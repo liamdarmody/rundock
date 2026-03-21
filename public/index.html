@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lean MVP</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --base: #1A1A1A;
+  --surface: #222222;
+  --elevated: #2A2A2A;
+  --card: #323232;
+  --border: #3A3A3A;
+  --text-1: #F0EDE8;
+  --text-2: #9A9590;
+  --accent: #E87A5A;
+  --accent-hover: #F09070;
+  --accent-glow: rgba(232, 122, 90, 0.12);
+  --success: #6BC67E;
+  --attention: #E8A84C;
+  --working: #7AA2E8;
+  --idle: #7A756E;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+  background: var(--base);
+  color: var(--text-1);
+  -webkit-font-smoothing: antialiased;
+}
+
+button { border: none; background: none; cursor: pointer; font-family: inherit; color: inherit; }
+input { border: none; background: none; font-family: inherit; color: inherit; outline: none; }
+
+.app { display: flex; height: 100vh; overflow: hidden; }
+
+/* Nav rail */
+.nav-rail {
+  width: 60px;
+  background: var(--base);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40px 0 16px;
+}
+
+.nav-main { display: flex; flex-direction: column; gap: 4px; flex: 1; padding-top: 4px; align-items: center; }
+.nav-bottom { display: flex; flex-direction: column; gap: 4px; align-items: center; }
+
+.nav-item {
+  width: 42px; height: 42px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 12px; color: var(--text-2);
+  transition: all 0.15s ease;
+}
+.nav-item:hover { color: var(--text-1); background: var(--surface); }
+.nav-item.active { color: var(--accent); background: var(--accent-glow); }
+.nav-item svg { width: 21px; height: 21px; }
+.nav-separator { width: 24px; height: 1px; background: var(--border); margin: 8px 0; }
+
+/* Sidebar */
+.sidebar {
+  width: 280px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebar-header { padding: 24px 16px 12px; }
+.sidebar-label { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); }
+
+.file-tree { flex: 1; overflow-y: auto; padding: 0 8px; }
+
+.folder-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px; border-radius: 8px; cursor: pointer;
+  font-size: 14px; font-weight: 600; color: var(--text-1);
+  user-select: none;
+}
+.folder-item:hover { background: var(--elevated); }
+.folder-icon { font-size: 10px; color: var(--text-2); width: 12px; text-align: center; }
+
+.file-children { padding-left: 20px; }
+.file-children.collapsed { display: none; }
+
+.file-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px; border-radius: 8px; cursor: pointer;
+  font-size: 14px; color: var(--text-1);
+}
+.file-item:hover { background: var(--elevated); }
+.file-item.active { background: var(--elevated); }
+.file-item-icon { width: 14px; height: 14px; color: var(--text-2); }
+
+/* Main panel */
+.main { flex: 1; display: flex; flex-direction: column; background: var(--elevated); overflow: hidden; }
+
+/* Chat header */
+.chat-header {
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 12px;
+}
+.chat-header-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--idle); }
+.chat-header-dot.working { background: var(--working); animation: pulse 2s ease-in-out infinite; }
+.chat-title { font-size: 14px; font-weight: 600; flex: 1; }
+.chat-status { font-size: 12px; color: var(--text-2); }
+
+/* Messages */
+.messages { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+
+.msg { max-width: 85%; animation: fadeIn 0.2s ease; }
+.msg-user { align-self: flex-end; }
+.msg-agent { align-self: flex-start; }
+
+.msg-sender { font-size: 12px; font-weight: 600; color: var(--accent); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+.msg-sender-icon { width: 18px; height: 18px; border-radius: 50%; background: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 10px; color: white; }
+
+.msg-bubble {
+  padding: 12px 16px; border-radius: 16px;
+  font-size: 14px; line-height: 1.6;
+  white-space: pre-wrap; word-wrap: break-word;
+}
+.msg-agent .msg-bubble { background: var(--card); border-top-left-radius: 4px; }
+.msg-user .msg-bubble { background: var(--accent-glow); border: 1px solid rgba(232,122,90,0.15); border-bottom-right-radius: 4px; }
+
+.msg-system {
+  align-self: center; font-size: 12px; color: var(--text-2);
+  padding: 4px 12px; background: var(--card); border-radius: 20px;
+}
+
+.msg-time { font-size: 11px; color: var(--text-2); margin-left: auto; font-weight: 400; }
+
+/* Tool use indicators */
+.msg-tool {
+  align-self: flex-start; max-width: 85%;
+  padding: 8px 12px; margin: 0;
+  background: var(--card); border-left: 3px solid var(--working);
+  border-radius: 0 8px 8px 0;
+  font-size: 12px; color: var(--text-2);
+  display: flex; align-items: center; gap: 8px;
+  animation: fadeIn 0.2s ease;
+}
+.msg-tool-icon { color: var(--working); }
+.msg-tool.done { border-left-color: var(--success); }
+.msg-tool.done .msg-tool-icon { color: var(--success); }
+
+/* Streaming indicator */
+.streaming-dot {
+  display: inline-block; width: 6px; height: 6px;
+  border-radius: 50%; background: var(--accent);
+  animation: pulse 1s ease-in-out infinite;
+  margin-left: 4px; vertical-align: middle;
+}
+
+/* Input */
+.chat-input {
+  padding: 16px 24px;
+  border-top: 1px solid var(--border);
+  display: flex; align-items: center; gap: 12px;
+}
+.chat-input input {
+  flex: 1; padding: 12px 16px;
+  background: var(--card); border-radius: 16px;
+  font-size: 14px; border: 1px solid var(--border);
+  transition: border-color 0.15s ease;
+}
+.chat-input input:focus { border-color: var(--accent); }
+.chat-input input::placeholder { color: var(--text-2); }
+.chat-input input:disabled { opacity: 0.5; }
+
+.send-btn {
+  width: 42px; height: 42px;
+  background: var(--accent); color: white;
+  border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  transition: all 0.2s ease;
+}
+.send-btn:hover { background: var(--accent-hover); }
+.send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.send-btn svg { width: 18px; height: 18px; }
+
+/* File editor */
+.editor { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.editor-header {
+  padding: 16px 24px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 12px;
+}
+.editor-filename { font-size: 14px; font-weight: 600; flex: 1; }
+.editor-status { font-size: 12px; color: var(--success); }
+.editor-content {
+  flex: 1; padding: 24px 32px; overflow-y: auto;
+  font-size: 14px; line-height: 1.7; outline: none;
+  font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+  white-space: pre-wrap;
+}
+
+/* Hidden */
+.hidden { display: none !important; }
+
+/* Connection status */
+.connection-bar {
+  padding: 6px 24px; font-size: 12px; font-weight: 500;
+  text-align: center; transition: all 0.3s ease;
+}
+.connection-bar.connected { background: rgba(107,198,126,0.1); color: var(--success); }
+.connection-bar.disconnected { background: rgba(232,90,90,0.1); color: #E85A5A; }
+.connection-bar.connecting { background: rgba(122,162,232,0.1); color: var(--working); }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* Thinking animation */
+.thinking-bubble { display: flex; align-items: center; min-height: 24px; }
+.thinking-dots span {
+  display: inline-block; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--text-2);
+  margin: 0 2px; animation: bounce 1.4s infinite ease-in-out both;
+}
+.thinking-dots span:nth-child(1) { animation-delay: 0s; }
+.thinking-dots span:nth-child(2) { animation-delay: 0.16s; }
+.thinking-dots span:nth-child(3) { animation-delay: 0.32s; }
+
+@keyframes bounce {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+  40% { transform: scale(1); opacity: 1; }
+}
+
+/* Formatted message content */
+.msg-bubble h1, .msg-bubble h2, .msg-bubble h3 { margin: 16px 0 8px 0; line-height: 1.3; }
+.msg-bubble h1 { font-size: 18px; }
+.msg-bubble h2 { font-size: 16px; }
+.msg-bubble h3 { font-size: 14px; font-weight: 600; }
+.msg-bubble p { margin: 0 0 8px 0; }
+.msg-bubble p:last-child { margin-bottom: 0; }
+.msg-bubble ul, .msg-bubble ol { margin: 4px 0 8px 0; padding-left: 20px; }
+.msg-bubble li { margin-bottom: 4px; list-style: disc; line-height: 1.5; }
+.msg-bubble li:last-child { margin-bottom: 0; }
+.msg-bubble code { background: var(--elevated); padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+.msg-bubble pre { background: var(--elevated); padding: 12px; border-radius: 8px; overflow-x: auto; margin: 8px 0; }
+.msg-bubble pre code { background: none; padding: 0; }
+.msg-bubble strong { font-weight: 600; }
+.msg-bubble hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Nav rail -->
+  <nav class="nav-rail">
+    <div class="nav-main">
+      <button class="nav-item active" onclick="showView('chat')" title="Chat">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      </button>
+      <button class="nav-item" onclick="showView('files')" title="Files">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+      </button>
+    </div>
+  </nav>
+
+  <!-- Sidebar: file tree (shown in files view) -->
+  <aside class="sidebar hidden" id="sidebar-files">
+    <div class="sidebar-header">
+      <span class="sidebar-label">Files</span>
+    </div>
+    <div class="file-tree" id="file-tree"></div>
+  </aside>
+
+  <!-- Main panel -->
+  <main class="main">
+    <div class="connection-bar connecting" id="connection-bar">Connecting...</div>
+
+    <!-- Chat view -->
+    <div id="view-chat" style="display:flex; flex-direction:column; flex:1; overflow:hidden;">
+      <div class="chat-header">
+        <span class="chat-header-dot" id="status-dot"></span>
+        <span class="chat-title">Conversation with Cos</span>
+        <span class="chat-status" id="chat-status">idle</span>
+      </div>
+      <div class="messages" id="messages"></div>
+      <div class="chat-input">
+        <input type="text" id="msg-input" placeholder="Message Cos..." autofocus>
+        <button class="send-btn" id="send-btn" onclick="sendMessage()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Editor view -->
+    <div id="view-editor" class="hidden" style="display:flex; flex-direction:column; flex:1; overflow:hidden;">
+      <div class="editor-header">
+        <span class="editor-filename" id="editor-filename">Select a file</span>
+        <span class="editor-status" id="editor-status"></span>
+      </div>
+      <div class="editor-content" id="editor-content" contenteditable="true"></div>
+    </div>
+  </main>
+</div>
+
+<script>
+// ===== STATE =====
+let ws = null;
+let isProcessing = false;
+let currentView = 'chat';
+let currentFilePath = null;
+let currentStreamingMsg = null;
+
+// ===== WEBSOCKET =====
+function connect() {
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${protocol}//${location.host}`);
+
+  ws.onopen = () => {
+    document.getElementById('connection-bar').className = 'connection-bar connected';
+    document.getElementById('connection-bar').textContent = 'Connected';
+    setTimeout(() => {
+      document.getElementById('connection-bar').style.display = 'none';
+    }, 2000);
+    // Request file tree
+    ws.send(JSON.stringify({ type: 'get_files' }));
+  };
+
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    handleMessage(data);
+  };
+
+  ws.onclose = () => {
+    document.getElementById('connection-bar').style.display = 'block';
+    document.getElementById('connection-bar').className = 'connection-bar disconnected';
+    document.getElementById('connection-bar').textContent = 'Disconnected. Reconnecting...';
+    setTimeout(connect, 3000);
+  };
+}
+
+// ===== MESSAGE HANDLING =====
+function handleMessage(data) {
+  switch (data.type) {
+    case 'system':
+      if (data.subtype === 'init') {
+        // Claude Code initialised, show available tools/agents
+        addSystemMsg(`Connected. ${data.tools?.length || 0} tools, ${data.agents?.length || 0} agents available.`);
+      } else if (data.subtype === 'done') {
+        finishProcessing();
+      }
+      break;
+
+    case 'assistant':
+      handleAssistantMessage(data);
+      break;
+
+    case 'result':
+      if (data.result) {
+        // Final result, ensure it's displayed
+        if (currentStreamingMsg) {
+          currentStreamingMsg.querySelector('.msg-bubble').innerHTML = formatMarkdown(data.result);
+          currentStreamingMsg = null;
+        }
+      }
+      finishProcessing();
+      break;
+
+    case 'file_tree':
+      renderFileTree(data.tree);
+      break;
+
+    case 'file_content':
+      document.getElementById('editor-filename').textContent = data.path;
+      document.getElementById('editor-content').textContent = data.content;
+      document.getElementById('editor-status').textContent = 'Loaded';
+      currentFilePath = data.path;
+      break;
+
+    case 'file_saved':
+      document.getElementById('editor-status').textContent = 'Saved';
+      break;
+
+    case 'raw':
+      // Raw output, show as system message
+      if (data.content.trim()) {
+        addSystemMsg(data.content.trim());
+      }
+      break;
+
+    case 'error':
+      addSystemMsg('Error: ' + data.content);
+      break;
+  }
+}
+
+function handleAssistantMessage(data) {
+  const msg = data.message;
+  if (!msg || !msg.content) return;
+
+  // Remove thinking indicator on first real message
+  const thinking = document.getElementById('thinking-indicator');
+  if (thinking) thinking.remove();
+
+  for (const block of msg.content) {
+    if (block.type === 'text') {
+      if (currentStreamingMsg) {
+        currentStreamingMsg.querySelector('.msg-bubble').innerHTML = formatMarkdown(block.text);
+      } else {
+        currentStreamingMsg = addAgentMsg(block.text);
+      }
+    } else if (block.type === 'tool_use') {
+      // Remove thinking indicator for tool use too
+      addToolMsg(block.name, JSON.stringify(block.input).substring(0, 100));
+    }
+  }
+
+  scrollToBottom();
+}
+
+// ===== UI =====
+function addAgentMsg(text) {
+  const messages = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'msg msg-agent';
+  div.innerHTML = `
+    <div class="msg-sender">
+      <span class="msg-sender-icon">★</span> Cos
+      <span class="msg-time">${new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
+    </div>
+    <div class="msg-bubble">${formatMarkdown(text)}</div>
+  `;
+  messages.appendChild(div);
+  scrollToBottom();
+  return div;
+}
+
+function addUserMsg(text) {
+  const messages = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'msg msg-user';
+  div.innerHTML = `<div class="msg-bubble">${escapeHtml(text)}</div>`;
+  messages.appendChild(div);
+  scrollToBottom();
+}
+
+function addSystemMsg(text) {
+  const messages = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'msg-system';
+  div.textContent = text;
+  messages.appendChild(div);
+  scrollToBottom();
+}
+
+function addToolMsg(name, input) {
+  const messages = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'msg-tool';
+  div.innerHTML = `<span class="msg-tool-icon">&#x2192;</span> Using ${escapeHtml(name)}`;
+  messages.appendChild(div);
+  scrollToBottom();
+  // Mark as done after a moment (the result will follow)
+  setTimeout(() => { div.classList.add('done'); }, 500);
+}
+
+function scrollToBottom() {
+  const messages = document.getElementById('messages');
+  messages.scrollTop = messages.scrollHeight;
+}
+
+// ===== SEND =====
+function sendMessage() {
+  const input = document.getElementById('msg-input');
+  const text = input.value.trim();
+  if (!text || isProcessing || !ws) return;
+
+  addUserMsg(text);
+  input.value = '';
+  startProcessing();
+  currentStreamingMsg = null;
+
+  ws.send(JSON.stringify({ type: 'chat', content: text }));
+}
+
+function startProcessing() {
+  isProcessing = true;
+  document.getElementById('status-dot').classList.add('working');
+  document.getElementById('chat-status').textContent = 'working...';
+  document.getElementById('send-btn').disabled = true;
+  document.getElementById('msg-input').disabled = true;
+
+  // Add thinking indicator
+  const messages = document.getElementById('messages');
+  const thinking = document.createElement('div');
+  thinking.className = 'msg msg-agent';
+  thinking.id = 'thinking-indicator';
+  thinking.innerHTML = `
+    <div class="msg-sender">
+      <span class="msg-sender-icon">★</span> Cos
+    </div>
+    <div class="msg-bubble thinking-bubble">
+      <span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span>
+    </div>
+  `;
+  messages.appendChild(thinking);
+  scrollToBottom();
+}
+
+function finishProcessing() {
+  isProcessing = false;
+  currentStreamingMsg = null;
+  document.getElementById('status-dot').classList.remove('working');
+  document.getElementById('chat-status').textContent = 'idle';
+  document.getElementById('send-btn').disabled = false;
+  document.getElementById('msg-input').disabled = false;
+  document.getElementById('msg-input').focus();
+}
+
+// ===== FILE TREE =====
+function renderFileTree(tree) {
+  const container = document.getElementById('file-tree');
+  container.innerHTML = '';
+  renderTreeLevel(tree, container);
+}
+
+function renderTreeLevel(items, container) {
+  for (const item of items) {
+    if (item.type === 'folder') {
+      const folder = document.createElement('div');
+      folder.className = 'folder-item';
+      folder.innerHTML = `<span class="folder-icon">&#x25B6;</span> ${escapeHtml(item.name)}`;
+      folder.onclick = () => {
+        const children = folder.nextElementSibling;
+        const icon = folder.querySelector('.folder-icon');
+        children.classList.toggle('collapsed');
+        icon.innerHTML = children.classList.contains('collapsed') ? '&#x25B6;' : '&#x25BC;';
+      };
+      container.appendChild(folder);
+
+      const children = document.createElement('div');
+      children.className = 'file-children collapsed';
+      renderTreeLevel(item.children, children);
+      container.appendChild(children);
+    } else {
+      const file = document.createElement('div');
+      file.className = 'file-item';
+      file.innerHTML = `<svg class="file-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> ${escapeHtml(item.name)}`;
+      file.onclick = () => {
+        document.querySelectorAll('.file-item').forEach(f => f.classList.remove('active'));
+        file.classList.add('active');
+        ws.send(JSON.stringify({ type: 'read_file', path: item.path }));
+        showView('files');
+      };
+      container.appendChild(file);
+    }
+  }
+}
+
+// ===== VIEWS =====
+function showView(view) {
+  currentView = view;
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+
+  if (view === 'chat') {
+    document.querySelectorAll('.nav-item')[0].classList.add('active');
+    document.getElementById('sidebar-files').classList.add('hidden');
+    document.getElementById('view-chat').classList.remove('hidden');
+    document.getElementById('view-editor').classList.add('hidden');
+    document.getElementById('view-chat').style.display = 'flex';
+  } else {
+    document.querySelectorAll('.nav-item')[1].classList.add('active');
+    document.getElementById('sidebar-files').classList.remove('hidden');
+    document.getElementById('view-chat').classList.add('hidden');
+    document.getElementById('view-chat').style.display = 'none';
+    document.getElementById('view-editor').classList.remove('hidden');
+    document.getElementById('view-editor').style.display = 'flex';
+  }
+}
+
+// ===== EDITOR SAVE =====
+let saveTimer = null;
+document.addEventListener('input', (e) => {
+  if (e.target.id === 'editor-content' && currentFilePath) {
+    document.getElementById('editor-status').textContent = 'Unsaved';
+    document.getElementById('editor-status').style.color = 'var(--attention)';
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      ws.send(JSON.stringify({
+        type: 'save_file',
+        path: currentFilePath,
+        content: document.getElementById('editor-content').textContent
+      }));
+      document.getElementById('editor-status').textContent = 'Saved';
+      document.getElementById('editor-status').style.color = 'var(--success)';
+    }, 1500);
+  }
+});
+
+// ===== KEYBOARD =====
+document.getElementById('msg-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
+
+// ===== HELPERS =====
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function formatMarkdown(text) {
+  let html = escapeHtml(text);
+
+  // Code blocks (``` ... ```)
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+
+  // Bold
+  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  // Headers
+  html = html.replace(/^### (.*$)/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.*$)/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.*$)/gm, '<h1>$1</h1>');
+
+  // Horizontal rule
+  html = html.replace(/^---$/gm, '<hr>');
+
+  // Convert bullet lists into proper <ul><li> structure
+  html = html.replace(/((?:^[-*] .*$\n?)+)/gm, (match) => {
+    const items = match.trim().split('\n').map(line => {
+      const text = line.replace(/^[-*] /, '');
+      return `<li>${text}</li>`;
+    }).join('');
+    return `<ul>${items}</ul>`;
+  });
+
+  // Convert numbered lists
+  html = html.replace(/((?:^\d+\. .*$\n?)+)/gm, (match) => {
+    const items = match.trim().split('\n').map(line => {
+      const text = line.replace(/^\d+\. /, '');
+      return `<li>${text}</li>`;
+    }).join('');
+    return `<ol>${items}</ol>`;
+  });
+
+  // Paragraphs: wrap remaining text blocks
+  html = html.split('\n\n').map(block => {
+    block = block.trim();
+    if (!block) return '';
+    // Don't wrap blocks that are already HTML elements
+    if (block.startsWith('<h') || block.startsWith('<ul') || block.startsWith('<ol') ||
+        block.startsWith('<pre') || block.startsWith('<hr') || block.startsWith('<p')) {
+      return block;
+    }
+    // Replace single newlines with <br> within paragraphs
+    return `<p>${block.replace(/\n/g, '<br>')}</p>`;
+  }).join('');
+
+  return html;
+}
+
+// ===== INIT =====
+connect();
+</script>
+</body>
+</html>
