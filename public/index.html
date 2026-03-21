@@ -3,676 +3,1216 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Lean MVP</title>
+<title>Rundock</title>
+<script src="/marked.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
-  --base: #1A1A1A;
-  --surface: #222222;
-  --elevated: #2A2A2A;
-  --card: #323232;
-  --border: #3A3A3A;
-  --text-1: #F0EDE8;
-  --text-2: #9A9590;
-  --accent: #E87A5A;
-  --accent-hover: #F09070;
-  --accent-glow: rgba(232, 122, 90, 0.12);
-  --success: #6BC67E;
-  --attention: #E8A84C;
-  --working: #7AA2E8;
-  --idle: #7A756E;
+  --base: #1A1A1A; --surface: #222222; --elevated: #2A2A2A;
+  --card: #323232; --border: #3A3A3A;
+  --text-1: #F0EDE8; --text-2: #9A9590;
+  --accent: #E87A5A; --accent-hover: #F09070; --accent-glow: rgba(232,122,90,0.12);
+  --success: #6BC67E; --attention: #E8A84C; --working: #7AA2E8; --idle: #7A756E;
+  --title: 18px; --body: 14px; --caption: 12px; --label: 11px;
 }
 
-* { margin: 0; padding: 0; box-sizing: border-box; }
-
-html, body {
-  height: 100%;
-  font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
-  background: var(--base);
-  color: var(--text-1);
-  -webkit-font-smoothing: antialiased;
+body.light {
+  --base: #F5F2ED; --surface: #FAF8F5; --elevated: #FFFFFF;
+  --card: #F0EDE8; --border: #E5E0D8;
+  --text-1: #1A1A1A; --text-2: #7A756E;
+  --accent-glow: rgba(232,122,90,0.08);
 }
 
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease; }
+html, body { height: 100%; font-family: 'Inter', system-ui, -apple-system, sans-serif; background: var(--base); color: var(--text-1); -webkit-font-smoothing: antialiased; }
 button { border: none; background: none; cursor: pointer; font-family: inherit; color: inherit; }
 input { border: none; background: none; font-family: inherit; color: inherit; outline: none; }
+.hidden { display: none !important; }
 
 .app { display: flex; height: 100vh; overflow: hidden; }
 
 /* Nav rail */
-.nav-rail {
-  width: 60px;
-  background: var(--base);
-  border-right: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 40px 0 16px;
-}
-
+.nav-rail { width: 60px; background: var(--base); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; padding: 40px 0 16px; flex-shrink: 0; }
 .nav-main { display: flex; flex-direction: column; gap: 4px; flex: 1; padding-top: 4px; align-items: center; }
 .nav-bottom { display: flex; flex-direction: column; gap: 4px; align-items: center; }
-
-.nav-item {
-  width: 42px; height: 42px;
-  display: flex; align-items: center; justify-content: center;
-  border-radius: 12px; color: var(--text-2);
-  transition: all 0.15s ease;
-}
+.nav-item { width: 42px; height: 42px; display: flex; align-items: center; justify-content: center; border-radius: 12px; color: var(--text-2); transition: all 0.15s ease; }
 .nav-item:hover { color: var(--text-1); background: var(--surface); }
 .nav-item.active { color: var(--accent); background: var(--accent-glow); }
 .nav-item svg { width: 21px; height: 21px; }
 .nav-separator { width: 24px; height: 1px; background: var(--border); margin: 8px 0; }
 
 /* Sidebar */
-.sidebar {
-  width: 280px;
-  background: var(--surface);
-  border-right: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
+.sidebar { width: 280px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; }
+.sidebar > div { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 .sidebar-header { padding: 24px 16px 12px; }
-.sidebar-label { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); }
+.sidebar-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); }
 
-.file-tree { flex: 1; overflow-y: auto; padding: 0 8px; }
+/* Compact agent status list */
+.agent-status-list { flex: 1; overflow-y: auto; padding: 0 8px; }
+.agent-status-item { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; cursor: pointer; transition: background 0.15s ease; }
+.agent-status-item:hover { background: var(--elevated); }
+.agent-status-item.active { background: var(--elevated); }
+.avatar { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; color: white; flex-shrink: 0; }
+.avatar.sm { width: 24px; height: 24px; font-size: 12px; }
+.avatar.xs { width: 18px; height: 18px; font-size: 9px; }
+.agent-status-name { flex: 1; font-size: var(--body); font-weight: 500; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-status-state { font-size: var(--caption); font-weight: 500; color: var(--idle); flex-shrink: 0; }
+.agent-status-state.working { color: var(--working); }
 
-.folder-item {
-  display: flex; align-items: center; gap: 8px;
-  padding: 8px; border-radius: 8px; cursor: pointer;
-  font-size: 14px; font-weight: 600; color: var(--text-1);
-  user-select: none;
-}
+/* Conversation list */
+.convo-list { flex: 1; overflow-y: auto; padding: 0 8px; }
+.convo-item { display: flex; flex-direction: column; gap: 2px; padding: 10px 8px; border-radius: 8px; cursor: pointer; transition: background 0.15s ease; }
+.convo-item:hover { background: var(--elevated); }
+.convo-item.active { background: var(--elevated); }
+.convo-title { font-size: var(--body); font-weight: 500; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.convo-preview { font-size: var(--caption); color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.convo-meta { font-size: var(--caption); color: var(--text-2); display: flex; align-items: center; gap: 6px; }
+
+/* File tree */
+.file-tree { flex: 1; overflow-y: auto; padding: 0 8px; min-height: 0; }
+.folder-item { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; cursor: pointer; font-size: var(--body); font-weight: 600; color: var(--text-1); user-select: none; }
 .folder-item:hover { background: var(--elevated); }
 .folder-icon { font-size: 10px; color: var(--text-2); width: 12px; text-align: center; }
-
 .file-children { padding-left: 20px; }
 .file-children.collapsed { display: none; }
-
-.file-item {
-  display: flex; align-items: center; gap: 8px;
-  padding: 8px; border-radius: 8px; cursor: pointer;
-  font-size: 14px; color: var(--text-1);
-}
+.file-item { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; cursor: pointer; font-size: var(--body); color: var(--text-1); }
 .file-item:hover { background: var(--elevated); }
 .file-item.active { background: var(--elevated); }
 .file-item-icon { width: 14px; height: 14px; color: var(--text-2); }
 
+/* Add button */
+.add-btn { display: flex; align-items: center; gap: 8px; padding: 12px 16px; margin: 4px 8px 12px; border-radius: 8px; font-size: var(--body); font-weight: 500; color: var(--text-2); transition: all 0.15s ease; }
+.add-btn:hover { color: var(--accent); background: var(--accent-glow); }
+
 /* Main panel */
 .main { flex: 1; display: flex; flex-direction: column; background: var(--elevated); overflow: hidden; }
 
-/* Chat header */
-.chat-header {
-  padding: 16px 24px;
-  border-bottom: 1px solid var(--border);
-  display: flex; align-items: center; gap: 12px;
-}
-.chat-header-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--idle); }
-.chat-header-dot.working { background: var(--working); animation: pulse 2s ease-in-out infinite; }
-.chat-title { font-size: 14px; font-weight: 600; flex: 1; }
-.chat-status { font-size: 12px; color: var(--text-2); }
+/* Org chart */
+.org-chart { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px; overflow: hidden; }
+.org-chart-title { font-size: var(--body); font-weight: 500; color: var(--text-2); margin-bottom: 32px; }
+.org-tree { display: flex; flex-direction: column; align-items: center; }
+.org-card { background: var(--card); border-radius: 12px; padding: 16px 20px; display: flex; align-items: center; gap: 12px; cursor: pointer; transition: all 0.2s ease; border: 1px solid var(--border); min-width: 180px; }
+.org-card:hover { border-color: var(--accent); box-shadow: 0 0 24px rgba(232,122,90,0.2); transform: translateY(-2px); }
+.org-card-name { font-size: var(--body); font-weight: 700; color: var(--text-1); }
+.org-card-role { font-size: var(--caption); color: var(--text-2); max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.org-leader .org-card { padding: 20px 28px; }
+.org-leader .org-card .avatar { width: 44px; height: 44px; font-size: 18px; }
+.org-leader .org-card-name { font-size: var(--title); }
+.org-trunk { width: 1px; height: 32px; background: var(--border); }
+.org-branches { display: flex; gap: 12px; position: relative; flex-wrap: wrap; justify-content: center; }
+.org-hline { position: absolute; top: 0; height: 1px; background: var(--border); }
+.org-branch { display: flex; flex-direction: column; align-items: center; }
+.org-branch-stem { width: 1px; height: 24px; background: var(--border); }
 
-/* Messages */
+/* Agent profile */
+.profile { flex: 1; overflow-y: auto; padding: 32px; }
+.profile-back { font-size: var(--body); font-weight: 500; color: var(--text-2); display: inline-flex; align-items: center; gap: 6px; margin-bottom: 24px; cursor: pointer; transition: color 0.15s ease; }
+.profile-back:hover { color: var(--accent); }
+.profile-header { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; }
+.profile-avatar { width: 56px; height: 56px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; color: white; }
+.profile-name { font-size: var(--title); font-weight: 700; margin-bottom: 2px; }
+.profile-desc { font-size: var(--body); color: var(--text-2); line-height: 1.5; }
+.profile-cta { margin-bottom: 24px; }
+.profile-cta-btn { padding: 8px 20px; background: var(--accent); color: white; font-size: var(--body); font-weight: 600; border-radius: 8px; transition: all 0.2s ease; }
+.profile-cta-btn:hover { background: var(--accent-hover); box-shadow: 0 0 24px rgba(232,122,90,0.2); }
+.profile-section { margin-bottom: 24px; }
+.profile-section-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); margin-bottom: 8px; }
+.profile-list { display: flex; flex-direction: column; gap: 4px; }
+.profile-list-item { padding: 10px 16px; background: var(--card); border-radius: 12px; font-size: var(--body); color: var(--text-1); }
+.profile-existing { margin-bottom: 24px; }
+.profile-existing-label { font-size: var(--caption); color: var(--text-2); margin-bottom: 8px; }
+.profile-existing-item { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: var(--card); border-radius: 8px; cursor: pointer; transition: background 0.15s ease; margin-bottom: 4px; }
+.profile-existing-item:hover { background: var(--elevated); border: 1px solid var(--accent); margin: -1px; margin-bottom: 3px; }
+.profile-existing-title { font-size: var(--body); font-weight: 500; flex: 1; }
+.profile-existing-meta { font-size: var(--caption); color: var(--text-2); }
+
+/* Chat */
+.chat-header { padding: 16px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+.chat-back { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 8px; color: var(--text-2); transition: all 0.15s ease; flex-shrink: 0; cursor: pointer; }
+.chat-back:hover { color: var(--text-1); background: var(--card); }
+.chat-title-input { font-size: var(--body); font-weight: 600; width: 100%; background: transparent; border: 1px solid transparent; border-radius: 4px; padding: 2px 6px; margin: -2px -6px; transition: all 0.15s ease; color: var(--text-1); }
+.chat-title-input:hover { border-color: var(--border); }
+.chat-title-input:focus { border-color: var(--accent); background: var(--card); }
+.chat-convo-status { font-size: var(--caption); font-weight: 600; padding: 3px 10px; border-radius: 6px; cursor: pointer; transition: all 0.15s ease; flex-shrink: 0; }
+.chat-convo-status.active-convo { background: rgba(107,198,126,0.12); color: var(--success); }
+.chat-convo-status.done-convo { background: var(--card); color: var(--text-2); }
+.chat-status { font-size: var(--caption); color: var(--idle); font-weight: 500; display: none; }
+.chat-status.working { color: var(--working); display: inline; }
 .messages { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
-
 .msg { max-width: 85%; animation: fadeIn 0.2s ease; }
 .msg-user { align-self: flex-end; }
 .msg-agent { align-self: flex-start; }
-
-.msg-sender { font-size: 12px; font-weight: 600; color: var(--accent); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
-.msg-sender-icon { width: 18px; height: 18px; border-radius: 50%; background: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 10px; color: white; }
-
-.msg-bubble {
-  padding: 12px 16px; border-radius: 16px;
-  font-size: 14px; line-height: 1.6;
-  white-space: pre-wrap; word-wrap: break-word;
-}
+.msg-sender { font-size: var(--caption); font-weight: 600; margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+.msg-time { font-size: var(--label); color: var(--text-2); font-weight: 400; margin-left: auto; }
+.msg-bubble { padding: 12px 16px; border-radius: 16px; font-size: var(--body); line-height: 1.55; word-wrap: break-word; }
 .msg-agent .msg-bubble { background: var(--card); border-top-left-radius: 4px; }
 .msg-user .msg-bubble { background: var(--accent-glow); border: 1px solid rgba(232,122,90,0.15); border-bottom-right-radius: 4px; }
-
-.msg-system {
-  align-self: center; font-size: 12px; color: var(--text-2);
-  padding: 4px 12px; background: var(--card); border-radius: 20px;
-}
-
-.msg-time { font-size: 11px; color: var(--text-2); margin-left: auto; font-weight: 400; }
-
-/* Tool use indicators */
-.msg-tool {
-  align-self: flex-start; max-width: 85%;
-  padding: 8px 12px; margin: 0;
-  background: var(--card); border-left: 3px solid var(--working);
-  border-radius: 0 8px 8px 0;
-  font-size: 12px; color: var(--text-2);
-  display: flex; align-items: center; gap: 8px;
-  animation: fadeIn 0.2s ease;
-}
-.msg-tool-icon { color: var(--working); }
+.msg-system { align-self: center; font-size: var(--caption); color: var(--text-2); padding: 4px 12px; background: var(--card); border-radius: 20px; }
+.msg-tool { align-self: flex-start; max-width: 85%; padding: 8px 12px; background: var(--card); border-left: 3px solid var(--working); border-radius: 0 8px 8px 0; font-size: var(--caption); color: var(--text-2); display: flex; align-items: center; gap: 8px; animation: fadeIn 0.2s ease; }
 .msg-tool.done { border-left-color: var(--success); }
-.msg-tool.done .msg-tool-icon { color: var(--success); }
-
-/* Streaming indicator */
-.streaming-dot {
-  display: inline-block; width: 6px; height: 6px;
-  border-radius: 50%; background: var(--accent);
-  animation: pulse 1s ease-in-out infinite;
-  margin-left: 4px; vertical-align: middle;
-}
-
-/* Input */
-.chat-input {
-  padding: 16px 24px;
-  border-top: 1px solid var(--border);
-  display: flex; align-items: center; gap: 12px;
-}
-.chat-input input {
-  flex: 1; padding: 12px 16px;
-  background: var(--card); border-radius: 16px;
-  font-size: 14px; border: 1px solid var(--border);
-  transition: border-color 0.15s ease;
-}
-.chat-input input:focus { border-color: var(--accent); }
-.chat-input input::placeholder { color: var(--text-2); }
-.chat-input input:disabled { opacity: 0.5; }
-
-.send-btn {
-  width: 42px; height: 42px;
-  background: var(--accent); color: white;
-  border-radius: 50%; display: flex; align-items: center; justify-content: center;
-  transition: all 0.2s ease;
-}
+.chat-input { padding: 16px 24px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+.chat-input textarea { flex: 1; padding: 12px 16px; background: var(--card); border-radius: 16px; font-size: var(--body); border: 1px solid var(--border); transition: border-color 0.15s ease; resize: none; overflow-y: hidden; min-height: 44px; max-height: 200px; line-height: 1.5; font-family: inherit; color: var(--text-1); outline: none; }
+.chat-input textarea:focus { border-color: var(--accent); }
+.chat-input textarea::placeholder { color: var(--text-2); }
+.chat-input textarea:disabled { opacity: 0.5; }
+.send-btn { width: 42px; height: 42px; background: var(--accent); color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease; flex-shrink: 0; }
 .send-btn:hover { background: var(--accent-hover); }
 .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .send-btn svg { width: 18px; height: 18px; }
 
-/* File editor */
-.editor { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-.editor-header {
-  padding: 16px 24px; border-bottom: 1px solid var(--border);
-  display: flex; align-items: center; gap: 12px;
-}
-.editor-filename { font-size: 14px; font-weight: 600; flex: 1; }
-.editor-status { font-size: 12px; color: var(--success); }
-.editor-content {
-  flex: 1; padding: 24px 32px; overflow-y: auto;
-  font-size: 14px; line-height: 1.7; outline: none;
-  font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
-  white-space: pre-wrap;
-}
+/* Editor */
+.editor-header { padding: 16px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
+.editor-filename { font-size: var(--body); font-weight: 600; flex: 1; }
+.editor-status { font-size: var(--caption); color: var(--success); }
+.editor-toggle { padding: 4px 12px; font-size: var(--caption); font-weight: 600; border-radius: 6px; background: var(--card); color: var(--text-2); transition: all 0.15s ease; }
+.editor-toggle:hover { color: var(--text-1); }
+.editor-toggle.active { background: var(--accent-glow); color: var(--accent); }
+.editor-content { flex: 1; padding: 24px 32px; overflow-y: auto; font-size: var(--body); line-height: 1.7; outline: none; }
+.editor-content.source { white-space: pre-wrap; font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 13px; color: var(--text-2); }
+.editor-content.formatted { white-space: normal; }
+.editor-content.formatted h1 { font-size: 24px; font-weight: 700; margin: 0 0 16px; }
+.editor-content.formatted h2 { font-size: var(--title); font-weight: 600; margin: 24px 0 8px; }
+.editor-content.formatted h3 { font-size: var(--body); font-weight: 600; margin: 16px 0 8px; }
+.editor-content.formatted p { margin: 0 0 12px; line-height: 1.7; }
+.editor-content.formatted ul, .editor-content.formatted ol { margin: 0 0 12px; padding-left: 24px; }
+.editor-content.formatted li { margin-bottom: 4px; list-style: disc; line-height: 1.6; }
+.editor-content.formatted strong { font-weight: 600; }
+.editor-content.formatted code { background: var(--card); padding: 2px 6px; border-radius: 4px; font-size: 13px; font-family: 'SF Mono', 'Fira Code', monospace; }
+.editor-content.formatted pre { background: var(--card); padding: 16px; border-radius: 8px; overflow-x: auto; margin: 12px 0; }
+.editor-content.formatted pre code { background: none; padding: 0; }
+.editor-content.formatted hr { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+.editor-content.formatted table { border-collapse: collapse; margin: 12px 0; width: 100%; }
+.editor-content.formatted th, .editor-content.formatted td { padding: 8px 12px; border: 1px solid var(--border); text-align: left; font-size: var(--body); }
+.editor-content.formatted th { background: var(--card); font-weight: 600; }
+.editor-content.formatted blockquote { border-left: 3px solid var(--accent); padding-left: 16px; color: var(--text-2); margin: 12px 0; }
+.callout { border-radius: 8px; padding: 12px 16px; margin: 8px 0; border-left: 3px solid; }
+.callout-title { font-weight: 600; font-size: var(--body); margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+.callout-content { font-size: var(--body); line-height: 1.6; }
+.callout-content .callout { margin: 8px 0 4px; }
+.callout-abstract { background: rgba(122,162,232,0.08); border-color: var(--working); }
+.callout-abstract .callout-title { color: var(--working); }
+.callout-note, .callout-info { background: rgba(122,162,232,0.08); border-color: var(--working); }
+.callout-note .callout-title, .callout-info .callout-title { color: var(--working); }
+.callout-warning, .callout-caution { background: rgba(232,168,76,0.08); border-color: var(--attention); }
+.callout-warning .callout-title, .callout-caution .callout-title { color: var(--attention); }
+.callout-tip, .callout-important { background: rgba(107,198,126,0.08); border-color: var(--success); }
+.callout-tip .callout-title, .callout-important .callout-title { color: var(--success); }
+.callout-danger, .callout-error, .callout-bug { background: rgba(232,90,90,0.08); border-color: #E85A5A; }
+.callout-danger .callout-title, .callout-error .callout-title, .callout-bug .callout-title { color: #E85A5A; }
+.callout-success, .callout-check, .callout-done { background: rgba(107,198,126,0.08); border-color: var(--success); }
+.callout-success .callout-title, .callout-check .callout-title { color: var(--success); }
+.callout-question, .callout-help, .callout-faq { background: rgba(232,168,76,0.08); border-color: var(--attention); }
+.callout-question .callout-title { color: var(--attention); }
+.callout-example { background: rgba(160,122,232,0.08); border-color: #A07AE8; }
+.callout-example .callout-title { color: #A07AE8; }
+.callout-quote, .callout-cite { background: var(--card); border-color: var(--text-2); }
+.callout-quote .callout-title { color: var(--text-2); }
+.callout-todo { background: rgba(122,162,232,0.08); border-color: var(--working); }
+.callout-todo .callout-title { color: var(--working); }
+.editor-content.formatted a { color: var(--accent); }
+.editor-content.formatted img { max-width: 100%; border-radius: 8px; }
 
-/* Hidden */
-.hidden { display: none !important; }
+/* Thinking */
+.thinking-bubble { min-height: 24px; }
+.thinking-dots { display: flex; align-items: center; gap: 0; }
+.thinking-dots span { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--text-2); margin: 0 2px; animation: bounce 1.4s infinite ease-in-out both; }
+.thinking-dots span:nth-child(1) { animation-delay: 0s; }
+.thinking-dots span:nth-child(2) { animation-delay: 0.16s; }
+.thinking-dots span:nth-child(3) { animation-delay: 0.32s; }
+.thinking-status { font-size: var(--caption); color: var(--text-2); margin-top: 6px; transition: opacity 0.2s ease; }
+@keyframes bounce { 0%,80%,100% { transform: scale(0.6); opacity: 0.4; } 40% { transform: scale(1); opacity: 1; } }
 
-/* Connection status */
-.connection-bar {
-  padding: 6px 24px; font-size: 12px; font-weight: 500;
-  text-align: center; transition: all 0.3s ease;
-}
+/* Markdown rendering (chat bubbles, file preview, profile) */
+.msg-bubble h1,.msg-bubble h2,.msg-bubble h3,.msg-bubble h4 { margin: 14px 0 4px; line-height: 1.3; }
+.msg-bubble *:first-child { margin-top: 0; }
+.msg-bubble h1 { font-size: 17px; } .msg-bubble h2 { font-size: 15px; } .msg-bubble h3 { font-size: var(--body); font-weight: 600; } .msg-bubble h4 { font-size: var(--body); font-weight: 600; }
+.msg-bubble p { margin: 0 0 8px; } .msg-bubble p:last-child { margin-bottom: 0; }
+.msg-bubble ul,.msg-bubble ol { margin: 2px 0 8px; padding-left: 20px; }
+.msg-bubble ul { list-style: disc; } .msg-bubble ol { list-style: decimal; }
+.msg-bubble li { margin-bottom: 2px; line-height: 1.5; }
+.msg-bubble li > p { margin: 0 0 2px; }
+.msg-bubble li > p:last-child { margin-bottom: 0; }
+.msg-bubble li > ul,.msg-bubble li > ol { margin: 2px 0 2px; }
+.msg-bubble > :last-child { margin-bottom: 0; }
+.msg-bubble p + ul,.msg-bubble p + ol { margin-top: -4px; }
+.msg-bubble code { background: var(--elevated); padding: 2px 6px; border-radius: 4px; font-size: 13px; font-family: 'SF Mono','Fira Code','Consolas',monospace; }
+.msg-bubble pre { background: var(--elevated); padding: 12px 16px; border-radius: 8px; overflow-x: auto; margin: 8px 0; }
+.msg-bubble pre code { background: none; padding: 0; display: block; line-height: 1.5; }
+.msg-bubble strong { font-weight: 600; }
+.msg-bubble em { font-style: italic; }
+.msg-bubble del { text-decoration: line-through; color: var(--text-2); }
+.msg-bubble blockquote { border-left: 3px solid var(--accent); padding-left: 16px; color: var(--text-2); margin: 8px 0; }
+.msg-bubble table { border-collapse: collapse; margin: 8px 0; width: 100%; font-size: var(--body); }
+.msg-bubble th,.msg-bubble td { padding: 7px 12px; border: 1px solid var(--border); text-align: left; }
+.msg-bubble th { background: var(--card); font-weight: 600; }
+.msg-bubble hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+.msg-bubble a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.msg-bubble img { max-width: 100%; border-radius: 8px; margin: 8px 0; }
+.msg-bubble mark { background: rgba(232,122,90,0.2); color: var(--text-1); padding: 1px 4px; border-radius: 3px; }
+.msg-bubble .wikilink { color: var(--accent); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.msg-bubble .md-tag { background: var(--card); color: var(--accent); padding: 2px 8px; border-radius: 4px; font-size: var(--caption); font-weight: 500; }
+.msg-bubble input[type="checkbox"] { margin-right: 8px; accent-color: var(--accent); }
+
+/* Connection bar */
+.connection-bar { padding: 6px 24px; font-size: var(--caption); font-weight: 500; text-align: center; }
 .connection-bar.connected { background: rgba(107,198,126,0.1); color: var(--success); }
 .connection-bar.disconnected { background: rgba(232,90,90,0.1); color: #E85A5A; }
 .connection-bar.connecting { background: rgba(122,162,232,0.1); color: var(--working); }
 
-/* Scrollbar */
 ::-webkit-scrollbar { width: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-
-/* Thinking animation */
-.thinking-bubble { display: flex; align-items: center; min-height: 24px; }
-.thinking-dots span {
-  display: inline-block; width: 8px; height: 8px;
-  border-radius: 50%; background: var(--text-2);
-  margin: 0 2px; animation: bounce 1.4s infinite ease-in-out both;
-}
-.thinking-dots span:nth-child(1) { animation-delay: 0s; }
-.thinking-dots span:nth-child(2) { animation-delay: 0.16s; }
-.thinking-dots span:nth-child(3) { animation-delay: 0.32s; }
-
-@keyframes bounce {
-  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
-  40% { transform: scale(1); opacity: 1; }
-}
-
-/* Formatted message content */
-.msg-bubble h1, .msg-bubble h2, .msg-bubble h3 { margin: 16px 0 8px 0; line-height: 1.3; }
-.msg-bubble h1 { font-size: 18px; }
-.msg-bubble h2 { font-size: 16px; }
-.msg-bubble h3 { font-size: 14px; font-weight: 600; }
-.msg-bubble p { margin: 0 0 8px 0; }
-.msg-bubble p:last-child { margin-bottom: 0; }
-.msg-bubble ul, .msg-bubble ol { margin: 4px 0 8px 0; padding-left: 20px; }
-.msg-bubble li { margin-bottom: 4px; list-style: disc; line-height: 1.5; }
-.msg-bubble li:last-child { margin-bottom: 0; }
-.msg-bubble code { background: var(--elevated); padding: 2px 6px; border-radius: 4px; font-size: 13px; }
-.msg-bubble pre { background: var(--elevated); padding: 12px; border-radius: 8px; overflow-x: auto; margin: 8px 0; }
-.msg-bubble pre code { background: none; padding: 0; }
-.msg-bubble strong { font-weight: 600; }
-.msg-bubble hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
-
-@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 </style>
 </head>
 <body>
 <div class="app">
-
-  <!-- Nav rail -->
   <nav class="nav-rail">
     <div class="nav-main">
-      <button class="nav-item active" onclick="showView('chat')" title="Chat">
+      <button class="nav-item active" data-nav="team" onclick="switchNav('team')" title="Team">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      </button>
+      <button class="nav-item" data-nav="conversations" onclick="switchNav('conversations')" title="Conversations">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
       </button>
-      <button class="nav-item" onclick="showView('files')" title="Files">
+      <button class="nav-item" data-nav="files" onclick="switchNav('files')" title="Files">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+      </button>
+    </div>
+    <div class="nav-bottom">
+      <button class="nav-item" onclick="toggleTheme()" title="Toggle theme" id="theme-toggle">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+      </button>
+      <div class="nav-separator"></div>
+      <button class="nav-item" title="Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.604.852.997 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
     </div>
   </nav>
 
-  <!-- Sidebar: file tree (shown in files view) -->
-  <aside class="sidebar hidden" id="sidebar-files">
-    <div class="sidebar-header">
-      <span class="sidebar-label">Files</span>
+  <aside class="sidebar">
+    <div id="sidebar-team">
+      <div class="sidebar-header"><span class="sidebar-label">Team</span></div>
+      <div class="agent-status-list" id="agent-list"></div>
+      <div id="sidebar-routines"></div>
     </div>
-    <div class="file-tree" id="file-tree"></div>
+    <div id="sidebar-conversations" class="hidden">
+      <div class="sidebar-header"><span class="sidebar-label">Conversations</span></div>
+      <div class="convo-list" id="convo-list"></div>
+      <button class="add-btn" onclick="newConversation()">+ New conversation</button>
+    </div>
+    <div id="sidebar-files" class="hidden">
+      <div class="sidebar-header"><span class="sidebar-label">Files</span></div>
+      <div class="file-tree" id="file-tree"></div>
+    </div>
   </aside>
 
-  <!-- Main panel -->
   <main class="main">
     <div class="connection-bar connecting" id="connection-bar">Connecting...</div>
-
-    <!-- Chat view -->
-    <div id="view-chat" style="display:flex; flex-direction:column; flex:1; overflow:hidden;">
+    <!-- Home: org chart -->
+    <div id="view-home" style="display:flex;flex-direction:column;flex:1;overflow:hidden"><div class="org-chart" id="org-chart"></div></div>
+    <!-- Agent profile -->
+    <div id="view-profile" class="hidden" style="display:flex;flex-direction:column;flex:1;overflow:hidden"><div class="profile" id="profile-content"></div></div>
+    <!-- Chat -->
+    <div id="view-chat" class="hidden" style="display:flex;flex-direction:column;flex:1;overflow:hidden">
       <div class="chat-header">
-        <span class="chat-header-dot" id="status-dot"></span>
-        <span class="chat-title">Conversation with Cos</span>
-        <span class="chat-status" id="chat-status">idle</span>
+        <a class="chat-back" onclick="goBack()"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></a>
+        <div class="avatar sm" id="chat-agent-avatar"></div>
+        <div style="flex:1;min-width:0">
+          <input id="chat-title-input" class="chat-title-input" spellcheck="false" value="New conversation" onchange="renameConversation(this.value)">
+          <div style="font-size:var(--caption);color:var(--text-2);display:flex;align-items:center;gap:6px" id="chat-agent-row">
+            <span id="chat-agent-label"></span>
+            <span class="chat-status" id="chat-status"></span>
+          </div>
+        </div>
+        <span class="chat-convo-status" id="chat-convo-status" onclick="toggleConvoStatus()">Active</span>
       </div>
       <div class="messages" id="messages"></div>
       <div class="chat-input">
-        <input type="text" id="msg-input" placeholder="Message Cos..." autofocus>
-        <button class="send-btn" id="send-btn" onclick="sendMessage()">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
-        </button>
+        <textarea id="msg-input" placeholder="Message..." rows="1"></textarea>
+        <button class="send-btn" id="send-btn" onclick="sendMessage()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></button>
       </div>
     </div>
-
-    <!-- Editor view -->
-    <div id="view-editor" class="hidden" style="display:flex; flex-direction:column; flex:1; overflow:hidden;">
+    <!-- Editor -->
+    <div id="view-editor" class="hidden" style="display:flex;flex-direction:column;flex:1;overflow:hidden">
       <div class="editor-header">
+        <a class="chat-back" onclick="showView('home')"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></a>
         <span class="editor-filename" id="editor-filename">Select a file</span>
         <span class="editor-status" id="editor-status"></span>
+        <button class="editor-toggle active" id="toggle-preview" onclick="setEditorMode('preview')">Preview</button>
+        <button class="editor-toggle" id="toggle-edit" onclick="setEditorMode('edit')">Edit</button>
       </div>
-      <div class="editor-content" id="editor-content" contenteditable="true"></div>
+      <div class="editor-content formatted" id="editor-content"></div>
     </div>
   </main>
 </div>
 
 <script>
-// ===== STATE =====
-let ws = null;
-let isProcessing = false;
-let currentView = 'chat';
-let currentFilePath = null;
-let currentStreamingMsg = null;
+const sunIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`;
+const moonIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
 
-// ===== WEBSOCKET =====
+let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null;
+// Per-conversation state: { convoId: { isProcessing, currentStreamingMsg, latestText } }
+const convoState = {};
+
+// WebSocket
 function connect() {
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${protocol}//${location.host}`);
-
-  ws.onopen = () => {
-    document.getElementById('connection-bar').className = 'connection-bar connected';
-    document.getElementById('connection-bar').textContent = 'Connected';
-    setTimeout(() => {
-      document.getElementById('connection-bar').style.display = 'none';
-    }, 2000);
-    // Request file tree
-    ws.send(JSON.stringify({ type: 'get_files' }));
-  };
-
-  ws.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    handleMessage(data);
-  };
-
-  ws.onclose = () => {
-    document.getElementById('connection-bar').style.display = 'block';
-    document.getElementById('connection-bar').className = 'connection-bar disconnected';
-    document.getElementById('connection-bar').textContent = 'Disconnected. Reconnecting...';
-    setTimeout(connect, 3000);
-  };
+  const p = location.protocol==='https:'?'wss:':'ws:';
+  ws = new WebSocket(`${p}//${location.host}`);
+  ws.onopen = () => { setConn('connected'); ws.send(JSON.stringify({type:'get_agents'})); ws.send(JSON.stringify({type:'get_files'})); };
+  ws.onmessage = e => handle(JSON.parse(e.data));
+  ws.onclose = () => { setConn('disconnected'); setTimeout(connect,3000); };
 }
+function setConn(s) { const b=document.getElementById('connection-bar'); b.className=`connection-bar ${s}`; b.textContent=s==='connected'?'Connected':s==='disconnected'?'Disconnected. Reconnecting...':'Connecting...'; if(s==='connected')setTimeout(()=>b.style.display='none',2000); else b.style.display='block'; }
 
-// ===== MESSAGE HANDLING =====
-function handleMessage(data) {
-  switch (data.type) {
+// Message handling
+function handle(d) {
+  const convoId = d._conversationId;
+
+  switch(d.type) {
+    case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesSidebar(); break;
     case 'system':
-      if (data.subtype === 'init') {
-        // Claude Code initialised, show available tools/agents
-        addSystemMsg(`Connected. ${data.tools?.length || 0} tools, ${data.agents?.length || 0} agents available.`);
-      } else if (data.subtype === 'done') {
-        finishProcessing();
+      // Capture session ID from init message
+      if(d.subtype==='init' && d._sessionId && convoId) {
+        const convo = conversations.find(c => c.id === convoId);
+        if(convo && !convo.sessionId) convo.sessionId = d._sessionId;
       }
+      if(d.subtype==='done' && convoId) finishProcessing(convoId);
       break;
-
     case 'assistant':
-      handleAssistantMessage(data);
+      if(convoId) handleAssistant(d, convoId);
       break;
-
     case 'result':
-      if (data.result) {
-        // Final result, ensure it's displayed
-        if (currentStreamingMsg) {
-          currentStreamingMsg.querySelector('.msg-bubble').innerHTML = formatMarkdown(data.result);
-          currentStreamingMsg = null;
-        }
-      }
-      finishProcessing();
+      if(convoId) handleResult(d, convoId);
       break;
-
-    case 'file_tree':
-      renderFileTree(data.tree);
-      break;
-
-    case 'file_content':
-      document.getElementById('editor-filename').textContent = data.path;
-      document.getElementById('editor-content').textContent = data.content;
-      document.getElementById('editor-status').textContent = 'Loaded';
-      currentFilePath = data.path;
-      break;
-
-    case 'file_saved':
-      document.getElementById('editor-status').textContent = 'Saved';
-      break;
-
-    case 'raw':
-      // Raw output, show as system message
-      if (data.content.trim()) {
-        addSystemMsg(data.content.trim());
-      }
-      break;
-
-    case 'error':
-      addSystemMsg('Error: ' + data.content);
-      break;
+    case 'file_tree': cachedFileTree = d.tree; renderFileTree(d.tree); break;
+    case 'file_content': loadFileContent(d.path, d.content); break;
+    case 'file_saved': document.getElementById('editor-status').textContent='Saved'; break;
+    case 'error': if(!d.content?.includes('no stdin')) addSystemMsgToConvo(d.content, convoId); break;
   }
 }
+function getConvoState(convoId) {
+  if(!convoState[convoId]) convoState[convoId] = { isProcessing: false, currentStreamingMsg: null, latestText: '', latestAgentId: null };
+  return convoState[convoId];
+}
 
-function handleAssistantMessage(data) {
-  const msg = data.message;
-  if (!msg || !msg.content) return;
+function handleAssistant(d, convoId) {
+  const msg=d.message; if(!msg?.content) return;
+  const state = getConvoState(convoId);
+  const isActive = activeConversation?.id === convoId;
 
-  // Remove thinking indicator on first real message
-  const thinking = document.getElementById('thinking-indicator');
-  if (thinking) thinking.remove();
-
-  for (const block of msg.content) {
-    if (block.type === 'text') {
-      if (currentStreamingMsg) {
-        currentStreamingMsg.querySelector('.msg-bubble').innerHTML = formatMarkdown(block.text);
-      } else {
-        currentStreamingMsg = addAgentMsg(block.text);
+  for(const block of msg.content) {
+    if(block.type==='text' && block.text) {
+      state.latestText = block.text;
+      state.latestAgentId = d._agent;
+    } else if(block.type==='tool_use') {
+      if(isActive) {
+        const status = document.getElementById('thinking-status');
+        if(status) status.textContent = formatToolName(block.name);
+        scrollBottom();
       }
-    } else if (block.type === 'tool_use') {
-      // Remove thinking indicator for tool use too
-      addToolMsg(block.name, JSON.stringify(block.input).substring(0, 100));
-    }
-  }
-
-  scrollToBottom();
-}
-
-// ===== UI =====
-function addAgentMsg(text) {
-  const messages = document.getElementById('messages');
-  const div = document.createElement('div');
-  div.className = 'msg msg-agent';
-  div.innerHTML = `
-    <div class="msg-sender">
-      <span class="msg-sender-icon">★</span> Cos
-      <span class="msg-time">${new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
-    </div>
-    <div class="msg-bubble">${formatMarkdown(text)}</div>
-  `;
-  messages.appendChild(div);
-  scrollToBottom();
-  return div;
-}
-
-function addUserMsg(text) {
-  const messages = document.getElementById('messages');
-  const div = document.createElement('div');
-  div.className = 'msg msg-user';
-  div.innerHTML = `<div class="msg-bubble">${escapeHtml(text)}</div>`;
-  messages.appendChild(div);
-  scrollToBottom();
-}
-
-function addSystemMsg(text) {
-  const messages = document.getElementById('messages');
-  const div = document.createElement('div');
-  div.className = 'msg-system';
-  div.textContent = text;
-  messages.appendChild(div);
-  scrollToBottom();
-}
-
-function addToolMsg(name, input) {
-  const messages = document.getElementById('messages');
-  const div = document.createElement('div');
-  div.className = 'msg-tool';
-  div.innerHTML = `<span class="msg-tool-icon">&#x2192;</span> Using ${escapeHtml(name)}`;
-  messages.appendChild(div);
-  scrollToBottom();
-  // Mark as done after a moment (the result will follow)
-  setTimeout(() => { div.classList.add('done'); }, 500);
-}
-
-function scrollToBottom() {
-  const messages = document.getElementById('messages');
-  messages.scrollTop = messages.scrollHeight;
-}
-
-// ===== SEND =====
-function sendMessage() {
-  const input = document.getElementById('msg-input');
-  const text = input.value.trim();
-  if (!text || isProcessing || !ws) return;
-
-  addUserMsg(text);
-  input.value = '';
-  startProcessing();
-  currentStreamingMsg = null;
-
-  ws.send(JSON.stringify({ type: 'chat', content: text }));
-}
-
-function startProcessing() {
-  isProcessing = true;
-  document.getElementById('status-dot').classList.add('working');
-  document.getElementById('chat-status').textContent = 'working...';
-  document.getElementById('send-btn').disabled = true;
-  document.getElementById('msg-input').disabled = true;
-
-  // Add thinking indicator
-  const messages = document.getElementById('messages');
-  const thinking = document.createElement('div');
-  thinking.className = 'msg msg-agent';
-  thinking.id = 'thinking-indicator';
-  thinking.innerHTML = `
-    <div class="msg-sender">
-      <span class="msg-sender-icon">★</span> Cos
-    </div>
-    <div class="msg-bubble thinking-bubble">
-      <span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span>
-    </div>
-  `;
-  messages.appendChild(thinking);
-  scrollToBottom();
-}
-
-function finishProcessing() {
-  isProcessing = false;
-  currentStreamingMsg = null;
-  document.getElementById('status-dot').classList.remove('working');
-  document.getElementById('chat-status').textContent = 'idle';
-  document.getElementById('send-btn').disabled = false;
-  document.getElementById('msg-input').disabled = false;
-  document.getElementById('msg-input').focus();
-}
-
-// ===== FILE TREE =====
-function renderFileTree(tree) {
-  const container = document.getElementById('file-tree');
-  container.innerHTML = '';
-  renderTreeLevel(tree, container);
-}
-
-function renderTreeLevel(items, container) {
-  for (const item of items) {
-    if (item.type === 'folder') {
-      const folder = document.createElement('div');
-      folder.className = 'folder-item';
-      folder.innerHTML = `<span class="folder-icon">&#x25B6;</span> ${escapeHtml(item.name)}`;
-      folder.onclick = () => {
-        const children = folder.nextElementSibling;
-        const icon = folder.querySelector('.folder-icon');
-        children.classList.toggle('collapsed');
-        icon.innerHTML = children.classList.contains('collapsed') ? '&#x25B6;' : '&#x25BC;';
-      };
-      container.appendChild(folder);
-
-      const children = document.createElement('div');
-      children.className = 'file-children collapsed';
-      renderTreeLevel(item.children, children);
-      container.appendChild(children);
-    } else {
-      const file = document.createElement('div');
-      file.className = 'file-item';
-      file.innerHTML = `<svg class="file-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> ${escapeHtml(item.name)}`;
-      file.onclick = () => {
-        document.querySelectorAll('.file-item').forEach(f => f.classList.remove('active'));
-        file.classList.add('active');
-        ws.send(JSON.stringify({ type: 'read_file', path: item.path }));
-        showView('files');
-      };
-      container.appendChild(file);
     }
   }
 }
 
-// ===== VIEWS =====
-function showView(view) {
-  currentView = view;
-  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+function handleResult(d, convoId) {
+  const state = getConvoState(convoId);
+  const isActive = activeConversation?.id === convoId;
+  const convo = conversations.find(c => c.id === convoId);
+  const agentId = d._agent || state.latestAgentId;
 
-  if (view === 'chat') {
-    document.querySelectorAll('.nav-item')[0].classList.add('active');
-    document.getElementById('sidebar-files').classList.add('hidden');
-    document.getElementById('view-chat').classList.remove('hidden');
-    document.getElementById('view-editor').classList.add('hidden');
-    document.getElementById('view-chat').style.display = 'flex';
+  if(d.result && convo) {
+    convo.messages.push({role:'agent', content:d.result, agentId});
+  }
+
+  if(isActive) {
+    const t=document.getElementById('thinking-indicator'); if(t) t.remove();
+    if(d.result) addAgentMsg(d.result, agentId);
+  }
+
+  state.currentStreamingMsg=null; state.latestText=''; state.latestAgentId=null;
+  finishProcessing(convoId);
+  renderConvoList();
+}
+
+function addSystemMsgToConvo(text, convoId) {
+  if(!convoId || activeConversation?.id === convoId) addSystemMsg('Error: ' + text);
+}
+
+// Agents - compact status list
+function renderAgentList() {
+  document.getElementById('agent-list').innerHTML = agents.map(a => `
+    <div class="agent-status-item" onclick="showProfile('${a.id}')" data-agent="${a.id}">
+      <div class="avatar sm" style="background:${a.colour}">${a.icon}</div>
+      <span class="agent-status-name">${a.name}</span>
+      <span class="agent-status-state" data-status="${a.id}">idle</span>
+    </div>`).join('');
+  // Update org chart name labels to include role
+  renderOrgChart();
+}
+
+// Org chart - click opens profile
+function renderOrgChart() {
+  const def=agents.find(a=>a.isDefault)||agents[0], others=agents.filter(a=>!a.isDefault);
+  let h='<div class="org-chart-title">Your team</div><div class="org-tree">';
+  if(def) h+=`<div class="org-leader"><div class="org-card" onclick="showProfile('${def.id}')"><div class="avatar" style="background:${def.colour};width:44px;height:44px;font-size:18px">${def.icon}</div><div><div class="org-card-name" style="font-size:var(--title)">${def.name}</div><div class="org-card-role">${def.role||'Chief of Staff'}</div></div></div></div>`;
+  if(others.length) {
+    h+='<div class="org-trunk"></div><div class="org-branches" id="org-branches"><div class="org-hline" id="org-hline"></div>';
+    for(const a of others) h+=`<div class="org-branch"><div class="org-branch-stem"></div><div class="org-card" onclick="showProfile('${a.id}')"><div class="avatar" style="background:${a.colour}">${a.icon}</div><div><div class="org-card-name">${a.name}</div><div class="org-card-role">${a.role||''}</div></div></div></div>`;
+    h+='</div>';
+  }
+  h+='</div>';
+  document.getElementById('org-chart').innerHTML=h;
+  setTimeout(()=>{ drawAndScaleOrgChart(); },50);
+}
+function drawAndScaleOrgChart() {
+  const container = document.getElementById('org-chart');
+  const tree = container?.querySelector('.org-tree');
+  if (!container || !tree) return;
+
+  // Step 1: Reset scale so we measure at natural size
+  tree.style.transform = 'scale(1)';
+  tree.style.transformOrigin = 'center top';
+
+  // Step 2: Draw lines at natural scale
+  const br = document.querySelectorAll('#org-branches .org-branch');
+  const brContainer = document.getElementById('org-branches');
+  const hline = document.getElementById('org-hline');
+  if (br.length && brContainer && hline) {
+    const r = brContainer.getBoundingClientRect();
+    const f = br[0].getBoundingClientRect();
+    const la = br[br.length - 1].getBoundingClientRect();
+    hline.style.left = (f.left + f.width / 2 - r.left) + 'px';
+    hline.style.width = (la.left + la.width / 2 - f.left - f.width / 2) + 'px';
+  }
+
+  // Step 3: Measure natural dimensions
+  const containerW = container.clientWidth - 64;
+  const containerH = container.clientHeight - 80;
+  const treeW = tree.offsetWidth;
+  const treeH = tree.offsetHeight;
+
+  if (treeW === 0 || treeH === 0) return;
+
+  // Step 4: Calculate scale to fill ~80% of container, min 1.0, max 1.6
+  const scaleX = (containerW * 0.8) / treeW;
+  const scaleY = (containerH * 0.8) / treeH;
+  const scale = Math.max(1.0, Math.min(scaleX, scaleY, 1.6));
+
+  // Step 5: Apply scale (lines are inside the tree, so they scale too)
+  tree.style.transform = `scale(${scale})`;
+}
+
+// Agent profile
+function showProfile(agentId) {
+  const a=agents.find(x=>x.id===agentId); if(!a) return;
+  const existing=conversations.filter(c=>c.agentId===agentId);
+  let h=`<a class="profile-back" onclick="goHome()">&#8592; Team</a>
+    <div class="profile-header">
+      <div class="profile-avatar" style="background:${a.colour}">${a.icon}</div>
+      <div>
+        <div class="profile-name">${a.name}</div>
+        ${a.role?`<div style="font-size:var(--body);color:var(--text-2)">${a.role}</div>`:''}
+      </div>
+    </div>`;
+  if(a.description) h+=`<p class="profile-desc" style="margin-bottom:24px">${esc(a.description)}</p>`;
+  h+=`<div class="profile-cta"><button class="profile-cta-btn" onclick="startConversation('${a.id}')">New conversation</button></div>`;
+  // Existing conversations
+  if(existing.length) {
+    h+=`<div class="profile-existing"><div class="profile-section-label">Existing conversations</div>`;
+    for(const c of existing) {
+      h+=`<div class="profile-existing-item" onclick="openConversation('${c.id}')"><span class="profile-existing-title">${esc(c.title)}</span><span class="profile-existing-meta">${c.messages.length} msg</span></div>`;
+    }
+    h+=`</div>`;
+  }
+  // Capabilities
+  if(a.capabilities) {
+    const c = a.capabilities;
+    if(c.does) h+=`<div class="profile-section"><div class="profile-section-label">What ${a.name} does</div><div class="profile-list-item" style="line-height:1.6">${esc(c.does)}</div></div>`;
+    if(c.reads) h+=`<div class="profile-section"><div class="profile-section-label">Reads from</div><div class="profile-list">${c.reads.split(',').map(r=>`<div class="profile-list-item">${r.trim()}</div>`).join('')}</div></div>`;
+    if(c.writes) h+=`<div class="profile-section"><div class="profile-section-label">Writes to</div><div class="profile-list"><div class="profile-list-item">${esc(c.writes)}</div></div></div>`;
+    if(c.connectors) h+=`<div class="profile-section"><div class="profile-section-label">Connectors</div><div class="profile-list">${c.connectors.split(',').map(cn=>`<div class="profile-list-item" style="display:flex;align-items:center;justify-content:space-between">${cn.trim()}<span style="color:var(--success);font-size:var(--caption)">Connected</span></div>`).join('')}</div></div>`;
+  }
+  // Routines
+  if(a.routines && a.routines.length) {
+    h+=`<div class="profile-section"><div class="profile-section-label">Routines</div><div class="profile-list">`;
+    for(const r of a.routines) {
+      const stateText = r.state ? (r.state.status === 'running' ? '<span style="color:var(--working)">Running now</span>' : `Last run: ${formatTimeAgo(r.state.lastRun)} (${r.state.status})`) : '<span style="color:var(--text-2)">Not yet run</span>';
+      h+=`<div class="profile-list-item" style="display:flex;flex-direction:column;gap:4px">
+        <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-weight:600">${esc(r.name)}</span></div>
+        <div style="font-size:var(--caption);color:var(--text-2)">${esc(r.schedule)}</div>
+        <div style="font-size:var(--caption)">${stateText}</div>
+      </div>`;
+    }
+    h+=`</div></div>`;
+  }
+  // Model
+  const modelLabels = {opus:'Opus (most capable)',sonnet:'Sonnet (fast, efficient)',haiku:'Haiku (lightweight)'};
+  if(a.model) h+=`<div class="profile-section"><div class="profile-section-label">Model</div><div class="profile-list"><div class="profile-list-item">${modelLabels[a.model]||a.model}</div></div></div>`;
+  // Instructions (collapsible)
+  if(a.instructions) h+=`<div class="profile-section">
+    <div class="profile-section-label" style="cursor:pointer" onclick="const el=document.getElementById('agent-instructions');el.classList.toggle('hidden');">Instructions ▾</div>
+    <div id="agent-instructions" class="hidden"><div class="profile-list-item" style="font-size:var(--caption);line-height:1.6;white-space:pre-wrap;max-height:400px;overflow-y:auto">${esc(a.instructions)}</div></div>
+  </div>`;
+  document.getElementById('profile-content').innerHTML=h;
+  showView('profile');
+  // Highlight in sidebar
+  document.querySelectorAll('.agent-status-item').forEach(el=>el.classList.remove('active'));
+  document.querySelector(`[data-agent="${agentId}"]`)?.classList.add('active');
+}
+
+// Conversations
+function startConversation(agentId) {
+  const agent=agents.find(a=>a.id===agentId)||agents[0];
+  const convo={id:Date.now().toString(),agentId:agent.id,agent,title:`Chat with ${agent.name}`,messages:[],status:'active'};
+  conversations.unshift(convo); activeConversation=convo;
+  renderConvoList(); setupChat(convo);
+  document.getElementById('messages').innerHTML='';
+  showView('chat');
+}
+function newConversation() { const d=agents.find(a=>a.isDefault)||agents[0]; if(d) startConversation(d.id); }
+function setupChat(convo) {
+  const agent = convo.agent;
+  document.getElementById('chat-title-input').value=convo.title;
+  document.getElementById('chat-agent-label').textContent=agent.name;
+  document.getElementById('chat-agent-avatar').style.background=agent.colour;
+  document.getElementById('chat-agent-avatar').textContent=agent.icon;
+  const msgInput = document.getElementById('msg-input');
+  msgInput.placeholder=`Message ${agent.name}...`;
+  msgInput.style.height = 'auto';
+  msgInput.style.height = '44px';
+  const statusEl=document.getElementById('chat-convo-status');
+  statusEl.textContent=convo.status==='done'?'Done':'Active';
+  statusEl.className=`chat-convo-status ${convo.status==='done'?'done-convo':'active-convo'}`;
+  // Set input state based on this conversation's processing state
+  const state = getConvoState(convo.id);
+  msgInput.disabled = state.isProcessing;
+  document.getElementById('send-btn').disabled = state.isProcessing;
+  if(!state.isProcessing) msgInput.focus();
+}
+function renameConversation(newTitle) {
+  if(activeConversation && newTitle.trim()) {
+    activeConversation.title=newTitle.trim();
+    renderConvoList();
+  }
+}
+function toggleConvoStatus() {
+  if(!activeConversation) return;
+  activeConversation.status = activeConversation.status==='done'?'active':'done';
+  const statusEl=document.getElementById('chat-convo-status');
+  statusEl.textContent=activeConversation.status==='done'?'Done':'Active';
+  statusEl.className=`chat-convo-status ${activeConversation.status==='done'?'done-convo':'active-convo'}`;
+  renderConvoList();
+}
+function renderConvoList() {
+  const active=conversations.filter(c=>c.status!=='done');
+  const done=conversations.filter(c=>c.status==='done');
+  let h='';
+  if(active.length) {
+    for(const c of active) {
+      const lastMsg=c.messages.filter(m=>m.role==='agent').pop();
+      const preview=lastMsg?lastMsg.content.substring(0,60)+'...':'No messages yet';
+      h+=`<div class="convo-item ${activeConversation?.id===c.id?'active':''}" onclick="openConversation('${c.id}')">
+        <span class="convo-title">${esc(c.title)}</span>
+        <span class="convo-preview">${esc(preview)}</span>
+        <div class="convo-meta"><div class="avatar xs" style="background:${c.agent.colour}">${c.agent.icon}</div><span>${c.agent.name}</span></div>
+      </div>`;
+    }
+  }
+  if(done.length) {
+    h+=`<div style="padding:12px 8px 6px"><span class="sidebar-label" style="cursor:pointer" onclick="document.getElementById('done-convos').classList.toggle('hidden')">Done (${done.length}) &#x25BE;</span></div>`;
+    h+=`<div id="done-convos" class="hidden">`;
+    for(const c of done) {
+      const lastMsg=c.messages.filter(m=>m.role==='agent').pop();
+      const preview=lastMsg?lastMsg.content.substring(0,50)+'...':'';
+      h+=`<div class="convo-item ${activeConversation?.id===c.id?'active':''}" onclick="openConversation('${c.id}')" style="opacity:0.7">
+        <span class="convo-title">${esc(c.title)}</span>
+        <span class="convo-preview">${esc(preview)}</span>
+        <div class="convo-meta"><div class="avatar xs" style="background:${c.agent.colour}">${c.agent.icon}</div><span>${c.agent.name}</span></div>
+      </div>`;
+    }
+    h+=`</div>`;
+  }
+  document.getElementById('convo-list').innerHTML=h;
+}
+function openConversation(id) {
+  const c=conversations.find(x=>x.id===id); if(!c) return;
+  activeConversation=c;
+  if(c.status==='done') { c.status='active'; }
+  setupChat(c);
+  const el=document.getElementById('messages'); el.innerHTML='';
+  for(const m of c.messages) { if(m.role==='user') addUserMsg(m.content,false); else if(m.role==='agent') addAgentMsg(m.content,m.agentId,false); }
+  // Restore processing state if this conversation is still working
+  const state = getConvoState(id);
+  if(state.isProcessing) {
+    document.getElementById('chat-status').textContent='· working...'; document.getElementById('chat-status').classList.add('working');
+    document.getElementById('send-btn').disabled=true; document.getElementById('msg-input').disabled=true;
+    const a=c.agent;
+    const m2=document.getElementById('messages'),d=document.createElement('div'); d.className='msg msg-agent'; d.id='thinking-indicator';
+    d.innerHTML=`<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.name||'Agent'}</div><div class="msg-bubble thinking-bubble"><span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span><div class="thinking-status" id="thinking-status"></div></div>`;
+    m2.appendChild(d);
   } else {
-    document.querySelectorAll('.nav-item')[1].classList.add('active');
-    document.getElementById('sidebar-files').classList.remove('hidden');
-    document.getElementById('view-chat').classList.add('hidden');
-    document.getElementById('view-chat').style.display = 'none';
-    document.getElementById('view-editor').classList.remove('hidden');
-    document.getElementById('view-editor').style.display = 'flex';
+    document.getElementById('chat-status').textContent=''; document.getElementById('chat-status').classList.remove('working');
+    document.getElementById('send-btn').disabled=false;
+    document.getElementById('msg-input').disabled=false;
+    document.getElementById('msg-input').focus();
   }
+  showView('chat'); scrollBottom(); renderConvoList();
 }
 
-// ===== EDITOR SAVE =====
-let saveTimer = null;
-document.addEventListener('input', (e) => {
-  if (e.target.id === 'editor-content' && currentFilePath) {
-    document.getElementById('editor-status').textContent = 'Unsaved';
-    document.getElementById('editor-status').style.color = 'var(--attention)';
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-      ws.send(JSON.stringify({
-        type: 'save_file',
-        path: currentFilePath,
-        content: document.getElementById('editor-content').textContent
-      }));
-      document.getElementById('editor-status').textContent = 'Saved';
-      document.getElementById('editor-status').style.color = 'var(--success)';
-    }, 1500);
+// Send
+function sendMessage() {
+  const input=document.getElementById('msg-input'),text=input.value.trim();
+  if(!activeConversation||!ws) return;
+  const state = getConvoState(activeConversation.id);
+  if(!text||state.isProcessing) return;
+  addUserMsg(text); activeConversation.messages.push({role:'user',content:text});
+  if(activeConversation.messages.filter(m=>m.role==='user').length===1) { activeConversation.title=text.substring(0,50)+(text.length>50?'...':''); document.getElementById('chat-title-input').value=activeConversation.title; renderConvoList(); }
+  input.value=''; input.style.height='44px'; startProcessing(activeConversation.id);
+  const chatMsg = {type:'chat', content:text, agent:activeConversation.agentId, conversationId:activeConversation.id};
+  // Include session ID for resume if this isn't the first message
+  if(activeConversation.sessionId) chatMsg.sessionId = activeConversation.sessionId;
+  ws.send(JSON.stringify(chatMsg));
+}
+function startProcessing(convoId) {
+  const state = getConvoState(convoId);
+  state.isProcessing=true; state.latestText=''; state.latestAgentId=null;
+  const isActive = activeConversation?.id === convoId;
+  const convo = conversations.find(c=>c.id===convoId);
+  if(isActive) {
+    document.getElementById('chat-status').textContent='· working...'; document.getElementById('chat-status').classList.add('working');
+    document.getElementById('send-btn').disabled=true;
+    document.getElementById('msg-input').disabled=true;
+    const a=convo?.agent||agents[0];
+    const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg msg-agent'; d.id='thinking-indicator';
+    d.innerHTML=`<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.name||'Agent'}</div><div class="msg-bubble thinking-bubble"><span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span><div class="thinking-status" id="thinking-status"></div></div>`;
+    m.appendChild(d); scrollBottom();
   }
-});
+  if(convo) { const s=document.querySelector(`[data-status="${convo.agentId}"]`); if(s){s.textContent='working';s.classList.add('working');} }
+}
+function finishProcessing(convoId) {
+  const state = getConvoState(convoId);
+  state.isProcessing=false; state.currentStreamingMsg=null;
+  const isActive = activeConversation?.id === convoId;
+  const convo = conversations.find(c=>c.id===convoId);
 
-// ===== KEYBOARD =====
-document.getElementById('msg-input').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    sendMessage();
+  if(isActive) {
+    const tt=document.getElementById('thinking-indicator'); if(tt) tt.remove();
+    document.getElementById('chat-status').textContent=''; document.getElementById('chat-status').classList.remove('working');
+    document.getElementById('send-btn').disabled=false;
+    document.getElementById('msg-input').disabled=false;
+    document.getElementById('msg-input').focus();
   }
-});
-
-// ===== HELPERS =====
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
+  if(convo) { const s=document.querySelector(`[data-status="${convo.agentId}"]`); if(s){s.textContent='idle';s.classList.remove('working');} }
 }
 
-function formatMarkdown(text) {
-  let html = escapeHtml(text);
+// UI helpers
+function addAgentMsg(text,agentId,anim=true) {
+  const a=agents.find(x=>x.id===agentId)||activeConversation?.agent||agents[0],m=document.getElementById('messages'),d=document.createElement('div');
+  d.className='msg msg-agent'; if(!anim)d.style.animation='none';
+  d.innerHTML=`<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.name||'Agent'}<span class="msg-time">${new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></div><div class="msg-bubble">${formatMd(text)}</div>`;
+  m.appendChild(d); scrollBottom(); return d;
+}
+function addUserMsg(text,anim=true) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg msg-user'; if(!anim)d.style.animation='none'; d.innerHTML=`<div class="msg-bubble">${esc(text)}</div>`; m.appendChild(d); scrollBottom(); }
+function addSystemMsg(text) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg-system'; d.textContent=text; m.appendChild(d); scrollBottom(); }
+function addToolMsg(name) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg-tool'; d.innerHTML=`<span style="color:var(--working)">&#x2192;</span> Using ${esc(name)}`; m.appendChild(d); scrollBottom(); return d; }
+function formatToolName(name) {
+  const labels = {
+    'Read': 'Reading files...', 'Glob': 'Searching files...', 'Grep': 'Searching content...',
+    'Bash': 'Running a command...', 'Write': 'Writing a file...', 'Edit': 'Editing a file...',
+    'WebSearch': 'Searching the web...', 'WebFetch': 'Fetching a page...',
+    'Agent': 'Delegating to a specialist...', 'Skill': 'Running a skill...',
+    'TodoWrite': 'Updating tasks...', 'NotebookEdit': 'Editing notebook...',
+    'ListMcpResourcesTool': 'Checking connectors...', 'ReadMcpResourceTool': 'Reading from connector...',
+    'ToolSearch': 'Looking up tools...'
+  };
+  // Check for MCP tools (mcp__service__tool format)
+  if(name.startsWith('mcp__')) {
+    const parts = name.split('__');
+    const service = parts[1] || '';
+    return `Checking ${service}...`;
+  }
+  return labels[name] || `Working...`;
+}
+function scrollBottom() { const m=document.getElementById('messages'); if(m) m.scrollTop=m.scrollHeight; }
 
-  // Code blocks (``` ... ```)
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+// Views
+function switchNav(nav) {
+  document.querySelectorAll('.nav-item[data-nav]').forEach(n=>n.classList.remove('active'));
+  document.querySelector(`[data-nav="${nav}"]`)?.classList.add('active');
+  ['team','conversations','files'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
+  document.getElementById(`sidebar-${nav}`).classList.remove('hidden');
+  if(nav==='files') showView('editor');
+  else if(nav==='conversations') showView(activeConversation?'chat':'home');
+  else showView('home');
+}
+function showView(v) { currentView=v; ['home','profile','chat','editor'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';} if(v==='home')setTimeout(drawAndScaleOrgChart,50); }
+function goHome() { activeConversation=null; showView('home'); switchNav('team'); document.querySelectorAll('.agent-status-item').forEach(el=>el.classList.remove('active')); }
+function goBack() { if(activeConversation) showProfile(activeConversation.agentId); else goHome(); }
 
-  // Bold
-  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+// Theme
+function toggleTheme() { document.body.classList.toggle('light'); document.getElementById('theme-toggle').innerHTML=document.body.classList.contains('light')?moonIcon:sunIcon; }
 
-  // Inline code
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-
-  // Headers
-  html = html.replace(/^### (.*$)/gm, '<h3>$1</h3>');
-  html = html.replace(/^## (.*$)/gm, '<h2>$1</h2>');
-  html = html.replace(/^# (.*$)/gm, '<h1>$1</h1>');
-
-  // Horizontal rule
-  html = html.replace(/^---$/gm, '<hr>');
-
-  // Convert bullet lists into proper <ul><li> structure
-  html = html.replace(/((?:^[-*] .*$\n?)+)/gm, (match) => {
-    const items = match.trim().split('\n').map(line => {
-      const text = line.replace(/^[-*] /, '');
-      return `<li>${text}</li>`;
-    }).join('');
-    return `<ul>${items}</ul>`;
-  });
-
-  // Convert numbered lists
-  html = html.replace(/((?:^\d+\. .*$\n?)+)/gm, (match) => {
-    const items = match.trim().split('\n').map(line => {
-      const text = line.replace(/^\d+\. /, '');
-      return `<li>${text}</li>`;
-    }).join('');
-    return `<ol>${items}</ol>`;
-  });
-
-  // Paragraphs: wrap remaining text blocks
-  html = html.split('\n\n').map(block => {
-    block = block.trim();
-    if (!block) return '';
-    // Don't wrap blocks that are already HTML elements
-    if (block.startsWith('<h') || block.startsWith('<ul') || block.startsWith('<ol') ||
-        block.startsWith('<pre') || block.startsWith('<hr') || block.startsWith('<p')) {
-      return block;
+// File tree
+function renderFileTree(tree) { const c=document.getElementById('file-tree'); c.innerHTML=''; buildTree(tree,c); }
+function buildTree(items,container) {
+  for(const item of items) {
+    if(item.type==='folder') {
+      const f=document.createElement('div'); f.className='folder-item'; f.innerHTML=`<span class="folder-icon">&#x25B6;</span> ${esc(item.name)}`;
+      f.onclick=()=>{const ch=f.nextElementSibling,ic=f.querySelector('.folder-icon');ch.classList.toggle('collapsed');ic.innerHTML=ch.classList.contains('collapsed')?'&#x25B6;':'&#x25BC;';};
+      container.appendChild(f);
+      const ch=document.createElement('div'); ch.className='file-children collapsed'; buildTree(item.children,ch); container.appendChild(ch);
+    } else {
+      const fi=document.createElement('div'); fi.className='file-item';
+      fi.innerHTML=`<svg class="file-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> ${esc(item.name)}`;
+      fi.onclick=()=>{document.querySelectorAll('.file-item').forEach(x=>x.classList.remove('active'));fi.classList.add('active');ws.send(JSON.stringify({type:'read_file',path:item.path}));showView('editor');};
+      container.appendChild(fi);
     }
-    // Replace single newlines with <br> within paragraphs
-    return `<p>${block.replace(/\n/g, '<br>')}</p>`;
-  }).join('');
+  }
+}
+
+// Editor
+let editorMode='preview', rawFileContent='', fileFrontmatter='', fileBody='';
+
+function loadFileContent(path, content) {
+  currentFilePath = path;
+  rawFileContent = content;
+  document.getElementById('editor-filename').textContent = path;
+  document.getElementById('editor-status').textContent = '';
+
+  // Split frontmatter from body
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  if (fmMatch) {
+    fileFrontmatter = '---\n' + fmMatch[1] + '\n---\n';
+    fileBody = fmMatch[2];
+  } else {
+    fileFrontmatter = '';
+    fileBody = content;
+  }
+
+  // Always open in preview mode
+  editorMode = 'preview';
+  renderEditorContent();
+}
+
+function renderEditorContent() {
+  const el = document.getElementById('editor-content');
+  document.getElementById('toggle-preview').classList.toggle('active', editorMode === 'preview');
+  document.getElementById('toggle-edit').classList.toggle('active', editorMode === 'edit');
+
+  if (editorMode === 'preview') {
+    el.className = 'editor-content formatted';
+    el.contentEditable = 'false';
+    el.innerHTML = formatMdFull(fileBody);
+  } else {
+    el.className = 'editor-content source';
+    el.contentEditable = 'true';
+    el.textContent = rawFileContent;
+    el.focus();
+  }
+}
+
+function setEditorMode(mode) {
+  if (mode === 'preview' && editorMode === 'edit') {
+    // Switching from edit to preview: capture changes first
+    rawFileContent = document.getElementById('editor-content').textContent;
+    const fmMatch = rawFileContent.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+    if (fmMatch) { fileFrontmatter = '---\n' + fmMatch[1] + '\n---\n'; fileBody = fmMatch[2]; }
+    else { fileFrontmatter = ''; fileBody = rawFileContent; }
+  }
+  editorMode = mode;
+  renderEditorContent();
+}
+
+function getFileContentForSave() {
+  if (editorMode === 'edit') {
+    rawFileContent = document.getElementById('editor-content').textContent;
+  }
+  return rawFileContent;
+}
+
+// ===== MARKDOWN RENDERING (marked + Obsidian extensions) =====
+
+// Configure marked
+marked.setOptions({ gfm: true, breaks: false });
+
+function renderMarkdown(text, options = {}) {
+  let src = text;
+
+
+  // Pre-processing: Obsidian-specific syntax (before marked processes it)
+
+  // Obsidian comments: %%text%% - hide completely
+  src = src.replace(/%%[\s\S]*?%%/g, '');
+
+  // Wikilinks: [[file|display]] and [[file]]
+  src = src.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '<a class="wikilink" onclick="openWikilink(\'$1\')">$2</a>');
+  src = src.replace(/\[\[([^\]]+)\]\]/g, '<a class="wikilink" onclick="openWikilink(\'$1\')">$1</a>');
+
+  // Highlights: ==text==
+  src = src.replace(/==(.*?)==/g, '<mark>$1</mark>');
+
+  // Tags: #tag (but not inside code blocks or headings)
+  src = src.replace(/(?:^|\s)#([a-zA-Z][a-zA-Z0-9_/-]*)/g, ' <span class="md-tag">#$1</span>');
+
+  // Callouts: process before marked
+  if (options.callouts !== false) {
+    src = processCalloutsSrc(src);
+  }
+
+  // Render with marked
+  let html = marked.parse(src);
+
+  // Post-processing: clean up marked output for our styling
+  // Checkboxes: add accent colour
+  html = html.replace(/<input.*?checked.*?disabled.*?>/g, '<input type="checkbox" checked disabled style="margin-right:8px;accent-color:var(--accent)">');
+  html = html.replace(/<input.*?disabled.*?type="checkbox".*?>/g, '<input type="checkbox" disabled style="margin-right:8px">');
 
   return html;
 }
 
-// ===== INIT =====
+function processCalloutsSrc(src) {
+  // Process Obsidian callouts in raw source before marked
+  // Callout: > [!type] title followed by > content
+  const lines = src.split('\n');
+  const result = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const calloutMatch = lines[i].match(/^>\s*\[!(\w+)\]([+-])?\s*(.*)/);
+    if (calloutMatch) {
+      const type = calloutMatch[1].toLowerCase();
+      const title = calloutMatch[3] || type.charAt(0).toUpperCase() + type.slice(1);
+      const contentLines = [];
+      i++;
+
+      // Collect callout content (lines starting with >)
+      while (i < lines.length && (lines[i].startsWith('>') || lines[i].trim() === '')) {
+        if (lines[i].trim() === '' && i + 1 < lines.length && !lines[i + 1].startsWith('>')) break;
+        let line = lines[i].replace(/^>\s?/, '');
+        contentLines.push(line);
+        i++;
+      }
+
+      const content = renderMarkdown(contentLines.join('\n'), { callouts: true });
+      result.push(`<div class="callout callout-${type}"><div class="callout-title">${title}</div><div class="callout-content">${content}</div></div>`);
+    } else {
+      result.push(lines[i]);
+      i++;
+    }
+  }
+
+  return result.join('\n');
+}
+
+// Alias for backward compatibility
+function formatMd(text) { return renderMarkdown(text); }
+function formatMdFull(text) { return renderMarkdown(text, { callouts: true }); }
+
+// ===== LEGACY (kept for reference, replaced by marked) =====
+function _legacyFormatMdFull(text) {
+  let h = esc(text);
+  h = h.replace(/%%[\s\S]*?%%/g, '');
+
+  // Code blocks (preserve from further processing)
+  const codeBlocks = [];
+  h = h.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+    codeBlocks.push(`<pre><code>${code}</code></pre>`);
+    return `%%CODEBLOCK${codeBlocks.length - 1}%%`;
+  });
+
+  // Tables
+  h = h.replace(/((?:^\|.*\|$\n?)+)/gm, (match) => {
+    const rows = match.trim().split('\n').filter(r => !r.match(/^\|\s*[-:]+/));
+    if (rows.length === 0) return match;
+    let table = '<table>';
+    rows.forEach((row, i) => {
+      const cells = row.split('|').filter(c => c.trim() !== '');
+      const tag = i === 0 ? 'th' : 'td';
+      table += '<tr>' + cells.map(c => `<${tag}>${c.trim()}</${tag}>`).join('') + '</tr>';
+    });
+    return table + '</table>';
+  });
+
+  // Checkboxes (before list processing)
+  h = h.replace(/^- \[x\] (.*$)/gm, '<li style="list-style:none;margin-left:-20px"><input type="checkbox" checked disabled style="margin-right:8px;accent-color:var(--accent)">$1</li>');
+  h = h.replace(/^- \[ \] (.*$)/gm, '<li style="list-style:none;margin-left:-20px"><input type="checkbox" disabled style="margin-right:8px">$1</li>');
+
+  // Headers
+  h = h.replace(/^###### (.*$)/gm, '<h6>$1</h6>');
+  h = h.replace(/^##### (.*$)/gm, '<h5>$1</h5>');
+  h = h.replace(/^#### (.*$)/gm, '<h4>$1</h4>');
+  h = h.replace(/^### (.*$)/gm, '<h3>$1</h3>');
+  h = h.replace(/^## (.*$)/gm, '<h2>$1</h2>');
+  h = h.replace(/^# (.*$)/gm, '<h1>$1</h1>');
+
+  // Horizontal rules
+  h = h.replace(/^---$/gm, '<hr>');
+
+  // Callouts and blockquotes
+  h = parseCallouts(h);
+
+  // Bullet lists (non-checkbox)
+  h = h.replace(/((?:^[-*] (?!\[).*$\n?)+)/gm, (match) => {
+    const items = match.trim().split('\n').map(l => `<li>${l.replace(/^[-*] /, '')}</li>`).join('');
+    return `<ul>${items}</ul>`;
+  });
+
+  // Wrap checkbox runs in <ul>
+  h = h.replace(/((?:<li style="list-style:none.*?<\/li>\n?)+)/g, '<ul style="padding-left:24px">$1</ul>');
+
+  // Numbered lists
+  h = h.replace(/((?:^\d+\. .*$\n?)+)/gm, (match) => {
+    const items = match.trim().split('\n').map(l => `<li>${l.replace(/^\d+\. /, '')}</li>`).join('');
+    return `<ol>${items}</ol>`;
+  });
+
+  // Wikilinks: [[file|display]] and [[file]]
+  h = h.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '<a class="wikilink" onclick="openWikilink(\'$1\')" style="color:var(--accent);cursor:pointer;text-decoration:underline;text-underline-offset:2px">$2</a>');
+  h = h.replace(/\[\[([^\]]+)\]\]/g, '<a class="wikilink" onclick="openWikilink(\'$1\')" style="color:var(--accent);cursor:pointer;text-decoration:underline;text-underline-offset:2px">$1</a>');
+
+  // Images: ![alt](url)
+  h = h.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%;border-radius:8px;margin:8px 0">');
+
+  // Hyperlinks: [text](url)
+  h = h.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline;text-underline-offset:2px">$1</a>');
+
+  // Highlights: ==text==
+  h = h.replace(/==(.*?)==/g, '<mark style="background:rgba(232,122,90,0.2);color:var(--text-1);padding:1px 4px;border-radius:3px">$1</mark>');
+
+  // Bold + Italic: ***text***
+  h = h.replace(/\*\*\*(.*?)\*\*\*/g, '<strong><em>$1</em></strong>');
+
+  // Bold: **text**
+  h = h.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+
+  // Italic: *text* (but not inside URLs or already-processed tags)
+  h = h.replace(/(?<![=\w])\*([^*\n]+)\*(?![=\w])/g, '<em>$1</em>');
+
+  // Strikethrough: ~~text~~
+  h = h.replace(/~~(.*?)~~/g, '<del>$1</del>');
+
+  // Inline code (after bold/italic to avoid conflicts)
+  h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  // Tags: #tag (render as styled pill)
+  h = h.replace(/(?:^|\s)#([a-zA-Z][a-zA-Z0-9_/-]*)/g, ' <span style="background:var(--card);color:var(--accent);padding:2px 8px;border-radius:4px;font-size:var(--caption);font-weight:500">#$1</span>');
+
+  // Paragraphs
+  h = h.split('\n\n').map(b => {
+    b = b.trim(); if (!b) return '';
+    if (b.startsWith('<')) return b;
+    return `<p>${b.replace(/\n/g, '<br>')}</p>`;
+  }).join('');
+
+  // Restore code blocks
+  h = h.replace(/%%CODEBLOCK(\d+)%%/g, (_, i) => codeBlocks[parseInt(i)]);
+
+  return h;
+}
+
+function _legacyParseCallouts(html) {
+  // Find blockquote blocks (lines starting with &gt;)
+  return html.replace(/((?:^&gt;.*$\n?)+)/gm, (block) => {
+    return processBlockquote(block);
+  });
+}
+
+function _legacyProcessBlockquote(block) {
+  // Remove one level of &gt; prefix
+  const lines = block.split('\n');
+  const stripped = lines.map(l => l.replace(/^&gt; ?/, '')).join('\n');
+
+  // Check if it's a callout: [!type]
+  const calloutMatch = stripped.match(/^\[!(\w+)\]([+-])?\s*(.*)/);
+  if (calloutMatch) {
+    const type = calloutMatch[1].toLowerCase();
+    const foldable = calloutMatch[2] || '';
+    const title = calloutMatch[3] || type.charAt(0).toUpperCase() + type.slice(1);
+    let content = stripped.substring(stripped.indexOf('\n') + 1);
+
+    // Recursively process nested callouts in the content
+    if (content.includes('&gt;')) {
+      content = parseCallouts(content);
+    }
+
+    // Process inline markdown in content
+    content = content.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    content = content.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+    content = content.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '<a class="wikilink" onclick="openWikilink(\'$1\')" style="color:var(--accent);cursor:pointer;text-decoration:underline;text-underline-offset:2px">$2</a>');
+    content = content.replace(/\[\[([^\]]+)\]\]/g, '<a class="wikilink" onclick="openWikilink(\'$1\')" style="color:var(--accent);cursor:pointer;text-decoration:underline;text-underline-offset:2px">$1</a>');
+
+    return `<div class="callout callout-${type}"><div class="callout-title">${esc(title)}</div><div class="callout-content">${content.replace(/\n/g, '<br>')}</div></div>`;
+  }
+
+  // Regular blockquote
+  let content = stripped;
+  if (content.includes('&gt;')) {
+    content = parseCallouts(content);
+  }
+  return `<blockquote>${content.replace(/\n/g, '<br>')}</blockquote>`;
+}
+
+// Editor save
+let saveTimer=null;
+document.addEventListener('input',e=>{if(e.target.id==='editor-content'&&currentFilePath&&editorMode==='edit'){document.getElementById('editor-status').textContent='Unsaved';document.getElementById('editor-status').style.color='var(--attention)';clearTimeout(saveTimer);saveTimer=setTimeout(()=>{ws.send(JSON.stringify({type:'save_file',path:currentFilePath,content:getFileContentForSave()}));document.getElementById('editor-status').style.color='var(--success)';document.getElementById('editor-status').textContent='Saved';},1500);}});
+const msgInput = document.getElementById('msg-input');
+msgInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}});
+msgInput.addEventListener('input',()=>{ msgInput.style.height='auto'; msgInput.style.height=Math.min(msgInput.scrollHeight, 200)+'px'; });
+
+function formatTimeAgo(isoStr) {
+  if (!isoStr) return 'never';
+  const d = new Date(isoStr);
+  const now = new Date();
+  const diffMs = now - d;
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+function renderRoutinesSidebar() {
+  const container = document.getElementById('sidebar-routines');
+  if (!container) return;
+  const allRoutines = [];
+  for (const a of agents) {
+    if (a.routines) {
+      for (const r of a.routines) {
+        allRoutines.push({ ...r, agentName: a.name, agentColour: a.colour, agentIcon: a.icon });
+      }
+    }
+  }
+  if (allRoutines.length === 0) { container.innerHTML = ''; return; }
+
+  let h = '<div style="border-top:1px solid var(--border);margin:12px 16px 0;padding-top:16px"><span class="sidebar-label">Routines</span></div>';
+  h += '<div style="padding:8px 8px 16px">';
+  for (const r of allRoutines) {
+    const statusText = r.state?.status === 'running'
+      ? '<span style="color:var(--working)">Running...</span>'
+      : `<span style="color:var(--text-2)">${formatScheduleShort(r.schedule)}</span>`;
+    h += `<div style="display:flex;align-items:center;gap:8px;padding:8px;font-size:var(--caption);border-radius:8px;transition:background 0.15s ease;cursor:default" onmouseover="this.style.background='var(--elevated)'" onmouseout="this.style.background='transparent'">
+      <div class="avatar" style="background:${r.agentColour};width:20px;height:20px;font-size:9px">${r.agentIcon}</div>
+      <span style="flex:1;color:var(--text-1);font-weight:500;font-size:var(--body)">${esc(r.name)}</span>
+      ${statusText}
+    </div>`;
+  }
+  h += '</div>';
+  container.innerHTML = h;
+}
+
+function formatScheduleShort(schedule) {
+  if (!schedule) return '';
+  const s = schedule.toLowerCase();
+  const dailyMatch = s.match(/every day at (\d{2}):(\d{2})/);
+  if (dailyMatch) {
+    const h = parseInt(dailyMatch[1]);
+    const m = dailyMatch[2];
+    return `${h > 12 ? h - 12 : h}:${m} ${h >= 12 ? 'PM' : 'AM'}`;
+  }
+  const weeklyMatch = s.match(/every (\w+) at (\d{2}):(\d{2})/);
+  if (weeklyMatch) {
+    const day = weeklyMatch[1].charAt(0).toUpperCase() + weeklyMatch[1].slice(1, 3);
+    const h = parseInt(weeklyMatch[2]);
+    const m = weeklyMatch[3];
+    return `${day} ${h > 12 ? h - 12 : h}:${m} ${h >= 12 ? 'PM' : 'AM'}`;
+  }
+  return schedule;
+}
+
+function esc(t){const d=document.createElement('div');d.textContent=t;return d.innerHTML;}
+function _legacyFormatMd(text) {
+  let h=esc(text);
+  h=h.replace(/%%[\s\S]*?%%/g,'');
+  // Code blocks
+  const cb=[];
+  h=h.replace(/```(\w*)\n([\s\S]*?)```/g,(_,l,c)=>{cb.push(`<pre><code>${c}</code></pre>`);return`%%CB${cb.length-1}%%`;});
+  // Checkboxes
+  h=h.replace(/^- \[x\] (.*$)/gm,'<li style="list-style:none;margin-left:-20px"><input type="checkbox" checked disabled style="margin-right:8px;accent-color:var(--accent)">$1</li>');
+  h=h.replace(/^- \[ \] (.*$)/gm,'<li style="list-style:none;margin-left:-20px"><input type="checkbox" disabled style="margin-right:8px">$1</li>');
+  // Headers
+  h=h.replace(/^### (.*$)/gm,'<h3>$1</h3>');
+  h=h.replace(/^## (.*$)/gm,'<h2>$1</h2>');
+  h=h.replace(/^# (.*$)/gm,'<h1>$1</h1>');
+  // Wikilinks
+  h=h.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g,'<a class="wikilink" onclick="openWikilink(\'$1\')" style="color:var(--accent);cursor:pointer;text-decoration:underline;text-underline-offset:2px">$2</a>');
+  h=h.replace(/\[\[([^\]]+)\]\]/g,'<a class="wikilink" onclick="openWikilink(\'$1\')" style="color:var(--accent);cursor:pointer;text-decoration:underline;text-underline-offset:2px">$1</a>');
+  // Images
+  h=h.replace(/!\[([^\]]*)\]\(([^)]+)\)/g,'<img src="$2" alt="$1" style="max-width:100%;border-radius:8px">');
+  // Hyperlinks
+  h=h.replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline;text-underline-offset:2px">$1</a>');
+  // Highlights
+  h=h.replace(/==(.*?)==/g,'<mark style="background:rgba(232,122,90,0.2);color:var(--text-1);padding:1px 4px;border-radius:3px">$1</mark>');
+  // Bold+italic, bold, italic, strikethrough
+  h=h.replace(/\*\*\*(.*?)\*\*\*/g,'<strong><em>$1</em></strong>');
+  h=h.replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>');
+  h=h.replace(/(?<![=\w])\*([^*\n]+)\*(?![=\w])/g,'<em>$1</em>');
+  h=h.replace(/~~(.*?)~~/g,'<del>$1</del>');
+  // Inline code
+  h=h.replace(/`([^`]+)`/g,'<code>$1</code>');
+  // Lists
+  h=h.replace(/((?:^[-*] (?!\[).*$\n?)+)/gm,m=>{const items=m.trim().split('\n').map(l=>`<li>${l.replace(/^[-*] /,'')}</li>`).join('');return`<ul>${items}</ul>`;});
+  h=h.replace(/((?:<li style="list-style:none.*?<\/li>\n?)+)/g,'<ul style="padding-left:24px">$1</ul>');
+  // Paragraphs
+  h=h.split('\n\n').map(b=>{b=b.trim();if(!b)return'';if(b.startsWith('<'))return b;return`<p>${b.replace(/\n/g,'<br>')}</p>`;}).join('');
+  // Restore code blocks
+  h=h.replace(/%%CB(\d+)%%/g,(_,i)=>cb[parseInt(i)]);
+  return h;
+}
+
+// Wikilink navigation
+let cachedFileTree = null;
+
+function openWikilink(name) {
+  const baseName = name.split('#')[0].trim();
+  const searchName = baseName.endsWith('.md') ? baseName : baseName + '.md';
+
+  // Search the cached file tree data (not the DOM)
+  if (cachedFileTree) {
+    const match = findFileInTree(cachedFileTree, searchName);
+    if (match) {
+      switchNav('files');
+      ws.send(JSON.stringify({ type: 'read_file', path: match }));
+      showView('editor');
+      return;
+    }
+  }
+
+  // If not found in cache, ask the server directly
+  if (ws) {
+    ws.send(JSON.stringify({ type: 'read_file', path: searchName }));
+    switchNav('files');
+    showView('editor');
+  }
+}
+
+function findFileInTree(items, searchName) {
+  // Normalise search: could be "filename.md" or "path/to/filename.md"
+  const searchLower = searchName.toLowerCase();
+  const searchBase = searchName.split('/').pop().toLowerCase();
+
+  for (const item of items) {
+    if (item.type === 'file') {
+      const itemPath = item.path.toLowerCase();
+      const itemName = item.name.toLowerCase();
+      // Exact path match
+      if (itemPath === searchLower) return item.path;
+      // Exact name match
+      if (itemName === searchBase) return item.path;
+      // Name without .md match
+      if (itemName === searchBase.replace('.md', '') + '.md') return item.path;
+    } else if (item.type === 'folder' && item.children) {
+      const found = findFileInTree(item.children, searchName);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+window.addEventListener('resize',()=>{ if(currentView==='home') drawAndScaleOrgChart(); });
 connect();
 </script>
 </body>

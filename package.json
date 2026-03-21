@@ -8,6 +8,7 @@
     "dev": "node server.js"
   },
   "dependencies": {
+    "marked": "^17.0.5",
     "ws": "^8.18.0"
   },
   "engines": {
