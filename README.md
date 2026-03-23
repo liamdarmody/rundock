@@ -1,84 +1,114 @@
 # Rundock
 
-Your personal AI operating system. BYO AI. We provide the OS.
+A visual interface for managing AI agent teams powered by Claude Code.
 
-A web interface for Claude Code that gives non-technical users the same power developers get in the terminal. Manage your AI team, have multi-agent conversations, edit files, and buy agents and skills from a marketplace.
+Rundock gives you an org chart, conversations, skill management, and file browsing for your Claude Code agents. It makes AI agent teams accessible without the terminal.
 
-## Quick Start
+## Prerequisites
+
+- **Claude Code** installed and authenticated ([code.claude.com](https://code.claude.com))
+- **Node.js** 18+ ([nodejs.org](https://nodejs.org))
+
+## Quick start
 
 ```bash
+git clone https://github.com/liamdarmody/rundock.git
+cd rundock
 npm install
-WORKSPACE=/path/to/your/workspace npm start
+node server.js
 ```
 
-Open `http://localhost:3000`.
+Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-## Requirements
+You'll see a workspace picker. Choose a folder that contains (or will contain) your Claude Code agents. If you already have a `.claude/agents/` directory, Rundock will discover it automatically.
 
-- Node.js 20+
-- Claude Code CLI installed and authenticated (`claude auth login`)
+To open a specific workspace directly:
 
-## How It Works
-
-The server spawns Claude Code with `--output-format stream-json` and bridges it to the browser via WebSocket. Your Anthropic subscription (Pro/Max) handles all AI compute. Rundock provides the interface.
-
-### Architecture
-
-```
-Browser (public/index.html)
-    ↕ WebSocket
-server.js (Node.js)
-    ↕ spawns: claude --print --output-format stream-json --agent <name>
-    ↕ fs.readFileSync / fs.writeFileSync
-Workspace directory (local disk)
+```bash
+WORKSPACE=/path/to/your/folder node server.js
 ```
 
-One Node.js process. No database. No containers. No auth. The same workspace files are accessible to Rundock, Claude Code, and any other tool (Obsidian, VS Code, etc.) simultaneously.
+## What you'll see
 
-### Agent Discovery
+**Team:** An org chart showing your agents. Click any agent to see their profile with role, capabilities, skills, and routines.
 
-Agents are loaded dynamically from `.claude/agents/` in the workspace. Each agent is a markdown file with YAML frontmatter:
+**Conversations:** Chat with any agent through the browser. Messages go to Claude Code under the hood. Each conversation maintains its own session with context preserved across messages.
+
+**Skills:** Browse the skills in your workspace. See which agents use which skills. Click through to read the source files.
+
+**Files:** Browse and edit workspace files with markdown preview and syntax highlighting.
+
+## Setting up your workspace
+
+**Already have Claude Code agents?** Rundock discovers them from `.claude/agents/`. They'll appear on the org chart. Add a few optional frontmatter fields to customise how they display.
+
+**Starting fresh?** Open any folder. You can set up agents and workspace rules from there.
+
+### Agent frontmatter
+
+Rundock reads standard Claude Code agent frontmatter and adds optional fields for the visual layer:
 
 ```yaml
 ---
-name: Ana
-role: Content Analyst
-description: Analyses content performance data...
-tools: Read, Glob, Grep, Bash
-model: sonnet
-maxTurns: 15
+# Standard Claude Code fields
+name: content-creator
+description: >
+  Full content pipeline from idea to publish-ready post.
+model: opus
+
+# Rundock extension fields (all optional)
+displayName: Penn
+role: Content Creator
+type: specialist
+order: 3
+icon: ✎
+colour: #6BC67E
 ---
-
-# Instructions for this agent...
 ```
 
-The default agent is defined by the workspace's `CLAUDE.md` file.
+| Field | Purpose |
+|---|---|
+| `displayName` | Human-friendly name for the UI. Falls back to title-cased `name` if not set |
+| `role` | Short title on org chart (2-4 words) |
+| `type` | `orchestrator`, `specialist`, or `platform`. Determines org chart position |
+| `order` | Position on org chart. Orchestrator is 0, specialists numbered after |
+| `icon` | Single unicode character for the avatar circle |
+| `colour` | Hex colour for the avatar background |
 
-### File Operations
-
-Files are read and written directly to the workspace filesystem. Auto-save with 1.5s debounce. Changes made in Rundock are immediately visible to Claude Code, Obsidian, or any other tool accessing the same directory.
-
-### Production Path
-
-This same server.js runs inside a per-user container (Fly.io Machine) in production. The code doesn't change. The only differences are: files live on a persistent volume instead of local disk, auth is handled via Claude Code's setup-token OAuth flow, and a backend routes traffic between users and their containers.
-
-## Project Structure
+## How it works
 
 ```
-server.js          Node.js WebSocket server + agent discovery
-public/
-  index.html       Web UI (three-column layout, org chart, chat, files)
-.env.example       Environment variables template
+Browser (WebSocket) <-> Node.js server <-> Claude Code CLI
 ```
 
-## Features
+- **server.js:** Discovers agents, skills, and files. Spawns Claude Code processes for conversations. Manages sessions.
+- **public/index.html:** Single-page app with nav rail, sidebar, and main panel.
+- **Claude Code:** Runs as child processes with `--output-format stream-json`. Each conversation gets its own process with session persistence via `--resume`.
 
-- Dynamic agent discovery from workspace
-- Multi-agent conversations (each agent gets its own Claude Code session)
-- Org chart team view
-- Agent profiles with description, tools, model, and instructions
-- Real-time chat with thinking indicators and tool use display
-- File tree browsing and editing with auto-save
-- Conversation history (in-memory, per session)
-- Dark/light mode
-- Markdown rendering in chat messages
+Everything runs on your machine. No data is sent anywhere other than Anthropic's API (through Claude Code). Same workspace files are accessible to Rundock, Claude Code, Obsidian, VS Code, or any other tool simultaneously.
+
+## Common issues
+
+**"Command not found: claude"**
+
+Claude Code isn't installed or isn't in your PATH. Install it from [code.claude.com](https://code.claude.com) and verify `claude --version` works in your terminal.
+
+**No agents on the org chart**
+
+Your workspace doesn't have `.claude/agents/` or the agent files are missing Rundock frontmatter (`type` and `order` fields). Add these fields to place agents on the org chart.
+
+**Agent shows as "Content Creator" instead of a name**
+
+Add `displayName: Penn` to the agent's frontmatter. Without it, Rundock title-cases the `name` field.
+
+**Skills list is empty**
+
+Rundock looks for skills in `System/Playbooks/` (PLAYBOOK.md files) and `.claude/skills/` (SKILL.md files).
+
+**Conversations disappear on refresh**
+
+Conversations are stored in browser memory for this MVP. They reset on page refresh. Session persistence is planned.
+
+## Feedback
+
+This is an early MVP. If you find bugs or have ideas, open an issue at [github.com/liamdarmody/rundock/issues](https://github.com/liamdarmody/rundock/issues).

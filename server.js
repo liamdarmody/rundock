@@ -14,7 +14,70 @@ const { spawn } = require('child_process');
 const { WebSocketServer } = require('ws');
 
 const PORT = process.env.PORT || 3000;
-const WORKSPACE = process.env.WORKSPACE || process.cwd();
+let WORKSPACE = process.env.WORKSPACE || null;
+
+// Recent workspaces (persisted to disk)
+const RECENT_FILE = path.join(__dirname, '.recent-workspaces.json');
+function loadRecentWorkspaces() {
+  try { return JSON.parse(fs.readFileSync(RECENT_FILE, 'utf-8')); } catch (e) { return []; }
+}
+function saveRecentWorkspace(dir) {
+  const recent = loadRecentWorkspaces().filter(r => r.path !== dir);
+  recent.unshift({ path: dir, name: path.basename(dir), lastOpened: new Date().toISOString() });
+  fs.writeFileSync(RECENT_FILE, JSON.stringify(recent.slice(0, 10), null, 2));
+}
+
+// Scan common locations for workspaces (directories with .claude/ or CLAUDE.md)
+function discoverWorkspaces() {
+  const candidates = [];
+  const home = process.env.HOME || process.env.USERPROFILE || '';
+  const searchDirs = new Set([
+    path.join(home, 'Documents'),
+    path.join(home, 'Projects'),
+    path.join(home, 'Desktop'),
+    home
+  ]);
+
+  // Also scan subdirectories of Documents (e.g. Documents/Obsidian Vaults/, Documents/Projects/)
+  try {
+    const docsDir = path.join(home, 'Documents');
+    if (fs.existsSync(docsDir)) {
+      for (const sub of fs.readdirSync(docsDir, { withFileTypes: true })) {
+        if (sub.isDirectory() && !sub.name.startsWith('.')) {
+          searchDirs.add(path.join(docsDir, sub.name));
+        }
+      }
+    }
+  } catch (e) {}
+
+  for (const searchDir of [...searchDirs]) {
+    try {
+      if (!fs.existsSync(searchDir)) continue;
+      const items = fs.readdirSync(searchDir, { withFileTypes: true });
+      for (const item of items) {
+        if (!item.isDirectory() || item.name.startsWith('.') || item.name === 'node_modules') continue;
+        const fullPath = path.join(searchDir, item.name);
+        const hasClaude = fs.existsSync(path.join(fullPath, '.claude')) || fs.existsSync(path.join(fullPath, 'CLAUDE.md'));
+        if (hasClaude) {
+          // Check if it has Rundock-ready agents
+          const agentsDir = path.join(fullPath, '.claude', 'agents');
+          let agentCount = 0;
+          let hasRundockFrontmatter = false;
+          try {
+            const agentFiles = fs.readdirSync(agentsDir).filter(f => f.endsWith('.md'));
+            agentCount = agentFiles.length;
+            for (const af of agentFiles) {
+              const content = fs.readFileSync(path.join(agentsDir, af), 'utf-8');
+              if (content.includes('type:') && content.includes('order:')) { hasRundockFrontmatter = true; break; }
+            }
+          } catch (e) {}
+          candidates.push({ path: fullPath, name: item.name, agentCount, hasRundockFrontmatter });
+        }
+      }
+    } catch (e) {}
+  }
+  return candidates;
+}
 
 // ===== ROUTINE STATE (in-memory) =====
 
@@ -442,8 +505,37 @@ wss.on('connection', (ws) => {
         });
       }
 
-      if (msg.type === 'get_agents') ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents() }));
-      if (msg.type === 'get_files') ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) }));
+      if (msg.type === 'get_workspaces') {
+        ws.send(JSON.stringify({
+          type: 'workspaces',
+          current: WORKSPACE,
+          recent: loadRecentWorkspaces(),
+          discovered: discoverWorkspaces()
+        }));
+      }
+
+      if (msg.type === 'set_workspace') {
+        const dir = msg.path;
+        if (dir && fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
+          WORKSPACE = dir;
+          saveRecentWorkspace(dir);
+          console.log(`  Workspace changed to: ${WORKSPACE}`);
+          ws.send(JSON.stringify({ type: 'workspace_set', path: WORKSPACE }));
+          ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents() }));
+          ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) }));
+        } else {
+          ws.send(JSON.stringify({ type: 'workspace_error', message: 'Directory not found' }));
+        }
+      }
+
+      if (msg.type === 'get_agents') {
+        if (!WORKSPACE) { ws.send(JSON.stringify({ type: 'needs_workspace' })); return; }
+        ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents() }));
+      }
+      if (msg.type === 'get_files') {
+        if (!WORKSPACE) return;
+        ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) }));
+      }
       if (msg.type === 'get_skills') ws.send(JSON.stringify({ type: 'skills', skills: discoverSkills() }));
 
       if (msg.type === 'read_file') {
@@ -626,11 +718,17 @@ function getFileTree(dir, prefix = '') {
 // ===== START =====
 
 server.listen(PORT, () => {
-  const agents = discoverAgents();
-  const totalRoutines = agents.reduce((sum, a) => sum + (a.routines?.length || 0), 0);
   console.log(`\n  Rundock running at http://localhost:${PORT}`);
-  console.log(`  Workspace: ${WORKSPACE}`);
-  console.log(`  Agents: ${agents.map(a => a.name).join(', ')}`);
-  console.log(`  Routines: ${totalRoutines}\n`);
-  startScheduler();
+  if (WORKSPACE) {
+    saveRecentWorkspace(WORKSPACE);
+    const agents = discoverAgents();
+    const totalRoutines = agents.reduce((sum, a) => sum + (a.routines?.length || 0), 0);
+    console.log(`  Workspace: ${WORKSPACE}`);
+    console.log(`  Agents: ${agents.map(a => a.displayName).join(', ')}`);
+    console.log(`  Routines: ${totalRoutines}`);
+    startScheduler();
+  } else {
+    console.log(`  No workspace set. Waiting for workspace selection.`);
+  }
+  console.log('');
 });
