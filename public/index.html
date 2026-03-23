@@ -9,8 +9,8 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
-  --base: #1A1A1A; --surface: #222222; --elevated: #2A2A2A;
-  --card: #323232; --border: #3A3A3A;
+  --base: #1A1A1A; --surface: #212121; --elevated: #272727;
+  --card: #333333; --border: #3D3D3D;
   --text-1: #F0EDE8; --text-2: #9A9590;
   --accent: #E87A5A; --accent-hover: #F09070; --accent-glow: rgba(232,122,90,0.12);
   --success: #6BC67E; --attention: #E8A84C; --working: #7AA2E8; --idle: #7A756E;
@@ -33,36 +33,39 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .app { display: flex; height: 100vh; overflow: hidden; }
 
 /* Nav rail */
-.nav-rail { width: 60px; background: var(--base); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; padding: 40px 0 16px; flex-shrink: 0; }
+.nav-rail { width: 60px; background: var(--base); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; padding: 40px 0 16px; flex-shrink: 0; z-index: 2; }
 .nav-main { display: flex; flex-direction: column; gap: 4px; flex: 1; padding-top: 4px; align-items: center; }
 .nav-bottom { display: flex; flex-direction: column; gap: 4px; align-items: center; }
-.nav-item { width: 42px; height: 42px; display: flex; align-items: center; justify-content: center; border-radius: 12px; color: var(--text-2); transition: all 0.15s ease; }
+.nav-item { width: 42px; height: 42px; display: flex; align-items: center; justify-content: center; border-radius: 12px; color: var(--text-2); transition: all 0.2s ease; }
 .nav-item:hover { color: var(--text-1); background: var(--surface); }
 .nav-item.active { color: var(--accent); background: var(--accent-glow); }
 .nav-item svg { width: 21px; height: 21px; }
+.nav-item .icon-filled { display: none; }
+.nav-item.active .icon-outline { display: none; }
+.nav-item.active .icon-filled { display: block; }
 .nav-separator { width: 24px; height: 1px; background: var(--border); margin: 8px 0; }
 
 /* Sidebar */
-.sidebar { width: 280px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; }
+.sidebar { width: 280px; background: var(--surface); border-right: none; display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; box-shadow: 1px 0 8px rgba(0,0,0,0.08); z-index: 1; }
 .sidebar > div { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
-.sidebar-header { padding: 24px 16px 12px; }
+.sidebar-header { padding: 24px 16px 8px; }
 .sidebar-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); }
 
 /* Compact agent status list */
 .agent-status-list { flex: 1; overflow-y: auto; padding: 0 8px; }
-.agent-status-item { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; cursor: pointer; transition: background 0.15s ease; }
+.agent-status-item { display: flex; align-items: center; gap: 8px; padding: 10px 8px; border-radius: 8px; cursor: pointer; transition: background 0.15s ease; }
 .agent-status-item:hover { background: var(--elevated); }
 .agent-status-item.active { background: var(--elevated); }
 .avatar { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; color: white; flex-shrink: 0; }
 .avatar.sm { width: 24px; height: 24px; font-size: 12px; }
 .avatar.xs { width: 18px; height: 18px; font-size: 9px; }
-.agent-status-name { flex: 1; font-size: var(--body); font-weight: 500; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-status-name { flex: 1; font-size: 13px; font-weight: 500; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .agent-status-state { font-size: var(--caption); font-weight: 500; color: var(--idle); flex-shrink: 0; }
 .agent-status-state.working { color: var(--working); }
 
 /* Conversation list */
 .convo-list { flex: 1; overflow-y: auto; padding: 0 8px; }
-.convo-item { display: flex; flex-direction: column; gap: 2px; padding: 10px 8px; border-radius: 8px; cursor: pointer; transition: background 0.15s ease; }
+.convo-item { display: flex; flex-direction: column; gap: 3px; padding: 12px 8px; border-radius: 8px; cursor: pointer; transition: background 0.15s ease; }
 .convo-item:hover { background: var(--elevated); }
 .convo-item.active { background: var(--elevated); }
 .convo-title { font-size: var(--body); font-weight: 500; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -86,24 +89,32 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .add-btn:hover { color: var(--accent); background: var(--accent-glow); }
 
 /* Main panel */
-.main { flex: 1; display: flex; flex-direction: column; background: var(--elevated); overflow: hidden; }
+.main { flex: 1; display: flex; flex-direction: column; background: var(--elevated); overflow: hidden; position: relative; }
+.main-view-transition { animation: viewFadeIn 0.15s ease; }
+@keyframes viewFadeIn { from { opacity: 0; } to { opacity: 1; } }
 
 /* Org chart */
 .org-chart { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px; overflow: hidden; }
-.org-chart-title { font-size: var(--body); font-weight: 500; color: var(--text-2); margin-bottom: 32px; }
+/* org-chart-title removed: redundant label */
 .org-tree { display: flex; flex-direction: column; align-items: center; }
-.org-card { background: var(--card); border-radius: 12px; padding: 16px 20px; display: flex; align-items: center; gap: 12px; cursor: pointer; transition: all 0.2s ease; border: 1px solid var(--border); min-width: 180px; }
-.org-card:hover { border-color: var(--accent); box-shadow: 0 0 24px rgba(232,122,90,0.2); transform: translateY(-2px); }
+.org-card { background: var(--card); border-radius: 12px; padding: 16px 20px; display: flex; align-items: center; gap: 12px; cursor: pointer; transition: all 0.2s ease; border: 1px solid transparent; box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08); }
+.org-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.2), 0 0 0 1px var(--accent); transform: translateY(-2px); }
 .org-card-name { font-size: var(--body); font-weight: 700; color: var(--text-1); }
 .org-card-role { font-size: var(--caption); color: var(--text-2); max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .org-leader .org-card { padding: 20px 28px; }
 .org-leader .org-card .avatar { width: 44px; height: 44px; font-size: 18px; }
 .org-leader .org-card-name { font-size: var(--title); }
-.org-trunk { width: 1px; height: 32px; background: var(--border); }
-.org-branches { display: flex; gap: 12px; position: relative; flex-wrap: wrap; justify-content: center; }
-.org-hline { position: absolute; top: 0; height: 1px; background: var(--border); }
-.org-branch { display: flex; flex-direction: column; align-items: center; }
-.org-branch-stem { width: 1px; height: 24px; background: var(--border); }
+/* Org chart connector lines: pure CSS */
+.org-trunk { height: 32px; }
+.org-branches { display: flex; position: relative; justify-content: center; }
+.org-branch { display: flex; flex-direction: column; align-items: center; padding: 24px 8px 0; position: relative; }
+.org-branch::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--text-2); opacity: 0.25; }
+.org-branch::after { content: ''; position: absolute; top: 0; left: 50%; width: 1px; height: 24px; background: var(--text-2); opacity: 0.25; transform: translateX(-50%); }
+.org-branch:first-child::before { left: 50%; }
+.org-branch:last-child::before { right: 50%; }
+.org-branch:only-child::before { display: none; }
+.org-branch.trunk-branch::after { top: -32px; height: 56px; }
+.org-branch-stem { display: none; }
 
 /* Agent profile */
 .profile { flex: 1; overflow-y: auto; padding: 32px; }
@@ -117,6 +128,11 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .profile-cta-btn { padding: 8px 20px; background: var(--accent); color: white; font-size: var(--body); font-weight: 600; border-radius: 8px; transition: all 0.2s ease; }
 .profile-cta-btn:hover { background: var(--accent-hover); box-shadow: 0 0 24px rgba(232,122,90,0.2); }
 .profile-section { margin-bottom: 24px; }
+.profile-card { background: var(--card); border-radius: 12px; padding: 4px 0; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.profile-card-section { padding: 12px 16px; }
+.profile-card-section + .profile-card-section { border-top: 1px solid var(--border); }
+.profile-card-text { font-size: var(--body); line-height: 1.6; color: var(--text-1); }
+.profile-card-item { font-size: var(--body); padding: 6px 0; color: var(--text-1); }
 .profile-section-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); margin-bottom: 8px; }
 .profile-list { display: flex; flex-direction: column; gap: 4px; }
 .profile-list-item { padding: 10px 16px; background: var(--card); border-radius: 12px; font-size: var(--body); color: var(--text-1); }
@@ -146,19 +162,20 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .msg-sender { font-size: var(--caption); font-weight: 600; margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
 .msg-time { font-size: var(--label); color: var(--text-2); font-weight: 400; margin-left: auto; }
 .msg-bubble { padding: 12px 16px; border-radius: 16px; font-size: var(--body); line-height: 1.55; word-wrap: break-word; }
-.msg-agent .msg-bubble { background: var(--card); border-top-left-radius: 4px; }
+.msg-agent .msg-bubble { background: var(--card); border-top-left-radius: 4px; box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
 .msg-user .msg-bubble { background: var(--accent-glow); border: 1px solid rgba(232,122,90,0.15); border-bottom-right-radius: 4px; }
 .msg-system { align-self: center; font-size: var(--caption); color: var(--text-2); padding: 4px 12px; background: var(--card); border-radius: 20px; }
 .msg-tool { align-self: flex-start; max-width: 85%; padding: 8px 12px; background: var(--card); border-left: 3px solid var(--working); border-radius: 0 8px 8px 0; font-size: var(--caption); color: var(--text-2); display: flex; align-items: center; gap: 8px; animation: fadeIn 0.2s ease; }
 .msg-tool.done { border-left-color: var(--success); }
 .chat-input { padding: 16px 24px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
-.chat-input textarea { flex: 1; padding: 12px 16px; background: var(--card); border-radius: 16px; font-size: var(--body); border: 1px solid var(--border); transition: border-color 0.15s ease; resize: none; overflow-y: hidden; min-height: 44px; max-height: 200px; line-height: 1.5; font-family: inherit; color: var(--text-1); outline: none; }
-.chat-input textarea:focus { border-color: var(--accent); }
+.chat-input textarea { flex: 1; padding: 12px 16px; background: var(--card); border-radius: 16px; font-size: var(--body); border: 1px solid transparent; transition: all 0.2s ease; resize: none; overflow-y: hidden; min-height: 44px; max-height: 200px; line-height: 1.5; font-family: inherit; color: var(--text-1); outline: none; }
+.chat-input textarea:focus { box-shadow: 0 0 0 2px rgba(232,122,90,0.2); }
 .chat-input textarea::placeholder { color: var(--text-2); }
 .chat-input textarea:disabled { opacity: 0.5; }
-.send-btn { width: 42px; height: 42px; background: var(--accent); color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease; flex-shrink: 0; }
-.send-btn:hover { background: var(--accent-hover); }
-.send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.send-btn { width: 42px; height: 42px; background: var(--card); color: var(--text-2); border-radius: 50%; display: flex; align-items: center; justify-content: center; transition: all 0.25s ease; flex-shrink: 0; }
+.send-btn.active { background: var(--accent); color: white; box-shadow: 0 2px 8px rgba(232,122,90,0.3); }
+.send-btn.active:hover { background: var(--accent-hover); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(232,122,90,0.4); }
+.send-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 .send-btn svg { width: 18px; height: 18px; }
 
 /* Editor */
@@ -210,18 +227,15 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .callout-quote .callout-title { color: var(--text-2); }
 .callout-todo { background: rgba(122,162,232,0.08); border-color: var(--working); }
 .callout-todo .callout-title { color: var(--working); }
-.editor-content.formatted a { color: var(--accent); }
+.editor-content.formatted a { color: var(--accent); cursor: pointer; }
 .editor-content.formatted img { max-width: 100%; border-radius: 8px; }
 
 /* Thinking */
-.thinking-bubble { min-height: 24px; }
-.thinking-dots { display: flex; align-items: center; gap: 0; }
-.thinking-dots span { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--text-2); margin: 0 2px; animation: bounce 1.4s infinite ease-in-out both; }
-.thinking-dots span:nth-child(1) { animation-delay: 0s; }
-.thinking-dots span:nth-child(2) { animation-delay: 0.16s; }
-.thinking-dots span:nth-child(3) { animation-delay: 0.32s; }
-.thinking-status { font-size: var(--caption); color: var(--text-2); margin-top: 6px; transition: opacity 0.2s ease; }
-@keyframes bounce { 0%,80%,100% { transform: scale(0.6); opacity: 0.4; } 40% { transform: scale(1); opacity: 1; } }
+.thinking-bubble { min-height: 24px; display: flex; align-items: center; gap: 12px; }
+.thinking-pulse { width: 24px; height: 24px; border-radius: 50%; animation: agentPulse 1.8s ease-in-out infinite; flex-shrink: 0; }
+.thinking-label { font-size: var(--caption); color: var(--text-2); }
+.thinking-status { font-size: var(--caption); color: var(--text-2); transition: opacity 0.2s ease; }
+@keyframes agentPulse { 0%,100% { opacity: 0.3; transform: scale(0.9); } 50% { opacity: 0.8; transform: scale(1.05); } }
 
 /* Markdown rendering (chat bubbles, file preview, profile) */
 .msg-bubble h1,.msg-bubble h2,.msg-bubble h3,.msg-bubble h4 { margin: 14px 0 4px; line-height: 1.3; }
@@ -247,7 +261,7 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .msg-bubble th,.msg-bubble td { padding: 7px 12px; border: 1px solid var(--border); text-align: left; }
 .msg-bubble th { background: var(--card); font-weight: 600; }
 .msg-bubble hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
-.msg-bubble a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.msg-bubble a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .msg-bubble img { max-width: 100%; border-radius: 8px; margin: 8px 0; }
 .msg-bubble mark { background: rgba(232,122,90,0.2); color: var(--text-1); padding: 1px 4px; border-radius: 3px; }
 .msg-bubble .wikilink { color: var(--accent); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
@@ -260,10 +274,40 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .connection-bar.disconnected { background: rgba(232,90,90,0.1); color: #E85A5A; }
 .connection-bar.connecting { background: rgba(122,162,232,0.1); color: var(--working); }
 
-::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: transparent; border-radius: 3px; transition: background 0.2s ease; }
+*:hover > ::-webkit-scrollbar-thumb, *:hover::-webkit-scrollbar-thumb { background: var(--border); }
+.messages::-webkit-scrollbar-thumb { background: transparent; }
+.messages:hover::-webkit-scrollbar-thumb { background: var(--border); }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+/* Skills */
+.skill-sidebar-item { display: flex; align-items: center; gap: 8px; padding: 10px 8px; border-radius: 8px; cursor: pointer; transition: background 0.15s ease; }
+.skill-sidebar-item:hover { background: var(--elevated); }
+.skill-sidebar-item.active { background: var(--elevated); }
+.skill-sidebar-name { font-size: 13px; font-weight: 500; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.skill-dots { display: flex; gap: 3px; align-items: center; flex-shrink: 0; }
+.skill-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.skills-header { padding: 16px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+.skills-header-title { font-size: var(--body); font-weight: 600; }
+.skills-list-main { display: flex; flex-direction: column; border-radius: 12px; overflow: hidden; }
+.skill-row { background: var(--card); cursor: pointer; transition: background 0.15s ease; border-bottom: 1px solid var(--border); }
+.skill-row:last-child { border-bottom: none; }
+.skill-row:hover { background: rgba(255,255,255,0.03); }
+body.light .skill-row:hover { background: rgba(0,0,0,0.03); }
+.skill-row-header { display: flex; align-items: center; justify-content: space-between; padding: 11px 16px; gap: 12px; }
+.skill-row-left { display: flex; align-items: center; gap: 8px; min-width: 0; flex-shrink: 0; }
+.skill-row-name { font-size: var(--body); font-weight: 500; color: var(--text-1); white-space: nowrap; }
+.skill-row-desc { font-size: var(--caption); color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.skill-row-chevron { flex-shrink: 0; color: var(--text-2); transition: transform 0.15s ease; transform: rotate(-90deg); }
+.skill-row.expanded .skill-row-chevron { transform: rotate(0deg); }
+.skill-row-detail { display: none; padding: 0 16px 14px 38px; }
+.skill-row.expanded .skill-row-detail { display: block; }
+.skill-row.expanded .skill-row-desc { display: none; }
+.skill-detail-grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; font-size: var(--caption); }
+.skill-detail-label { color: var(--text-2); font-weight: 500; }
+.skill-detail-value { color: var(--text-1); }
 </style>
 </head>
 <body>
@@ -271,13 +315,20 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
   <nav class="nav-rail">
     <div class="nav-main">
       <button class="nav-item active" data-nav="team" onclick="switchNav('team')" title="Team">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <svg class="icon-filled" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M14 21H2v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2z"/><circle cx="8" cy="7" r="4"/><path d="M22 21h-4v-2a5.97 5.97 0 0 0-1.5-4h.5a3 3 0 0 1 3 3v3z"/><circle cx="17" cy="7.5" r="3"/></svg>
       </button>
       <button class="nav-item" data-nav="conversations" onclick="switchNav('conversations')" title="Conversations">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <svg class="icon-filled" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      </button>
+      <button class="nav-item" data-nav="skills" onclick="switchNav('skills')" title="Skills">
+        <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        <svg class="icon-filled" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
       </button>
       <button class="nav-item" data-nav="files" onclick="switchNav('files')" title="Files">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        <svg class="icon-filled" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
       </button>
     </div>
     <div class="nav-bottom">
@@ -293,7 +344,7 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 
   <aside class="sidebar">
     <div id="sidebar-team">
-      <div class="sidebar-header"><span class="sidebar-label">Team</span></div>
+      <div class="sidebar-header"><span class="sidebar-label">Your Team</span></div>
       <div class="agent-status-list" id="agent-list"></div>
       <div id="sidebar-routines"></div>
     </div>
@@ -301,6 +352,10 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
       <div class="sidebar-header"><span class="sidebar-label">Conversations</span></div>
       <div class="convo-list" id="convo-list"></div>
       <button class="add-btn" onclick="newConversation()">+ New conversation</button>
+    </div>
+    <div id="sidebar-skills" class="hidden">
+      <div class="sidebar-header"><span class="sidebar-label">Skills</span></div>
+      <div id="skills-sidebar-list" style="flex:1;overflow-y:auto;padding:0 8px;"></div>
     </div>
     <div id="sidebar-files" class="hidden">
       <div class="sidebar-header"><span class="sidebar-label">Files</span></div>
@@ -331,13 +386,23 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
       <div class="messages" id="messages"></div>
       <div class="chat-input">
         <textarea id="msg-input" placeholder="Message..." rows="1"></textarea>
-        <button class="send-btn" id="send-btn" onclick="sendMessage()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></button>
+        <button class="send-btn" id="send-btn" onclick="sendMessage()" title="Send message"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></button>
+      </div>
+    </div>
+    <!-- Skills -->
+    <div id="view-skills" class="hidden" style="display:flex;flex-direction:column;flex:1;overflow:hidden">
+      <div class="skills-header">
+        <a class="chat-back" onclick="switchNav('team')"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></a>
+        <span class="skills-header-title">Skills</span>
+      </div>
+      <div style="flex:1;overflow-y:auto;padding:20px 28px;">
+        <div style="max-width:720px;" id="skills-main-list"></div>
       </div>
     </div>
     <!-- Editor -->
     <div id="view-editor" class="hidden" style="display:flex;flex-direction:column;flex:1;overflow:hidden">
       <div class="editor-header">
-        <a class="chat-back" onclick="showView('home')"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></a>
+        <a class="chat-back" onclick="editorGoBack()"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></a>
         <span class="editor-filename" id="editor-filename">Select a file</span>
         <span class="editor-status" id="editor-status"></span>
         <button class="editor-toggle active" id="toggle-preview" onclick="setEditorMode('preview')">Preview</button>
@@ -352,7 +417,7 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 const sunIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`;
 const moonIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
 
-let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null;
+let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false;
 // Per-conversation state: { convoId: { isProcessing, currentStreamingMsg, latestText } }
 const convoState = {};
 
@@ -372,6 +437,7 @@ function handle(d) {
 
   switch(d.type) {
     case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesSidebar(); break;
+    case 'skills': skills=d.skills; skillsLoaded=true; renderSkills(); break;
     case 'system':
       // Capture session ID from init message
       if(d.subtype==='init' && d._sessionId && convoId) {
@@ -442,29 +508,98 @@ function addSystemMsgToConvo(text, convoId) {
 
 // Agents - compact status list
 function renderAgentList() {
-  document.getElementById('agent-list').innerHTML = agents.map(a => `
-    <div class="agent-status-item" onclick="showProfile('${a.id}')" data-agent="${a.id}">
+  const onTeam = agents.filter(a => a.status === 'onTeam' && a.type !== 'platform');
+  const platform = agents.filter(a => a.status === 'onTeam' && a.type === 'platform');
+  const available = agents.filter(a => a.status === 'available' || a.status === 'raw');
+
+  let h = '';
+  // On team agents
+  for (const a of onTeam) {
+    h += `<div class="agent-status-item" onclick="showProfile('${a.id}')" data-agent="${a.id}">
       <div class="avatar sm" style="background:${a.colour}">${a.icon}</div>
       <span class="agent-status-name">${a.name}</span>
       <span class="agent-status-state" data-status="${a.id}">idle</span>
-    </div>`).join('');
-  // Update org chart name labels to include role
+    </div>`;
+  }
+  // Platform agents
+  if (platform.length) {
+    h += `<div style="border-top:1px solid var(--border);margin:8px 8px 0;padding-top:12px"><span class="sidebar-label">Rundock Agents</span></div>`;
+    for (const a of platform) {
+      h += `<div class="agent-status-item" onclick="showProfile('${a.id}')" data-agent="${a.id}">
+        <div class="avatar sm" style="background:${a.colour}">${a.icon}</div>
+        <span class="agent-status-name">${a.name}</span>
+        <span class="agent-status-state" data-status="${a.id}">idle</span>
+      </div>`;
+    }
+  }
+  // Available agents
+  if (available.length) {
+    h += `<div style="border-top:1px solid var(--border);margin:8px 8px 0;padding-top:12px;cursor:pointer" onclick="document.getElementById('available-agents').classList.toggle('hidden')"><span class="sidebar-label">Available (${available.length}) &#x25BE;</span></div>`;
+    h += `<div id="available-agents" class="hidden" style="padding:4px 0">`;
+    for (const a of available) {
+      const isRaw = a.status === 'raw';
+      h += `<div class="agent-status-item" style="${isRaw ? 'opacity:0.6' : ''}">
+        <div class="avatar sm" style="background:${a.colour}">${a.icon}</div>
+        <div style="flex:1;min-width:0">
+          <span class="agent-status-name">${a.name}</span>
+          <span style="font-size:var(--caption);color:var(--text-2);display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${a.description ? a.description.substring(0, 50) : (isRaw ? 'Needs setup' : 'Ready to place')}</span>
+        </div>
+        ${isRaw
+          ? `<button style="font-size:var(--caption);color:var(--accent);font-weight:500;flex-shrink:0;padding:4px 8px;border-radius:6px;background:var(--accent-glow)" onclick="event.stopPropagation(); startConversation(agents.find(x=>x.type==='platform')?.id || 'default')">Onboard</button>`
+          : `<button style="font-size:var(--caption);color:var(--success);font-weight:500;flex-shrink:0;padding:4px 8px;border-radius:6px;background:rgba(107,198,126,0.1)" onclick="event.stopPropagation(); addToTeam('${a.id}')">Add to team</button>`
+        }
+      </div>`;
+    }
+    h += `</div>`;
+  }
+  document.getElementById('agent-list').innerHTML = h;
   renderOrgChart();
 }
 
 // Org chart - click opens profile
 function renderOrgChart() {
-  const def=agents.find(a=>a.isDefault)||agents[0], others=agents.filter(a=>!a.isDefault);
-  let h='<div class="org-chart-title">Your team</div><div class="org-tree">';
-  if(def) h+=`<div class="org-leader"><div class="org-card" onclick="showProfile('${def.id}')"><div class="avatar" style="background:${def.colour};width:44px;height:44px;font-size:18px">${def.icon}</div><div><div class="org-card-name" style="font-size:var(--title)">${def.name}</div><div class="org-card-role">${def.role||'Chief of Staff'}</div></div></div></div>`;
-  if(others.length) {
-    h+='<div class="org-trunk"></div><div class="org-branches" id="org-branches"><div class="org-hline" id="org-hline"></div>';
-    for(const a of others) h+=`<div class="org-branch"><div class="org-branch-stem"></div><div class="org-card" onclick="showProfile('${a.id}')"><div class="avatar" style="background:${a.colour}">${a.icon}</div><div><div class="org-card-name">${a.name}</div><div class="org-card-role">${a.role||''}</div></div></div></div>`;
-    h+='</div>';
+  const orchestrator = agents.find(a => a.status === 'onTeam' && a.type === 'orchestrator');
+  const specialists = agents.filter(a => a.status === 'onTeam' && a.type === 'specialist');
+  const platformAgents = agents.filter(a => a.status === 'onTeam' && a.type === 'platform');
+  // Fallback for agents without type field (backward compat)
+  const untyped = agents.filter(a => a.status === 'onTeam' && !a.type);
+  const leader = orchestrator || agents.find(a => a.isDefault) || agents[0];
+  const team = specialists.length ? specialists : untyped.filter(a => a !== leader);
+
+  let h = '<div class="org-tree">';
+
+  // Orchestrator
+  if (leader) {
+    h += `<div class="org-leader"><div class="org-card" onclick="showProfile('${leader.id}')"><div class="avatar" style="background:${leader.colour};width:44px;height:44px;font-size:18px">${leader.icon}</div><div><div class="org-card-name" style="font-size:var(--title)">${leader.name}</div><div class="org-card-role">${leader.role || ''}</div></div></div></div>`;
   }
-  h+='</div>';
-  document.getElementById('org-chart').innerHTML=h;
-  setTimeout(()=>{ drawAndScaleOrgChart(); },50);
+
+  // Specialists
+  if (team.length) {
+    const midIndex = Math.floor(team.length / 2);
+    h += '<div class="org-trunk"></div><div class="org-branches">';
+    team.forEach((a, i) => {
+      const isTrunk = (team.length % 2 === 1) && (i === midIndex);
+      h += `<div class="org-branch${isTrunk ? ' trunk-branch' : ''}"><div class="org-branch-stem"></div><div class="org-card" onclick="showProfile('${a.id}')"><div class="avatar" style="background:${a.colour}">${a.icon}</div><div><div class="org-card-name">${a.name}</div><div class="org-card-role">${a.role || ''}</div></div></div></div>`;
+    });
+    h += '</div>';
+  }
+
+  // Platform section (inside .org-tree so it scales together)
+  if (platformAgents.length) {
+    h += '<div style="margin-top:48px;display:flex;flex-direction:column;align-items:center">';
+    h += '<div style="width:60%;max-width:200px;height:1px;background:var(--border);margin-bottom:24px"></div>';
+    h += '<div style="font-size:var(--label);font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-2);margin-bottom:16px">Rundock Agents</div>';
+    h += '<div style="display:flex;justify-content:center;gap:12px">';
+    for (const a of platformAgents) {
+      h += `<div class="org-card" onclick="showProfile('${a.id}')" style="padding:10px 16px" onmouseover="this.style.transform='none'" onmouseout="this.style.transform='none'"><div class="avatar" style="background:${a.colour};width:26px;height:26px;font-size:11px">${a.icon}</div><div><div class="org-card-name" style="font-size:var(--caption);font-weight:600">${a.name}</div><div class="org-card-role" style="font-size:var(--label)">${a.role || ''}</div></div></div>`;
+    }
+    h += '</div></div>';
+  }
+
+  h += '</div>'; // close .org-tree
+
+  document.getElementById('org-chart').innerHTML = h;
+  setTimeout(() => { drawAndScaleOrgChart(); }, 50);
 }
 function drawAndScaleOrgChart() {
   const container = document.getElementById('org-chart');
@@ -475,19 +610,7 @@ function drawAndScaleOrgChart() {
   tree.style.transform = 'scale(1)';
   tree.style.transformOrigin = 'center top';
 
-  // Step 2: Draw lines at natural scale
-  const br = document.querySelectorAll('#org-branches .org-branch');
-  const brContainer = document.getElementById('org-branches');
-  const hline = document.getElementById('org-hline');
-  if (br.length && brContainer && hline) {
-    const r = brContainer.getBoundingClientRect();
-    const f = br[0].getBoundingClientRect();
-    const la = br[br.length - 1].getBoundingClientRect();
-    hline.style.left = (f.left + f.width / 2 - r.left) + 'px';
-    hline.style.width = (la.left + la.width / 2 - f.left - f.width / 2) + 'px';
-  }
-
-  // Step 3: Measure natural dimensions
+  // Step 2: Measure natural dimensions
   const containerW = container.clientWidth - 64;
   const containerH = container.clientHeight - 80;
   const treeW = tree.offsetWidth;
@@ -495,12 +618,12 @@ function drawAndScaleOrgChart() {
 
   if (treeW === 0 || treeH === 0) return;
 
-  // Step 4: Calculate scale to fill ~80% of container, min 1.0, max 1.6
+  // Step 3: Calculate scale, min 1.0, max 1.2
   const scaleX = (containerW * 0.8) / treeW;
   const scaleY = (containerH * 0.8) / treeH;
-  const scale = Math.max(1.0, Math.min(scaleX, scaleY, 1.6));
+  const scale = Math.max(1.0, Math.min(scaleX, scaleY, 1.2));
 
-  // Step 5: Apply scale (lines are inside the tree, so they scale too)
+  // Step 4: Apply scale
   tree.style.transform = `scale(${scale})`;
 }
 
@@ -526,35 +649,44 @@ function showProfile(agentId) {
     }
     h+=`</div>`;
   }
-  // Capabilities
+  // Capabilities card
   if(a.capabilities) {
     const c = a.capabilities;
-    if(c.does) h+=`<div class="profile-section"><div class="profile-section-label">What ${a.name} does</div><div class="profile-list-item" style="line-height:1.6">${esc(c.does)}</div></div>`;
-    if(c.reads) h+=`<div class="profile-section"><div class="profile-section-label">Reads from</div><div class="profile-list">${c.reads.split(',').map(r=>`<div class="profile-list-item">${r.trim()}</div>`).join('')}</div></div>`;
-    if(c.writes) h+=`<div class="profile-section"><div class="profile-section-label">Writes to</div><div class="profile-list"><div class="profile-list-item">${esc(c.writes)}</div></div></div>`;
-    if(c.connectors) h+=`<div class="profile-section"><div class="profile-section-label">Connectors</div><div class="profile-list">${c.connectors.split(',').map(cn=>`<div class="profile-list-item" style="display:flex;align-items:center;justify-content:space-between">${cn.trim()}<span style="color:var(--success);font-size:var(--caption)">Connected</span></div>`).join('')}</div></div>`;
+    h+=`<div class="profile-card">`;
+    if(c.does) h+=`<div class="profile-card-section"><div class="profile-section-label">What ${a.name} does</div><div class="profile-card-text">${esc(c.does)}</div></div>`;
+    if(c.reads) h+=`<div class="profile-card-section"><div class="profile-section-label">Reads from</div>${c.reads.split(',').map(r=>`<div class="profile-card-item">${r.trim()}</div>`).join('')}</div>`;
+    if(c.writes) h+=`<div class="profile-card-section"><div class="profile-section-label">Writes to</div><div class="profile-card-text">${esc(c.writes)}</div></div>`;
+    h+=`</div>`;
   }
-  // Routines
-  if(a.routines && a.routines.length) {
-    h+=`<div class="profile-section"><div class="profile-section-label">Routines</div><div class="profile-list">`;
-    for(const r of a.routines) {
-      const stateText = r.state ? (r.state.status === 'running' ? '<span style="color:var(--working)">Running now</span>' : `Last run: ${formatTimeAgo(r.state.lastRun)} (${r.state.status})`) : '<span style="color:var(--text-2)">Not yet run</span>';
-      h+=`<div class="profile-list-item" style="display:flex;flex-direction:column;gap:4px">
-        <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-weight:600">${esc(r.name)}</span></div>
-        <div style="font-size:var(--caption);color:var(--text-2)">${esc(r.schedule)}</div>
-        <div style="font-size:var(--caption)">${stateText}</div>
-      </div>`;
+  // Routines + Configuration card
+  const hasRoutines = a.routines && a.routines.length;
+  const hasConnectors = a.capabilities?.connectors;
+  if(hasRoutines || hasConnectors || a.model) {
+    h+=`<div class="profile-card">`;
+    if(hasRoutines) {
+      h+=`<div class="profile-card-section"><div class="profile-section-label">Routines</div>`;
+      for(const r of a.routines) {
+        const stateText = r.state ? (r.state.status === 'running' ? '<span style="color:var(--working)">Running now</span>' : `Last run: ${formatTimeAgo(r.state.lastRun)} (${r.state.status})`) : '<span style="color:var(--text-2)">Not yet run</span>';
+        h+=`<div class="profile-card-item" style="display:flex;flex-direction:column;gap:3px">
+          <span style="font-weight:600">${esc(r.name)}</span>
+          <span style="font-size:var(--caption);color:var(--text-2)">${esc(r.schedule)}</span>
+          <span style="font-size:var(--caption)">${stateText}</span>
+        </div>`;
+      }
+      h+=`</div>`;
     }
-    h+=`</div></div>`;
+    if(hasConnectors) {
+      h+=`<div class="profile-card-section"><div class="profile-section-label">Connectors</div>${a.capabilities.connectors.split(',').map(cn=>`<div class="profile-card-item" style="display:flex;align-items:center;justify-content:space-between">${cn.trim()}<span style="color:var(--success);font-size:var(--caption)">Connected</span></div>`).join('')}</div>`;
+    }
+    const modelLabels = {opus:'Opus (most capable)',sonnet:'Sonnet (fast, efficient)',haiku:'Haiku (lightweight)'};
+    if(a.model) h+=`<div class="profile-card-section"><div class="profile-section-label">Model</div><div class="profile-card-item">${modelLabels[a.model]||a.model}</div></div>`;
+    h+=`</div>`;
   }
-  // Model
-  const modelLabels = {opus:'Opus (most capable)',sonnet:'Sonnet (fast, efficient)',haiku:'Haiku (lightweight)'};
-  if(a.model) h+=`<div class="profile-section"><div class="profile-section-label">Model</div><div class="profile-list"><div class="profile-list-item">${modelLabels[a.model]||a.model}</div></div></div>`;
-  // Instructions (collapsible)
-  if(a.instructions) h+=`<div class="profile-section">
-    <div class="profile-section-label" style="cursor:pointer" onclick="const el=document.getElementById('agent-instructions');el.classList.toggle('hidden');">Instructions ▾</div>
-    <div id="agent-instructions" class="hidden"><div class="profile-list-item" style="font-size:var(--caption);line-height:1.6;white-space:pre-wrap;max-height:400px;overflow-y:auto">${esc(a.instructions)}</div></div>
-  </div>`;
+  // Instructions card (collapsible)
+  if(a.instructions) h+=`<div class="profile-card" style="cursor:pointer" onclick="document.getElementById('agent-instructions').classList.toggle('hidden')">
+    <div class="profile-card-section"><div class="profile-section-label">Instructions ▾</div>
+    <div id="agent-instructions" class="hidden"><div style="font-size:var(--caption);line-height:1.6;white-space:pre-wrap;max-height:400px;overflow-y:auto;color:var(--text-2);padding-top:8px">${esc(a.instructions)}</div></div>
+    </div></div>`;
   document.getElementById('profile-content').innerHTML=h;
   showView('profile');
   // Highlight in sidebar
@@ -612,7 +744,7 @@ function renderConvoList() {
   if(active.length) {
     for(const c of active) {
       const lastMsg=c.messages.filter(m=>m.role==='agent').pop();
-      const preview=lastMsg?lastMsg.content.substring(0,60)+'...':'No messages yet';
+      const preview=lastMsg?stripMd(lastMsg.content).substring(0,60)+'...':'No messages yet';
       h+=`<div class="convo-item ${activeConversation?.id===c.id?'active':''}" onclick="openConversation('${c.id}')">
         <span class="convo-title">${esc(c.title)}</span>
         <span class="convo-preview">${esc(preview)}</span>
@@ -625,7 +757,7 @@ function renderConvoList() {
     h+=`<div id="done-convos" class="hidden">`;
     for(const c of done) {
       const lastMsg=c.messages.filter(m=>m.role==='agent').pop();
-      const preview=lastMsg?lastMsg.content.substring(0,50)+'...':'';
+      const preview=lastMsg?stripMd(lastMsg.content).substring(0,50)+'...':'';
       h+=`<div class="convo-item ${activeConversation?.id===c.id?'active':''}" onclick="openConversation('${c.id}')" style="opacity:0.7">
         <span class="convo-title">${esc(c.title)}</span>
         <span class="convo-preview">${esc(preview)}</span>
@@ -650,7 +782,7 @@ function openConversation(id) {
     document.getElementById('send-btn').disabled=true; document.getElementById('msg-input').disabled=true;
     const a=c.agent;
     const m2=document.getElementById('messages'),d=document.createElement('div'); d.className='msg msg-agent'; d.id='thinking-indicator';
-    d.innerHTML=`<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.name||'Agent'}</div><div class="msg-bubble thinking-bubble"><span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span><div class="thinking-status" id="thinking-status"></div></div>`;
+    d.innerHTML=`<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.name||'Agent'}</div><div class="msg-bubble thinking-bubble"><div class="thinking-pulse" style="background:${a?.colour||'var(--accent)'}"></div><div><div class="thinking-label">Thinking</div><div class="thinking-status" id="thinking-status"></div></div></div>`;
     m2.appendChild(d);
   } else {
     document.getElementById('chat-status').textContent=''; document.getElementById('chat-status').classList.remove('working');
@@ -669,7 +801,7 @@ function sendMessage() {
   if(!text||state.isProcessing) return;
   addUserMsg(text); activeConversation.messages.push({role:'user',content:text});
   if(activeConversation.messages.filter(m=>m.role==='user').length===1) { activeConversation.title=text.substring(0,50)+(text.length>50?'...':''); document.getElementById('chat-title-input').value=activeConversation.title; renderConvoList(); }
-  input.value=''; input.style.height='44px'; startProcessing(activeConversation.id);
+  input.value=''; input.style.height='44px'; document.getElementById('send-btn').classList.remove('active'); startProcessing(activeConversation.id);
   const chatMsg = {type:'chat', content:text, agent:activeConversation.agentId, conversationId:activeConversation.id};
   // Include session ID for resume if this isn't the first message
   if(activeConversation.sessionId) chatMsg.sessionId = activeConversation.sessionId;
@@ -686,7 +818,7 @@ function startProcessing(convoId) {
     document.getElementById('msg-input').disabled=true;
     const a=convo?.agent||agents[0];
     const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg msg-agent'; d.id='thinking-indicator';
-    d.innerHTML=`<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.name||'Agent'}</div><div class="msg-bubble thinking-bubble"><span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span><div class="thinking-status" id="thinking-status"></div></div>`;
+    d.innerHTML=`<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.name||'Agent'}</div><div class="msg-bubble thinking-bubble"><div class="thinking-pulse" style="background:${a?.colour||'var(--accent)'}"></div><div><div class="thinking-label">Thinking</div><div class="thinking-status" id="thinking-status"></div></div></div>`;
     m.appendChild(d); scrollBottom();
   }
   if(convo) { const s=document.querySelector(`[data-status="${convo.agentId}"]`); if(s){s.textContent='working';s.classList.add('working');} }
@@ -741,13 +873,14 @@ function scrollBottom() { const m=document.getElementById('messages'); if(m) m.s
 function switchNav(nav) {
   document.querySelectorAll('.nav-item[data-nav]').forEach(n=>n.classList.remove('active'));
   document.querySelector(`[data-nav="${nav}"]`)?.classList.add('active');
-  ['team','conversations','files'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
+  ['team','conversations','skills','files'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
   document.getElementById(`sidebar-${nav}`).classList.remove('hidden');
   if(nav==='files') showView('editor');
+  else if(nav==='skills') { showView('skills'); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } document.querySelectorAll('.skill-sidebar-item').forEach(el=>el.classList.remove('active')); document.querySelectorAll('.skill-row.expanded').forEach(r=>r.classList.remove('expanded')); }
   else if(nav==='conversations') showView(activeConversation?'chat':'home');
   else showView('home');
 }
-function showView(v) { currentView=v; ['home','profile','chat','editor'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';} if(v==='home')setTimeout(drawAndScaleOrgChart,50); }
+function showView(v) { currentView=v; ['home','profile','chat','editor','skills'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');} if(v==='home')setTimeout(drawAndScaleOrgChart,50); }
 function goHome() { activeConversation=null; showView('home'); switchNav('team'); document.querySelectorAll('.agent-status-item').forEach(el=>el.classList.remove('active')); }
 function goBack() { if(activeConversation) showProfile(activeConversation.agentId); else goHome(); }
 
@@ -766,7 +899,7 @@ function buildTree(items,container) {
     } else {
       const fi=document.createElement('div'); fi.className='file-item';
       fi.innerHTML=`<svg class="file-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> ${esc(item.name)}`;
-      fi.onclick=()=>{document.querySelectorAll('.file-item').forEach(x=>x.classList.remove('active'));fi.classList.add('active');ws.send(JSON.stringify({type:'read_file',path:item.path}));showView('editor');};
+      fi.onclick=()=>{document.querySelectorAll('.file-item').forEach(x=>x.classList.remove('active'));fi.classList.add('active');editorReturnView='home';ws.send(JSON.stringify({type:'read_file',path:item.path}));showView('editor');};
       container.appendChild(fi);
     }
   }
@@ -1059,7 +1192,15 @@ let saveTimer=null;
 document.addEventListener('input',e=>{if(e.target.id==='editor-content'&&currentFilePath&&editorMode==='edit'){document.getElementById('editor-status').textContent='Unsaved';document.getElementById('editor-status').style.color='var(--attention)';clearTimeout(saveTimer);saveTimer=setTimeout(()=>{ws.send(JSON.stringify({type:'save_file',path:currentFilePath,content:getFileContentForSave()}));document.getElementById('editor-status').style.color='var(--success)';document.getElementById('editor-status').textContent='Saved';},1500);}});
 const msgInput = document.getElementById('msg-input');
 msgInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}});
-msgInput.addEventListener('input',()=>{ msgInput.style.height='auto'; msgInput.style.height=Math.min(msgInput.scrollHeight, 200)+'px'; });
+msgInput.addEventListener('input',()=>{
+  msgInput.style.height='auto'; msgInput.style.height=Math.min(msgInput.scrollHeight, 200)+'px';
+  const btn=document.getElementById('send-btn');
+  if(msgInput.value.trim()) btn.classList.add('active'); else btn.classList.remove('active');
+});
+
+function addToTeam(agentId) {
+  if (ws) ws.send(JSON.stringify({ type: 'add_to_team', agentId }));
+}
 
 function formatTimeAgo(isoStr) {
   if (!isoStr) return 'never';
@@ -1124,6 +1265,7 @@ function formatScheduleShort(schedule) {
 }
 
 function esc(t){const d=document.createElement('div');d.textContent=t;return d.innerHTML;}
+function stripMd(t){return t.replace(/\*\*(.*?)\*\*/g,'$1').replace(/\*(.*?)\*/g,'$1').replace(/~~(.*?)~~/g,'$1').replace(/`([^`]+)`/g,'$1').replace(/^#+\s/gm,'').replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g,'$2').replace(/\[\[([^\]]+)\]\]/g,'$1').replace(/==(.*?)==/g,'$1');}
 function _legacyFormatMd(text) {
   let h=esc(text);
   h=h.replace(/%%[\s\S]*?%%/g,'');
@@ -1210,6 +1352,130 @@ function findFileInTree(items, searchName) {
     }
   }
   return null;
+}
+
+// ===== SKILLS =====
+
+function renderSkills() {
+  const assigned = skills.filter(s => s.status === 'assigned');
+  const unassigned = skills.filter(s => s.status === 'unassigned');
+
+  // Sidebar
+  const sidebar = document.getElementById('skills-sidebar-list');
+  let sidebarHtml = '';
+
+  if (assigned.length) {
+    sidebarHtml += `<div style="padding:4px 8px 4px"><span class="sidebar-label">Assigned</span></div>`;
+    for (const s of assigned) {
+      const dots = s.assignedAgents.map(a => `<span class="skill-dot" style="background:${a.colour}" title="${a.name}"></span>`).join('');
+      sidebarHtml += `<div class="skill-sidebar-item" onclick="selectSkill('${s.id}')" data-skill="${s.id}">
+        <span class="skill-sidebar-name">${esc(s.name)}</span>
+        <span class="skill-dots">${dots}</span>
+      </div>`;
+    }
+  }
+
+  if (unassigned.length) {
+    sidebarHtml += `<div style="padding:12px 8px 4px"><span class="sidebar-label">Unassigned</span></div>`;
+    for (const s of unassigned) {
+      sidebarHtml += `<div class="skill-sidebar-item" onclick="selectSkill('${s.id}')" data-skill="${s.id}">
+        <span class="skill-sidebar-name">${esc(s.name)}</span>
+      </div>`;
+    }
+  }
+
+  sidebar.innerHTML = sidebarHtml;
+
+  // Main panel
+  const main = document.getElementById('skills-main-list');
+  let mainHtml = '';
+
+  if (assigned.length) {
+    mainHtml += `<div style="margin-bottom:24px">
+      <div style="font-size:var(--label);font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-2);margin-bottom:10px;padding-left:4px">Assigned</div>
+      <div class="skills-list-main">`;
+    for (const s of assigned) {
+      mainHtml += renderSkillRow(s);
+    }
+    mainHtml += `</div></div>`;
+  }
+
+  if (unassigned.length) {
+    mainHtml += `<div style="margin-bottom:24px">
+      <div style="font-size:var(--label);font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-2);margin-bottom:10px;padding-left:4px">Unassigned</div>
+      <div class="skills-list-main">`;
+    for (const s of unassigned) {
+      mainHtml += renderSkillRow(s);
+    }
+    mainHtml += `</div></div>`;
+  }
+
+  if (!skills.length) {
+    mainHtml = `<div style="display:flex;align-items:center;justify-content:center;height:200px;color:var(--text-2);font-size:var(--body)">No skills found</div>`;
+  }
+
+  main.innerHTML = mainHtml;
+}
+
+function renderSkillRow(s) {
+  const dots = s.assignedAgents.map(a => `<span class="skill-dot" style="background:${a.colour}" title="${a.name}"></span>`).join('');
+
+  // Build detail grid rows dynamically
+  let gridRows = '';
+  if (s.assignedAgents.length) {
+    const agentList = s.assignedAgents.map(a => `<span style="display:flex;align-items:center;gap:6px"><span class="skill-dot" style="background:${a.colour}"></span> ${esc(a.name)}</span>`).join('');
+    gridRows += `<span class="skill-detail-label">Used by</span><span class="skill-detail-value">${agentList}</span>`;
+  }
+  gridRows += `<span class="skill-detail-label">Source</span><span class="skill-detail-value"><a onclick="event.stopPropagation();openSkillFile('${s.filePath}')" style="font-family:'SF Mono','Fira Code',monospace;font-size:var(--label);color:var(--accent);cursor:pointer;text-decoration:none">${esc(s.slug)}</a></span>`;
+
+  return `<div class="skill-row" data-skill-row="${s.id}" onclick="toggleSkillRow(this)">
+    <div class="skill-row-header">
+      <div class="skill-row-left">
+        <svg class="skill-row-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="14" height="14"><polyline points="6 9 12 15 18 9"/></svg>
+        <span class="skill-row-name">${esc(s.name)}</span>
+        <span class="skill-dots">${dots}</span>
+      </div>
+      <span class="skill-row-desc">${esc(s.description)}</span>
+    </div>
+    <div class="skill-row-detail">
+      <div class="skill-detail-grid">${gridRows}</div>
+      ${s.description ? `<div style="margin-top:10px;font-size:var(--caption);line-height:1.6;color:var(--text-2)">${esc(s.description)}</div>` : ''}
+    </div>
+  </div>`;
+}
+
+function toggleSkillRow(el) {
+  el.classList.toggle('expanded');
+}
+
+let editorReturnView = 'home';
+
+function openSkillFile(filePath) {
+  editorReturnView = 'skills';
+  ws.send(JSON.stringify({ type: 'read_file', path: filePath }));
+  showView('editor');
+}
+
+function editorGoBack() {
+  showView(editorReturnView);
+  editorReturnView = 'home';
+}
+
+function selectSkill(id) {
+  // Ensure skills view is visible
+  showView('skills');
+
+  // Highlight in sidebar
+  document.querySelectorAll('.skill-sidebar-item').forEach(el => el.classList.remove('active'));
+  document.querySelector(`.skill-sidebar-item[data-skill="${id}"]`)?.classList.add('active');
+
+  // Collapse others, expand selected, scroll to it
+  document.querySelectorAll('.skill-row.expanded').forEach(r => r.classList.remove('expanded'));
+  const row = document.querySelector(`.skill-row[data-skill-row="${id}"]`);
+  if (row) {
+    row.classList.add('expanded');
+    setTimeout(() => row.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
+  }
 }
 
 window.addEventListener('resize',()=>{ if(currentView==='home') drawAndScaleOrgChart(); });

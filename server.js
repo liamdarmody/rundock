@@ -54,19 +54,35 @@ function discoverAgents() {
         const caps = parseCapabilities(fmText);
         const routines = parseRoutines(fmText);
 
+        const agentType = meta.type || null; // orchestrator, specialist, platform, or null
+        const hasOrder = meta.order !== undefined && meta.order !== '';
+        const orderNum = hasOrder ? parseInt(meta.order) : null;
+
+        // Three-state detection:
+        // onTeam: has order (with or without type - backward compat)
+        // available: has type but no order (marketplace install, not placed)
+        // raw: no type AND no order (bare Claude Code agent, needs onboarding)
+        let status = 'raw';
+        if (hasOrder) status = 'onTeam';
+        else if (agentType) status = 'available';
+
         agents.push({
           id: isDefault ? 'default' : id,
-          name: displayName,
+          name: meta.displayName || displayName,
+          agentName: displayName, // Claude Code --agent value
           role,
           description: meta.description || '',
+          type: agentType,
+          status,
           capabilities: caps,
           routines: routines,
           model: meta.model || null,
-          order: meta.order ? parseInt(meta.order) : 99,
+          order: orderNum,
           instructions: instructions.substring(0, 2000),
           isDefault,
-          colour: colours[colourIdx % colours.length],
-          icon: icons[colourIdx % icons.length]
+          colour: meta.colour || colours[colourIdx % colours.length],
+          icon: meta.icon || icons[colourIdx % icons.length],
+          fileName: file
         });
         colourIdx++;
       } catch (e) {
@@ -97,11 +113,18 @@ function discoverAgents() {
     }
   }
 
-  // Sort: default first, then by order
+  // Sort: onTeam first (by order), then available, then raw
   agents.sort((a, b) => {
-    if (a.isDefault) return -1;
-    if (b.isDefault) return 1;
-    return (a.order || 99) - (b.order || 99);
+    const statusOrder = { onTeam: 0, available: 1, raw: 2 };
+    const sa = statusOrder[a.status] ?? 2;
+    const sb = statusOrder[b.status] ?? 2;
+    if (sa !== sb) return sa - sb;
+    // Within onTeam: orchestrator first, then by order
+    if (a.type === 'orchestrator' && b.type !== 'orchestrator') return -1;
+    if (b.type === 'orchestrator' && a.type !== 'orchestrator') return 1;
+    if (a.type === 'platform' && b.type !== 'platform') return 1;
+    if (b.type === 'platform' && a.type !== 'platform') return -1;
+    return (a.order ?? 99) - (b.order ?? 99);
   });
 
   // Attach routine state
@@ -350,13 +373,13 @@ wss.on('connection', (ws) => {
           args.push('--resume', msg.sessionId);
         }
 
-        // Always pass --agent with the agent's display name (from frontmatter)
-        // Claude Code uses the frontmatter 'name' field, not the filename
+        // Always pass --agent with the Claude Code agent name (frontmatter 'name' field)
         if (!msg.sessionId) {
           const agentList = discoverAgents();
           const agentData = agentList.find(a => a.id === (msg.agent || 'default'));
-          if (agentData && agentData.name) {
-            args.push('--agent', agentData.name);
+          if (agentData) {
+            // Use agentName (Claude Code's 'name' field) not displayName
+            args.push('--agent', agentData.agentName || agentData.name);
           }
         }
 
@@ -419,11 +442,37 @@ wss.on('connection', (ws) => {
 
       if (msg.type === 'get_agents') ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents() }));
       if (msg.type === 'get_files') ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) }));
+      if (msg.type === 'get_skills') ws.send(JSON.stringify({ type: 'skills', skills: discoverSkills() }));
 
       if (msg.type === 'read_file') {
         const fullPath = path.join(WORKSPACE, msg.path);
         if (fs.existsSync(fullPath) && !fullPath.includes('..')) {
           ws.send(JSON.stringify({ type: 'file_content', path: msg.path, content: fs.readFileSync(fullPath, 'utf-8') }));
+        }
+      }
+
+      if (msg.type === 'add_to_team') {
+        // Assign the next order number to an available agent
+        const agentList = discoverAgents();
+        const target = agentList.find(a => a.id === msg.agentId);
+        if (target && target.fileName) {
+          const maxOrder = Math.max(0, ...agentList.filter(a => a.order !== null).map(a => a.order));
+          const nextOrder = maxOrder + 1;
+          const filePath = path.join(WORKSPACE, '.claude', 'agents', target.fileName);
+          let content = fs.readFileSync(filePath, 'utf-8');
+          // Add or update order field in frontmatter
+          if (content.match(/^order:\s/m)) {
+            content = content.replace(/^order:\s.*/m, `order: ${nextOrder}`);
+          } else {
+            // Add order after the type field, or after description
+            content = content.replace(/^(type:\s.*)/m, `$1\norder: ${nextOrder}`);
+            if (!content.match(/^order:/m)) {
+              content = content.replace(/^(description:[\s\S]*?)(\n\w)/m, `$1\norder: ${nextOrder}$2`);
+            }
+          }
+          fs.writeFileSync(filePath, content, 'utf-8');
+          // Send updated agent list
+          ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents() }));
         }
       }
 
@@ -445,6 +494,108 @@ wss.on('connection', (ws) => {
     processes.clear();
   });
 });
+
+// ===== SKILL DISCOVERY =====
+
+function discoverSkills() {
+  const skills = [];
+  const agents = discoverAgents();
+  const agentsDir = path.join(WORKSPACE, '.claude', 'agents');
+
+  // Read full body text of each on-team agent (after frontmatter, not CLAUDE.md)
+  const agentBody = {};
+  for (const agent of agents.filter(a => a.status === 'onTeam' && a.fileName)) {
+    try {
+      const content = fs.readFileSync(path.join(agentsDir, agent.fileName), 'utf-8');
+      const bodyMatch = content.match(/^---\n[\s\S]*?\n---\n([\s\S]*)/);
+      agentBody[agent.id] = bodyMatch ? bodyMatch[1].toLowerCase() : '';
+    } catch (e) { agentBody[agent.id] = ''; }
+  }
+
+  // Scan multiple skill locations
+  const sources = [
+    { dir: path.join(WORKSPACE, 'System', 'Playbooks'), defFile: 'PLAYBOOK.md', sourceLabel: 'System/Playbooks' },
+    { dir: path.join(WORKSPACE, '.claude', 'skills'), defFile: 'SKILL.md', sourceLabel: '.claude/skills' },
+  ];
+
+  for (const source of sources) {
+    if (!fs.existsSync(source.dir)) continue;
+    const dirs = fs.readdirSync(source.dir, { withFileTypes: true }).filter(d => d.isDirectory());
+
+    for (const dir of dirs) {
+      const defPath = path.join(source.dir, dir.name, source.defFile);
+      if (!fs.existsSync(defPath)) continue;
+
+      try {
+        const content = fs.readFileSync(defPath, 'utf-8');
+        const parsed = parseSkillFile(content, dir.name);
+
+        // Match skill to agents dynamically:
+        // Check if the exact slug appears in the agent's body text
+        const slug = dir.name.toLowerCase();
+        const assignedAgents = [];
+
+        for (const agent of agents.filter(a => a.status === 'onTeam')) {
+          const body = agentBody[agent.id] || '';
+          // Look for exact slug reference (e.g. "linkedin-hook-generator" or "hook-generator")
+          if (body.includes(slug)) {
+            assignedAgents.push({ id: agent.id, name: agent.name, colour: agent.colour, icon: agent.icon });
+          }
+        }
+
+        skills.push({
+          id: dir.name,
+          name: parsed.displayName,
+          description: parsed.description,
+          slug: dir.name,
+          source: source.sourceLabel,
+          sourcePath: `${source.sourceLabel}/${dir.name}/`,
+          filePath: `${source.sourceLabel}/${dir.name}/${source.defFile}`,
+          assignedAgents,
+          status: assignedAgents.length > 0 ? 'assigned' : 'unassigned'
+        });
+      } catch (e) {
+        console.error(`Error reading skill ${dir.name}:`, e.message);
+      }
+    }
+  }
+
+  // Sort: assigned first, then alphabetical
+  skills.sort((a, b) => {
+    if (a.status !== b.status) return a.status === 'assigned' ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  return skills;
+}
+
+function parseSkillFile(content, slug) {
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+  let name = slug;
+  let description = '';
+
+  if (fmMatch) {
+    const nameMatch = fmMatch[1].match(/^name:\s*(.+)/m);
+    if (nameMatch) name = nameMatch[1].trim();
+
+    // Handle multi-line description with > or plain multi-line
+    const descMatch = fmMatch[1].match(/description:\s*>?\s*\n((?:\s+.+\n?)+)/);
+    if (descMatch) {
+      description = descMatch[1].replace(/\n\s*/g, ' ').trim();
+    } else {
+      const descSingle = fmMatch[1].match(/^description:\s*(.+)/m);
+      if (descSingle) description = descSingle[1].trim();
+    }
+  }
+
+  // Convert slug-style names to title case (preserve known brand casing)
+  const brandWords = { linkedin: 'LinkedIn', reddit: 'Reddit', notion: 'Notion', readwise: 'Readwise', granola: 'Granola', api: 'API', oauth: 'OAuth', mcp: 'MCP' };
+  const displayName = name === slug
+    ? slug.split('-').map(w => brandWords[w.toLowerCase()] || (w.charAt(0).toUpperCase() + w.slice(1))).join(' ')
+    : name;
+
+  return { displayName, description };
+}
 
 // ===== FILE TREE =====
 
