@@ -41,7 +41,8 @@ function discoverAgents() {
         const id = file.replace('.md', '');
         const isDefault = meta.isDefault === 'true' || meta.isDefault === true || (meta.order && parseInt(meta.order) === 0);
 
-        const displayName = meta.name || titleCase(id);
+        const fmName = meta.name || id;
+        const displayName = meta.displayName || meta.name || titleCase(id);
         const role = meta.role || titleCase(id);
         const bodyMatch = content.match(/^---\n[\s\S]*?\n---\n([\s\S]*)/);
         let instructions = bodyMatch ? bodyMatch[1].trim() : '';
@@ -68,8 +69,8 @@ function discoverAgents() {
 
         agents.push({
           id: isDefault ? 'default' : id,
-          name: meta.displayName || displayName,
-          agentName: displayName, // Claude Code --agent value
+          name: fmName,
+          displayName,
           role,
           description: meta.description || '',
           type: agentType,
@@ -96,9 +97,11 @@ function discoverAgents() {
     if (fs.existsSync(claudeMdPath)) {
       const content = fs.readFileSync(claudeMdPath, 'utf-8');
       const nameMatch = content.match(/^#\s+(.+)/m);
+      const defaultName = nameMatch ? nameMatch[1].split(/\s*[-]/)[0].trim() : 'Assistant';
       agents.unshift({
         id: 'default',
-        name: nameMatch ? nameMatch[1].split(/\s*[-]/)[0].trim() : 'Assistant',
+        name: 'default',
+        displayName: defaultName,
         role: 'Default Agent',
         description: '',
         capabilities: null,
@@ -373,13 +376,12 @@ wss.on('connection', (ws) => {
           args.push('--resume', msg.sessionId);
         }
 
-        // Always pass --agent with the Claude Code agent name (frontmatter 'name' field)
+        // Pass --agent with the slug name (matches filename, used by Claude Code for resolution)
         if (!msg.sessionId) {
           const agentList = discoverAgents();
           const agentData = agentList.find(a => a.id === (msg.agent || 'default'));
-          if (agentData) {
-            // Use agentName (Claude Code's 'name' field) not displayName
-            args.push('--agent', agentData.agentName || agentData.name);
+          if (agentData && agentData.id !== 'default') {
+            args.push('--agent', agentData.name);
           }
         }
 
@@ -539,7 +541,7 @@ function discoverSkills() {
           const body = agentBody[agent.id] || '';
           // Look for exact slug reference (e.g. "linkedin-hook-generator" or "hook-generator")
           if (body.includes(slug)) {
-            assignedAgents.push({ id: agent.id, name: agent.name, colour: agent.colour, icon: agent.icon });
+            assignedAgents.push({ id: agent.id, name: agent.displayName, colour: agent.colour, icon: agent.icon });
           }
         }
 

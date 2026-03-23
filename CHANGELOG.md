@@ -4,6 +4,28 @@ All notable changes to the Rundock project.
 
 ---
 
+## 2026-03-23 — Agent name migration, displayName, empty states
+
+### Features
+- **displayName field:** Agents now have a slug-style `name` (e.g. `content-creator`) for Claude Code resolution and a separate `displayName` (e.g. `Penn`) for UI display. Falls back to title-cased name if displayName is not set.
+- **Empty states:** Conversations, Skills, and Files sidebars show helpful messages when empty instead of blank panels.
+- **Agent last activity:** Sidebar shows relative timestamps ("Just now", "3m ago") after an agent completes a conversation. Updates every 60 seconds without re-rendering.
+- **Skill source navigation:** Click a skill's source name to open its file in the editor. Back button returns to Skills view.
+
+### Fixes
+- **--agent flag bug:** Chat handler was passing display name instead of slug to Claude Code. Now uses agent ID (filename slug) consistently, matching the scheduler.
+- **Skill expand behaviour:** Multi-expand everywhere. Sidebar and main panel both allow multiple skills open. Consistent interaction model.
+- **Skills header back button:** Returns to Team view with correct nav state instead of showing org chart with skills sidebar.
+- **Org chart hover:** Removed translateY(-2px) that caused cards to separate from connector lines.
+- **Colour values in frontmatter:** Quotes in YAML hex values were passed through literally, breaking CSS. Fixed by using unquoted hex values.
+
+### Architecture
+- **Agent object restructured:** `name` holds the slug (used for --agent flag and lookups), `displayName` holds the human name (used for all UI). Removed redundant `agentName` field.
+- **Agent-onboarding skill updated:** Documents displayName as optional field, natural language routines, unicode icons, unquoted hex colours. No invented specifications.
+- **Guide agent constraints:** Added rules against fabricating specifications and assigning health scores. Defined a concrete workspace health checklist.
+
+---
+
 ## 2026-03-23 — Skills view, design refinements
 
 ### Features

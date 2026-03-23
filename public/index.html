@@ -98,7 +98,7 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 /* org-chart-title removed: redundant label */
 .org-tree { display: flex; flex-direction: column; align-items: center; }
 .org-card { background: var(--card); border-radius: 12px; padding: 16px 20px; display: flex; align-items: center; gap: 12px; cursor: pointer; transition: all 0.2s ease; border: 1px solid transparent; box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08); }
-.org-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.2), 0 0 0 1px var(--accent); transform: translateY(-2px); }
+.org-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.2), 0 0 0 1px var(--accent); }
 .org-card-name { font-size: var(--body); font-weight: 700; color: var(--text-1); }
 .org-card-role { font-size: var(--caption); color: var(--text-2); max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .org-leader .org-card { padding: 20px 28px; }
@@ -418,6 +418,7 @@ const sunIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stro
 const moonIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
 
 let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false;
+const agentLastActivity = {}; // { agentId: { time: Date, label: string } }
 // Per-conversation state: { convoId: { isProcessing, currentStreamingMsg, latestText } }
 const convoState = {};
 
@@ -436,7 +437,7 @@ function handle(d) {
   const convoId = d._conversationId;
 
   switch(d.type) {
-    case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesSidebar(); break;
+    case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesSidebar(); renderConvoList(); break;
     case 'skills': skills=d.skills; skillsLoaded=true; renderSkills(); break;
     case 'system':
       // Capture session ID from init message
@@ -515,20 +516,24 @@ function renderAgentList() {
   let h = '';
   // On team agents
   for (const a of onTeam) {
+    const last = agentLastActivity[a.id];
+    const statusText = last ? formatTimeAgo(last.time) : 'idle';
     h += `<div class="agent-status-item" onclick="showProfile('${a.id}')" data-agent="${a.id}">
       <div class="avatar sm" style="background:${a.colour}">${a.icon}</div>
-      <span class="agent-status-name">${a.name}</span>
-      <span class="agent-status-state" data-status="${a.id}">idle</span>
+      <span class="agent-status-name">${a.displayName}</span>
+      <span class="agent-status-state" data-status="${a.id}">${statusText}</span>
     </div>`;
   }
   // Platform agents
   if (platform.length) {
     h += `<div style="border-top:1px solid var(--border);margin:8px 8px 0;padding-top:12px"><span class="sidebar-label">Rundock Agents</span></div>`;
     for (const a of platform) {
+      const last = agentLastActivity[a.id];
+      const statusText = last ? formatTimeAgo(last.time) : 'idle';
       h += `<div class="agent-status-item" onclick="showProfile('${a.id}')" data-agent="${a.id}">
         <div class="avatar sm" style="background:${a.colour}">${a.icon}</div>
-        <span class="agent-status-name">${a.name}</span>
-        <span class="agent-status-state" data-status="${a.id}">idle</span>
+        <span class="agent-status-name">${a.displayName}</span>
+        <span class="agent-status-state" data-status="${a.id}">${statusText}</span>
       </div>`;
     }
   }
@@ -541,7 +546,7 @@ function renderAgentList() {
       h += `<div class="agent-status-item" style="${isRaw ? 'opacity:0.6' : ''}">
         <div class="avatar sm" style="background:${a.colour}">${a.icon}</div>
         <div style="flex:1;min-width:0">
-          <span class="agent-status-name">${a.name}</span>
+          <span class="agent-status-name">${a.displayName}</span>
           <span style="font-size:var(--caption);color:var(--text-2);display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${a.description ? a.description.substring(0, 50) : (isRaw ? 'Needs setup' : 'Ready to place')}</span>
         </div>
         ${isRaw
@@ -570,7 +575,7 @@ function renderOrgChart() {
 
   // Orchestrator
   if (leader) {
-    h += `<div class="org-leader"><div class="org-card" onclick="showProfile('${leader.id}')"><div class="avatar" style="background:${leader.colour};width:44px;height:44px;font-size:18px">${leader.icon}</div><div><div class="org-card-name" style="font-size:var(--title)">${leader.name}</div><div class="org-card-role">${leader.role || ''}</div></div></div></div>`;
+    h += `<div class="org-leader"><div class="org-card" onclick="showProfile('${leader.id}')"><div class="avatar" style="background:${leader.colour};width:44px;height:44px;font-size:18px">${leader.icon}</div><div><div class="org-card-name" style="font-size:var(--title)">${leader.displayName}</div><div class="org-card-role">${leader.role || ''}</div></div></div></div>`;
   }
 
   // Specialists
@@ -579,7 +584,7 @@ function renderOrgChart() {
     h += '<div class="org-trunk"></div><div class="org-branches">';
     team.forEach((a, i) => {
       const isTrunk = (team.length % 2 === 1) && (i === midIndex);
-      h += `<div class="org-branch${isTrunk ? ' trunk-branch' : ''}"><div class="org-branch-stem"></div><div class="org-card" onclick="showProfile('${a.id}')"><div class="avatar" style="background:${a.colour}">${a.icon}</div><div><div class="org-card-name">${a.name}</div><div class="org-card-role">${a.role || ''}</div></div></div></div>`;
+      h += `<div class="org-branch${isTrunk ? ' trunk-branch' : ''}"><div class="org-branch-stem"></div><div class="org-card" onclick="showProfile('${a.id}')"><div class="avatar" style="background:${a.colour}">${a.icon}</div><div><div class="org-card-name">${a.displayName}</div><div class="org-card-role">${a.role || ''}</div></div></div></div>`;
     });
     h += '</div>';
   }
@@ -591,7 +596,7 @@ function renderOrgChart() {
     h += '<div style="font-size:var(--label);font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-2);margin-bottom:16px">Rundock Agents</div>';
     h += '<div style="display:flex;justify-content:center;gap:12px">';
     for (const a of platformAgents) {
-      h += `<div class="org-card" onclick="showProfile('${a.id}')" style="padding:10px 16px" onmouseover="this.style.transform='none'" onmouseout="this.style.transform='none'"><div class="avatar" style="background:${a.colour};width:26px;height:26px;font-size:11px">${a.icon}</div><div><div class="org-card-name" style="font-size:var(--caption);font-weight:600">${a.name}</div><div class="org-card-role" style="font-size:var(--label)">${a.role || ''}</div></div></div>`;
+      h += `<div class="org-card" onclick="showProfile('${a.id}')" style="padding:10px 16px" onmouseover="this.style.transform='none'" onmouseout="this.style.transform='none'"><div class="avatar" style="background:${a.colour};width:26px;height:26px;font-size:11px">${a.icon}</div><div><div class="org-card-name" style="font-size:var(--caption);font-weight:600">${a.displayName}</div><div class="org-card-role" style="font-size:var(--label)">${a.role || ''}</div></div></div>`;
     }
     h += '</div></div>';
   }
@@ -635,7 +640,7 @@ function showProfile(agentId) {
     <div class="profile-header">
       <div class="profile-avatar" style="background:${a.colour}">${a.icon}</div>
       <div>
-        <div class="profile-name">${a.name}</div>
+        <div class="profile-name">${a.displayName}</div>
         ${a.role?`<div style="font-size:var(--body);color:var(--text-2)">${a.role}</div>`:''}
       </div>
     </div>`;
@@ -653,7 +658,7 @@ function showProfile(agentId) {
   if(a.capabilities) {
     const c = a.capabilities;
     h+=`<div class="profile-card">`;
-    if(c.does) h+=`<div class="profile-card-section"><div class="profile-section-label">What ${a.name} does</div><div class="profile-card-text">${esc(c.does)}</div></div>`;
+    if(c.does) h+=`<div class="profile-card-section"><div class="profile-section-label">What ${a.displayName} does</div><div class="profile-card-text">${esc(c.does)}</div></div>`;
     if(c.reads) h+=`<div class="profile-card-section"><div class="profile-section-label">Reads from</div>${c.reads.split(',').map(r=>`<div class="profile-card-item">${r.trim()}</div>`).join('')}</div>`;
     if(c.writes) h+=`<div class="profile-card-section"><div class="profile-section-label">Writes to</div><div class="profile-card-text">${esc(c.writes)}</div></div>`;
     h+=`</div>`;
@@ -697,7 +702,7 @@ function showProfile(agentId) {
 // Conversations
 function startConversation(agentId) {
   const agent=agents.find(a=>a.id===agentId)||agents[0];
-  const convo={id:Date.now().toString(),agentId:agent.id,agent,title:`Chat with ${agent.name}`,messages:[],status:'active'};
+  const convo={id:Date.now().toString(),agentId:agent.id,agent,title:`Chat with ${agent.displayName}`,messages:[],status:'active'};
   conversations.unshift(convo); activeConversation=convo;
   renderConvoList(); setupChat(convo);
   document.getElementById('messages').innerHTML='';
@@ -707,11 +712,11 @@ function newConversation() { const d=agents.find(a=>a.isDefault)||agents[0]; if(
 function setupChat(convo) {
   const agent = convo.agent;
   document.getElementById('chat-title-input').value=convo.title;
-  document.getElementById('chat-agent-label').textContent=agent.name;
+  document.getElementById('chat-agent-label').textContent=agent.displayName;
   document.getElementById('chat-agent-avatar').style.background=agent.colour;
   document.getElementById('chat-agent-avatar').textContent=agent.icon;
   const msgInput = document.getElementById('msg-input');
-  msgInput.placeholder=`Message ${agent.name}...`;
+  msgInput.placeholder=`Message ${agent.displayName}...`;
   msgInput.style.height = 'auto';
   msgInput.style.height = '44px';
   const statusEl=document.getElementById('chat-convo-status');
@@ -741,6 +746,11 @@ function renderConvoList() {
   const active=conversations.filter(c=>c.status!=='done');
   const done=conversations.filter(c=>c.status==='done');
   let h='';
+  if(!active.length && !done.length) {
+    h = `<div style="padding:12px 16px">
+      <div style="color:var(--text-2);font-size:var(--caption);line-height:1.6">Click an agent to start a conversation</div>
+    </div>`;
+  }
   if(active.length) {
     for(const c of active) {
       const lastMsg=c.messages.filter(m=>m.role==='agent').pop();
@@ -748,7 +758,7 @@ function renderConvoList() {
       h+=`<div class="convo-item ${activeConversation?.id===c.id?'active':''}" onclick="openConversation('${c.id}')">
         <span class="convo-title">${esc(c.title)}</span>
         <span class="convo-preview">${esc(preview)}</span>
-        <div class="convo-meta"><div class="avatar xs" style="background:${c.agent.colour}">${c.agent.icon}</div><span>${c.agent.name}</span></div>
+        <div class="convo-meta"><div class="avatar xs" style="background:${c.agent.colour}">${c.agent.icon}</div><span>${c.agent.displayName}</span></div>
       </div>`;
     }
   }
@@ -761,7 +771,7 @@ function renderConvoList() {
       h+=`<div class="convo-item ${activeConversation?.id===c.id?'active':''}" onclick="openConversation('${c.id}')" style="opacity:0.7">
         <span class="convo-title">${esc(c.title)}</span>
         <span class="convo-preview">${esc(preview)}</span>
-        <div class="convo-meta"><div class="avatar xs" style="background:${c.agent.colour}">${c.agent.icon}</div><span>${c.agent.name}</span></div>
+        <div class="convo-meta"><div class="avatar xs" style="background:${c.agent.colour}">${c.agent.icon}</div><span>${c.agent.displayName}</span></div>
       </div>`;
     }
     h+=`</div>`;
@@ -782,7 +792,7 @@ function openConversation(id) {
     document.getElementById('send-btn').disabled=true; document.getElementById('msg-input').disabled=true;
     const a=c.agent;
     const m2=document.getElementById('messages'),d=document.createElement('div'); d.className='msg msg-agent'; d.id='thinking-indicator';
-    d.innerHTML=`<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.name||'Agent'}</div><div class="msg-bubble thinking-bubble"><div class="thinking-pulse" style="background:${a?.colour||'var(--accent)'}"></div><div><div class="thinking-label">Thinking</div><div class="thinking-status" id="thinking-status"></div></div></div>`;
+    d.innerHTML=`<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.displayName||'Agent'}</div><div class="msg-bubble thinking-bubble"><div class="thinking-pulse" style="background:${a?.colour||'var(--accent)'}"></div><div><div class="thinking-label">Thinking</div><div class="thinking-status" id="thinking-status"></div></div></div>`;
     m2.appendChild(d);
   } else {
     document.getElementById('chat-status').textContent=''; document.getElementById('chat-status').classList.remove('working');
@@ -818,7 +828,7 @@ function startProcessing(convoId) {
     document.getElementById('msg-input').disabled=true;
     const a=convo?.agent||agents[0];
     const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg msg-agent'; d.id='thinking-indicator';
-    d.innerHTML=`<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.name||'Agent'}</div><div class="msg-bubble thinking-bubble"><div class="thinking-pulse" style="background:${a?.colour||'var(--accent)'}"></div><div><div class="thinking-label">Thinking</div><div class="thinking-status" id="thinking-status"></div></div></div>`;
+    d.innerHTML=`<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.displayName||'Agent'}</div><div class="msg-bubble thinking-bubble"><div class="thinking-pulse" style="background:${a?.colour||'var(--accent)'}"></div><div><div class="thinking-label">Thinking</div><div class="thinking-status" id="thinking-status"></div></div></div>`;
     m.appendChild(d); scrollBottom();
   }
   if(convo) { const s=document.querySelector(`[data-status="${convo.agentId}"]`); if(s){s.textContent='working';s.classList.add('working');} }
@@ -836,14 +846,37 @@ function finishProcessing(convoId) {
     document.getElementById('msg-input').disabled=false;
     document.getElementById('msg-input').focus();
   }
-  if(convo) { const s=document.querySelector(`[data-status="${convo.agentId}"]`); if(s){s.textContent='idle';s.classList.remove('working');} }
+  if(convo) {
+    agentLastActivity[convo.agentId] = { time: new Date(), label: convo.title };
+    const s=document.querySelector(`[data-status="${convo.agentId}"]`);
+    if(s){s.textContent=formatTimeAgo(new Date());s.classList.remove('working');}
+  }
 }
+
+function formatTimeAgo(date) {
+  const now = new Date();
+  const diff = Math.floor((now - date) / 1000);
+  if (diff < 60) return 'Just now';
+  if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+  return `${Math.floor(diff/86400)}d ago`;
+}
+
+// Tick agent timestamps every 60 seconds without re-rendering
+setInterval(() => {
+  for (const [agentId, activity] of Object.entries(agentLastActivity)) {
+    const el = document.querySelector(`[data-status="${agentId}"]`);
+    if (el && !el.classList.contains('working')) {
+      el.textContent = formatTimeAgo(activity.time);
+    }
+  }
+}, 60000);
 
 // UI helpers
 function addAgentMsg(text,agentId,anim=true) {
   const a=agents.find(x=>x.id===agentId)||activeConversation?.agent||agents[0],m=document.getElementById('messages'),d=document.createElement('div');
   d.className='msg msg-agent'; if(!anim)d.style.animation='none';
-  d.innerHTML=`<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.name||'Agent'}<span class="msg-time">${new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></div><div class="msg-bubble">${formatMd(text)}</div>`;
+  d.innerHTML=`<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.displayName||'Agent'}<span class="msg-time">${new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></div><div class="msg-bubble">${formatMd(text)}</div>`;
   m.appendChild(d); scrollBottom(); return d;
 }
 function addUserMsg(text,anim=true) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg msg-user'; if(!anim)d.style.animation='none'; d.innerHTML=`<div class="msg-bubble">${esc(text)}</div>`; m.appendChild(d); scrollBottom(); }
@@ -888,7 +921,7 @@ function goBack() { if(activeConversation) showProfile(activeConversation.agentI
 function toggleTheme() { document.body.classList.toggle('light'); document.getElementById('theme-toggle').innerHTML=document.body.classList.contains('light')?moonIcon:sunIcon; }
 
 // File tree
-function renderFileTree(tree) { const c=document.getElementById('file-tree'); c.innerHTML=''; buildTree(tree,c); }
+function renderFileTree(tree) { const c=document.getElementById('file-tree'); c.innerHTML=''; if(!tree||!tree.length){c.innerHTML=`<div style="padding:12px 16px"><div style="color:var(--text-2);font-size:var(--caption);line-height:1.6">No files in this workspace</div></div>`;return;} buildTree(tree,c); }
 function buildTree(items,container) {
   for(const item of items) {
     if(item.type==='folder') {
@@ -1223,7 +1256,7 @@ function renderRoutinesSidebar() {
   for (const a of agents) {
     if (a.routines) {
       for (const r of a.routines) {
-        allRoutines.push({ ...r, agentName: a.name, agentColour: a.colour, agentIcon: a.icon });
+        allRoutines.push({ ...r, agentName: a.displayName, agentColour: a.colour, agentIcon: a.icon });
       }
     }
   }
@@ -1364,6 +1397,11 @@ function renderSkills() {
   const sidebar = document.getElementById('skills-sidebar-list');
   let sidebarHtml = '';
 
+  if (!assigned.length && !unassigned.length) {
+    sidebarHtml = `<div style="padding:12px 16px">
+      <div style="color:var(--text-2);font-size:var(--caption);line-height:1.6">No skills found in this workspace</div>
+    </div>`;
+  }
   if (assigned.length) {
     sidebarHtml += `<div style="padding:4px 8px 4px"><span class="sidebar-label">Assigned</span></div>`;
     for (const s of assigned) {
@@ -1411,7 +1449,7 @@ function renderSkills() {
   }
 
   if (!skills.length) {
-    mainHtml = `<div style="display:flex;align-items:center;justify-content:center;height:200px;color:var(--text-2);font-size:var(--body)">No skills found</div>`;
+    mainHtml = `<div style="padding:12px 4px"><div style="color:var(--text-2);font-size:var(--caption);line-height:1.6">No skills found in this workspace</div></div>`;
   }
 
   main.innerHTML = mainHtml;
