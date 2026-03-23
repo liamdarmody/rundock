@@ -4,6 +4,38 @@ All notable changes to the Rundock project.
 
 ---
 
+## 2026-03-23 — Skills view, design refinements
+
+### Features
+- **Skills view:** New lightning bolt nav icon. Sidebar lists all skills grouped by Assigned (on an agent) and Unassigned. Main panel shows accordion list with expand-to-reveal detail.
+- **Dynamic skill discovery:** Server scans `System/Playbooks/` for `PLAYBOOK.md` and `.claude/skills/` for `SKILL.md`. No hardcoded skill names. Works with any workspace.
+- **Agent-to-skill mapping:** Matches skills to agents by searching each agent's body text for the exact skill slug. Handles multi-agent assignments (e.g. a skill used by both Scout and Penn shows both coloured dots).
+- **Skill source navigation:** Click the source name in a skill's expanded detail to open the skill file in the editor (preview mode). Back button returns to Skills view.
+- **Three-state agent model:** Agents are classified as onTeam (has order), available (has type, no order), or raw (no type, no order). Sort order: orchestrator first, then specialists by order, then platform agents.
+- **Filled nav icons:** Team, Conversations, Skills, and Files icons swap between outline and filled variants on active state.
+
+### Design
+- **Colour token refinements:** Surface #212121, elevated #272727, card #333333, border #3D3D3D. Warmer, more depth between layers.
+- **Sidebar shadow:** Replaced hard border-right with soft `box-shadow` for depth. Added z-index layering (nav > sidebar > main).
+- **View transitions:** Fade-in animation on view switches.
+- **Org chart cards:** Transparent border by default, accent glow + shadow on hover instead of border highlight. Removed redundant title label.
+- **Agent list density:** Sidebar items use 10px vertical padding and 13px font, matching across Team and Skills views.
+- **Conversation item spacing:** 12px padding, 3px gap for better readability.
+- **Skill row hover:** Uses rgba overlay instead of hardcoded hex. Works correctly in both dark and light mode.
+- **Expanded skill detail:** Preview description hides when row is expanded to avoid duplication. Full description shown below the metadata grid.
+
+### Fixes
+- **Skills back button resets nav state:** Returns to Team view with correct nav highlight, sidebar, and main panel.
+- **Sidebar skill selection collapses others:** Only one skill expanded at a time when navigating via sidebar.
+- **State reset on re-entry:** Navigating away from Skills and back clears expanded rows and sidebar highlights.
+- **Editor back button context-aware:** Returns to Skills view when opened from a skill source link, home when opened from Files.
+
+### Architecture
+- **`discoverSkills()` in server.js:** Scans multiple source directories, parses frontmatter, maps to agents via body text slug matching. Returns skills with id, name, description, slug, source path, file path, assigned agents, and status.
+- **`get_skills` WebSocket message:** Lazy-loaded on first Skills nav click. Client caches result.
+
+---
+
 ## 2026-03-21 — Multi-agent sessions, routines, markdown rendering
 
 ### Features
