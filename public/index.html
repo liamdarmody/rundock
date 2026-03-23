@@ -1469,8 +1469,7 @@ function selectSkill(id) {
   document.querySelectorAll('.skill-sidebar-item').forEach(el => el.classList.remove('active'));
   document.querySelector(`.skill-sidebar-item[data-skill="${id}"]`)?.classList.add('active');
 
-  // Collapse others, expand selected, scroll to it
-  document.querySelectorAll('.skill-row.expanded').forEach(r => r.classList.remove('expanded'));
+  // Expand selected and scroll to it (leave others open)
   const row = document.querySelector(`.skill-row[data-skill-row="${id}"]`);
   if (row) {
     row.classList.add('expanded');
