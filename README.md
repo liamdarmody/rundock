@@ -6,6 +6,8 @@ Rundock gives knowledge workers a visual way to build and manage AI agent teams.
 
 **Rundock is not designed for coding or building apps.** It's built around markdown files and knowledge workspaces. If you're looking for AI-assisted development, use Claude Code directly in your terminal or IDE.
 
+**Already using Claude Code?** Rundock surfaces what the terminal hides: which agents you have, which skills they use, and what's happening across your conversations. Same `.claude/` directory, same agent files, new visibility.
+
 ![Rundock org chart showing an AI agent team](docs/rundock-agent-team-org-chart.png)
 
 ## Prerequisites
@@ -38,7 +40,7 @@ WORKSPACE=/path/to/your/folder npm start
 
 **Conversations:** Chat with any agent through the browser. Messages go to Claude Code under the hood. Each conversation maintains its own session with context preserved across messages.
 
-**Skills:** Browse the skills in your workspace. See which agents use which skills. Click through to read the source files.
+**Skills:** See which agents use which skills at a glance. In Claude Code, skill-to-agent assignments are invisible. Rundock surfaces the full map.
 
 **Files:** Browse and edit workspace files with markdown preview and syntax highlighting.
 
