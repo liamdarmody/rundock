@@ -2,11 +2,11 @@
 
 A browser-based OS for AI agent teams. Built for knowledge work, powered by Claude Code.
 
-Rundock gives knowledge workers a visual way to build and manage AI agent teams. Instead of the terminal, you get an org chart, conversations, skill management, and file browsing. If you work with documents, notes, and reference material rather than source code, Rundock makes agent teams accessible: product managers, researchers, strategists, consultants, writers, analysts, and operations leads.
+**Already using Claude Code?** Rundock surfaces what the terminal hides: which agents you have, which skills they use, and what's happening across your conversations. Same `.claude/` directory, same agent files, new visibility.
+
+Rundock gives knowledge workers a visual way to build and manage AI agent teams: an org chart, conversations, skill management, and file browsing. For product managers, researchers, strategists, consultants, writers, analysts, and operations leads.
 
 **Rundock is not designed for coding or building apps.** It's built around markdown files and knowledge workspaces. If you're looking for AI-assisted development, use Claude Code directly in your terminal or IDE.
-
-**Already using Claude Code?** Rundock surfaces what the terminal hides: which agents you have, which skills they use, and what's happening across your conversations. Same `.claude/` directory, same agent files, new visibility.
 
 ![Rundock org chart showing an AI agent team](docs/rundock-agent-team-org-chart.png)
 
@@ -34,15 +34,15 @@ To open a specific workspace directly:
 WORKSPACE=/path/to/your/folder npm start
 ```
 
-## What you'll see
+## Your team at a glance
 
 **Team:** An org chart showing your agents. Click any agent to see their profile with role, capabilities, skills, and routines.
 
-**Conversations:** Chat with any agent through the browser. Messages go to Claude Code under the hood. Each conversation maintains its own session with context preserved across messages.
+**Conversations:** Chat with any agent through the browser. Run multiple conversations in parallel, each with its own agent and session context.
 
 **Skills:** See which agents use which skills at a glance. In Claude Code, skill-to-agent assignments are invisible. Rundock surfaces the full map.
 
-**Files:** Browse and edit workspace files with markdown preview and syntax highlighting.
+**Files:** Your agents read and write files in your workspace. Browse, preview, and edit those same files with full markdown rendering.
 
 ## Setting up your workspace
 
@@ -85,7 +85,7 @@ prompts:
 | `colour` | Hex colour for the avatar background |
 | `prompts` | List of starter prompts shown as pills when starting a new conversation |
 
-## How it works
+## Your data never leaves your computer
 
 ```
 Browser (WebSocket) <-> Node.js server <-> Claude Code CLI
@@ -133,8 +133,8 @@ Rundock looks for skills in `.claude/skills/` (SKILL.md files). Skills are also 
 
 **Conversations disappear on refresh**
 
-Conversations are stored in browser memory for this MVP. They reset on page refresh. Session persistence is planned.
+Conversations are stored in browser memory for now. They reset on page refresh. Session persistence is on the roadmap.
 
 ## Feedback
 
-This is an early MVP. If you find bugs or have ideas, open an issue at [github.com/liamdarmody/rundock/issues](https://github.com/liamdarmody/rundock/issues).
+Early access. If you find bugs or have ideas, open an issue at [github.com/liamdarmody/rundock/issues](https://github.com/liamdarmody/rundock/issues).
