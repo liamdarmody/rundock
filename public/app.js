@@ -319,7 +319,7 @@ function renderOrgChart() {
   if (hasTeam) {
     // Orchestrator
     if (leader) {
-      h += `<div class="org-leader"><div class="org-card" onclick="showProfile('${leader.id}')"><div class="avatar" style="background:${leader.colour};width:44px;height:44px;font-size:18px">${leader.icon}</div><div><div class="org-card-name" style="font-size:var(--title)">${leader.displayName}</div><div class="org-card-role">${leader.role || ''}</div></div></div></div>`;
+      h += `<div class="org-leader"><div class="org-card" onclick="showProfile('${leader.id}')"><div class="avatar" style="background:${leader.colour}">${leader.icon}</div><div><div class="org-card-name">${leader.displayName}</div><div class="org-card-role">${leader.role || ''}</div></div></div></div>`;
     }
 
     // Specialists
@@ -345,7 +345,7 @@ function renderOrgChart() {
 
   // Platform section (inside .org-tree so it scales together)
   if (platformAgents.length) {
-    h += `<div class="org-platform-section" style="margin-top:${hasTeam ? '48' : '32'}px">`;
+    h += `<div class="org-platform-section" style="margin-top:${hasTeam ? '56' : '32'}px">`;
     h += '<div class="org-platform-divider"></div>';
     h += '<div class="org-platform-label">Rundock Agents</div>';
     h += '<div style="display:flex;justify-content:center;gap:12px">';

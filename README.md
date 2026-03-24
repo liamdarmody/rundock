@@ -6,6 +6,8 @@ Rundock gives knowledge workers a visual way to build and manage AI agent teams.
 
 **Rundock is not designed for coding or building apps.** It's built around markdown files and knowledge workspaces. If you're looking for AI-assisted development, use Claude Code directly in your terminal or IDE.
 
+![Rundock org chart showing an AI agent team](docs/rundock-agent-team-org-chart.png)
+
 ## Prerequisites
 
 - **Claude Code** installed and authenticated ([code.claude.com](https://code.claude.com))
