@@ -4,135 +4,55 @@ All notable changes to the Rundock project.
 
 ---
 
-## 2026-03-24 — Workspace picker, settings, Guide, codebase refactor
+## 2026-03-24: Doc foundation, prompts, workspace scaffold
 
 ### Features
-- **Workspace picker redesign:** Removed text path input. Shows recent and discovered workspaces as clickable cards. New "Create new workspace" button creates directories at ~/Documents/Rundock/<name> with .claude/ scaffolding.
-- **Settings page:** Gear icon now opens a settings view with three sections: Workspace (path, agent/skill counts, change workspace), Appearance (theme toggle with localStorage persistence), and About (version, feedback link).
-- **Built-in Guide agent:** Empty workspaces automatically get a platform Guide agent (id: rundock-guide) injected at runtime. No file on disk required. Launches Claude Code without --agent flag. Workspaces with an existing platform agent are unaffected.
-- **Empty state onboarding:** All four tabs (Team, Conversations, Skills, Files) show consistent empty states with icon, title, and "Talk to the Guide" CTA button. Populated workspaces show agent cards instead.
-- **Theme persistence:** Light/dark theme preference saved to localStorage and restored on page load.
+- **Doc agent scaffold:** New workspaces automatically get a `rundock-guide.md` agent file, plus `rundock-workspace-setup` and `rundock-agent-onboarding` skills written to `.claude/skills/`. Existing workspaces with a platform agent are untouched.
+- **Prompt pills:** Agents can define `prompts` in frontmatter. Starting a conversation shows clickable starter prompts centred in the chat area. Pills disappear on first message.
+- **New conversation routing:** "+ New conversation" auto-starts with the orchestrator (if present), Doc (empty workspace), or shows the agent picker (team agents, no orchestrator).
+- **Skills on agent profiles:** Agent profile cards now show assigned skills with click-through to the Skills tab.
+- **Doc communication style:** Doc's agent file includes tone, formatting rules, and banned AI patterns to prevent generic responses.
+- **Workspace structure guidance:** Workspace Setup skill suggests PARA, Functional, or Minimal folder structures for knowledge workers.
 
 ### Fixes
-- **Duplicate Guide in org chart:** Guide no longer appears as both the leader and a platform agent when it's the only agent. Shows welcome message instead.
-- **Settings sidebar highlight:** Gear icon click now correctly highlights "Workspace" in the settings nav instead of defaulting to "About".
-- **Workspace path escaping:** Replaced inline onclick string interpolation with data attributes and delegated click handler. Prevents injection risk from unusual paths.
-- **Switch case scoping:** Wrapped workspace_error case body in braces to prevent lexical declaration issues across browsers.
-- **Duplicate formatTimeAgo:** Consolidated two implementations (different inputs, different casing) into one that accepts both Date objects and ISO strings.
+- **Avatar visibility:** All avatar circles now have a subtle inset shadow border, preventing colour-on-background blending in either theme.
+- **Doc colour:** Changed from grey (#9A9590) to steel blue (#6B8A9E) for clear visual distinction.
+- **Frontmatter quote stripping:** Parser now strips surrounding quotes from YAML values, fixing broken CSS when users write `colour: "#hex"`.
+- **Attribute escaping:** Added `escAttr()` for prompt pill data attributes. Handles `"`, `'`, `<`, `>`, `&`.
+- **parsePrompts regex:** Fixed to handle prompts as the last frontmatter block (no trailing newline).
+- **Workspace picker flash:** Nav rail and sidebar hidden by default in HTML, shown only after workspace loads.
+- **README cleanup:** Updated example agent to Marshall (Project Manager). Updated Node version to 20+. Switched to `npm start`.
 
 ### Architecture
-- **JS extracted to app.js:** All JavaScript moved from inline `<script>` in index.html to a separate `public/app.js` file. index.html is now HTML + CSS only (545 lines).
-- **Section structure:** app.js organised into 16 labelled sections with a table of contents header.
-- **Agent helpers:** `getTeamAgents()`, `getPlatformAgents()`, `getGuide()` replace 11+ inline filter/find calls throughout the codebase.
-- **CSS classes replace inline styles:** Workspace cards, agent cards, routine items, empty states, org chart platform section, and sidebar dividers all use named CSS classes instead of inline style attributes. All onmouseover/onmouseout handlers replaced with CSS :hover rules.
-- **Legacy markdown removed:** Deleted ~260 lines of dead _legacy* functions replaced by the marked library in a prior session.
-- **list_workspaces message type:** Server now supports a dedicated message that returns workspace data without the current field, eliminating the forceShowPicker global flag pattern.
+- **Scaffold system:** `scaffoldWorkspace()` function reads templates from `scaffold/` directory. Called on workspace create, set, and server startup. Additive only: checks for existing files before writing. Wrapped in try/catch so failures don't block workspace loading.
+- **`rundock-` namespace:** All Rundock-shipped agent files and skill directories use a `rundock-` prefix to avoid colliding with user-created files.
+- **`parsePrompts()` function:** Extracts `prompts:` list from agent frontmatter, returns string array.
 
 ---
 
-## 2026-03-23 — Agent name migration, displayName, empty states
+## 0.1.0: Initial release
 
 ### Features
-- **displayName field:** Agents now have a slug-style `name` (e.g. `content-creator`) for Claude Code resolution and a separate `displayName` (e.g. `Penn`) for UI display. Falls back to title-cased name if displayName is not set.
-- **Empty states:** Conversations, Skills, and Files sidebars show helpful messages when empty instead of blank panels.
-- **Agent last activity:** Sidebar shows relative timestamps ("Just now", "3m ago") after an agent completes a conversation. Updates every 60 seconds without re-rendering.
-- **Skill source navigation:** Click a skill's source name to open its file in the editor. Back button returns to Skills view.
-
-### Fixes
-- **--agent flag bug:** Chat handler was passing display name instead of slug to Claude Code. Now uses agent ID (filename slug) consistently, matching the scheduler.
-- **Skill expand behaviour:** Multi-expand everywhere. Sidebar and main panel both allow multiple skills open. Consistent interaction model.
-- **Skills header back button:** Returns to Team view with correct nav state instead of showing org chart with skills sidebar.
-- **Org chart hover:** Removed translateY(-2px) that caused cards to separate from connector lines.
-- **Colour values in frontmatter:** Quotes in YAML hex values were passed through literally, breaking CSS. Fixed by using unquoted hex values.
-
-### Architecture
-- **Agent object restructured:** `name` holds the slug (used for --agent flag and lookups), `displayName` holds the human name (used for all UI). Removed redundant `agentName` field.
-- **Agent-onboarding skill updated:** Documents displayName as optional field, natural language routines, unicode icons, unquoted hex colours. No invented specifications.
-- **Guide agent constraints:** Added rules against fabricating specifications and assigning health scores. Defined a concrete workspace health checklist.
-
----
-
-## 2026-03-23 — Skills view, design refinements
-
-### Features
-- **Skills view:** New lightning bolt nav icon. Sidebar lists all skills grouped by Assigned (on an agent) and Unassigned. Main panel shows accordion list with expand-to-reveal detail.
-- **Dynamic skill discovery:** Server scans `System/Playbooks/` for `PLAYBOOK.md` and `.claude/skills/` for `SKILL.md`. No hardcoded skill names. Works with any workspace.
-- **Agent-to-skill mapping:** Matches skills to agents by searching each agent's body text for the exact skill slug. Handles multi-agent assignments (e.g. a skill used by both Scout and Penn shows both coloured dots).
-- **Skill source navigation:** Click the source name in a skill's expanded detail to open the skill file in the editor (preview mode). Back button returns to Skills view.
-- **Three-state agent model:** Agents are classified as onTeam (has order), available (has type, no order), or raw (no type, no order). Sort order: orchestrator first, then specialists by order, then platform agents.
-- **Filled nav icons:** Team, Conversations, Skills, and Files icons swap between outline and filled variants on active state.
-
-### Design
-- **Colour token refinements:** Surface #212121, elevated #272727, card #333333, border #3D3D3D. Warmer, more depth between layers.
-- **Sidebar shadow:** Replaced hard border-right with soft `box-shadow` for depth. Added z-index layering (nav > sidebar > main).
-- **View transitions:** Fade-in animation on view switches.
-- **Org chart cards:** Transparent border by default, accent glow + shadow on hover instead of border highlight. Removed redundant title label.
-- **Agent list density:** Sidebar items use 10px vertical padding and 13px font, matching across Team and Skills views.
-- **Conversation item spacing:** 12px padding, 3px gap for better readability.
-- **Skill row hover:** Uses rgba overlay instead of hardcoded hex. Works correctly in both dark and light mode.
-- **Expanded skill detail:** Preview description hides when row is expanded to avoid duplication. Full description shown below the metadata grid.
-
-### Fixes
-- **Skills back button resets nav state:** Returns to Team view with correct nav highlight, sidebar, and main panel.
-- **Sidebar skill selection collapses others:** Only one skill expanded at a time when navigating via sidebar.
-- **State reset on re-entry:** Navigating away from Skills and back clears expanded rows and sidebar highlights.
-- **Editor back button context-aware:** Returns to Skills view when opened from a skill source link, home when opened from Files.
+- **Agent team management:** Visual org chart showing agents discovered from `.claude/agents/`. Agents support `type` (orchestrator, specialist, platform), `order`, `displayName`, `icon`, and `colour` frontmatter fields.
+- **Conversations:** Chat with any agent through the browser. Messages bridge to Claude Code via WebSocket. Session persistence across messages via `--resume`. Concurrent conversations with independent state.
+- **Skills:** Browse skills from `.claude/skills/` and `System/Playbooks/`. Dynamic agent-to-skill mapping via body text slug matching. Click through to source files.
+- **File browsing and editing:** Workspace file tree with markdown preview (including Obsidian extensions: wikilinks, callouts, highlights, tags) and raw edit mode with auto-save.
+- **Agent profiles:** Capabilities, routines with schedule and run status, model info, assigned skills, collapsible instructions.
+- **Routines:** Parsed from agent frontmatter. Server-side scheduler checks every 60 seconds. Supports daily and weekly schedules.
+- **Built-in Doc agent:** Platform guide injected at runtime for workspaces without a platform agent. Provides onboarding assistance.
+- **Workspace picker:** Discovers workspaces from common locations. Create new workspaces from the UI. Recent workspaces remembered across sessions.
+- **Settings:** Workspace info, theme toggle (dark/light with localStorage persistence), version and feedback link.
+- **Empty state onboarding:** All tabs show contextual empty states with CTAs to get started.
+- **Dark and light themes:** Toggle in nav rail. Preference persisted.
+- **Three-state agent model:** onTeam (has order), available (has type, no order), raw (no type or order).
 
 ### Architecture
-- **`discoverSkills()` in server.js:** Scans multiple source directories, parses frontmatter, maps to agents via body text slug matching. Returns skills with id, name, description, slug, source path, file path, assigned agents, and status.
-- **`get_skills` WebSocket message:** Lazy-loaded on first Skills nav click. Client caches result.
-
----
-
-## 2026-03-21 — Multi-agent sessions, routines, markdown rendering
-
-### Features
-- **Session continuity:** Each conversation is a persistent Claude Code session. First message creates a session, subsequent messages resume it via `--resume <session-id>`. Full conversation context preserved.
-- **Concurrent conversations:** Multiple conversations can have active Claude Code processes simultaneously. Per-conversation state tracking (isProcessing, streaming, latest text). Switching conversations restores the correct UI state.
-- **Agent identity via `--agent` flag:** Server passes `--agent <Name>` using the frontmatter name field for every conversation. Each agent responds with its own identity. No server-side identity injection.
-- **Routines display:** Parsed from agent frontmatter. Shown on agent profiles (name, schedule, last run status) and team sidebar (compact list with next run time). Lightweight server-side scheduler checks every 60 seconds.
-- **Markdown rendering with marked.js:** Replaced hand-rolled regex parser with the `marked` library. Tables, nested lists, code blocks, GFM task lists all render correctly.
-- **Obsidian markdown extensions:** Wikilinks (click to navigate), callouts (styled cards), highlights, strikethrough, tags (styled pills), comments (hidden in preview).
-- **File preview/edit modes:** Preview (read-only, rendered markdown, frontmatter hidden) and Edit (raw source, editable, auto-save). Prevents formatting destruction from contenteditable HTML.
-- **Wikilink navigation:** Click any `[[wikilink]]` to open the linked file. Searches cached file tree recursively, handles full paths and partial matches.
-- **Conversation naming:** Auto-named from first message. Editable title in chat header. Active/Done status toggle.
-- **Agent profiles:** Capabilities (does/reads/writes/connectors), model with human label, routines, collapsible instructions. No technical tool names.
-- **Thinking indicator with tool status:** Bouncing dots stay visible until final response. Status line updates as tools are used ("Reading files...", "Checking todoist..."). No intermediate message bubbles.
-- **Auto-expanding textarea:** Message input grows with content, up to 200px max.
-- **Dark/light mode toggle:** In nav rail, smooth transition.
-
-### Fixes
-- **Concurrent input:** Sending a message in one conversation no longer blocks input in other conversations. Per-conversation disabled state.
-- **File tree scrolling:** Long folder contents are scrollable in the sidebar.
-- **Cache headers:** Server sends no-cache headers on index.html to prevent stale CSS/JS.
-- **Textarea colour:** Text input uses theme-aware colour variable instead of browser default black.
-- **Permission mode:** All Claude Code processes run with `--permission-mode bypassPermissions` for full read/write access within the workspace.
-
-### Architecture
-- **Agent discovery:** Reads all `.claude/agents/*.md` files. Parses YAML frontmatter for name, role, description, capabilities, routines, model, order. Sorts by order field. Default agent detected by `order: 0`.
-- **Server passes `--agent <Name>` always:** Even for the default agent. Uses frontmatter `name` field (not filename). Claude Code resolves agents by name.
-- **Session management:** Server maintains `Map<conversationId, process>`. Each conversation has its own Claude Code process. Session IDs captured from init messages and stored on conversation objects.
-- **Routine scheduler:** Reads routines from agent frontmatter. Parses "every day at HH:MM" and "every [weekday] at HH:MM" schedules. Checks every 60 seconds. Executes by spawning Claude Code with the routine's prompt. Run state tracked in memory.
+- Single `server.js` (Node.js) + `public/app.js` + `public/index.html`
+- Claude Code integration via `--print --output-format stream-json --verbose`
+- WebSocket bridge between browser and Claude Code CLI processes
+- Session management via `Map<conversationId, process>` with `--resume` for continuity
+- Markdown rendering via `marked` library with Obsidian extension post-processing
 
 ### Dependencies
-- Added `marked` (v17) for markdown rendering
-
----
-
-## 2026-03-21 — Initial lean MVP
-
-### Features
-- **WebSocket bridge:** Node.js server spawns Claude Code with `--output-format stream-json` and bridges to browser via WebSocket.
-- **Three-column layout:** Nav rail, sidebar (team/conversations/files), main panel (org chart/chat/editor/profile).
-- **Dynamic agent discovery:** Loads agents from `.claude/agents/` directory. Shows on org chart and sidebar.
-- **Real-time chat:** Send messages, receive streamed responses, timestamps, thinking indicator.
-- **File browsing and editing:** Reads workspace directory tree, opens files, auto-save with 1.5s debounce.
-- **Agent profiles:** Name, role, description, tools, model, instructions.
-- **Org chart:** Responsive scaling, connector lines, click to view profile.
-- **Conversation list:** Multiple conversations, preview text, agent avatars.
-
-### Architecture
-- Single `server.js` (Node.js) + single `public/index.html`
-- Claude Code integration via `--print --output-format stream-json --verbose`
-- File operations via `fs.readFileSync` / `fs.writeFileSync` directly on workspace directory
-- Same code runs on localhost and in production containers
+- `marked` (v17) for markdown rendering
+- `ws` (v8) for WebSocket server

@@ -8,7 +8,7 @@
  * 3. WEBSOCKET ....................... connect, setConn
  * 4. MESSAGE HANDLING ................ handle, handleAssistant, handleResult
  * 5. AGENT LIST & SIDEBAR ........... renderAgentList, renderConvoEmptyAgents, renderRoutinesSidebar
- * 6. ORG CHART ....................... renderOrgChart, drawAndScaleOrgChart
+ * 6. ORG CHART ....................... renderOrgChart
  * 7. AGENT PROFILE .................. showProfile
  * 8. CONVERSATIONS .................. startConversation, openConversation, renderConvoList
  * 9. CHAT & MESSAGING ............... sendMessage, startProcessing, finishProcessing
@@ -35,6 +35,7 @@ const convoState = {};
 // ===== 2. HELPERS =====
 
 function esc(t){const d=document.createElement('div');d.textContent=t;return d.innerHTML;}
+function escAttr(t){return t.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function stripMd(t){return t.replace(/\*\*(.*?)\*\*/g,'$1').replace(/\*(.*?)\*/g,'$1').replace(/~~(.*?)~~/g,'$1').replace(/`([^`]+)`/g,'$1').replace(/^#+\s/gm,'').replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g,'$2').replace(/\[\[([^\]]+)\]\]/g,'$1').replace(/==(.*?)==/g,'$1');}
 
 function formatTimeAgo(input) {
@@ -54,14 +55,14 @@ function formatScheduleShort(schedule) {
   if (dailyMatch) {
     const h = parseInt(dailyMatch[1]);
     const m = dailyMatch[2];
-    return `${h > 12 ? h - 12 : h}:${m} ${h >= 12 ? 'PM' : 'AM'}`;
+    return `${h === 0 ? 12 : (h > 12 ? h - 12 : h)}:${m} ${h >= 12 ? 'PM' : 'AM'}`;
   }
   const weeklyMatch = s.match(/every (\w+) at (\d{2}):(\d{2})/);
   if (weeklyMatch) {
     const day = weeklyMatch[1].charAt(0).toUpperCase() + weeklyMatch[1].slice(1, 3);
     const h = parseInt(weeklyMatch[2]);
     const m = weeklyMatch[3];
-    return `${day} ${h > 12 ? h - 12 : h}:${m} ${h >= 12 ? 'PM' : 'AM'}`;
+    return `${day} ${h === 0 ? 12 : (h > 12 ? h - 12 : h)}:${m} ${h >= 12 ? 'PM' : 'AM'}`;
   }
   return schedule;
 }
@@ -188,7 +189,7 @@ function renderAgentList() {
     const guide = platform[0];
     h += `<div class="sidebar-empty-state">
       <div class="sidebar-empty-text">No agents yet</div>
-      <button class="empty-cta" style="width:100%" onclick="startConversation('${guide.id}')">Talk to the Guide</button>
+      <button class="empty-cta" style="width:100%" onclick="startConversation('${guide.id}')">Talk to Doc</button>
     </div>`;
   }
   // Platform agents
@@ -242,7 +243,7 @@ function renderConvoEmptyAgents() {
 
   if (teamAgents.length) {
     // Populated workspace: show agent cards
-    if (labelEl) { labelEl.textContent = 'Start a conversation'; labelEl.style.fontSize = 'var(--body)'; labelEl.style.fontWeight = '400'; labelEl.style.color = 'var(--text-2)'; }
+    if (labelEl) { labelEl.textContent = 'Start a conversation'; labelEl.className = 'empty-subtitle'; }
 
     const agentCard = a =>
       `<div onclick="startConversation('${a.id}')" class="convo-agent-card">
@@ -256,20 +257,14 @@ function renderConvoEmptyAgents() {
       h += `<div class="convo-agent-divider"></div>`;
       h += `<div class="convo-agent-grid">${platformAgents.map(agentCard).join('')}</div>`;
     }
-    contentEl.style.display = 'flex';
-    contentEl.style.flexDirection = 'column';
-    contentEl.style.alignItems = 'center';
-    contentEl.style.gap = '0';
+    contentEl.className = 'convo-agent-layout';
     contentEl.innerHTML = h;
   } else {
-    // Empty workspace: show Guide CTA
-    if (labelEl) { labelEl.textContent = 'No conversations yet'; labelEl.style.fontSize = 'var(--title)'; labelEl.style.fontWeight = '700'; labelEl.style.color = 'var(--text-1)'; }
+    // Empty workspace: show Doc CTA
+    if (labelEl) { labelEl.textContent = 'No conversations yet'; labelEl.className = 'empty-title'; }
     const guide = platformAgents[0];
-    contentEl.style.display = '';
-    contentEl.style.flexDirection = '';
-    contentEl.style.alignItems = '';
-    contentEl.style.gap = '';
-    contentEl.innerHTML = guide ? `<button class="empty-cta" style="margin-top:4px" onclick="startConversation('${guide.id}')">Talk to the Guide</button>` : '';
+    contentEl.className = '';
+    contentEl.innerHTML = guide ? `<button class="empty-cta" style="margin-top:8px" onclick="startConversation('${guide.id}')">Talk to Doc</button>` : '';
   }
 }
 
@@ -343,7 +338,7 @@ function renderOrgChart() {
     h += '<div class="org-empty-state">';
     h += '<div class="empty-title">Welcome to Rundock</div>';
     if (guide) {
-      h += `<button class="empty-cta" style="margin-top:8px" onclick="startConversation('${guide.id}')">Talk to the Guide</button>`;
+      h += `<button class="empty-cta" style="margin-top:8px" onclick="startConversation('${guide.id}')">Talk to Doc</button>`;
     }
     h += '</div>';
   }
@@ -355,7 +350,7 @@ function renderOrgChart() {
     h += '<div class="org-platform-label">Rundock Agents</div>';
     h += '<div style="display:flex;justify-content:center;gap:12px">';
     for (const a of platformAgents) {
-      h += `<div class="org-card org-card-sm" onclick="showProfile('${a.id}')"><div class="avatar xxs" style="background:${a.colour}">${a.icon}</div><div><div class="org-card-name" style="font-size:var(--caption);font-weight:600">${a.displayName}</div><div class="org-card-role" style="font-size:var(--label)">${a.role || ''}</div></div></div>`;
+      h += `<div class="org-card org-card-sm" onclick="showProfile('${a.id}')"><div class="avatar" style="background:${a.colour}">${a.icon}</div><div><div class="org-card-name">${a.displayName}</div><div class="org-card-role">${a.role || ''}</div></div></div>`;
     }
     h += '</div></div>';
   }
@@ -363,32 +358,6 @@ function renderOrgChart() {
   h += '</div>'; // close .org-tree
 
   document.getElementById('org-chart').innerHTML = h;
-  setTimeout(() => { drawAndScaleOrgChart(); }, 50);
-}
-function drawAndScaleOrgChart() {
-  const container = document.getElementById('org-chart');
-  const tree = container?.querySelector('.org-tree');
-  if (!container || !tree) return;
-
-  // Step 1: Reset scale so we measure at natural size
-  tree.style.transform = 'scale(1)';
-  tree.style.transformOrigin = 'center top';
-
-  // Step 2: Measure natural dimensions
-  const containerW = container.clientWidth - 64;
-  const containerH = container.clientHeight - 80;
-  const treeW = tree.offsetWidth;
-  const treeH = tree.offsetHeight;
-
-  if (treeW === 0 || treeH === 0) return;
-
-  // Step 3: Calculate scale, min 1.0, max 1.2
-  const scaleX = (containerW * 0.8) / treeW;
-  const scaleY = (containerH * 0.8) / treeH;
-  const scale = Math.max(1.0, Math.min(scaleX, scaleY, 1.2));
-
-  // Step 4: Apply scale
-  tree.style.transform = `scale(${scale})`;
 }
 
 // ===== 7. AGENT PROFILE =====
@@ -422,6 +391,18 @@ function showProfile(agentId) {
     if(c.reads) h+=`<div class="profile-card-section"><div class="profile-section-label">Reads from</div>${c.reads.split(',').map(r=>`<div class="profile-card-item">${r.trim()}</div>`).join('')}</div>`;
     if(c.writes) h+=`<div class="profile-card-section"><div class="profile-section-label">Writes to</div><div class="profile-card-text">${esc(c.writes)}</div></div>`;
     h+=`</div>`;
+  }
+  // Skills card
+  const agentSkills = skills.filter(s => s.assignedAgents.some(aa => aa.id === a.id));
+  if(agentSkills.length) {
+    h+=`<div class="profile-card"><div class="profile-card-section"><div class="profile-section-label">Skills</div>`;
+    for(const s of agentSkills) {
+      h+=`<div class="profile-card-item" style="display:flex;flex-direction:column;gap:2px;cursor:pointer" onclick="switchNav('skills');selectSkill('${s.id}')">
+        <span style="font-weight:600">${esc(s.name)}</span>
+        ${s.description ? `<span style="font-size:var(--caption);color:var(--text-2)">${esc(s.description)}</span>` : ''}
+      </div>`;
+    }
+    h+=`</div></div>`;
   }
   // Routines + Configuration card
   const hasRoutines = a.routines && a.routines.length;
@@ -466,10 +447,38 @@ function startConversation(agentId) {
   const convo={id:Date.now().toString(),agentId:agent.id,agent,title:`Chat with ${agent.displayName}`,messages:[],status:'active'};
   conversations.unshift(convo); activeConversation=convo;
   renderConvoList(); setupChat(convo);
-  document.getElementById('messages').innerHTML='';
+  const messagesEl=document.getElementById('messages');
+  messagesEl.innerHTML='';
+  // Show prompt pills if agent has prompts
+  if(agent.prompts && agent.prompts.length) {
+    let h=`<div id="chat-prompts" class="chat-prompts">`;
+    h+=`<div class="chat-prompts-avatar avatar" style="background:${agent.colour};width:56px;height:56px;font-size:24px">${agent.icon}</div>`;
+    h+=`<div class="chat-prompts-title">How can I help?</div>`;
+    h+=`<div class="chat-prompts-list">`;
+    for(const p of agent.prompts) {
+      h+=`<button class="prompt-pill" data-prompt="${escAttr(p)}">${esc(p)}</button>`;
+    }
+    h+=`</div></div>`;
+    messagesEl.innerHTML=h;
+  }
   showView('chat');
 }
-function newConversation() { const d=agents.find(a=>a.isDefault)||agents[0]; if(d) startConversation(d.id); }
+function sendPrompt(text) {
+  const el=document.getElementById('chat-prompts'); if(el) el.remove();
+  document.getElementById('msg-input').value=text;
+  sendMessage();
+}
+function newConversation() {
+  const guide = getGuide();
+  const orchestrator = agents.find(a => a.status === 'onTeam' && a.type === 'orchestrator');
+  const teamAgents = getTeamAgents();
+  // Empty workspace (only Doc): start with guide
+  if (!teamAgents.length && guide) { startConversation(guide.id); return; }
+  // Orchestrator exists: start with orchestrator
+  if (orchestrator) { startConversation(orchestrator.id); return; }
+  // Team agents, no orchestrator: show agent picker
+  showView('convo-empty');
+}
 function setupChat(convo) {
   const agent = convo.agent;
   document.getElementById('chat-title-input').value=convo.title;
@@ -571,6 +580,7 @@ function sendMessage() {
   if(!activeConversation||!ws) return;
   const state = getConvoState(activeConversation.id);
   if(!text||state.isProcessing) return;
+  const promptsEl=document.getElementById('chat-prompts'); if(promptsEl) promptsEl.remove();
   addUserMsg(text); activeConversation.messages.push({role:'user',content:text});
   if(activeConversation.messages.filter(m=>m.role==='user').length===1) { activeConversation.title=text.substring(0,50)+(text.length>50?'...':''); document.getElementById('chat-title-input').value=activeConversation.title; renderConvoList(); }
   input.value=''; input.style.height='44px'; document.getElementById('send-btn').classList.remove('active'); startProcessing(activeConversation.id);
@@ -665,10 +675,10 @@ function switchNav(nav) {
   if(nav==='settings') { showView('settings'); showSettingsSection('workspace'); }
   else if(nav==='files') showView('editor');
   else if(nav==='skills') { showView('skills'); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } document.querySelectorAll('.skill-sidebar-item').forEach(el=>el.classList.remove('active')); document.querySelectorAll('.skill-row.expanded').forEach(r=>r.classList.remove('expanded')); }
-  else if(nav==='conversations') showView(activeConversation?'chat':'convo-empty');
+  else if(nav==='conversations') { if(activeConversation) showView('chat'); else newConversation(); }
   else showView('home');
 }
-function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');} if(v==='home')setTimeout(drawAndScaleOrgChart,50); }
+function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }
 function goHome() { activeConversation=null; showView('home'); switchNav('team'); document.querySelectorAll('.agent-status-item').forEach(el=>el.classList.remove('active')); }
 function goBack() { if(activeConversation) showProfile(activeConversation.agentId); else goHome(); }
 
@@ -691,7 +701,7 @@ function renderFileTree(tree) {
     if(editorEmpty) editorEmpty.innerHTML=`
       <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" class="empty-icon"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
       <div class="empty-title">No files yet</div>
-      ${guide ? `<button class="empty-cta" style="margin-top:4px" onclick="switchNav('conversations');startConversation('${guide.id}')">Talk to the Guide</button>` : ''}`;
+      ${guide ? `<button class="empty-cta" style="margin-top:8px" onclick="switchNav('conversations');startConversation('${guide.id}')">Talk to Doc</button>` : ''}`;
     return;
   }
   if(editorEmpty) editorEmpty.innerHTML=`
@@ -982,7 +992,7 @@ function renderSkills() {
     mainHtml = `<div class="org-empty-state" style="padding:48px 24px;text-align:center">
       <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" class="empty-icon"><polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
       <div class="empty-title">No skills yet</div>
-      ${guide ? `<button class="empty-cta" style="margin-top:4px" onclick="switchNav('conversations');startConversation('${guide.id}')">Talk to the Guide</button>` : ''}
+      ${guide ? `<button class="empty-cta" style="margin-top:8px" onclick="switchNav('conversations');startConversation('${guide.id}')">Talk to Doc</button>` : ''}
     </div>`;
   }
 
@@ -1176,6 +1186,12 @@ document.addEventListener('click', e => {
   if (item && item.dataset.wsPath) selectWorkspace(item.dataset.wsPath);
 });
 
+// Delegated click handler for prompt pills
+document.addEventListener('click', e => {
+  const pill = e.target.closest('.prompt-pill');
+  if (pill && pill.dataset.prompt) sendPrompt(pill.dataset.prompt);
+});
+
 function showCreateForm() {
   document.getElementById('create-workspace-btn').style.display = 'none';
   document.getElementById('create-workspace-form').style.display = 'block';
@@ -1232,5 +1248,4 @@ document.addEventListener('keydown', e => {
   }
 });
 
-window.addEventListener('resize',()=>{ if(currentView==='home') drawAndScaleOrgChart(); });
 connect();

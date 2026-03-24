@@ -3,3 +3,7 @@ node_modules/
 .DS_Store
 *.log
 .recent-workspaces.json
+.vscode/
+.idea/
+*.swp
+*.swo

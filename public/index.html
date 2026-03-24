@@ -14,7 +14,7 @@
   --text-1: #F0EDE8; --text-2: #9A9590;
   --accent: #E87A5A; --accent-hover: #F09070; --accent-glow: rgba(232,122,90,0.12);
   --success: #6BC67E; --attention: #E8A84C; --working: #7AA2E8; --idle: #7A756E;
-  --title: 18px; --body: 14px; --caption: 12px; --label: 11px;
+  --heading: 22px; --title: 18px; --body: 14px; --caption: 12px; --label: 11px;
 }
 
 body.light {
@@ -56,7 +56,7 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .agent-status-item { display: flex; align-items: center; gap: 8px; padding: 10px 8px; border-radius: 8px; cursor: pointer; transition: background 0.15s ease; }
 .agent-status-item:hover { background: var(--elevated); }
 .agent-status-item.active { background: var(--elevated); }
-.avatar { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; color: white; flex-shrink: 0; }
+.avatar { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; color: white; flex-shrink: 0; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.12), 0 0 0 1px rgba(0,0,0,0.06); }
 .avatar.sm { width: 24px; height: 24px; font-size: 12px; }
 .avatar.xs { width: 18px; height: 18px; font-size: 9px; }
 .agent-status-name { flex: 1; font-size: 13px; font-weight: 500; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -97,13 +97,14 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .org-chart { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px; overflow: hidden; }
 /* org-chart-title removed: redundant label */
 .org-tree { display: flex; flex-direction: column; align-items: center; }
-.org-card { background: var(--card); border-radius: 12px; padding: 16px 20px; display: flex; align-items: center; gap: 12px; cursor: pointer; transition: all 0.2s ease; border: 1px solid transparent; box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08); }
+.org-card { background: var(--card); border-radius: 14px; padding: 19px 24px; display: flex; align-items: center; gap: 14px; cursor: pointer; transition: all 0.2s ease; border: 1px solid transparent; box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08); }
 .org-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.2), 0 0 0 1px var(--accent); }
-.org-card-name { font-size: var(--body); font-weight: 700; color: var(--text-1); }
-.org-card-role { font-size: var(--caption); color: var(--text-2); max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.org-leader .org-card { padding: 20px 28px; }
-.org-leader .org-card .avatar { width: 44px; height: 44px; font-size: 18px; }
-.org-leader .org-card-name { font-size: var(--title); }
+.org-card-name { font-size: var(--title); font-weight: 700; color: var(--text-1); }
+.org-card-role { font-size: var(--body); color: var(--text-2); max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.org-card .avatar { width: 38px; height: 38px; font-size: 17px; }
+.org-leader .org-card { padding: 24px 34px; }
+.org-leader .org-card .avatar { width: 52px; height: 52px; font-size: 22px; }
+.org-leader .org-card-name { font-size: var(--heading); }
 /* Org chart connector lines: pure CSS */
 .org-trunk { height: 32px; }
 .org-branches { display: flex; position: relative; justify-content: center; }
@@ -177,6 +178,14 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .send-btn.active:hover { background: var(--accent-hover); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(232,122,90,0.4); }
 .send-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 .send-btn svg { width: 18px; height: 18px; }
+
+/* Chat prompts */
+.chat-prompts { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; padding: 48px 24px; gap: 16px; }
+.chat-prompts-avatar { width: 56px; height: 56px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; }
+.chat-prompts-title { font-size: var(--heading); font-weight: 700; color: var(--text-1); }
+.chat-prompts-list { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; max-width: 480px; margin-top: 8px; }
+.prompt-pill { background: var(--card); border: 1px solid var(--border); border-radius: 20px; padding: 8px 16px; font-size: var(--body); color: var(--text-1); cursor: pointer; transition: all 0.15s ease; }
+.prompt-pill:hover { border-color: var(--accent); background: var(--accent-glow); }
 
 /* Editor */
 .editor-header { padding: 16px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
@@ -326,7 +335,7 @@ body.light .skill-row:hover { background: rgba(0,0,0,0.03); }
 .settings-btn-primary:hover { background: var(--accent-hover); }
 
 /* Empty state CTA */
-.empty-cta { padding: 8px 20px; background: var(--accent); color: white; font-size: var(--caption); font-weight: 600; border-radius: 8px; transition: background 0.15s ease; cursor: pointer; }
+.empty-cta { padding: 10px 24px; background: var(--accent); color: white; font-size: var(--body); font-weight: 600; border-radius: 8px; transition: background 0.15s ease; cursor: pointer; }
 .empty-cta:hover { background: var(--accent-hover); }
 
 /* View panels */
@@ -361,6 +370,7 @@ body.light .skill-row:hover { background: rgba(0,0,0,0.03); }
 .convo-agent-card-role { font-size: var(--label); color: var(--text-2); }
 .convo-agent-grid { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
 .convo-agent-divider { width: 60px; height: 1px; background: var(--border); margin: 8px auto 0; }
+.convo-agent-layout { display: flex; flex-direction: column; align-items: center; }
 
 /* Routine sidebar items */
 .routine-item { display: flex; align-items: center; gap: 8px; padding: 8px; font-size: var(--caption); border-radius: 8px; transition: background 0.15s ease; cursor: default; }
@@ -380,22 +390,26 @@ body.light .skill-row:hover { background: rgba(0,0,0,0.03); }
 .agent-status-desc { font-size: var(--caption); color: var(--text-2); display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Empty state title (shared) */
-.empty-title { font-size: var(--title); font-weight: 700; color: var(--text-1); }
+.empty-title { font-size: var(--heading); font-weight: 700; color: var(--text-1); }
+.empty-subtitle { font-size: var(--body); font-weight: 400; color: var(--text-2); }
 .empty-icon { color: var(--text-2); opacity: 0.4; }
 
 /* Org chart empty/platform */
 .org-empty-state { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 24px; }
 .org-platform-section { display: flex; flex-direction: column; align-items: center; }
 .org-platform-divider { width: 60%; max-width: 200px; height: 1px; background: var(--border); margin-bottom: 24px; }
-.org-platform-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); margin-bottom: 16px; }
-.org-card-sm { padding: 10px 16px; }
+.org-platform-label { font-size: var(--caption); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); margin-bottom: 16px; }
+.org-card-sm { padding: 12px 19px; }
 .org-card-sm:hover { transform: none; }
+.org-card-sm .avatar { width: 28px; height: 28px; font-size: 12px; }
+.org-card-sm .org-card-name { font-size: var(--body); }
+.org-card-sm .org-card-role { font-size: var(--caption); }
 .section-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); margin-bottom: 8px; text-align: left; }
 </style>
 </head>
 <body>
 <div class="app">
-  <nav class="nav-rail">
+  <nav class="nav-rail" style="display:none">
     <div class="nav-main">
       <button class="nav-item active" data-nav="team" onclick="switchNav('team')" title="Team">
         <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
@@ -425,7 +439,7 @@ body.light .skill-row:hover { background: rgba(0,0,0,0.03); }
     </div>
   </nav>
 
-  <aside class="sidebar">
+  <aside class="sidebar" style="display:none">
     <div id="sidebar-team">
       <div class="sidebar-header" id="sidebar-team-header"><span class="sidebar-label">Your Team</span></div>
       <div class="agent-status-list" id="agent-list"></div>
@@ -492,8 +506,8 @@ body.light .skill-row:hover { background: rgba(0,0,0,0.03); }
     <div id="view-profile" class="hidden view-panel"><div class="profile" id="profile-content"></div></div>
     <!-- Conversations empty -->
     <div id="view-convo-empty" class="hidden view-panel view-centered">
-      <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--text-2);opacity:0.4"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-      <div id="convo-empty-label" class="empty-title" style="text-align:center;max-width:320px;line-height:1.5">Start a conversation</div>
+      <svg class="empty-icon" viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      <div id="convo-empty-label" class="empty-title">Start a conversation</div>
       <div id="convo-empty-content"></div>
     </div>
     <!-- Chat -->

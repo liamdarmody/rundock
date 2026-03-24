@@ -1,7 +1,7 @@
 /**
  * Rundock Server
  *
- * 1. Discovers agents from .claude/agents/ (including default from cos.md + CLAUDE.md)
+ * 1. Discovers agents from .claude/agents/ (including default from CLAUDE.md)
  * 2. Parses capabilities and routines from agent frontmatter
  * 3. Bridges browser <-> Claude Code via WebSocket + stream-json
  * 4. Runs a lightweight scheduler for routines
@@ -117,6 +117,7 @@ function discoverAgents() {
 
         const caps = parseCapabilities(fmText);
         const routines = parseRoutines(fmText);
+        const prompts = parsePrompts(fmText);
 
         const agentType = meta.type || null; // orchestrator, specialist, platform, or null
         const hasOrder = meta.order !== undefined && meta.order !== '';
@@ -140,6 +141,7 @@ function discoverAgents() {
           status,
           capabilities: caps,
           routines: routines,
+          prompts: prompts.length > 0 ? prompts : null,
           model: meta.model || null,
           order: orderNum,
           instructions: instructions.substring(0, 2000),
@@ -169,12 +171,14 @@ function discoverAgents() {
         description: '',
         capabilities: null,
         routines: [],
+        prompts: null,
         model: null,
         order: 0,
         instructions: content.substring(0, 2000),
         isDefault: true,
         colour: '#E87A5A',
-        icon: '★'
+        icon: '★',
+        fileName: null
       });
     }
   }
@@ -193,23 +197,24 @@ function discoverAgents() {
     return (a.order ?? 99) - (b.order ?? 99);
   });
 
-  // Inject built-in Guide if no platform agent exists
+  // Inject built-in Doc if no platform agent exists
   if (!agents.find(a => a.type === 'platform')) {
     agents.push({
       id: 'rundock-guide',
       name: 'rundock-guide',
-      displayName: 'Guide',
+      displayName: 'Doc',
       role: 'Platform Guide',
       description: 'Helps you set up and navigate your Rundock workspace',
       type: 'platform',
       status: 'onTeam',
       capabilities: null,
       routines: [],
+      prompts: ['Help me set up this workspace', 'Create an agent for my team', 'What makes a workspace Rundock-ready?'],
       model: null,
       order: 99,
       instructions: '',
       isDefault: false,
-      colour: '#9A9590',
+      colour: '#6B8A9E',
       icon: '⬡',
       fileName: null
     });
@@ -247,8 +252,8 @@ function parseAgentFrontmatter(content) {
   let currentValue = '';
 
   for (const line of lines) {
-    // Skip nested blocks (capabilities, routines) - parsed separately
-    if (line.match(/^(capabilities|routines):$/)) {
+    // Skip nested blocks (capabilities, routines, prompts) - parsed separately
+    if (line.match(/^(capabilities|routines|prompts):$/)) {
       if (currentKey) { meta[currentKey] = currentValue.trim(); }
       currentKey = null; continue;
     }
@@ -266,6 +271,12 @@ function parseAgentFrontmatter(content) {
   if (currentKey) meta[currentKey] = currentValue.trim();
 
   if (meta.description) meta.description = meta.description.replace(/^>\s*/, '').trim();
+  // Strip surrounding quotes from values (YAML-style "value" or 'value')
+  for (const key of Object.keys(meta)) {
+    if (typeof meta[key] === 'string') {
+      meta[key] = meta[key].replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1');
+    }
+  }
   return meta;
 }
 
@@ -297,6 +308,18 @@ function parseRoutines(fmText) {
     if (routine.name) routines.push(routine);
   }
   return routines;
+}
+
+function parsePrompts(fmText) {
+  const match = fmText.match(/prompts:\n((?:  - [^\n]*(?:\n|$))+)/);
+  if (!match) return [];
+  const prompts = [];
+  for (const line of match[1].split('\n')) {
+    if (!line.trim()) continue;
+    const item = line.match(/^\s+-\s*"?(.*?)"?\s*$/);
+    if (item && item[1].trim()) prompts.push(item[1].trim());
+  }
+  return prompts;
 }
 
 // ===== SCHEDULER =====
@@ -402,6 +425,59 @@ function broadcastRoutineUpdate() {
   });
 }
 
+// ===== WORKSPACE SCAFFOLD =====
+
+function scaffoldWorkspace(dir) {
+  try {
+    const agentsDir = path.join(dir, '.claude', 'agents');
+    fs.mkdirSync(agentsDir, { recursive: true });
+
+    // Fast path: if rundock-guide.md already exists, skip agent scaffold
+    const guideFile = path.join(agentsDir, 'rundock-guide.md');
+    if (!fs.existsSync(guideFile)) {
+      // Slow path: check if any existing agent has type: platform in frontmatter
+      let hasPlatformAgent = false;
+      try {
+        const existingFiles = fs.readdirSync(agentsDir).filter(f => f.endsWith('.md'));
+        for (const file of existingFiles) {
+          const content = fs.readFileSync(path.join(agentsDir, file), 'utf-8');
+          const fmText = extractFrontmatterText(content);
+          if (fmText && /^type:\s*platform\s*$/m.test(fmText)) {
+            hasPlatformAgent = true;
+            break;
+          }
+        }
+      } catch (e) {}
+
+      if (!hasPlatformAgent) {
+        const guideContent = fs.readFileSync(path.join(__dirname, 'scaffold', 'rundock-guide.md'), 'utf-8');
+        fs.writeFileSync(guideFile, guideContent, 'utf-8');
+        console.log(`  Scaffolded: .claude/agents/rundock-guide.md`);
+      }
+    }
+
+    // Scaffold skills
+    const skillsDir = path.join(dir, '.claude', 'skills');
+    const skillTemplates = [
+      { slug: 'rundock-workspace-setup', templateFile: 'rundock-workspace-setup.md' },
+      { slug: 'rundock-agent-onboarding', templateFile: 'rundock-agent-onboarding.md' }
+    ];
+
+    for (const skill of skillTemplates) {
+      const skillDir = path.join(skillsDir, skill.slug);
+      const skillFile = path.join(skillDir, 'SKILL.md');
+      if (!fs.existsSync(skillFile)) {
+        fs.mkdirSync(skillDir, { recursive: true });
+        const content = fs.readFileSync(path.join(__dirname, 'scaffold', skill.templateFile), 'utf-8');
+        fs.writeFileSync(skillFile, content, 'utf-8');
+        console.log(`  Scaffolded: .claude/skills/${skill.slug}/SKILL.md`);
+      }
+    }
+  } catch (e) {
+    console.warn(`  Warning: scaffold failed for ${dir}: ${e.message}`);
+  }
+}
+
 // ===== HTTP SERVER =====
 
 const server = http.createServer((req, res) => {
@@ -422,8 +498,8 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify(getFileTree(WORKSPACE)));
   } else if (req.url.startsWith('/api/file?path=')) {
     const filePath = decodeURIComponent(req.url.split('path=')[1]);
-    const fullPath = path.join(WORKSPACE, filePath);
-    if (fs.existsSync(fullPath) && !fullPath.includes('..')) {
+    const fullPath = path.resolve(WORKSPACE, filePath);
+    if (fullPath.startsWith(path.resolve(WORKSPACE)) && fs.existsSync(fullPath)) {
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       res.end(fs.readFileSync(fullPath, 'utf-8'));
     } else {
@@ -438,11 +514,20 @@ const server = http.createServer((req, res) => {
 
 // ===== WEBSOCKET SERVER =====
 
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({
+  server,
+  verifyClient: ({ origin, req }) => {
+    // Allow connections from the same host (localhost or configured host)
+    if (!origin) return true; // Non-browser clients (e.g. CLI tools)
+    const allowed = [`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`];
+    return allowed.includes(origin);
+  }
+});
 
 wss.on('connection', (ws) => {
   console.log('Client connected');
   const processes = new Map(); // conversationId -> { process, buffer }
+  function safeSend(data) { if (ws.readyState === 1) ws.send(typeof data === 'string' ? data : JSON.stringify(data)); }
 
   ws.on('message', (data) => {
     try {
@@ -500,9 +585,9 @@ wss.on('connection', (ws) => {
                 if (parsed.type === 'system' && parsed.subtype === 'init' && parsed.session_id) {
                   parsed._sessionId = parsed.session_id;
                 }
-                ws.send(JSON.stringify(parsed));
+                safeSend(JSON.stringify(parsed));
               } catch (e) {
-                ws.send(JSON.stringify({ type: 'raw', content: line, _agent: msg.agent || 'default', _conversationId: convoId }));
+                safeSend(JSON.stringify({ type: 'raw', content: line, _agent: msg.agent || 'default', _conversationId: convoId }));
               }
             }
           }
@@ -511,7 +596,7 @@ wss.on('connection', (ws) => {
         proc.stderr.on('data', (chunk) => {
           const text = chunk.toString();
           if (text.includes('no stdin data') || text.includes('proceeding without')) return;
-          ws.send(JSON.stringify({ type: 'error', content: text, _conversationId: convoId }));
+          safeSend(JSON.stringify({ type: 'error', content: text, _conversationId: convoId }));
         });
 
         proc.on('close', (code) => {
@@ -520,12 +605,12 @@ wss.on('connection', (ws) => {
               const parsed = JSON.parse(entry.buffer);
               parsed._agent = msg.agent || 'default';
               parsed._conversationId = convoId;
-              ws.send(JSON.stringify(parsed));
+              safeSend(JSON.stringify(parsed));
             } catch (e) {
-              ws.send(JSON.stringify({ type: 'raw', content: entry.buffer, _conversationId: convoId }));
+              safeSend(JSON.stringify({ type: 'raw', content: entry.buffer, _conversationId: convoId }));
             }
           }
-          ws.send(JSON.stringify({ type: 'system', subtype: 'done', code, _agent: msg.agent || 'default', _conversationId: convoId }));
+          safeSend(JSON.stringify({ type: 'system', subtype: 'done', code, _agent: msg.agent || 'default', _conversationId: convoId }));
           processes.delete(convoId);
         });
       }
@@ -552,6 +637,7 @@ wss.on('connection', (ws) => {
         if (dir && fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
           WORKSPACE = dir;
           saveRecentWorkspace(dir);
+          try { scaffoldWorkspace(dir); } catch (e) { console.warn('Scaffold warning:', e.message); }
           console.log(`  Workspace changed to: ${WORKSPACE}`);
           ws.send(JSON.stringify({ type: 'workspace_set', path: WORKSPACE }));
           ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents() }));
@@ -573,6 +659,7 @@ wss.on('connection', (ws) => {
             fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
             WORKSPACE = dir;
             saveRecentWorkspace(dir);
+            try { scaffoldWorkspace(dir); } catch (e) { console.warn('Scaffold warning:', e.message); }
             console.log(`  Workspace created: ${WORKSPACE}`);
             ws.send(JSON.stringify({ type: 'workspace_set', path: WORKSPACE }));
             ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents() }));
@@ -594,8 +681,8 @@ wss.on('connection', (ws) => {
       if (msg.type === 'get_skills') ws.send(JSON.stringify({ type: 'skills', skills: discoverSkills() }));
 
       if (msg.type === 'read_file') {
-        const fullPath = path.join(WORKSPACE, msg.path);
-        if (fs.existsSync(fullPath) && !fullPath.includes('..')) {
+        const fullPath = path.resolve(WORKSPACE, msg.path);
+        if (fullPath.startsWith(path.resolve(WORKSPACE)) && fs.existsSync(fullPath)) {
           ws.send(JSON.stringify({ type: 'file_content', path: msg.path, content: fs.readFileSync(fullPath, 'utf-8') }));
         }
       }
@@ -626,8 +713,8 @@ wss.on('connection', (ws) => {
       }
 
       if (msg.type === 'save_file') {
-        const fullPath = path.join(WORKSPACE, msg.path);
-        if (!fullPath.includes('..')) {
+        const fullPath = path.resolve(WORKSPACE, msg.path);
+        if (fullPath.startsWith(path.resolve(WORKSPACE))) {
           fs.writeFileSync(fullPath, msg.content, 'utf-8');
           ws.send(JSON.stringify({ type: 'file_saved', path: msg.path }));
         }
@@ -776,6 +863,7 @@ server.listen(PORT, () => {
   console.log(`\n  Rundock running at http://localhost:${PORT}`);
   if (WORKSPACE) {
     saveRecentWorkspace(WORKSPACE);
+    try { scaffoldWorkspace(WORKSPACE); } catch (e) { console.warn('Scaffold warning:', e.message); }
     const agents = discoverAgents();
     const totalRoutines = agents.reduce((sum, a) => sum + (a.routines?.length || 0), 0);
     console.log(`  Workspace: ${WORKSPACE}`);

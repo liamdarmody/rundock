@@ -1,7 +1,7 @@
 {
   "name": "rundock",
   "version": "0.1.0",
-  "description": "Your personal AI operating system. BYO AI. We provide the OS.",
+  "description": "A browser-based OS for AI agent teams. Built for knowledge work, powered by Claude Code.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
