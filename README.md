@@ -36,7 +36,7 @@ WORKSPACE=/path/to/your/folder npm start
 
 ## Your team at a glance
 
-**Team:** An org chart showing your agents. Click any agent to see their profile with role, capabilities, skills, and routines.
+**Team:** See your agents on an org chart. Click any agent to view their profile with role, capabilities, skills, and routines.
 
 **Conversations:** Chat with any agent through the browser. Run multiple conversations in parallel, each with its own agent and session context.
 
