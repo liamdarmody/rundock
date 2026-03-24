@@ -484,6 +484,9 @@ const server = http.createServer((req, res) => {
   if (req.url === '/' || req.url === '/index.html') {
     res.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache, no-store, must-revalidate' });
     res.end(fs.readFileSync(path.join(__dirname, 'public', 'index.html')));
+  } else if (req.url === '/favicon.svg') {
+    res.writeHead(200, { 'Content-Type': 'image/svg+xml' });
+    res.end(fs.readFileSync(path.join(__dirname, 'public', 'favicon.svg')));
   } else if (req.url === '/marked.min.js') {
     res.writeHead(200, { 'Content-Type': 'application/javascript' });
     res.end(fs.readFileSync(path.join(__dirname, 'node_modules', 'marked', 'lib', 'marked.umd.js')));
