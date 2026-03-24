@@ -4,6 +4,32 @@ All notable changes to the Rundock project.
 
 ---
 
+## 2026-03-24 — Workspace picker, settings, Guide, codebase refactor
+
+### Features
+- **Workspace picker redesign:** Removed text path input. Shows recent and discovered workspaces as clickable cards. New "Create new workspace" button creates directories at ~/Documents/Rundock/<name> with .claude/ scaffolding.
+- **Settings page:** Gear icon now opens a settings view with three sections: Workspace (path, agent/skill counts, change workspace), Appearance (theme toggle with localStorage persistence), and About (version, feedback link).
+- **Built-in Guide agent:** Empty workspaces automatically get a platform Guide agent (id: rundock-guide) injected at runtime. No file on disk required. Launches Claude Code without --agent flag. Workspaces with an existing platform agent are unaffected.
+- **Empty state onboarding:** All four tabs (Team, Conversations, Skills, Files) show consistent empty states with icon, title, and "Talk to the Guide" CTA button. Populated workspaces show agent cards instead.
+- **Theme persistence:** Light/dark theme preference saved to localStorage and restored on page load.
+
+### Fixes
+- **Duplicate Guide in org chart:** Guide no longer appears as both the leader and a platform agent when it's the only agent. Shows welcome message instead.
+- **Settings sidebar highlight:** Gear icon click now correctly highlights "Workspace" in the settings nav instead of defaulting to "About".
+- **Workspace path escaping:** Replaced inline onclick string interpolation with data attributes and delegated click handler. Prevents injection risk from unusual paths.
+- **Switch case scoping:** Wrapped workspace_error case body in braces to prevent lexical declaration issues across browsers.
+- **Duplicate formatTimeAgo:** Consolidated two implementations (different inputs, different casing) into one that accepts both Date objects and ISO strings.
+
+### Architecture
+- **JS extracted to app.js:** All JavaScript moved from inline `<script>` in index.html to a separate `public/app.js` file. index.html is now HTML + CSS only (545 lines).
+- **Section structure:** app.js organised into 16 labelled sections with a table of contents header.
+- **Agent helpers:** `getTeamAgents()`, `getPlatformAgents()`, `getGuide()` replace 11+ inline filter/find calls throughout the codebase.
+- **CSS classes replace inline styles:** Workspace cards, agent cards, routine items, empty states, org chart platform section, and sidebar dividers all use named CSS classes instead of inline style attributes. All onmouseover/onmouseout handlers replaced with CSS :hover rules.
+- **Legacy markdown removed:** Deleted ~260 lines of dead _legacy* functions replaced by the marked library in a prior session.
+- **list_workspaces message type:** Server now supports a dedicated message that returns workspace data without the current field, eliminating the forceShowPicker global flag pattern.
+
+---
+
 ## 2026-03-23 — Agent name migration, displayName, empty states
 
 ### Features

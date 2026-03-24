@@ -193,6 +193,28 @@ function discoverAgents() {
     return (a.order ?? 99) - (b.order ?? 99);
   });
 
+  // Inject built-in Guide if no platform agent exists
+  if (!agents.find(a => a.type === 'platform')) {
+    agents.push({
+      id: 'rundock-guide',
+      name: 'rundock-guide',
+      displayName: 'Guide',
+      role: 'Platform Guide',
+      description: 'Helps you set up and navigate your Rundock workspace',
+      type: 'platform',
+      status: 'onTeam',
+      capabilities: null,
+      routines: [],
+      model: null,
+      order: 99,
+      instructions: '',
+      isDefault: false,
+      colour: '#9A9590',
+      icon: '⬡',
+      fileName: null
+    });
+  }
+
   // Attach routine state
   for (const agent of agents) {
     if (agent.routines) {
@@ -389,6 +411,9 @@ const server = http.createServer((req, res) => {
   } else if (req.url === '/marked.min.js') {
     res.writeHead(200, { 'Content-Type': 'application/javascript' });
     res.end(fs.readFileSync(path.join(__dirname, 'node_modules', 'marked', 'lib', 'marked.umd.js')));
+  } else if (req.url === '/app.js') {
+    res.writeHead(200, { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-cache, no-store, must-revalidate' });
+    res.end(fs.readFileSync(path.join(__dirname, 'public', 'app.js')));
   } else if (req.url === '/api/agents') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(discoverAgents()));
@@ -443,7 +468,7 @@ wss.on('connection', (ws) => {
         if (!msg.sessionId) {
           const agentList = discoverAgents();
           const agentData = agentList.find(a => a.id === (msg.agent || 'default'));
-          if (agentData && agentData.id !== 'default') {
+          if (agentData && agentData.id !== 'default' && agentData.fileName) {
             args.push('--agent', agentData.name);
           }
         }
@@ -514,6 +539,14 @@ wss.on('connection', (ws) => {
         }));
       }
 
+      if (msg.type === 'list_workspaces') {
+        ws.send(JSON.stringify({
+          type: 'workspaces',
+          recent: loadRecentWorkspaces(),
+          discovered: discoverWorkspaces()
+        }));
+      }
+
       if (msg.type === 'set_workspace') {
         const dir = msg.path;
         if (dir && fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
@@ -525,6 +558,28 @@ wss.on('connection', (ws) => {
           ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) }));
         } else {
           ws.send(JSON.stringify({ type: 'workspace_error', message: 'Directory not found' }));
+        }
+      }
+
+      if (msg.type === 'create_workspace') {
+        const rawName = (msg.name || '').replace(/[\/\\:*?"<>|]/g, '').trim();
+        if (!rawName) {
+          ws.send(JSON.stringify({ type: 'workspace_error', message: 'Please enter a workspace name' }));
+        } else {
+          const home = process.env.HOME || process.env.USERPROFILE || '';
+          const dir = path.join(home, 'Documents', 'Rundock', rawName);
+          try {
+            fs.mkdirSync(dir, { recursive: true });
+            fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+            WORKSPACE = dir;
+            saveRecentWorkspace(dir);
+            console.log(`  Workspace created: ${WORKSPACE}`);
+            ws.send(JSON.stringify({ type: 'workspace_set', path: WORKSPACE }));
+            ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents() }));
+            ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) }));
+          } catch (e) {
+            ws.send(JSON.stringify({ type: 'workspace_error', message: 'Could not create workspace: ' + e.message }));
+          }
         }
       }
 
