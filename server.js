@@ -38,7 +38,7 @@ function discoverWorkspaces() {
     home
   ]);
 
-  // Also scan subdirectories of Documents (e.g. Documents/Obsidian Vaults/, Documents/Projects/)
+  // Also scan subdirectories of Documents
   try {
     const docsDir = path.join(home, 'Documents');
     if (fs.existsSync(docsDir)) {
