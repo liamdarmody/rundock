@@ -135,6 +135,10 @@ Rundock looks for skills in `.claude/skills/` (SKILL.md files). Skills are also 
 
 Conversations are stored in browser memory for now. They reset on page refresh. Session persistence is on the roadmap.
 
+## Licence
+
+PolyForm Perimeter 1.0.0. Use Rundock for any purpose, including commercial. The one restriction: you cannot use this code to build a product that competes with Rundock. See [LICENSE](LICENSE) for the full terms.
+
 ## Feedback
 
 Early access. If you find bugs or have ideas, open an issue at [github.com/liamdarmody/rundock/issues](https://github.com/liamdarmody/rundock/issues).
