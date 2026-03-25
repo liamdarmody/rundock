@@ -27,6 +27,35 @@ function saveRecentWorkspace(dir) {
   fs.writeFileSync(RECENT_FILE, JSON.stringify(recent.slice(0, 10), null, 2));
 }
 
+// Rundock session persistence (.rundock/ in workspace root)
+function rundockDir() { return path.join(WORKSPACE, '.rundock'); }
+
+function readConversations() {
+  try {
+    const file = path.join(rundockDir(), 'conversations.json');
+    return JSON.parse(fs.readFileSync(file, 'utf-8'));
+  } catch (e) { return []; }
+}
+
+function writeConversations(list) {
+  const dir = rundockDir();
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'conversations.json'), JSON.stringify(list, null, 2));
+}
+
+function readState() {
+  try {
+    const file = path.join(rundockDir(), 'state.json');
+    return JSON.parse(fs.readFileSync(file, 'utf-8'));
+  } catch (e) { return {}; }
+}
+
+function writeState(state) {
+  const dir = rundockDir();
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify(state, null, 2));
+}
+
 // Scan common locations for workspaces (directories with .claude/ or CLAUDE.md)
 function discoverWorkspaces() {
   const candidates = [];
@@ -82,6 +111,12 @@ function discoverWorkspaces() {
 // ===== ROUTINE STATE (in-memory) =====
 
 const routineState = {}; // { routineKey: { lastRun, status, duration } }
+
+// ===== AGENT HELPERS =====
+
+function validateAgentSlug(name) {
+  return typeof name === 'string' && /^[a-z0-9][a-z0-9-]*$/.test(name) && name.length <= 60 && !name.includes('..');
+}
 
 // ===== AGENT DISCOVERY =====
 
@@ -395,13 +430,14 @@ function executeRoutine(agent, routine, key) {
   // Notify connected clients
   broadcastRoutineUpdate();
 
-  const args = ['--print', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'bypassPermissions'];
+  // Routines run unattended (no user to approve), so bypass permissions
+  const args = ['--print', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
   if (agent.id !== 'default') args.push('--agent', agent.id);
   args.push(routine.prompt);
 
   const proc = spawn('claude', args, {
     cwd: WORKSPACE,
-    env: { ...process.env, TERM: 'dumb' },
+    env: { ...process.env, TERM: 'dumb', RUNDOCK: '1' },
     stdio: ['ignore', 'pipe', 'pipe']
   });
 
@@ -425,54 +461,402 @@ function broadcastRoutineUpdate() {
   });
 }
 
+// ===== WORKSPACE ANALYSIS (Seven Signals) =====
+
+const SKILL_CLUSTERS = [
+  { label: 'Meetings & People', pattern: /meeting|prep|process|granola|attendee|agenda|people|person|contact/i },
+  { label: 'Career & Growth', pattern: /career|coach|resume|identity|evidence|promotion|mentor|feedback/i },
+  { label: 'Content & Writing', pattern: /content|write|draft|publish|post|blog|newsletter|hook|audit|voice/i },
+  { label: 'Research & Analysis', pattern: /research|search|scrape|fetch|crawl|analy|competitor|trend|digest/i },
+  { label: 'Code Review', pattern: /code.?review|pr-review|pull.?request|diff|merge|refactor/i },
+  { label: 'Build & Deploy', pattern: /lint|ci[-\s]|deploy|compile|bundle|release|docker|\.test|unit.?test|e2e/i },
+  { label: 'Project Management', pattern: /project|health|brief|product|roadmap|sprint|backlog|kanban/i },
+  { label: 'Planning & Review', pattern: /daily|weekly|quarter|plan|review|goal|priority|standup|retro/i },
+  { label: 'System & Setup', pattern: /setup|install|config(?!ure)|dex-update|system-update|reset|health-check|getting-started|migrate/i },
+];
+
+function analyzeWorkspace(dir, existingAgents) {
+  const analysis = { identity: {}, skills: {}, integrations: {}, structure: {}, userProfile: {}, hooks: {}, agents: {} };
+
+  // --- Signal 1: Identity ---
+  const sources = [];
+  try {
+    const readmePath = path.join(dir, 'README.md');
+    if (fs.existsSync(readmePath)) {
+      const text = fs.readFileSync(readmePath, 'utf-8');
+      const h1 = text.match(/^#\s+(.+)/m);
+      const firstPara = text.match(/^#[^\n]+\n+([^\n#]+)/m);
+      sources.push({ file: 'README.md', heading: h1 ? h1[1].trim() : null, summary: firstPara ? firstPara[1].trim() : null });
+    }
+  } catch (e) {}
+  try {
+    const claudePath = path.join(dir, 'CLAUDE.md');
+    if (fs.existsSync(claudePath)) {
+      const text = fs.readFileSync(claudePath, 'utf-8');
+      const h1 = text.match(/^#\s+(.+)/m);
+      const youAre = text.match(/You are (\w+)[,.]?\s*([^.]*)\./);
+      sources.push({ file: 'CLAUDE.md', heading: h1 ? h1[1].trim() : null, identity: youAre ? `You are ${youAre[1]}, ${youAre[2]}.` : null });
+    }
+  } catch (e) {}
+  try {
+    const pkgPath = path.join(dir, 'package.json');
+    if (fs.existsSync(pkgPath)) {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+      if (pkg.name || pkg.description) {
+        sources.push({ file: 'package.json', name: pkg.name || null, description: pkg.description || null });
+      }
+    }
+  } catch (e) {}
+
+  // Resolve identity: README > CLAUDE.md > package.json
+  let suggestedName = null, suggestedTagline = null, suggestedRole = null;
+  const readme = sources.find(s => s.file === 'README.md');
+  const claude = sources.find(s => s.file === 'CLAUDE.md');
+  const pkg = sources.find(s => s.file === 'package.json');
+  if (readme?.heading) {
+    // Extract name and tagline from heading like "Dex by Dave — Your AI Chief of Staff"
+    const parts = readme.heading.split(/[—–:|]+/).map(s => s.trim());
+    suggestedName = parts[0]?.split(/\s+/)[0]; // First word of first part
+    suggestedTagline = parts[1] || readme.summary;
+    suggestedRole = parts[1] || null;
+  }
+  if (!suggestedName && claude?.identity) {
+    const nameMatch = claude.identity.match(/You are (\w+)/);
+    if (nameMatch) suggestedName = nameMatch[1];
+  }
+  if (!suggestedName && pkg?.name) {
+    suggestedName = pkg.name.split('-')[0];
+    suggestedName = suggestedName.charAt(0).toUpperCase() + suggestedName.slice(1);
+  }
+  analysis.identity = { sources, suggestedName, suggestedTagline, suggestedRole };
+
+  // --- Signal 2: Skills with Pre-Grouping ---
+  const skillSources = [
+    { dir: path.join(dir, 'System', 'Playbooks'), defFile: 'PLAYBOOK.md' },
+    { dir: path.join(dir, '.claude', 'skills'), defFile: 'SKILL.md' },
+  ];
+  const allSkills = [];
+  for (const src of skillSources) {
+    if (!fs.existsSync(src.dir)) continue;
+    try {
+      // Skip _prefixed (inactive) and anthropic-* (Claude Code built-in document skills)
+      const dirs = fs.readdirSync(src.dir, { withFileTypes: true }).filter(d => d.isDirectory() && !d.name.startsWith('_') && !d.name.startsWith('anthropic-'));
+      for (const d of dirs) {
+        const defPath = path.join(src.dir, d.name, src.defFile);
+        if (!fs.existsSync(defPath)) continue;
+        try {
+          const content = fs.readFileSync(defPath, 'utf-8');
+          const parsed = parseSkillFile(content, d.name);
+          allSkills.push({ id: d.name, name: parsed.displayName, description: parsed.description });
+        } catch (e) {}
+      }
+    } catch (e) {}
+  }
+
+  // Group skills by keyword clusters
+  const groups = [];
+  const grouped = new Set();
+  for (const cluster of SKILL_CLUSTERS) {
+    const matching = allSkills.filter(s => {
+      if (grouped.has(s.id)) return false;
+      const text = `${s.id} ${s.name} ${s.description}`.toLowerCase();
+      const matches = text.match(cluster.pattern);
+      return matches;
+    });
+    if (matching.length > 0) {
+      // Calculate confidence based on match quality
+      const slugs = matching.map(s => s.id);
+      const highConfidence = matching.filter(s => {
+        const text = `${s.id} ${s.name} ${s.description}`.toLowerCase();
+        const allMatches = text.match(new RegExp(cluster.pattern.source, 'gi'));
+        return allMatches && allMatches.length >= 2;
+      });
+      groups.push({
+        label: cluster.label,
+        slugs,
+        confidence: highConfidence.length >= matching.length / 2 ? 'high' : 'medium'
+      });
+      slugs.forEach(s => grouped.add(s));
+    }
+  }
+  // Ungrouped skills
+  const ungrouped = allSkills.filter(s => !grouped.has(s.id)).map(s => s.id);
+  if (ungrouped.length > 0) {
+    groups.push({ label: 'Uncategorised', slugs: ungrouped, confidence: 'low' });
+  }
+  analysis.skills = { total: allSkills.length, groups, ungrouped, list: allSkills };
+
+  // --- Signal 3: Integrations and MCP Servers ---
+  const mcpReferences = [];
+  const mentionedTools = [];
+  const knownTools = ['Granola', 'ScreenPipe', 'Notion', 'Todoist', 'Slack', 'Linear', 'Jira', 'GitHub', 'Obsidian', 'Raycast', 'AuthoredUp', 'Readwise'];
+  try {
+    const claudePath = path.join(dir, 'CLAUDE.md');
+    if (fs.existsSync(claudePath)) {
+      const text = fs.readFileSync(claudePath, 'utf-8');
+      const lines = text.split('\n');
+      // Extract named MCP servers: match "from X MCP" or "X MCP tools/server" patterns
+      // These are the reliable indicators of actual named MCP servers
+      const mcpNamePattern = /(?:from|via|using|call|check)\s+(?:the\s+)?(\w[\w\s]*?)\s+MCP\b/gi;
+      let mcpMatch;
+      while ((mcpMatch = mcpNamePattern.exec(text)) !== null) {
+        const rawName = mcpMatch[1].trim();
+        // Skip if the "name" is a common verb/article that leaked through
+        if (rawName.length < 2 || /^(the|a|an|to|is|it|or|if|my)$/i.test(rawName)) continue;
+        const name = rawName + ' MCP';
+        if (!mcpReferences.find(m => m.name === name)) {
+          mcpReferences.push({ name, context: mcpMatch[0].trim(), source: 'CLAUDE.md' });
+        }
+      }
+      for (const tool of knownTools) {
+        if (text.includes(tool) && !mentionedTools.includes(tool)) {
+          mentionedTools.push(tool);
+        }
+      }
+    }
+  } catch (e) {}
+
+  let configuredServers = [];
+  try {
+    const mcpJsonPath = path.join(dir, '.mcp.json');
+    if (fs.existsSync(mcpJsonPath)) {
+      const mcpConfig = JSON.parse(fs.readFileSync(mcpJsonPath, 'utf-8'));
+      if (mcpConfig.mcpServers) {
+        configuredServers = Object.keys(mcpConfig.mcpServers);
+      }
+    }
+  } catch (e) {}
+  analysis.integrations = { mcpReferences, configuredServers, mentionedTools };
+
+  // --- Signal 4: Folder Structure with Pattern Detection ---
+  let topLevelDirs = [];
+  try {
+    topLevelDirs = fs.readdirSync(dir, { withFileTypes: true })
+      .filter(d => d.isDirectory() && !d.name.startsWith('.') && d.name !== 'node_modules')
+      .map(d => d.name);
+  } catch (e) {}
+
+  let pattern = 'unknown';
+  const hasNumbered = topLevelDirs.some(d => /^\d{2}[-_]/.test(d));
+  const paraNames = ['inbox', 'project', 'area', 'resource', 'archive'];
+  const hasPara = paraNames.filter(p => topLevelDirs.some(d => d.toLowerCase().includes(p))).length >= 3;
+  const hasDev = ['src', 'lib', 'test', 'tests'].filter(d => topLevelDirs.includes(d)).length >= 2;
+  const hasFunctional = ['clients', 'marketing', 'finance', 'sales', 'engineering', 'hr'].filter(d =>
+    topLevelDirs.some(td => td.toLowerCase() === d)
+  ).length >= 2;
+
+  if (hasNumbered && hasPara) pattern = 'para-numbered';
+  else if (hasPara) pattern = 'para';
+  else if (hasDev) pattern = 'dev-project';
+  else if (hasFunctional) pattern = 'functional';
+  else if (topLevelDirs.length <= 3) pattern = 'minimal';
+
+  // Key path detection
+  const keyPaths = {};
+  const allDirs = [...topLevelDirs];
+  // Also scan second-level dirs for key paths
+  for (const td of topLevelDirs) {
+    try {
+      const subs = fs.readdirSync(path.join(dir, td), { withFileTypes: true })
+        .filter(d => d.isDirectory())
+        .map(d => `${td}/${d.name}`);
+      allDirs.push(...subs);
+    } catch (e) {}
+  }
+  for (const d of allDirs) {
+    const lower = d.toLowerCase();
+    if (!keyPaths.inbox && (lower.includes('inbox') || lower.includes('capture'))) keyPaths.inbox = d + '/';
+    if (!keyPaths.projects && lower.includes('project')) keyPaths.projects = d + '/';
+    if (!keyPaths.tasks && lower.includes('task')) keyPaths.tasks = d + '/';
+    if (!keyPaths.people && lower.includes('people')) keyPaths.people = d + '/';
+    if (!keyPaths.areas && lower.match(/area/)) keyPaths.areas = d + '/';
+    if (!keyPaths.archive && lower.includes('archive')) keyPaths.archive = d + '/';
+    if (!keyPaths.system && (lower === 'system' || lower === 'config')) keyPaths.system = d + '/';
+  }
+  analysis.structure = {
+    topLevelDirs,
+    pattern,
+    keyPaths,
+    hasClaudeDir: fs.existsSync(path.join(dir, '.claude')),
+    hasAgentsDir: fs.existsSync(path.join(dir, '.claude', 'agents')),
+    hasSkillsDir: fs.existsSync(path.join(dir, '.claude', 'skills'))
+  };
+
+  // --- Signal 5: User Profile and Configuration ---
+  const profilePaths = ['user-profile.yaml', 'profile.yaml', 'config.yaml', 'System/user-profile.yaml', 'System/config.yaml'];
+  let userProfile = { exists: false, file: null, populated: false, fields: {} };
+  for (const p of profilePaths) {
+    try {
+      const fullPath = path.join(dir, p);
+      if (fs.existsSync(fullPath)) {
+        const text = fs.readFileSync(fullPath, 'utf-8');
+        const fields = {};
+        for (const field of ['name', 'role', 'roleGroup', 'company', 'email']) {
+          const match = text.match(new RegExp(`^${field}:\\s*(.+)`, 'm'));
+          fields[field] = match ? match[1].trim().replace(/^['"]|['"]$/g, '') : '';
+        }
+        const populated = Object.values(fields).some(v => v && v.length > 0);
+        userProfile = { exists: true, file: p, populated, fields };
+        break;
+      }
+    } catch (e) {}
+  }
+
+  // Check for pillars/goals config
+  let systemConfig = { pillars: { exists: false }, templates: [] };
+  try {
+    const pillarPaths = ['pillars.yaml', 'System/pillars.yaml'];
+    for (const p of pillarPaths) {
+      if (fs.existsSync(path.join(dir, p))) {
+        const text = fs.readFileSync(path.join(dir, p), 'utf-8');
+        const populated = text.split('\n').filter(l => l.trim() && !l.startsWith('#') && !l.startsWith('---')).length > 3;
+        systemConfig.pillars = { exists: true, populated, file: p };
+        break;
+      }
+    }
+    // Look for template files
+    const sysDir = path.join(dir, 'System');
+    if (fs.existsSync(sysDir)) {
+      const sysFiles = fs.readdirSync(sysDir);
+      systemConfig.templates = sysFiles.filter(f => /template|example/i.test(f));
+    }
+  } catch (e) {}
+  analysis.userProfile = userProfile;
+  analysis.systemConfig = systemConfig;
+
+  // --- Signal 6: Hooks and Automation ---
+  const hooksResult = { present: [], soundHooks: [], contextHooks: [], automationHooks: [] };
+  try {
+    const settingsPath = path.join(dir, '.claude', 'settings.json');
+    if (fs.existsSync(settingsPath)) {
+      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+      if (settings.hooks) {
+        for (const [event, entries] of Object.entries(settings.hooks)) {
+          hooksResult.present.push(event);
+          for (const entry of (Array.isArray(entries) ? entries : [])) {
+            const hooks = entry.hooks || [entry];
+            for (const hook of hooks) {
+              if (!hook.command) continue;
+              const cmd = hook.command;
+              if (/afplay|aplay|paplay|powershell.*audio/i.test(cmd)) {
+                const alreadyMuted = cmd.includes('$RUNDOCK');
+                hooksResult.soundHooks.push({ event, command: cmd, muted: alreadyMuted });
+              } else if (/inject|context/i.test(cmd)) {
+                const nameMatch = cmd.match(/\/([\w-]+)\.\w+$/);
+                hooksResult.contextHooks.push({ event, matcher: entry.matcher || null, name: nameMatch ? nameMatch[1] : cmd.substring(0, 60) });
+              } else if (/session|\.sh|\.py|\.js/i.test(cmd)) {
+                hooksResult.automationHooks.push({ event, command: cmd.substring(0, 80) });
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {}
+  analysis.hooks = hooksResult;
+
+  // --- Signal 7: Existing Agents ---
+  const agentList = existingAgents || discoverAgents();
+  const nonPlatform = agentList.filter(a => a.type !== 'platform');
+  analysis.agents = {
+    total: agentList.length,
+    onTeam: nonPlatform.filter(a => a.status === 'onTeam').length,
+    available: nonPlatform.filter(a => a.status === 'available').length,
+    raw: nonPlatform.filter(a => a.status === 'raw').length,
+    hasOrchestrator: agentList.some(a => a.type === 'orchestrator'),
+    list: agentList.map(a => ({
+      name: a.id, displayName: a.displayName, role: a.role, type: a.type,
+      order: a.order, status: a.status
+    }))
+  };
+
+  return analysis;
+}
+
+// Mute sound hooks for Rundock (idempotent: skips already-muted hooks)
+function muteHooks(dir) {
+  const settingsPath = path.join(dir, '.claude', 'settings.json');
+  if (!fs.existsSync(settingsPath)) return;
+  try {
+    const text = fs.readFileSync(settingsPath, 'utf-8');
+    const settings = JSON.parse(text);
+    if (!settings.hooks) return;
+    let mutedCount = 0;
+    const soundPattern = /afplay|aplay|paplay|powershell.*audio/i;
+
+    for (const [event, entries] of Object.entries(settings.hooks)) {
+      for (const entry of (Array.isArray(entries) ? entries : [])) {
+        const hooks = entry.hooks || [entry];
+        for (const hook of hooks) {
+          if (!hook.command || !soundPattern.test(hook.command)) continue;
+          if (hook.command.includes('$RUNDOCK')) continue; // Already muted
+          hook.command = `[ -z "$RUNDOCK" ] && ${hook.command} || true`;
+          mutedCount++;
+        }
+      }
+    }
+    if (mutedCount > 0) {
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+      console.log(`  [Scaffold] Muted ${mutedCount} sound hook(s) for Rundock`);
+    }
+  } catch (e) {
+    console.warn(`  Warning: could not mute hooks: ${e.message}`);
+  }
+}
+
 // ===== WORKSPACE SCAFFOLD =====
+
+// Rundock-owned files: synced from scaffold/ on every workspace open.
+// Only rundock-* prefixed files are managed. User files are never touched.
+const RUNDOCK_MANAGED_FILES = [
+  { source: 'rundock-guide.md',            target: '.claude/agents/rundock-guide.md' },
+  { source: 'rundock-workspace-setup.md',  target: '.claude/skills/rundock-workspace-setup/SKILL.md' },
+  { source: 'rundock-agent-onboarding.md', target: '.claude/skills/rundock-agent-onboarding/SKILL.md' },
+];
 
 function scaffoldWorkspace(dir) {
   try {
-    const agentsDir = path.join(dir, '.claude', 'agents');
-    fs.mkdirSync(agentsDir, { recursive: true });
+    fs.mkdirSync(path.join(dir, '.claude', 'agents'), { recursive: true });
 
-    // Fast path: if rundock-guide.md already exists, skip agent scaffold
-    const guideFile = path.join(agentsDir, 'rundock-guide.md');
-    if (!fs.existsSync(guideFile)) {
-      // Slow path: check if any existing agent has type: platform in frontmatter
-      let hasPlatformAgent = false;
-      try {
-        const existingFiles = fs.readdirSync(agentsDir).filter(f => f.endsWith('.md'));
-        for (const file of existingFiles) {
-          const content = fs.readFileSync(path.join(agentsDir, file), 'utf-8');
-          const fmText = extractFrontmatterText(content);
-          if (fmText && /^type:\s*platform\s*$/m.test(fmText)) {
-            hasPlatformAgent = true;
-            break;
-          }
-        }
-      } catch (e) {}
+    // Sync Rundock-owned agents and skills from scaffold sources
+    for (const entry of RUNDOCK_MANAGED_FILES) {
+      const sourceContent = fs.readFileSync(path.join(__dirname, 'scaffold', entry.source), 'utf-8');
+      const targetPath = path.join(dir, entry.target);
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
 
-      if (!hasPlatformAgent) {
-        const guideContent = fs.readFileSync(path.join(__dirname, 'scaffold', 'rundock-guide.md'), 'utf-8');
-        fs.writeFileSync(guideFile, guideContent, 'utf-8');
-        console.log(`  Scaffolded: .claude/agents/rundock-guide.md`);
+      let action = null;
+      if (!fs.existsSync(targetPath)) {
+        action = 'Created';
+      } else {
+        const deployed = fs.readFileSync(targetPath, 'utf-8');
+        if (deployed !== sourceContent) action = 'Updated';
+      }
+
+      if (action) {
+        fs.writeFileSync(targetPath, sourceContent, 'utf-8');
+        console.log(`  [Scaffold] ${action}: ${entry.target}`);
       }
     }
 
-    // Scaffold skills
-    const skillsDir = path.join(dir, '.claude', 'skills');
-    const skillTemplates = [
-      { slug: 'rundock-workspace-setup', templateFile: 'rundock-workspace-setup.md' },
-      { slug: 'rundock-agent-onboarding', templateFile: 'rundock-agent-onboarding.md' }
-    ];
+    // Create .rundock/ directory for session persistence
+    const rundockPath = path.join(dir, '.rundock');
+    fs.mkdirSync(rundockPath, { recursive: true });
 
-    for (const skill of skillTemplates) {
-      const skillDir = path.join(skillsDir, skill.slug);
-      const skillFile = path.join(skillDir, 'SKILL.md');
-      if (!fs.existsSync(skillFile)) {
-        fs.mkdirSync(skillDir, { recursive: true });
-        const content = fs.readFileSync(path.join(__dirname, 'scaffold', skill.templateFile), 'utf-8');
-        fs.writeFileSync(skillFile, content, 'utf-8');
-        console.log(`  Scaffolded: .claude/skills/${skill.slug}/SKILL.md`);
+    // Ensure .rundock/ is gitignored (contains session IDs and timestamps)
+    const gitignorePath = path.join(dir, '.gitignore');
+    try {
+      const existing = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, 'utf-8') : '';
+      if (!existing.includes('.rundock')) {
+        const line = (existing && !existing.endsWith('\n') ? '\n' : '') + '.rundock/\n';
+        fs.appendFileSync(gitignorePath, line);
+        console.log(`  Scaffolded: .rundock/ added to .gitignore`);
       }
+    } catch (e) {
+      console.warn(`  Warning: could not update .gitignore: ${e.message}`);
     }
+
+    // Auto-mute sound hooks for Rundock
+    muteHooks(dir);
   } catch (e) {
     console.warn(`  Warning: scaffold failed for ${dir}: ${e.message}`);
   }
@@ -527,10 +911,56 @@ const wss = new WebSocketServer({
   }
 });
 
+// Module-level process tracking: survives WebSocket reconnects
+const chatProcesses = new Map(); // conversationId -> { process, buffer, processId, agentId, responseText }
+const connectedClients = new Set(); // All active WebSocket connections
+const disconnectBuffer = []; // Messages queued while no clients are connected
+
+function safeSend(data) {
+  const payload = typeof data === 'string' ? data : JSON.stringify(data);
+  let sent = false;
+  for (const client of connectedClients) {
+    if (client.readyState === 1) {
+      client.send(payload);
+      sent = true;
+    }
+  }
+  if (!sent) {
+    // No live clients: buffer for delivery on next connect
+    if (disconnectBuffer.length < 500) disconnectBuffer.push(payload);
+  }
+}
+
+// Heartbeat: detect silently dead connections every 15s
+const HEARTBEAT_INTERVAL = 15000;
+setInterval(() => {
+  for (const client of connectedClients) {
+    if (client._alive === false) {
+      console.log('[WS] Heartbeat timeout, terminating stale connection');
+      client.terminate();
+      return;
+    }
+    client._alive = false;
+    client.ping();
+  }
+}, HEARTBEAT_INTERVAL);
+
 wss.on('connection', (ws) => {
   console.log('Client connected');
-  const processes = new Map(); // conversationId -> { process, buffer }
-  function safeSend(data) { if (ws.readyState === 1) ws.send(typeof data === 'string' ? data : JSON.stringify(data)); }
+  connectedClients.add(ws);
+  ws._alive = true;
+  ws.on('pong', () => { ws._alive = true; });
+
+  // Tell this client about any active processes so it can restore thinking indicators.
+  // Always send this message, even when empty, so the client can reconcile stale state.
+  const active = [];
+  for (const [convoId, entry] of chatProcesses) {
+    active.push({ conversationId: convoId, processId: entry.processId, agentId: entry.agentId, responseText: entry.responseText || '' });
+  }
+  ws.send(JSON.stringify({ type: 'active_processes', processes: active }));
+
+  // Alias for handlers that still reference local `processes`
+  const processes = chatProcesses;
 
   ws.on('message', (data) => {
     try {
@@ -538,6 +968,7 @@ wss.on('connection', (ws) => {
 
       if (msg.type === 'chat') {
         const convoId = msg.conversationId || 'default';
+        const processId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
         // Kill existing process for this conversation only
         if (processes.has(convoId)) {
@@ -545,7 +976,15 @@ wss.on('connection', (ws) => {
           processes.delete(convoId);
         }
 
-        const args = ['--print', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--permission-mode', 'bypassPermissions'];
+        // Interactive chat: bidirectional stream-json for permission prompts.
+        // acceptEdits: file reads/writes/edits auto-approved, Bash prompts via UI.
+        // Agent file writes (.claude/agents/) go through Rundock server endpoints,
+        // not through Claude Code (which hardcodes .claude/ as protected).
+        const args = ['--print', '--output-format', 'stream-json', '--input-format', 'stream-json',
+          '--verbose', '--include-partial-messages', '--permission-mode', 'acceptEdits',
+          '--allowed-tools', 'Bash,WebFetch,WebSearch,mcp__*',
+          '--disallowed-tools', 'Write(*.js),Write(*.jsx),Write(*.ts),Write(*.tsx),Write(*.py),Write(*.sh),Write(*.bash),Write(*.rb),Write(*.pl),Write(*.exe),Write(*.dll),Write(*.so),Edit(*.js),Edit(*.jsx),Edit(*.ts),Edit(*.tsx),Edit(*.py),Edit(*.sh),Edit(*.bash),Edit(*.rb),Edit(*.pl),Edit(*.exe),Bash(rm *),Bash(sudo *),Bash(chmod *),Bash(chown *),Bash(curl * | *sh),Bash(wget * | *sh)',
+          '--append-system-prompt', 'FORMATTING RULES (mandatory, apply to all output):\n- NEVER use em dashes (—) or en dashes (–) anywhere. This includes lists, headers, separators, and inline text. Wrong: "Dex — Chief of Staff". Right: "Dex: Chief of Staff". Use colons, full stops, commas, or restructure instead.\n- Use UK spelling throughout.\n\nPLATFORM RULES:\nRundock is a knowledge management platform. You can create and edit markdown, YAML, JSON, and text files. Writing or editing executable code files (.js, .ts, .py, .sh, etc.) is blocked by design. Destructive commands (rm, sudo, chmod) are also blocked. If a user asks you to do something that hits these restrictions, explain that Rundock is designed for knowledge work, not software development, and suggest an alternative approach using supported file types. Never offer to change permission settings or suggest workarounds to bypass these restrictions.'];
 
         // Resume existing session if we have a session ID
         if (msg.sessionId) {
@@ -555,24 +994,32 @@ wss.on('connection', (ws) => {
         // Pass --agent with the slug name (matches filename, used by Claude Code for resolution)
         if (!msg.sessionId) {
           const agentList = discoverAgents();
-          const agentData = agentList.find(a => a.id === (msg.agent || 'default'));
-          if (agentData && agentData.id !== 'default' && agentData.fileName) {
+          const requestedAgent = msg.agent || 'default';
+          // Match by id, or by filename slug (handles orchestrator whose id is remapped to 'default')
+          const agentData = agentList.find(a => a.id === requestedAgent)
+            || agentList.find(a => a.fileName && a.fileName.replace('.md', '') === requestedAgent);
+          if (agentData && agentData.fileName) {
             args.push('--agent', agentData.name);
           }
         }
 
-        args.push(msg.content);
-
-        console.log(`[Chat] convo=${convoId} agent=${msg.agent} sessionId=${msg.sessionId||'new'} args=${args.filter(a=>a.startsWith('--')).join(' ')}`);
+        // Prompt goes via stdin (stream-json input), not as a CLI arg
+        console.log(`[Chat] convo=${convoId} proc=${processId} agent=${msg.agent} sessionId=${msg.sessionId||'new'} args=${args.filter(a=>a.startsWith('--')).join(' ')}`);
 
         const proc = spawn('claude', args, {
           cwd: WORKSPACE,
-          env: { ...process.env, TERM: 'dumb' },
-          stdio: ['ignore', 'pipe', 'pipe']
+          env: { ...process.env, TERM: 'dumb', RUNDOCK: '1' },
+          stdio: ['pipe', 'pipe', 'pipe']
         });
 
-        const entry = { process: proc, buffer: '' };
+        const entry = { process: proc, buffer: '', processId, agentId: msg.agent || 'default', responseText: '' };
         processes.set(convoId, entry);
+
+        // Tell client which processId is now active for this conversation
+        safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId }));
+
+        // Send the user's prompt via stdin as a stream-json message
+        proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: msg.content } }) + '\n');
 
         proc.stdout.on('data', (chunk) => {
           entry.buffer += chunk.toString();
@@ -584,47 +1031,99 @@ wss.on('connection', (ws) => {
                 const parsed = JSON.parse(line);
                 parsed._agent = msg.agent || 'default';
                 parsed._conversationId = convoId;
+                parsed._processId = processId;
                 // Capture session ID from init message
                 if (parsed.type === 'system' && parsed.subtype === 'init' && parsed.session_id) {
                   parsed._sessionId = parsed.session_id;
                 }
+                // Accumulate response text for reconnect replay
+                if (parsed.type === 'stream_event' && parsed.event?.type === 'content_block_delta' && parsed.event?.delta?.type === 'text_delta' && parsed.event.delta.text) {
+                  entry.responseText += parsed.event.delta.text;
+                } else if (parsed.type === 'assistant' && parsed.message?.content) {
+                  for (const block of parsed.message.content) {
+                    if (block.type === 'text' && block.text) entry.responseText = block.text;
+                  }
+                }
                 safeSend(JSON.stringify(parsed));
               } catch (e) {
-                safeSend(JSON.stringify({ type: 'raw', content: line, _agent: msg.agent || 'default', _conversationId: convoId }));
+                safeSend(JSON.stringify({ type: 'raw', content: line, _agent: msg.agent || 'default', _conversationId: convoId, _processId: processId }));
               }
             }
           }
         });
 
+        let stderrBuffer = '';
         proc.stderr.on('data', (chunk) => {
           const text = chunk.toString();
+          stderrBuffer += text;
           if (text.includes('no stdin data') || text.includes('proceeding without')) return;
-          safeSend(JSON.stringify({ type: 'error', content: text, _conversationId: convoId }));
+          safeSend(JSON.stringify({ type: 'error', content: text, _conversationId: convoId, _processId: processId }));
         });
 
         proc.on('close', (code) => {
+          // Only send done if this process is still the active one for this conversation.
+          // A superseded process (killed by a newer message) should not trigger finishProcessing.
+          const current = processes.get(convoId);
+          if (current && current.processId !== processId) return;
+
+          // Detect stale session: if --resume was used and the process failed quickly,
+          // retry without --resume so the user gets a fresh session transparently
+          const isResumeFailure = msg.sessionId && !msg._resumeRetry && code !== 0 &&
+            (stderrBuffer.includes('session') || stderrBuffer.includes('resume') || stderrBuffer.includes('not found'));
+          if (isResumeFailure) {
+            console.log(`[Chat] Resume failed for session ${msg.sessionId}, retrying fresh`);
+            processes.delete(convoId);
+            safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: 'Previous session expired. Starting fresh.', _conversationId: convoId, _processId: processId }));
+            // Re-dispatch without sessionId to start a fresh session (flag prevents infinite retry)
+            const freshMsg = { ...msg, sessionId: null, _resumeRetry: true };
+            ws.emit('message', JSON.stringify(freshMsg));
+            return;
+          }
+
           if (entry.buffer.trim()) {
             try {
               const parsed = JSON.parse(entry.buffer);
               parsed._agent = msg.agent || 'default';
               parsed._conversationId = convoId;
+              parsed._processId = processId;
               safeSend(JSON.stringify(parsed));
             } catch (e) {
-              safeSend(JSON.stringify({ type: 'raw', content: entry.buffer, _conversationId: convoId }));
+              safeSend(JSON.stringify({ type: 'raw', content: entry.buffer, _conversationId: convoId, _processId: processId }));
             }
           }
-          safeSend(JSON.stringify({ type: 'system', subtype: 'done', code, _agent: msg.agent || 'default', _conversationId: convoId }));
+          safeSend(JSON.stringify({ type: 'system', subtype: 'done', code, _agent: msg.agent || 'default', _conversationId: convoId, _processId: processId }));
           processes.delete(convoId);
         });
       }
 
+      // Permission response: user approved/denied a tool in the browser UI.
+      // Forward as a control_response to the Claude Code process via stdin.
+      if (msg.type === 'permission_response') {
+        const entry = processes.get(msg.conversationId);
+        if (entry && entry.process.stdin && entry.process.stdin.writable) {
+          const controlResponse = JSON.stringify({
+            type: 'control_response',
+            response: {
+              request_id: msg.requestId,
+              subtype: 'can_use_tool',
+              behavior: msg.allow ? 'allow' : 'deny',
+              ...(msg.allow ? {} : { message: 'User denied this action in Rundock' })
+            }
+          }) + '\n';
+          entry.process.stdin.write(controlResponse);
+          console.log(`[Permission] convo=${msg.conversationId} requestId=${msg.requestId} decision=${msg.allow ? 'allow' : 'deny'}`);
+        }
+      }
+
       if (msg.type === 'get_workspaces') {
-        ws.send(JSON.stringify({
+        const wsData = {
           type: 'workspaces',
           current: WORKSPACE,
           recent: loadRecentWorkspaces(),
           discovered: discoverWorkspaces()
-        }));
+        };
+        if (WORKSPACE) wsData.analysis = analyzeWorkspace(WORKSPACE, discoverAgents());
+        ws.send(JSON.stringify(wsData));
       }
 
       if (msg.type === 'list_workspaces') {
@@ -638,12 +1137,17 @@ wss.on('connection', (ws) => {
       if (msg.type === 'set_workspace') {
         const dir = msg.path;
         if (dir && fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
+          // Kill all running processes when switching workspace
+          for (const [, entry] of chatProcesses) entry.process.kill();
+          chatProcesses.clear();
           WORKSPACE = dir;
           saveRecentWorkspace(dir);
           try { scaffoldWorkspace(dir); } catch (e) { console.warn('Scaffold warning:', e.message); }
           console.log(`  Workspace changed to: ${WORKSPACE}`);
-          ws.send(JSON.stringify({ type: 'workspace_set', path: WORKSPACE }));
-          ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents() }));
+          const agentList = discoverAgents();
+          const analysis = analyzeWorkspace(dir, agentList);
+          ws.send(JSON.stringify({ type: 'workspace_set', path: WORKSPACE, analysis }));
+          ws.send(JSON.stringify({ type: 'agents', agents: agentList }));
           ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) }));
         } else {
           ws.send(JSON.stringify({ type: 'workspace_error', message: 'Directory not found' }));
@@ -660,12 +1164,17 @@ wss.on('connection', (ws) => {
           try {
             fs.mkdirSync(dir, { recursive: true });
             fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+            // Kill all running processes when creating/switching workspace
+            for (const [, entry] of chatProcesses) entry.process.kill();
+            chatProcesses.clear();
             WORKSPACE = dir;
             saveRecentWorkspace(dir);
             try { scaffoldWorkspace(dir); } catch (e) { console.warn('Scaffold warning:', e.message); }
             console.log(`  Workspace created: ${WORKSPACE}`);
-            ws.send(JSON.stringify({ type: 'workspace_set', path: WORKSPACE }));
-            ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents() }));
+            const agentList = discoverAgents();
+            const analysis = analyzeWorkspace(dir, agentList);
+            ws.send(JSON.stringify({ type: 'workspace_set', path: WORKSPACE, analysis }));
+            ws.send(JSON.stringify({ type: 'agents', agents: agentList }));
             ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) }));
           } catch (e) {
             ws.send(JSON.stringify({ type: 'workspace_error', message: 'Could not create workspace: ' + e.message }));
@@ -682,6 +1191,55 @@ wss.on('connection', (ws) => {
         ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) }));
       }
       if (msg.type === 'get_skills') ws.send(JSON.stringify({ type: 'skills', skills: discoverSkills() }));
+
+      // ===== SESSION PERSISTENCE =====
+
+      if (msg.type === 'get_conversations') {
+        if (!WORKSPACE) return;
+        ws.send(JSON.stringify({ type: 'conversations', conversations: readConversations() }));
+      }
+
+      // Client requests buffered messages after it has loaded conversations and state.
+      // Skip stream_event and assistant messages since responseText snapshot covers them.
+      if (msg.type === 'flush_buffer') {
+        if (disconnectBuffer.length) {
+          console.log(`[WS] Flushing ${disconnectBuffer.length} buffered messages (filtering stream events)`);
+          while (disconnectBuffer.length) {
+            const m = disconnectBuffer.shift();
+            try {
+              const parsed = JSON.parse(m);
+              if (parsed.type === 'stream_event' || parsed.type === 'assistant') continue;
+            } catch (e) {}
+            if (ws.readyState === 1) ws.send(m);
+          }
+        }
+      }
+
+      if (msg.type === 'save_conversation') {
+        if (!WORKSPACE || !msg.conversation || !msg.conversation.id) return;
+        const convos = readConversations();
+        const idx = convos.findIndex(c => c.id === msg.conversation.id);
+        // Only persist metadata, never message content
+        const entry = {
+          id: msg.conversation.id,
+          agentId: msg.conversation.agentId,
+          sessionId: msg.conversation.sessionId || null,
+          title: msg.conversation.title,
+          status: msg.conversation.status || 'active',
+          createdAt: msg.conversation.createdAt || new Date().toISOString(),
+          lastActiveAt: new Date().toISOString()
+        };
+        if (idx >= 0) { convos[idx] = entry; } else { convos.unshift(entry); }
+        // Cap at 100 conversations
+        writeConversations(convos.slice(0, 100));
+      }
+
+      if (msg.type === 'delete_conversation') {
+        if (!WORKSPACE || !msg.id) return;
+        const convos = readConversations().filter(c => c.id !== msg.id);
+        writeConversations(convos);
+        ws.send(JSON.stringify({ type: 'conversations', conversations: convos }));
+      }
 
       if (msg.type === 'read_file') {
         const fullPath = path.resolve(WORKSPACE, msg.path);
@@ -715,6 +1273,71 @@ wss.on('connection', (ws) => {
         }
       }
 
+      // ===== AGENT CRUD (server-side, bypasses Claude Code's .claude/ protection) =====
+
+      if (msg.type === 'create_agent') {
+        const name = msg.name;
+        if (!validateAgentSlug(name)) {
+          ws.send(JSON.stringify({ type: 'agent_error', message: 'Invalid agent name. Use lowercase letters, numbers, and hyphens only.' }));
+        } else {
+          const agentsDir = path.join(WORKSPACE, '.claude', 'agents');
+          if (!fs.existsSync(agentsDir)) fs.mkdirSync(agentsDir, { recursive: true });
+          const filePath = path.join(agentsDir, name + '.md');
+          if (fs.existsSync(filePath)) {
+            ws.send(JSON.stringify({ type: 'agent_error', message: `Agent "${name}" already exists.` }));
+          } else {
+            fs.writeFileSync(filePath, msg.content, 'utf-8');
+            console.log(`[Agent] Created: ${name}`);
+            ws.send(JSON.stringify({ type: 'agent_saved', agentId: name }));
+            const updatedAgents = discoverAgents();
+            ws.send(JSON.stringify({ type: 'agents', agents: updatedAgents }));
+            ws.send(JSON.stringify({ type: 'skills', skills: discoverSkills(updatedAgents) }));
+            // Mark setup complete when first non-platform agent joins the team
+            const state = readState();
+            if (!state.setupComplete && updatedAgents.some(a => a.status === 'onTeam' && a.type !== 'platform')) {
+              writeState({ ...state, setupComplete: true, setupCompletedAt: new Date().toISOString(), version: 1 });
+              console.log(`[Setup] Marked complete`);
+            }
+          }
+        }
+      }
+
+      if (msg.type === 'update_agent') {
+        const agentList = discoverAgents();
+        const target = agentList.find(a => a.id === msg.agentId);
+        if (!target || !target.fileName) {
+          ws.send(JSON.stringify({ type: 'agent_error', message: `Agent "${msg.agentId}" not found.` }));
+        } else {
+          const filePath = path.join(WORKSPACE, '.claude', 'agents', target.fileName);
+          if (!filePath.startsWith(path.resolve(WORKSPACE))) {
+            ws.send(JSON.stringify({ type: 'agent_error', message: 'Invalid path.' }));
+          } else {
+            fs.writeFileSync(filePath, msg.content, 'utf-8');
+            console.log(`[Agent] Updated: ${msg.agentId}`);
+            ws.send(JSON.stringify({ type: 'agent_saved', agentId: msg.agentId }));
+            ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents() }));
+          }
+        }
+      }
+
+      if (msg.type === 'delete_agent') {
+        const agentList = discoverAgents();
+        const target = agentList.find(a => a.id === msg.agentId);
+        if (!target || !target.fileName) {
+          ws.send(JSON.stringify({ type: 'agent_error', message: `Agent "${msg.agentId}" not found.` }));
+        } else if (target.type === 'platform') {
+          ws.send(JSON.stringify({ type: 'agent_error', message: 'Cannot delete platform agents.' }));
+        } else {
+          const filePath = path.join(WORKSPACE, '.claude', 'agents', target.fileName);
+          if (filePath.startsWith(path.resolve(WORKSPACE))) {
+            fs.unlinkSync(filePath);
+            console.log(`[Agent] Deleted: ${msg.agentId}`);
+            ws.send(JSON.stringify({ type: 'agent_deleted', agentId: msg.agentId }));
+            ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents() }));
+          }
+        }
+      }
+
       if (msg.type === 'save_file') {
         const fullPath = path.resolve(WORKSPACE, msg.path);
         if (fullPath.startsWith(path.resolve(WORKSPACE))) {
@@ -729,16 +1352,17 @@ wss.on('connection', (ws) => {
 
   ws.on('close', () => {
     console.log('Client disconnected');
-    for (const [, entry] of processes) entry.process.kill();
-    processes.clear();
+    connectedClients.delete(ws);
+    // Don't kill processes: they survive reconnects.
+    // If no clients remain, safeSend will buffer output until the next connection.
   });
 });
 
 // ===== SKILL DISCOVERY =====
 
-function discoverSkills() {
+function discoverSkills(existingAgents) {
   const skills = [];
-  const agents = discoverAgents();
+  const agents = existingAgents || discoverAgents();
   const agentsDir = path.join(WORKSPACE, '.claude', 'agents');
 
   // Read full body text of each on-team agent (after frontmatter, not CLAUDE.md)
