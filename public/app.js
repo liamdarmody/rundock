@@ -27,10 +27,11 @@
 const sunIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`;
 const moonIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
 
-let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false, currentWorkspacePath=null;
+let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false, currentWorkspacePath=null, workspaceAnalysis=null;
 const agentLastActivity = {}; // { agentId: { time: Date, label: string } }
 // Per-conversation state: { convoId: { isProcessing, currentStreamingMsg, latestText } }
 const convoState = {};
+let pendingActiveProcesses = null; // Deferred until conversations are loaded
 
 // ===== 2. HELPERS =====
 
@@ -78,7 +79,8 @@ function connect() {
   ws = new WebSocket(`${p}//${location.host}`);
   ws.onopen = () => { setConn('connected'); ws.send(JSON.stringify({type:'get_workspaces'})); };
   ws.onmessage = e => handle(JSON.parse(e.data));
-  ws.onclose = () => { setConn('disconnected'); setTimeout(connect,3000); };
+  ws.onclose = () => { setConn('disconnected'); setTimeout(connect, 2000); };
+  ws.onerror = () => {}; // Prevent unhandled error; onclose fires next
 }
 function setConn(s) { const b=document.getElementById('connection-bar'); b.className=`connection-bar ${s}`; b.textContent=s==='connected'?'Connected':s==='disconnected'?'Disconnected. Reconnecting...':'Connecting...'; if(s==='connected')setTimeout(()=>b.style.display='none',2000); else b.style.display='block'; }
 
@@ -86,10 +88,9 @@ function setConn(s) { const b=document.getElementById('connection-bar'); b.class
 
 function handle(d) {
   const convoId = d._conversationId;
-
   switch(d.type) {
     case 'workspaces': handleWorkspaces(d); break;
-    case 'workspace_set': onWorkspaceReady(d.path); break;
+    case 'workspace_set': onWorkspaceReady(d.path, d.analysis); break;
     case 'workspace_error': {
       const errEl = document.getElementById('workspace-error');
       if (errEl) { errEl.textContent = d.message; errEl.style.display = 'block'; }
@@ -98,29 +99,134 @@ function handle(d) {
     case 'needs_workspace': showView('workspace'); break;
     case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesSidebar(); renderConvoList(); break;
     case 'skills': skills=d.skills; skillsLoaded=true; renderSkills(); break;
+    case 'conversations': handlePersistedConversations(d.conversations); break;
     case 'system':
-      // Capture session ID from init message
+      // Track active process per conversation to ignore stale events
+      if(d.subtype==='process_started' && convoId && d._processId) {
+        const state = getConvoState(convoId);
+        state.activeProcessId = d._processId;
+        // Remove stale permission cards from the previous process
+        document.querySelectorAll('.msg-permission').forEach(el => el.remove());
+      }
+      // Capture session ID from init message and persist for resume after refresh
       if(d.subtype==='init' && d._sessionId && convoId) {
         const convo = conversations.find(c => c.id === convoId);
-        if(convo && !convo.sessionId) convo.sessionId = d._sessionId;
+        if(convo && !convo.sessionId) {
+          convo.sessionId = d._sessionId;
+          persistConversation(convo);
+        }
       }
-      if(d.subtype==='done' && convoId) finishProcessing(convoId);
+      // Stale session: server is retrying fresh, clear the old sessionId
+      if(d.subtype==='info' && d.content && convoId) {
+        const convo = conversations.find(c => c.id === convoId);
+        if(convo && convo.sessionId) {
+          convo.sessionId = null;
+          persistConversation(convo);
+        }
+        addSystemMsgToConvo(d.content, convoId, false);
+      }
+      // Only finish if this done event is from the currently active process
+      if(d.subtype==='done' && convoId) {
+        const state = getConvoState(convoId);
+        if(!d._processId || !state.activeProcessId || d._processId === state.activeProcessId) {
+          finishProcessing(convoId);
+        }
+      }
+      break;
+    case 'stream_event':
+      if(convoId && !isStaleProcess(d, convoId)) handleStreamEvent(d, convoId);
       break;
     case 'assistant':
-      if(convoId) handleAssistant(d, convoId);
+      if(convoId && !isStaleProcess(d, convoId)) handleAssistant(d, convoId);
       break;
     case 'result':
-      if(convoId) handleResult(d, convoId);
+      if(convoId && !isStaleProcess(d, convoId)) handleResult(d, convoId);
       break;
     case 'file_tree': cachedFileTree = d.tree; renderFileTree(d.tree); break;
     case 'file_content': loadFileContent(d.path, d.content); break;
     case 'file_saved': document.getElementById('editor-status').textContent='Saved'; break;
+    case 'agent_saved':
+      addSystemMsg('Agent "' + (d.agentId || '') + '" created');
+      break;
+    case 'agent_error':
+      addSystemMsg(d.message || 'Agent operation failed');
+      break;
+    case 'agent_deleted':
+      addSystemMsg('Agent "' + (d.agentId || '') + '" removed');
+      break;
+    case 'active_processes':
+      // Defer until workspace is ready and conversations are loaded
+      pendingActiveProcesses = d.processes || [];
+      break;
+    case 'control_request':
+      if(convoId) handlePermissionRequest(d, convoId);
+      break;
     case 'error': if(!d.content?.includes('no stdin')) addSystemMsgToConvo(d.content, convoId); break;
   }
 }
 function getConvoState(convoId) {
-  if(!convoState[convoId]) convoState[convoId] = { isProcessing: false, currentStreamingMsg: null, latestText: '', latestAgentId: null };
+  if(!convoState[convoId]) convoState[convoId] = { isProcessing: false, currentStreamingMsg: null, latestText: '', latestAgentId: null, activeProcessId: null };
   return convoState[convoId];
+}
+function isStaleProcess(d, convoId) {
+  if(!d._processId) return false;
+  const state = getConvoState(convoId);
+  return state.activeProcessId && d._processId !== state.activeProcessId;
+}
+
+function handleStreamEvent(d, convoId) {
+  const evt = d.event; if(!evt) return;
+  const state = getConvoState(convoId);
+  const isActive = activeConversation?.id === convoId;
+  if(!isActive) return;
+
+  // Text streaming: render deltas in real-time
+  if(evt.type === 'content_block_delta' && evt.delta?.type === 'text_delta' && evt.delta.text) {
+    const text = evt.delta.text;
+
+    // Create streaming message bubble if it doesn't exist yet
+    if(!state.currentStreamingMsg) {
+      // Remove thinking indicator, replace with streaming bubble
+      const t = document.getElementById('thinking-indicator'); if(t) t.remove();
+      const agentId = d._agent || state.latestAgentId;
+      const a = agents.find(x => x.id === agentId) || activeConversation?.agent || agents[0];
+      const m = document.getElementById('messages'), el = document.createElement('div');
+      el.className = 'msg msg-agent';
+      el.innerHTML = `<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.displayName||'Agent'}<span class="msg-time">${new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></div><div class="msg-bubble"><span class="streaming-text"></span></div>`;
+      m.appendChild(el);
+      state.currentStreamingMsg = el;
+      state.streamingRawText = '';
+    }
+
+    state.streamingRawText += text;
+    const streamEl = state.currentStreamingMsg.querySelector('.streaming-text');
+    if(streamEl) streamEl.innerHTML = formatMd(state.streamingRawText);
+    scrollBottom();
+  }
+
+  // Tool use: show thinking indicator with tool name (even if streaming already started)
+  if(evt.type === 'content_block_start' && evt.content_block?.type === 'tool_use') {
+    const toolName = evt.content_block.name || '';
+    let status = document.getElementById('thinking-status');
+    if(!status) {
+      // Thinking indicator was removed when streaming started; re-add it below the streaming message
+      const agentId = d._agent || state.latestAgentId;
+      const a = agents.find(x => x.id === agentId) || activeConversation?.agent || agents[0];
+      const m = document.getElementById('messages'), el = document.createElement('div');
+      el.className = 'msg msg-agent'; el.id = 'thinking-indicator';
+      el.innerHTML = `<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.displayName||'Agent'}</div><div class="msg-bubble thinking-bubble"><div class="thinking-pulse" style="background:${a?.colour||'var(--accent)'}"></div><div><div class="thinking-label">Thinking</div><div class="thinking-status" id="thinking-status"></div></div></div>`;
+      m.appendChild(el);
+      scrollBottom();
+      status = el.querySelector('#thinking-status');
+    }
+    if(status) status.textContent = formatToolName(toolName);
+    // Refresh file tree when file-writing tools are used (with delay for disk flush)
+    if(/^(Write|Edit|Bash|NotebookEdit)/.test(toolName)) {
+      setTimeout(() => {
+        if(ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'get_files' }));
+      }, 1000);
+    }
+  }
 }
 
 function handleAssistant(d, convoId) {
@@ -148,22 +254,97 @@ function handleResult(d, convoId) {
   const convo = conversations.find(c => c.id === convoId);
   const agentId = d._agent || state.latestAgentId;
 
-  if(d.result && convo) {
-    convo.messages.push({role:'agent', content:d.result, agentId});
+  try {
+  // Detect agent definitions in the response and route to server for creation.
+  // Primary: RUNDOCK:CREATE_AGENT markers. Fallback: raw YAML frontmatter blocks.
+  const textToScan = d.result || state.streamingRawText || state.latestText || '';
+  if(textToScan && ws) {
+    let agentsCreated = 0;
+
+    // Primary: explicit markers
+    const markerPattern = /<!-- RUNDOCK:CREATE_AGENT name=([\w-]+) -->\n```[^\n]*\n([\s\S]*?)```\n<!-- \/RUNDOCK:CREATE_AGENT -->/g;
+    let match;
+    while((match = markerPattern.exec(textToScan)) !== null) {
+      ws.send(JSON.stringify({ type: 'create_agent', name: match[1], content: match[2].trim() }));
+      agentsCreated++;
+    }
+
+    // Fallback: detect raw YAML frontmatter blocks with agent fields (name + type)
+    // This handles cases where the LLM outputs agent files without the marker wrapper
+    if(agentsCreated === 0) {
+      const fmPattern = /```[^\n]*\n(---\n[\s\S]*?\n---[\s\S]*?)```/g;
+      let fmMatch;
+      while((fmMatch = fmPattern.exec(textToScan)) !== null) {
+        const block = fmMatch[1].trim();
+        const nameMatch = block.match(/^name:\s*(.+)$/m);
+        const typeMatch = block.match(/^type:\s*(orchestrator|specialist)$/m);
+        if(nameMatch && typeMatch) {
+          const slug = nameMatch[1].trim();
+          ws.send(JSON.stringify({ type: 'create_agent', name: slug, content: block }));
+          agentsCreated++;
+          console.log('[Agent] Fallback extraction:', slug);
+        }
+      }
+      // Also try without code fences (raw frontmatter separated by ---)
+      if(agentsCreated === 0) {
+        const rawBlocks = textToScan.split(/\n(?=---\nname:\s)/).filter(b => b.trim().startsWith('---'));
+        for(const block of rawBlocks) {
+          const nameMatch = block.match(/^name:\s*(.+)$/m);
+          const typeMatch = block.match(/^type:\s*(orchestrator|specialist)$/m);
+          if(nameMatch && typeMatch) {
+            const slug = nameMatch[1].trim();
+            // Extract just the frontmatter + body (stop at the next --- block or end)
+            const content = block.trim();
+            ws.send(JSON.stringify({ type: 'create_agent', name: slug, content }));
+            agentsCreated++;
+            console.log('[Agent] Raw frontmatter extraction:', slug);
+          }
+        }
+      }
+    }
+
+    if(agentsCreated > 0) {
+      console.log('[Agent] Created', agentsCreated, 'agents');
+      setTimeout(() => {
+        if(ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'get_agents' }));
+          ws.send(JSON.stringify({ type: 'get_skills' }));
+        }
+      }, 500);
+    }
+  }
+
+  // In stream-json mode, the response text arrives via stream_event deltas
+  // and is rendered in real-time. The 'result' message is a completion signal.
+  // Use streamed text if result field is empty (which it usually is in stream-json).
+  const responseText = d.result || state.streamingRawText || state.latestText || '';
+
+  if(responseText && convo) {
+    convo.messages.push({role:'agent', content: responseText, agentId});
   }
 
   if(isActive) {
     const t=document.getElementById('thinking-indicator'); if(t) t.remove();
-    if(d.result) addAgentMsg(d.result, agentId);
+    if(state.currentStreamingMsg) {
+      // Text was already streamed in real-time. Do a final re-render with complete markdown.
+      const streamEl = state.currentStreamingMsg.querySelector('.streaming-text');
+      if(streamEl && responseText) streamEl.innerHTML = formatMd(responseText);
+    } else if(responseText) {
+      // No streaming happened (e.g. very short response). Render now.
+      addAgentMsg(responseText, agentId);
+    }
   }
 
-  state.currentStreamingMsg=null; state.latestText=''; state.latestAgentId=null;
+  } catch(err) {
+    console.error('[handleResult] Error:', err);
+  }
+  state.currentStreamingMsg=null; state.streamingRawText=''; state.latestText=''; state.latestAgentId=null;
   finishProcessing(convoId);
   renderConvoList();
 }
 
-function addSystemMsgToConvo(text, convoId) {
-  if(!convoId || activeConversation?.id === convoId) addSystemMsg('Error: ' + text);
+function addSystemMsgToConvo(text, convoId, isError = true) {
+  if(!convoId || activeConversation?.id === convoId) addSystemMsg((isError ? 'Error: ' : '') + text);
 }
 
 // ===== 5. AGENT LIST & SIDEBAR =====
@@ -188,7 +369,7 @@ function renderAgentList() {
   } else if (platform.length) {
     const guide = platform[0];
     h += `<div class="sidebar-empty-state">
-      <div class="sidebar-empty-text">No agents yet</div>
+      <div class="sidebar-empty-text">No team agents yet. Doc can explore this workspace and create a team for you.</div>
       <button class="empty-cta" style="width:100%" onclick="startConversation('${guide.id}')">Talk to Doc</button>
     </div>`;
   }
@@ -261,10 +442,12 @@ function renderConvoEmptyAgents() {
     contentEl.innerHTML = h;
   } else {
     // Empty workspace: show Doc CTA
-    if (labelEl) { labelEl.textContent = 'No conversations yet'; labelEl.className = 'empty-title'; }
+    if (labelEl) { labelEl.textContent = 'No team agents yet'; labelEl.className = 'empty-title'; }
     const guide = platformAgents[0];
     contentEl.className = '';
-    contentEl.innerHTML = guide ? `<button class="empty-cta" style="margin-top:8px" onclick="startConversation('${guide.id}')">Talk to Doc</button>` : '';
+    contentEl.innerHTML = guide
+      ? `<div class="sidebar-empty-text" style="text-align:center;max-width:280px;margin:0 auto 8px">Doc can explore this workspace and set up your agent team.</div><button class="empty-cta" style="margin-top:4px" onclick="startConversation('${guide.id}')">Talk to Doc to get started</button>`
+      : '';
   }
 }
 
@@ -309,8 +492,9 @@ function renderOrgChart() {
   const platformAgents = getPlatformAgents();
   // Fallback for agents without type field (backward compat)
   const untyped = agents.filter(a => a.status === 'onTeam' && !a.type);
-  // Only consider non-platform agents for the org tree
-  const leader = orchestrator || agents.find(a => a.isDefault) || null;
+  // Only consider non-platform, Rundock-configured agents for the org tree.
+  // The synthetic default agent (from CLAUDE.md, no type field) doesn't count as a team.
+  const leader = orchestrator || agents.find(a => a.isDefault && a.type) || null;
   const team = specialists.length ? specialists : untyped.filter(a => a !== leader);
   const hasTeam = leader || team.length;
 
@@ -325,22 +509,53 @@ function renderOrgChart() {
     // Specialists
     if (team.length) {
       const midIndex = Math.floor(team.length / 2);
-      h += '<div class="org-trunk"></div><div class="org-branches">';
+      const hasTrunkBranch = team.length % 2 === 1;
+      h += `<div class="org-trunk${hasTrunkBranch ? ' trunk-hidden' : ''}"></div><div class="org-branches">`;
       team.forEach((a, i) => {
-        const isTrunk = (team.length % 2 === 1) && (i === midIndex);
+        const isTrunk = hasTrunkBranch && (i === midIndex);
         h += `<div class="org-branch${isTrunk ? ' trunk-branch' : ''}"><div class="org-branch-stem"></div><div class="org-card" onclick="showProfile('${a.id}')"><div class="avatar" style="background:${a.colour}">${a.icon}</div><div><div class="org-card-name">${a.displayName}</div><div class="org-card-role">${a.role || ''}</div></div></div></div>`;
       });
       h += '</div>';
     }
   } else {
-    // Empty workspace: show welcome message
     const guide = platformAgents[0];
-    h += '<div class="org-empty-state">';
-    h += '<div class="empty-title">Welcome to Rundock</div>';
-    if (guide) {
-      h += `<button class="empty-cta" style="margin-top:8px" onclick="startConversation('${guide.id}')">Talk to Doc</button>`;
+    const a = workspaceAnalysis;
+    const hasContext = a && (a.identity.sources.length > 0 || a.skills.total > 0);
+
+    if (hasContext && a) {
+      // Path B: Has context, no team. Show analysis card.
+      h += '<div class="org-empty-state">';
+      // Identity card
+      const name = a.identity.suggestedName || 'Your Workspace';
+      const tagline = a.identity.suggestedTagline || a.identity.suggestedRole || '';
+      h += `<div class="empty-title">${esc(name)}${tagline ? ': ' + esc(tagline) : ''}</div>`;
+      // Stats line
+      const stats = [];
+      if (a.skills.total > 0) stats.push(`${a.skills.total} skills`);
+      if (a.structure.pattern !== 'unknown') {
+        const acronyms = new Set(['para']);
+        const patternLabel = a.structure.pattern.split('-').map(w => acronyms.has(w.toLowerCase()) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+        stats.push(patternLabel + ' structure');
+      }
+      const integrationCount = a.integrations.mcpReferences.length + a.integrations.configuredServers.length + a.integrations.mentionedTools.length;
+      if (integrationCount > 0) stats.push(`${integrationCount} integrations`);
+      if (stats.length) h += `<div style="color:var(--text-2);font-size:var(--caption);margin-bottom:16px">${stats.join(' &middot; ')}</div>`;
+      // Action card
+      h += '<div style="color:var(--text-2);font-size:var(--body);max-width:320px;text-align:center;line-height:1.6">Doc can create your agent team based on what\'s here. Skills will be automatically grouped and assigned.</div>';
+      if (guide) {
+        h += `<button class="empty-cta" style="margin-top:12px" onclick="startSetupConversation()">Set up your team</button>`;
+      }
+      h += '</div>';
+    } else {
+      // Path C: Empty or raw workspace.
+      h += '<div class="org-empty-state">';
+      h += '<div class="empty-title">Welcome to Rundock</div>';
+      h += '<div class="sidebar-empty-text" style="text-align:center;max-width:320px">Fresh workspace. Doc can help you set up your agent team from scratch.</div>';
+      if (guide) {
+        h += `<button class="empty-cta" style="margin-top:4px" onclick="startConversation('${guide.id}')">Talk to Doc to get started</button>`;
+      }
+      h += '</div>';
     }
-    h += '</div>';
   }
 
   // Platform section (inside .org-tree so it scales together)
@@ -358,7 +573,22 @@ function renderOrgChart() {
   h += '</div>'; // close .org-tree
 
   document.getElementById('org-chart').innerHTML = h;
+  requestAnimationFrame(scaleOrgTree);
 }
+
+function scaleOrgTree() {
+  const chart = document.getElementById('org-chart');
+  const tree = chart?.querySelector('.org-tree');
+  if (!tree) return;
+  tree.style.transform = 'none';
+  const chartW = chart.clientWidth - 96; // padding + breathing room
+  const treeW = tree.scrollWidth;
+  if (treeW > chartW && chartW > 0) {
+    const s = Math.max(0.55, chartW / treeW);
+    tree.style.transform = `scale(${s})`;
+  }
+}
+window.addEventListener('resize', scaleOrgTree);
 
 // ===== 7. AGENT PROFILE =====
 
@@ -442,13 +672,80 @@ function showProfile(agentId) {
 
 // ===== 8. CONVERSATIONS =====
 
+// Persist conversation metadata to server (never message content)
+function persistConversation(convo) {
+  if (!ws || !convo) return;
+  ws.send(JSON.stringify({
+    type: 'save_conversation',
+    conversation: {
+      id: convo.id,
+      agentId: convo.agentId,
+      sessionId: convo.sessionId || null,
+      title: convo.title,
+      status: convo.status,
+      createdAt: convo.createdAt || new Date().toISOString()
+    }
+  }));
+}
+
+// Merge persisted conversations with in-memory list on workspace load
+function handlePersistedConversations(persisted) {
+  if (!persisted || !Array.isArray(persisted)) return;
+  for (const entry of persisted) {
+    // Skip if already in memory (from current session)
+    if (conversations.find(c => c.id === entry.id)) continue;
+    // Resolve agent object (may have been deleted)
+    const agent = agents.find(a => a.id === entry.agentId);
+    conversations.push({
+      id: entry.id,
+      agentId: entry.agentId,
+      agent: agent || { id: entry.agentId, displayName: entry.agentId, colour: 'var(--text-3)', icon: '?', prompts: [] },
+      title: entry.title || 'Untitled',
+      messages: [],  // No message content persisted; resume via sessionId
+      status: entry.status || 'done',
+      sessionId: entry.sessionId || null,
+      createdAt: entry.createdAt,
+      lastActiveAt: entry.lastActiveAt,
+      persisted: true  // Flag: this was loaded from disk, has no in-memory messages
+    });
+  }
+  renderConvoList();
+
+  // Now that conversations are loaded, reconcile any active processes from a reconnect.
+  // Always run this, even if active_processes was empty or never received, to clean stale state.
+  handleActiveProcesses(pendingActiveProcesses || []);
+  pendingActiveProcesses = null;
+
+  // Auto-navigate to the conversation that's still processing
+  const processing = conversations.find(c => getConvoState(c.id).isProcessing);
+  if (processing) {
+    openConversation(processing.id);
+    switchNav('conversations');
+  }
+
+  // Request buffered messages now that conversations and state are ready
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'flush_buffer' }));
+  }
+}
+
+function createConversation(agentId, title) {
+  const agent = agents.find(a => a.id === agentId) || agents[0];
+  const convo = { id: Date.now().toString(), agentId: agent.id, agent, title: title || `Chat with ${agent.displayName}`, messages: [], status: 'active', createdAt: new Date().toISOString() };
+  conversations.unshift(convo);
+  activeConversation = convo;
+  persistConversation(convo);
+  renderConvoList();
+  setupChat(convo);
+  document.getElementById('messages').innerHTML = '';
+  switchNav('conversations');
+  showView('chat');
+  return convo;
+}
+
 function startConversation(agentId) {
-  const agent=agents.find(a=>a.id===agentId)||agents[0];
-  const convo={id:Date.now().toString(),agentId:agent.id,agent,title:`Chat with ${agent.displayName}`,messages:[],status:'active'};
-  conversations.unshift(convo); activeConversation=convo;
-  renderConvoList(); setupChat(convo);
-  const messagesEl=document.getElementById('messages');
-  messagesEl.innerHTML='';
+  const convo = createConversation(agentId);
+  const agent = convo.agent;
   // Show prompt pills if agent has prompts
   if(agent.prompts && agent.prompts.length) {
     let h=`<div id="chat-prompts" class="chat-prompts">`;
@@ -459,10 +756,92 @@ function startConversation(agentId) {
       h+=`<button class="prompt-pill" data-prompt="${escAttr(p)}">${esc(p)}</button>`;
     }
     h+=`</div></div>`;
-    messagesEl.innerHTML=h;
+    document.getElementById('messages').innerHTML=h;
   }
-  showView('chat');
 }
+
+// Path B: Start a Doc conversation with workspace analysis pre-loaded
+function startSetupConversation() {
+  const guide = agents.find(a => a.type === 'platform');
+  if (!guide || !workspaceAnalysis) { startConversation(guide?.id || 'default'); return; }
+  const a = workspaceAnalysis;
+
+  // Build the analysis block
+  let block = '[WORKSPACE_ANALYSIS]\n';
+  // Identity
+  const readme = a.identity.sources.find(s => s.file === 'README.md');
+  const claude = a.identity.sources.find(s => s.file === 'CLAUDE.md');
+  if (readme) block += `Identity: ${a.identity.suggestedName || 'Unknown'} -- "${a.identity.suggestedTagline || a.identity.suggestedRole || ''}" (README.md)\n`;
+  if (claude?.identity) block += `Technical identity: "${claude.identity}" (CLAUDE.md)\n`;
+  // Skills
+  if (a.skills.total > 0) {
+    block += `Skills: ${a.skills.total} found, grouped as:\n`;
+    for (const g of a.skills.groups) {
+      const note = g.label === 'System & Setup' ? ' (assign to orchestrator or exclude)' : '';
+      block += `  - ${g.label}: ${g.slugs.join(', ')}${note}\n`;
+    }
+  } else {
+    block += 'Skills: none found\n';
+  }
+  // Integrations (deduplicated, case-insensitive)
+  const seen = new Set();
+  const allIntegrations = [
+    ...a.integrations.mcpReferences.map(m => m.name),
+    ...a.integrations.configuredServers,
+    ...a.integrations.mentionedTools
+  ].filter(name => {
+    const key = name.toLowerCase().replace(/\s+mcp$/i, '');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  if (allIntegrations.length) block += `Integrations: ${allIntegrations.join(', ')}\n`;
+  // Structure
+  if (a.structure.pattern !== 'unknown') {
+    block += `Structure: ${a.structure.pattern} (${a.structure.topLevelDirs.join(', ')})\n`;
+    const paths = Object.entries(a.structure.keyPaths).map(([k,v]) => `${k}=${v}`);
+    if (paths.length) block += `Key paths: ${paths.join(', ')}\n`;
+  }
+  // User profile
+  if (a.userProfile.exists) {
+    block += a.userProfile.populated
+      ? `User profile: ${a.userProfile.fields.name || 'unknown'}, ${a.userProfile.fields.role || 'unknown role'}\n`
+      : 'User profile: exists but not populated\n';
+  }
+  // Hooks
+  if (a.hooks.contextHooks.length) block += `Hooks: context injection (${a.hooks.contextHooks.map(h => h.name).join(', ')})\n`;
+  if (a.hooks.soundHooks.length) block += `Sound hooks: ${a.hooks.soundHooks.length} (auto-muted for Rundock)\n`;
+  // Agents
+  const nonPlatform = a.agents.list.filter(ag => ag.type !== 'platform');
+  if (nonPlatform.length) {
+    block += `Existing agents: ${nonPlatform.map(ag => `${ag.displayName} (${ag.status})`).join(', ')}\n`;
+  } else {
+    block += 'Existing agents: none (Doc only)\n';
+  }
+  block += '[/WORKSPACE_ANALYSIS]\n\n';
+  block += 'Propose an agent team for this workspace. Do NOT create agents yet. Show me the team plan first, then I will confirm.';
+
+  // Start conversation with custom title
+  const convo = createConversation(guide.id, `${a.identity.suggestedName || 'Workspace'} Team Setup`);
+
+  // Show a system-level status line (not a user or agent message)
+  const summaryParts = [];
+  if (a.identity.suggestedName) summaryParts.push(a.identity.suggestedName + (a.identity.suggestedTagline ? ': ' + a.identity.suggestedTagline : ''));
+  if (a.skills.total > 0) summaryParts.push(`${a.skills.total} skills in ${a.skills.groups.length} groups`);
+  const integrationCount = a.integrations.mcpReferences.length + a.integrations.configuredServers.length + a.integrations.mentionedTools.length;
+  if (integrationCount > 0) summaryParts.push(`${integrationCount} integrations`);
+  addSystemMsg(summaryParts.length ? 'Analysing workspace: ' + summaryParts.join(' · ') : 'Setting up your agent team...');
+  // Store as 'system' role so it won't replay as a user bubble if conversation re-renders
+  convo.messages.push({ role: 'system', content: block });
+
+  // Send the full analysis to Doc (but don't display it)
+  startProcessing(convo.id);
+  const chatMsg = { type: 'chat', content: block, agent: convo.agentId, conversationId: convo.id };
+  if (convo.sessionId) chatMsg.sessionId = convo.sessionId;
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(chatMsg));
+  persistConversation(convo);
+}
+
 function sendPrompt(text) {
   const el=document.getElementById('chat-prompts'); if(el) el.remove();
   document.getElementById('msg-input').value=text;
@@ -501,6 +880,7 @@ function setupChat(convo) {
 function renameConversation(newTitle) {
   if(activeConversation && newTitle.trim()) {
     activeConversation.title=newTitle.trim();
+    persistConversation(activeConversation);
     renderConvoList();
   }
 }
@@ -510,43 +890,61 @@ function toggleConvoStatus() {
   const statusEl=document.getElementById('chat-convo-status');
   statusEl.textContent=activeConversation.status==='done'?'Done':'Active';
   statusEl.className=`chat-convo-status ${activeConversation.status==='done'?'done-convo':'active-convo'}`;
+  persistConversation(activeConversation);
   renderConvoList();
 }
 function renderConvoList() {
-  const active=conversations.filter(c=>c.status!=='done');
-  const done=conversations.filter(c=>c.status==='done');
-  let h='';
-  if(!active.length && !done.length) {
+  // Current session conversations (have in-memory messages)
+  const current = conversations.filter(c => c.status !== 'done' && !c.persisted);
+  // Previous sessions (persisted from disk, no in-memory messages)
+  const previous = conversations.filter(c => c.persisted && c.status !== 'done');
+  const done = conversations.filter(c => c.status === 'done');
+  let h = '';
+  if (!current.length && !previous.length && !done.length) {
     h = `<div style="padding:12px 16px">
       <div style="color:var(--text-2);font-size:var(--caption);line-height:1.6">No conversations yet</div>
     </div>`;
   }
-  if(active.length) {
-    for(const c of active) {
-      const lastMsg=c.messages.filter(m=>m.role==='agent').pop();
-      const preview=lastMsg?stripMd(lastMsg.content).substring(0,60)+'...':'No messages yet';
-      h+=`<div class="convo-item ${activeConversation?.id===c.id?'active':''}" onclick="openConversation('${c.id}')">
+  if (current.length) {
+    for (const c of current) {
+      const lastMsg = c.messages.filter(m => m.role === 'agent').pop();
+      const preview = lastMsg ? stripMd(lastMsg.content).substring(0, 60) + '...' : 'No messages yet';
+      h += `<div class="convo-item ${activeConversation?.id === c.id ? 'active' : ''}" onclick="openConversation('${c.id}')">
         <span class="convo-title">${esc(c.title)}</span>
         <span class="convo-preview">${esc(preview)}</span>
         <div class="convo-meta"><div class="avatar xs" style="background:${c.agent.colour}">${c.agent.icon}</div><span>${c.agent.displayName}</span></div>
       </div>`;
     }
   }
-  if(done.length) {
-    h+=`<div style="padding:12px 8px 6px"><span class="sidebar-label" style="cursor:pointer" onclick="document.getElementById('done-convos').classList.toggle('hidden')">Done (${done.length}) &#x25BE;</span></div>`;
-    h+=`<div id="done-convos" class="hidden">`;
-    for(const c of done) {
-      const lastMsg=c.messages.filter(m=>m.role==='agent').pop();
-      const preview=lastMsg?stripMd(lastMsg.content).substring(0,50)+'...':'';
-      h+=`<div class="convo-item ${activeConversation?.id===c.id?'active':''}" onclick="openConversation('${c.id}')" style="opacity:0.7">
+  if (previous.length) {
+    h += `<div style="padding:12px 8px 6px"><span class="sidebar-label" style="cursor:pointer" onclick="document.getElementById('prev-convos').classList.toggle('hidden')">Previous (${previous.length}) &#x25BE;</span></div>`;
+    h += `<div id="prev-convos" class="hidden">`;
+    for (const c of previous) {
+      const agentGone = !agents.find(a => a.id === c.agentId);
+      const opacity = agentGone ? 'opacity:0.5' : 'opacity:0.8';
+      const suffix = agentGone ? ' (agent removed)' : '';
+      h += `<div class="convo-item ${activeConversation?.id === c.id ? 'active' : ''}" onclick="openConversation('${c.id}')" style="${opacity}">
+        <span class="convo-title">${esc(c.title)}${suffix}</span>
+        <div class="convo-meta"><div class="avatar xs" style="background:${c.agent.colour}">${c.agent.icon}</div><span>${c.agent.displayName}</span></div>
+      </div>`;
+    }
+    h += `</div>`;
+  }
+  if (done.length) {
+    h += `<div style="padding:12px 8px 6px"><span class="sidebar-label" style="cursor:pointer" onclick="document.getElementById('done-convos').classList.toggle('hidden')">Done (${done.length}) &#x25BE;</span></div>`;
+    h += `<div id="done-convos" class="hidden">`;
+    for (const c of done) {
+      const lastMsg = c.messages.filter(m => m.role === 'agent').pop();
+      const preview = lastMsg ? stripMd(lastMsg.content).substring(0, 50) + '...' : '';
+      h += `<div class="convo-item ${activeConversation?.id === c.id ? 'active' : ''}" onclick="openConversation('${c.id}')" style="opacity:0.7">
         <span class="convo-title">${esc(c.title)}</span>
         <span class="convo-preview">${esc(preview)}</span>
         <div class="convo-meta"><div class="avatar xs" style="background:${c.agent.colour}">${c.agent.icon}</div><span>${c.agent.displayName}</span></div>
       </div>`;
     }
-    h+=`</div>`;
+    h += `</div>`;
   }
-  document.getElementById('convo-list').innerHTML=h;
+  document.getElementById('convo-list').innerHTML = h;
 }
 function openConversation(id) {
   const c=conversations.find(x=>x.id===id); if(!c) return;
@@ -554,16 +952,43 @@ function openConversation(id) {
   if(c.status==='done') { c.status='active'; }
   setupChat(c);
   const el=document.getElementById('messages'); el.innerHTML='';
-  for(const m of c.messages) { if(m.role==='user') addUserMsg(m.content,false); else if(m.role==='agent') addAgentMsg(m.content,m.agentId,false); }
+  if(c.persisted && c.messages.length===0) {
+    // Persisted conversation from a previous session: show resume divider
+    el.innerHTML=`<div style="display:flex;align-items:center;gap:8px;padding:16px 0;color:var(--text-3);font-size:var(--caption)">
+      <div style="flex:1;height:1px;background:var(--border)"></div>
+      <span>Previous session${c.sessionId ? ' (will resume)' : ''}</span>
+      <div style="flex:1;height:1px;background:var(--border)"></div>
+    </div>`;
+    // Clear persisted flag: this conversation is now active in current session
+    c.persisted = false;
+    c.status = 'active';
+    persistConversation(c);
+    renderConvoList();
+  } else {
+    for(const m of c.messages) { if(m.role==='user') addUserMsg(m.content,false); else if(m.role==='agent') addAgentMsg(m.content,m.agentId,false); }
+  }
   // Restore processing state if this conversation is still working
   const state = getConvoState(id);
   if(state.isProcessing) {
     document.getElementById('chat-status').textContent='· working...'; document.getElementById('chat-status').classList.add('working');
     document.getElementById('send-btn').disabled=true; document.getElementById('msg-input').disabled=true;
     const a=c.agent;
-    const m2=document.getElementById('messages'),d=document.createElement('div'); d.className='msg msg-agent'; d.id='thinking-indicator';
-    d.innerHTML=`<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.displayName||'Agent'}</div><div class="msg-bubble thinking-bubble"><div class="thinking-pulse" style="background:${a?.colour||'var(--accent)'}"></div><div><div class="thinking-label">Thinking</div><div class="thinking-status" id="thinking-status"></div></div></div>`;
-    m2.appendChild(d);
+    const m2=document.getElementById('messages');
+    // Render any response text accumulated on the server before we reconnected
+    if(state.streamingRawText) {
+      const el = document.createElement('div');
+      el.className = 'msg msg-agent';
+      el.innerHTML = `<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.displayName||'Agent'}<span class="msg-time">${new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></div><div class="msg-bubble"><span class="streaming-text">${formatMd(state.streamingRawText)}</span></div>`;
+      m2.appendChild(el);
+      state.currentStreamingMsg = el;
+    }
+    // Show thinking indicator only if no text has been streamed yet.
+    // If we have snapshot text, the stream is active and the bubble is unnecessary.
+    if(!state.streamingRawText) {
+      const d=document.createElement('div'); d.className='msg msg-agent'; d.id='thinking-indicator';
+      d.innerHTML=`<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.displayName||'Agent'}</div><div class="msg-bubble thinking-bubble"><div class="thinking-pulse" style="background:${a?.colour||'var(--accent)'}"></div><div><div class="thinking-label">Thinking</div><div class="thinking-status" id="thinking-status"></div></div></div>`;
+      m2.appendChild(d);
+    }
   } else {
     document.getElementById('chat-status').textContent=''; document.getElementById('chat-status').classList.remove('working');
     document.getElementById('send-btn').disabled=false;
@@ -575,19 +1000,33 @@ function openConversation(id) {
 
 // ===== 9. CHAT & MESSAGING =====
 
+// Core send helper: pushes a message to server, updates UI, persists metadata
+function dispatchMessage(convo, text) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  addUserMsg(text);
+  convo.messages.push({ role: 'user', content: text });
+  // Promote from "Previous" to current session when user sends a message
+  if (convo.persisted) {
+    convo.persisted = false;
+    convo.status = 'active';
+    renderConvoList();
+  }
+  startProcessing(convo.id);
+  const chatMsg = { type: 'chat', content: text, agent: convo.agentId, conversationId: convo.id };
+  if (convo.sessionId) chatMsg.sessionId = convo.sessionId;
+  ws.send(JSON.stringify(chatMsg));
+  persistConversation(convo);
+}
+
 function sendMessage() {
   const input=document.getElementById('msg-input'),text=input.value.trim();
   if(!activeConversation||!ws) return;
   const state = getConvoState(activeConversation.id);
   if(!text||state.isProcessing) return;
   const promptsEl=document.getElementById('chat-prompts'); if(promptsEl) promptsEl.remove();
-  addUserMsg(text); activeConversation.messages.push({role:'user',content:text});
-  if(activeConversation.messages.filter(m=>m.role==='user').length===1) { activeConversation.title=text.substring(0,50)+(text.length>50?'...':''); document.getElementById('chat-title-input').value=activeConversation.title; renderConvoList(); }
-  input.value=''; input.style.height='44px'; document.getElementById('send-btn').classList.remove('active'); startProcessing(activeConversation.id);
-  const chatMsg = {type:'chat', content:text, agent:activeConversation.agentId, conversationId:activeConversation.id};
-  // Include session ID for resume if this isn't the first message
-  if(activeConversation.sessionId) chatMsg.sessionId = activeConversation.sessionId;
-  ws.send(JSON.stringify(chatMsg));
+  if(activeConversation.messages.filter(m=>m.role==='user').length===0) { activeConversation.title=text.substring(0,50)+(text.length>50?'...':''); document.getElementById('chat-title-input').value=activeConversation.title; renderConvoList(); }
+  input.value=''; input.style.height='44px'; document.getElementById('send-btn').classList.remove('active');
+  dispatchMessage(activeConversation, text);
 }
 function startProcessing(convoId) {
   const state = getConvoState(convoId);
@@ -623,6 +1062,62 @@ function finishProcessing(convoId) {
     const s=document.querySelector(`[data-status="${convo.agentId}"]`);
     if(s){s.textContent=formatTimeAgo(new Date());s.classList.remove('working');}
   }
+  // Refresh file tree after a short delay to let file writes flush to disk
+  setTimeout(() => {
+    if(ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'get_files' }));
+    }
+  }, 500);
+}
+
+// Restore processing state after WebSocket reconnect.
+// Server sends active_processes with all running Claude processes.
+function handleActiveProcesses(active) {
+  const activeConvoIds = new Set(active.map(p => p.conversationId));
+
+  // Restore thinking indicators for conversations that are still processing
+  for (const proc of active) {
+    const convo = conversations.find(c => c.id === proc.conversationId);
+    const state = getConvoState(proc.conversationId);
+    if (!state.isProcessing && convo) {
+      state.activeProcessId = proc.processId;
+      state.isProcessing = true;
+      // Restore any response text accumulated on the server while we were disconnected
+      if (proc.responseText) {
+        state.streamingRawText = proc.responseText;
+      }
+      // If this conversation is already visible, show the thinking indicator immediately.
+      // Otherwise, openConversation will pick up state.isProcessing when the user navigates to it.
+      if (activeConversation?.id === proc.conversationId) {
+        startProcessing(proc.conversationId);
+      }
+      console.log(`[Reconnect] Restored processing for convo=${proc.conversationId}`);
+    }
+  }
+
+  // Finish any conversations that the client thought were processing but the server has no process for
+  for (const [convoId, state] of Object.entries(convoState)) {
+    if (state.isProcessing && !activeConvoIds.has(convoId)) {
+      // If we have accumulated response text, save it as a message before clearing
+      const convo = conversations.find(c => c.id === convoId);
+      if (state.streamingRawText && convo) {
+        convo.messages.push({ role: 'agent', content: state.streamingRawText, agentId: convo.agentId });
+        // If this conversation is visible, render the text (without thinking bubble)
+        if (activeConversation?.id === convoId) {
+          const existingStream = state.currentStreamingMsg;
+          if (existingStream) {
+            const streamEl = existingStream.querySelector('.streaming-text');
+            if (streamEl) streamEl.innerHTML = formatMd(state.streamingRawText);
+          } else {
+            addAgentMsg(state.streamingRawText, convo.agentId, false);
+          }
+        }
+      }
+      state.streamingRawText = '';
+      finishProcessing(convoId);
+      console.log(`[Reconnect] Cleared stale processing for convo=${convoId}`);
+    }
+  }
 }
 
 // Tick agent timestamps every 60 seconds without re-rendering
@@ -645,6 +1140,184 @@ function addAgentMsg(text,agentId,anim=true) {
 function addUserMsg(text,anim=true) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg msg-user'; if(!anim)d.style.animation='none'; d.innerHTML=`<div class="msg-bubble">${esc(text)}</div>`; m.appendChild(d); scrollBottom(); }
 function addSystemMsg(text) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg-system'; d.textContent=text; m.appendChild(d); scrollBottom(); }
 function addToolMsg(name) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg-tool'; d.innerHTML=`<span style="color:var(--working)">&#x2192;</span> Using ${esc(name)}`; m.appendChild(d); scrollBottom(); return d; }
+// ===== PERMISSION UI =====
+
+// Session-level "always allow" patterns
+const alwaysAllowedTools = new Set();
+// Pending permission callbacks (avoids inline onclick injection)
+const pendingPermissions = new Map();
+
+const BASH_DESCRIPTIONS = {
+  ls: 'List directory contents', cat: 'Read file contents', head: 'Read start of file',
+  tail: 'Read end of file', grep: 'Search file contents', rg: 'Search file contents',
+  find: 'Find files', echo: 'Print text', pwd: 'Show current directory',
+  mkdir: 'Create directory', cp: 'Copy files', mv: 'Move or rename files',
+  rm: 'Delete files', npm: 'Run npm', node: 'Run JavaScript', python: 'Run Python',
+  python3: 'Run Python', pip: 'Install Python packages', git: 'Run git command',
+  curl: 'Make HTTP request', wget: 'Download file', chmod: 'Change permissions',
+  sudo: 'Run as superuser'
+};
+
+function bashBin(cmd) { return cmd.split(/\s+/)[0].replace(/^.*\//, ''); }
+
+// Classify risk level of a tool request
+function classifyRisk(toolName, input) {
+  if (toolName === 'Bash') {
+    const cmd = (input.command || '').trim();
+    const highRisk = /^(rm|sudo|chmod|chown|kill|mkfs|dd|curl\s.*\|\s*sh|wget\s.*\|\s*sh)/.test(cmd)
+      || /--force|--hard|-rf\b/.test(cmd)
+      || /git\s+(push|reset|clean|checkout\s+\.)/.test(cmd);
+    if (highRisk) return 'high';
+    const lowRisk = /^(ls|cat|head|tail|echo|pwd|whoami|which|grep|rg|find|wc|sort|uniq|diff|file|stat|date|env|printenv|node\s+-e|python3?\s+-c)/.test(cmd);
+    if (lowRisk) return 'low';
+    return 'medium';
+  }
+  return 'medium';
+}
+
+// Build human-readable summary and context for a tool request
+function describeToolRequest(toolName, input) {
+  let summary = '';
+  let context = '';
+  let detail = '';
+
+  if (toolName === 'Bash') {
+    const cmd = (input.command || '').trim();
+    detail = cmd;
+    const bin = bashBin(cmd);
+    summary = BASH_DESCRIPTIONS[bin] || `Run ${bin}`;
+    if (bin === 'rm') context = 'This will permanently delete files';
+    else if (bin === 'sudo') context = 'This runs with elevated privileges';
+    else if (/git\s+push/.test(cmd)) context = 'This will push changes to a remote repository';
+    else if (/git\s+reset\s+--hard/.test(cmd)) context = 'This will discard uncommitted changes';
+    else if (bin === 'npm' && /install/.test(cmd)) context = 'This will install packages and modify node_modules';
+  } else if (toolName === 'Write') {
+    summary = 'Create a file';
+    detail = input.file_path || '';
+  } else if (toolName === 'Edit') {
+    summary = 'Edit a file';
+    detail = input.file_path || '';
+  } else if (toolName === 'Read') {
+    summary = 'Read a file';
+    detail = input.file_path || '';
+  } else if (toolName.startsWith('mcp__')) {
+    const parts = toolName.split('__');
+    summary = `Use ${parts[1] || 'connector'}`;
+    detail = parts[2] || '';
+  } else {
+    summary = `Use ${toolName}`;
+    detail = JSON.stringify(input).substring(0, 200);
+  }
+  return { summary, context, detail };
+}
+
+// Key for always-allow matching
+function toolAllowKey(toolName, input) {
+  if (toolName === 'Bash') {
+    return 'Bash:' + bashBin((input.command || '').trim());
+  }
+  return toolName;
+}
+
+function handlePermissionRequest(d, convoId) {
+  const isActive = activeConversation?.id === convoId;
+  if (!isActive) return;
+
+  const req = d.request || {};
+  const requestId = d.request_id || '';
+  const toolName = req.tool_name || 'Unknown';
+  const input = req.input || {};
+  const risk = classifyRisk(toolName, input);
+  const { summary, context, detail } = describeToolRequest(toolName, input);
+  const key = toolAllowKey(toolName, input);
+
+  // Auto-allow if user previously chose "Always allow" for this pattern
+  if (alwaysAllowedTools.has(key)) {
+    if (ws) {
+      ws.send(JSON.stringify({ type: 'permission_response', requestId, conversationId: convoId, allow: true }));
+    }
+    return;
+  }
+
+  // Store callback data for safe event handling (no inline onclick injection)
+  pendingPermissions.set(requestId, { convoId, key });
+
+  const icons = {
+    low: '<svg class="permission-icon" width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5"/><path d="M6 8l1.5 1.5L10.5 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    medium: '<svg class="permission-icon" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1L1 4.5V8c0 3.5 3 6.5 7 7.5 4-1 7-4 7-7.5V4.5L8 1z" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M6 8l1.5 1.5L10.5 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    high: '<svg class="permission-icon" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1L1 4.5V8c0 3.5 3 6.5 7 7.5 4-1 7-4 7-7.5V4.5L8 1z" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M8 5v3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="10.75" r="0.75" fill="currentColor"/></svg>'
+  };
+
+  const m = document.getElementById('messages');
+  const card = document.createElement('div');
+  card.className = 'msg msg-permission';
+  card.id = 'perm-' + requestId;
+  card.innerHTML = `
+    <div class="permission-card risk-${risk}">
+      <div class="permission-header">
+        ${icons[risk]}
+        <span class="permission-summary">${esc(summary)}</span>
+      </div>
+      ${context ? `<div class="permission-context">${esc(context)}</div>` : ''}
+      <code class="permission-detail">${esc(detail)}</code>
+      <div class="permission-actions">
+        <button class="btn-perm btn-allow" data-perm-id="${esc(requestId)}" data-perm-action="allow">Allow</button>
+        ${risk !== 'high' ? `<button class="btn-perm btn-always" data-perm-id="${esc(requestId)}" data-perm-action="always">Always allow</button>` : ''}
+        <button class="btn-perm btn-deny" data-perm-id="${esc(requestId)}" data-perm-action="deny">Deny</button>
+      </div>
+    </div>
+  `;
+
+  // Attach event listeners safely (no inline onclick)
+  card.querySelectorAll('[data-perm-action]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const action = btn.dataset.permAction;
+      const id = btn.dataset.permId;
+      respondPermission(id, action === 'deny' ? false : true, action === 'always');
+    });
+  });
+
+  // Pause the thinking indicator while waiting for user decision
+  const t = document.getElementById('thinking-indicator');
+  if (t) t.style.display = 'none';
+
+  m.appendChild(card);
+  scrollBottom();
+}
+
+function respondPermission(requestId, allow, always) {
+  const pending = pendingPermissions.get(requestId);
+  if (!pending || !ws) return;
+  pendingPermissions.delete(requestId);
+
+  ws.send(JSON.stringify({
+    type: 'permission_response',
+    requestId: requestId,
+    conversationId: pending.convoId,
+    allow: allow
+  }));
+
+  // Store always-allow pattern if requested
+  if (allow && always) {
+    alwaysAllowedTools.add(pending.key);
+  }
+
+  // Replace the card with a resolved indicator
+  const card = document.getElementById('perm-' + requestId);
+  if (card) {
+    const summary = card.querySelector('.permission-summary')?.textContent || '';
+    const detail = card.querySelector('.permission-detail')?.textContent || '';
+    const label = allow ? (always ? '✓ Always' : '✓') : '✕';
+    card.innerHTML = `<div class="permission-resolved ${allow ? 'allowed' : 'denied'}">
+      <span>${label}</span> ${esc(summary)}${detail ? ': ' + esc(detail) : ''}
+    </div>`;
+  }
+
+  // Resume thinking indicator
+  const t = document.getElementById('thinking-indicator');
+  if (t) t.style.display = '';
+}
+
 function formatToolName(name) {
   const labels = {
     'Read': 'Reading files...', 'Glob': 'Searching files...', 'Grep': 'Searching content...',
@@ -701,7 +1374,7 @@ function renderFileTree(tree) {
     if(editorEmpty) editorEmpty.innerHTML=`
       <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" class="empty-icon"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
       <div class="empty-title">No files yet</div>
-      ${guide ? `<button class="empty-cta" style="margin-top:8px" onclick="switchNav('conversations');startConversation('${guide.id}')">Talk to Doc</button>` : ''}`;
+      ${guide ? `<button class="empty-cta" style="margin-top:8px" onclick="startConversation('${guide.id}')">Talk to Doc</button>` : ''}`;
     return;
   }
   if(editorEmpty) editorEmpty.innerHTML=`
@@ -992,7 +1665,7 @@ function renderSkills() {
     mainHtml = `<div class="org-empty-state" style="padding:48px 24px;text-align:center">
       <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" class="empty-icon"><polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
       <div class="empty-title">No skills yet</div>
-      ${guide ? `<button class="empty-cta" style="margin-top:8px" onclick="switchNav('conversations');startConversation('${guide.id}')">Talk to Doc</button>` : ''}
+      ${guide ? `<button class="empty-cta" style="margin-top:8px" onclick="startConversation('${guide.id}')">Talk to Doc</button>` : ''}
     </div>`;
   }
 
@@ -1123,7 +1796,7 @@ function changeWorkspace() {
 function handleWorkspaces(d) {
   if (d.current) {
     // Server already has a workspace set (env var or previous selection)
-    onWorkspaceReady(d.current);
+    onWorkspaceReady(d.current, d.analysis);
     return;
   }
   // No workspace set, show picker
@@ -1211,8 +1884,10 @@ function createWorkspace() {
   ws.send(JSON.stringify({ type: 'create_workspace', name }));
 }
 
-function onWorkspaceReady(dir) {
+function onWorkspaceReady(dir, analysis) {
+  const isSameWorkspace = (currentWorkspacePath === dir);
   currentWorkspacePath = dir;
+  workspaceAnalysis = analysis || null;
   // Show nav and sidebar
   document.querySelector('.nav-rail').style.display = '';
   document.querySelector('.sidebar').style.display = '';
@@ -1220,8 +1895,16 @@ function onWorkspaceReady(dir) {
   ws.send(JSON.stringify({ type: 'get_agents' }));
   ws.send(JSON.stringify({ type: 'get_files' }));
   ws.send(JSON.stringify({ type: 'get_skills' }));
+  ws.send(JSON.stringify({ type: 'get_conversations' }));
   skillsLoaded = false;
-  // Reset state
+
+  if (isSameWorkspace && currentView !== 'workspace') {
+    // Reconnect to same workspace: keep in-memory conversations and active view intact.
+    // Processing state will be reconciled by the active_processes message from the server.
+    return;
+  }
+
+  // Different workspace: reset everything
   conversations = [];
   activeConversation = null;
   showView('home');

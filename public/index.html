@@ -38,9 +38,11 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .nav-rail { width: 60px; background: var(--base); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; padding: 40px 0 16px; flex-shrink: 0; z-index: 2; }
 .nav-main { display: flex; flex-direction: column; gap: 4px; flex: 1; padding-top: 4px; align-items: center; }
 .nav-bottom { display: flex; flex-direction: column; gap: 4px; align-items: center; }
-.nav-item { width: 42px; height: 42px; display: flex; align-items: center; justify-content: center; border-radius: 12px; color: var(--text-2); transition: all 0.2s ease; }
+.nav-item { position: relative; width: 42px; height: 42px; display: flex; align-items: center; justify-content: center; border-radius: 12px; color: var(--text-2); transition: all 0.2s ease; }
 .nav-item:hover { color: var(--text-1); background: var(--surface); }
 .nav-item.active { color: var(--accent); background: var(--accent-glow); }
+.nav-item[data-tooltip]::after { content: attr(data-tooltip); position: absolute; left: calc(100% + 6px); top: 50%; transform: translateY(-50%) translateX(-4px); opacity: 0; pointer-events: none; white-space: nowrap; font-size: 12px; font-weight: 500; letter-spacing: 0.01em; color: var(--text-1); background: var(--elevated); padding: 4px 10px; border-radius: 6px; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); z-index: 100; transition: opacity 150ms ease, transform 150ms ease; transition-delay: 0ms; }
+.nav-item[data-tooltip]:hover::after { opacity: 1; transform: translateY(-50%) translateX(0); transition-delay: 400ms; }
 .nav-item svg { width: 21px; height: 21px; }
 .nav-item .icon-filled { display: none; }
 .nav-item.active .icon-outline { display: none; }
@@ -98,7 +100,7 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 /* Org chart */
 .org-chart { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px; overflow: hidden; }
 /* org-chart-title removed: redundant label */
-.org-tree { display: flex; flex-direction: column; align-items: center; }
+.org-tree { display: flex; flex-direction: column; align-items: center; max-width: 100%; transform-origin: top center; }
 .org-card { background: var(--card); border-radius: 14px; padding: 24px 30px; display: flex; align-items: center; gap: 16px; cursor: pointer; transition: all 0.2s ease; border: 1px solid transparent; box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08); }
 .org-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.2), 0 0 0 1px var(--accent); }
 .org-card-name { font-size: var(--org-name); font-weight: 700; color: var(--text-1); }
@@ -108,7 +110,8 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .org-leader .org-card .avatar { width: 64px; height: 64px; font-size: 28px; }
 .org-leader .org-card-name { font-size: var(--org-leader-name); }
 /* Org chart connector lines: pure CSS */
-.org-trunk { height: 40px; }
+.org-trunk { width: 1px; height: 40px; background: var(--text-2); opacity: 0.25; }
+.org-trunk.trunk-hidden { background: transparent; }
 .org-branches { display: flex; position: relative; justify-content: center; }
 .org-branch { display: flex; flex-direction: column; align-items: center; padding: 30px 20px 0; position: relative; }
 .org-branch::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--text-2); opacity: 0.25; }
@@ -170,6 +173,34 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .msg-system { align-self: center; font-size: var(--caption); color: var(--text-2); padding: 4px 12px; background: var(--card); border-radius: 20px; }
 .msg-tool { align-self: flex-start; max-width: 85%; padding: 8px 12px; background: var(--card); border-left: 3px solid var(--working); border-radius: 0 8px 8px 0; font-size: var(--caption); color: var(--text-2); display: flex; align-items: center; gap: 8px; animation: fadeIn 0.2s ease; }
 .msg-tool.done { border-left-color: var(--success); }
+/* Permission prompt cards */
+.msg-permission { align-self: flex-start; max-width: 85%; animation: fadeIn 0.2s ease; }
+.permission-card { background: var(--card); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.permission-card.risk-low { border: 1px solid var(--border); }
+.permission-card.risk-medium { border: 1px solid var(--border); }
+.permission-card.risk-high { border: 1px solid var(--attention); }
+.permission-header { display: flex; align-items: center; gap: 8px; font-size: var(--body); font-weight: 500; }
+.risk-low .permission-header { color: var(--text-1); }
+.risk-medium .permission-header { color: var(--text-1); }
+.risk-high .permission-header { color: var(--attention); }
+.permission-icon { flex-shrink: 0; }
+.risk-low .permission-icon { color: var(--text-2); }
+.risk-medium .permission-icon { color: var(--text-1); }
+.risk-high .permission-icon { color: var(--attention); }
+.permission-context { font-size: var(--caption); color: var(--text-2); margin-top: -4px; padding-left: 24px; }
+.permission-detail { display: block; background: var(--elevated); padding: 8px 12px; border-radius: 6px; font-size: 13px; font-family: 'SF Mono','Fira Code','Consolas',monospace; color: var(--text-2); word-break: break-all; line-height: 1.4; overflow: hidden; max-height: 80px; }
+.permission-actions { display: flex; gap: 8px; align-items: center; }
+.btn-perm { padding: 6px 16px; border-radius: 8px; font-size: var(--caption); font-weight: 500; cursor: pointer; border: 1px solid var(--border); transition: all 0.15s ease; }
+.btn-allow { background: var(--success); color: #1a1a1a; border-color: var(--success); }
+.btn-allow:hover { filter: brightness(1.1); }
+.btn-always { background: transparent; color: var(--success); border-color: var(--success); }
+.btn-always:hover { background: rgba(107,198,126,0.12); }
+.btn-deny { background: transparent; color: var(--text-2); }
+.btn-deny:hover { background: var(--elevated); color: var(--text-1); }
+.permission-resolved { font-size: var(--caption); padding: 6px 12px; border-radius: 8px; display: flex; align-items: center; gap: 6px; }
+.permission-resolved.allowed { background: rgba(107,198,126,0.12); color: var(--success); }
+.permission-resolved.denied { background: rgba(232,122,90,0.12); color: var(--accent); }
+.permission-resolved.auto-allowed { background: rgba(107,198,126,0.06); color: var(--text-2); font-style: italic; }
 .chat-input { padding: 16px 24px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
 .chat-input textarea { flex: 1; padding: 12px 16px; background: var(--card); border-radius: 16px; font-size: var(--body); border: 1px solid transparent; transition: all 0.2s ease; resize: none; overflow-y: hidden; min-height: 44px; max-height: 200px; line-height: 1.5; font-family: inherit; color: var(--text-1); outline: none; }
 .chat-input textarea:focus { box-shadow: 0 0 0 2px rgba(232,122,90,0.2); }
@@ -413,29 +444,29 @@ body.light .skill-row:hover { background: rgba(0,0,0,0.03); }
 <div class="app">
   <nav class="nav-rail" style="display:none">
     <div class="nav-main">
-      <button class="nav-item active" data-nav="team" onclick="switchNav('team')" title="Team">
+      <button class="nav-item active" data-nav="team" onclick="switchNav('team')" data-tooltip="Team">
         <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
         <svg class="icon-filled" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M14 21H2v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2z"/><circle cx="8" cy="7" r="4"/><path d="M22 21h-4v-2a5.97 5.97 0 0 0-1.5-4h.5a3 3 0 0 1 3 3v3z"/><circle cx="17" cy="7.5" r="3"/></svg>
       </button>
-      <button class="nav-item" data-nav="conversations" onclick="switchNav('conversations')" title="Conversations">
+      <button class="nav-item" data-nav="conversations" onclick="switchNav('conversations')" data-tooltip="Conversations">
         <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         <svg class="icon-filled" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
       </button>
-      <button class="nav-item" data-nav="skills" onclick="switchNav('skills')" title="Skills">
+      <button class="nav-item" data-nav="skills" onclick="switchNav('skills')" data-tooltip="Skills">
         <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
         <svg class="icon-filled" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
       </button>
-      <button class="nav-item" data-nav="files" onclick="switchNav('files')" title="Files">
+      <button class="nav-item" data-nav="files" onclick="switchNav('files')" data-tooltip="Files">
         <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
         <svg class="icon-filled" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
       </button>
     </div>
     <div class="nav-bottom">
-      <button class="nav-item" onclick="toggleTheme()" title="Toggle theme" id="theme-toggle">
+      <button class="nav-item" onclick="toggleTheme()" data-tooltip="Theme" id="theme-toggle">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
       </button>
       <div class="nav-separator"></div>
-      <button class="nav-item" data-nav="settings" onclick="switchNav('settings')" title="Settings">
+      <button class="nav-item" data-nav="settings" onclick="switchNav('settings')" data-tooltip="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.604.852.997 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
     </div>
