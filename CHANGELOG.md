@@ -1,58 +1,78 @@
 # Changelog
 
-All notable changes to the Rundock project.
+All notable changes to Rundock are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
+
+## 0.3.0: Resilience (2026-03-25)
+
+Reconnect recovery, safety guardrails, and agent quality enforcement. Rundock now handles disconnects gracefully, restricts what agents can do, and ensures consistent output formatting across all workspaces.
+
+### Added
+
+- **WebSocket reconnect recovery:** Close the tab mid-conversation and reopen. Response text is preserved, streaming resumes, and the thinking indicator restores correctly.
+- **Session persistence:** Conversations survive page reloads. Metadata (title, agent, session ID) stored in `.rundock/` per workspace. Previous sessions appear in a collapsible sidebar section and resume on click.
+- **Workspace analysis:** Seven-signal scan (identity, skills, integrations, folder structure, user profile, hooks, existing agents) runs before onboarding. Doc receives structured data instead of guessing.
+- **Agent creation via markers:** Agents are created through `RUNDOCK:CREATE_AGENT` markers in chat responses. Supports detection of raw YAML frontmatter as fallback. Org chart and skills update automatically.
+- **Agent deletion:** Remove agents from the profile card. Confirmation required. File deleted from `.claude/agents/`.
+- **Permission UX:** Risk-tiered permission cards (low/medium/high) with allow, always-allow, and deny actions. Designed and styled, ready for Claude Agent SDK integration.
+- **File type restrictions:** Agents cannot write executable code (.js, .ts, .py, .sh, etc.) or run destructive commands (rm, sudo, chmod). Rundock is designed for knowledge work.
+- **System prompt injection:** All agents receive formatting rules (no em dashes, UK spelling) and platform context via `--append-system-prompt`.
+- **File tree auto-refresh:** File tree updates automatically when agents create or modify files, both mid-response and on completion.
+- **Managed scaffold sync:** Rundock-owned files (Doc agent, platform skills) sync from `scaffold/` on every workspace open. User files are never touched.
+- **Hook muting:** Sound hooks in workspace settings are automatically wrapped with a `$RUNDOCK` guard so they only fire in terminal, not in the browser.
+- **Nav tooltips:** Delayed, styled tooltips on nav rail icons replace browser-native title attributes.
+
+### Changed
+
+- **Orchestrator identity:** The `--agent` flag is now correctly passed for orchestrator agents. Previously, the ID remapping to 'default' caused the orchestrator to lose its identity.
+- **Doc rewrite:** Complete overhaul of the platform guide. Two-beat onboarding flow (propose team, then create agents). Quality rules for agent creation: no skill overlap, character-style names, rich instructions, formatting enforcement.
+- **Org chart responsive scaling:** Cards scale down on smaller screens via CSS transform. Breathing room added to prevent edge clipping.
+- **Routine permissions:** Changed from `bypassPermissions` to `dangerously-skip-permissions` flag for unattended routine execution.
+- **Disconnect buffer:** Messages sent while no client is connected are buffered and delivered on reconnect. Stream events are filtered (covered by response text snapshot); result and system messages are preserved.
+
+### Fixed
+
+- **Org chart connector line:** Vertical trunk line between orchestrator and specialists now renders correctly. Handles odd and even specialist counts.
+- **Thinking bubble mid-response:** Thinking indicator reappears when an agent makes tool calls partway through a response, instead of disappearing permanently.
+- **Thinking bubble on reconnect:** No longer shows a stuck thinking indicator when the process has already completed while disconnected.
+- **Workspace picker dismissal:** Selecting the current workspace no longer keeps the picker visible.
+- **Stuck input after response:** `finishProcessing` now always runs even if response handling throws an error. The message input can no longer get permanently locked.
+- **Previous conversation promotion:** Resuming a conversation from a previous session moves it out of the "Previous" section immediately.
+- **Em dash enforcement:** Agent source files cleaned of em dashes. System prompt rule strengthened with explicit wrong/right examples. Doc's quality rules now require clean formatting in generated agent files.
 
 ---
 
-## 2026-03-24: Doc foundation, prompts, workspace scaffold
+## 0.2.0: Doc (2026-03-24)
 
-### Features
-- **Doc agent scaffold:** New workspaces automatically get a `rundock-guide.md` agent file, plus `rundock-workspace-setup` and `rundock-agent-onboarding` skills written to `.claude/skills/`. Existing workspaces with a platform agent are untouched.
-- **Prompt pills:** Agents can define `prompts` in frontmatter. Starting a conversation shows clickable starter prompts centred in the chat area. Pills disappear on first message.
-- **New conversation routing:** "+ New conversation" auto-starts with the orchestrator (if present), Doc (empty workspace), or shows the agent picker (team agents, no orchestrator).
-- **Skills on agent profiles:** Agent profile cards now show assigned skills with click-through to the Skills tab.
-- **Doc communication style:** Doc's agent file includes tone, formatting rules, and banned AI patterns to prevent generic responses.
-- **Workspace structure guidance:** Workspace Setup skill suggests PARA, Functional, or Minimal folder structures for knowledge workers.
+The platform guide, starter prompts, and workspace scaffolding. Doc helps users set up workspaces and create agent teams.
 
-### Fixes
-- **Avatar visibility:** All avatar circles now have a subtle inset shadow border, preventing colour-on-background blending in either theme.
-- **Doc colour:** Changed from grey (#9A9590) to steel blue (#6B8A9E) for clear visual distinction.
-- **Frontmatter quote stripping:** Parser now strips surrounding quotes from YAML values, fixing broken CSS when users write `colour: "#hex"`.
-- **Attribute escaping:** Added `escAttr()` for prompt pill data attributes. Handles `"`, `'`, `<`, `>`, `&`.
-- **parsePrompts regex:** Fixed to handle prompts as the last frontmatter block (no trailing newline).
-- **Workspace picker flash:** Nav rail and sidebar hidden by default in HTML, shown only after workspace loads.
-- **README cleanup:** Updated example agent to Marshall (Project Manager). Updated Node version to 20+. Switched to `npm start`.
+### Added
 
-### Architecture
-- **Scaffold system:** `scaffoldWorkspace()` function reads templates from `scaffold/` directory. Called on workspace create, set, and server startup. Additive only: checks for existing files before writing. Wrapped in try/catch so failures don't block workspace loading.
-- **`rundock-` namespace:** All Rundock-shipped agent files and skill directories use a `rundock-` prefix to avoid colliding with user-created files.
-- **`parsePrompts()` function:** Extracts `prompts:` list from agent frontmatter, returns string array.
+- **Doc agent:** New workspaces automatically get a platform guide agent with workspace setup and agent onboarding skills.
+- **Starter prompts:** Agents can define `prompts` in frontmatter. Clickable prompt pills appear when starting a conversation.
+- **Conversation routing:** New conversations auto-start with the orchestrator, Doc (empty workspace), or show an agent picker.
+- **Skills on profiles:** Agent profile cards show assigned skills with navigation to the Skills tab.
+- **Workspace structure guidance:** Workspace Setup skill suggests PARA, Functional, or Minimal folder structures.
+
+### Fixed
+
+- **Avatar visibility:** Inset shadow border prevents colour-on-background blending in both themes.
+- **Frontmatter parsing:** Quote stripping for YAML values, prompt extraction from final frontmatter block.
+- **Workspace picker flash:** Nav rail hidden until workspace loads.
 
 ---
 
-## 0.1.0: Initial release
+## 0.1.0: First light
 
-### Features
-- **Agent team management:** Visual org chart showing agents discovered from `.claude/agents/`. Agents support `type` (orchestrator, specialist, platform), `order`, `displayName`, `icon`, and `colour` frontmatter fields.
-- **Conversations:** Chat with any agent through the browser. Messages bridge to Claude Code via WebSocket. Session persistence across messages via `--resume`. Concurrent conversations with independent state.
-- **Skills:** Browse skills from `.claude/skills/` and `System/Playbooks/`. Dynamic agent-to-skill mapping via body text slug matching. Click through to source files.
-- **File browsing and editing:** Workspace file tree with markdown preview (including Obsidian extensions: wikilinks, callouts, highlights, tags) and raw edit mode with auto-save.
-- **Agent profiles:** Capabilities, routines with schedule and run status, model info, assigned skills, collapsible instructions.
-- **Routines:** Parsed from agent frontmatter. Server-side scheduler checks every 60 seconds. Supports daily and weekly schedules.
-- **Built-in Doc agent:** Platform guide injected at runtime for workspaces without a platform agent. Provides onboarding assistance.
-- **Workspace picker:** Discovers workspaces from common locations. Create new workspaces from the UI. Recent workspaces remembered across sessions.
-- **Settings:** Workspace info, theme toggle (dark/light with localStorage persistence), version and feedback link.
-- **Empty state onboarding:** All tabs show contextual empty states with CTAs to get started.
-- **Dark and light themes:** Toggle in nav rail. Preference persisted.
-- **Three-state agent model:** onTeam (has order), available (has type, no order), raw (no type or order).
+The foundation. Agent teams, conversations, skills, and file browsing in the browser.
 
-### Architecture
-- Single `server.js` (Node.js) + `public/app.js` + `public/index.html`
-- Claude Code integration via `--print --output-format stream-json --verbose`
-- WebSocket bridge between browser and Claude Code CLI processes
-- Session management via `Map<conversationId, process>` with `--resume` for continuity
-- Markdown rendering via `marked` library with Obsidian extension post-processing
+### Added
 
-### Dependencies
-- `marked` (v17) for markdown rendering
-- `ws` (v8) for WebSocket server
+- **Agent team management:** Visual org chart from `.claude/agents/`. Supports orchestrator, specialist, and platform agent types with custom icons, colours, and ordering.
+- **Conversations:** Chat with any agent via WebSocket bridge to Claude Code. Session continuity via `--resume`. Independent concurrent conversations.
+- **Skills browser:** Discovers skills from `.claude/skills/` and `System/Playbooks/`. Dynamic agent-to-skill mapping via body text matching.
+- **File browser:** Workspace file tree with markdown preview (wikilinks, callouts, highlights, tags) and raw edit mode with auto-save.
+- **Agent profiles:** Capabilities, routines with schedules, model info, assigned skills, collapsible instructions.
+- **Routines:** Server-side scheduler for daily and weekly agent tasks parsed from frontmatter.
+- **Workspace picker:** Auto-discovers workspaces from common locations. Create new workspaces from the UI. Remembers recent selections.
+- **Dark and light themes:** Toggle in nav rail with localStorage persistence.
+- **Empty state onboarding:** Contextual empty states with calls to action across all tabs.

@@ -7,10 +7,16 @@ Help the user set up their Rundock workspace. Walk through the following:
 
 ## 1. Understand the workspace
 
-Ask what this workspace is for:
-- What kind of work happens here?
+**Read before asking.** Before asking the user anything:
+- Read `CLAUDE.md` if it exists (this often contains a full description of the workspace purpose, rules, and structure)
+- Run `ls` on the workspace root and key directories to understand the folder structure
+- Check `.claude/settings.json` for existing tool permissions, hooks, and MCP servers
+- Check `.claude/skills/` and any system/playbook directories for existing capabilities
+- Summarise what you found. Propose a plan based on what the workspace already contains
+
+Only ask questions about things the files don't answer:
 - Who will use it (just the user, or a team)?
-- What tools or integrations matter?
+- Any tools or integrations not already visible in the config?
 
 ## 2. Create CLAUDE.md
 
