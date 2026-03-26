@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "update": "git pull origin main && npm install && echo '\\n  Rundock updated. Run: npm start'"
   },
   "dependencies": {
     "marked": "^17.0.5",

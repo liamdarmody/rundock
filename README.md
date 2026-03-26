@@ -38,6 +38,14 @@ To open a specific workspace directly:
 WORKSPACE=/path/to/your/folder npm start
 ```
 
+## Updating
+
+```bash
+npm run update
+```
+
+Pulls the latest changes and reinstalls dependencies. Then run `npm start` as usual.
+
 ## Your team at a glance
 
 **Team:** See your agents on an org chart. Click any agent to view their profile with role, capabilities, skills, and routines.
