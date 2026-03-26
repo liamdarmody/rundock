@@ -28,7 +28,7 @@ npm start
 
 Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-You'll see a workspace picker. Choose a folder that contains (or will contain) your knowledge base and agents. A workspace is any folder: your documents, research, projects. If you already have a `.claude/agents/` directory, Rundock will discover it automatically.
+You'll see a workspace picker. Choose a folder that contains (or will contain) your knowledge base and agents. A workspace is any folder where you keep your work: documents, research, projects. This should be separate from the Rundock install folder. If you already have a `.claude/agents/` directory, Rundock will discover it automatically.
 
 **New to Rundock?** Doc, the built-in guide, analyses your workspace and proposes an agent team. Say go, and your agents appear on the org chart. Start a conversation and put them to work.
 
