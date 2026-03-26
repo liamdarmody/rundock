@@ -105,11 +105,13 @@ Everything runs on your machine. No data is sent anywhere other than Anthropic's
 
 **Your API key is managed by Claude Code, not Rundock.** When you install Claude Code and sign in, it stores your authentication locally on your machine. Rundock never sees, stores, or transmits your API key. If you've already authenticated with Claude Code in your terminal, Rundock uses that same session.
 
-**Agents can read and write files in your workspace.** Rundock runs Claude Code with permissions that allow agents to read files, write files, and run commands within your workspace folder without asking for confirmation each time. This is what makes the conversational experience smooth (an agent can create an agent file, update a document, or set up a folder structure when you ask it to). Agents do not have access to files outside your workspace.
+**Agents can read and write knowledge files in your workspace.** Rundock runs Claude Code with permissions that allow agents to read files, write markdown and knowledge files, and run commands within your workspace folder without asking for confirmation each time. This is what makes the conversational experience smooth (an agent can create an agent file, update a document, or set up a folder structure when you ask it to). Agents do not have access to files outside your workspace.
 
-**The codebase is small and auditable.** Rundock is roughly 800 lines of server code and 1,200 lines of client code. There are two dependencies (a markdown renderer and a WebSocket library). You can read the entire codebase in an afternoon.
+**Executable code is blocked by design.** Agents cannot write or edit code files (.js, .ts, .py, .sh, and other executable formats). Destructive commands (rm, sudo, chmod) are also blocked. Rundock is built for knowledge work, not software development.
 
-**Nothing is stored in the cloud.** Conversations are held in browser memory and reset on page refresh. Your workspace files are plain files on disk. Theme preference is saved in your browser's local storage. A list of recently opened workspaces is saved to a local file in the Rundock install directory. That's it.
+**The codebase is small and auditable.** Rundock is roughly 1,500 lines of server code and 1,900 lines of client code. There are two dependencies (a markdown renderer and a WebSocket library). You can read the entire codebase in an afternoon.
+
+**Nothing is stored in the cloud.** Conversation metadata (title, agent, session ID) is saved to a `.rundock/` directory in your workspace so sessions persist across page reloads. Message content is not stored by Rundock. Your workspace files are plain files on disk. Theme preference is saved in your browser's local storage. A list of recently opened workspaces is saved to a local file in the Rundock install directory. That's it.
 
 For technical users: the full source is in `server.js` (Node.js HTTP + WebSocket server, agent/skill discovery, Claude Code process management) and `public/app.js` (single-page client application). No build step, no bundler, no minification.
 
@@ -133,7 +135,7 @@ Rundock looks for skills in `.claude/skills/` (SKILL.md files). Skills are also 
 
 **Conversations disappear on refresh**
 
-Conversations are stored in browser memory for now. They reset on page refresh. Session persistence is on the roadmap.
+Conversation metadata persists across reloads, but message content is not stored by Rundock (Claude Code owns session history). Previous conversations appear in a collapsible "Previous" section in the sidebar. Click one to resume where you left off.
 
 ## Licence
 
