@@ -12,8 +12,10 @@ Rundock gives knowledge workers a visual way to build and manage AI agent teams:
 
 ## Prerequisites
 
-- **Claude Code** installed and authenticated ([code.claude.com](https://code.claude.com))
 - **Node.js** 20+ ([nodejs.org](https://nodejs.org))
+- **Claude Code** installed and signed in ([install guide](https://docs.anthropic.com/en/docs/claude-code/overview)). Run `claude` in your terminal to sign in. Claude Code requires a Claude Pro or Max subscription.
+
+Already have both? Skip to quick start.
 
 ## Quick start
 
@@ -26,7 +28,9 @@ npm start
 
 Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-You'll see a workspace picker. Choose a folder that contains (or will contain) your knowledge base and agents. If you already have a `.claude/agents/` directory, Rundock will discover it automatically.
+You'll see a workspace picker. Choose a folder that contains (or will contain) your knowledge base and agents. A workspace is any folder: your documents, research, projects. If you already have a `.claude/agents/` directory, Rundock will discover it automatically.
+
+**New to Rundock?** Doc, the built-in guide, analyses your workspace and proposes an agent team. Say go, and your agents appear on the org chart. Start a conversation and put them to work.
 
 To open a specific workspace directly:
 
