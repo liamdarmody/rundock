@@ -2,6 +2,34 @@
 
 All notable changes to Rundock are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## 0.4.0: Permissions (2026-03-27)
+
+Interactive mode and browser-based permission cards. Conversations now use a persistent process, and terminal commands require user approval through an in-conversation permission UI.
+
+### Added
+
+- **Permission cards:** When an agent needs to run a terminal command, a permission card appears in the conversation showing the command, risk level, and Allow/Deny/Always Allow buttons. Powered by Claude Code's PreToolUse hook system bridged to the browser via HTTP long-poll.
+- **Permission timeout:** Cards auto-deny after 120 seconds if the user doesn't respond. Claude is told the request timed out (not denied) so it retries on the next ask.
+- **Always Allow:** Session-scoped pattern matching. Click "Always Allow" on a command type and subsequent matching commands auto-approve without showing a card. Resets on page refresh.
+- **Risk classification:** Commands are classified as low (ls, cat, grep), medium (npm, git), or high risk (rm, sudo, chmod). High-risk cards omit the "Always Allow" option.
+
+### Changed
+
+- **Interactive mode (Deliverable A):** Claude Code processes now stay alive between messages. Follow-up messages push to stdin instead of spawning new processes. Faster response times and proper conversation continuity.
+- **Permission model:** Bash commands are no longer silently blocked by `--disallowed-tools`. They go through the permission card UI so the user decides. Executable file restrictions (Write/Edit on .js, .py, .sh, etc.) remain hard-blocked.
+- **Allowed tools:** Write and Edit added to allowed-tools for knowledge files. Disallowed-tools still blocks executable file extensions.
+- **System prompt:** Updated to encourage agents to use Bash when appropriate and let the user decide via permission cards, rather than self-censoring.
+- **Legacy rollback:** Set `RUNDOCK_LEGACY_SPAWN=1` to revert to the previous one-process-per-message model.
+
+### Technical
+
+- `scripts/permission-hook.js`: PreToolUse hook script that bridges Claude Code to Rundock's browser UI via `POST /api/permission-request`.
+- `POST /api/permission-request`: HTTP endpoint that holds the connection open until the user clicks Allow/Deny or the 120s timeout fires.
+- Workspace scaffold writes `.claude/settings.local.json` with hook configuration on first open.
+- Spawn env passes `RUNDOCK_PORT` and `RUNDOCK_CONVO_ID` to child processes for hook routing.
+
+---
+
 ## 0.3.0: Resilience (2026-03-25)
 
 Reconnect recovery, safety guardrails, and agent quality enforcement. Rundock now handles disconnects gracefully, restricts what agents can do, and ensures consistent output formatting across all workspaces.
@@ -13,7 +41,7 @@ Reconnect recovery, safety guardrails, and agent quality enforcement. Rundock no
 - **Workspace analysis:** Seven-signal scan (identity, skills, integrations, folder structure, user profile, hooks, existing agents) runs before onboarding. Doc receives structured data instead of guessing.
 - **Agent creation via markers:** Agents are created through `RUNDOCK:CREATE_AGENT` markers in chat responses. Supports detection of raw YAML frontmatter as fallback. Org chart and skills update automatically.
 - **Agent deletion:** Remove agents from the profile card. Confirmation required. File deleted from `.claude/agents/`.
-- **Permission UX:** Risk-tiered permission cards (low/medium/high) with allow, always-allow, and deny actions. Designed and styled, ready for Claude Agent SDK integration.
+- **Permission UX:** Risk-tiered permission cards (low/medium/high) with allow, always-allow, and deny actions. Designed and styled. Now fully functional in 0.4.0 via PreToolUse hooks.
 - **File type restrictions:** Agents cannot write executable code (.js, .ts, .py, .sh, etc.) or run destructive commands (rm, sudo, chmod). Rundock is designed for knowledge work.
 - **System prompt injection:** All agents receive formatting rules (no em dashes, UK spelling) and platform context via `--append-system-prompt`.
 - **File tree auto-refresh:** File tree updates automatically when agents create or modify files, both mid-response and on completion.

@@ -16,6 +16,10 @@ const { WebSocketServer } = require('ws');
 const PORT = process.env.PORT || 3000;
 let WORKSPACE = process.env.WORKSPACE || null;
 
+// Pending permission requests from PreToolUse hooks (keyed by requestId).
+// Each entry holds the HTTP response object so we can resolve it when the user decides.
+const pendingPermissionRequests = new Map();
+
 // Recent workspaces (persisted to disk)
 const RECENT_FILE = path.join(__dirname, '.recent-workspaces.json');
 function loadRecentWorkspaces() {
@@ -857,6 +861,34 @@ function scaffoldWorkspace(dir) {
 
     // Auto-mute sound hooks for Rundock
     muteHooks(dir);
+
+    // Configure PreToolUse permission hook in .claude/settings.local.json.
+    // This makes Claude Code call our hook script before executing Bash commands,
+    // which bridges to the Rundock browser UI for user approval.
+    const hookScript = path.join(__dirname, 'scripts', 'permission-hook.js');
+    const settingsLocalPath = path.join(dir, '.claude', 'settings.local.json');
+    let settingsLocal = {};
+    if (fs.existsSync(settingsLocalPath)) {
+      try { settingsLocal = JSON.parse(fs.readFileSync(settingsLocalPath, 'utf-8')); } catch (e) { /* start fresh */ }
+    }
+    if (!settingsLocal.hooks) settingsLocal.hooks = {};
+    if (!settingsLocal.hooks.PreToolUse) settingsLocal.hooks.PreToolUse = [];
+
+    const hasPermHook = settingsLocal.hooks.PreToolUse.some(e =>
+      (e.hooks || []).some(h => h.command && h.command.includes('permission-hook'))
+    );
+    if (!hasPermHook) {
+      settingsLocal.hooks.PreToolUse.push({
+        matcher: 'Bash',
+        hooks: [{
+          type: 'command',
+          command: `node "${hookScript}"`,
+          timeout: 300
+        }]
+      });
+      fs.writeFileSync(settingsLocalPath, JSON.stringify(settingsLocal, null, 2));
+      console.log('  [Scaffold] Configured permission hook in .claude/settings.local.json');
+    }
   } catch (e) {
     console.warn(`  Warning: scaffold failed for ${dir}: ${e.message}`);
   }
@@ -893,6 +925,61 @@ const server = http.createServer((req, res) => {
       res.writeHead(404);
       res.end('File not found');
     }
+
+  // Permission hook endpoint: receives tool requests from the PreToolUse hook script,
+  // forwards them to the browser as permission cards, and holds the connection open
+  // until the user clicks Allow or Deny (or the 120s timeout fires).
+  } else if (req.method === 'POST' && req.url === '/api/permission-request') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const requestId = 'perm-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+        const convoId = data.conversation_id || '';
+
+        // Store the pending HTTP response (resolved when user decides)
+        pendingPermissionRequests.set(requestId, {
+          res,
+          conversationId: convoId,
+          toolName: data.tool_name,
+          toolInput: data.tool_input,
+          timer: setTimeout(() => {
+            const pending = pendingPermissionRequests.get(requestId);
+            if (pending) {
+              pendingPermissionRequests.delete(requestId);
+              console.log(`[Permission] Auto-denied (timeout): ${data.tool_name} convo=${convoId} requestId=${requestId}`);
+              // Send denied indicator to browser
+              safeSend(JSON.stringify({
+                type: 'permission_timeout',
+                requestId,
+                _conversationId: convoId
+              }));
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ allow: false, reason: 'timeout' }));
+            }
+          }, 120000)
+        });
+
+        // Forward to browser as a control_request (existing permission card UI handles this)
+        safeSend(JSON.stringify({
+          type: 'control_request',
+          request_id: requestId,
+          request: {
+            subtype: 'can_use_tool',
+            tool_name: data.tool_name,
+            input: data.tool_input || {}
+          },
+          _conversationId: convoId
+        }));
+
+        console.log(`[Permission] Hook request: ${data.tool_name} convo=${convoId} requestId=${requestId}`);
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid request' }));
+      }
+    });
+
   } else {
     res.writeHead(404);
     res.end('Not found');
@@ -968,150 +1055,287 @@ wss.on('connection', (ws) => {
 
       if (msg.type === 'chat') {
         const convoId = msg.conversationId || 'default';
-        const processId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+        const useLegacy = process.env.RUNDOCK_LEGACY_SPAWN === '1';
 
-        // Kill existing process for this conversation only
-        if (processes.has(convoId)) {
-          processes.get(convoId).process.kill();
-          processes.delete(convoId);
-        }
+        // ── INTERACTIVE MODE (Deliverable A) ──────────────────────────
+        // Process stays alive between messages. Follow-ups push to stdin.
+        // --print is NOT used; Claude Code runs in interactive stream-json mode.
+        if (!useLegacy) {
 
-        // Interactive chat: bidirectional stream-json for permission prompts.
-        // acceptEdits: file reads/writes/edits auto-approved, Bash prompts via UI.
-        // Agent file writes (.claude/agents/) go through Rundock server endpoints,
-        // not through Claude Code (which hardcodes .claude/ as protected).
-        const args = ['--print', '--output-format', 'stream-json', '--input-format', 'stream-json',
-          '--verbose', '--include-partial-messages', '--permission-mode', 'acceptEdits',
-          '--allowed-tools', 'Bash,WebFetch,WebSearch,mcp__*',
-          '--disallowed-tools', 'Write(*.js),Write(*.jsx),Write(*.ts),Write(*.tsx),Write(*.py),Write(*.sh),Write(*.bash),Write(*.rb),Write(*.pl),Write(*.exe),Write(*.dll),Write(*.so),Edit(*.js),Edit(*.jsx),Edit(*.ts),Edit(*.tsx),Edit(*.py),Edit(*.sh),Edit(*.bash),Edit(*.rb),Edit(*.pl),Edit(*.exe),Bash(rm *),Bash(sudo *),Bash(chmod *),Bash(chown *),Bash(curl * | *sh),Bash(wget * | *sh)',
-          '--append-system-prompt', 'FORMATTING RULES (mandatory, apply to all output):\n- NEVER use em dashes (—) or en dashes (–) anywhere. This includes lists, headers, separators, and inline text. Wrong: "Dex — Chief of Staff". Right: "Dex: Chief of Staff". Use colons, full stops, commas, or restructure instead.\n- Use UK spelling throughout.\n\nPLATFORM RULES:\nRundock is a knowledge management platform. You can create and edit markdown, YAML, JSON, and text files. Writing or editing executable code files (.js, .ts, .py, .sh, etc.) is blocked by design. Destructive commands (rm, sudo, chmod) are also blocked. If a user asks you to do something that hits these restrictions, explain that Rundock is designed for knowledge work, not software development, and suggest an alternative approach using supported file types. Never offer to change permission settings or suggest workarounds to bypass these restrictions.'];
+          // If a live process exists for this conversation, push the follow-up to its stdin
+          const existing = processes.get(convoId);
+          if (existing && !existing.exited && existing.process.stdin && existing.process.stdin.writable) {
+            const processId = existing.processId;
+            console.log(`[Chat] convo=${convoId} proc=${processId} FOLLOW-UP (interactive stdin)`);
+            safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId }));
+            existing.responseText = '';
+            existing.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: msg.content } }) + '\n');
+          } else {
+            // No live process: spawn a new one (first message or after disconnect)
+            // Kill stale entry if present
+            if (existing) {
+              try { existing.process.kill(); } catch (e) { /* already dead */ }
+              processes.delete(convoId);
+            }
 
-        // Resume existing session if we have a session ID
-        if (msg.sessionId) {
-          args.push('--resume', msg.sessionId);
-        }
+            const processId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
-        // Pass --agent with the slug name (matches filename, used by Claude Code for resolution)
-        if (!msg.sessionId) {
-          const agentList = discoverAgents();
-          const requestedAgent = msg.agent || 'default';
-          // Match by id, or by filename slug (handles orchestrator whose id is remapped to 'default')
-          const agentData = agentList.find(a => a.id === requestedAgent)
-            || agentList.find(a => a.fileName && a.fileName.replace('.md', '') === requestedAgent);
-          if (agentData && agentData.fileName) {
-            args.push('--agent', agentData.name);
+            // Interactive chat: bidirectional stream-json, no --print.
+            // Permission flow: PreToolUse hook (configured in workspace .claude/settings.local.json)
+            // catches Bash commands, POSTs to /api/permission-request, Rundock shows a permission
+            // card in the browser, user clicks Allow/Deny, hook returns the decision to Claude Code.
+            // Read-only and knowledge-work tools are in allowed-tools (auto-approved, no card).
+            const args = ['--output-format', 'stream-json', '--input-format', 'stream-json',
+              '--verbose', '--include-partial-messages', '--permission-mode', 'default',
+              '--allowed-tools', 'Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,ToolSearch,Agent,Skill,mcp__*',
+              '--disallowed-tools', 'Write(*.js),Write(*.jsx),Write(*.ts),Write(*.tsx),Write(*.py),Write(*.sh),Write(*.bash),Write(*.rb),Write(*.pl),Write(*.exe),Write(*.dll),Write(*.so),Edit(*.js),Edit(*.jsx),Edit(*.ts),Edit(*.tsx),Edit(*.py),Edit(*.sh),Edit(*.bash),Edit(*.rb),Edit(*.pl),Edit(*.exe)',
+              '--append-system-prompt', 'FORMATTING RULES (mandatory, apply to all output):\n- NEVER use em dashes (—) or en dashes (–) anywhere. This includes lists, headers, separators, and inline text. Wrong: "AI — your assistant". Right: "AI: your assistant". Use colons, full stops, commas, or restructure instead.\n- Use UK spelling throughout.\n\nPLATFORM RULES:\nRundock is a knowledge management platform focused on knowledge work. You can create and edit markdown, YAML, JSON, and text files freely. Writing or editing executable code files (.js, .ts, .py, .sh, etc.) is blocked by design.\n\nFor terminal commands (Bash), use them whenever they are the best way to accomplish the task. Do not avoid Bash to be cautious. The user has a permission system that lets them approve or deny each command, so always attempt the command and let the user decide. If a command is denied, respect the decision without questioning it. Simply acknowledge it and offer an alternative if relevant. Do not describe denied commands as "blocked by the platform" or suggest the user lacks permissions. They chose to deny that specific request.\n\nDestructive commands (rm with force flags, sudo, chmod, chown) and piped install scripts (curl|sh, wget|sh) are blocked entirely and will not reach the user for approval.'];
+
+            // Resume existing session if we have a session ID
+            if (msg.sessionId) {
+              args.push('--resume', msg.sessionId);
+            }
+
+            // Pass --agent with the slug name (first message only, not on resume)
+            if (!msg.sessionId) {
+              const agentList = discoverAgents();
+              const requestedAgent = msg.agent || 'default';
+              const agentData = agentList.find(a => a.id === requestedAgent)
+                || agentList.find(a => a.fileName && a.fileName.replace('.md', '') === requestedAgent);
+              if (agentData && agentData.fileName) {
+                args.push('--agent', agentData.name);
+              }
+            }
+
+            console.log(`[Chat] convo=${convoId} proc=${processId} agent=${msg.agent} sessionId=${msg.sessionId||'new'} mode=interactive args=${args.filter(a=>a.startsWith('--')).join(' ')}`);
+
+            const proc = spawn('claude', args, {
+              cwd: WORKSPACE,
+              env: { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(PORT), RUNDOCK_CONVO_ID: convoId },
+              stdio: ['pipe', 'pipe', 'pipe']
+            });
+
+            const entry = { process: proc, buffer: '', processId, agentId: msg.agent || 'default', responseText: '', exited: false };
+            processes.set(convoId, entry);
+
+            safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId }));
+
+            // Send the first message via stdin
+            proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: msg.content } }) + '\n');
+
+            let stderrBuffer = '';
+
+            proc.stdout.on('data', (chunk) => {
+              entry.buffer += chunk.toString();
+              const lines = entry.buffer.split('\n');
+              entry.buffer = lines.pop();
+              for (const line of lines) {
+                if (line.trim()) {
+                  try {
+                    const parsed = JSON.parse(line);
+                    parsed._agent = entry.agentId;
+                    parsed._conversationId = convoId;
+                    parsed._processId = processId;
+                    // Capture session ID from init message
+                    if (parsed.type === 'system' && parsed.subtype === 'init' && parsed.session_id) {
+                      parsed._sessionId = parsed.session_id;
+                    }
+                    // Accumulate response text for reconnect replay
+                    if (parsed.type === 'stream_event' && parsed.event?.type === 'content_block_delta' && parsed.event?.delta?.type === 'text_delta' && parsed.event.delta.text) {
+                      entry.responseText += parsed.event.delta.text;
+                    } else if (parsed.type === 'assistant' && parsed.message?.content) {
+                      for (const block of parsed.message.content) {
+                        if (block.type === 'text' && block.text) entry.responseText = block.text;
+                      }
+                    }
+
+                    // In interactive mode, a 'result' message means the turn is complete.
+                    // Send a 'done' event so the client finishes processing, but keep the process alive.
+                    if (parsed.type === 'result') {
+                      safeSend(JSON.stringify(parsed));
+                      safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: 0, _agent: entry.agentId, _conversationId: convoId, _processId: processId }));
+                      entry.responseText = '';
+                    } else {
+                      safeSend(JSON.stringify(parsed));
+                    }
+                  } catch (e) {
+                    safeSend(JSON.stringify({ type: 'raw', content: line, _agent: entry.agentId, _conversationId: convoId, _processId: processId }));
+                  }
+                }
+              }
+            });
+
+            proc.stderr.on('data', (chunk) => {
+              const text = chunk.toString();
+              stderrBuffer += text;
+              if (text.includes('no stdin data') || text.includes('proceeding without')) return;
+              safeSend(JSON.stringify({ type: 'error', content: text, _conversationId: convoId, _processId: processId }));
+            });
+
+            proc.on('close', (code) => {
+              entry.exited = true;
+              const current = processes.get(convoId);
+              if (current && current.processId !== processId) return;
+
+              // Detect stale session and retry fresh
+              const isResumeFailure = msg.sessionId && !msg._resumeRetry && code !== 0 &&
+                (stderrBuffer.includes('session') || stderrBuffer.includes('resume') || stderrBuffer.includes('not found'));
+              if (isResumeFailure) {
+                console.log(`[Chat] Resume failed for session ${msg.sessionId}, retrying fresh`);
+                processes.delete(convoId);
+                safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: 'Previous session expired. Starting fresh.', _conversationId: convoId, _processId: processId }));
+                const freshMsg = { ...msg, sessionId: null, _resumeRetry: true };
+                ws.emit('message', JSON.stringify(freshMsg));
+                return;
+              }
+
+              // Flush remaining buffer
+              if (entry.buffer.trim()) {
+                try {
+                  const parsed = JSON.parse(entry.buffer);
+                  parsed._agent = entry.agentId;
+                  parsed._conversationId = convoId;
+                  parsed._processId = processId;
+                  safeSend(JSON.stringify(parsed));
+                } catch (e) {
+                  safeSend(JSON.stringify({ type: 'raw', content: entry.buffer, _conversationId: convoId, _processId: processId }));
+                }
+              }
+
+              // Process exited unexpectedly in interactive mode. Send done so client unblocks.
+              console.log(`[Chat] convo=${convoId} proc=${processId} process exited code=${code} (interactive)`);
+              safeSend(JSON.stringify({ type: 'system', subtype: 'done', code, _agent: entry.agentId, _conversationId: convoId, _processId: processId }));
+              processes.delete(convoId);
+            });
           }
-        }
 
-        // Prompt goes via stdin (stream-json input), not as a CLI arg
-        console.log(`[Chat] convo=${convoId} proc=${processId} agent=${msg.agent} sessionId=${msg.sessionId||'new'} args=${args.filter(a=>a.startsWith('--')).join(' ')}`);
+        // ── LEGACY MODE (--print, one process per message) ────────────
+        } else {
+          const processId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
-        const proc = spawn('claude', args, {
-          cwd: WORKSPACE,
-          env: { ...process.env, TERM: 'dumb', RUNDOCK: '1' },
-          stdio: ['pipe', 'pipe', 'pipe']
-        });
+          // Kill existing process for this conversation only
+          if (processes.has(convoId)) {
+            processes.get(convoId).process.kill();
+            processes.delete(convoId);
+          }
 
-        const entry = { process: proc, buffer: '', processId, agentId: msg.agent || 'default', responseText: '' };
-        processes.set(convoId, entry);
+          const args = ['--print', '--output-format', 'stream-json', '--input-format', 'stream-json',
+            '--verbose', '--include-partial-messages', '--permission-mode', 'acceptEdits',
+            '--allowed-tools', 'Bash,WebFetch,WebSearch,mcp__*',
+            '--disallowed-tools', 'Write(*.js),Write(*.jsx),Write(*.ts),Write(*.tsx),Write(*.py),Write(*.sh),Write(*.bash),Write(*.rb),Write(*.pl),Write(*.exe),Write(*.dll),Write(*.so),Edit(*.js),Edit(*.jsx),Edit(*.ts),Edit(*.tsx),Edit(*.py),Edit(*.sh),Edit(*.bash),Edit(*.rb),Edit(*.pl),Edit(*.exe)',
+            '--append-system-prompt', 'FORMATTING RULES (mandatory, apply to all output):\n- NEVER use em dashes (—) or en dashes (–) anywhere. This includes lists, headers, separators, and inline text. Wrong: "AI — your assistant". Right: "AI: your assistant". Use colons, full stops, commas, or restructure instead.\n- Use UK spelling throughout.\n\nPLATFORM RULES:\nRundock is a knowledge management platform. You can create and edit markdown, YAML, JSON, and text files. Writing or editing executable code files (.js, .ts, .py, .sh, etc.) is blocked by design. Destructive commands (rm, sudo, chmod) are also blocked. If a user asks you to do something that hits these restrictions, explain that Rundock is designed for knowledge work, not software development, and suggest an alternative approach using supported file types. Never offer to change permission settings or suggest workarounds to bypass these restrictions.'];
 
-        // Tell client which processId is now active for this conversation
-        safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId }));
+          if (msg.sessionId) {
+            args.push('--resume', msg.sessionId);
+          }
 
-        // Send the user's prompt via stdin as a stream-json message
-        proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: msg.content } }) + '\n');
+          if (!msg.sessionId) {
+            const agentList = discoverAgents();
+            const requestedAgent = msg.agent || 'default';
+            const agentData = agentList.find(a => a.id === requestedAgent)
+              || agentList.find(a => a.fileName && a.fileName.replace('.md', '') === requestedAgent);
+            if (agentData && agentData.fileName) {
+              args.push('--agent', agentData.name);
+            }
+          }
 
-        proc.stdout.on('data', (chunk) => {
-          entry.buffer += chunk.toString();
-          const lines = entry.buffer.split('\n');
-          entry.buffer = lines.pop();
-          for (const line of lines) {
-            if (line.trim()) {
+          console.log(`[Chat] convo=${convoId} proc=${processId} agent=${msg.agent} sessionId=${msg.sessionId||'new'} mode=legacy args=${args.filter(a=>a.startsWith('--')).join(' ')}`);
+
+          const proc = spawn('claude', args, {
+            cwd: WORKSPACE,
+            env: { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(PORT), RUNDOCK_CONVO_ID: convoId },
+            stdio: ['pipe', 'pipe', 'pipe']
+          });
+
+          const entry = { process: proc, buffer: '', processId, agentId: msg.agent || 'default', responseText: '', exited: false };
+          processes.set(convoId, entry);
+
+          safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId }));
+
+          proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: msg.content } }) + '\n');
+
+          proc.stdout.on('data', (chunk) => {
+            entry.buffer += chunk.toString();
+            const lines = entry.buffer.split('\n');
+            entry.buffer = lines.pop();
+            for (const line of lines) {
+              if (line.trim()) {
+                try {
+                  const parsed = JSON.parse(line);
+                  parsed._agent = msg.agent || 'default';
+                  parsed._conversationId = convoId;
+                  parsed._processId = processId;
+                  if (parsed.type === 'system' && parsed.subtype === 'init' && parsed.session_id) {
+                    parsed._sessionId = parsed.session_id;
+                  }
+                  if (parsed.type === 'stream_event' && parsed.event?.type === 'content_block_delta' && parsed.event?.delta?.type === 'text_delta' && parsed.event.delta.text) {
+                    entry.responseText += parsed.event.delta.text;
+                  } else if (parsed.type === 'assistant' && parsed.message?.content) {
+                    for (const block of parsed.message.content) {
+                      if (block.type === 'text' && block.text) entry.responseText = block.text;
+                    }
+                  }
+                  safeSend(JSON.stringify(parsed));
+                } catch (e) {
+                  safeSend(JSON.stringify({ type: 'raw', content: line, _agent: msg.agent || 'default', _conversationId: convoId, _processId: processId }));
+                }
+              }
+            }
+          });
+
+          let stderrBuffer = '';
+          proc.stderr.on('data', (chunk) => {
+            const text = chunk.toString();
+            stderrBuffer += text;
+            if (text.includes('no stdin data') || text.includes('proceeding without')) return;
+            safeSend(JSON.stringify({ type: 'error', content: text, _conversationId: convoId, _processId: processId }));
+          });
+
+          proc.on('close', (code) => {
+            entry.exited = true;
+            const current = processes.get(convoId);
+            if (current && current.processId !== processId) return;
+
+            const isResumeFailure = msg.sessionId && !msg._resumeRetry && code !== 0 &&
+              (stderrBuffer.includes('session') || stderrBuffer.includes('resume') || stderrBuffer.includes('not found'));
+            if (isResumeFailure) {
+              console.log(`[Chat] Resume failed for session ${msg.sessionId}, retrying fresh`);
+              processes.delete(convoId);
+              safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: 'Previous session expired. Starting fresh.', _conversationId: convoId, _processId: processId }));
+              const freshMsg = { ...msg, sessionId: null, _resumeRetry: true };
+              ws.emit('message', JSON.stringify(freshMsg));
+              return;
+            }
+
+            if (entry.buffer.trim()) {
               try {
-                const parsed = JSON.parse(line);
+                const parsed = JSON.parse(entry.buffer);
                 parsed._agent = msg.agent || 'default';
                 parsed._conversationId = convoId;
                 parsed._processId = processId;
-                // Capture session ID from init message
-                if (parsed.type === 'system' && parsed.subtype === 'init' && parsed.session_id) {
-                  parsed._sessionId = parsed.session_id;
-                }
-                // Accumulate response text for reconnect replay
-                if (parsed.type === 'stream_event' && parsed.event?.type === 'content_block_delta' && parsed.event?.delta?.type === 'text_delta' && parsed.event.delta.text) {
-                  entry.responseText += parsed.event.delta.text;
-                } else if (parsed.type === 'assistant' && parsed.message?.content) {
-                  for (const block of parsed.message.content) {
-                    if (block.type === 'text' && block.text) entry.responseText = block.text;
-                  }
-                }
                 safeSend(JSON.stringify(parsed));
               } catch (e) {
-                safeSend(JSON.stringify({ type: 'raw', content: line, _agent: msg.agent || 'default', _conversationId: convoId, _processId: processId }));
+                safeSend(JSON.stringify({ type: 'raw', content: entry.buffer, _conversationId: convoId, _processId: processId }));
               }
             }
-          }
-        });
-
-        let stderrBuffer = '';
-        proc.stderr.on('data', (chunk) => {
-          const text = chunk.toString();
-          stderrBuffer += text;
-          if (text.includes('no stdin data') || text.includes('proceeding without')) return;
-          safeSend(JSON.stringify({ type: 'error', content: text, _conversationId: convoId, _processId: processId }));
-        });
-
-        proc.on('close', (code) => {
-          // Only send done if this process is still the active one for this conversation.
-          // A superseded process (killed by a newer message) should not trigger finishProcessing.
-          const current = processes.get(convoId);
-          if (current && current.processId !== processId) return;
-
-          // Detect stale session: if --resume was used and the process failed quickly,
-          // retry without --resume so the user gets a fresh session transparently
-          const isResumeFailure = msg.sessionId && !msg._resumeRetry && code !== 0 &&
-            (stderrBuffer.includes('session') || stderrBuffer.includes('resume') || stderrBuffer.includes('not found'));
-          if (isResumeFailure) {
-            console.log(`[Chat] Resume failed for session ${msg.sessionId}, retrying fresh`);
+            safeSend(JSON.stringify({ type: 'system', subtype: 'done', code, _agent: msg.agent || 'default', _conversationId: convoId, _processId: processId }));
             processes.delete(convoId);
-            safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: 'Previous session expired. Starting fresh.', _conversationId: convoId, _processId: processId }));
-            // Re-dispatch without sessionId to start a fresh session (flag prevents infinite retry)
-            const freshMsg = { ...msg, sessionId: null, _resumeRetry: true };
-            ws.emit('message', JSON.stringify(freshMsg));
-            return;
-          }
-
-          if (entry.buffer.trim()) {
-            try {
-              const parsed = JSON.parse(entry.buffer);
-              parsed._agent = msg.agent || 'default';
-              parsed._conversationId = convoId;
-              parsed._processId = processId;
-              safeSend(JSON.stringify(parsed));
-            } catch (e) {
-              safeSend(JSON.stringify({ type: 'raw', content: entry.buffer, _conversationId: convoId, _processId: processId }));
-            }
-          }
-          safeSend(JSON.stringify({ type: 'system', subtype: 'done', code, _agent: msg.agent || 'default', _conversationId: convoId, _processId: processId }));
-          processes.delete(convoId);
-        });
+          });
+        }
       }
 
       // Permission response: user approved/denied a tool in the browser UI.
-      // Forward as a control_response to the Claude Code process via stdin.
+      // Resolves the pending HTTP long-poll from the PreToolUse hook script.
       if (msg.type === 'permission_response') {
-        const entry = processes.get(msg.conversationId);
-        if (entry && entry.process.stdin && entry.process.stdin.writable) {
-          const controlResponse = JSON.stringify({
-            type: 'control_response',
-            response: {
-              request_id: msg.requestId,
-              subtype: 'can_use_tool',
-              behavior: msg.allow ? 'allow' : 'deny',
-              ...(msg.allow ? {} : { message: 'User denied this action in Rundock' })
-            }
-          }) + '\n';
-          entry.process.stdin.write(controlResponse);
+        const pending = pendingPermissionRequests.get(msg.requestId);
+        if (pending) {
+          clearTimeout(pending.timer);
+          pendingPermissionRequests.delete(msg.requestId);
+          pending.res.writeHead(200, { 'Content-Type': 'application/json' });
+          pending.res.end(JSON.stringify({ allow: msg.allow }));
           console.log(`[Permission] convo=${msg.conversationId} requestId=${msg.requestId} decision=${msg.allow ? 'allow' : 'deny'}`);
+        } else {
+          console.warn(`[Permission] No pending request for requestId=${msg.requestId} (expired or already resolved)`);
         }
       }
 

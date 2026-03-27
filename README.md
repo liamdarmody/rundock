@@ -105,7 +105,7 @@ Browser (WebSocket) <-> Node.js server <-> Claude Code CLI
 
 - **server.js:** Discovers agents, skills, and files. Spawns Claude Code processes for conversations. Manages sessions.
 - **public/index.html:** Single-page app with nav rail, sidebar, and main panel.
-- **Claude Code:** Runs as child processes with `--output-format stream-json`. Each conversation gets its own process with session persistence via `--resume`.
+- **Claude Code:** Runs as child processes in interactive stream-json mode. Each conversation gets its own persistent process with session continuity via `--resume`. Follow-up messages push to stdin rather than spawning new processes.
 
 Everything runs on your machine. No data is sent anywhere other than Anthropic's API (through Claude Code). Same workspace files are accessible to Rundock, Claude Code, Obsidian, VS Code, or any other tool simultaneously.
 
@@ -117,9 +117,11 @@ Everything runs on your machine. No data is sent anywhere other than Anthropic's
 
 **Your API key is managed by Claude Code, not Rundock.** When you install Claude Code and sign in, it stores your authentication locally on your machine. Rundock never sees, stores, or transmits your API key. If you've already authenticated with Claude Code in your terminal, Rundock uses that same session.
 
-**Agents can read and write knowledge files in your workspace.** Rundock runs Claude Code with permissions that allow agents to read files, write markdown and knowledge files, and run commands within your workspace folder without asking for confirmation each time. This is what makes the conversational experience smooth (an agent can create an agent file, update a document, or set up a folder structure when you ask it to). Agents do not have access to files outside your workspace.
+**Agents can read and write knowledge files in your workspace.** Rundock runs Claude Code with permissions that allow agents to read files, write markdown and knowledge files, and browse your workspace freely. Agents do not have access to files outside your workspace.
 
-**Executable code is blocked by design.** Agents cannot write or edit code files (.js, .ts, .py, .sh, and other executable formats). Destructive commands (rm, sudo, chmod) are also blocked. Rundock is built for knowledge work, not software development.
+**Terminal commands require your approval.** When an agent needs to run a command (Bash), a permission card appears in the conversation with the command details, risk level, and Allow/Deny buttons. You can also choose "Always Allow" to auto-approve a command pattern for the rest of your session. High-risk commands (rm, sudo, chmod) are flagged with a warning. Cards auto-deny after two minutes if you don't respond.
+
+**Executable code is blocked by design.** Agents cannot write or edit code files (.js, .ts, .py, .sh, and other executable formats). Rundock is built for knowledge work, not software development.
 
 **The codebase is small and auditable.** Rundock is roughly 1,500 lines of server code and 1,900 lines of client code. There are two dependencies (a markdown renderer and a WebSocket library). You can read the entire codebase in an afternoon.
 

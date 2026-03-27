@@ -161,6 +161,16 @@ function handle(d) {
     case 'control_request':
       if(convoId) handlePermissionRequest(d, convoId);
       break;
+    case 'permission_timeout': {
+      const card = document.getElementById('perm-' + d.requestId);
+      if (card) {
+        card.innerHTML = `<div class="permission-resolved denied"><span>✕ Timed out</span></div>`;
+      }
+      pendingPermissions.delete(d.requestId);
+      const t = document.getElementById('thinking-indicator');
+      if (t) t.style.display = '';
+      break;
+    }
     case 'error': if(!d.content?.includes('no stdin')) addSystemMsgToConvo(d.content, convoId); break;
   }
 }
@@ -1239,8 +1249,9 @@ function handlePermissionRequest(d, convoId) {
     return;
   }
 
-  // Store callback data for safe event handling (no inline onclick injection)
-  pendingPermissions.set(requestId, { convoId, key });
+  // Store callback data for safe event handling (no inline onclick injection).
+  // toolInput is echoed back in control_response (required by Claude Code).
+  pendingPermissions.set(requestId, { convoId, key, toolInput: input });
 
   const icons = {
     low: '<svg class="permission-icon" width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5"/><path d="M6 8l1.5 1.5L10.5 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -1294,7 +1305,8 @@ function respondPermission(requestId, allow, always) {
     type: 'permission_response',
     requestId: requestId,
     conversationId: pending.convoId,
-    allow: allow
+    allow: allow,
+    toolInput: pending.toolInput || {}
   }));
 
   // Store always-allow pattern if requested
