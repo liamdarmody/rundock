@@ -171,6 +171,9 @@ function handle(d) {
       if (t) t.style.display = '';
       break;
     }
+    case 'session_history':
+      renderSessionHistory(d);
+      break;
     case 'error': if(!d.content?.includes('no stdin')) addSystemMsgToConvo(d.content, convoId); break;
   }
 }
@@ -744,7 +747,7 @@ function createConversation(agentId, title) {
   const convo = { id: Date.now().toString(), agentId: agent.id, agent, title: title || `Chat with ${agent.displayName}`, messages: [], status: 'active', createdAt: new Date().toISOString() };
   conversations.unshift(convo);
   activeConversation = convo;
-  persistConversation(convo);
+  // Don't persist yet: conversation is saved on first message send (lazy creation)
   renderConvoList();
   setupChat(convo);
   document.getElementById('messages').innerHTML = '';
@@ -956,26 +959,52 @@ function renderConvoList() {
   }
   document.getElementById('convo-list').innerHTML = h;
 }
+// Discard current conversation if no real messages were sent (lazy creation cleanup)
+function discardIfEmpty() {
+  if (!activeConversation) return;
+  const hasUserMsg = activeConversation.messages.some(m => m.role === 'user');
+  if (!hasUserMsg && !activeConversation.persisted) {
+    conversations = conversations.filter(c => c.id !== activeConversation.id);
+    activeConversation = null;
+    renderConvoList();
+  }
+}
+
 function openConversation(id) {
+  if (activeConversation && activeConversation.id !== id) discardIfEmpty();
   const c=conversations.find(x=>x.id===id); if(!c) return;
   activeConversation=c;
   if(c.status==='done') { c.status='active'; }
   setupChat(c);
   const el=document.getElementById('messages'); el.innerHTML='';
-  if(c.persisted && c.messages.length===0) {
-    // Persisted conversation from a previous session: show resume divider
-    el.innerHTML=`<div style="display:flex;align-items:center;gap:8px;padding:16px 0;color:var(--text-3);font-size:var(--caption)">
-      <div style="flex:1;height:1px;background:var(--border)"></div>
-      <span>Previous session${c.sessionId ? ' (will resume)' : ''}</span>
-      <div style="flex:1;height:1px;background:var(--border)"></div>
-    </div>`;
+  if(c.persisted && c.messages.length===0 && c.sessionId) {
+    // Persisted conversation from a previous session: load history from JSONL transcript
+    el.innerHTML=`<div id="history-loading" style="text-align:center;padding:24px 0;color:var(--text-3);font-size:var(--caption)">Loading conversation history...</div>`;
+    ws.send(JSON.stringify({
+      type: 'get_session_history',
+      sessionId: c.sessionId,
+      conversationId: c.id,
+      limit: 20
+    }));
     // Clear persisted flag: this conversation is now active in current session
     c.persisted = false;
     c.status = 'active';
     persistConversation(c);
     renderConvoList();
   } else {
-    for(const m of c.messages) { if(m.role==='user') addUserMsg(m.content,false); else if(m.role==='agent') addAgentMsg(m.content,m.agentId,false); }
+    const historyCount = c._historyCount || 0;
+    for(let i=0; i<c.messages.length; i++) {
+      const m = c.messages[i];
+      if(m.role==='user') addUserMsg(m.content,false);
+      else if(m.role==='agent') addAgentMsg(m.content,m.agentId,false);
+      if(m.isHistory) {
+        const last = el.lastElementChild;
+        if(last) last.classList.add('history-msg');
+      }
+      if(historyCount > 0 && i === historyCount - 1) {
+        el.appendChild(createHistoryDivider());
+      }
+    }
   }
   // Restore processing state if this conversation is still working
   const state = getConvoState(id);
@@ -1150,6 +1179,107 @@ function addAgentMsg(text,agentId,anim=true) {
 function addUserMsg(text,anim=true) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg msg-user'; if(!anim)d.style.animation='none'; d.innerHTML=`<div class="msg-bubble">${esc(text)}</div>`; m.appendChild(d); scrollBottom(); }
 function addSystemMsg(text) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg-system'; d.textContent=text; m.appendChild(d); scrollBottom(); }
 function addToolMsg(name) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg-tool'; d.innerHTML=`<span style="color:var(--working)">&#x2192;</span> Using ${esc(name)}`; m.appendChild(d); scrollBottom(); return d; }
+// ===== SESSION HISTORY =====
+
+function createHistoryDivider() {
+  const divider = document.createElement('div');
+  divider.id = 'history-divider';
+  divider.style.cssText = 'display:flex;align-items:center;gap:8px;padding:16px 0;color:var(--text-3);font-size:var(--caption)';
+  divider.innerHTML = `<div style="flex:1;height:1px;background:var(--border)"></div><span>Previous session</span><div style="flex:1;height:1px;background:var(--border)"></div>`;
+  return divider;
+}
+
+function renderSessionHistory(d) {
+  const convo = conversations.find(c => c.id === d.conversationId);
+  if (!convo) return;
+  const el = document.getElementById('messages');
+  if (!el) return;
+
+  // Remove the loading indicator
+  const loader = document.getElementById('history-loading');
+  if (loader) loader.remove();
+
+  // If the user already sent a new (non-history) message while history was loading, skip rendering
+  if (convo.messages.some(m => !m.isHistory)) return;
+
+  // Build history messages
+  const frag = document.createDocumentFragment();
+
+  // "Load earlier messages" button if there's more history
+  if (d.hasMore) {
+    const loadMore = document.createElement('div');
+    loadMore.className = 'history-load-more';
+    loadMore.id = 'history-load-more';
+    const alreadyLoaded = (convo._historyCount || 0) + d.messages.length;
+    loadMore.textContent = `Load earlier messages (${d.totalCount - alreadyLoaded} more)`;
+    loadMore.style.cssText = 'text-align:center;padding:12px 0;font-size:var(--caption);color:var(--accent);cursor:pointer;';
+    loadMore.dataset.offset = d.messages.length;
+    loadMore.onclick = () => {
+      const currentOffset = parseInt(loadMore.dataset.offset);
+      loadMore.textContent = 'Loading...';
+      loadMore.dataset.offset = currentOffset + 20;
+      ws.send(JSON.stringify({
+        type: 'get_session_history',
+        sessionId: convo.sessionId,
+        conversationId: convo.id,
+        limit: 20,
+        offset: currentOffset
+      }));
+    };
+    frag.appendChild(loadMore);
+  }
+
+  // Render each historical message
+  const agent = convo.agent;
+  for (const msg of d.messages) {
+    const div = document.createElement('div');
+    div.style.animation = 'none';
+    if (msg.role === 'user') {
+      div.className = 'msg msg-user history-msg';
+      div.innerHTML = `<div class="msg-bubble">${esc(msg.content)}</div>`;
+    } else {
+      div.className = 'msg msg-agent history-msg';
+      div.innerHTML = `<div class="msg-sender" style="color:${agent?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${agent?.colour||'var(--accent)'}">${agent?.icon||'?'}</div> ${agent?.displayName||'Agent'}</div><div class="msg-bubble">${formatMd(msg.content)}</div>`;
+    }
+    frag.appendChild(div);
+  }
+
+  // Insert before any existing content (in case of load-more)
+  const existingDivider = document.getElementById('history-divider');
+  const isLoadMore = !!existingDivider;
+  if (isLoadMore) {
+    // Load more: capture scroll position, prepend, then restore
+    const loadMoreBtn = document.getElementById('history-load-more');
+    const scrollAnchor = loadMoreBtn ? loadMoreBtn.nextElementSibling : el.firstChild;
+    const anchorTop = scrollAnchor ? scrollAnchor.getBoundingClientRect().top : 0;
+    if (loadMoreBtn) loadMoreBtn.remove();
+    el.insertBefore(frag, el.firstChild);
+    // Restore scroll so the anchor stays in the same viewport position
+    if (scrollAnchor) {
+      const newAnchorTop = scrollAnchor.getBoundingClientRect().top;
+      el.scrollTop += (newAnchorTop - anchorTop);
+    }
+  } else {
+    // First load: add the divider after history messages
+    const divider = createHistoryDivider();
+    frag.appendChild(divider);
+    el.insertBefore(frag, el.firstChild);
+    // Scroll to the divider so the user sees the boundary
+    divider.scrollIntoView({ behavior: 'auto', block: 'end' });
+  }
+
+  // Store history messages in convo so they persist when navigating away and back
+  const historyMsgs = d.messages.map(m => ({
+    role: m.role === 'user' ? 'user' : 'agent',
+    content: m.content,
+    agentId: convo.agentId,
+    isHistory: true
+  }));
+  // Prepend to existing messages (load-more adds older messages before existing ones)
+  convo.messages = [...historyMsgs, ...convo.messages];
+  convo._historyCount = (convo._historyCount || 0) + historyMsgs.length;
+}
+
 // ===== PERMISSION UI =====
 
 // Session-level "always allow" patterns
@@ -1364,7 +1494,7 @@ function switchNav(nav) {
   else showView('home');
 }
 function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }
-function goHome() { activeConversation=null; showView('home'); switchNav('team'); document.querySelectorAll('.agent-status-item').forEach(el=>el.classList.remove('active')); }
+function goHome() { discardIfEmpty(); activeConversation=null; showView('home'); switchNav('team'); document.querySelectorAll('.agent-status-item').forEach(el=>el.classList.remove('active')); }
 function goBack() { if(activeConversation) showProfile(activeConversation.agentId); else goHome(); }
 
 // Theme

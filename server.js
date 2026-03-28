@@ -12,6 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const { WebSocketServer } = require('ws');
+const readline = require('readline');
 
 const PORT = process.env.PORT || 3000;
 let WORKSPACE = process.env.WORKSPACE || null;
@@ -58,6 +59,64 @@ function writeState(state) {
   const dir = rundockDir();
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify(state, null, 2));
+}
+
+// Session history: read Claude Code JSONL transcripts from disk
+function getSessionJsonlPath(sessionId) {
+  if (!WORKSPACE || !sessionId) return null;
+  const home = process.env.HOME || process.env.USERPROFILE || '';
+  const projectHash = WORKSPACE.replace(/\//g, '-');
+  const jsonlPath = path.join(home, '.claude', 'projects', projectHash, sessionId + '.jsonl');
+  if (fs.existsSync(jsonlPath)) return jsonlPath;
+  // Fallback: scan project dirs for the session file
+  const projectsDir = path.join(home, '.claude', 'projects');
+  try {
+    for (const dir of fs.readdirSync(projectsDir)) {
+      const candidate = path.join(projectsDir, dir, sessionId + '.jsonl');
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  } catch (e) { /* projects dir doesn't exist */ }
+  return null;
+}
+
+async function parseSessionHistory(sessionId, limit = 20, offset = 0) {
+  const filePath = getSessionJsonlPath(sessionId);
+  if (!filePath) return { messages: [], totalCount: 0, hasMore: false };
+
+  const displayable = [];
+  const rl = readline.createInterface({
+    input: fs.createReadStream(filePath, { encoding: 'utf-8' }),
+    crlfDelay: Infinity
+  });
+
+  for await (const line of rl) {
+    try {
+      const obj = JSON.parse(line);
+      // User text messages (not tool results)
+      if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
+        displayable.push({ role: 'user', content: obj.message.content });
+        continue;
+      }
+      // Assistant messages with text content
+      if (obj.message && obj.message.role === 'assistant' && Array.isArray(obj.message.content)) {
+        const textParts = obj.message.content
+          .filter(b => b.type === 'text' && b.text)
+          .map(b => b.text);
+        if (textParts.length > 0) {
+          displayable.push({ role: 'assistant', content: textParts.join('\n\n') });
+        }
+      }
+    } catch (e) { /* skip unparseable lines */ }
+  }
+
+  const totalCount = displayable.length;
+  // Return the last `limit` messages, offset from the end
+  const start = Math.max(0, totalCount - limit - offset);
+  const end = Math.max(0, totalCount - offset);
+  const messages = displayable.slice(start, end);
+  const hasMore = start > 0;
+
+  return { messages, totalCount, hasMore };
 }
 
 // Scan common locations for workspaces (directories with .claude/ or CLAUDE.md)
@@ -1042,6 +1101,7 @@ wss.on('connection', (ws) => {
   // Always send this message, even when empty, so the client can reconcile stale state.
   const active = [];
   for (const [convoId, entry] of chatProcesses) {
+    if (entry.idle) continue; // Don't report idle processes as active
     active.push({ conversationId: convoId, processId: entry.processId, agentId: entry.agentId, responseText: entry.responseText || '' });
   }
   ws.send(JSON.stringify({ type: 'active_processes', processes: active }));
@@ -1069,6 +1129,7 @@ wss.on('connection', (ws) => {
             console.log(`[Chat] convo=${convoId} proc=${processId} FOLLOW-UP (interactive stdin)`);
             safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId }));
             existing.responseText = '';
+            existing.idle = false;
             existing.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: msg.content } }) + '\n');
           } else {
             // No live process: spawn a new one (first message or after disconnect)
@@ -1155,6 +1216,7 @@ wss.on('connection', (ws) => {
                       safeSend(JSON.stringify(parsed));
                       safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: 0, _agent: entry.agentId, _conversationId: convoId, _processId: processId }));
                       entry.responseText = '';
+                      entry.idle = true;
                     } else {
                       safeSend(JSON.stringify(parsed));
                     }
@@ -1420,7 +1482,13 @@ wss.on('connection', (ws) => {
 
       if (msg.type === 'get_conversations') {
         if (!WORKSPACE) return;
-        ws.send(JSON.stringify({ type: 'conversations', conversations: readConversations() }));
+        // Clean up empty conversations (no sessionId means no message was ever sent)
+        // Only remove if older than 5 minutes to avoid race with sessionId assignment
+        const convos = readConversations();
+        const fiveMinAgo = Date.now() - 5 * 60 * 1000;
+        const cleaned = convos.filter(c => c.sessionId || new Date(c.lastActiveAt || c.createdAt).getTime() > fiveMinAgo);
+        if (cleaned.length < convos.length) writeConversations(cleaned);
+        ws.send(JSON.stringify({ type: 'conversations', conversations: cleaned }));
       }
 
       // Client requests buffered messages after it has loaded conversations and state.
@@ -1560,6 +1628,29 @@ wss.on('connection', (ws) => {
             ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents() }));
           }
         }
+      }
+
+      if (msg.type === 'get_session_history') {
+        const { sessionId, conversationId, limit, offset } = msg;
+        const jsonlPath = getSessionJsonlPath(sessionId);
+        parseSessionHistory(sessionId, limit || 20, offset || 0).then(result => {
+          ws.send(JSON.stringify({
+            type: 'session_history',
+            conversationId,
+            messages: result.messages,
+            totalCount: result.totalCount,
+            hasMore: result.hasMore
+          }));
+        }).catch(err => {
+          console.warn('[Session history] Parse error:', err.message);
+          ws.send(JSON.stringify({
+            type: 'session_history',
+            conversationId,
+            messages: [],
+            totalCount: 0,
+            hasMore: false
+          }));
+        });
       }
 
       if (msg.type === 'save_file') {

@@ -125,7 +125,7 @@ Everything runs on your machine. No data is sent anywhere other than Anthropic's
 
 **The codebase is small and auditable.** Rundock is roughly 1,500 lines of server code and 1,900 lines of client code. There are two dependencies (a markdown renderer and a WebSocket library). You can read the entire codebase in an afternoon.
 
-**Nothing is stored in the cloud.** Conversation metadata (title, agent, session ID) is saved to a `.rundock/` directory in your workspace so sessions persist across page reloads. Message content is not stored by Rundock. Your workspace files are plain files on disk. Theme preference is saved in your browser's local storage. A list of recently opened workspaces is saved to a local file in the Rundock install directory. That's it.
+**Nothing is stored in the cloud.** Conversation metadata (title, agent, session ID) is saved to a `.rundock/` directory in your workspace so sessions persist across page reloads. Message content is read from Claude Code's own JSONL transcript files on disk when resuming a previous conversation. Rundock does not store message content separately. Your workspace files are plain files on disk. Theme preference is saved in your browser's local storage. A list of recently opened workspaces is saved to a local file in the Rundock install directory. That's it.
 
 For technical users: the full source is in `server.js` (Node.js HTTP + WebSocket server, agent/skill discovery, Claude Code process management) and `public/app.js` (single-page client application). No build step, no bundler, no minification.
 
@@ -149,7 +149,7 @@ Rundock looks for skills in `.claude/skills/` (SKILL.md files). Skills are also 
 
 **Conversations disappear on refresh**
 
-Conversation metadata persists across reloads, but message content is not stored by Rundock (Claude Code owns session history). Previous conversations appear in a collapsible "Previous" section in the sidebar. Click one to resume where you left off.
+Conversation metadata persists across reloads. Previous conversations appear in a collapsible "Previous" section in the sidebar. Click one to resume: Rundock loads the message history from Claude Code's JSONL transcript files on disk. Messages from the previous session appear faded with a "Previous session" divider.
 
 ## Licence
 

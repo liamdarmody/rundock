@@ -2,6 +2,23 @@
 
 All notable changes to Rundock are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## 0.5.0: Session History (2026-03-28)
+
+Session history on resume, idle process handling, and conversation cleanup. Previous conversations now load their full message history from Claude Code's transcripts.
+
+### Added
+
+- **Session history on resume:** Opening a previous conversation loads the message history from Claude Code's JSONL transcript files on disk. Messages render with faded styling and a "Previous session" divider separating history from new messages.
+- **Paginated history loading:** Long conversations show a "Load earlier messages" button that loads older messages in batches of 20, with scroll position preserved.
+- **Lazy conversation creation:** New conversations are only persisted to disk when the first message is sent. Navigating away from an empty conversation silently discards it.
+- **Empty conversation cleanup:** On workspace load, persisted conversations with no session ID (and older than 5 minutes) are automatically removed.
+
+### Fixed
+
+- **Stale process thinking mode:** Idle Claude Code processes (waiting for input between turns) were reported as "active" on page reload, causing conversations to get stuck in thinking mode with a disabled input field. Processes now track idle state and are excluded from the active process list when not mid-response.
+
+---
+
 ## 0.4.0: Permissions (2026-03-27)
 
 Interactive mode and browser-based permission cards. Conversations now use a persistent process, and terminal commands require user approval through an in-conversation permission UI.
