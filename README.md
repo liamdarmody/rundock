@@ -40,7 +40,10 @@ WORKSPACE=/path/to/your/folder npm start
 
 ## Updating
 
+From the Rundock install directory (where you cloned the repo):
+
 ```bash
+cd /path/to/rundock
 npm run update
 ```
 
