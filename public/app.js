@@ -372,11 +372,13 @@ function handleResult(d, convoId) {
     // DELEGATE marker: orchestrator hands off to another agent
     const delegatePattern = /<!-- RUNDOCK:DELEGATE agent=([\w-]+) -->\n?([\s\S]*?)<!-- \/RUNDOCK:DELEGATE -->/;
     const delegateMatch = textToScan.match(delegatePattern);
+    let delegationTriggered = false;
     if (delegateMatch) {
       const targetAgent = delegateMatch[1];
       const context = delegateMatch[2].trim();
       console.log('[Delegate] Detected:', targetAgent, 'context:', context.substring(0, 100));
       ws.send(JSON.stringify({ type: 'delegate', conversationId: convoId, targetAgent, context }));
+      delegationTriggered = true;
     }
 
     // RETURN marker: delegate signals task complete, return to orchestrator
@@ -461,7 +463,8 @@ function handleResult(d, convoId) {
     console.error('[handleResult] Error:', err);
   }
   state.currentStreamingMsg=null; state.streamingRawText=''; state.latestText=''; state.latestAgentId=null;
-  finishProcessing(convoId);
+  // Don't finish processing when the orchestrator just delegated: the delegate is about to start
+  if (!delegationTriggered) finishProcessing(convoId);
   renderConvoList();
 }
 
