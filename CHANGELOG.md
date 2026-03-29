@@ -2,6 +2,37 @@
 
 All notable changes to Rundock are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## 0.6.0: Delegation (2026-03-29)
+
+Agent delegation, skill lifecycle, and a scalable org chart. Orchestrators can now route work to specialists mid-conversation, and Doc can create and edit skills directly.
+
+### Added
+
+- **Specialist delegation:** Orchestrators hand off conversations to specialist agents when a request matches their domain. The specialist stays active for follow-up questions. When the user asks something outside the specialist's scope, it hands back to the orchestrator, which automatically routes the request to the correct agent. No repeated questions, no dead air.
+- **Platform delegation:** Orchestrators delegate platform operations (creating, editing, deleting agents and skills) to Doc. Platform delegates are transactional: complete the task and return. Specialist delegates are conversational: stay until the user moves on.
+- **Skill lifecycle markers:** Doc can now create, edit, and delete skills via `RUNDOCK:SAVE_SKILL` and `RUNDOCK:DELETE_SKILL` markers, bypassing Claude Code's `.claude/` write restriction. Same marker pattern used for agents.
+- **Dynamic team roster:** The orchestrator's system prompt includes a live roster of all agents and their skills. When agents or skills change mid-session, the orchestrator respawns with an updated roster.
+- **Sidebar delegation preview:** The conversation list shows the currently active agent's name and icon during delegation, not the original orchestrator.
+- **Org chart zoom:** +/- controls in the bottom-right corner. Zoom in enables scroll with auto-centering on the orchestrator. Window resize resets to auto-fit.
+- **Org chart d3-hierarchy layout:** Replaced CSS flexbox layout with d3-hierarchy tree positioning. Supports any team size and multi-level hierarchies via the `reportsTo` frontmatter field.
+
+### Changed
+
+- **Org chart rendering:** All card dimensions, font sizes, padding, and connector positions are now computed in JavaScript at the target scale before rendering HTML. No CSS transforms. Eliminates phantom scroll space, misaligned connectors, and centering issues from the previous approach.
+- **Permission mode:** Changed from `default` to `acceptEdits`. Write and Edit operations on knowledge files (markdown, YAML, JSON) no longer require manual approval. Executable file restrictions remain hard-blocked via disallowed-tools.
+- **Agent marker renamed:** `RUNDOCK:CREATE_AGENT` renamed to `RUNDOCK:SAVE_AGENT` for consistency. Works for both creating new agents and updating existing ones.
+- **Scaffold consolidated:** `rundock-agent-onboarding.md` and `rundock-workspace-setup.md` removed. Their capabilities are now built into `rundock-guide.md` with dedicated skill files (`rundock-workspace`, `rundock-agents`, `rundock-skills`).
+
+### Fixed
+
+- **Skill files couldn't be saved:** Doc couldn't write to `.claude/skills/` because Claude Code blocks Write/Edit operations on the `.claude/` directory. Fixed by adding server-side marker handling for skill files, matching the existing pattern for agent files.
+- **Stale scaffold hooks:** Previous versions installed PreToolUse hooks for Write and Edit in `.claude/settings.local.json`. These are now cleaned up automatically on workspace connect.
+- **Specialists naming other specialists:** A specialist would reference another specialist by name instead of handing back to the orchestrator for routing. Delegation context now instructs specialists not to name other agents.
+- **Orchestrator not responding after specialist return:** Fixed with auto-continue: the server sends the user's pending request to the orchestrator when a specialist hands back.
+- **Org chart breaking at scale:** Cards overlapping, connector lines misaligned, content clipped on smaller screens. Replaced entirely with d3-hierarchy coordinate layout and SVG connectors.
+
+---
+
 ## 0.5.0: Session History (2026-03-28)
 
 Session history on resume, idle process handling, and conversation cleanup. Previous conversations now load their full message history from Claude Code's transcripts.

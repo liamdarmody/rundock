@@ -6,6 +6,7 @@
 <title>Rundock</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script src="/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3-hierarchy@3.1.2/dist/d3-hierarchy.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -16,7 +17,7 @@
   --accent: #E87A5A; --accent-hover: #F09070; --accent-glow: rgba(232,122,90,0.12);
   --success: #6BC67E; --attention: #E8A84C; --working: #7AA2E8; --idle: #7A756E;
   --heading: 22px; --title: 18px; --body: 14px; --caption: 12px; --label: 11px;
-  --org-name: 20px; --org-role: 15px; --org-leader-name: 28px;
+  --org-name: 20px; --org-role: 15px;
 }
 
 body.light {
@@ -98,29 +99,28 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 @keyframes viewFadeIn { from { opacity: 0; } to { opacity: 1; } }
 
 /* Org chart */
-.org-chart { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px; overflow: hidden; }
+.org-chart { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px; overflow: auto; position: relative; }
+.org-zoom { position: fixed; bottom: 24px; right: 24px; display: flex; flex-direction: column; background: var(--elevated); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; z-index: 5; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+.org-zoom button { width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; color: var(--text-2); font-size: 18px; font-weight: 500; line-height: 1; }
+.org-zoom button:hover { color: var(--text-1); background: var(--surface); }
+.org-zoom .org-zoom-divider { height: 1px; background: var(--border); }
 /* org-chart-title removed: redundant label */
-.org-tree { display: flex; flex-direction: column; align-items: center; max-width: 100%; transform-origin: top center; }
+.org-tree { display: flex; flex-direction: column; align-items: center; transform-origin: top center; position: relative; }
 .org-card { background: var(--card); border-radius: 14px; padding: 24px 30px; display: flex; align-items: center; gap: 16px; cursor: pointer; transition: all 0.2s ease; border: 1px solid transparent; box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08); }
 .org-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.2), 0 0 0 1px var(--accent); }
 .org-card-name { font-size: var(--org-name); font-weight: 700; color: var(--text-1); }
 .org-card-role { font-size: var(--org-role); color: var(--text-2); max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .org-card .avatar { width: 48px; height: 48px; font-size: 21px; }
-.org-leader .org-card { padding: 30px 44px; }
-.org-leader .org-card .avatar { width: 64px; height: 64px; font-size: 28px; }
-.org-leader .org-card-name { font-size: var(--org-leader-name); }
-/* Org chart connector lines: pure CSS */
-.org-trunk { width: 1px; height: 40px; background: var(--text-2); opacity: 0.25; }
-.org-trunk.trunk-hidden { background: transparent; }
-.org-branches { display: flex; position: relative; justify-content: center; }
-.org-branch { display: flex; flex-direction: column; align-items: center; padding: 30px 20px 0; position: relative; }
-.org-branch::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--text-2); opacity: 0.25; }
-.org-branch::after { content: ''; position: absolute; top: 0; left: 50%; width: 1px; height: 30px; background: var(--text-2); opacity: 0.25; transform: translateX(-50%); }
-.org-branch:first-child::before { left: 50%; }
-.org-branch:last-child::before { right: 50%; }
-.org-branch:only-child::before { display: none; }
-.org-branch.trunk-branch::after { top: -40px; height: 70px; }
-.org-branch-stem { display: none; }
+/* Org chart: d3-hierarchy layout with SVG connectors */
+/* All card dimensions are computed in JS and applied inline. */
+/* CSS here handles only positioning, overflow, and base visual styles. */
+.org-layout { position: relative; }
+.org-layout .org-card { position: absolute; transform: translate(-50%, 0); box-sizing: border-box; overflow: hidden; }
+.org-layout .org-card .avatar { flex-shrink: 0; }
+.org-layout .org-card .org-card-role { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.org-connectors { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; }
+.org-connectors g { opacity: 0.25; }
+.org-connectors path { fill: none; stroke: var(--text-2); stroke-width: 1; }
 
 /* Agent profile */
 .profile { flex: 1; overflow-y: auto; padding: 32px; }
@@ -231,6 +231,7 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .editor-toggle.active { background: var(--accent-glow); color: var(--accent); }
 .editor-content { flex: 1; padding: 24px 32px; overflow-y: auto; font-size: var(--body); line-height: 1.7; outline: none; }
 .editor-content.source { white-space: pre-wrap; font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 13px; color: var(--text-2); }
+textarea.editor-content { resize: none; border: none; background: transparent; width: 100%; box-sizing: border-box; }
 .editor-content.formatted { white-space: normal; }
 .editor-content.formatted h1 { font-size: 24px; font-weight: 700; margin: 0 0 16px; }
 .editor-content.formatted h2 { font-size: var(--title); font-weight: 600; margin: 24px 0 8px; }
@@ -439,6 +440,9 @@ body.light .skill-row:hover { background: rgba(0,0,0,0.03); }
 .org-card-sm .avatar { width: 28px; height: 28px; font-size: 12px; }
 .org-card-sm .org-card-name { font-size: var(--body); }
 .org-card-sm .org-card-role { font-size: var(--caption); }
+.msg-delegation { display: flex; align-items: center; gap: 12px; padding: 12px 0; margin: 8px 0; }
+.delegation-line { flex: 1; height: 1px; background: var(--border); }
+.delegation-badge { display: flex; align-items: center; gap: 6px; font-size: var(--caption); font-weight: 600; white-space: nowrap; }
 .section-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); margin-bottom: 8px; text-align: left; }
 </style>
 </head>
@@ -581,6 +585,7 @@ body.light .skill-row:hover { background: rgba(0,0,0,0.03); }
       </div>
       <div id="editor-empty" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px"></div>
       <div class="editor-content formatted hidden" id="editor-content"></div>
+      <textarea class="editor-content source hidden" id="editor-textarea"></textarea>
     </div>
     <!-- Settings -->
     <div id="view-settings" class="hidden view-panel view-scroll">

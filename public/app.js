@@ -32,6 +32,7 @@ const agentLastActivity = {}; // { agentId: { time: Date, label: string } }
 // Per-conversation state: { convoId: { isProcessing, currentStreamingMsg, latestText } }
 const convoState = {};
 let pendingActiveProcesses = null; // Deferred until conversations are loaded
+let orgZoomOffset = 0; // User zoom adjustment: +/- steps of 0.1 on top of auto-fit scale
 
 // ===== 2. HELPERS =====
 
@@ -107,6 +108,8 @@ function handle(d) {
         state.activeProcessId = d._processId;
         // Remove stale permission cards from the previous process
         document.querySelectorAll('.msg-permission').forEach(el => el.remove());
+        // Auto-continue: orchestrator picking up after specialist return
+        if(d.autoContinue) startProcessing(convoId);
       }
       // Capture session ID from init message and persist for resume after refresh
       if(d.subtype==='init' && d._sessionId && convoId) {
@@ -132,6 +135,41 @@ function handle(d) {
           finishProcessing(convoId);
         }
       }
+      // Agent switch: delegation handoff or return
+      if(d.subtype==='agent_switch' && convoId) {
+        const toAgent = agents.find(a => a.id === d.toAgent);
+        const fromAgent = agents.find(a => a.id === d.fromAgent);
+        const state = getConvoState(convoId);
+        state.delegationActive = !!toAgent && toAgent.type !== 'orchestrator';
+        state.activeAgentId = d.toAgent;
+        renderConvoList();
+        const isReturn = toAgent?.type === 'orchestrator' || (fromAgent && fromAgent.type !== 'orchestrator');
+        if(activeConversation?.id === convoId) {
+          const m = document.getElementById('messages');
+          const divider = document.createElement('div');
+          divider.className = 'msg-delegation';
+          if(toAgent && fromAgent) {
+            divider.innerHTML = `<div class="delegation-line"></div><div class="delegation-badge" style="color:${toAgent.colour}"><span class="avatar xs" style="background:${toAgent.colour}">${toAgent.icon}</span>${isReturn ? toAgent.displayName + ' resumed' : toAgent.displayName + ' joined'}</div><div class="delegation-line"></div>`;
+          }
+          m.appendChild(divider);
+          scrollBottom();
+          // Update chat header
+          if(toAgent) {
+            const headerLabel = document.getElementById('chat-agent-label');
+            const headerAvatar = document.getElementById('chat-agent-avatar');
+            if(headerLabel) headerLabel.textContent = toAgent.displayName;
+            if(headerAvatar) { headerAvatar.style.background = toAgent.colour; headerAvatar.textContent = toAgent.icon; }
+            document.getElementById('msg-input').placeholder = 'Message ' + toAgent.displayName + '...';
+          }
+        }
+        // Show delegate as working AFTER the divider is rendered
+        if (!isReturn && state.delegationActive) {
+          startProcessing(convoId);
+        }
+      }
+      if(d.subtype==='delegation_error' && convoId) {
+        addSystemMsgToConvo(d.content || 'Delegation failed', convoId, true);
+      }
       break;
     case 'stream_event':
       if(convoId && !isStaleProcess(d, convoId)) handleStreamEvent(d, convoId);
@@ -146,13 +184,22 @@ function handle(d) {
     case 'file_content': loadFileContent(d.path, d.content); break;
     case 'file_saved': document.getElementById('editor-status').textContent='Saved'; break;
     case 'agent_saved':
-      addSystemMsg('Agent "' + (d.agentId || '') + '" created');
+      addSystemMsg('Agent "' + (d.agentId || '') + '" ' + (d.updated ? 'updated' : 'created'));
       break;
     case 'agent_error':
       addSystemMsg(d.message || 'Agent operation failed');
       break;
     case 'agent_deleted':
       addSystemMsg('Agent "' + (d.agentId || '') + '" removed');
+      break;
+    case 'skill_saved':
+      addSystemMsg('Skill "' + (d.skillId || '') + '" ' + (d.updated ? 'updated' : 'created'));
+      break;
+    case 'skill_error':
+      addSystemMsg(d.message || 'Skill operation failed');
+      break;
+    case 'skill_deleted':
+      addSystemMsg('Skill "' + (d.skillId || '') + '" removed');
       break;
     case 'active_processes':
       // Defer until workspace is ready and conversations are loaded
@@ -213,7 +260,17 @@ function handleStreamEvent(d, convoId) {
 
     state.streamingRawText += text;
     const streamEl = state.currentStreamingMsg.querySelector('.streaming-text');
-    if(streamEl) streamEl.innerHTML = formatMd(state.streamingRawText);
+    if(streamEl) {
+      // Strip RUNDOCK markers during streaming so marker content never leaks to the user
+      let displayText = state.streamingRawText;
+      // Complete marker blocks (opening + content + closing)
+      displayText = displayText.replace(/<!--\s*RUNDOCK:[A-Z_]+ [^>]*-->\n?[\s\S]*?<!--\s*\/RUNDOCK:[A-Z_]+ -->/g, '');
+      // Standalone markers (DELETE, RETURN)
+      displayText = displayText.replace(/<!--\s*RUNDOCK:(?:DELETE_\w+ name=[\w-]+|RETURN)\s*-->/g, '');
+      // Partial/incomplete marker still streaming (no closing tag yet)
+      displayText = displayText.replace(/<!--\s*RUNDOCK:[\s\S]*$/g, '');
+      streamEl.innerHTML = formatMd(displayText);
+    }
     scrollBottom();
   }
 
@@ -268,23 +325,66 @@ function handleResult(d, convoId) {
   const agentId = d._agent || state.latestAgentId;
 
   try {
-  // Detect agent definitions in the response and route to server for creation.
-  // Primary: RUNDOCK:CREATE_AGENT markers. Fallback: raw YAML frontmatter blocks.
-  const textToScan = d.result || state.streamingRawText || state.latestText || '';
+  // Detect agent and skill definitions in responses and route to server.
+  // SAVE markers (upsert): RUNDOCK:SAVE_AGENT, RUNDOCK:SAVE_SKILL
+  // Legacy CREATE markers also supported for backward compatibility.
+  // Prefer streamingRawText: it contains the raw text with HTML comment markers intact.
+  // d.result from stream-json is often empty or may strip HTML comments.
+  const textToScan = state.streamingRawText || d.result || state.latestText || '';
   if(textToScan && ws) {
-    let agentsCreated = 0;
+    let filesCreated = 0;
 
-    // Primary: explicit markers
-    const markerPattern = /<!-- RUNDOCK:CREATE_AGENT name=([\w-]+) -->\n```[^\n]*\n([\s\S]*?)```\n<!-- \/RUNDOCK:CREATE_AGENT -->/g;
+    // SAVE_AGENT and CREATE_AGENT markers (both route to save_agent for upsert)
+    // Code fences between markers are optional: model may output with or without them.
+    const agentMarkerPattern = /<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT name=([\w-]+) -->\n(?:```[^\n]*\n)?([\s\S]*?)(?:```\n)?<!-- \/RUNDOCK:(?:SAVE|CREATE)_AGENT -->/g;
     let match;
-    while((match = markerPattern.exec(textToScan)) !== null) {
-      ws.send(JSON.stringify({ type: 'create_agent', name: match[1], content: match[2].trim() }));
-      agentsCreated++;
+    while((match = agentMarkerPattern.exec(textToScan)) !== null) {
+      ws.send(JSON.stringify({ type: 'save_agent', name: match[1], content: match[2].trim() }));
+      filesCreated++;
+      console.log('[Agent] Marker save:', match[1]);
+    }
+
+    // SAVE_SKILL markers (code fences optional)
+    const skillMarkerPattern = /<!-- RUNDOCK:SAVE_SKILL name=([\w-]+) -->\n(?:```[^\n]*\n)?([\s\S]*?)(?:```\n)?<!-- \/RUNDOCK:SAVE_SKILL -->/g;
+    while((match = skillMarkerPattern.exec(textToScan)) !== null) {
+      ws.send(JSON.stringify({ type: 'save_skill', name: match[1], content: match[2].trim() }));
+      filesCreated++;
+      console.log('[Skill] Marker save:', match[1]);
+    }
+
+    // DELETE markers (no content, just the name)
+    const deleteSkillPattern = /<!-- RUNDOCK:DELETE_SKILL name=([\w-]+) -->/g;
+    while((match = deleteSkillPattern.exec(textToScan)) !== null) {
+      ws.send(JSON.stringify({ type: 'delete_skill', name: match[1] }));
+      filesCreated++;
+      console.log('[Skill] Marker delete:', match[1]);
+    }
+    const deleteAgentPattern = /<!-- RUNDOCK:DELETE_AGENT name=([\w-]+) -->/g;
+    while((match = deleteAgentPattern.exec(textToScan)) !== null) {
+      ws.send(JSON.stringify({ type: 'delete_agent', agentId: match[1] }));
+      filesCreated++;
+      console.log('[Agent] Marker delete:', match[1]);
+    }
+
+    // DELEGATE marker: orchestrator hands off to another agent
+    const delegatePattern = /<!-- RUNDOCK:DELEGATE agent=([\w-]+) -->\n?([\s\S]*?)<!-- \/RUNDOCK:DELEGATE -->/;
+    const delegateMatch = textToScan.match(delegatePattern);
+    if (delegateMatch) {
+      const targetAgent = delegateMatch[1];
+      const context = delegateMatch[2].trim();
+      console.log('[Delegate] Detected:', targetAgent, 'context:', context.substring(0, 100));
+      ws.send(JSON.stringify({ type: 'delegate', conversationId: convoId, targetAgent, context }));
+    }
+
+    // RETURN marker: delegate signals task complete, return to orchestrator
+    if (/<!-- RUNDOCK:RETURN -->/.test(textToScan)) {
+      console.log('[Delegate] Return detected');
+      ws.send(JSON.stringify({ type: 'end_delegation', conversationId: convoId }));
     }
 
     // Fallback: detect raw YAML frontmatter blocks with agent fields (name + type)
     // This handles cases where the LLM outputs agent files without the marker wrapper
-    if(agentsCreated === 0) {
+    if(filesCreated === 0) {
       const fmPattern = /```[^\n]*\n(---\n[\s\S]*?\n---[\s\S]*?)```/g;
       let fmMatch;
       while((fmMatch = fmPattern.exec(textToScan)) !== null) {
@@ -293,31 +393,30 @@ function handleResult(d, convoId) {
         const typeMatch = block.match(/^type:\s*(orchestrator|specialist)$/m);
         if(nameMatch && typeMatch) {
           const slug = nameMatch[1].trim();
-          ws.send(JSON.stringify({ type: 'create_agent', name: slug, content: block }));
-          agentsCreated++;
+          ws.send(JSON.stringify({ type: 'save_agent', name: slug, content: block }));
+          filesCreated++;
           console.log('[Agent] Fallback extraction:', slug);
         }
       }
       // Also try without code fences (raw frontmatter separated by ---)
-      if(agentsCreated === 0) {
+      if(filesCreated === 0) {
         const rawBlocks = textToScan.split(/\n(?=---\nname:\s)/).filter(b => b.trim().startsWith('---'));
         for(const block of rawBlocks) {
           const nameMatch = block.match(/^name:\s*(.+)$/m);
           const typeMatch = block.match(/^type:\s*(orchestrator|specialist)$/m);
           if(nameMatch && typeMatch) {
             const slug = nameMatch[1].trim();
-            // Extract just the frontmatter + body (stop at the next --- block or end)
             const content = block.trim();
-            ws.send(JSON.stringify({ type: 'create_agent', name: slug, content }));
-            agentsCreated++;
+            ws.send(JSON.stringify({ type: 'save_agent', name: slug, content }));
+            filesCreated++;
             console.log('[Agent] Raw frontmatter extraction:', slug);
           }
         }
       }
     }
 
-    if(agentsCreated > 0) {
-      console.log('[Agent] Created', agentsCreated, 'agents');
+    if(filesCreated > 0) {
+      console.log('[Rundock] Saved', filesCreated, 'file(s)');
       setTimeout(() => {
         if(ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'get_agents' }));
@@ -330,7 +429,14 @@ function handleResult(d, convoId) {
   // In stream-json mode, the response text arrives via stream_event deltas
   // and is rendered in real-time. The 'result' message is a completion signal.
   // Use streamed text if result field is empty (which it usually is in stream-json).
-  const responseText = d.result || state.streamingRawText || state.latestText || '';
+  let responseText = state.streamingRawText || d.result || state.latestText || '';
+  // Strip RUNDOCK markers from displayed text
+  // DELEGATE: strip the marker block AND any text after it (orchestrator should stop after delegating)
+  responseText = responseText.replace(/<!-- RUNDOCK:DELEGATE agent=[\w-]+ -->\n?[\s\S]*/g, '').trim();
+  responseText = responseText.replace(/<!-- RUNDOCK:RETURN -->/g, '').trim();
+  responseText = responseText.replace(/<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT name=[\w-]+ -->\n?(?:```[^\n]*\n)?[\s\S]*?(?:```\n)?<!-- \/RUNDOCK:(?:SAVE|CREATE)_AGENT -->/g, '').trim();
+  responseText = responseText.replace(/<!-- RUNDOCK:SAVE_SKILL name=[\w-]+ -->\n?(?:```[^\n]*\n)?[\s\S]*?(?:```\n)?<!-- \/RUNDOCK:SAVE_SKILL -->/g, '').trim();
+  responseText = responseText.replace(/<!-- RUNDOCK:DELETE_(?:SKILL|AGENT) name=[\w-]+ -->/g, '').trim();
 
   if(responseText && convo) {
     convo.messages.push({role:'agent', content: responseText, agentId});
@@ -362,21 +468,34 @@ function addSystemMsgToConvo(text, convoId, isError = true) {
 
 // ===== 5. AGENT LIST & SIDEBAR =====
 
+function getWorkingAgentIds() {
+  const working = new Set();
+  for (const [convoId, state] of Object.entries(convoState||{})) {
+    if (state.isProcessing) {
+      const activeId = state.activeAgentId || conversations.find(c=>c.id===convoId)?.agentId;
+      if (activeId) working.add(activeId);
+    }
+  }
+  return working;
+}
 function renderAgentList() {
   const onTeam = getTeamAgents();
   const platform = getPlatformAgents();
   const available = agents.filter(a => a.status === 'available' || a.status === 'raw');
+  const workingIds = getWorkingAgentIds();
 
   let h = '';
   // On team agents (or empty state)
   if (onTeam.length) {
     for (const a of onTeam) {
+      const isWorking = workingIds.has(a.id);
       const last = agentLastActivity[a.id];
-      const statusText = last ? formatTimeAgo(last.time) : 'idle';
+      const statusText = isWorking ? 'working' : (last ? formatTimeAgo(last.time) : 'idle');
+      const workingClass = isWorking ? ' working' : '';
       h += `<div class="agent-status-item" onclick="showProfile('${a.id}')" data-agent="${a.id}">
         <div class="avatar sm" style="background:${a.colour}">${a.icon}</div>
         <span class="agent-status-name">${a.displayName}</span>
-        <span class="agent-status-state" data-status="${a.id}">${statusText}</span>
+        <span class="agent-status-state${workingClass}" data-status="${a.id}">${statusText}</span>
       </div>`;
     }
   } else if (platform.length) {
@@ -390,12 +509,14 @@ function renderAgentList() {
   if (platform.length) {
     h += `<div class="sidebar-section-divider"><span class="sidebar-label">Rundock Agents</span></div>`;
     for (const a of platform) {
+      const isWorking = workingIds.has(a.id);
       const last = agentLastActivity[a.id];
-      const statusText = last ? formatTimeAgo(last.time) : 'idle';
+      const statusText = isWorking ? 'working' : (last ? formatTimeAgo(last.time) : 'idle');
+      const workingClass = isWorking ? ' working' : '';
       h += `<div class="agent-status-item" onclick="showProfile('${a.id}')" data-agent="${a.id}">
         <div class="avatar sm" style="background:${a.colour}">${a.icon}</div>
         <span class="agent-status-name">${a.displayName}</span>
-        <span class="agent-status-state" data-status="${a.id}">${statusText}</span>
+        <span class="agent-status-state${workingClass}" data-status="${a.id}">${statusText}</span>
       </div>`;
     }
   }
@@ -405,14 +526,14 @@ function renderAgentList() {
     h += `<div id="available-agents" class="hidden" style="padding:4px 0">`;
     for (const a of available) {
       const isRaw = a.status === 'raw';
-      h += `<div class="agent-status-item" style="${isRaw ? 'opacity:0.6' : ''}">
+      h += `<div class="agent-status-item" style="${isRaw ? 'opacity:0.6;' : ''}cursor:pointer" onclick="showProfile('${a.id}')">
         <div class="avatar sm" style="background:${a.colour}">${a.icon}</div>
         <div style="flex:1;min-width:0">
           <span class="agent-status-name">${a.displayName}</span>
-          <span class="agent-status-desc">${a.description ? a.description.substring(0, 50) : (isRaw ? 'Needs setup' : 'Ready to place')}</span>
+          <span class="agent-status-desc">${a.description ? a.description.substring(0, 50) : (isRaw ? 'Needs setup' : 'Ready to add')}</span>
         </div>
         ${isRaw
-          ? `<button class="agent-action-btn onboard" onclick="event.stopPropagation(); startConversation(getGuide()?.id || 'default')">Onboard</button>`
+          ? `<button class="agent-action-btn onboard" onclick="event.stopPropagation(); startConversation(getGuide()?.id || 'default')">Setup</button>`
           : `<button class="agent-action-btn add" onclick="event.stopPropagation(); addToTeam('${a.id}')">Add to team</button>`
         }
       </div>`;
@@ -499,50 +620,179 @@ function addToTeam(agentId) {
 
 // ===== 6. ORG CHART =====
 
+// Card dimension presets at 1:1 scale (before scaling)
+const ORG_PRESETS = {
+  leader:  { w: 280, h: 108, padV: 30, padH: 44, gap: 16, avatar: 64, icon: 28, name: 28, role: 15 },
+  normal:  { w: 220, h: 86,  padV: 16, padH: 20, gap: 12, avatar: 40, icon: 18, name: 15, role: 13 },
+  compact: { w: 170, h: 67,  padV: 10, padH: 14, gap: 10, avatar: 28, icon: 12, name: 14, role: 12 },
+};
+
+// Render a single org card with all dimensions scaled by factor `s`
+function orgCardHtml(agent, preset, s, posStyle) {
+  const r = (v) => Math.round(v * s);
+  const p = ORG_PRESETS[preset];
+  const br = Math.round(14 * s);
+  let h = `<div class="org-card ${preset === 'normal' ? '' : preset}" style="${posStyle}width:${r(p.w)}px;height:${r(p.h)}px;padding:${r(p.padV)}px ${r(p.padH)}px;gap:${r(p.gap)}px;border-radius:${br}px" onclick="showProfile('${agent.id}')">`;
+  h += `<div class="avatar" style="background:${agent.colour};width:${r(p.avatar)}px;height:${r(p.avatar)}px;font-size:${r(p.icon)}px;flex-shrink:0">${agent.icon}</div>`;
+  h += `<div><div class="org-card-name" style="font-size:${r(p.name)}px">${agent.displayName}</div>`;
+  h += `<div class="org-card-role" style="font-size:${r(p.role)}px">${agent.role || ''}</div></div></div>`;
+  return h;
+}
+
 function renderOrgChart() {
   const orchestrator = agents.find(a => a.status === 'onTeam' && a.type === 'orchestrator');
   const specialists = agents.filter(a => a.status === 'onTeam' && a.type === 'specialist');
   const platformAgents = getPlatformAgents();
-  // Fallback for agents without type field (backward compat)
   const untyped = agents.filter(a => a.status === 'onTeam' && !a.type);
-  // Only consider non-platform, Rundock-configured agents for the org tree.
-  // The synthetic default agent (from CLAUDE.md, no type field) doesn't count as a team.
   const leader = orchestrator || agents.find(a => a.isDefault && a.type) || null;
   const team = specialists.length ? specialists : untyped.filter(a => a !== leader);
   const hasTeam = leader || team.length;
 
+  const chart = document.getElementById('org-chart');
+  if (!chart) return;
+
+  // Defer rendering until chart has layout dimensions (e.g. view not yet visible).
+  // goHome() calls renderOrgChart() again when the view becomes active.
+  if (hasTeam && chart.clientWidth === 0) return;
+
+  // Scale factor: set by tree layout when hasTeam, used by platform section too
+  let s = 1;
   let h = '<div class="org-tree">';
 
   if (hasTeam) {
-    // Orchestrator
-    if (leader) {
-      h += `<div class="org-leader"><div class="org-card" onclick="showProfile('${leader.id}')"><div class="avatar" style="background:${leader.colour}">${leader.icon}</div><div><div class="org-card-name">${leader.displayName}</div><div class="org-card-role">${leader.role || ''}</div></div></div></div>`;
-    }
+    // Build tree data: each agent has a parent (reportsTo field, or defaults to orchestrator)
+    const allTeam = [];
+    if (leader) allTeam.push({ ...leader, _orgParent: null });
+    team.forEach(a => {
+      const parentId = a.reportsTo || (leader ? leader.id : null);
+      allTeam.push({ ...a, _orgParent: parentId });
+    });
 
-    // Specialists
-    if (team.length) {
-      const midIndex = Math.floor(team.length / 2);
-      const hasTrunkBranch = team.length % 2 === 1;
-      h += `<div class="org-trunk${hasTrunkBranch ? ' trunk-hidden' : ''}"></div><div class="org-branches">`;
-      team.forEach((a, i) => {
-        const isTrunk = hasTrunkBranch && (i === midIndex);
-        h += `<div class="org-branch${isTrunk ? ' trunk-branch' : ''}"><div class="org-branch-stem"></div><div class="org-card" onclick="showProfile('${a.id}')"><div class="avatar" style="background:${a.colour}">${a.icon}</div><div><div class="org-card-name">${a.displayName}</div><div class="org-card-role">${a.role || ''}</div></div></div></div>`;
+    // Build d3 hierarchy
+    const rootData = { id: '__root__', children: [] };
+    const nodeMap = new Map();
+    allTeam.forEach(a => nodeMap.set(a.id, { ...a, children: [] }));
+    allTeam.forEach(a => {
+      if (a._orgParent && nodeMap.has(a._orgParent)) {
+        nodeMap.get(a._orgParent).children.push(nodeMap.get(a.id));
+      } else if (!a._orgParent) {
+        rootData.children.push(nodeMap.get(a.id));
+      }
+    });
+
+    const treeRoot = rootData.children.length === 1 ? rootData.children[0] : rootData;
+    const isCompact = team.length > 10;
+    const preset = isCompact ? 'compact' : 'normal';
+    const P = ORG_PRESETS;
+
+    // d3 layout at full scale (1:1 spacing)
+    const nodeW = isCompact ? 220 : 280;
+    const nodeH = isCompact ? 160 : 190;
+    const hierarchy = d3.hierarchy(treeRoot);
+    d3.tree().nodeSize([nodeW, nodeH])(hierarchy);
+
+    const cardW = (n) => n.data.type === 'orchestrator' ? P.leader.w : P[preset].w;
+    const cardH = (n) => n.data.type === 'orchestrator' ? P.leader.h : P[preset].h;
+
+    // Get bounds of d3 node centres
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    hierarchy.each(n => {
+      if (n.data.id === '__root__') return;
+      minX = Math.min(minX, n.x); maxX = Math.max(maxX, n.x);
+      minY = Math.min(minY, n.y); maxY = Math.max(maxY, n.y);
+    });
+
+    // Full-scale tree dimensions (centre-to-edge + padding)
+    const pad = 20;
+    const halfMaxCard = Math.max(P.leader.w, P[preset].w) / 2;
+    const fullW = (maxX - minX) + halfMaxCard * 2 + pad * 2;
+    const fullH = (maxY - minY) + P.leader.h + P[preset].h + pad * 2;
+
+    // Compute scale: auto-fit viewport, then apply user zoom offset
+    const chartW = chart.clientWidth - 64;
+    const chartH = chart.clientHeight - 64;
+    const fitScale = Math.min(chartW / fullW, chartH / fullH, 1);
+    s = Math.max(0.15, Math.min(2, fitScale + orgZoomOffset));
+
+    // Scaled coordinate helpers
+    const r = (v) => Math.round(v * s);
+    const sx = (x) => Math.round((x - minX + halfMaxCard + pad) * s);
+    const sy = (y) => Math.round((y - minY + pad) * s);
+    const totalW = r(fullW);
+    const totalH = r(fullH);
+
+    h += `<div class="org-layout" style="width:${totalW}px;height:${totalH}px">`;
+    h += `<svg class="org-connectors" width="${totalW}" height="${totalH}"><g>`;
+
+    // Build parent-children groups for connectors
+    const parentGroups = new Map();
+    hierarchy.each(n => {
+      if (n.data.id === '__root__' || !n.parent || n.parent.data.id === '__root__') return;
+      const pid = n.parent.data.id;
+      if (!parentGroups.has(pid)) parentGroups.set(pid, { parent: n.parent, children: [] });
+      parentGroups.get(pid).children.push(n);
+    });
+    hierarchy.each(n => {
+      if (n.parent && n.parent.data.id !== '__root__') return;
+      if (!n.children || n.data.id === '__root__') return;
+      const pid = n.data.id;
+      if (!parentGroups.has(pid)) parentGroups.set(pid, { parent: n, children: [] });
+      n.children.forEach(c => {
+        if (c.data.id !== '__root__') parentGroups.get(pid).children.push(c);
       });
-      h += '</div>';
-    }
+    });
+
+    parentGroups.forEach(({ parent: p, children: kids }) => {
+      if (kids.length === 0) return;
+      const px = sx(p.x);
+      const srcBottom = sy(p.y) + r(cardH(p));
+      const ty = sy(kids[0].y);
+      const midY = srcBottom + Math.round((ty - srcBottom) / 2);
+
+      h += `<path d="M${px},${srcBottom} L${px},${midY}"/>`;
+      const childXs = kids.map(c => sx(c.x));
+      if (kids.length > 1) {
+        h += `<path d="M${Math.min(...childXs)},${midY} L${Math.max(...childXs)},${midY}"/>`;
+      }
+      kids.forEach(c => {
+        h += `<path d="M${sx(c.x)},${midY} L${sx(c.x)},${sy(c.y)}"/>`;
+      });
+    });
+
+    h += '</g></svg>';
+
+    // Place cards at computed positions
+    hierarchy.each(n => {
+      if (n.data.id === '__root__') return;
+      const isLeader = n.data.type === 'orchestrator';
+      const p = isLeader ? 'leader' : preset;
+      h += orgCardHtml(n.data, p, s, `left:${sx(n.x)}px;top:${sy(n.y)}px;`);
+    });
+
+    h += '</div>'; // close .org-layout
+
+    // Set scroll/centering after DOM update
+    requestAnimationFrame(() => {
+      const overflowX = fullW * s > chartW;
+      const overflowY = fullH * s > chartH;
+      chart.style.overflowX = overflowX ? 'auto' : 'hidden';
+      chart.style.overflowY = overflowY ? 'auto' : 'hidden';
+      chart.style.justifyContent = overflowY ? 'flex-start' : 'center';
+      chart.style.alignItems = overflowX ? 'flex-start' : 'center';
+      if (overflowX) chart.scrollLeft = Math.max(0, (totalW - chart.clientWidth) / 2);
+      if (overflowY) chart.scrollTop = Math.max(0, (totalH - chart.clientHeight) / 2);
+    });
+
   } else {
     const guide = platformAgents[0];
     const a = workspaceAnalysis;
     const hasContext = a && (a.identity.sources.length > 0 || a.skills.total > 0);
 
     if (hasContext && a) {
-      // Path B: Has context, no team. Show analysis card.
       h += '<div class="org-empty-state">';
-      // Identity card
       const name = a.identity.suggestedName || 'Your Workspace';
       const tagline = a.identity.suggestedTagline || a.identity.suggestedRole || '';
       h += `<div class="empty-title">${esc(name)}${tagline ? ': ' + esc(tagline) : ''}</div>`;
-      // Stats line
       const stats = [];
       if (a.skills.total > 0) stats.push(`${a.skills.total} skills`);
       if (a.structure.pattern !== 'unknown') {
@@ -553,14 +803,12 @@ function renderOrgChart() {
       const integrationCount = a.integrations.mcpReferences.length + a.integrations.configuredServers.length + a.integrations.mentionedTools.length;
       if (integrationCount > 0) stats.push(`${integrationCount} integrations`);
       if (stats.length) h += `<div style="color:var(--text-2);font-size:var(--caption);margin-bottom:16px">${stats.join(' &middot; ')}</div>`;
-      // Action card
       h += '<div style="color:var(--text-2);font-size:var(--body);max-width:320px;text-align:center;line-height:1.6">Doc can create your agent team based on what\'s here. Skills will be automatically grouped and assigned.</div>';
       if (guide) {
         h += `<button class="empty-cta" style="margin-top:12px" onclick="startSetupConversation()">Set up your team</button>`;
       }
       h += '</div>';
     } else {
-      // Path C: Empty or raw workspace.
       h += '<div class="org-empty-state">';
       h += '<div class="empty-title">Welcome to Rundock</div>';
       h += '<div class="sidebar-empty-text" style="text-align:center;max-width:320px">Fresh workspace. Doc can help you set up your agent team from scratch.</div>';
@@ -569,46 +817,57 @@ function renderOrgChart() {
       }
       h += '</div>';
     }
+    chart.style.overflow = 'hidden';
+    chart.style.justifyContent = 'center';
+    chart.style.alignItems = 'center';
   }
 
-  // Platform section (inside .org-tree so it scales together)
+  // Platform section: scaled to match specialist cards
   if (platformAgents.length) {
-    h += `<div class="org-platform-section" style="margin-top:${hasTeam ? '56' : '32'}px">`;
-    h += '<div class="org-platform-divider"></div>';
-    h += '<div class="org-platform-label">Rundock Agents</div>';
-    h += '<div style="display:flex;justify-content:center;gap:12px">';
+    const r = (v) => Math.round(v * s);
+    h += `<div class="org-platform-section" style="margin-top:${r(hasTeam ? 24 : 32)}px">`;
+    h += `<div class="org-platform-divider" style="max-width:${r(200)}px;margin-bottom:${r(24)}px"></div>`;
+    h += `<div class="org-platform-label" style="font-size:${r(12)}px;margin-bottom:${r(16)}px">Rundock Agents</div>`;
+    h += `<div style="display:flex;justify-content:center;gap:${r(12)}px">`;
     for (const a of platformAgents) {
-      h += `<div class="org-card org-card-sm" onclick="showProfile('${a.id}')"><div class="avatar" style="background:${a.colour}">${a.icon}</div><div><div class="org-card-name">${a.displayName}</div><div class="org-card-role">${a.role || ''}</div></div></div>`;
+      h += orgCardHtml(a, 'normal', s, '');
     }
     h += '</div></div>';
   }
 
   h += '</div>'; // close .org-tree
 
-  document.getElementById('org-chart').innerHTML = h;
-  requestAnimationFrame(scaleOrgTree);
+  // Zoom controls (only when there's a team to zoom)
+  if (hasTeam) {
+    h += '<div class="org-zoom">';
+    h += '<button onclick="orgZoom(1)" title="Zoom in">+</button>';
+    h += '<div class="org-zoom-divider"></div>';
+    h += '<button onclick="orgZoom(-1)" title="Zoom out">&minus;</button>';
+    h += '</div>';
+  }
+
+  chart.innerHTML = h;
 }
 
-function scaleOrgTree() {
-  const chart = document.getElementById('org-chart');
-  const tree = chart?.querySelector('.org-tree');
-  if (!tree) return;
-  tree.style.transform = 'none';
-  const chartW = chart.clientWidth - 96; // padding + breathing room
-  const treeW = tree.scrollWidth;
-  if (treeW > chartW && chartW > 0) {
-    const s = Math.max(0.55, chartW / treeW);
-    tree.style.transform = `scale(${s})`;
-  }
+function orgZoom(dir) {
+  orgZoomOffset += dir * 0.1;
+  renderOrgChart();
 }
-window.addEventListener('resize', scaleOrgTree);
+
+// Debounced resize: reset zoom and re-render
+let _orgResizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(_orgResizeTimer);
+  _orgResizeTimer = setTimeout(() => { orgZoomOffset = 0; renderOrgChart(); }, 150);
+});
 
 // ===== 7. AGENT PROFILE =====
 
 function showProfile(agentId) {
   const a=agents.find(x=>x.id===agentId); if(!a) return;
   const existing=conversations.filter(c=>c.agentId===agentId);
-  let h=`<a class="profile-back" onclick="goHome()">&#8592; Team</a>
+  const backLabel = a.status === 'onTeam' ? 'Team' : 'Available';
+  let h=`<a class="profile-back" onclick="goHome()">&#8592; ${backLabel}</a>
     <div class="profile-header">
       <div class="profile-avatar" style="background:${a.colour}">${a.icon}</div>
       <div>
@@ -617,7 +876,13 @@ function showProfile(agentId) {
       </div>
     </div>`;
   if(a.description) h+=`<p class="profile-desc" style="margin-bottom:24px">${esc(a.description)}</p>`;
-  h+=`<div class="profile-cta"><button class="profile-cta-btn" onclick="startConversation('${a.id}')">New conversation</button></div>`;
+  if(a.status === 'raw') {
+    h+=`<div class="profile-cta"><button class="profile-cta-btn" onclick="startConversation(getGuide()?.id || 'default')">Setup with Doc</button></div>`;
+  } else if(a.status === 'available') {
+    h+=`<div class="profile-cta"><button class="profile-cta-btn" onclick="addToTeam('${a.id}')">Add to team</button></div>`;
+  } else {
+    h+=`<div class="profile-cta"><button class="profile-cta-btn" onclick="startConversation('${a.id}')">New conversation</button></div>`;
+  }
   // Existing conversations
   if(existing.length) {
     h+=`<div class="profile-existing"><div class="profile-section-label">Existing conversations</div>`;
@@ -922,10 +1187,13 @@ function renderConvoList() {
     for (const c of current) {
       const lastMsg = c.messages.filter(m => m.role === 'agent').pop();
       const preview = lastMsg ? stripMd(lastMsg.content).substring(0, 60) + '...' : 'No messages yet';
+      const cState = convoState[c.id];
+      const activeId = cState?.activeAgentId;
+      const displayAgent = (activeId && agents.find(a => a.id === activeId)) || c.agent;
       h += `<div class="convo-item ${activeConversation?.id === c.id ? 'active' : ''}" onclick="openConversation('${c.id}')">
         <span class="convo-title">${esc(c.title)}</span>
         <span class="convo-preview">${esc(preview)}</span>
-        <div class="convo-meta"><div class="avatar xs" style="background:${c.agent.colour}">${c.agent.icon}</div><span>${c.agent.displayName}</span></div>
+        <div class="convo-meta"><div class="avatar xs" style="background:${displayAgent.colour}">${displayAgent.icon}</div><span>${displayAgent.displayName}</span></div>
       </div>`;
     }
   }
@@ -1076,12 +1344,16 @@ function startProcessing(convoId) {
     document.getElementById('chat-status').textContent='· working...'; document.getElementById('chat-status').classList.add('working');
     document.getElementById('send-btn').disabled=true;
     document.getElementById('msg-input').disabled=true;
-    const a=convo?.agent||agents[0];
+    // Use the active delegate agent during delegation, otherwise the conversation agent
+    const activeId = state.activeAgentId || convo?.agentId;
+    const a = (activeId && agents.find(x => x.id === activeId)) || convo?.agent || agents[0];
     const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg msg-agent'; d.id='thinking-indicator';
     d.innerHTML=`<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.displayName||'Agent'}</div><div class="msg-bubble thinking-bubble"><div class="thinking-pulse" style="background:${a?.colour||'var(--accent)'}"></div><div><div class="thinking-label">Thinking</div><div class="thinking-status" id="thinking-status"></div></div></div>`;
     m.appendChild(d); scrollBottom();
   }
-  if(convo) { const s=document.querySelector(`[data-status="${convo.agentId}"]`); if(s){s.textContent='working';s.classList.add('working');} }
+  // Show working status on the active agent (delegate or conversation agent)
+  const statusAgentId = state.activeAgentId || convo?.agentId;
+  if(statusAgentId) { const s=document.querySelector(`[data-status="${statusAgentId}"]`); if(s){s.textContent='working';s.classList.add('working');} }
 }
 function finishProcessing(convoId) {
   const state = getConvoState(convoId);
@@ -1097,8 +1369,10 @@ function finishProcessing(convoId) {
     document.getElementById('msg-input').focus();
   }
   if(convo) {
-    agentLastActivity[convo.agentId] = { time: new Date(), label: convo.title };
-    const s=document.querySelector(`[data-status="${convo.agentId}"]`);
+    // Clear working status on the active agent (delegate or conversation agent)
+    const statusAgentId = state.activeAgentId || convo.agentId;
+    agentLastActivity[statusAgentId] = { time: new Date(), label: convo.title };
+    const s=document.querySelector(`[data-status="${statusAgentId}"]`);
     if(s){s.textContent=formatTimeAgo(new Date());s.classList.remove('working');}
   }
   // Refresh file tree after a short delay to let file writes flush to disk
@@ -1494,7 +1768,7 @@ function switchNav(nav) {
   else showView('home');
 }
 function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }
-function goHome() { discardIfEmpty(); activeConversation=null; showView('home'); switchNav('team'); document.querySelectorAll('.agent-status-item').forEach(el=>el.classList.remove('active')); }
+function goHome() { discardIfEmpty(); activeConversation=null; showView('home'); switchNav('team'); document.querySelectorAll('.agent-status-item').forEach(el=>el.classList.remove('active')); renderOrgChart(); }
 function goBack() { if(activeConversation) showProfile(activeConversation.agentId); else goHome(); }
 
 // Theme
@@ -1568,26 +1842,29 @@ function loadFileContent(path, content) {
 }
 
 function renderEditorContent() {
-  const el = document.getElementById('editor-content');
+  const previewEl = document.getElementById('editor-content');
+  const textareaEl = document.getElementById('editor-textarea');
   document.getElementById('toggle-preview').classList.toggle('active', editorMode === 'preview');
   document.getElementById('toggle-edit').classList.toggle('active', editorMode === 'edit');
 
   if (editorMode === 'preview') {
-    el.className = 'editor-content formatted';
-    el.contentEditable = 'false';
-    el.innerHTML = formatMdFull(fileBody);
+    textareaEl.classList.add('hidden');
+    previewEl.classList.remove('hidden');
+    previewEl.className = 'editor-content formatted';
+    previewEl.innerHTML = formatMdFull(fileBody);
   } else {
-    el.className = 'editor-content source';
-    el.contentEditable = 'true';
-    el.textContent = rawFileContent;
-    el.focus();
+    previewEl.classList.add('hidden');
+    textareaEl.classList.remove('hidden');
+    textareaEl.className = 'editor-content source';
+    textareaEl.value = rawFileContent;
+    textareaEl.focus();
   }
 }
 
 function setEditorMode(mode) {
   if (mode === 'preview' && editorMode === 'edit') {
     // Switching from edit to preview: capture changes first
-    rawFileContent = document.getElementById('editor-content').textContent;
+    rawFileContent = document.getElementById('editor-textarea').value;
     const fmMatch = rawFileContent.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
     if (fmMatch) { fileFrontmatter = '---\n' + fmMatch[1] + '\n---\n'; fileBody = fmMatch[2]; }
     else { fileFrontmatter = ''; fileBody = rawFileContent; }
@@ -1598,7 +1875,7 @@ function setEditorMode(mode) {
 
 function getFileContentForSave() {
   if (editorMode === 'edit') {
-    rawFileContent = document.getElementById('editor-content').textContent;
+    rawFileContent = document.getElementById('editor-textarea').value;
   }
   return rawFileContent;
 }
@@ -1666,7 +1943,7 @@ function editorGoBack() {
 // ===== 12. MARKDOWN RENDERING =====
 
 // Configure marked
-marked.setOptions({ gfm: true, breaks: false });
+marked.setOptions({ gfm: true, breaks: true });
 
 function renderMarkdown(text, options = {}) {
   let src = text;
@@ -2057,7 +2334,7 @@ function onWorkspaceReady(dir, analysis) {
 
 // Editor save
 let saveTimer=null;
-document.addEventListener('input',e=>{if(e.target.id==='editor-content'&&currentFilePath&&editorMode==='edit'){document.getElementById('editor-status').textContent='Unsaved';document.getElementById('editor-status').style.color='var(--attention)';clearTimeout(saveTimer);saveTimer=setTimeout(()=>{ws.send(JSON.stringify({type:'save_file',path:currentFilePath,content:getFileContentForSave()}));document.getElementById('editor-status').style.color='var(--success)';document.getElementById('editor-status').textContent='Saved';},1500);}});
+document.addEventListener('input',e=>{if((e.target.id==='editor-content'||e.target.id==='editor-textarea')&&currentFilePath&&editorMode==='edit'){document.getElementById('editor-status').textContent='Unsaved';document.getElementById('editor-status').style.color='var(--attention)';clearTimeout(saveTimer);saveTimer=setTimeout(()=>{ws.send(JSON.stringify({type:'save_file',path:currentFilePath,content:getFileContentForSave()}));document.getElementById('editor-status').style.color='var(--success)';document.getElementById('editor-status').textContent='Saved';},1500);}});
 const msgInput = document.getElementById('msg-input');
 msgInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}});
 msgInput.addEventListener('input',()=>{

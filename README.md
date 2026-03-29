@@ -51,7 +51,9 @@ Pulls the latest changes and reinstalls dependencies. Then run `npm start` as us
 
 ## Your team at a glance
 
-**Team:** See your agents on an org chart. Click any agent to view their profile with role, capabilities, skills, and routines.
+**Team:** See your agents on an org chart with zoom controls. Click any agent to view their profile with role, capabilities, skills, and routines. The chart scales to any team size.
+
+**Delegation:** Orchestrator agents route work to the right specialist mid-conversation. You see who's active in the sidebar, and specialists hand back when the request moves outside their domain. The orchestrator picks up where they left off.
 
 **Conversations:** Chat with any agent through the browser. Run multiple conversations in parallel, each with its own agent and session context.
 
@@ -99,16 +101,17 @@ prompts:
 | `icon` | Single unicode character for the avatar circle |
 | `colour` | Hex colour for the avatar background |
 | `prompts` | List of starter prompts shown as pills when starting a new conversation |
+| `reportsTo` | Agent slug this agent reports to. Enables multi-level org chart hierarchies |
 
 ## Your data never leaves your computer
 
 ```
-Browser (WebSocket) <-> Node.js server <-> Claude Code CLI
+Browser (WebSocket) <-> Node.js server <-> Claude Code CLI (one process per conversation, delegates spawn additional processes)
 ```
 
-- **server.js:** Discovers agents, skills, and files. Spawns Claude Code processes for conversations. Manages sessions.
+- **server.js:** Discovers agents, skills, and files. Spawns Claude Code processes for conversations. Manages delegation between agents, permission cards, and session continuity.
 - **public/index.html:** Single-page app with nav rail, sidebar, and main panel.
-- **Claude Code:** Runs as child processes in interactive stream-json mode. Each conversation gets its own persistent process with session continuity via `--resume`. Follow-up messages push to stdin rather than spawning new processes.
+- **Claude Code:** Runs as child processes in interactive stream-json mode. Each conversation gets its own persistent process with session continuity via `--resume`. Follow-up messages push to stdin rather than spawning new processes. Delegation spawns a second process for the specialist, parking the orchestrator until the specialist returns.
 
 Everything runs on your machine. No data is sent anywhere other than Anthropic's API (through Claude Code). Same workspace files are accessible to Rundock, Claude Code, Obsidian, VS Code, or any other tool simultaneously.
 
@@ -126,11 +129,11 @@ Everything runs on your machine. No data is sent anywhere other than Anthropic's
 
 **Executable code is blocked by design.** Agents cannot write or edit code files (.js, .ts, .py, .sh, and other executable formats). Rundock is built for knowledge work, not software development.
 
-**The codebase is small and auditable.** Rundock is roughly 1,500 lines of server code and 1,900 lines of client code. There are two dependencies (a markdown renderer and a WebSocket library). You can read the entire codebase in an afternoon.
+**The codebase is small and auditable.** Two source files (server.js and public/app.js), two dependencies (a markdown renderer and a WebSocket library). No build step, no bundler. You can read the entire codebase in an afternoon.
 
 **Nothing is stored in the cloud.** Conversation metadata (title, agent, session ID) is saved to a `.rundock/` directory in your workspace so sessions persist across page reloads. Message content is read from Claude Code's own JSONL transcript files on disk when resuming a previous conversation. Rundock does not store message content separately. Your workspace files are plain files on disk. Theme preference is saved in your browser's local storage. A list of recently opened workspaces is saved to a local file in the Rundock install directory. That's it.
 
-For technical users: the full source is in `server.js` (Node.js HTTP + WebSocket server, agent/skill discovery, Claude Code process management) and `public/app.js` (single-page client application). No build step, no bundler, no minification.
+For technical users: the full source is in `server.js` (Node.js HTTP + WebSocket server, agent/skill discovery, delegation, Claude Code process management) and `public/app.js` (single-page client application). No build step, no bundler, no minification.
 
 ## Common issues
 
