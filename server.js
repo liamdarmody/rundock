@@ -61,6 +61,19 @@ function writeState(state) {
   fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify(state, null, 2));
 }
 
+// Search helper: extract a snippet around the query match
+function extractSnippet(text, query, contextChars = 60) {
+  const lower = text.toLowerCase();
+  const idx = lower.indexOf(query);
+  if (idx === -1) return text.substring(0, contextChars * 2);
+  const start = Math.max(0, idx - contextChars);
+  const end = Math.min(text.length, idx + query.length + contextChars);
+  let snippet = text.substring(start, end).replace(/\n/g, ' ');
+  if (start > 0) snippet = '...' + snippet;
+  if (end < text.length) snippet += '...';
+  return snippet;
+}
+
 // Session history: read Claude Code JSONL transcripts from disk
 function getSessionJsonlPath(sessionId) {
   if (!WORKSPACE || !sessionId) return null;
@@ -1999,6 +2012,61 @@ wss.on('connection', (ws) => {
             flagRosterRefresh();
           }
         }
+      }
+
+      // ── CONVERSATION SEARCH: search titles and transcript content ──
+      if (msg.type === 'search_conversations') {
+        (async () => {
+          const query = (msg.query || '').toLowerCase().trim();
+          if (!WORKSPACE || !query) {
+            ws.send(JSON.stringify({ type: 'search_results', results: [], query: msg.query }));
+            return;
+          }
+          const convos = readConversations();
+          // Phase 1: title matches (instant)
+          const titleMatches = convos.filter(c => (c.title || '').toLowerCase().includes(query)).map(c => ({ ...c, matchType: 'title' }));
+          // Phase 2: content matches (scan JSONL transcripts)
+          const contentSearchPromises = convos.filter(c => c.sessionId).map(async (c) => {
+            const filePath = getSessionJsonlPath(c.sessionId);
+            if (!filePath) return null;
+            try {
+              const rl = readline.createInterface({
+                input: fs.createReadStream(filePath, { encoding: 'utf-8' }),
+                crlfDelay: Infinity
+              });
+              for await (const line of rl) {
+                try {
+                  const obj = JSON.parse(line);
+                  // Check user messages
+                  if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
+                    if (obj.message.content.toLowerCase().includes(query)) {
+                      rl.close();
+                      return { ...c, matchType: 'content', snippet: extractSnippet(obj.message.content, query) };
+                    }
+                  }
+                  // Check assistant text blocks
+                  if (obj.message && obj.message.role === 'assistant' && Array.isArray(obj.message.content)) {
+                    for (const block of obj.message.content) {
+                      if (block.type === 'text' && block.text && block.text.toLowerCase().includes(query)) {
+                        rl.close();
+                        return { ...c, matchType: 'content', snippet: extractSnippet(block.text, query) };
+                      }
+                    }
+                  }
+                } catch (e) { /* skip */ }
+              }
+            } catch (e) { /* file read error */ }
+            return null;
+          });
+          const contentResults = (await Promise.all(contentSearchPromises)).filter(Boolean);
+          // Merge: title matches first, then content-only matches (no duplicates)
+          const titleIds = new Set(titleMatches.map(c => c.id));
+          const merged = [...titleMatches, ...contentResults.filter(c => !titleIds.has(c.id))];
+          ws.send(JSON.stringify({ type: 'search_results', results: merged.slice(0, 50), query: msg.query }));
+        })().catch(err => {
+          console.warn('[Search] Error:', err.message);
+          ws.send(JSON.stringify({ type: 'search_results', results: [], query: msg.query }));
+        });
       }
 
       if (msg.type === 'get_session_history') {

@@ -55,7 +55,7 @@ Pulls the latest changes and reinstalls dependencies. Then run `npm start` as us
 
 **Delegation:** Orchestrator agents route work to the right specialist mid-conversation. You see who's active in the sidebar, and specialists hand back when the request moves outside their domain. The orchestrator picks up where they left off.
 
-**Conversations:** Chat with any agent through the browser. Run multiple conversations in parallel, each with its own agent and session context.
+**Conversations:** Chat with any agent through the browser. Run multiple conversations in parallel, each with its own agent and session context. Search across conversation titles and full transcript history to find past work. Claude Code has no built-in way to search session content; Rundock does.
 
 **Skills:** See which agents use which skills at a glance. In Claude Code, skill-to-agent assignments are invisible. Rundock surfaces the full map.
 

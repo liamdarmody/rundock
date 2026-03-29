@@ -68,6 +68,15 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .agent-status-state { font-size: var(--caption); font-weight: 500; color: var(--idle); flex-shrink: 0; }
 .agent-status-state.working { color: var(--working); }
 
+/* Conversation search */
+.sidebar-search-wrap { position: relative; padding: 0 8px 4px; }
+.sidebar-search { width: 100%; box-sizing: border-box; padding: 7px 28px 7px 10px; font-size: var(--caption); font-family: inherit; color: var(--text-1); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; outline: none; transition: border-color 0.15s ease; }
+.sidebar-search:focus { border-color: var(--text-2); }
+.sidebar-search::placeholder { color: var(--text-2); opacity: 0.6; }
+.sidebar-search-clear { position: absolute; right: 16px; top: 50%; transform: translateY(-50%); margin-top: -2px; font-size: 16px; color: var(--text-2); cursor: pointer; line-height: 1; }
+.sidebar-search-clear:hover { color: var(--text-1); }
+.sidebar-search-clear.hidden { display: none; }
+
 /* Conversation list */
 .convo-list { flex: 1; overflow-y: auto; padding: 0 8px; }
 .convo-item { display: flex; flex-direction: column; gap: 3px; padding: 12px 8px; border-radius: 8px; cursor: pointer; transition: background 0.15s ease; }
@@ -486,6 +495,10 @@ body.light .skill-row:hover { background: rgba(0,0,0,0.03); }
     </div>
     <div id="sidebar-conversations" class="hidden">
       <div class="sidebar-header"><span class="sidebar-label">Conversations</span></div>
+      <div class="sidebar-search-wrap">
+        <input type="text" id="convo-search" class="sidebar-search" placeholder="Search conversations..." oninput="filterConversations(this.value)" onkeydown="if(event.key==='Escape'){clearConvoSearch();this.blur();}" />
+        <span class="sidebar-search-clear hidden" id="convo-search-clear" onclick="clearConvoSearch()">&times;</span>
+      </div>
       <div class="convo-list" id="convo-list"></div>
       <button class="add-btn" onclick="newConversation()">+ New conversation</button>
     </div>
@@ -495,6 +508,10 @@ body.light .skill-row:hover { background: rgba(0,0,0,0.03); }
     </div>
     <div id="sidebar-files" class="hidden">
       <div class="sidebar-header"><span class="sidebar-label">Files</span></div>
+      <div class="sidebar-search-wrap">
+        <input type="text" id="file-search" class="sidebar-search" placeholder="Search files..." oninput="filterFiles(this.value)" onkeydown="if(event.key==='Escape'){clearFileSearch();this.blur();}" />
+        <span class="sidebar-search-clear hidden" id="file-search-clear" onclick="clearFileSearch()">&times;</span>
+      </div>
       <div class="file-tree" id="file-tree"></div>
     </div>
     <div id="sidebar-settings" class="hidden">

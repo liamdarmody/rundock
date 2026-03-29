@@ -2,9 +2,9 @@
 
 All notable changes to Rundock are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## 0.6.0: Delegation (2026-03-29)
+## 0.6.0: Delegation and Search (2026-03-29)
 
-Agent delegation, skill lifecycle, and a scalable org chart. Orchestrators can now route work to specialists mid-conversation, and Doc can create and edit skills directly.
+Agent delegation, skill lifecycle, a scalable org chart, and sidebar search. Orchestrators can now route work to specialists mid-conversation, Doc can create and edit skills directly, and conversations and files are searchable from the sidebar.
 
 ### Added
 
@@ -15,6 +15,8 @@ Agent delegation, skill lifecycle, and a scalable org chart. Orchestrators can n
 - **Sidebar delegation preview:** The conversation list shows the currently active agent's name and icon during delegation, not the original orchestrator.
 - **Org chart zoom:** +/- controls in the bottom-right corner. Zoom in enables scroll with auto-centering on the orchestrator. Window resize resets to auto-fit.
 - **Org chart d3-hierarchy layout:** Replaced CSS flexbox layout with d3-hierarchy tree positioning. Supports any team size and multi-level hierarchies via the `reportsTo` frontmatter field.
+- **Conversation search:** Search bar in the conversations sidebar. Matches conversation titles instantly, then searches transcript content for deeper matches. Results show a snippet with context around the match.
+- **File search:** Search bar in the files sidebar. Type a filename and matching files appear as a flat list with their directory path for quick navigation.
 
 ### Changed
 

@@ -221,6 +221,9 @@ function handle(d) {
     case 'session_history':
       renderSessionHistory(d);
       break;
+    case 'search_results':
+      handleSearchResults(d);
+      break;
     case 'error': if(!d.content?.includes('no stdin')) addSystemMsgToConvo(d.content, convoId); break;
   }
 }
@@ -1172,6 +1175,11 @@ function toggleConvoStatus() {
   renderConvoList();
 }
 function renderConvoList() {
+  // When search is active, show flat filtered results
+  if (convoSearchResults !== null) {
+    renderSearchResults();
+    return;
+  }
   // Current session conversations (have in-memory messages)
   const current = conversations.filter(c => c.status !== 'done' && !c.persisted);
   // Previous sessions (persisted from disk, no in-memory messages)
@@ -1227,6 +1235,81 @@ function renderConvoList() {
   }
   document.getElementById('convo-list').innerHTML = h;
 }
+
+// ===== CONVERSATION SEARCH =====
+let convoSearchQuery = '';
+let convoSearchResults = null; // null = no search active, [] = search with no results
+let convoSearchTimer = null;
+
+function filterConversations(query) {
+  const q = query.trim();
+  const clearBtn = document.getElementById('convo-search-clear');
+  if (clearBtn) clearBtn.classList.toggle('hidden', !q);
+
+  if (!q) {
+    convoSearchQuery = '';
+    convoSearchResults = null;
+    renderConvoList();
+    return;
+  }
+
+  convoSearchQuery = q;
+
+  // Phase 1: instant title filter (client-side)
+  const lower = q.toLowerCase();
+  const titleMatches = conversations.filter(c => (c.title || '').toLowerCase().includes(lower));
+  convoSearchResults = titleMatches.map(c => ({ id: c.id, matchType: 'title' }));
+  renderConvoList();
+
+  // Phase 2: debounced content search (server-side, 300ms)
+  clearTimeout(convoSearchTimer);
+  if (q.length >= 3) {
+    convoSearchTimer = setTimeout(() => {
+      ws.send(JSON.stringify({ type: 'search_conversations', query: q }));
+    }, 300);
+  }
+}
+
+function clearConvoSearch() {
+  const input = document.getElementById('convo-search');
+  if (input) input.value = '';
+  filterConversations('');
+}
+
+function handleSearchResults(d) {
+  // Only apply if the query still matches what we searched for
+  if (d.query?.toLowerCase().trim() !== convoSearchQuery.toLowerCase().trim()) return;
+  // Merge server results with existing title matches
+  const existingIds = new Set((convoSearchResults || []).map(r => r.id));
+  const newResults = (d.results || []).filter(r => !existingIds.has(r.id));
+  convoSearchResults = [...(convoSearchResults || []), ...newResults.map(r => ({ id: r.id, matchType: r.matchType, snippet: r.snippet }))];
+  renderConvoList();
+}
+
+function renderSearchResults() {
+  const matchIds = new Set(convoSearchResults.map(r => r.id));
+  const snippetMap = new Map(convoSearchResults.filter(r => r.snippet).map(r => [r.id, r.snippet]));
+  const matched = conversations.filter(c => matchIds.has(c.id));
+  let h = '';
+  if (!matched.length) {
+    h = `<div style="padding:12px 16px">
+      <div style="color:var(--text-2);font-size:var(--caption);line-height:1.6">No matches</div>
+    </div>`;
+  }
+  for (const c of matched) {
+    const snippet = snippetMap.get(c.id);
+    const preview = snippet ? esc(snippet) : (c.messages?.length ? esc(stripMd(c.messages.filter(m => m.role === 'agent').pop()?.content || '').substring(0, 60)) : '');
+    const displayAgent = c.agent || { colour: 'var(--text-2)', icon: '?', displayName: 'Unknown' };
+    const opacity = c.persisted ? 'opacity:0.8;' : '';
+    h += `<div class="convo-item ${activeConversation?.id === c.id ? 'active' : ''}" onclick="openConversation('${c.id}')" style="${opacity}">
+      <span class="convo-title">${esc(c.title)}</span>
+      ${preview ? `<span class="convo-preview">${preview}</span>` : ''}
+      <div class="convo-meta"><div class="avatar xs" style="background:${displayAgent.colour}">${displayAgent.icon}</div><span>${displayAgent.displayName}</span></div>
+    </div>`;
+  }
+  document.getElementById('convo-list').innerHTML = h;
+}
+
 // Discard current conversation if no real messages were sent (lazy creation cleanup)
 function discardIfEmpty() {
   if (!activeConversation) return;
@@ -1761,6 +1844,9 @@ function switchNav(nav) {
   document.querySelector(`[data-nav="${nav}"]`)?.classList.add('active');
   ['team','conversations','skills','files','settings'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
   document.getElementById(`sidebar-${nav}`).classList.remove('hidden');
+  // Clear search when navigating away
+  if(nav !== 'conversations') clearConvoSearch();
+  if(nav !== 'files') clearFileSearch();
   if(nav==='settings') { showView('settings'); showSettingsSection('workspace'); }
   else if(nav==='files') showView('editor');
   else if(nav==='skills') { showView('skills'); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } document.querySelectorAll('.skill-sidebar-item').forEach(el=>el.classList.remove('active')); document.querySelectorAll('.skill-row.expanded').forEach(r=>r.classList.remove('expanded')); }
@@ -1812,6 +1898,48 @@ function buildTree(items,container) {
       container.appendChild(fi);
     }
   }
+}
+
+// ===== FILE SEARCH =====
+let fileSearchQuery = '';
+
+function filterFiles(query) {
+  const q = query.trim();
+  const clearBtn = document.getElementById('file-search-clear');
+  if (clearBtn) clearBtn.classList.toggle('hidden', !q);
+  fileSearchQuery = q;
+  if (!cachedFileTree) return;
+  if (!q) { renderFileTree(cachedFileTree); return; }
+  const lower = q.toLowerCase();
+  const matches = flattenTree(cachedFileTree).filter(f => f.name.toLowerCase().includes(lower));
+  const container = document.getElementById('file-tree');
+  container.innerHTML = '';
+  if (!matches.length) {
+    container.innerHTML = '<div style="padding:12px 16px;color:var(--text-2);font-size:var(--caption)">No matches</div>';
+    return;
+  }
+  for (const item of matches) {
+    const fi = document.createElement('div'); fi.className = 'file-item';
+    const dir = item.path.includes('/') ? item.path.substring(0, item.path.lastIndexOf('/')) + '/' : '';
+    fi.innerHTML = `<svg class="file-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><div><div>${esc(item.name)}</div>${dir ? `<div style="font-size:11px;color:var(--text-2);margin-top:1px">${esc(dir)}</div>` : ''}</div>`;
+    fi.onclick = () => { document.querySelectorAll('.file-item').forEach(x => x.classList.remove('active')); fi.classList.add('active'); editorReturnView = 'home'; ws.send(JSON.stringify({ type: 'read_file', path: item.path })); showView('editor'); };
+    container.appendChild(fi);
+  }
+}
+
+function flattenTree(items, result) {
+  result = result || [];
+  for (const item of items) {
+    if (item.type === 'folder') { flattenTree(item.children || [], result); }
+    else { result.push(item); }
+  }
+  return result;
+}
+
+function clearFileSearch() {
+  const input = document.getElementById('file-search');
+  if (input) input.value = '';
+  filterFiles('');
 }
 
 // Editor
