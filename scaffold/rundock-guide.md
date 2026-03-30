@@ -49,9 +49,9 @@ Respond with a short, confident team proposal. This must be fast (no tool calls,
 2. **Use the README identity** for the orchestrator's displayName and role.
 3. **Use the CLAUDE.md identity** for agent instruction behaviour and tone.
 4. **Plan one specialist per skill group** that has 2+ skills. Assign uncategorised skills to the most logical agent or the orchestrator. Assign system and configuration skills to the orchestrator or exclude them.
-5. **Use character-style displayNames** (short, memorable: "Cos", "Penn", "Scout", "Kit"). Not functional labels.
-6. **Present the team as a compact list:** each agent with its displayName, role, icon, which skill groups it covers, and an example of what you'd ask it (e.g. "you'd ask Scout things like 'What are people saying about X on Reddit?'"). Keep it scannable.
-7. **Reference specific workspace artefacts.** If the analysis found files, folders, skills, or integrations, mention them by name. "I found your meeting notes in Granola/ and 4 content skills." The specificity proves you understood the workspace.
+5. **Use character-style displayNames** (short, memorable: "Kit", "Sage", "Mira", "Finn"). Not functional labels.
+6. **Present the team as a compact list:** each agent with its displayName, role, icon, which skill groups it covers, and an example of what you'd ask it (e.g. "you'd ask Sage things like 'What are people saying about X on Reddit?'"). Keep it scannable.
+7. **Reference specific workspace artefacts.** If the analysis found files, folders, skills, or integrations, mention them by name. "I found your meeting notes in Notes/ and 4 content skills." The specificity proves you understood the workspace.
 8. **End with a clear prompt:** "Ready to build? Say **go** and I'll create them one by one."
 
 Do NOT create any agents in Beat 1. Do NOT use the RUNDOCK:SAVE_AGENT marker. Propose only.
@@ -75,6 +75,7 @@ displayName: Short Name
 role: Role Title
 type: specialist
 order: 1
+reportsTo: orchestrator-slug
 icon: ★
 colour: #E87A5A
 prompts:
@@ -96,6 +97,7 @@ Agent instructions here...
 - **No skill overlap.** Every skill slug must be assigned to exactly one agent. If two agents could own a skill, pick the one whose core purpose aligns best. Never list a skill on both.
 - **System and configuration skills stay on the orchestrator.** Skills related to initialisation and integration configuration belong on the orchestrator unless they are tightly scoped to a specialist's domain. Rundock platform skills (`rundock-workspace`, `rundock-agents`, `rundock-skills`) belong to Doc, not the orchestrator.
 - **Model selection.** Set the orchestrator to `model: opus` (needs strong routing judgement). Set specialists to `model: sonnet` unless their domain requires deeper reasoning (e.g. a strategy or coaching agent may benefit from opus).
+- **Reporting lines.** Set `reportsTo` on every specialist. For flat teams, all specialists report to the orchestrator. For multi-level teams, sub-agents report to their lead specialist. See the "Multi-level teams" section for the full pattern.
 - **Orchestrator prompts should be high-level.** "What's on my plate today?", "Help me prioritise", "What should I focus on?" are good. "Run my daily plan" or "Prep for my meeting" are specialist-level and should appear on the relevant specialist, not the orchestrator.
 - **Visually distinct icons.** Each agent's icon must be clearly different from all others at small sizes. Avoid similar shapes (e.g. ◈ and ◆ look nearly identical). Prefer icons from different unicode categories.
 - **Every specialist needs a "What you don't handle" section** listing which agent to route to for out-of-scope requests.
@@ -146,6 +148,7 @@ displayName: Human Name
 role: Short Role Title
 type: orchestrator | specialist | platform
 order: 0
+reportsTo: parent-agent-slug
 icon: ★
 colour: #E87A5A
 prompts:
@@ -177,7 +180,8 @@ Agent instructions go here...
 | `displayName` | No | Human-friendly name for UI (falls back to title-cased name) |
 | `role` | No | Short title on org chart (2-4 words) |
 | `type` | No | `orchestrator` (team lead), `specialist` (team member), `platform` (system agent) |
-| `order` | No | Position on org chart. 0 = lead, then numbered sequentially |
+| `order` | No | Position on org chart. 0 = lead, then numbered sequentially. Use decimals for sub-agents (e.g. 1.1, 1.2 under a specialist at order 1) |
+| `reportsTo` | No | The `name` slug of the agent this one reports to. Every specialist should have this set. Determines delegation chain and org chart hierarchy |
 | `icon` | No | Single unicode character for avatar |
 | `colour` | No | Hex colour for avatar background |
 | `prompts` | No | List of starter prompts shown when starting a conversation |
@@ -189,6 +193,30 @@ Agent instructions go here...
 - **orchestrator:** The team lead. Routes work to specialists. There should be one per workspace (order: 0).
 - **specialist:** A team member with specific skills. Numbered after the orchestrator.
 - **platform:** System agent (like you). Always appears last on the org chart.
+
+### Multi-level teams
+
+Specialists can lead their own sub-teams. A specialist with direct reports can delegate to them, creating a two-level chain (e.g. orchestrator delegates to a lead, the lead delegates to their support agents).
+
+To set this up:
+
+1. **Set `reportsTo` on every specialist.** Direct reports of the orchestrator use `reportsTo: {orchestrator-slug}`. Sub-agents use `reportsTo: {lead-slug}`.
+2. **Use decimal ordering** to visually group sub-agents. If the lead is `order: 1`, their reports are `order: 1.1`, `order: 1.2`, etc.
+3. **The lead stays type: specialist.** They do not become an orchestrator. Rundock detects they have direct reports and gives them scoped delegation abilities automatically.
+4. **The lead is a "playing manager."** They do their own work AND coordinate their sub-team. They are not a pure delegator.
+
+Example structure:
+```
+Mira (orchestrator, order: 0)
+  Kit (specialist, order: 1, reportsTo: mira)
+    Sage (specialist, order: 1.1, reportsTo: kit)
+    Finn (specialist, order: 1.2, reportsTo: kit)
+  Jules (specialist, order: 4, reportsTo: mira)
+```
+
+The orchestrator only sees its direct reports (Kit, Jules). Kit only sees their direct reports (Sage, Finn). The delegation chain is enforced by the roster each agent receives.
+
+**Honest delegation rule:** When writing instructions for agents with direct reports, include this principle: if the agent says it is pulling in a team member, it must actually delegate using the DELEGATE marker. The user sees team members join the conversation, their name in the header, and their status change. If the agent handles work itself, it should own it and not claim a team member is doing it. This keeps the UI honest and builds trust in the team structure.
 
 ## Creating agents
 

@@ -2,6 +2,43 @@
 
 All notable changes to Rundock are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## 0.7.0: Multi-Level Teams (2026-03-30)
+
+Multi-level delegation, agent interruption, conversation transcripts, and a suite of reliability fixes. Specialists can now lead their own sub-teams, users can cancel running agents, and sidebar conversations show the correct active agent on page load.
+
+### Added
+
+- **Multi-level delegation:** Specialists with direct reports can delegate to their own sub-teams. The orchestrator delegates to a lead, the lead delegates to a support agent, and out-of-scope returns skip back to the orchestrator. Uses the `reportsTo` frontmatter field to define the chain.
+- **Agent interrupt/cancel:** A stop button replaces the send button while an agent is working. Click to cancel the running process immediately. Cleans up pending permission requests, parked parent processes, and delegate chains. Partial response text is preserved with a "Cancelled" badge.
+- **Conversation transcripts:** Server-side transcript system tracks all messages across the delegation chain. Used for context passing between agents, sidebar attribution, and conversation search. Capped at 20 entries with original request preserved.
+- **Sidebar agent attribution:** Previous conversations show the last active agent (not the orchestrator) in the sidebar immediately on page load, before clicking. Uses transcript enrichment on the server.
+- **Conversation delete:** Hover trash icon on Previous and Done conversations. Soft delete removes from the conversation list; session files stay on disk.
+- **Collapsible permission commands:** Long Bash commands in permission cards collapse behind a "Show command" toggle. Applies to both the approval prompt and the resolved confirmation.
+- **Capabilities in team roster:** Agent `capabilities.does` and `capabilities.connectors` are now surfaced in the orchestrator's dynamic team roster, improving routing accuracy.
+
+### Changed
+
+- **Delegation extraction:** The delegation handler is now a standalone function (`handleDelegation`) instead of a closure inside the WebSocket message handler. Eliminates stale WebSocket reference bugs on reconnect.
+- **Agent name matching:** Agent interception uses word-boundary regex matching to prevent false positives (e.g. short agent names matching inside longer words).
+- **Agent discovery caching:** `discoverAgents()` cached with a 2-second TTL to avoid redundant filesystem scans during delegation flows.
+- **Orchestrator delegation prompt:** Strengthened to prevent orchestrators from answering questions that belong to specialists. Router-first behaviour enforced.
+- **Specialist delegation prompt:** Specialists with direct reports receive scoped delegation instructions with mandatory delegation triggers and honest naming rules.
+- **Session history limit:** Increased from 20 to 50 messages per load.
+- **Transcript context on delegation:** Delegates receive the full conversation transcript (excluding their own prior messages) for continuity.
+
+### Fixed
+
+- **Double done event:** `wireProcessHandlers` sent done on result, then the close handler sent done again. Added `resultSent` flag with guards on interactive, legacy, and delegate close handlers.
+- **Accordion state lost on re-render:** Previous and Done sections collapsed when the sidebar re-rendered. Now preserves open/close state across renders.
+- **Delete re-adding conversations:** Server was sending the full conversation list on delete, which `handlePersistedConversations` re-added. Changed to a targeted `conversation_deleted` acknowledgement.
+- **Transcript preserves original request:** Transcript rotation keeps the first entry (the user's original request) so delegates always have full context.
+- **Attribution matching tightened:** Content prefix storage increased from 100 to 200 characters with a minimum length guard to reduce false matches.
+- **Empty transcript caching:** Failed transcript loads are cached to avoid repeated disk reads.
+- **Streaming text after tool use:** Text deltas following a tool call now insert a paragraph break so they don't run into the previous content.
+- **Org chart reportsTo resolution:** Node map now indexes by both id and name slug so `reportsTo` matches work regardless of which is used.
+
+---
+
 ## 0.6.0: Delegation and Search (2026-03-29)
 
 Agent delegation, skill lifecycle, a scalable org chart, and sidebar search. Orchestrators can now route work to specialists mid-conversation, Doc can create and edit skills directly, and conversations and files are searchable from the sidebar.

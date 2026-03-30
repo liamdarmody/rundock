@@ -114,8 +114,19 @@ function handle(d) {
       // Capture session ID from init message and persist for resume after refresh
       if(d.subtype==='init' && d._sessionId && convoId) {
         const convo = conversations.find(c => c.id === convoId);
-        if(convo && !convo.sessionId) {
-          convo.sessionId = d._sessionId;
+        if(convo) {
+          const agentId = d._agent || convo.agentId;
+          const isOrchestrator = agentId === convo.agentId;
+          // Only set the primary sessionId for the orchestrator (used for --resume on reload).
+          // Delegate sessions are tracked in sessionIds but don't replace the primary.
+          if (isOrchestrator || !convo.sessionId) {
+            convo.sessionId = d._sessionId;
+          }
+          // Track all sessionIds for history loading across delegation chain
+          if (!convo.sessionIds) convo.sessionIds = [];
+          if (!convo.sessionIds.find(s => s.sessionId === d._sessionId)) {
+            convo.sessionIds.push({ sessionId: d._sessionId, agentId });
+          }
           persistConversation(convo);
         }
       }
@@ -127,6 +138,20 @@ function handle(d) {
           persistConversation(convo);
         }
         addSystemMsgToConvo(d.content, convoId, false);
+      }
+      // Agent was cancelled by user
+      if(d.subtype==='cancelled' && convoId) {
+        const state = getConvoState(convoId);
+        // Add a cancelled badge to the current streaming message if there is one
+        const streamEl = state.currentStreamingMsg;
+        if (streamEl) {
+          const badge = document.createElement('span');
+          badge.className = 'cancelled-badge';
+          badge.textContent = 'Cancelled';
+          const bubble = streamEl.querySelector('.msg-bubble');
+          if (bubble) bubble.appendChild(badge);
+        }
+        addSystemMsgToConvo('Agent stopped by user.', convoId, false);
       }
       // Only finish if this done event is from the currently active process
       if(d.subtype==='done' && convoId) {
@@ -143,8 +168,16 @@ function handle(d) {
         state.delegationActive = !!toAgent && toAgent.type !== 'orchestrator';
         state.activeAgentId = d.toAgent;
         renderConvoList();
-        const isReturn = toAgent?.type === 'orchestrator' || (fromAgent && fromAgent.type !== 'orchestrator');
+        // Determine if this is a return (back to orchestrator or back to parent)
+        // vs a forward delegation (orchestrator->specialist or specialist->sub-specialist)
+        const isReturn = toAgent?.type === 'orchestrator';
         if(activeConversation?.id === convoId) {
+          // Reset streaming state so the new agent gets a fresh message bubble
+          if (state.currentStreamingMsg) {
+            state.currentStreamingMsg = null;
+            state.streamingRawText = '';
+            state.latestText = '';
+          }
           const m = document.getElementById('messages');
           const divider = document.createElement('div');
           divider.className = 'msg-delegation';
@@ -245,7 +278,12 @@ function handleStreamEvent(d, convoId) {
 
   // Text streaming: render deltas in real-time
   if(evt.type === 'content_block_delta' && evt.delta?.type === 'text_delta' && evt.delta.text) {
-    const text = evt.delta.text;
+    let text = evt.delta.text;
+    // Insert newline between tool-use progress updates so they don't run together
+    if(state.afterToolUse && state.streamingRawText && state.streamingRawText.length > 0) {
+      text = '\n\n' + text;
+    }
+    state.afterToolUse = false;
 
     // Create streaming message bubble if it doesn't exist yet
     if(!state.currentStreamingMsg) {
@@ -279,6 +317,7 @@ function handleStreamEvent(d, convoId) {
 
   // Tool use: show thinking indicator with tool name (even if streaming already started)
   if(evt.type === 'content_block_start' && evt.content_block?.type === 'tool_use') {
+    state.afterToolUse = true;
     const toolName = evt.content_block.name || '';
     let status = document.getElementById('thinking-status');
     if(!status) {
@@ -326,6 +365,7 @@ function handleResult(d, convoId) {
   const isActive = activeConversation?.id === convoId;
   const convo = conversations.find(c => c.id === convoId);
   const agentId = d._agent || state.latestAgentId;
+  let delegationTriggered = false;
 
   try {
   // Detect agent and skill definitions in responses and route to server.
@@ -372,7 +412,6 @@ function handleResult(d, convoId) {
     // DELEGATE marker: orchestrator hands off to another agent
     const delegatePattern = /<!-- RUNDOCK:DELEGATE agent=([\w-]+) -->\n?([\s\S]*?)<!-- \/RUNDOCK:DELEGATE -->/;
     const delegateMatch = textToScan.match(delegatePattern);
-    let delegationTriggered = false;
     if (delegateMatch) {
       const targetAgent = delegateMatch[1];
       const context = delegateMatch[2].trim();
@@ -675,9 +714,14 @@ function renderOrgChart() {
     });
 
     // Build d3 hierarchy
+    // nodeMap is keyed by both id and name so reportsTo can match either
     const rootData = { id: '__root__', children: [] };
     const nodeMap = new Map();
-    allTeam.forEach(a => nodeMap.set(a.id, { ...a, children: [] }));
+    allTeam.forEach(a => {
+      const node = { ...a, children: [] };
+      nodeMap.set(a.id, node);
+      if (a.name && a.name !== a.id) nodeMap.set(a.name, node);
+    });
     allTeam.forEach(a => {
       if (a._orgParent && nodeMap.has(a._orgParent)) {
         nodeMap.get(a._orgParent).children.push(nodeMap.get(a.id));
@@ -959,12 +1003,15 @@ function showProfile(agentId) {
 // Persist conversation metadata to server (never message content)
 function persistConversation(convo) {
   if (!ws || !convo) return;
+  const state = convoState[convo.id];
   ws.send(JSON.stringify({
     type: 'save_conversation',
     conversation: {
       id: convo.id,
       agentId: convo.agentId,
+      activeAgentId: state?.activeAgentId || null,
       sessionId: convo.sessionId || null,
+      sessionIds: convo.sessionIds || [],
       title: convo.title,
       status: convo.status,
       createdAt: convo.createdAt || new Date().toISOString()
@@ -980,7 +1027,7 @@ function handlePersistedConversations(persisted) {
     if (conversations.find(c => c.id === entry.id)) continue;
     // Resolve agent object (may have been deleted)
     const agent = agents.find(a => a.id === entry.agentId);
-    conversations.push({
+    const convo = {
       id: entry.id,
       agentId: entry.agentId,
       agent: agent || { id: entry.agentId, displayName: entry.agentId, colour: 'var(--text-3)', icon: '?', prompts: [] },
@@ -988,10 +1035,18 @@ function handlePersistedConversations(persisted) {
       messages: [],  // No message content persisted; resume via sessionId
       status: entry.status || 'done',
       sessionId: entry.sessionId || null,
+      sessionIds: entry.sessionIds || [],
       createdAt: entry.createdAt,
       lastActiveAt: entry.lastActiveAt,
       persisted: true  // Flag: this was loaded from disk, has no in-memory messages
-    });
+    };
+    conversations.push(convo);
+    // Restore active agent from server-enriched data (transcript-based)
+    if (entry.activeAgentId) {
+      const state = getConvoState(convo.id);
+      state.activeAgentId = entry.activeAgentId;
+      if (entry.activeAgentId !== entry.agentId) state.delegationActive = true;
+    }
   }
   renderConvoList();
 
@@ -1143,7 +1198,9 @@ function newConversation() {
   showView('convo-empty');
 }
 function setupChat(convo) {
-  const agent = convo.agent;
+  const state = getConvoState(convo.id);
+  const activeId = state?.activeAgentId;
+  const agent = (activeId && agents.find(a => a.id === activeId)) || convo.agent;
   document.getElementById('chat-title-input').value=convo.title;
   document.getElementById('chat-agent-label').textContent=agent.displayName;
   document.getElementById('chat-agent-avatar').style.background=agent.colour;
@@ -1156,10 +1213,23 @@ function setupChat(convo) {
   statusEl.textContent=convo.status==='done'?'Done':'Active';
   statusEl.className=`chat-convo-status ${convo.status==='done'?'done-convo':'active-convo'}`;
   // Set input state based on this conversation's processing state
-  const state = getConvoState(convo.id);
   msgInput.disabled = state.isProcessing;
-  document.getElementById('send-btn').disabled = state.isProcessing;
-  if(!state.isProcessing) msgInput.focus();
+  const sendBtn = document.getElementById('send-btn');
+  if (state.isProcessing) {
+    sendBtn.disabled = false;
+    sendBtn.classList.add('cancel');
+    sendBtn.classList.remove('active');
+    sendBtn.onclick = cancelProcessing;
+    sendBtn.title = 'Stop agent';
+    sendBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
+  } else {
+    sendBtn.disabled = false;
+    sendBtn.classList.remove('cancel');
+    sendBtn.onclick = sendMessage;
+    sendBtn.title = 'Send message';
+    sendBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
+    msgInput.focus();
+  }
 }
 function renameConversation(newTitle) {
   if(activeConversation && newTitle.trim()) {
@@ -1167,6 +1237,20 @@ function renameConversation(newTitle) {
     persistConversation(activeConversation);
     renderConvoList();
   }
+}
+function deleteConversation(id, evt) {
+  evt.stopPropagation(); // Don't open the conversation
+  if (!confirm('Delete this conversation?')) return;
+  conversations = conversations.filter(c => c.id !== id);
+  delete convoState[id];
+  if (activeConversation?.id === id) {
+    activeConversation = null;
+    showView('home');
+  }
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'delete_conversation', id }));
+  }
+  renderConvoList();
 }
 function toggleConvoStatus() {
   if(!activeConversation) return;
@@ -1209,29 +1293,41 @@ function renderConvoList() {
     }
   }
   if (previous.length) {
+    const prevEl = document.getElementById('prev-convos');
+    const prevOpen = prevEl ? !prevEl.classList.contains('hidden') : false;
     h += `<div style="padding:12px 8px 6px"><span class="sidebar-label" style="cursor:pointer" onclick="document.getElementById('prev-convos').classList.toggle('hidden')">Previous (${previous.length}) &#x25BE;</span></div>`;
-    h += `<div id="prev-convos" class="hidden">`;
+    h += `<div id="prev-convos" class="${prevOpen ? '' : 'hidden'}">`;
     for (const c of previous) {
       const agentGone = !agents.find(a => a.id === c.agentId);
       const opacity = agentGone ? 'opacity:0.5' : 'opacity:0.8';
       const suffix = agentGone ? ' (agent removed)' : '';
+      const pState = convoState[c.id];
+      const pActiveId = pState?.activeAgentId;
+      const pDisplayAgent = (pActiveId && agents.find(a => a.id === pActiveId)) || c.agent;
       h += `<div class="convo-item ${activeConversation?.id === c.id ? 'active' : ''}" onclick="openConversation('${c.id}')" style="${opacity}">
+        <button class="convo-delete" onclick="deleteConversation('${c.id}', event)" title="Delete conversation"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
         <span class="convo-title">${esc(c.title)}${suffix}</span>
-        <div class="convo-meta"><div class="avatar xs" style="background:${c.agent.colour}">${c.agent.icon}</div><span>${c.agent.displayName}</span></div>
+        <div class="convo-meta"><div class="avatar xs" style="background:${pDisplayAgent.colour}">${pDisplayAgent.icon}</div><span>${pDisplayAgent.displayName}</span></div>
       </div>`;
     }
     h += `</div>`;
   }
   if (done.length) {
+    const doneEl = document.getElementById('done-convos');
+    const doneOpen = doneEl ? !doneEl.classList.contains('hidden') : false;
     h += `<div style="padding:12px 8px 6px"><span class="sidebar-label" style="cursor:pointer" onclick="document.getElementById('done-convos').classList.toggle('hidden')">Done (${done.length}) &#x25BE;</span></div>`;
-    h += `<div id="done-convos" class="hidden">`;
+    h += `<div id="done-convos" class="${doneOpen ? '' : 'hidden'}">`;
     for (const c of done) {
       const lastMsg = c.messages.filter(m => m.role === 'agent').pop();
       const preview = lastMsg ? stripMd(lastMsg.content).substring(0, 50) + '...' : '';
+      const dState = convoState[c.id];
+      const dActiveId = dState?.activeAgentId;
+      const dDisplayAgent = (dActiveId && agents.find(a => a.id === dActiveId)) || c.agent;
       h += `<div class="convo-item ${activeConversation?.id === c.id ? 'active' : ''}" onclick="openConversation('${c.id}')" style="opacity:0.7">
+        <button class="convo-delete" onclick="deleteConversation('${c.id}', event)" title="Delete conversation"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
         <span class="convo-title">${esc(c.title)}</span>
         <span class="convo-preview">${esc(preview)}</span>
-        <div class="convo-meta"><div class="avatar xs" style="background:${c.agent.colour}">${c.agent.icon}</div><span>${c.agent.displayName}</span></div>
+        <div class="convo-meta"><div class="avatar xs" style="background:${dDisplayAgent.colour}">${dDisplayAgent.icon}</div><span>${dDisplayAgent.displayName}</span></div>
       </div>`;
     }
     h += `</div>`;
@@ -1331,14 +1427,17 @@ function openConversation(id) {
   if(c.status==='done') { c.status='active'; }
   setupChat(c);
   const el=document.getElementById('messages'); el.innerHTML='';
-  if(c.persisted && c.messages.length===0 && c.sessionId) {
-    // Persisted conversation from a previous session: load history from JSONL transcript
+  if(c.persisted && c.messages.length===0 && (c.sessionId || (c.sessionIds && c.sessionIds.length))) {
+    // Persisted conversation from a previous session: load history from JSONL transcript(s)
     el.innerHTML=`<div id="history-loading" style="text-align:center;padding:24px 0;color:var(--text-3);font-size:var(--caption)">Loading conversation history...</div>`;
+    // Send all sessionIds so server can merge history across delegation chain
+    const sessionIds = (c.sessionIds && c.sessionIds.length) ? c.sessionIds : (c.sessionId ? [{ sessionId: c.sessionId, agentId: c.agentId }] : []);
     ws.send(JSON.stringify({
       type: 'get_session_history',
       sessionId: c.sessionId,
+      sessionIds: sessionIds,
       conversationId: c.id,
-      limit: 20
+      limit: 50
     }));
     // Clear persisted flag: this conversation is now active in current session
     c.persisted = false;
@@ -1364,7 +1463,11 @@ function openConversation(id) {
   const state = getConvoState(id);
   if(state.isProcessing) {
     document.getElementById('chat-status').textContent='· working...'; document.getElementById('chat-status').classList.add('working');
-    document.getElementById('send-btn').disabled=true; document.getElementById('msg-input').disabled=true;
+    const sb = document.getElementById('send-btn');
+    sb.disabled = false; sb.classList.add('cancel'); sb.classList.remove('active');
+    sb.onclick = cancelProcessing; sb.title = 'Stop agent';
+    sb.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
+    document.getElementById('msg-input').disabled=true;
     const a=c.agent;
     const m2=document.getElementById('messages');
     // Render any response text accumulated on the server before we reconnected
@@ -1428,7 +1531,13 @@ function startProcessing(convoId) {
   const convo = conversations.find(c=>c.id===convoId);
   if(isActive) {
     document.getElementById('chat-status').textContent='· working...'; document.getElementById('chat-status').classList.add('working');
-    document.getElementById('send-btn').disabled=true;
+    const sendBtn = document.getElementById('send-btn');
+    sendBtn.disabled = false;
+    sendBtn.classList.add('cancel');
+    sendBtn.classList.remove('active');
+    sendBtn.onclick = cancelProcessing;
+    sendBtn.title = 'Stop agent';
+    sendBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
     document.getElementById('msg-input').disabled=true;
     // Use the active delegate agent during delegation, otherwise the conversation agent
     const activeId = state.activeAgentId || convo?.agentId;
@@ -1450,7 +1559,13 @@ function finishProcessing(convoId) {
   if(isActive) {
     const tt=document.getElementById('thinking-indicator'); if(tt) tt.remove();
     document.getElementById('chat-status').textContent=''; document.getElementById('chat-status').classList.remove('working');
-    document.getElementById('send-btn').disabled=false;
+    const sendBtn = document.getElementById('send-btn');
+    sendBtn.disabled = false;
+    sendBtn.classList.remove('cancel');
+    sendBtn.onclick = sendMessage;
+    sendBtn.title = 'Send message';
+    sendBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
+    sendBtn.style.opacity = '';
     document.getElementById('msg-input').disabled=false;
     document.getElementById('msg-input').focus();
   }
@@ -1467,6 +1582,19 @@ function finishProcessing(convoId) {
       ws.send(JSON.stringify({ type: 'get_files' }));
     }
   }, 500);
+}
+
+function cancelProcessing() {
+  if (!activeConversation || !ws || ws.readyState !== WebSocket.OPEN) return;
+  const state = getConvoState(activeConversation.id);
+  if (!state.isProcessing) return;
+  ws.send(JSON.stringify({ type: 'cancel', conversationId: activeConversation.id }));
+  // Immediate visual feedback while waiting for server confirmation
+  const statusEl = document.getElementById('thinking-status');
+  if (statusEl) statusEl.textContent = 'Cancelling...';
+  const sendBtn = document.getElementById('send-btn');
+  sendBtn.disabled = true;
+  sendBtn.style.opacity = '0.5';
 }
 
 // Restore processing state after WebSocket reconnect.
@@ -1578,9 +1706,11 @@ function renderSessionHistory(d) {
       const currentOffset = parseInt(loadMore.dataset.offset);
       loadMore.textContent = 'Loading...';
       loadMore.dataset.offset = currentOffset + 20;
+      const loadSessionIds = (convo.sessionIds && convo.sessionIds.length) ? convo.sessionIds : (convo.sessionId ? [{ sessionId: convo.sessionId, agentId: convo.agentId }] : []);
       ws.send(JSON.stringify({
         type: 'get_session_history',
         sessionId: convo.sessionId,
+        sessionIds: loadSessionIds,
         conversationId: convo.id,
         limit: 20,
         offset: currentOffset
@@ -1589,8 +1719,9 @@ function renderSessionHistory(d) {
     frag.appendChild(loadMore);
   }
 
-  // Render each historical message
-  const agent = convo.agent;
+  // Render each historical message with per-message agent attribution
+  const defaultAgent = convo.agent;
+  let lastAgentId = null;
   for (const msg of d.messages) {
     const div = document.createElement('div');
     div.style.animation = 'none';
@@ -1598,8 +1729,19 @@ function renderSessionHistory(d) {
       div.className = 'msg msg-user history-msg';
       div.innerHTML = `<div class="msg-bubble">${esc(msg.content)}</div>`;
     } else {
+      // Use per-message agentId if available (from multi-session merge), fall back to default
+      const msgAgent = msg.agentId ? (agents.find(a => a.id === msg.agentId) || defaultAgent) : defaultAgent;
+      // Add delegation divider if agent changed
+      if (msg.agentId && msg.agentId !== lastAgentId && lastAgentId !== null) {
+        const divider = document.createElement('div');
+        divider.className = 'msg-delegation history-msg';
+        divider.style.animation = 'none';
+        divider.innerHTML = `<div class="delegation-line"></div><div class="delegation-badge" style="color:${msgAgent?.colour||'var(--accent)'}"><span class="avatar xs" style="background:${msgAgent?.colour||'var(--accent)'}">${msgAgent?.icon||'?'}</span>${msgAgent?.displayName||'Agent'} joined</div><div class="delegation-line"></div>`;
+        frag.appendChild(divider);
+      }
+      lastAgentId = msg.agentId || lastAgentId;
       div.className = 'msg msg-agent history-msg';
-      div.innerHTML = `<div class="msg-sender" style="color:${agent?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${agent?.colour||'var(--accent)'}">${agent?.icon||'?'}</div> ${agent?.displayName||'Agent'}</div><div class="msg-bubble">${formatMd(msg.content)}</div>`;
+      div.innerHTML = `<div class="msg-sender" style="color:${msgAgent?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${msgAgent?.colour||'var(--accent)'}">${msgAgent?.icon||'?'}</div> ${msgAgent?.displayName||'Agent'}</div><div class="msg-bubble">${formatMd(msg.content)}</div>`;
     }
     frag.appendChild(div);
   }
@@ -1632,12 +1774,29 @@ function renderSessionHistory(d) {
   const historyMsgs = d.messages.map(m => ({
     role: m.role === 'user' ? 'user' : 'agent',
     content: m.content,
-    agentId: convo.agentId,
+    agentId: m.agentId || convo.agentId,
     isHistory: true
   }));
   // Prepend to existing messages (load-more adds older messages before existing ones)
   convo.messages = [...historyMsgs, ...convo.messages];
   convo._historyCount = (convo._historyCount || 0) + historyMsgs.length;
+
+  // Update activeAgentId to the last responding agent from history
+  // This fixes sidebar/title showing wrong agent after restart
+  const lastAssistantMsg = [...d.messages].reverse().find(m => m.role === 'assistant' && m.agentId);
+  if (lastAssistantMsg) {
+    const state = getConvoState(convo.id);
+    state.activeAgentId = lastAssistantMsg.agentId;
+    // Update header and sidebar to reflect the correct agent
+    if (activeConversation?.id === convo.id) {
+      const agent = agents.find(a => a.id === lastAssistantMsg.agentId) || convo.agent;
+      document.getElementById('chat-agent-label').textContent = agent.displayName;
+      document.getElementById('chat-agent-avatar').style.background = agent.colour;
+      document.getElementById('chat-agent-avatar').textContent = agent.icon;
+      document.getElementById('msg-input').placeholder = `Message ${agent.displayName}...`;
+    }
+    renderConvoList();
+  }
 }
 
 // ===== PERMISSION UI =====
@@ -1685,7 +1844,7 @@ function describeToolRequest(toolName, input) {
     const cmd = (input.command || '').trim();
     detail = cmd;
     const bin = bashBin(cmd);
-    summary = BASH_DESCRIPTIONS[bin] || `Run ${bin}`;
+    summary = input.description || BASH_DESCRIPTIONS[bin] || `Run ${bin}`;
     if (bin === 'rm') context = 'This will permanently delete files';
     else if (bin === 'sudo') context = 'This runs with elevated privileges';
     else if (/git\s+push/.test(cmd)) context = 'This will push changes to a remote repository';
@@ -1760,7 +1919,9 @@ function handlePermissionRequest(d, convoId) {
         <span class="permission-summary">${esc(summary)}</span>
       </div>
       ${context ? `<div class="permission-context">${esc(context)}</div>` : ''}
-      <code class="permission-detail">${esc(detail)}</code>
+      ${(toolName === 'Bash' && input.description && detail.length > 60)
+        ? `<details class="permission-detail-collapse"><summary>Show command</summary><code class="permission-detail">${esc(detail)}</code></details>`
+        : `<code class="permission-detail">${esc(detail)}</code>`}
       <div class="permission-actions">
         <button class="btn-perm btn-allow" data-perm-id="${esc(requestId)}" data-perm-action="allow">Allow</button>
         ${risk !== 'high' ? `<button class="btn-perm btn-always" data-perm-id="${esc(requestId)}" data-perm-action="always">Always allow</button>` : ''}
@@ -1810,8 +1971,11 @@ function respondPermission(requestId, allow, always) {
     const summary = card.querySelector('.permission-summary')?.textContent || '';
     const detail = card.querySelector('.permission-detail')?.textContent || '';
     const label = allow ? (always ? '✓ Always' : '✓') : '✕';
+    const detailHtml = (detail && detail.length > 60 && summary)
+      ? `<details class="permission-detail-collapse"><summary>Show command</summary><code class="permission-detail">${esc(detail)}</code></details>`
+      : (detail ? `<span class="permission-resolved-detail">: ${esc(detail)}</span>` : '');
     card.innerHTML = `<div class="permission-resolved ${allow ? 'allowed' : 'denied'}">
-      <span>${label}</span> ${esc(summary)}${detail ? ': ' + esc(detail) : ''}
+      <span>${label}</span> ${esc(summary)}${detailHtml}
     </div>`;
   }
 
@@ -2471,7 +2635,9 @@ msgInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preve
 msgInput.addEventListener('input',()=>{
   msgInput.style.height='auto'; msgInput.style.height=Math.min(msgInput.scrollHeight, 200)+'px';
   const btn=document.getElementById('send-btn');
-  if(msgInput.value.trim()) btn.classList.add('active'); else btn.classList.remove('active');
+  if(!btn.classList.contains('cancel')) {
+    if(msgInput.value.trim()) btn.classList.add('active'); else btn.classList.remove('active');
+  }
 });
 
 // Enter creates workspace

@@ -17,6 +17,11 @@ const readline = require('readline');
 const PORT = process.env.PORT || 3000;
 let WORKSPACE = process.env.WORKSPACE || null;
 
+// Shared constants to avoid repetition across process spawn sites
+const DISALLOWED_TOOLS = 'Write(*.js),Write(*.jsx),Write(*.ts),Write(*.tsx),Write(*.py),Write(*.sh),Write(*.bash),Write(*.rb),Write(*.pl),Write(*.exe),Write(*.dll),Write(*.so),Edit(*.js),Edit(*.jsx),Edit(*.ts),Edit(*.tsx),Edit(*.py),Edit(*.sh),Edit(*.bash),Edit(*.rb),Edit(*.pl),Edit(*.exe)';
+const ALLOWED_TOOLS_INTERACTIVE = 'Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,ToolSearch,Agent,Skill,mcp__*';
+const ALLOWED_TOOLS_LEGACY = 'Bash,WebFetch,WebSearch,mcp__*';
+
 // Pending permission requests from PreToolUse hooks (keyed by requestId).
 // Each entry holds the HTTP response object so we can resolve it when the user decides.
 const pendingPermissionRequests = new Map();
@@ -222,16 +227,52 @@ function flagRosterRefresh() {
   }
 }
 
-function buildTeamRoster(orchestratorId) {
+function buildTeamRoster(leaderId, scopedToDirectReports = false) {
   const allAgents = discoverAgents();
   const allSkills = discoverSkills(allAgents);
-  const teammates = allAgents.filter(a => a.status === 'onTeam' && a.id !== orchestratorId && a.id !== 'default');
+  // All agents use explicit reportsTo. Filter to direct reports of this leader.
+  // Fallback: agents with no reportsTo are included for orchestrators (backward compat).
+  const teammates = allAgents.filter(a => a.status === 'onTeam' && a.id !== leaderId && a.id !== 'default' && (a.reportsTo === leaderId || (!scopedToDirectReports && !a.reportsTo)));
   if (teammates.length === 0) return null;
   return teammates.map(a => {
     const agentSkills = allSkills.filter(s => s.assignedAgents.some(aa => aa.id === a.id));
     const skillList = agentSkills.length > 0 ? ' Skills: ' + agentSkills.map(s => s.slug).join(', ') : '';
-    return `- ${a.displayName} (${a.name}): ${a.role}.${skillList}`;
+    const capsDoes = a.capabilities && a.capabilities.does ? ` Does: ${a.capabilities.does}` : '';
+    const capsConnectors = a.capabilities && a.capabilities.connectors ? ` Connectors: ${a.capabilities.connectors}` : '';
+    return `- ${a.displayName} (${a.name}): ${a.role}.${capsDoes}${capsConnectors}${skillList}`;
   }).join('\n');
+}
+
+// Check if an Agent tool call targets a direct report of the given agent.
+// Returns the matched agent object or null.
+function findDirectReportMatch(agentId, toolInput) {
+  const allAgents = discoverAgents();
+  const directReports = allAgents.filter(a =>
+    a.status === 'onTeam' && (a.reportsTo === agentId || a.reportsTo === allAgents.find(x => x.id === agentId)?.name)
+  );
+  if (directReports.length === 0) return null;
+
+  // Check subagent_type field (most reliable)
+  if (toolInput.subagent_type) {
+    const match = directReports.find(dr =>
+      dr.name === toolInput.subagent_type || dr.id === toolInput.subagent_type
+    );
+    if (match) return match;
+  }
+
+  // Check prompt text for agent name/displayName references (word-boundary match to avoid false positives)
+  const promptText = (toolInput.prompt || '').toLowerCase();
+  const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  for (const dr of directReports) {
+    const nameRegex = new RegExp(`\\b${escapeRegex(dr.name.toLowerCase())}\\b`);
+    if (nameRegex.test(promptText)) return dr;
+    if (dr.displayName) {
+      const displayRegex = new RegExp(`\\b${escapeRegex(dr.displayName.toLowerCase())}\\b`);
+      if (displayRegex.test(promptText)) return dr;
+    }
+  }
+
+  return null;
 }
 
 function buildSystemPrompt(agentData) {
@@ -253,15 +294,29 @@ function buildSystemPrompt(agentData) {
     'Destructive commands (rm with force flags, sudo, chmod, chown) and piped install scripts (curl|sh, wget|sh) are blocked entirely and will not reach the user for approval.'
   ].join('\n');
 
-  // Build delegation section with dynamic team roster for orchestrator agents
+  // Build delegation section for agents that lead other agents
+  // Orchestrators get the full team roster. Specialists with direct reports get a scoped roster.
   let delegationSection = '';
-  if (agentData && agentData.type === 'orchestrator') {
+  const isOrchestrator = agentData && agentData.type === 'orchestrator';
+  const directReportRoster = agentData ? buildTeamRoster(agentData.id, true) : null;
+  const hasDirectReports = !!directReportRoster;
+
+  if (isOrchestrator) {
     const roster = buildTeamRoster(agentData.id);
 
     if (roster) {
       delegationSection = [
-        'DELEGATION:',
-        'You lead a team of specialists. When a request clearly falls within a specialist\'s domain, delegate to them. Tell the user briefly who you are handing to and why, then output the DELEGATE marker and STOP. Do not generate any further text after the closing marker. Do not summarise, predict, or describe what the specialist will do.',
+        'DELEGATION (your primary job):',
+        'You are a router, not a doer. Your first action on every user message must be: check if a specialist on your team covers this domain. If yes, delegate immediately.',
+        '',
+        'DO NOT:',
+        '- Answer the question yourself, even partially, even if you know the answer',
+        '- Read files, search the vault, or use any tools to gather information for a question that belongs to a specialist',
+        '- Say you will delegate and then answer the question yourself in the same response',
+        '',
+        'Your ONLY job when a specialist covers the domain is: output the DELEGATE marker. Nothing else. No file reads, no analysis, no "let me check." Just route.',
+        '',
+        'When delegating, tell the user briefly who you are handing to and why, then output the DELEGATE marker and STOP. Do not generate any further text after the closing marker. Do not summarise, predict, or describe what the specialist will do.',
         '',
         'Format:',
         '{Brief explanation to user of who you are handing to and why}',
@@ -272,12 +327,22 @@ function buildSystemPrompt(agentData) {
         '',
         'CRITICAL: Your response MUST end immediately after the closing <!-- /RUNDOCK:DELEGATE --> tag. Any text after it will be shown to the user and will be confusing. The specialist will appear in the conversation and handle the request. After they finish, you resume automatically.',
         '',
+        'NAMING RULE (most important):',
+        '- NEVER mention a specialist by name unless you are outputting a DELEGATE marker in the same response.',
+        '- If you handle something yourself, describe what YOU are doing. Do not say "Let me hand this to [specialist]" and then answer it yourself.',
+        '- This rule exists because the user sees specialists join the conversation when you delegate. If you name them but they never appear, it breaks trust.',
+        '',
+        'WHEN TO DELEGATE vs HANDLE YOURSELF:',
+        '- Delegate (DELEGATE marker): when a request clearly falls within a specialist\'s domain. The specialist appears in the conversation.',
+        '- Handle yourself: when no specialist fits, or when coordinating across multiple specialists.',
+        '- Background parallel work (Agent tool): only for running multiple independent tasks simultaneously. Never name a specialist when using the Agent tool.',
+        '',
         'YOUR TEAM:',
         roster,
         '',
         'ROUTING RULES:',
+        '- BEFORE answering any user request, check your team roster. If a specialist covers this domain, delegate immediately. Do not answer it yourself, even if you know the answer. The specialist exists for a reason and may have deeper tools and context.',
         '- Platform operations (creating, editing, deleting agents, skills, or workspace config): always delegate to the platform agent (type: platform).',
-        '- If a request maps clearly to one specialist, ALWAYS delegate. Never answer it yourself, even if the question seems simple. The specialist exists for a reason.',
         '- If a request spans multiple specialists, handle the coordination yourself and delegate sub-tasks as needed.',
         '- If no specialist fits, handle it yourself.',
         '',
@@ -285,6 +350,47 @@ function buildSystemPrompt(agentData) {
         'When a specialist hands back to you, read the conversation to understand why. If the specialist returned because the user asked for something outside their scope, pick up that request immediately: either handle it yourself or delegate to the right specialist. Do not ask the user to repeat themselves.',
       ].join('\n');
     }
+  } else if (hasDirectReports) {
+    delegationSection = [
+      'DELEGATION:',
+      'You have a support team that reports to you. When a task falls within a team member\'s specialisation, delegate to them so they appear in the conversation and handle it directly.',
+      '',
+      'DELEGATION IS TEXT-ONLY. When you decide to delegate:',
+      '1. Write a brief explanation to the user',
+      '2. Output the DELEGATE marker immediately',
+      '3. STOP. Do not call any tools (Read, Grep, Glob, Bash, Agent, or any other tool) before, during, or after the marker.',
+      '',
+      'The delegation response must contain ONLY text and the marker. No tool calls whatsoever.',
+      '',
+      'Format:',
+      '{Brief explanation to user of who you are pulling in and why}',
+      '',
+      '<!-- RUNDOCK:DELEGATE agent={agent-name} -->',
+      '{Summarise what you need from this team member with full context}',
+      '<!-- /RUNDOCK:DELEGATE -->',
+      '',
+      'Your response MUST end immediately after the closing tag. Your team member will appear in the conversation and handle the request. After they finish, you resume automatically.',
+      '',
+      'NAMING RULE (most important):',
+      '- NEVER mention a team member by name unless you are outputting a DELEGATE marker in the same response.',
+      '- If you decide to do the work yourself, describe what YOU are doing: "I\'ll check the data", "I\'ll run the analysis." Do not say "Let me pull in [team member]" or "I\'ll have [name] look into this" and then do it yourself.',
+      '- This rule exists because the user sees your team members join the conversation when you delegate. If you name them but they never appear, it breaks trust.',
+      '',
+      'WHEN TO DELEGATE vs DO IT YOURSELF:',
+      '- Delegate (DELEGATE marker): when the task falls within a team member\'s core speciality. Check your agent instructions for mandatory delegation triggers. If your instructions say to delegate a task type to a specific team member, you MUST delegate. Do not do it yourself.',
+      '- Do it yourself: only for tasks that are YOUR core speciality (as defined in your agent instructions). If a team member is specifically designated for a task type, delegate even if you could do it.',
+      '- Background parallel work (Agent tool): only for running multiple independent tasks simultaneously where no single team member needs to interact with the user. Never name a team member when using the Agent tool.',
+      '',
+      'YOUR SUPPORT TEAM:',
+      directReportRoster,
+      '',
+      'ROUTING RULES:',
+      '- Only delegate to agents listed above. These are your direct reports.',
+      '- If a request falls outside your domain entirely, hand back to the orchestrator using <!-- RUNDOCK:RETURN --> instead of delegating.',
+      '',
+      'AFTER A TEAM MEMBER RETURNS:',
+      'When a team member hands back to you, pick up where you left off. Use their output to continue your work. Do not ask the user to repeat themselves.',
+    ].join('\n');
   }
 
   const sections = [baseRules];
@@ -295,7 +401,15 @@ function buildSystemPrompt(agentData) {
 
 // ===== AGENT DISCOVERY =====
 
+let _agentCache = null;
+let _agentCacheTime = 0;
+const AGENT_CACHE_TTL = 2000; // 2 seconds
+
+function invalidateAgentCache() { _agentCache = null; _agentCacheTime = 0; }
+
 function discoverAgents() {
+  const now = Date.now();
+  if (_agentCache && (now - _agentCacheTime) < AGENT_CACHE_TTL) return _agentCache;
   const agents = [];
   const agentsDir = path.join(WORKSPACE, '.claude', 'agents');
   const claudeMdPath = path.join(WORKSPACE, 'CLAUDE.md');
@@ -331,7 +445,7 @@ function discoverAgents() {
 
         const agentType = meta.type || null; // orchestrator, specialist, platform, or null
         const hasOrder = meta.order !== undefined && meta.order !== '';
-        const orderNum = hasOrder ? parseInt(meta.order) : null;
+        const orderNum = hasOrder ? parseFloat(meta.order) : null;
 
         // Three-state detection:
         // onTeam: has order (with or without type - backward compat)
@@ -354,6 +468,7 @@ function discoverAgents() {
           prompts: prompts.length > 0 ? prompts : null,
           model: meta.model || null,
           order: orderNum,
+          reportsTo: meta.reportsTo || null,
           instructions: instructions.substring(0, 2000),
           isDefault,
           colour: meta.colour || colours[colourIdx % colours.length],
@@ -440,6 +555,8 @@ function discoverAgents() {
     }
   }
 
+  _agentCache = agents;
+  _agentCacheTime = Date.now();
   return agents;
 }
 
@@ -1179,8 +1296,68 @@ const wss = new WebSocketServer({
 
 // Module-level process tracking: survives WebSocket reconnects
 const chatProcesses = new Map(); // conversationId -> { process, buffer, processId, agentId, responseText }
+const convoTranscripts = new Map(); // conversationId -> [{ role: 'user'|'agent', agent: string, text: string }]
 const connectedClients = new Set(); // All active WebSocket connections
 const disconnectBuffer = []; // Messages queued while no clients are connected
+
+// Conversation transcript helpers
+function transcriptDir() { return path.join(rundockDir(), 'transcripts'); }
+
+function loadTranscript(convoId) {
+  if (convoTranscripts.has(convoId)) return convoTranscripts.get(convoId);
+  try {
+    const file = path.join(transcriptDir(), `${convoId}.json`);
+    const data = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    convoTranscripts.set(convoId, data);
+    return data;
+  } catch (e) {
+    const empty = [];
+    convoTranscripts.set(convoId, empty);
+    return empty;
+  }
+}
+
+function saveTranscript(convoId) {
+  if (!WORKSPACE) return;
+  const transcript = convoTranscripts.get(convoId);
+  if (!transcript) return;
+  const dir = transcriptDir();
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${convoId}.json`), JSON.stringify(transcript, null, 2));
+}
+
+function appendTranscript(convoId, role, agentId, text) {
+  // Load from disk if not in memory (e.g. after server restart)
+  if (!convoTranscripts.has(convoId)) {
+    const existing = loadTranscript(convoId);
+    convoTranscripts.set(convoId, existing);
+  }
+  const transcript = convoTranscripts.get(convoId);
+  // Limit transcript to last 20 entries to avoid token bloat
+  if (transcript.length >= 20) transcript.splice(1, 1); // Keep first entry (original request)
+  transcript.push({ role, agent: agentId, text: (text || '').substring(0, 2000) });
+  // Persist to disk
+  saveTranscript(convoId);
+}
+
+function formatTranscript(convoId, { excludeAgent } = {}) {
+  // Load from disk if not in memory
+  const transcript = loadTranscript(convoId);
+  if (!transcript || transcript.length === 0) return null;
+  const allAgents = discoverAgents(); // Call once, not per entry
+  // When excludeAgent is set, filter out that agent's own previous responses
+  // so they don't re-process old requests when re-delegated
+  const filtered = excludeAgent
+    ? transcript.filter(t => t.role === 'user' || t.agent !== excludeAgent)
+    : transcript;
+  if (filtered.length === 0) return null;
+  return filtered.map(t => {
+    if (t.role === 'user') return `USER: ${t.text}`;
+    const agent = allAgents.find(a => a.id === t.agent || a.name === t.agent);
+    const name = agent?.displayName || t.agent;
+    return `${name.toUpperCase()}: ${t.text}`;
+  }).join('\n\n');
+}
 
 function safeSend(data) {
   const payload = typeof data === 'string' ? data : JSON.stringify(data);
@@ -1211,6 +1388,394 @@ setInterval(() => {
   }
 }, HEARTBEAT_INTERVAL);
 
+/**
+ * Shared stdout/stderr handler for all Claude Code processes.
+ * Consolidates JSONL parsing, metadata enrichment, session capture,
+ * Agent tool interception, response text accumulation, and result handling.
+ *
+ * @param {object} entry - Process entry (must have: process, buffer, processId, agentId, responseText, exited, pendingAgentTool)
+ * @param {string} convoId - Conversation ID
+ * @param {object} ws - WebSocket connection (unused, kept for signature compatibility)
+ * @param {object} options
+ * @param {boolean} options.enableInterception - Whether to intercept Agent tool calls targeting direct reports
+ * @param {function} options.onResult - Callback(entry, parsed) when a 'result' message is received
+ * @returns {{ value: string }} - Mutable stderr buffer reference
+ */
+function wireProcessHandlers(entry, convoId, ws, options = {}) {
+  const { enableInterception = false, onResult } = options;
+
+  entry.process.stdout.on('data', (chunk) => {
+    if (entry.exited) return; // P0: guard against data after SIGKILL
+    entry.buffer += chunk.toString();
+    const lines = entry.buffer.split('\n');
+    entry.buffer = lines.pop();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const parsed = JSON.parse(line);
+        parsed._agent = entry.agentId;
+        parsed._conversationId = convoId;
+        parsed._processId = entry.processId;
+
+        // Capture session ID from init message
+        if (parsed.type === 'system' && parsed.subtype === 'init' && parsed.session_id) {
+          entry.sessionId = parsed.session_id;
+          parsed._sessionId = parsed.session_id;
+        }
+
+        // ── Agent tool interception ──
+        if (enableInterception) {
+          const evt = parsed.type === 'stream_event' ? parsed.event : null;
+          if (evt) {
+            if (evt.type === 'content_block_start' && evt.content_block?.type === 'tool_use' && evt.content_block?.name === 'Agent') {
+              entry.pendingAgentTool = { blockIndex: evt.index, inputJson: '' };
+            }
+            if (entry.pendingAgentTool && evt.type === 'content_block_delta' && evt.index === entry.pendingAgentTool.blockIndex && evt.delta?.type === 'input_json_delta') {
+              entry.pendingAgentTool.inputJson += evt.delta.partial_json;
+            }
+            if (entry.pendingAgentTool && evt.type === 'content_block_stop' && evt.index === entry.pendingAgentTool.blockIndex) {
+              let intercepted = false;
+              try {
+                const toolInput = JSON.parse(entry.pendingAgentTool.inputJson);
+                const target = findDirectReportMatch(entry.agentId, toolInput);
+                if (target) {
+                  console.log(`[AgentIntercept] convo=${convoId} agent=${entry.agentId} intercepting Agent tool call targeting: ${target.name}`);
+                  intercepted = true;
+                  try { entry.process.kill('SIGKILL'); } catch (e) {}
+                  entry.exited = true;
+                  handleDelegation({
+                    type: 'delegate', conversationId: convoId,
+                    targetAgent: target.name,
+                    context: toolInput.prompt || toolInput.description || 'Handle this request.',
+                    _intercepted: true, _parentSessionId: entry.sessionId, _parentAgentId: entry.agentId
+                  }, chatProcesses);
+                }
+              } catch (e) {
+                console.log(`[AgentIntercept] convo=${convoId} failed to parse Agent tool input: ${e.message}`);
+              }
+              entry.pendingAgentTool = null;
+              if (intercepted) continue;
+            }
+          }
+        }
+
+        // Accumulate response text
+        if (parsed.type === 'stream_event' && parsed.event?.type === 'content_block_delta' && parsed.event?.delta?.type === 'text_delta' && parsed.event.delta.text) {
+          entry.responseText += parsed.event.delta.text;
+        } else if (parsed.type === 'assistant' && parsed.message?.content) {
+          for (const block of parsed.message.content) {
+            if (block.type === 'text' && block.text) entry.responseText = block.text;
+          }
+        }
+
+        // Result handling
+        if (parsed.type === 'result') {
+          entry.resultSent = true;
+          safeSend(JSON.stringify(parsed));
+          safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: 0, _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId }));
+          if (onResult) onResult(entry, parsed);
+        } else {
+          safeSend(JSON.stringify(parsed));
+        }
+      } catch (e) {
+        safeSend(JSON.stringify({ type: 'raw', content: line, _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId }));
+      }
+    }
+  });
+
+  const stderrBuf = { value: '' };
+  entry.process.stderr.on('data', (chunk) => {
+    const text = chunk.toString();
+    stderrBuf.value += text;
+    if (text.includes('no stdin data') || text.includes('proceeding without')) return;
+    safeSend(JSON.stringify({ type: 'error', content: text, _conversationId: convoId, _processId: entry.processId }));
+  });
+
+  return stderrBuf;
+}
+
+// ── DELEGATION HANDLER (standalone, no WebSocket dependency) ──
+function handleDelegation(msg, processes) {
+  const convoId = msg.conversationId;
+  const existing = processes.get(convoId);
+  const isIntercepted = !!msg._intercepted;
+
+  // For intercepted Agent tool calls, the parent is already killed
+  if (!isIntercepted && (!existing || existing.exited)) {
+    safeSend(JSON.stringify({ type: 'system', subtype: 'delegation_error', content: 'No active process to delegate from', _conversationId: convoId }));
+    return;
+  }
+
+  const agentList = discoverAgents();
+  const targetAgent = agentList.find(a => a.id === msg.targetAgent || a.name === msg.targetAgent);
+  if (!targetAgent || !targetAgent.fileName) {
+    safeSend(JSON.stringify({ type: 'system', subtype: 'delegation_error', content: `Agent "${msg.targetAgent}" not found`, _conversationId: convoId }));
+    return;
+  }
+
+  // Park the original process (or reference the killed one for intercepted calls)
+  const originalAgentId = isIntercepted ? msg._parentAgentId : existing.agentId;
+  const originalProcessId = isIntercepted ? (existing?.processId || 'intercepted') : existing.processId;
+  if (!isIntercepted) existing.idle = true;
+
+  // Spawn delegate process
+  const delegateProcessId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const isPlatformDelegate = targetAgent.type === 'platform';
+
+  // Platform delegates (Doc): transactional, auto-return after task completion
+  // Specialist delegates: conversational, user controls when to return
+  const delegationContext = isPlatformDelegate
+    ? 'DELEGATION CONTEXT:\nYou have been delegated a task by another agent. Complete the task in a single response if possible. When the task is done (agent created, skill saved, file written, question answered, etc.), output <!-- RUNDOCK:RETURN --> at the very end of that same response. Do not wait for follow-up questions. Do not ask if there is anything else. Just complete the task, confirm what you did, and return immediately. If you genuinely need clarification before you can proceed, ask, but prefer using sensible defaults over asking.'
+    : 'DELEGATION CONTEXT:\nYou have been brought into this conversation by the orchestrator to handle a specific request. Help the user with their request. Have a natural conversation. Stay in the conversation and keep helping with follow-up questions in your domain.\n\nIMPORTANT: Do NOT return after completing a single task. The user may have more questions for you. Wait for their next message.\n\nOnly return to the orchestrator (output <!-- RUNDOCK:RETURN --> at the very end of your response) when:\n- The user asks for something outside your area of expertise. Tell them briefly that this falls outside what you handle and you are handing them back so the right person can pick it up. Do NOT name other specialists or suggest who should handle it. That is the orchestrator\'s job. Then output the RETURN marker.\n\nDo not attempt tasks you are not designed for. Hand back promptly so the orchestrator can route correctly.';
+
+  const delegateArgs = ['--output-format', 'stream-json', '--input-format', 'stream-json',
+    '--verbose', '--include-partial-messages', '--permission-mode', 'acceptEdits',
+    '--allowed-tools', ALLOWED_TOOLS_INTERACTIVE,
+    '--disallowed-tools', DISALLOWED_TOOLS,
+    '--append-system-prompt', 'FORMATTING RULES (mandatory, apply to all output):\n- NEVER use em dashes (\u2014) or en dashes (\u2013) anywhere. This includes lists, headers, separators, and inline text. Wrong: "AI \u2014 your assistant". Right: "AI: your assistant". Use colons, full stops, commas, or restructure instead.\n- Use UK spelling throughout.\n\nPLATFORM RULES:\nRundock is a knowledge management platform focused on knowledge work. You can create and edit markdown, YAML, JSON, and text files freely. Writing or editing executable code files (.js, .ts, .py, .sh, etc.) is blocked by design.\n\n' + delegationContext + '\n\nFor terminal commands (Bash), use them whenever they are the best way to accomplish the task. Do not avoid Bash to be cautious. The user has a permission system that lets them approve or deny each command, so always attempt the command and let the user decide. If a command is denied, respect the decision without questioning it. Simply acknowledge it and offer an alternative if relevant. Do not describe denied commands as "blocked by the platform" or suggest the user lacks permissions. They chose to deny that specific request.\n\nDestructive commands (rm with force flags, sudo, chmod, chown) and piped install scripts (curl|sh, wget|sh) are blocked entirely and will not reach the user for approval.',
+    '--agent', targetAgent.name];
+
+  console.log(`[Delegate] convo=${convoId} from=${originalAgentId} to=${targetAgent.id} proc=${delegateProcessId}`);
+
+  const delegateProc = spawn('claude', delegateArgs, {
+    cwd: WORKSPACE,
+    env: { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(PORT), RUNDOCK_CONVO_ID: convoId },
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+
+  const delegateEntry = {
+    process: delegateProc, buffer: '', processId: delegateProcessId,
+    agentId: targetAgent.id, responseText: '', exited: false, resultSent: false, idle: false,
+    isPlatformDelegate, lastUserMessage: msg.context, receivedFollowUp: false,
+    isIntercepted,
+    pendingAgentTool: null,
+    delegation: {
+      originalAgentId, originalProcessId,
+      originalProcess: isIntercepted ? null : existing.process,
+      originalEntry: isIntercepted ? null : existing,
+      parentSessionId: isIntercepted ? msg._parentSessionId : null,
+      // For sub-delegates (e.g. sub-agent spawned via lead interception): track the orchestrator
+      // so out-of-scope returns can skip the mid-level parent and go straight back.
+      orchestratorEntry: isIntercepted && existing?.delegation?.originalEntry
+        ? existing.delegation.originalEntry : null,
+      orchestratorAgentId: isIntercepted && existing?.delegation?.originalAgentId
+        ? existing.delegation.originalAgentId : null
+    }
+  };
+  processes.set(convoId, delegateEntry);
+
+  // Notify client of agent switch
+  safeSend(JSON.stringify({
+    type: 'system', subtype: 'agent_switch', _conversationId: convoId, _processId: delegateProcessId,
+    fromAgent: originalAgentId, toAgent: targetAgent.id
+  }));
+  safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: delegateProcessId }));
+
+  // Send context as first message, including conversation transcript for context
+  // Exclude the delegate's own previous responses to prevent re-processing old requests
+  const transcript = formatTranscript(convoId, { excludeAgent: targetAgent.id });
+  const contextWithHistory = transcript
+    ? `CONVERSATION SO FAR:\n${transcript}\n\nYOUR TASK:\n${msg.context}`
+    : msg.context;
+  delegateProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: contextWithHistory } }) + '\n');
+
+  wireProcessHandlers(delegateEntry, convoId, null, {
+    enableInterception: true,
+    onResult: (e) => {
+      const hasReturn = /<!-- RUNDOCK:RETURN -->/.test(e.responseText);
+      const hasCrudMarker = /<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT|<!-- RUNDOCK:DELETE_AGENT|<!-- RUNDOCK:SAVE_SKILL|<!-- RUNDOCK:DELETE_SKILL/.test(e.responseText);
+      const shouldAutoReturn = e.isPlatformDelegate
+        ? (hasReturn || hasCrudMarker)
+        : hasReturn;
+
+      if (hasReturn) {
+        e.returnedOutOfScope = true;
+        console.log(`[Delegate] convo=${convoId} agent=${e.agentId} RETURN marker detected, flagging out-of-scope`);
+      }
+
+      if (shouldAutoReturn) {
+        console.log(`[Delegate] Server-side auto-return convo=${convoId} (marker=${hasReturn}, crud=${hasCrudMarker})`);
+        setTimeout(() => {
+          if (!e.exited) {
+            try { e.process.kill(); } catch (err) {}
+          }
+        }, 500);
+      }
+
+      e.finalResponseText = e.responseText;
+      if (e.responseText) appendTranscript(convoId, 'agent', e.agentId, e.responseText);
+      e.responseText = '';
+      e.idle = true;
+    }
+  });
+
+  delegateProc.on('close', (code) => {
+    delegateEntry.exited = true;
+    const current = processes.get(convoId);
+    if (current !== delegateEntry) return;
+
+    // If cancelled by user, skip all parent restoration logic
+    if (delegateEntry.cancelled) {
+      console.log(`[Delegate] convo=${convoId} delegate was cancelled, skipping parent restoration`);
+      processes.delete(convoId);
+      return;
+    }
+
+    // Flush remaining buffer
+    if (delegateEntry.buffer.trim()) {
+      try {
+        const parsed = JSON.parse(delegateEntry.buffer);
+        parsed._agent = delegateEntry.agentId;
+        parsed._conversationId = convoId;
+        parsed._processId = delegateProcessId;
+        safeSend(JSON.stringify(parsed));
+      } catch (e) {}
+    }
+
+    // Restore original process
+    const orig = delegateEntry.delegation.originalEntry;
+    if (delegateEntry.isIntercepted) {
+      const hasReturnMarker = delegateEntry.returnedOutOfScope ||
+        /<!-- RUNDOCK:RETURN -->/.test(delegateEntry.finalResponseText || delegateEntry.responseText);
+      const orchestratorEntry = delegateEntry.delegation.orchestratorEntry;
+      const orchestratorAgentId = delegateEntry.delegation.orchestratorAgentId;
+
+      console.log(`[AgentIntercept] convo=${convoId} close handler: isIntercepted=${delegateEntry.isIntercepted} returnedOutOfScope=${!!delegateEntry.returnedOutOfScope} hasReturnMarker=${hasReturnMarker} hasOrchestratorEntry=${!!orchestratorEntry} orchestratorExited=${orchestratorEntry?.exited}`);
+
+      if (hasReturnMarker && orchestratorEntry && !orchestratorEntry.exited) {
+        // Skip mid-level parent, return directly to orchestrator
+        console.log(`[AgentIntercept] convo=${convoId} sub-delegate returned out-of-scope, skipping ${delegateEntry.delegation.originalAgentId}, restoring orchestrator ${orchestratorAgentId}`);
+
+        orchestratorEntry.idle = true;
+        orchestratorEntry.delegation = null;
+        processes.set(convoId, orchestratorEntry);
+
+        safeSend(JSON.stringify({
+          type: 'system', subtype: 'agent_switch', _conversationId: convoId,
+          fromAgent: delegateEntry.agentId, toAgent: orchestratorAgentId
+        }));
+
+        // Auto-continue: nudge orchestrator to pick up the pending request
+        if (orchestratorEntry.process.stdin && orchestratorEntry.process.stdin.writable && !orchestratorEntry.process.killed) {
+          const pendingRequest = delegateEntry.lastUserMessage || '';
+          setTimeout(() => {
+            if (!orchestratorEntry.exited) {
+              console.log(`[AgentIntercept] convo=${convoId} auto-continuing orchestrator after skip-level return`);
+              orchestratorEntry.responseText = '';
+              orchestratorEntry.idle = false;
+              safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: orchestratorEntry.processId, autoContinue: true }));
+              const prompt = pendingRequest
+                ? `[SYSTEM: A specialist just returned because the user asked for something outside their scope. The user's pending request is: "${pendingRequest}"\n\nRoute this request now. Delegate to the right specialist if one fits, or handle it yourself. Do not summarise what the previous specialist did. Do not ask the user to repeat themselves. Respond to their request.]`
+                : '[SYSTEM: A specialist just returned. Ask the user what they need next.]';
+              try {
+                orchestratorEntry.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n');
+              } catch (err) {
+                console.warn(`[AgentIntercept] convo=${convoId} failed to write to orchestrator stdin: ${err.message}`);
+              }
+            }
+          }, 300);
+        }
+
+        safeSend(JSON.stringify({ type: 'system', subtype: 'done', code, _agent: delegateEntry.agentId, _conversationId: convoId, _processId: delegateProcessId }));
+        return;
+      }
+
+      // Normal intercepted return: restart mid-level parent with --resume
+      const parentAgentId = delegateEntry.delegation.originalAgentId;
+      const parentSessionId = delegateEntry.delegation.parentSessionId;
+      console.log(`[AgentIntercept] convo=${convoId} delegate done, restarting parent ${parentAgentId} (session=${parentSessionId})`);
+
+      safeSend(JSON.stringify({
+        type: 'system', subtype: 'agent_switch', _conversationId: convoId,
+        fromAgent: delegateEntry.agentId, toAgent: parentAgentId
+      }));
+
+      const parentAgentList = discoverAgents();
+      const parentAgentData = parentAgentList.find(a => a.id === parentAgentId || a.name === parentAgentId);
+      const parentSystemPrompt = parentAgentData ? buildSystemPrompt(parentAgentData) : '';
+
+      const resumeArgs = ['--output-format', 'stream-json', '--input-format', 'stream-json',
+        '--verbose', '--include-partial-messages', '--permission-mode', 'acceptEdits',
+        '--allowed-tools', ALLOWED_TOOLS_INTERACTIVE,
+        '--disallowed-tools', DISALLOWED_TOOLS];
+      if (parentSystemPrompt) resumeArgs.push('--append-system-prompt', parentSystemPrompt);
+      if (parentAgentData?.name) resumeArgs.push('--agent', parentAgentData.name);
+      if (parentSessionId) resumeArgs.push('--resume', parentSessionId);
+
+      const resumeProcessId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      const resumeProc = spawn('claude', resumeArgs, {
+        cwd: WORKSPACE,
+        env: { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(PORT), RUNDOCK_CONVO_ID: convoId },
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+
+      const resumeEntry = {
+        process: resumeProc, buffer: '', processId: resumeProcessId,
+        agentId: parentAgentId, responseText: '', exited: false, resultSent: false,
+        pendingAgentTool: null
+      };
+      processes.set(convoId, resumeEntry);
+
+      safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: resumeProcessId, autoContinue: true }));
+
+      const resumeTranscript = formatTranscript(convoId);
+      const resumePrompt = resumeTranscript
+        ? `[SYSTEM: You are resuming after your team member handled part of the conversation. Here is the full conversation so far:\n\n${resumeTranscript}\n\nThe user's latest request was: "${delegateEntry.lastUserMessage || 'continue'}"\n\nPick up from here. Do not repeat what your team member already covered. Act on the user's latest request.]`
+        : `[SYSTEM: Your team member completed a task. The user's latest request was: "${delegateEntry.lastUserMessage || 'continue'}". Act on it.]`;
+      resumeProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: resumePrompt } }) + '\n');
+
+      wireProcessHandlers(resumeEntry, convoId, null, {
+        enableInterception: true,
+        onResult: (e) => {
+          if (e.responseText) appendTranscript(convoId, 'agent', e.agentId, e.responseText);
+          e.responseText = '';
+          e.idle = true;
+        }
+      });
+      resumeProc.on('close', (rCode) => {
+        resumeEntry.exited = true;
+        const cur = processes.get(convoId);
+        if (cur === resumeEntry) processes.delete(convoId);
+        safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: rCode, _agent: resumeEntry.agentId, _conversationId: convoId, _processId: resumeProcessId }));
+      });
+
+    } else if (orig && !orig.exited) {
+      orig.idle = true;
+      orig.delegation = null;
+      processes.set(convoId, orig);
+      console.log(`[Delegate] convo=${convoId} delegate exited, restored ${delegateEntry.delegation.originalAgentId}`);
+      safeSend(JSON.stringify({
+        type: 'system', subtype: 'agent_switch', _conversationId: convoId,
+        fromAgent: delegateEntry.agentId, toAgent: delegateEntry.delegation.originalAgentId
+      }));
+
+      if (!delegateEntry.isPlatformDelegate && delegateEntry.receivedFollowUp && orig.process.stdin && orig.process.stdin.writable) {
+        const pendingRequest = delegateEntry.lastUserMessage || '';
+        setTimeout(() => {
+          if (!orig.exited) {
+            console.log(`[Delegate] convo=${convoId} auto-continuing orchestrator after specialist return`);
+            orig.responseText = '';
+            orig.idle = false;
+            safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: orig.processId, autoContinue: true }));
+            const prompt = pendingRequest
+              ? `[SYSTEM: The specialist just returned because the user asked for something outside their scope. The user's pending request is: "${pendingRequest}"\n\nRoute this request now. Delegate to the right specialist if one fits, or handle it yourself. Do not summarise what the previous specialist did. Do not ask the user to repeat themselves. Respond to their request.]`
+              : '[SYSTEM: The specialist just returned. The user indicated they were done with that specialist. Ask the user what they need next.]';
+            try {
+              orig.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n');
+            } catch (err) {
+              console.warn(`[Delegate] convo=${convoId} failed to write to orchestrator stdin: ${err.message}`);
+            }
+          }
+        }, 300);
+      }
+    } else {
+      processes.delete(convoId);
+      console.log(`[Delegate] convo=${convoId} delegate exited, original process gone`);
+    }
+    safeSend(JSON.stringify({ type: 'system', subtype: 'done', code, _agent: delegateEntry.agentId, _conversationId: convoId, _processId: delegateProcessId }));
+  });
+}
+
 wss.on('connection', (ws) => {
   console.log('Client connected');
   connectedClients.add(ws);
@@ -1236,6 +1801,9 @@ wss.on('connection', (ws) => {
       if (msg.type === 'chat') {
         const convoId = msg.conversationId || 'default';
         const useLegacy = process.env.RUNDOCK_LEGACY_SPAWN === '1';
+
+        // Track user messages in conversation transcript
+        appendTranscript(convoId, 'user', 'user', msg.content);
 
         // ── INTERACTIVE MODE (Deliverable A) ──────────────────────────
         // Process stays alive between messages. Follow-ups push to stdin.
@@ -1288,8 +1856,8 @@ wss.on('connection', (ws) => {
 
             const args = ['--output-format', 'stream-json', '--input-format', 'stream-json',
               '--verbose', '--include-partial-messages', '--permission-mode', 'acceptEdits',
-              '--allowed-tools', 'Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,ToolSearch,Agent,Skill,mcp__*',
-              '--disallowed-tools', 'Write(*.js),Write(*.jsx),Write(*.ts),Write(*.tsx),Write(*.py),Write(*.sh),Write(*.bash),Write(*.rb),Write(*.pl),Write(*.exe),Write(*.dll),Write(*.so),Edit(*.js),Edit(*.jsx),Edit(*.ts),Edit(*.tsx),Edit(*.py),Edit(*.sh),Edit(*.bash),Edit(*.rb),Edit(*.pl),Edit(*.exe)',
+              '--allowed-tools', ALLOWED_TOOLS_INTERACTIVE,
+              '--disallowed-tools', DISALLOWED_TOOLS,
               '--append-system-prompt', systemPrompt];
 
             // Resume existing session if we have a session ID
@@ -1310,7 +1878,12 @@ wss.on('connection', (ws) => {
               stdio: ['pipe', 'pipe', 'pipe']
             });
 
-            const entry = { process: proc, buffer: '', processId, agentId: msg.agent || 'default', responseText: '', exited: false };
+            const entry = {
+              process: proc, buffer: '', processId, agentId: msg.agent || 'default',
+              responseText: '', exited: false, resultSent: false,
+              // Agent tool interception state
+              pendingAgentTool: null  // { blockIndex, inputJson: '' }
+            };
             processes.set(convoId, entry);
 
             safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId }));
@@ -1318,54 +1891,13 @@ wss.on('connection', (ws) => {
             // Send the first message via stdin
             proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: msg.content } }) + '\n');
 
-            let stderrBuffer = '';
-
-            proc.stdout.on('data', (chunk) => {
-              entry.buffer += chunk.toString();
-              const lines = entry.buffer.split('\n');
-              entry.buffer = lines.pop();
-              for (const line of lines) {
-                if (line.trim()) {
-                  try {
-                    const parsed = JSON.parse(line);
-                    parsed._agent = entry.agentId;
-                    parsed._conversationId = convoId;
-                    parsed._processId = processId;
-                    // Capture session ID from init message
-                    if (parsed.type === 'system' && parsed.subtype === 'init' && parsed.session_id) {
-                      parsed._sessionId = parsed.session_id;
-                    }
-                    // Accumulate response text for reconnect replay
-                    if (parsed.type === 'stream_event' && parsed.event?.type === 'content_block_delta' && parsed.event?.delta?.type === 'text_delta' && parsed.event.delta.text) {
-                      entry.responseText += parsed.event.delta.text;
-                    } else if (parsed.type === 'assistant' && parsed.message?.content) {
-                      for (const block of parsed.message.content) {
-                        if (block.type === 'text' && block.text) entry.responseText = block.text;
-                      }
-                    }
-
-                    // In interactive mode, a 'result' message means the turn is complete.
-                    // Send a 'done' event so the client finishes processing, but keep the process alive.
-                    if (parsed.type === 'result') {
-                      safeSend(JSON.stringify(parsed));
-                      safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: 0, _agent: entry.agentId, _conversationId: convoId, _processId: processId }));
-                      entry.responseText = '';
-                      entry.idle = true;
-                    } else {
-                      safeSend(JSON.stringify(parsed));
-                    }
-                  } catch (e) {
-                    safeSend(JSON.stringify({ type: 'raw', content: line, _agent: entry.agentId, _conversationId: convoId, _processId: processId }));
-                  }
-                }
+            const stderrRef = wireProcessHandlers(entry, convoId, ws, {
+              enableInterception: true,
+              onResult: (e) => {
+                if (e.responseText) appendTranscript(convoId, 'agent', e.agentId, e.responseText);
+                e.responseText = '';
+                e.idle = true;
               }
-            });
-
-            proc.stderr.on('data', (chunk) => {
-              const text = chunk.toString();
-              stderrBuffer += text;
-              if (text.includes('no stdin data') || text.includes('proceeding without')) return;
-              safeSend(JSON.stringify({ type: 'error', content: text, _conversationId: convoId, _processId: processId }));
             });
 
             proc.on('close', (code) => {
@@ -1375,13 +1907,14 @@ wss.on('connection', (ws) => {
 
               // Detect stale session and retry fresh
               const isResumeFailure = msg.sessionId && !msg._resumeRetry && code !== 0 &&
-                (stderrBuffer.includes('session') || stderrBuffer.includes('resume') || stderrBuffer.includes('not found'));
+                (stderrRef.value.includes('session') || stderrRef.value.includes('resume') || stderrRef.value.includes('not found'));
               if (isResumeFailure) {
                 console.log(`[Chat] Resume failed for session ${msg.sessionId}, retrying fresh`);
                 processes.delete(convoId);
                 safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: 'Previous session expired. Starting fresh.', _conversationId: convoId, _processId: processId }));
                 const freshMsg = { ...msg, sessionId: null, _resumeRetry: true };
-                ws.emit('message', JSON.stringify(freshMsg));
+                const liveWs = [...connectedClients].find(c => c.readyState === 1) || ws;
+                liveWs.emit('message', JSON.stringify(freshMsg));
                 return;
               }
 
@@ -1398,9 +1931,11 @@ wss.on('connection', (ws) => {
                 }
               }
 
-              // Process exited unexpectedly in interactive mode. Send done so client unblocks.
-              console.log(`[Chat] convo=${convoId} proc=${processId} process exited code=${code} (interactive)`);
-              safeSend(JSON.stringify({ type: 'system', subtype: 'done', code, _agent: entry.agentId, _conversationId: convoId, _processId: processId }));
+              // Process exited in interactive mode. Send done so client unblocks (unless result or cancel already sent it).
+              console.log(`[Chat] convo=${convoId} proc=${processId} process exited code=${code} (interactive) cancelled=${!!entry.cancelled}`);
+              if (!entry.resultSent && !entry.cancelled) {
+                safeSend(JSON.stringify({ type: 'system', subtype: 'done', code, _agent: entry.agentId, _conversationId: convoId, _processId: processId }));
+              }
               processes.delete(convoId);
             });
           }
@@ -1417,8 +1952,8 @@ wss.on('connection', (ws) => {
 
           const args = ['--print', '--output-format', 'stream-json', '--input-format', 'stream-json',
             '--verbose', '--include-partial-messages', '--permission-mode', 'acceptEdits',
-            '--allowed-tools', 'Bash,WebFetch,WebSearch,mcp__*',
-            '--disallowed-tools', 'Write(*.js),Write(*.jsx),Write(*.ts),Write(*.tsx),Write(*.py),Write(*.sh),Write(*.bash),Write(*.rb),Write(*.pl),Write(*.exe),Write(*.dll),Write(*.so),Edit(*.js),Edit(*.jsx),Edit(*.ts),Edit(*.tsx),Edit(*.py),Edit(*.sh),Edit(*.bash),Edit(*.rb),Edit(*.pl),Edit(*.exe)',
+            '--allowed-tools', ALLOWED_TOOLS_LEGACY,
+            '--disallowed-tools', DISALLOWED_TOOLS,
             '--append-system-prompt', 'FORMATTING RULES (mandatory, apply to all output):\n- NEVER use em dashes (—) or en dashes (–) anywhere. This includes lists, headers, separators, and inline text. Wrong: "AI — your assistant". Right: "AI: your assistant". Use colons, full stops, commas, or restructure instead.\n- Use UK spelling throughout.\n\nPLATFORM RULES:\nRundock is a knowledge management platform. You can create and edit markdown, YAML, JSON, and text files. Writing or editing executable code files (.js, .ts, .py, .sh, etc.) is blocked by design. Destructive commands (rm, sudo, chmod) are also blocked. If a user asks you to do something that hits these restrictions, explain that Rundock is designed for knowledge work, not software development, and suggest an alternative approach using supported file types. Never offer to change permission settings or suggest workarounds to bypass these restrictions.'];
 
           if (msg.sessionId) {
@@ -1443,48 +1978,16 @@ wss.on('connection', (ws) => {
             stdio: ['pipe', 'pipe', 'pipe']
           });
 
-          const entry = { process: proc, buffer: '', processId, agentId: msg.agent || 'default', responseText: '', exited: false };
+          const entry = { process: proc, buffer: '', processId, agentId: msg.agent || 'default', responseText: '', exited: false, resultSent: false };
           processes.set(convoId, entry);
 
           safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId }));
 
           proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: msg.content } }) + '\n');
 
-          proc.stdout.on('data', (chunk) => {
-            entry.buffer += chunk.toString();
-            const lines = entry.buffer.split('\n');
-            entry.buffer = lines.pop();
-            for (const line of lines) {
-              if (line.trim()) {
-                try {
-                  const parsed = JSON.parse(line);
-                  parsed._agent = msg.agent || 'default';
-                  parsed._conversationId = convoId;
-                  parsed._processId = processId;
-                  if (parsed.type === 'system' && parsed.subtype === 'init' && parsed.session_id) {
-                    parsed._sessionId = parsed.session_id;
-                  }
-                  if (parsed.type === 'stream_event' && parsed.event?.type === 'content_block_delta' && parsed.event?.delta?.type === 'text_delta' && parsed.event.delta.text) {
-                    entry.responseText += parsed.event.delta.text;
-                  } else if (parsed.type === 'assistant' && parsed.message?.content) {
-                    for (const block of parsed.message.content) {
-                      if (block.type === 'text' && block.text) entry.responseText = block.text;
-                    }
-                  }
-                  safeSend(JSON.stringify(parsed));
-                } catch (e) {
-                  safeSend(JSON.stringify({ type: 'raw', content: line, _agent: msg.agent || 'default', _conversationId: convoId, _processId: processId }));
-                }
-              }
-            }
-          });
-
-          let stderrBuffer = '';
-          proc.stderr.on('data', (chunk) => {
-            const text = chunk.toString();
-            stderrBuffer += text;
-            if (text.includes('no stdin data') || text.includes('proceeding without')) return;
-            safeSend(JSON.stringify({ type: 'error', content: text, _conversationId: convoId, _processId: processId }));
+          // Legacy mode: no interception, no transcript, no idle tracking
+          const legacyStderrRef = wireProcessHandlers(entry, convoId, ws, {
+            enableInterception: false
           });
 
           proc.on('close', (code) => {
@@ -1493,20 +1996,21 @@ wss.on('connection', (ws) => {
             if (current && current.processId !== processId) return;
 
             const isResumeFailure = msg.sessionId && !msg._resumeRetry && code !== 0 &&
-              (stderrBuffer.includes('session') || stderrBuffer.includes('resume') || stderrBuffer.includes('not found'));
+              (legacyStderrRef.value.includes('session') || legacyStderrRef.value.includes('resume') || legacyStderrRef.value.includes('not found'));
             if (isResumeFailure) {
               console.log(`[Chat] Resume failed for session ${msg.sessionId}, retrying fresh`);
               processes.delete(convoId);
               safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: 'Previous session expired. Starting fresh.', _conversationId: convoId, _processId: processId }));
               const freshMsg = { ...msg, sessionId: null, _resumeRetry: true };
-              ws.emit('message', JSON.stringify(freshMsg));
+              const liveWs = [...connectedClients].find(c => c.readyState === 1) || ws;
+              liveWs.emit('message', JSON.stringify(freshMsg));
               return;
             }
 
             if (entry.buffer.trim()) {
               try {
                 const parsed = JSON.parse(entry.buffer);
-                parsed._agent = msg.agent || 'default';
+                parsed._agent = entry.agentId;
                 parsed._conversationId = convoId;
                 parsed._processId = processId;
                 safeSend(JSON.stringify(parsed));
@@ -1514,7 +2018,9 @@ wss.on('connection', (ws) => {
                 safeSend(JSON.stringify({ type: 'raw', content: entry.buffer, _conversationId: convoId, _processId: processId }));
               }
             }
-            safeSend(JSON.stringify({ type: 'system', subtype: 'done', code, _agent: msg.agent || 'default', _conversationId: convoId, _processId: processId }));
+            if (!entry.resultSent && !entry.cancelled) {
+              safeSend(JSON.stringify({ type: 'system', subtype: 'done', code, _agent: entry.agentId, _conversationId: convoId, _processId: processId }));
+            }
             processes.delete(convoId);
           });
         }
@@ -1532,6 +2038,78 @@ wss.on('connection', (ws) => {
           console.log(`[Permission] convo=${msg.conversationId} requestId=${msg.requestId} decision=${msg.allow ? 'allow' : 'deny'}`);
         } else {
           console.warn(`[Permission] No pending request for requestId=${msg.requestId} (expired or already resolved)`);
+        }
+      }
+
+      // ── CANCEL: User interrupts a running agent ────────────
+      if (msg.type === 'cancel') {
+        const convoId = msg.conversationId;
+        const entry = chatProcesses.get(convoId);
+        if (!entry || entry.exited) {
+          console.log(`[Cancel] convo=${convoId} no active process to cancel`);
+        } else if (entry.idle) {
+          console.log(`[Cancel] convo=${convoId} process is idle, nothing to cancel`);
+        } else {
+          console.log(`[Cancel] convo=${convoId} proc=${entry.processId} agent=${entry.agentId} killing`);
+
+          // Auto-deny any pending permission requests for this conversation
+          for (const [reqId, pending] of pendingPermissionRequests) {
+            if (pending.conversationId === convoId) {
+              clearTimeout(pending.timer);
+              pendingPermissionRequests.delete(reqId);
+              try {
+                pending.res.writeHead(200, { 'Content-Type': 'application/json' });
+                pending.res.end(JSON.stringify({ allow: false, reason: 'cancelled' }));
+              } catch (e) {}
+            }
+          }
+
+          // Mark as cancelled so delegation close handlers skip parent restoration
+          entry.cancelled = true;
+          entry.exited = true;
+
+          // Send cancelled event before kill so client gets it before the done event
+          safeSend(JSON.stringify({
+            type: 'system', subtype: 'cancelled',
+            _conversationId: convoId, _processId: entry.processId, _agent: entry.agentId
+          }));
+
+          // Kill the active process
+          try { entry.process.kill('SIGTERM'); } catch (e) {}
+          // Safety net: SIGKILL after 2 seconds
+          setTimeout(() => {
+            try { entry.process.kill('SIGKILL'); } catch (e) {}
+          }, 2000);
+
+          // If this is a delegate, also kill the parked parent(s)
+          if (entry.delegation) {
+            const orig = entry.delegation.originalEntry;
+            if (orig && !orig.exited) {
+              orig.exited = true;
+              orig.cancelled = true;
+              try { orig.process.kill('SIGTERM'); } catch (e) {}
+              setTimeout(() => { try { orig.process.kill('SIGKILL'); } catch (e) {} }, 2000);
+              console.log(`[Cancel] convo=${convoId} also killed parked parent agent=${orig.agentId}`);
+            }
+            // Also kill the orchestrator if it was a multi-level delegation
+            const orch = entry.delegation.orchestratorEntry;
+            if (orch && orch !== orig && !orch.exited) {
+              orch.exited = true;
+              orch.cancelled = true;
+              try { orch.process.kill('SIGTERM'); } catch (e) {}
+              setTimeout(() => { try { orch.process.kill('SIGKILL'); } catch (e) {} }, 2000);
+              console.log(`[Cancel] convo=${convoId} also killed parked orchestrator`);
+            }
+          }
+
+          // Clean up from the map immediately (close handler will also try but we guard with exited flag)
+          chatProcesses.delete(convoId);
+
+          // Send done so client unblocks
+          safeSend(JSON.stringify({
+            type: 'system', subtype: 'done', code: null,
+            _conversationId: convoId, _processId: entry.processId, _agent: entry.agentId
+          }));
         }
       }
 
@@ -1622,6 +2200,18 @@ wss.on('connection', (ws) => {
         const fiveMinAgo = Date.now() - 5 * 60 * 1000;
         const cleaned = convos.filter(c => c.sessionId || new Date(c.lastActiveAt || c.createdAt).getTime() > fiveMinAgo);
         if (cleaned.length < convos.length) writeConversations(cleaned);
+        // Enrich activeAgentId from transcript so sidebar shows correct agent on load
+        for (const c of cleaned) {
+          const transcript = loadTranscript(c.id);
+          if (transcript && transcript.length > 0) {
+            const lastAssistant = [...transcript].reverse().find(t => t.role !== 'user' && t.agent);
+            if (lastAssistant) c.activeAgentId = lastAssistant.agent;
+          } else if (c.activeAgentId && c.activeAgentId !== c.agentId) {
+            // No transcript: stale activeAgentId from a delegation that ended.
+            // Fall back to base agent (orchestrator) since they resume after delegates return.
+            c.activeAgentId = c.agentId;
+          }
+        }
         ws.send(JSON.stringify({ type: 'conversations', conversations: cleaned }));
       }
 
@@ -1649,7 +2239,9 @@ wss.on('connection', (ws) => {
         const entry = {
           id: msg.conversation.id,
           agentId: msg.conversation.agentId,
+          activeAgentId: msg.conversation.activeAgentId || null,
           sessionId: msg.conversation.sessionId || null,
+          sessionIds: msg.conversation.sessionIds || [],
           title: msg.conversation.title,
           status: msg.conversation.status || 'active',
           createdAt: msg.conversation.createdAt || new Date().toISOString(),
@@ -1662,185 +2254,9 @@ wss.on('connection', (ws) => {
 
       // ── DELEGATION: orchestrator hands off to another agent in the same conversation ──
       if (msg.type === 'delegate') {
-        const convoId = msg.conversationId;
-        const existing = processes.get(convoId);
-        if (!existing || existing.exited) {
-          safeSend(JSON.stringify({ type: 'system', subtype: 'delegation_error', content: 'No active process to delegate from', _conversationId: convoId }));
-          return;
-        }
-
-        const agentList = discoverAgents();
-        const targetAgent = agentList.find(a => a.id === msg.targetAgent || a.name === msg.targetAgent);
-        if (!targetAgent || !targetAgent.fileName) {
-          safeSend(JSON.stringify({ type: 'system', subtype: 'delegation_error', content: `Agent "${msg.targetAgent}" not found`, _conversationId: convoId }));
-          return;
-        }
-
-        // Park the original process
-        const originalAgentId = existing.agentId;
-        const originalProcessId = existing.processId;
-        existing.idle = true;
-
-        // Spawn delegate process
-        const delegateProcessId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-        const isPlatformDelegate = targetAgent.type === 'platform';
-
-        // Platform delegates (Doc): transactional, auto-return after task completion
-        // Specialist delegates: conversational, user controls when to return
-        const delegationContext = isPlatformDelegate
-          ? 'DELEGATION CONTEXT:\nYou have been delegated a task by another agent. Complete the task in a single response if possible. When the task is done (agent created, skill saved, file written, question answered, etc.), output <!-- RUNDOCK:RETURN --> at the very end of that same response. Do not wait for follow-up questions. Do not ask if there is anything else. Just complete the task, confirm what you did, and return immediately. If you genuinely need clarification before you can proceed, ask, but prefer using sensible defaults over asking.'
-          : 'DELEGATION CONTEXT:\nYou have been brought into this conversation by the orchestrator to handle a specific request. Help the user with their request. Have a natural conversation. Stay in the conversation and keep helping with follow-up questions in your domain.\n\nIMPORTANT: Do NOT return after completing a single task. The user may have more questions for you. Wait for their next message.\n\nOnly return to the orchestrator (output <!-- RUNDOCK:RETURN --> at the very end of your response) when:\n- The user asks for something outside your area of expertise. Tell them briefly that this falls outside what you handle and you are handing them back so the right person can pick it up. Do NOT name other specialists or suggest who should handle it. That is the orchestrator\'s job. Then output the RETURN marker.\n\nDo not attempt tasks you are not designed for. Hand back promptly so the orchestrator can route correctly.';
-
-        const delegateArgs = ['--output-format', 'stream-json', '--input-format', 'stream-json',
-          '--verbose', '--include-partial-messages', '--permission-mode', 'acceptEdits',
-          '--allowed-tools', 'Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,ToolSearch,Agent,Skill,mcp__*',
-          '--disallowed-tools', 'Write(*.js),Write(*.jsx),Write(*.ts),Write(*.tsx),Write(*.py),Write(*.sh),Write(*.bash),Write(*.rb),Write(*.pl),Write(*.exe),Write(*.dll),Write(*.so),Edit(*.js),Edit(*.jsx),Edit(*.ts),Edit(*.tsx),Edit(*.py),Edit(*.sh),Edit(*.bash),Edit(*.rb),Edit(*.pl),Edit(*.exe)',
-          '--append-system-prompt', 'FORMATTING RULES (mandatory, apply to all output):\n- NEVER use em dashes (—) or en dashes (–) anywhere. This includes lists, headers, separators, and inline text. Wrong: "AI — your assistant". Right: "AI: your assistant". Use colons, full stops, commas, or restructure instead.\n- Use UK spelling throughout.\n\nPLATFORM RULES:\nRundock is a knowledge management platform focused on knowledge work. You can create and edit markdown, YAML, JSON, and text files freely. Writing or editing executable code files (.js, .ts, .py, .sh, etc.) is blocked by design.\n\n' + delegationContext + '\n\nFor terminal commands (Bash), use them whenever they are the best way to accomplish the task. Do not avoid Bash to be cautious. The user has a permission system that lets them approve or deny each command, so always attempt the command and let the user decide. If a command is denied, respect the decision without questioning it. Simply acknowledge it and offer an alternative if relevant. Do not describe denied commands as "blocked by the platform" or suggest the user lacks permissions. They chose to deny that specific request.\n\nDestructive commands (rm with force flags, sudo, chmod, chown) and piped install scripts (curl|sh, wget|sh) are blocked entirely and will not reach the user for approval.',
-          '--agent', targetAgent.name];
-
-        console.log(`[Delegate] convo=${convoId} from=${originalAgentId} to=${targetAgent.id} proc=${delegateProcessId}`);
-
-        const delegateProc = spawn('claude', delegateArgs, {
-          cwd: WORKSPACE,
-          env: { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(PORT), RUNDOCK_CONVO_ID: convoId },
-          stdio: ['pipe', 'pipe', 'pipe']
-        });
-
-        const delegateEntry = {
-          process: delegateProc, buffer: '', processId: delegateProcessId,
-          agentId: targetAgent.id, responseText: '', exited: false, idle: false,
-          isPlatformDelegate, lastUserMessage: msg.context, receivedFollowUp: false,
-          delegation: { originalAgentId, originalProcessId, originalProcess: existing.process, originalEntry: existing }
-        };
-        processes.set(convoId, delegateEntry);
-
-        // Notify client of agent switch
-        safeSend(JSON.stringify({
-          type: 'system', subtype: 'agent_switch', _conversationId: convoId, _processId: delegateProcessId,
-          fromAgent: originalAgentId, toAgent: targetAgent.id
-        }));
-        safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: delegateProcessId }));
-
-        // Send context as first message
-        delegateProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: msg.context } }) + '\n');
-
-        let delegateStderr = '';
-
-        delegateProc.stdout.on('data', (chunk) => {
-          delegateEntry.buffer += chunk.toString();
-          const lines = delegateEntry.buffer.split('\n');
-          delegateEntry.buffer = lines.pop();
-          for (const line of lines) {
-            if (line.trim()) {
-              try {
-                const parsed = JSON.parse(line);
-                parsed._agent = delegateEntry.agentId;
-                parsed._conversationId = convoId;
-                parsed._processId = delegateProcessId;
-                if (parsed.type === 'system' && parsed.subtype === 'init' && parsed.session_id) {
-                  parsed._sessionId = parsed.session_id;
-                }
-                if (parsed.type === 'stream_event' && parsed.event?.type === 'content_block_delta' && parsed.event?.delta?.type === 'text_delta' && parsed.event.delta.text) {
-                  delegateEntry.responseText += parsed.event.delta.text;
-                } else if (parsed.type === 'assistant' && parsed.message?.content) {
-                  for (const block of parsed.message.content) {
-                    if (block.type === 'text' && block.text) delegateEntry.responseText = block.text;
-                  }
-                }
-                if (parsed.type === 'result') {
-                  safeSend(JSON.stringify(parsed));
-                  safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: 0, _agent: delegateEntry.agentId, _conversationId: convoId, _processId: delegateProcessId }));
-
-                  // Server-side auto-return for platform delegates (Doc):
-                  // Check for RETURN marker or CRUD markers in response.
-                  // Specialist delegates stay in conversation until user triggers return.
-                  const hasReturn = /<!-- RUNDOCK:RETURN -->/.test(delegateEntry.responseText);
-                  const hasCrudMarker = /<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT|<!-- RUNDOCK:DELETE_AGENT|<!-- RUNDOCK:SAVE_SKILL|<!-- RUNDOCK:DELETE_SKILL/.test(delegateEntry.responseText);
-                  const shouldAutoReturn = delegateEntry.isPlatformDelegate
-                    ? (hasReturn || hasCrudMarker)  // Platform: auto-return on RETURN or CRUD
-                    : hasReturn;                      // Specialist: only on explicit RETURN
-                  if (shouldAutoReturn) {
-                    console.log(`[Delegate] Server-side auto-return convo=${convoId} (marker=${hasReturn}, crud=${hasCrudMarker})`);
-                    // Short delay to let the client process the result and trigger CRUD handlers first
-                    setTimeout(() => {
-                      if (!delegateEntry.exited) {
-                        try { delegateEntry.process.kill(); } catch (e) {}
-                      }
-                    }, 500);
-                  }
-
-                  delegateEntry.responseText = '';
-                  delegateEntry.idle = true;
-                } else {
-                  safeSend(JSON.stringify(parsed));
-                }
-              } catch (e) {
-                safeSend(JSON.stringify({ type: 'raw', content: line, _agent: delegateEntry.agentId, _conversationId: convoId, _processId: delegateProcessId }));
-              }
-            }
-          }
-        });
-
-        delegateProc.stderr.on('data', (chunk) => {
-          const text = chunk.toString();
-          delegateStderr += text;
-          if (text.includes('no stdin data') || text.includes('proceeding without')) return;
-          safeSend(JSON.stringify({ type: 'error', content: text, _conversationId: convoId, _processId: delegateProcessId }));
-        });
-
-        delegateProc.on('close', (code) => {
-          delegateEntry.exited = true;
-          const current = processes.get(convoId);
-          if (current !== delegateEntry) return;
-
-          // Flush remaining buffer
-          if (delegateEntry.buffer.trim()) {
-            try {
-              const parsed = JSON.parse(delegateEntry.buffer);
-              parsed._agent = delegateEntry.agentId;
-              parsed._conversationId = convoId;
-              parsed._processId = delegateProcessId;
-              safeSend(JSON.stringify(parsed));
-            } catch (e) {}
-          }
-
-          // Restore original process
-          const orig = delegateEntry.delegation.originalEntry;
-          if (orig && !orig.exited) {
-            orig.idle = true;
-            orig.delegation = null;
-            processes.set(convoId, orig);
-            console.log(`[Delegate] convo=${convoId} delegate exited, restored ${delegateEntry.delegation.originalAgentId}`);
-            safeSend(JSON.stringify({
-              type: 'system', subtype: 'agent_switch', _conversationId: convoId,
-              fromAgent: delegateEntry.agentId, toAgent: delegateEntry.delegation.originalAgentId
-            }));
-
-            // Auto-continue: if the specialist returned after an out-of-scope user request,
-            // nudge the orchestrator to pick up the pending request.
-            // Only fires when the user sent follow-up messages to the specialist (not on first-turn completion).
-            if (!delegateEntry.isPlatformDelegate && delegateEntry.receivedFollowUp && orig.process.stdin && orig.process.stdin.writable) {
-              const pendingRequest = delegateEntry.lastUserMessage || '';
-              setTimeout(() => {
-                if (!orig.exited) {
-                  console.log(`[Delegate] convo=${convoId} auto-continuing orchestrator after specialist return`);
-                  orig.responseText = '';
-                  orig.idle = false;
-                  safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: orig.processId, autoContinue: true }));
-                  const prompt = pendingRequest
-                    ? `[SYSTEM: The specialist just returned because the user asked for something outside their scope. The user's pending request is: "${pendingRequest}"\n\nRoute this request now. Delegate to the right specialist if one fits, or handle it yourself. Do not summarise what the previous specialist did. Do not ask the user to repeat themselves. Respond to their request.]`
-                    : '[SYSTEM: The specialist just returned. The user indicated they were done with that specialist. Ask the user what they need next.]';
-                  orig.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n');
-                }
-              }, 300);
-            }
-          } else {
-            processes.delete(convoId);
-            console.log(`[Delegate] convo=${convoId} delegate exited, original process gone`);
-          }
-          safeSend(JSON.stringify({ type: 'system', subtype: 'done', code, _agent: delegateEntry.agentId, _conversationId: convoId, _processId: delegateProcessId }));
-        });
+        handleDelegation(msg, processes);
       }
+
 
       // End delegation: kill delegate, restore original
       if (msg.type === 'end_delegation') {
@@ -1857,7 +2273,7 @@ wss.on('connection', (ws) => {
         if (!WORKSPACE || !msg.id) return;
         const convos = readConversations().filter(c => c.id !== msg.id);
         writeConversations(convos);
-        ws.send(JSON.stringify({ type: 'conversations', conversations: convos }));
+        ws.send(JSON.stringify({ type: 'conversation_deleted', id: msg.id }));
       }
 
       if (msg.type === 'read_file') {
@@ -1939,7 +2355,7 @@ wss.on('connection', (ws) => {
             const updatedAgents = discoverAgents();
             ws.send(JSON.stringify({ type: 'agents', agents: updatedAgents }));
             ws.send(JSON.stringify({ type: 'skills', skills: discoverSkills(updatedAgents) }));
-            flagRosterRefresh();
+            flagRosterRefresh(); invalidateAgentCache();
             if (!existed) {
               const state = readState();
               if (!state.setupComplete && updatedAgents.some(a => a.status === 'onTeam' && a.type !== 'platform')) {
@@ -1967,7 +2383,7 @@ wss.on('connection', (ws) => {
             const updatedAgents = discoverAgents();
             ws.send(JSON.stringify({ type: 'agents', agents: updatedAgents }));
             ws.send(JSON.stringify({ type: 'skills', skills: discoverSkills(updatedAgents) }));
-            flagRosterRefresh();
+            flagRosterRefresh(); invalidateAgentCache();
           }
         }
       }
@@ -1990,7 +2406,7 @@ wss.on('connection', (ws) => {
             ws.send(JSON.stringify({ type: 'skill_saved', skillId: name, updated: existed }));
             const updatedAgents = discoverAgents();
             ws.send(JSON.stringify({ type: 'skills', skills: discoverSkills(updatedAgents) }));
-            flagRosterRefresh();
+            flagRosterRefresh(); invalidateAgentCache();
           }
         }
       }
@@ -2009,7 +2425,7 @@ wss.on('connection', (ws) => {
             ws.send(JSON.stringify({ type: 'skill_deleted', skillId: name }));
             const updatedAgents = discoverAgents();
             ws.send(JSON.stringify({ type: 'skills', skills: discoverSkills(updatedAgents) }));
-            flagRosterRefresh();
+            flagRosterRefresh(); invalidateAgentCache();
           }
         }
       }
@@ -2070,26 +2486,90 @@ wss.on('connection', (ws) => {
       }
 
       if (msg.type === 'get_session_history') {
-        const { sessionId, conversationId, limit, offset } = msg;
-        const jsonlPath = getSessionJsonlPath(sessionId);
-        parseSessionHistory(sessionId, limit || 20, offset || 0).then(result => {
-          ws.send(JSON.stringify({
-            type: 'session_history',
-            conversationId,
-            messages: result.messages,
-            totalCount: result.totalCount,
-            hasMore: result.hasMore
-          }));
-        }).catch(err => {
-          console.warn('[Session history] Parse error:', err.message);
-          ws.send(JSON.stringify({
-            type: 'session_history',
-            conversationId,
-            messages: [],
-            totalCount: 0,
-            hasMore: false
-          }));
-        });
+        const { sessionId, sessionIds, conversationId, limit, offset } = msg;
+
+        // Multi-session merge: load from all sessions in the delegation chain.
+        // Use the conversation transcript as the primary source for agent attribution,
+        // since JSONL sessions can contain messages from multiple agents after restarts.
+        if (sessionIds && sessionIds.length > 0) {
+          Promise.all(sessionIds.map(async (s) => {
+            const result = await parseSessionHistory(s.sessionId, 999, 0).catch(() => ({ messages: [] }));
+            return result.messages.map(m => ({ ...m, _sessionAgentId: s.agentId || null }));
+          })).then(allSessions => {
+            // Load transcript for accurate agent attribution
+            const transcript = loadTranscript(conversationId);
+            const transcriptAgents = []; // Build ordered list of { role, agentId, contentPrefix }
+            if (transcript && transcript.length > 0) {
+              for (const t of transcript) {
+                transcriptAgents.push({
+                  role: t.role === 'user' ? 'user' : 'assistant',
+                  agentId: t.agent,
+                  contentPrefix: (t.text || '').substring(0, 200)
+                });
+              }
+            }
+
+            // Merge all sessions in order, deduplicating user messages
+            const merged = [];
+            const seenUserMsgs = new Set();
+            let transcriptIdx = 0;
+            for (const sessionMsgs of allSessions) {
+              for (const m of sessionMsgs) {
+                if (m.role === 'user') {
+                  const key = m.content.substring(0, 200);
+                  if (seenUserMsgs.has(key)) continue;
+                  if (m.content.startsWith('CONVERSATION SO FAR:') || m.content.startsWith('[SYSTEM:')) continue;
+                  seenUserMsgs.add(key);
+                }
+                // Match against transcript for correct agent attribution
+                let agentId = m._sessionAgentId;
+                if (m.role === 'assistant' && transcriptAgents.length > 0) {
+                  // Find the next transcript entry that matches this message's role and content
+                  for (let ti = transcriptIdx; ti < transcriptAgents.length; ti++) {
+                    const te = transcriptAgents[ti];
+                    if (te.role === 'assistant' && m.content && te.contentPrefix.length > 10 && m.content.substring(0, 200).includes(te.contentPrefix.substring(0, 100))) {
+                      agentId = te.agentId;
+                      transcriptIdx = ti + 1;
+                      break;
+                    }
+                  }
+                }
+                delete m._sessionAgentId;
+                m.agentId = m.role === 'user' ? null : agentId;
+                merged.push(m);
+              }
+            }
+            const total = merged.length;
+            const lim = limit || 50;
+            const off = offset || 0;
+            const start = Math.max(0, total - lim - off);
+            const end = Math.max(0, total - off);
+            ws.send(JSON.stringify({
+              type: 'session_history',
+              conversationId,
+              messages: merged.slice(start, end),
+              totalCount: total,
+              hasMore: start > 0
+            }));
+          }).catch(err => {
+            console.warn('[Session history] Multi-session merge error:', err.message);
+            ws.send(JSON.stringify({ type: 'session_history', conversationId, messages: [], totalCount: 0, hasMore: false }));
+          });
+        } else {
+          // Fallback: single session (backward compatible)
+          parseSessionHistory(sessionId, limit || 20, offset || 0).then(result => {
+            ws.send(JSON.stringify({
+              type: 'session_history',
+              conversationId,
+              messages: result.messages,
+              totalCount: result.totalCount,
+              hasMore: result.hasMore
+            }));
+          }).catch(err => {
+            console.warn('[Session history] Parse error:', err.message);
+            ws.send(JSON.stringify({ type: 'session_history', conversationId, messages: [], totalCount: 0, hasMore: false }));
+          });
+        }
       }
 
       if (msg.type === 'save_file') {

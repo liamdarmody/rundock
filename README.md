@@ -53,9 +53,9 @@ Pulls the latest changes and reinstalls dependencies. Then run `npm start` as us
 
 **Team:** See your agents on an org chart with zoom controls. Click any agent to view their profile with role, capabilities, skills, and routines. The chart scales to any team size.
 
-**Delegation:** Orchestrator agents route work to the right specialist mid-conversation. You see who's active in the sidebar, and specialists hand back when the request moves outside their domain. The orchestrator picks up where they left off.
+**Delegation:** Orchestrator agents route work to the right specialist mid-conversation. You see who's active in the sidebar, and specialists hand back when the request moves outside their domain. The orchestrator picks up where they left off. Specialists can lead their own sub-teams: a content lead delegates analytics to an analyst, who appears in the conversation and handles it directly.
 
-**Conversations:** Chat with any agent through the browser. Run multiple conversations in parallel, each with its own agent and session context. Search across conversation titles and full transcript history to find past work. Claude Code has no built-in way to search session content; Rundock does.
+**Conversations:** Chat with any agent through the browser. Run multiple conversations in parallel, each with its own agent and session context. Search across conversation titles and full transcript history to find past work. Cancel a running agent with the stop button if it goes down the wrong path. Delete old conversations from the sidebar. Claude Code has no built-in way to search session content; Rundock does.
 
 **Skills:** See which agents use which skills at a glance. In Claude Code, skill-to-agent assignments are invisible. Rundock surfaces the full map.
 
@@ -97,7 +97,7 @@ prompts:
 | `displayName` | Human-friendly name for the UI. Falls back to title-cased `name` if not set |
 | `role` | Short title on org chart (2-4 words) |
 | `type` | `orchestrator`, `specialist`, or `platform`. Determines org chart position |
-| `order` | Position on org chart. Orchestrator is 0, specialists numbered after |
+| `order` | Position on org chart. Orchestrator is 0, specialists numbered after. Decimals for sub-agents (1.1, 1.2) |
 | `icon` | Single unicode character for the avatar circle |
 | `colour` | Hex colour for the avatar background |
 | `prompts` | List of starter prompts shown as pills when starting a new conversation |
@@ -109,9 +109,10 @@ prompts:
 Browser (WebSocket) <-> Node.js server <-> Claude Code CLI (one process per conversation, delegates spawn additional processes)
 ```
 
-- **server.js:** Discovers agents, skills, and files. Spawns Claude Code processes for conversations. Manages delegation between agents, permission cards, and session continuity.
-- **public/index.html:** Single-page app with nav rail, sidebar, and main panel.
-- **Claude Code:** Runs as child processes in interactive stream-json mode. Each conversation gets its own persistent process with session continuity via `--resume`. Follow-up messages push to stdin rather than spawning new processes. Delegation spawns a second process for the specialist, parking the orchestrator until the specialist returns.
+- **server.js:** Discovers agents, skills, and files. Spawns Claude Code processes for conversations. Manages single and multi-level delegation between agents, conversation transcripts, permission cards, and session continuity (~2,700 lines).
+- **public/app.js:** Single-page client application (~2,650 lines). Handles streaming, delegation UI, permission cards, cancel/interrupt, and conversation management.
+- **public/index.html:** Layout and styles. Nav rail, sidebar, and main panel.
+- **Claude Code:** Runs as child processes in interactive stream-json mode. Each conversation gets its own persistent process with session continuity via `--resume`. Follow-up messages push to stdin rather than spawning new processes. Delegation spawns additional processes for specialists, with multi-level chains supported (orchestrator to lead to sub-agent).
 
 Everything runs on your machine. No data is sent anywhere other than Anthropic's API (through Claude Code). Same workspace files are accessible to Rundock, Claude Code, Obsidian, VS Code, or any other tool simultaneously.
 
@@ -129,11 +130,11 @@ Everything runs on your machine. No data is sent anywhere other than Anthropic's
 
 **Executable code is blocked by design.** Agents cannot write or edit code files (.js, .ts, .py, .sh, and other executable formats). Rundock is built for knowledge work, not software development.
 
-**The codebase is small and auditable.** Two source files (server.js and public/app.js), two dependencies (a markdown renderer and a WebSocket library). No build step, no bundler. You can read the entire codebase in an afternoon.
+**The codebase is small and auditable.** Three source files totalling ~6,000 lines (server.js, public/app.js, public/index.html), two dependencies (a markdown renderer and a WebSocket library). No build step, no bundler. You can read the entire codebase in an afternoon.
 
 **Nothing is stored in the cloud.** Conversation metadata (title, agent, session ID) is saved to a `.rundock/` directory in your workspace so sessions persist across page reloads. Message content is read from Claude Code's own JSONL transcript files on disk when resuming a previous conversation. Rundock does not store message content separately. Your workspace files are plain files on disk. Theme preference is saved in your browser's local storage. A list of recently opened workspaces is saved to a local file in the Rundock install directory. That's it.
 
-For technical users: the full source is in `server.js` (Node.js HTTP + WebSocket server, agent/skill discovery, delegation, Claude Code process management) and `public/app.js` (single-page client application). No build step, no bundler, no minification.
+For technical users: the full source is in `server.js` (Node.js HTTP + WebSocket server, agent/skill discovery, multi-level delegation, transcripts, process management) and `public/app.js` (single-page client application). No build step, no bundler, no minification.
 
 ## Common issues
 

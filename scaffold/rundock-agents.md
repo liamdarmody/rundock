@@ -27,7 +27,8 @@ Suggest and confirm:
 - **role:** 2-4 word title (e.g. "Meeting Intelligence", "Content Strategist")
 - **icon:** Single unicode character. Must be visually distinct from existing agents.
 - **colour:** Hex colour for avatar. Must be visually distinct from existing agents.
-- **order:** 0 for orchestrator, sequential for specialists. Check existing agents to avoid collisions.
+- **order:** 0 for orchestrator, sequential integers for specialists. Use decimals for sub-agents (e.g. 1.1, 1.2 under a lead at order 1). Check existing agents to avoid collisions.
+- **reportsTo:** The `name` slug of the agent this one reports to. Every specialist should have this set. Direct reports of the orchestrator use the orchestrator's slug. Sub-agents use their lead's slug.
 - **model:** `opus` for orchestrator, `sonnet` for most specialists
 
 ### 3. Write instructions
@@ -62,6 +63,7 @@ displayName: {Human Name}
 role: {Short Role Title}
 type: {orchestrator|specialist}
 order: {number}
+reportsTo: {parent-agent-slug}
 icon: {unicode}
 colour: {hex}
 model: {opus|sonnet|haiku}
@@ -116,7 +118,7 @@ If the deleted agent owned skills, suggest reassigning them.
 Review all agents for quality and consistency.
 
 ### Per-agent checks
-- [ ] All frontmatter fields present (name, description, displayName, role, type, order, icon, colour, model, prompts)
+- [ ] All frontmatter fields present (name, description, displayName, role, type, order, reportsTo, icon, colour, model, prompts)
 - [ ] Identity statement in instructions
 - [ ] Specific responsibilities with skill slug references
 - [ ] Routing boundaries for specialists
@@ -128,6 +130,8 @@ Review all agents for quality and consistency.
 ### Team-wide checks
 - [ ] Exactly one orchestrator
 - [ ] No duplicate order numbers
+- [ ] Every specialist has `reportsTo` set
+- [ ] `reportsTo` chain is valid (no circular references, all targets exist)
 - [ ] All icons visually distinct
 - [ ] All colours visually distinct
 - [ ] Orchestrator delegates Rundock operations to Doc
