@@ -15,6 +15,9 @@ Multi-level delegation, agent interruption, conversation transcripts, and a suit
 - **Conversation delete:** Hover trash icon on Previous and Done conversations. Soft delete removes from the conversation list; session files stay on disk.
 - **Collapsible permission commands:** Long Bash commands in permission cards collapse behind a "Show command" toggle. Applies to both the approval prompt and the resolved confirmation.
 - **Capabilities in team roster:** Agent `capabilities.does` and `capabilities.connectors` are now surfaced in the orchestrator's dynamic team roster, improving routing accuracy.
+- **Unread message indicators:** Amber dot on the Conversations nav icon and accent dot on conversation preview cards when an agent responds in a non-visible conversation. Clears when the conversation is opened.
+- **Agent working status dot:** Green pulsing dot on org chart cards when an agent is actively processing. Hidden when idle.
+- **Working status nav badge:** Green pulsing dot on Team nav icon when any agent is processing.
 
 ### Changed
 
@@ -36,6 +39,8 @@ Multi-level delegation, agent interruption, conversation transcripts, and a suit
 - **Empty transcript caching:** Failed transcript loads are cached to avoid repeated disk reads.
 - **Streaming text after tool use:** Text deltas following a tool call now insert a paragraph break so they don't run into the previous content.
 - **Org chart reportsTo resolution:** Node map now indexes by both id and name slug so `reportsTo` matches work regardless of which is used.
+- **Background stream capture:** Stream events now accumulate text for all conversations, not just the active one. Previously, switching away from a conversation while an agent was responding would lose the entire response.
+- **Agent working status colour:** Working indicators (sidebar text, chat header) use green instead of blue for clearer active/idle distinction.
 
 ---
 

@@ -66,7 +66,7 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .avatar.xs { width: 18px; height: 18px; font-size: 9px; }
 .agent-status-name { flex: 1; font-size: 13px; font-weight: 500; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .agent-status-state { font-size: var(--caption); font-weight: 500; color: var(--idle); flex-shrink: 0; }
-.agent-status-state.working { color: var(--working); }
+.agent-status-state.working { color: var(--success); }
 
 /* Conversation search */
 .sidebar-search-wrap { position: relative; padding: 0 8px 4px; }
@@ -89,6 +89,9 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .convo-title { font-size: var(--body); font-weight: 500; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .convo-preview { font-size: var(--caption); color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .convo-meta { font-size: var(--caption); color: var(--text-2); display: flex; align-items: center; gap: 6px; }
+.convo-unread { width: 8px; height: 8px; min-width: 8px; background: var(--accent); border-radius: 50%; margin-left: auto; }
+.nav-badge { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--attention); border-radius: 50%; pointer-events: none; }
+.nav-badge-working { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--success); border-radius: 50%; pointer-events: none; animation: orgPulse 2s ease-in-out infinite; }
 
 /* File tree */
 .file-tree { flex: 1; overflow-y: auto; padding: 0 8px; min-height: 0; }
@@ -119,10 +122,13 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .org-zoom .org-zoom-divider { height: 1px; background: var(--border); }
 /* org-chart-title removed: redundant label */
 .org-tree { display: flex; flex-direction: column; align-items: center; transform-origin: top center; position: relative; }
-.org-card { background: var(--card); border-radius: 14px; padding: 24px 30px; display: flex; align-items: center; gap: 16px; cursor: pointer; transition: all 0.2s ease; border: 1px solid transparent; box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08); }
+.org-card { position: relative; background: var(--card); border-radius: 14px; padding: 24px 30px; display: flex; align-items: center; gap: 16px; cursor: pointer; transition: all 0.2s ease; border: 1px solid transparent; box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08); }
 .org-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.2), 0 0 0 1px var(--accent); }
 .org-card-name { font-size: var(--org-name); font-weight: 700; color: var(--text-1); }
 .org-card-role { font-size: var(--org-role); color: var(--text-2); max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.org-status-dot { position: absolute; top: 8px; right: 8px; border-radius: 50%; background: transparent; flex-shrink: 0; }
+.org-status-dot.working { background: var(--success); animation: orgPulse 2s ease-in-out infinite; }
+@keyframes orgPulse { 0%,100% { opacity: 0.3; transform: scale(0.95); } 50% { opacity: 1; transform: scale(1.1); } }
 .org-card .avatar { width: 48px; height: 48px; font-size: 21px; }
 /* Org chart: d3-hierarchy layout with SVG connectors */
 /* All card dimensions are computed in JS and applied inline. */
@@ -173,7 +179,7 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .chat-convo-status.active-convo { background: rgba(107,198,126,0.12); color: var(--success); }
 .chat-convo-status.done-convo { background: var(--card); color: var(--text-2); }
 .chat-status { font-size: var(--caption); color: var(--idle); font-weight: 500; display: none; }
-.chat-status.working { color: var(--working); display: inline; }
+.chat-status.working { color: var(--success); display: inline; margin-left: 6px; }
 .messages { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
 .msg { max-width: 85%; animation: fadeIn 0.2s ease; }
 .msg-user { align-self: flex-end; }
