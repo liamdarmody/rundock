@@ -1,12 +1,12 @@
 # Rundock
 
-A browser-based OS for AI agent teams. Built for knowledge work, powered by Claude Code.
+Your AI agent team, visible and working in the browser. Built for knowledge work, powered by Claude Code.
+
+Point Rundock at your workspace and get a team of AI agents built around what you do. They show up on an org chart, you talk to them through the browser, and they delegate to each other like a real team. For product managers, researchers, strategists, consultants, writers, analysts, and operations leads.
 
 **Already using Claude Code?** Rundock surfaces what the terminal hides: which agents you have, which skills they use, and what's happening across your conversations. Same `.claude/` directory, same agent files, new visibility.
 
-Rundock gives knowledge workers a visual way to build and manage AI agent teams: an org chart, conversations, skill management, and file browsing. For product managers, researchers, strategists, consultants, writers, analysts, and operations leads.
-
-**Rundock is not designed for coding or building apps.** It's built around markdown files and knowledge workspaces. If you're looking for AI-assisted development, use Claude Code directly in your terminal or IDE.
+**Rundock is built for knowledge work, not coding.** It's designed around markdown files and knowledge workspaces. If you're looking for AI-assisted development, use Claude Code directly in your terminal or IDE.
 
 ![Rundock org chart showing an AI agent team](docs/rundock-agent-team-org-chart.png)
 
