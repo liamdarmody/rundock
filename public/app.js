@@ -1292,7 +1292,6 @@ function renameConversation(newTitle) {
 }
 function deleteConversation(id, evt) {
   evt.stopPropagation(); // Don't open the conversation
-  if (!confirm('Delete this conversation?')) return;
   conversations = conversations.filter(c => c.id !== id);
   delete convoState[id];
   unreadConvos.delete(id);
@@ -1674,17 +1673,12 @@ function handleActiveProcesses(active) {
     const state = getConvoState(proc.conversationId);
     if (!state.isProcessing && convo) {
       state.activeProcessId = proc.processId;
-      state.isProcessing = true;
       // Restore any response text accumulated on the server while we were disconnected
       if (proc.responseText) {
         state.streamingRawText = proc.responseText;
       }
-      // If this conversation is already visible, show the thinking indicator immediately.
-      // Otherwise, openConversation will pick up state.isProcessing when the user navigates to it.
-      if (activeConversation?.id === proc.conversationId) {
-        startProcessing(proc.conversationId);
-      }
-      console.log(`[Reconnect] Restored processing for convo=${proc.conversationId}`);
+      // startProcessing sets isProcessing, updates sidebar, org chart dots, and nav badge
+      startProcessing(proc.conversationId);
     }
   }
 
@@ -2085,7 +2079,7 @@ function buildActivitySummary(toolCalls, turnStartTime) {
   if (!toolCalls || toolCalls.length === 0 || !turnStartTime) return null;
   const totalMs = Date.now() - turnStartTime;
   const totalSec = Math.round(totalMs / 1000);
-  const durationLabel = totalSec < 1 ? '<1s' : totalSec + 's';
+  const durationLabel = totalSec < 1 ? '<1s' : totalSec >= 60 ? Math.floor(totalSec / 60) + 'm' + (totalSec % 60 ? ' ' + (totalSec % 60) + 's' : '') : totalSec + 's';
 
   const details = document.createElement('details');
   details.className = 'activity-summary';
@@ -2097,10 +2091,11 @@ function buildActivitySummary(toolCalls, turnStartTime) {
   const list = document.createElement('div');
   list.className = 'activity-list';
   for (const tc of toolCalls) {
-    const elapsed = ((tc.time - turnStartTime) / 1000).toFixed(1);
+    const elapsedSec = (tc.time - turnStartTime) / 1000;
+    const elapsedLabel = elapsedSec >= 60 ? Math.floor(elapsedSec / 60) + 'm' + (Math.round(elapsedSec % 60) ? ' ' + Math.round(elapsedSec % 60) + 's' : '') : elapsedSec.toFixed(1) + 's';
     const row = document.createElement('div');
     row.className = 'activity-row';
-    row.innerHTML = `<span class="activity-time">${elapsed}s</span><span class="activity-tool">${esc(formatToolShort(tc.tool))}</span>`;
+    row.innerHTML = `<span class="activity-time">${elapsedLabel}</span><span class="activity-tool">${esc(formatToolShort(tc.tool))}</span>`;
     list.appendChild(row);
   }
   details.appendChild(list);
@@ -2122,7 +2117,7 @@ function switchNav(nav) {
   if(nav==='settings') { showView('settings'); showSettingsSection('workspace'); }
   else if(nav==='files') showView('editor');
   else if(nav==='skills') { showView('skills'); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } document.querySelectorAll('.skill-sidebar-item').forEach(el=>el.classList.remove('active')); document.querySelectorAll('.skill-row.expanded').forEach(r=>r.classList.remove('expanded')); }
-  else if(nav==='conversations') { if(activeConversation) showView('chat'); else newConversation(); }
+  else if(nav==='conversations') { if(activeConversation) { showView('chat'); if(unreadConvos.delete(activeConversation.id)) { updateUnreadBadge(); renderConvoList(); } } else newConversation(); }
   else showView('home');
 }
 function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }

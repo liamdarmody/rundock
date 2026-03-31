@@ -286,6 +286,9 @@ function buildSystemPrompt(agentData) {
     '',
     'FILES IN .claude/ DIRECTORY:',
     'Claude Code blocks Write and Edit tools for files inside .claude/. Do NOT use Write, Edit, or Bash to create, modify, or delete files in .claude/agents/ or .claude/skills/.',
+    '',
+    'TIMEZONE:',
+    `The user's local timezone is ${Intl.DateTimeFormat().resolvedOptions().timeZone}. Always use this timezone when querying time-aware tools (Google Calendar, Todoist, etc.) and when displaying dates and times to the user.`,
   ].join('\n');
 
   const bashRules = [
@@ -393,8 +396,24 @@ function buildSystemPrompt(agentData) {
     ].join('\n');
   }
 
+  // Scope boundary: non-orchestrator agents must return when asked to do work outside their domain
+  let scopeSection = '';
+  if (agentData && agentData.type !== 'orchestrator') {
+    scopeSection = [
+      'SCOPE BOUNDARY:',
+      'You are a specialist. Your domain is defined in your agent instructions. If the user asks you to do something that falls outside your domain of expertise:',
+      '1. Tell the user briefly that this falls outside what you handle and you are handing them back so the right person can pick it up.',
+      '2. Do NOT name other specialists or suggest who should handle it. That is the orchestrator\'s job.',
+      '3. Do NOT attempt the task yourself. Even if you could do a reasonable job, the designated specialist has deeper tools and context.',
+      '4. Output <!-- RUNDOCK:RETURN --> at the very end of your response.',
+      '',
+      'This applies whether you were delegated to by another agent or started the conversation directly with the user.',
+    ].join('\n');
+  }
+
   const sections = [baseRules];
   if (delegationSection) sections.push(delegationSection);
+  if (scopeSection) sections.push(scopeSection);
   sections.push(bashRules);
   return sections.join('\n\n');
 }
@@ -1502,6 +1521,92 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
   return stderrBuf;
 }
 
+// ── SCOPE RETURN: specialist hands off to orchestrator ──
+// Called when a directly-started specialist (no delegation parent) emits <!-- RUNDOCK:RETURN -->
+function handleScopeReturn(specialistEntry, convoId) {
+  const agentList = discoverAgents();
+  const orchestrator = agentList.find(a => a.type === 'orchestrator');
+
+  if (!orchestrator || !orchestrator.fileName) {
+    console.warn(`[ScopeReturn] convo=${convoId} no orchestrator found, cannot route`);
+    chatProcesses.delete(convoId);
+    safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: 0,
+      _agent: specialistEntry.agentId, _conversationId: convoId,
+      _processId: specialistEntry.processId }));
+    return;
+  }
+
+  const processId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const systemPrompt = buildSystemPrompt(orchestrator);
+
+  const args = ['--output-format', 'stream-json', '--input-format', 'stream-json',
+    '--verbose', '--include-partial-messages', '--permission-mode', 'acceptEdits',
+    '--allowed-tools', ALLOWED_TOOLS_INTERACTIVE,
+    '--disallowed-tools', DISALLOWED_TOOLS,
+    '--append-system-prompt', systemPrompt,
+    '--agent', orchestrator.name];
+
+  console.log(`[ScopeReturn] convo=${convoId} from=${specialistEntry.agentId} to=${orchestrator.id} proc=${processId}`);
+
+  const proc = spawn('claude', args, {
+    cwd: WORKSPACE,
+    env: { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(PORT), RUNDOCK_CONVO_ID: convoId },
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+
+  const orchEntry = {
+    process: proc, buffer: '', processId, agentId: orchestrator.id,
+    responseText: '', exited: false, resultSent: false,
+    lastUserMessage: specialistEntry.lastUserMessage,
+    pendingAgentTool: null,
+    toolCalls: [], turnStartTime: Date.now(),
+    scopeReturnSource: specialistEntry.agentId
+  };
+  chatProcesses.set(convoId, orchEntry);
+
+  // Notify client of agent switch
+  safeSend(JSON.stringify({
+    type: 'system', subtype: 'agent_switch', _conversationId: convoId,
+    _processId: processId,
+    fromAgent: specialistEntry.agentId, toAgent: orchestrator.id
+  }));
+  safeSend(JSON.stringify({ type: 'system', subtype: 'process_started',
+    _conversationId: convoId, _processId: processId, autoContinue: true }));
+
+  // Build context for orchestrator
+  const transcript = formatTranscript(convoId);
+  const pendingRequest = specialistEntry.lastUserMessage || '';
+  const prompt = transcript
+    ? `[SYSTEM: A specialist (${specialistEntry.agentId}) was handling this conversation but the user asked for something outside their scope. Here is the conversation so far:\n\n${transcript}\n\nThe user's pending request is: "${pendingRequest}"\n\nRoute this request now. Delegate to the right specialist if one fits, or handle it yourself. Do not ask the user to repeat themselves.]`
+    : `[SYSTEM: A specialist returned because the user asked for something outside their scope. The user's request is: "${pendingRequest}"\n\nRoute this request to the right specialist or handle it yourself.]`;
+
+  proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n');
+
+  wireProcessHandlers(orchEntry, convoId, null, {
+    enableInterception: true,
+    onResult: (e) => {
+      if (e.responseText) appendTranscript(convoId, 'agent', e.agentId, e.responseText);
+      e.responseText = '';
+      e.idle = true;
+    }
+  });
+
+  proc.on('close', (orchCode) => {
+    orchEntry.exited = true;
+    const current = chatProcesses.get(convoId);
+    if (current === orchEntry) chatProcesses.delete(convoId);
+    if (!orchEntry.resultSent) {
+      safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: orchCode,
+        _agent: orchEntry.agentId, _conversationId: convoId, _processId: processId }));
+    }
+  });
+
+  // Send done for the specialist that triggered the scope return
+  safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: 0,
+    _agent: specialistEntry.agentId, _conversationId: convoId,
+    _processId: specialistEntry.processId }));
+}
+
 // ── DELEGATION HANDLER (standalone, no WebSocket dependency) ──
 function handleDelegation(msg, processes) {
   const convoId = msg.conversationId;
@@ -1518,6 +1623,18 @@ function handleDelegation(msg, processes) {
   const targetAgent = agentList.find(a => a.id === msg.targetAgent || a.name === msg.targetAgent);
   if (!targetAgent || !targetAgent.fileName) {
     safeSend(JSON.stringify({ type: 'system', subtype: 'delegation_error', content: `Agent "${msg.targetAgent}" not found`, _conversationId: convoId }));
+    return;
+  }
+
+  // Prevent immediate re-delegation to the specialist that just scope-returned
+  if (existing && existing.scopeReturnSource === targetAgent.id) {
+    console.log(`[ScopeReturn] convo=${convoId} preventing loop: ${targetAgent.id} just scope-returned`);
+    existing.scopeReturnSource = null;
+    safeSend(JSON.stringify({
+      type: 'system', subtype: 'delegation_error',
+      content: `Cannot delegate back to ${targetAgent.id} immediately after scope return`,
+      _conversationId: convoId
+    }));
     return;
   }
 
@@ -1838,7 +1955,11 @@ wss.on('connection', (ws) => {
             safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId }));
             existing.responseText = '';
             existing.idle = false;
-            if (existing.delegation) { existing.lastUserMessage = msg.content; existing.receivedFollowUp = true; }
+            existing.toolCalls = [];
+            existing.turnStartTime = Date.now();
+            existing.lastUserMessage = msg.content;
+            existing.scopeReturnSource = null; // User sent new message, allow re-delegation
+            if (existing.delegation) { existing.receivedFollowUp = true; }
             existing.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: msg.content } }) + '\n');
           } else {
             // No live process: spawn a new one (first message or after disconnect)
@@ -1891,6 +2012,7 @@ wss.on('connection', (ws) => {
             const entry = {
               process: proc, buffer: '', processId, agentId: msg.agent || 'default',
               responseText: '', exited: false, resultSent: false,
+              lastUserMessage: msg.content,
               // Agent tool interception state
               pendingAgentTool: null,  // { blockIndex, inputJson: '' }
               toolCalls: [], turnStartTime: Date.now()
@@ -1905,6 +2027,17 @@ wss.on('connection', (ws) => {
             const stderrRef = wireProcessHandlers(entry, convoId, ws, {
               enableInterception: true,
               onResult: (e) => {
+                // Detect scope return: specialist wants to hand off to orchestrator
+                const hasReturn = /<!-- RUNDOCK:RETURN -->/.test(e.responseText);
+                if (hasReturn && !e.delegation) {
+                  e.scopeReturn = true;
+                  console.log(`[ScopeReturn] convo=${convoId} agent=${e.agentId} RETURN marker on non-delegated process`);
+                  setTimeout(() => {
+                    if (!e.exited) {
+                      try { e.process.kill(); } catch (err) {}
+                    }
+                  }, 500);
+                }
                 if (e.responseText) appendTranscript(convoId, 'agent', e.agentId, e.responseText);
                 e.responseText = '';
                 e.idle = true;
@@ -1915,6 +2048,13 @@ wss.on('connection', (ws) => {
               entry.exited = true;
               const current = processes.get(convoId);
               if (current && current.processId !== processId) return;
+
+              // Scope return: specialist wants to hand off to orchestrator
+              if (entry.scopeReturn) {
+                console.log(`[ScopeReturn] convo=${convoId} specialist ${entry.agentId} exited, spawning orchestrator`);
+                handleScopeReturn(entry, convoId);
+                return;
+              }
 
               // Detect stale session and retry fresh
               const isResumeFailure = msg.sessionId && !msg._resumeRetry && code !== 0 &&
@@ -1989,7 +2129,7 @@ wss.on('connection', (ws) => {
             stdio: ['pipe', 'pipe', 'pipe']
           });
 
-          const entry = { process: proc, buffer: '', processId, agentId: msg.agent || 'default', responseText: '', exited: false, resultSent: false, toolCalls: [], turnStartTime: Date.now() };
+          const entry = { process: proc, buffer: '', processId, agentId: msg.agent || 'default', responseText: '', exited: false, resultSent: false, lastUserMessage: msg.content, toolCalls: [], turnStartTime: Date.now() };
           processes.set(convoId, entry);
 
           safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId }));
@@ -2278,6 +2418,13 @@ wss.on('connection', (ws) => {
           console.log(`[Delegate] convo=${convoId} ending delegation, killing delegate`);
           try { current.process.kill(); } catch (e) {}
           // The close handler will restore the original process
+        } else if (current && !current.delegation && !current.exited && !current.scopeReturn) {
+          // Specialist started directly (no delegation) emitted RETURN
+          // Server-side onResult should have caught this, but handle as fallback
+          console.log(`[ScopeReturn] convo=${convoId} end_delegation fallback for non-delegated specialist`);
+          current.scopeReturn = true;
+          try { current.process.kill(); } catch (e) {}
+          // The close handler will call handleScopeReturn
         }
       }
 
