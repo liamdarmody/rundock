@@ -34,6 +34,7 @@ const convoState = {};
 let pendingActiveProcesses = null; // Deferred until conversations are loaded
 let orgZoomOffset = 0; // User zoom adjustment: +/- steps of 0.1 on top of auto-fit scale
 const unreadConvos = new Set(); // convoIds with unread agent messages
+const workingConvos = new Set(); // convoIds with agents actively processing
 
 // ===== 2. HELPERS =====
 
@@ -201,17 +202,16 @@ function handle(d) {
         const state = getConvoState(convoId);
         state.delegationActive = !!toAgent && toAgent.type !== 'orchestrator';
         state.activeAgentId = d.toAgent;
+        // Always reset streaming state on agent switch so the new agent gets a fresh bubble
+        state.currentStreamingMsg = null;
+        state.streamingRawText = '';
+        state.latestText = '';
+        state.latestAgentId = null;
         renderConvoList();
         // Determine if this is a return (back to orchestrator or back to parent)
         // vs a forward delegation (orchestrator->specialist or specialist->sub-specialist)
         const isReturn = toAgent?.type === 'orchestrator';
         if(activeConversation?.id === convoId) {
-          // Reset streaming state so the new agent gets a fresh message bubble
-          if (state.currentStreamingMsg) {
-            state.currentStreamingMsg = null;
-            state.streamingRawText = '';
-            state.latestText = '';
-          }
           const m = document.getElementById('messages');
           const divider = document.createElement('div');
           divider.className = 'msg-delegation';
@@ -328,7 +328,7 @@ function handleStreamEvent(d, convoId) {
       if(!state.currentStreamingMsg) {
         // Remove thinking indicator, replace with streaming bubble
         const t = document.getElementById('thinking-indicator'); if(t) t.remove();
-        const agentId = d._agent || state.latestAgentId;
+        const agentId = d._agent || state.activeAgentId || state.latestAgentId;
         const a = agents.find(x => x.id === agentId) || activeConversation?.agent || agents[0];
         const m = document.getElementById('messages'), el = document.createElement('div');
         el.className = 'msg msg-agent';
@@ -362,7 +362,7 @@ function handleStreamEvent(d, convoId) {
       let status = document.getElementById('thinking-status');
       if(!status) {
         // Thinking indicator was removed when streaming started; re-add it below the streaming message
-        const agentId = d._agent || state.latestAgentId;
+        const agentId = d._agent || state.activeAgentId || state.latestAgentId;
         const a = agents.find(x => x.id === agentId) || activeConversation?.agent || agents[0];
         const m = document.getElementById('messages'), el = document.createElement('div');
         el.className = 'msg msg-agent'; el.id = 'thinking-indicator';
@@ -405,7 +405,7 @@ function handleResult(d, convoId) {
   const state = getConvoState(convoId);
   const isActive = activeConversation?.id === convoId;
   const convo = conversations.find(c => c.id === convoId);
-  const agentId = d._agent || state.latestAgentId;
+  const agentId = d._agent || state.activeAgentId || state.latestAgentId;
   let delegationTriggered = false;
 
   try {
@@ -1307,6 +1307,7 @@ function deleteConversation(id, evt) {
   conversations = conversations.filter(c => c.id !== id);
   delete convoState[id];
   unreadConvos.delete(id);
+  workingConvos.delete(id);
   updateUnreadBadge();
   if (activeConversation?.id === id) {
     activeConversation = null;
@@ -1371,14 +1372,16 @@ function renderConvoList() {
       const cState = convoState[c.id];
       const activeId = cState?.activeAgentId;
       const displayAgent = (activeId && agents.find(a => a.id === activeId)) || c.agent;
-      const unread = unreadConvos.has(c.id);
+      const working = workingConvos.has(c.id);
+      const unread = !working && unreadConvos.has(c.id);
+      const indicator = working ? '<span class="convo-working"></span>' : unread ? '<span class="convo-unread"></span>' : '';
       const pinIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="${c.pinned ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 11V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v7"/><path d="M5 17h14"/><path d="M7 11l-2 6h14l-2-6"/></svg>`;
       const pinIndicator = c.pinned ? `<svg class="convo-pin-indicator" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 11V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v7"/><path d="M5 17h14"/><path d="M7 11l-2 6h14l-2-6"/></svg>` : '';
       h += `<div class="convo-item ${activeConversation?.id === c.id ? 'active' : ''} ${c.pinned ? 'pinned-convo' : ''}" onclick="openConversation('${c.id}')">
         <button class="convo-pin" onclick="togglePin('${c.id}', event)" title="${c.pinned ? 'Unpin conversation' : 'Pin conversation'}">${pinIcon}</button>
         <div class="convo-title-row"><span class="convo-title">${esc(c.title)}</span>${pinIndicator}</div>
         <span class="convo-preview">${esc(preview)}</span>
-        <div class="convo-meta"><div class="avatar xs" style="background:${displayAgent.colour}">${displayAgent.icon}</div><span>${displayAgent.displayName}</span>${unread ? '<span class="convo-unread"></span>' : ''}</div>
+        <div class="convo-meta"><div class="avatar xs" style="background:${displayAgent.colour}">${displayAgent.icon}</div><span>${displayAgent.displayName}</span>${indicator}</div>
       </div>`;
     }
   }
@@ -1394,11 +1397,13 @@ function renderConvoList() {
       const pState = convoState[c.id];
       const pActiveId = pState?.activeAgentId;
       const pDisplayAgent = (pActiveId && agents.find(a => a.id === pActiveId)) || c.agent;
-      const pUnread = unreadConvos.has(c.id);
+      const pWorking = workingConvos.has(c.id);
+      const pUnread = !pWorking && unreadConvos.has(c.id);
+      const pIndicator = pWorking ? '<span class="convo-working"></span>' : pUnread ? '<span class="convo-unread"></span>' : '';
       h += `<div class="convo-item ${activeConversation?.id === c.id ? 'active' : ''}" onclick="openConversation('${c.id}')" style="${opacity}">
         <button class="convo-delete" onclick="deleteConversation('${c.id}', event)" title="Delete conversation"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
         <span class="convo-title">${esc(c.title)}${suffix}</span>
-        <div class="convo-meta"><div class="avatar xs" style="background:${pDisplayAgent.colour}">${pDisplayAgent.icon}</div><span>${pDisplayAgent.displayName}</span>${pUnread ? '<span class="convo-unread"></span>' : ''}</div>
+        <div class="convo-meta"><div class="avatar xs" style="background:${pDisplayAgent.colour}">${pDisplayAgent.icon}</div><span>${pDisplayAgent.displayName}</span>${pIndicator}</div>
       </div>`;
     }
     h += `</div>`;
@@ -1414,12 +1419,14 @@ function renderConvoList() {
       const dState = convoState[c.id];
       const dActiveId = dState?.activeAgentId;
       const dDisplayAgent = (dActiveId && agents.find(a => a.id === dActiveId)) || c.agent;
-      const dUnread = unreadConvos.has(c.id);
+      const dWorking = workingConvos.has(c.id);
+      const dUnread = !dWorking && unreadConvos.has(c.id);
+      const dIndicator = dWorking ? '<span class="convo-working"></span>' : dUnread ? '<span class="convo-unread"></span>' : '';
       h += `<div class="convo-item ${activeConversation?.id === c.id ? 'active' : ''}" onclick="openConversation('${c.id}')" style="opacity:0.7">
         <button class="convo-delete" onclick="deleteConversation('${c.id}', event)" title="Delete conversation"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
         <span class="convo-title">${esc(c.title)}</span>
         <span class="convo-preview">${esc(preview)}</span>
-        <div class="convo-meta"><div class="avatar xs" style="background:${dDisplayAgent.colour}">${dDisplayAgent.icon}</div><span>${dDisplayAgent.displayName}</span>${dUnread ? '<span class="convo-unread"></span>' : ''}</div>
+        <div class="convo-meta"><div class="avatar xs" style="background:${dDisplayAgent.colour}">${dDisplayAgent.icon}</div><span>${dDisplayAgent.displayName}</span>${dIndicator}</div>
       </div>`;
     }
     h += `</div>`;
@@ -1492,11 +1499,13 @@ function renderSearchResults() {
     const preview = snippet ? esc(snippet) : (c.messages?.length ? esc(stripMd(c.messages.filter(m => m.role === 'agent').pop()?.content || '').substring(0, 60)) : '');
     const displayAgent = c.agent || { colour: 'var(--text-2)', icon: '?', displayName: 'Unknown' };
     const opacity = c.persisted ? 'opacity:0.8;' : '';
-    const sUnread = unreadConvos.has(c.id);
+    const sWorking = workingConvos.has(c.id);
+    const sUnread = !sWorking && unreadConvos.has(c.id);
+    const sIndicator = sWorking ? '<span class="convo-working"></span>' : sUnread ? '<span class="convo-unread"></span>' : '';
     h += `<div class="convo-item ${activeConversation?.id === c.id ? 'active' : ''}" onclick="openConversation('${c.id}')" style="${opacity}">
       <span class="convo-title">${esc(c.title)}</span>
       ${preview ? `<span class="convo-preview">${preview}</span>` : ''}
-      <div class="convo-meta"><div class="avatar xs" style="background:${displayAgent.colour}">${displayAgent.icon}</div><span>${displayAgent.displayName}</span>${sUnread ? '<span class="convo-unread"></span>' : ''}</div>
+      <div class="convo-meta"><div class="avatar xs" style="background:${displayAgent.colour}">${displayAgent.icon}</div><span>${displayAgent.displayName}</span>${sIndicator}</div>
     </div>`;
   }
   document.getElementById('convo-list').innerHTML = h;
@@ -1563,7 +1572,7 @@ function openConversation(id) {
     sb.onclick = cancelProcessing; sb.title = 'Stop agent';
     sb.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
     document.getElementById('msg-input').disabled=true;
-    const a=c.agent;
+    const a=agents.find(x => x.id === state.activeAgentId) || c.agent;
     const m2=document.getElementById('messages');
     // Render any response text accumulated on the server before we reconnected
     if(state.streamingRawText) {
@@ -1586,7 +1595,7 @@ function openConversation(id) {
     document.getElementById('msg-input').disabled=false;
     document.getElementById('msg-input').focus();
   }
-  showView('chat'); scrollBottom(); renderConvoList();
+  showView('chat'); scrollBottom(true); renderConvoList();
 }
 
 // ===== 9. CHAT & MESSAGING =====
@@ -1603,8 +1612,15 @@ function dispatchMessage(convo, text) {
     renderConvoList();
   }
   startProcessing(convo.id);
-  const chatMsg = { type: 'chat', content: text, agent: convo.agentId, conversationId: convo.id };
-  if (convo.sessionId) chatMsg.sessionId = convo.sessionId;
+  // Use the last-active agent (e.g. a delegate) if available, otherwise the conversation's base agent.
+  // Also resolve the correct session ID for that agent so --resume loads the right context.
+  const state = getConvoState(convo.id);
+  const resumeAgent = state.activeAgentId || convo.agentId;
+  const resumeSessionId = (resumeAgent !== convo.agentId && convo.sessionIds)
+    ? (convo.sessionIds.filter(s => s.agentId === resumeAgent).pop()?.sessionId || convo.sessionId)
+    : convo.sessionId;
+  const chatMsg = { type: 'chat', content: text, agent: resumeAgent, conversationId: convo.id };
+  if (resumeSessionId) chatMsg.sessionId = resumeSessionId;
   ws.send(JSON.stringify(chatMsg));
   persistConversation(convo);
 }
@@ -1622,6 +1638,9 @@ function sendMessage() {
 function startProcessing(convoId) {
   const state = getConvoState(convoId);
   state.isProcessing=true; state.latestText=''; state.latestAgentId=null;
+  workingConvos.add(convoId);
+  userScrolledUp = false; // Reset: follow the new response from the start
+  renderConvoList();
   const isActive = activeConversation?.id === convoId;
   const convo = conversations.find(c=>c.id===convoId);
   if(isActive) {
@@ -1652,6 +1671,14 @@ function startProcessing(convoId) {
 function finishProcessing(convoId) {
   const state = getConvoState(convoId);
   state.isProcessing=false; state.currentStreamingMsg=null;
+  workingConvos.delete(convoId);
+  // If user isn't viewing this conversation, mark as unread
+  const viewingChat = activeConversation?.id === convoId && currentView === 'chat';
+  if (!viewingChat) {
+    unreadConvos.add(convoId);
+    updateUnreadBadge();
+  }
+  renderConvoList();
   const isActive = activeConversation?.id === convoId;
   const convo = conversations.find(c=>c.id===convoId);
 
@@ -1760,7 +1787,7 @@ function addAgentMsg(text,agentId,anim=true) {
   d.innerHTML=`<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.displayName||'Agent'}<span class="msg-time">${new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></div><div class="msg-bubble">${formatMd(text)}</div>`;
   m.appendChild(d); scrollBottom(); return d;
 }
-function addUserMsg(text,anim=true) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg msg-user'; if(!anim)d.style.animation='none'; d.innerHTML=`<div class="msg-bubble">${esc(text)}</div>`; m.appendChild(d); scrollBottom(); }
+function addUserMsg(text,anim=true) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg msg-user'; if(!anim)d.style.animation='none'; d.innerHTML=`<div class="msg-bubble">${esc(text)}</div>`; m.appendChild(d); scrollBottom(true); }
 function addSystemMsg(text) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg-system'; d.textContent=text; m.appendChild(d); scrollBottom(); }
 function addToolMsg(name) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg-tool'; d.innerHTML=`<span style="color:var(--working)">&#x2192;</span> Using ${esc(name)}`; m.appendChild(d); scrollBottom(); return d; }
 // ===== SESSION HISTORY =====
@@ -2138,7 +2165,20 @@ function buildActivitySummary(toolCalls, turnStartTime) {
   return details;
 }
 
-function scrollBottom() { const m=document.getElementById('messages'); if(m) m.scrollTop=m.scrollHeight; }
+let userScrolledUp = false;
+function scrollBottom(force) {
+  const m=document.getElementById('messages'); if(!m) return;
+  if (force) { userScrolledUp = false; m.scrollTop=m.scrollHeight; return; }
+  if (!userScrolledUp) m.scrollTop=m.scrollHeight;
+}
+// Detect when user scrolls away from the bottom during streaming
+document.addEventListener('DOMContentLoaded', () => {
+  const m = document.getElementById('messages');
+  if (m) m.addEventListener('scroll', () => {
+    const atBottom = m.scrollHeight - m.scrollTop - m.clientHeight < 80;
+    userScrolledUp = !atBottom;
+  });
+});
 
 // ===== 10. VIEWS & NAVIGATION =====
 
