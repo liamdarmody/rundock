@@ -194,6 +194,17 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .msg-system { align-self: center; font-size: var(--caption); color: var(--text-2); padding: 4px 12px; background: var(--card); border-radius: 20px; }
 .msg-tool { align-self: flex-start; max-width: 85%; padding: 8px 12px; background: var(--card); border-left: 3px solid var(--working); border-radius: 0 8px 8px 0; font-size: var(--caption); color: var(--text-2); display: flex; align-items: center; gap: 8px; animation: fadeIn 0.2s ease; }
 .msg-tool.done { border-left-color: var(--success); }
+/* Activity summary */
+.activity-summary { margin-top: 8px; font-size: var(--caption); color: var(--text-2); }
+.activity-summary summary { cursor: pointer; user-select: none; padding: 4px 0; list-style: none; opacity: 0.6; transition: opacity 0.15s ease; }
+.activity-summary summary::-webkit-details-marker { display: none; }
+.activity-summary summary:hover { opacity: 1; }
+.activity-summary summary::before { content: '\25B8  '; }
+.activity-summary[open] summary::before { content: '\25BE  '; }
+.activity-list { padding: 6px 0 2px; display: flex; flex-direction: column; gap: 2px; }
+.activity-row { display: flex; align-items: baseline; gap: 10px; font-size: var(--label); line-height: 1.5; }
+.activity-time { color: var(--text-2); min-width: 32px; text-align: right; font-variant-numeric: tabular-nums; opacity: 0.5; }
+.activity-tool { color: var(--text-1); font-weight: 500; opacity: 0.7; }
 /* Permission prompt cards */
 .msg-permission { align-self: flex-start; max-width: 85%; animation: fadeIn 0.2s ease; }
 .permission-card { background: var(--card); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }

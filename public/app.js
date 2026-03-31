@@ -182,6 +182,8 @@ function handle(d) {
           badge.textContent = 'Cancelled';
           const bubble = streamEl.querySelector('.msg-bubble');
           if (bubble) bubble.appendChild(badge);
+          const actSummary = buildActivitySummary(d._toolCalls || [], d._turnStartTime || null);
+          if (actSummary) streamEl.appendChild(actSummary);
         }
         addSystemMsgToConvo('Agent stopped by user.', convoId, false);
       }
@@ -348,7 +350,7 @@ function handleStreamEvent(d, convoId) {
     }
   }
 
-  // Tool use: track state for all conversations, render indicator only when active
+  // Tool use: update thinking indicator when active
   if(evt.type === 'content_block_start' && evt.content_block?.type === 'tool_use') {
     state.afterToolUse = true;
     const toolName = evt.content_block.name || '';
@@ -533,9 +535,13 @@ function handleResult(d, convoId) {
       // Text was already streamed in real-time. Do a final re-render with complete markdown.
       const streamEl = state.currentStreamingMsg.querySelector('.streaming-text');
       if(streamEl && responseText) streamEl.innerHTML = formatMd(responseText);
+      const actSummary = buildActivitySummary(d._toolCalls || [], d._turnStartTime || null);
+      if(actSummary) state.currentStreamingMsg.appendChild(actSummary);
     } else if(responseText) {
       // No streaming happened (e.g. very short response). Render now.
-      addAgentMsg(responseText, agentId);
+      const msgEl = addAgentMsg(responseText, agentId);
+      const actSummary = buildActivitySummary(d._toolCalls || [], d._turnStartTime || null);
+      if(actSummary && msgEl) msgEl.appendChild(actSummary);
     }
   }
 
@@ -1958,6 +1964,14 @@ function handlePermissionRequest(d, convoId) {
     return;
   }
 
+  // Auto-allow low-risk (read-only) commands: no permission card, activity summary provides visibility
+  if (risk === 'low') {
+    if (ws) {
+      ws.send(JSON.stringify({ type: 'permission_response', requestId, conversationId: convoId, allow: true }));
+    }
+    return;
+  }
+
   // Store callback data for safe event handling (no inline onclick injection).
   // toolInput is echoed back in control_response (required by Claude Code).
   pendingPermissions.set(requestId, { convoId, key, toolInput: input });
@@ -2031,11 +2045,8 @@ function respondPermission(requestId, allow, always) {
     const summary = card.querySelector('.permission-summary')?.textContent || '';
     const detail = card.querySelector('.permission-detail')?.textContent || '';
     const label = allow ? (always ? '✓ Always' : '✓') : '✕';
-    const detailHtml = (detail && detail.length > 60 && summary)
-      ? `<details class="permission-detail-collapse"><summary>Show command</summary><code class="permission-detail">${esc(detail)}</code></details>`
-      : (detail ? `<span class="permission-resolved-detail">: ${esc(detail)}</span>` : '');
     card.innerHTML = `<div class="permission-resolved ${allow ? 'allowed' : 'denied'}">
-      <span>${label}</span> ${esc(summary)}${detailHtml}
+      <span>${label}</span> ${esc(summary)}
     </div>`;
   }
 
@@ -2062,6 +2073,40 @@ function formatToolName(name) {
   }
   return labels[name] || `Working...`;
 }
+function formatToolShort(name) {
+  if (name.startsWith('mcp__')) {
+    const parts = name.split('__');
+    return parts[1] || 'MCP';
+  }
+  return name;
+}
+
+function buildActivitySummary(toolCalls, turnStartTime) {
+  if (!toolCalls || toolCalls.length === 0 || !turnStartTime) return null;
+  const totalMs = Date.now() - turnStartTime;
+  const totalSec = Math.round(totalMs / 1000);
+  const durationLabel = totalSec < 1 ? '<1s' : totalSec + 's';
+
+  const details = document.createElement('details');
+  details.className = 'activity-summary';
+
+  const summary = document.createElement('summary');
+  summary.textContent = `${toolCalls.length} step${toolCalls.length === 1 ? '' : 's'} \u00b7 ${durationLabel}`;
+  details.appendChild(summary);
+
+  const list = document.createElement('div');
+  list.className = 'activity-list';
+  for (const tc of toolCalls) {
+    const elapsed = ((tc.time - turnStartTime) / 1000).toFixed(1);
+    const row = document.createElement('div');
+    row.className = 'activity-row';
+    row.innerHTML = `<span class="activity-time">${elapsed}s</span><span class="activity-tool">${esc(formatToolShort(tc.tool))}</span>`;
+    list.appendChild(row);
+  }
+  details.appendChild(list);
+  return details;
+}
+
 function scrollBottom() { const m=document.getElementById('messages'); if(m) m.scrollTop=m.scrollHeight; }
 
 // ===== 10. VIEWS & NAVIGATION =====

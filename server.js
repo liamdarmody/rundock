@@ -1459,6 +1459,11 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
           }
         }
 
+        // Track tool calls for activity summary
+        if (parsed.type === 'stream_event' && parsed.event?.type === 'content_block_start' && parsed.event?.content_block?.type === 'tool_use') {
+          entry.toolCalls.push({ tool: parsed.event.content_block.name, time: Date.now() });
+        }
+
         // Accumulate response text
         if (parsed.type === 'stream_event' && parsed.event?.type === 'content_block_delta' && parsed.event?.delta?.type === 'text_delta' && parsed.event.delta.text) {
           entry.responseText += parsed.event.delta.text;
@@ -1471,6 +1476,9 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
         // Result handling
         if (parsed.type === 'result') {
           entry.resultSent = true;
+          // Attach server-tracked tool calls for activity summary
+          parsed._toolCalls = entry.toolCalls || [];
+          parsed._turnStartTime = entry.turnStartTime || null;
           safeSend(JSON.stringify(parsed));
           safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: 0, _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId }));
           if (onResult) onResult(entry, parsed);
@@ -1549,6 +1557,7 @@ function handleDelegation(msg, processes) {
     isPlatformDelegate, lastUserMessage: msg.context, receivedFollowUp: false,
     isIntercepted,
     pendingAgentTool: null,
+    toolCalls: [], turnStartTime: Date.now(),
     delegation: {
       originalAgentId, originalProcessId,
       originalProcess: isIntercepted ? null : existing.process,
@@ -1712,7 +1721,8 @@ function handleDelegation(msg, processes) {
       const resumeEntry = {
         process: resumeProc, buffer: '', processId: resumeProcessId,
         agentId: parentAgentId, responseText: '', exited: false, resultSent: false,
-        pendingAgentTool: null
+        pendingAgentTool: null,
+        toolCalls: [], turnStartTime: Date.now()
       };
       processes.set(convoId, resumeEntry);
 
@@ -1882,7 +1892,8 @@ wss.on('connection', (ws) => {
               process: proc, buffer: '', processId, agentId: msg.agent || 'default',
               responseText: '', exited: false, resultSent: false,
               // Agent tool interception state
-              pendingAgentTool: null  // { blockIndex, inputJson: '' }
+              pendingAgentTool: null,  // { blockIndex, inputJson: '' }
+              toolCalls: [], turnStartTime: Date.now()
             };
             processes.set(convoId, entry);
 
@@ -1978,7 +1989,7 @@ wss.on('connection', (ws) => {
             stdio: ['pipe', 'pipe', 'pipe']
           });
 
-          const entry = { process: proc, buffer: '', processId, agentId: msg.agent || 'default', responseText: '', exited: false, resultSent: false };
+          const entry = { process: proc, buffer: '', processId, agentId: msg.agent || 'default', responseText: '', exited: false, resultSent: false, toolCalls: [], turnStartTime: Date.now() };
           processes.set(convoId, entry);
 
           safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId }));
@@ -2071,7 +2082,8 @@ wss.on('connection', (ws) => {
           // Send cancelled event before kill so client gets it before the done event
           safeSend(JSON.stringify({
             type: 'system', subtype: 'cancelled',
-            _conversationId: convoId, _processId: entry.processId, _agent: entry.agentId
+            _conversationId: convoId, _processId: entry.processId, _agent: entry.agentId,
+            _toolCalls: entry.toolCalls || [], _turnStartTime: entry.turnStartTime || null
           }));
 
           // Kill the active process

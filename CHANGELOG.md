@@ -2,6 +2,23 @@
 
 All notable changes to Rundock are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+> Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
+
+## 0.7.1: Activity Summary (2026-03-31)
+
+Diagnostics, permission refinements, and versioning convention. Agent responses now show what tools were used and how long the turn took. Read-only Bash commands skip the permission card. Resolved permission cards are cleaner.
+
+### Added
+
+- **Activity summary:** Collapsed summary below each agent response showing tool count and wall clock duration (process start to response delivery). Expands to show individual tool calls with timestamps relative to turn start. Tracked server-side for reliability across delegation chains and WebSocket reconnections.
+- **Low-risk auto-approve:** Read-only Bash commands (grep, find, ls, cat, head, tail, etc.) auto-approve without showing a permission card. Activity summary provides visibility. Medium and high-risk commands still require approval.
+
+### Changed
+
+- **Resolved permission cards:** Stripped to a single-line confirmation (e.g. "✓ Run npm install"). No "Show command" toggle on resolved cards. Pending cards still show the collapsible command detail.
+
+---
+
 ## 0.7.0: Multi-Level Teams (2026-03-30)
 
 Multi-level delegation, agent interruption, conversation transcripts, and a suite of reliability fixes. Specialists can now lead their own sub-teams, users can cancel running agents, and sidebar conversations show the correct active agent on page load.
@@ -13,7 +30,7 @@ Multi-level delegation, agent interruption, conversation transcripts, and a suit
 - **Conversation transcripts:** Server-side transcript system tracks all messages across the delegation chain. Used for context passing between agents, sidebar attribution, and conversation search. Capped at 20 entries with original request preserved.
 - **Sidebar agent attribution:** Previous conversations show the last active agent (not the orchestrator) in the sidebar immediately on page load, before clicking. Uses transcript enrichment on the server.
 - **Conversation delete:** Hover trash icon on Previous and Done conversations. Soft delete removes from the conversation list; session files stay on disk.
-- **Collapsible permission commands:** Long Bash commands in permission cards collapse behind a "Show command" toggle. Applies to both the approval prompt and the resolved confirmation.
+- **Collapsible permission commands:** Long Bash commands in permission cards collapse behind a "Show command" toggle on the approval prompt.
 - **Capabilities in team roster:** Agent `capabilities.does` and `capabilities.connectors` are now surfaced in the orchestrator's dynamic team roster, improving routing accuracy.
 - **Unread message indicators:** Amber dot on the Conversations nav icon and accent dot on conversation preview cards when an agent responds in a non-visible conversation. Clears when the conversation is opened.
 - **Agent working status dot:** Green pulsing dot on org chart cards when an agent is actively processing. Hidden when idle.
