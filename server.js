@@ -1814,10 +1814,11 @@ function handleDelegation(msg, processes) {
         return;
       }
 
-      // Normal intercepted return: restart mid-level parent with --resume
+      // Intercepted return: restart mid-level parent with --resume
       const parentAgentId = delegateEntry.delegation.originalAgentId;
       const parentSessionId = delegateEntry.delegation.parentSessionId;
-      console.log(`[AgentIntercept] convo=${convoId} delegate done, restarting parent ${parentAgentId} (session=${parentSessionId})`);
+      const isOutOfScope = hasReturnMarker;
+      console.log(`[AgentIntercept] convo=${convoId} delegate done, restarting parent ${parentAgentId} (session=${parentSessionId}) outOfScope=${isOutOfScope}`);
 
       safeSend(JSON.stringify({
         type: 'system', subtype: 'agent_switch', _conversationId: convoId,
@@ -1851,13 +1852,19 @@ function handleDelegation(msg, processes) {
       };
       processes.set(convoId, resumeEntry);
 
-      safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: resumeProcessId, autoContinue: true }));
+      // Only auto-prompt the parent if the delegate returned out-of-scope.
+      // Normal completion: parent restarts silently and waits for the next user message.
+      if (isOutOfScope) {
+        safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: resumeProcessId, autoContinue: true }));
 
-      const resumeTranscript = formatTranscript(convoId);
-      const resumePrompt = resumeTranscript
-        ? `[SYSTEM: You are resuming after your team member handled part of the conversation. Here is the full conversation so far:\n\n${resumeTranscript}\n\nThe user's latest request was: "${delegateEntry.lastUserMessage || 'continue'}"\n\nPick up from here. Do not repeat what your team member already covered. Act on the user's latest request.]`
-        : `[SYSTEM: Your team member completed a task. The user's latest request was: "${delegateEntry.lastUserMessage || 'continue'}". Act on it.]`;
-      resumeProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: resumePrompt } }) + '\n');
+        const resumeTranscript = formatTranscript(convoId);
+        const resumePrompt = resumeTranscript
+          ? `[SYSTEM: You are resuming after your team member handled part of the conversation. Here is the full conversation so far:\n\n${resumeTranscript}\n\nThe user's latest request was: "${delegateEntry.lastUserMessage || 'continue'}"\n\nPick up from here. Do not repeat what your team member already covered. Act on the user's latest request.]`
+          : `[SYSTEM: Your team member completed a task. The user's latest request was: "${delegateEntry.lastUserMessage || 'continue'}". Act on it.]`;
+        resumeProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: resumePrompt } }) + '\n');
+      } else {
+        console.log(`[AgentIntercept] convo=${convoId} delegate completed normally, parent ${parentAgentId} parked (no auto-prompt)`);
+      }
 
       wireProcessHandlers(resumeEntry, convoId, null, {
         enableInterception: true,
