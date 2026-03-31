@@ -13,6 +13,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { WebSocketServer } = require('ws');
 const readline = require('readline');
+const PKG_VERSION = require('./package.json').version;
 
 const PORT = process.env.PORT || 3000;
 let WORKSPACE = process.env.WORKSPACE || null;
@@ -1917,6 +1918,7 @@ wss.on('connection', (ws) => {
     active.push({ conversationId: convoId, processId: entry.processId, agentId: entry.agentId, responseText: entry.responseText || '', delegation: entry.delegation ? { originalAgentId: entry.delegation.originalAgentId } : null });
   }
   ws.send(JSON.stringify({ type: 'active_processes', processes: active }));
+  ws.send(JSON.stringify({ type: 'server_info', version: PKG_VERSION }));
 
   // Alias for handlers that still reference local `processes`
   const processes = chatProcesses;

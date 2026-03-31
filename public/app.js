@@ -272,6 +272,9 @@ function handle(d) {
       // Defer until workspace is ready and conversations are loaded
       pendingActiveProcesses = d.processes || [];
       break;
+    case 'server_info':
+      if (d.version) state.serverVersion = d.version;
+      break;
     case 'control_request':
       if(convoId) handlePermissionRequest(d, convoId);
       break;
@@ -2591,7 +2594,7 @@ function renderSettingsSection(section) {
       <div class="settings-card">
         <div class="settings-row">
           <span class="settings-label">Version</span>
-          <span class="settings-value" style="font-family:inherit">0.1.0</span>
+          <span class="settings-value" style="font-family:inherit">${state.serverVersion || 'unknown'}</span>
         </div>
         <div class="settings-row">
           <span class="settings-label">Feedback</span>

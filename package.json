@@ -1,6 +1,6 @@
 {
   "name": "rundock",
-  "version": "0.1.0",
+  "version": "0.7.2",
   "description": "A browser-based OS for AI agent teams. Built for knowledge work, powered by Claude Code.",
   "main": "server.js",
   "scripts": {
