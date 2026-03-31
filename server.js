@@ -288,6 +288,12 @@ function buildSystemPrompt(agentData) {
     'FILES IN .claude/ DIRECTORY:',
     'Claude Code blocks Write and Edit tools for files inside .claude/. Do NOT use Write, Edit, or Bash to create, modify, or delete files in .claude/agents/ or .claude/skills/.',
     '',
+    'FILE LINKS:',
+    'When referencing workspace files, use wikilink syntax. This is the ONLY format that creates clickable links in Rundock.',
+    'Format: [[filename]] or [[filename|display text]]',
+    'Example: [[_Daily Notes/2026-03-31.md]] or [[_Daily Notes/2026-03-31.md|today\'s note]]',
+    'Never use Obsidian URIs, file:// links, markdown links to file paths, or absolute paths. Just use wikilinks.',
+    '',
     'TIMEZONE:',
     `The user's local timezone is ${Intl.DateTimeFormat().resolvedOptions().timeZone}. Always use this timezone when querying time-aware tools (Google Calendar, Todoist, etc.) and when displaying dates and times to the user.`,
   ].join('\n');
@@ -438,7 +444,8 @@ function discoverAgents() {
   let colourIdx = 0;
 
   if (fs.existsSync(agentsDir)) {
-    const files = fs.readdirSync(agentsDir).filter(f => f.endsWith('.md'));
+    let files = [];
+    try { files = fs.readdirSync(agentsDir).filter(f => f.endsWith('.md')); } catch (e) { console.warn('  Cannot read agents dir:', e.message); }
 
     for (const file of files) {
       try {
@@ -2274,7 +2281,9 @@ wss.on('connection', (ws) => {
           recent: loadRecentWorkspaces(),
           discovered: discoverWorkspaces()
         };
-        if (WORKSPACE) wsData.analysis = analyzeWorkspace(WORKSPACE, discoverAgents());
+        if (WORKSPACE) {
+          try { wsData.analysis = analyzeWorkspace(WORKSPACE, discoverAgents()); } catch (e) { console.warn('  Workspace analysis failed:', e.message); }
+        }
         ws.send(JSON.stringify(wsData));
       }
 
@@ -2296,11 +2305,13 @@ wss.on('connection', (ws) => {
           saveRecentWorkspace(dir);
           try { scaffoldWorkspace(dir); } catch (e) { console.warn('Scaffold warning:', e.message); }
           console.log(`  Workspace changed to: ${WORKSPACE}`);
-          const agentList = discoverAgents();
-          const analysis = analyzeWorkspace(dir, agentList);
+          let agentList = [];
+          try { agentList = discoverAgents(); } catch (e) { console.warn('  Agent discovery failed:', e.message); }
+          let analysis = null;
+          try { analysis = analyzeWorkspace(dir, agentList); } catch (e) { console.warn('  Workspace analysis failed:', e.message); }
           ws.send(JSON.stringify({ type: 'workspace_set', path: WORKSPACE, analysis }));
           ws.send(JSON.stringify({ type: 'agents', agents: agentList }));
-          ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) }));
+          try { ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) })); } catch (e) { console.warn('  File tree failed:', e.message); }
         } else {
           ws.send(JSON.stringify({ type: 'workspace_error', message: 'Directory not found' }));
         }
@@ -2336,13 +2347,19 @@ wss.on('connection', (ws) => {
 
       if (msg.type === 'get_agents') {
         if (!WORKSPACE) { ws.send(JSON.stringify({ type: 'needs_workspace' })); return; }
-        ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents() }));
+        let agentList = [];
+        try { agentList = discoverAgents(); } catch (e) { console.warn('  Agent discovery failed:', e.message); }
+        ws.send(JSON.stringify({ type: 'agents', agents: agentList }));
       }
       if (msg.type === 'get_files') {
         if (!WORKSPACE) return;
-        ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) }));
+        try { ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) })); } catch (e) { console.warn('  File tree failed:', e.message); }
       }
-      if (msg.type === 'get_skills') ws.send(JSON.stringify({ type: 'skills', skills: discoverSkills() }));
+      if (msg.type === 'get_skills') {
+        let skillList = [];
+        try { skillList = discoverSkills(); } catch (e) { console.warn('  Skill discovery failed:', e.message); }
+        ws.send(JSON.stringify({ type: 'skills', skills: skillList }));
+      }
 
       // ===== SESSION PERSISTENCE =====
 
@@ -2398,6 +2415,8 @@ wss.on('connection', (ws) => {
           sessionIds: msg.conversation.sessionIds || [],
           title: msg.conversation.title,
           status: msg.conversation.status || 'active',
+          pinned: msg.conversation.pinned || false,
+          pinnedAt: msg.conversation.pinnedAt || null,
           createdAt: msg.conversation.createdAt || new Date().toISOString(),
           lastActiveAt: new Date().toISOString()
         };

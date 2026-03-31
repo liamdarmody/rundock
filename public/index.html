@@ -84,8 +84,17 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .convo-item.active { background: var(--elevated); }
 .convo-delete { position: absolute; top: 8px; right: 6px; width: 24px; height: 24px; border: none; background: transparent; color: var(--text-3); cursor: pointer; border-radius: 4px; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.15s ease, color 0.15s ease; font-size: 14px; padding: 0; z-index: 1; }
 .convo-item:hover .convo-delete { opacity: 1; }
-.convo-item:hover .convo-title { padding-right: 24px; }
+.convo-item:hover > .convo-title { padding-right: 24px; }
 .convo-delete:hover { color: var(--danger, #e55); background: var(--surface); }
+.convo-pin { position: absolute; top: 8px; right: 6px; width: 24px; height: 24px; border: none; background: transparent; color: var(--text-3); cursor: pointer; border-radius: 4px; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.15s ease, color 0.15s ease; padding: 0; z-index: 1; }
+.convo-item:hover .convo-pin { opacity: 1; }
+.convo-item:hover .convo-pin-indicator { opacity: 0; }
+.convo-item:hover .convo-title-row { padding-right: 24px; }
+.convo-pin:hover { color: var(--accent); background: var(--surface); }
+.convo-item.pinned-convo { border-left: 2px solid var(--accent); }
+.convo-pin-indicator { width: 12px; height: 12px; color: var(--accent); flex-shrink: 0; opacity: 0.7; margin-left: 4px; }
+.convo-title-row { display: flex; align-items: center; gap: 0; min-width: 0; }
+.convo-title-row .convo-title { flex: 1; min-width: 0; }
 .convo-title { font-size: var(--body); font-weight: 500; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .convo-preview { font-size: var(--caption); color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .convo-meta { font-size: var(--caption); color: var(--text-2); display: flex; align-items: center; gap: 6px; }
@@ -489,13 +498,13 @@ body.light .skill-row:hover { background: rgba(0,0,0,0.03); }
 <div class="app">
   <nav class="nav-rail" style="display:none">
     <div class="nav-main">
-      <button class="nav-item active" data-nav="team" onclick="switchNav('team')" data-tooltip="Team">
-        <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-        <svg class="icon-filled" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M14 21H2v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2z"/><circle cx="8" cy="7" r="4"/><path d="M22 21h-4v-2a5.97 5.97 0 0 0-1.5-4h.5a3 3 0 0 1 3 3v3z"/><circle cx="17" cy="7.5" r="3"/></svg>
-      </button>
-      <button class="nav-item" data-nav="conversations" onclick="switchNav('conversations')" data-tooltip="Conversations">
+      <button class="nav-item active" data-nav="conversations" onclick="switchNav('conversations')" data-tooltip="Conversations">
         <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         <svg class="icon-filled" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      </button>
+      <button class="nav-item" data-nav="team" onclick="switchNav('team')" data-tooltip="Team">
+        <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <svg class="icon-filled" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M14 21H2v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2z"/><circle cx="8" cy="7" r="4"/><path d="M22 21h-4v-2a5.97 5.97 0 0 0-1.5-4h.5a3 3 0 0 1 3 3v3z"/><circle cx="17" cy="7.5" r="3"/></svg>
       </button>
       <button class="nav-item" data-nav="skills" onclick="switchNav('skills')" data-tooltip="Skills">
         <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
@@ -518,12 +527,12 @@ body.light .skill-row:hover { background: rgba(0,0,0,0.03); }
   </nav>
 
   <aside class="sidebar" style="display:none">
-    <div id="sidebar-team">
+    <div id="sidebar-team" class="hidden">
       <div class="sidebar-header" id="sidebar-team-header"><span class="sidebar-label">Your Team</span></div>
       <div class="agent-status-list" id="agent-list"></div>
       <div id="sidebar-routines"></div>
     </div>
-    <div id="sidebar-conversations" class="hidden">
+    <div id="sidebar-conversations">
       <div class="sidebar-header"><span class="sidebar-label">Conversations</span></div>
       <div class="sidebar-search-wrap">
         <input type="text" id="convo-search" class="sidebar-search" placeholder="Search conversations..." oninput="filterConversations(this.value)" onkeydown="if(event.key==='Escape'){clearConvoSearch();this.blur();}" />
@@ -587,7 +596,7 @@ body.light .skill-row:hover { background: rgba(0,0,0,0.03); }
       </div>
     </div>
     <!-- Home: org chart -->
-    <div id="view-home" class="view-panel"><div class="org-chart" id="org-chart"></div></div>
+    <div id="view-home" class="hidden view-panel" style="display:none"><div class="org-chart" id="org-chart"></div></div>
     <!-- Agent profile -->
     <div id="view-profile" class="hidden view-panel"><div class="profile" id="profile-content"></div></div>
     <!-- Conversations empty -->

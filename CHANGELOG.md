@@ -4,18 +4,22 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## 0.7.2: Scope Return and Timezone (2026-03-31)
+## 0.7.2: Pinned Conversations and Scope Return (2026-03-31)
 
-Specialists can now hand work back to the orchestrator when asked to do something outside their domain. The platform detects the server's timezone and injects it into every agent's system prompt for accurate calendar and task queries.
+Pinned conversations persist across refresh and sort to top of the active list. Specialists can now hand work back to the orchestrator when asked to do something outside their domain.
 
 ### Added
 
+- **Pinned conversations:** Pin conversations to keep them across refresh. Pinned conversations sort to the top of the active list by most recent activity. Unpin to return to default behaviour.
+- **File wikilink navigation:** Clicking a wikilink opens the file in the in-app viewer with a back history stack. Agents are instructed to use wikilink syntax for file references. Markdown relative file links are intercepted as in-app wikilinks.
 - **Specialist scope return:** When a specialist (started directly, not via delegation) recognises work is outside their domain, they emit a RETURN marker. The platform kills the specialist process, spawns the orchestrator, passes the conversation transcript and pending request, and the orchestrator routes to the correct specialist. Includes loop prevention to stop the orchestrator delegating back to the agent that just returned.
 - **Platform timezone:** Every agent's system prompt now includes the server's IANA timezone (auto-detected via `Intl.DateTimeFormat`). Applies to all workspaces and all MCP tools (Google Calendar, Todoist, etc.).
 - **Scope boundary prompt:** All non-orchestrator agents receive instructions to return when asked to do work outside their domain. Applies regardless of how the conversation started.
 
 ### Changed
 
+- **Default landing view:** Nav rail reordered with Conversations first. Opening a workspace lands on conversations instead of the team view.
+- **Delete active conversation:** Deleting the active conversation opens the next pinned conversation or starts a new one, instead of showing an empty home view.
 - **Activity summary duration format:** Durations above 60 seconds display as Xm Ys (e.g. "2m 15s") instead of raw seconds. Zero seconds omitted (e.g. "3m" not "3m 0s").
 - **Tool call reset between turns:** Server resets tool call tracking on each follow-up message so activity summaries only show the current turn's tools.
 - **Working status on reconnect:** All active processes now trigger working indicators (sidebar, org chart, nav badge) on WebSocket reconnect, not just the visible conversation.
@@ -23,6 +27,8 @@ Specialists can now hand work back to the orchestrator when asked to do somethin
 
 ### Fixed
 
+- **Profile back button:** Returns to team view correctly instead of navigating to a stale home state.
+- **Workspace loading resilience:** Permission errors in agent, skill, or file discovery no longer silently break the workspace loading flow.
 - **Conversation delete confirmation:** Removed the native browser `confirm()` dialog. Trash icon now deletes immediately (soft delete, session files preserved on disk).
 
 ---

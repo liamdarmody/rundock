@@ -12,7 +12,7 @@
  * 7. AGENT PROFILE .................. showProfile
  * 8. CONVERSATIONS .................. startConversation, openConversation, renderConvoList
  * 9. CHAT & MESSAGING ............... sendMessage, startProcessing, finishProcessing
- * 10. VIEWS & NAVIGATION ............ switchNav, showView, goHome, goBack, toggleTheme
+ * 10. VIEWS & NAVIGATION ............ switchNav, showView, goHome, toggleTheme
  * 11. FILE TREE & EDITOR ............ renderFileTree, buildTree, loadFileContent
  * 12. MARKDOWN RENDERING ............ renderMarkdown, processCalloutsSrc
  * 13. SKILLS ........................ renderSkills, renderSkillRow, selectSkill
@@ -273,7 +273,7 @@ function handle(d) {
       pendingActiveProcesses = d.processes || [];
       break;
     case 'server_info':
-      if (d.version) state.serverVersion = d.version;
+      if (d.version) window._rundockVersion = d.version;
       break;
     case 'control_request':
       if(convoId) handlePermissionRequest(d, convoId);
@@ -895,18 +895,16 @@ function renderOrgChart() {
 
     if (hasContext && a) {
       h += '<div class="org-empty-state">';
-      const name = a.identity.suggestedName || 'Your Workspace';
-      const tagline = a.identity.suggestedTagline || a.identity.suggestedRole || '';
-      h += `<div class="empty-title">${esc(name)}${tagline ? ': ' + esc(tagline) : ''}</div>`;
+      h += `<div class="empty-title">Your Workspace</div>`;
       const stats = [];
-      if (a.skills.total > 0) stats.push(`${a.skills.total} skills`);
+      if (a.skills.total > 0) stats.push(`${a.skills.total} skill${a.skills.total !== 1 ? 's' : ''}`);
       if (a.structure.pattern !== 'unknown') {
         const acronyms = new Set(['para']);
         const patternLabel = a.structure.pattern.split('-').map(w => acronyms.has(w.toLowerCase()) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
         stats.push(patternLabel + ' structure');
       }
       const integrationCount = a.integrations.mcpReferences.length + a.integrations.configuredServers.length + a.integrations.mentionedTools.length;
-      if (integrationCount > 0) stats.push(`${integrationCount} integrations`);
+      if (integrationCount > 0) stats.push(`${integrationCount} integration${integrationCount !== 1 ? 's' : ''}`);
       if (stats.length) h += `<div style="color:var(--text-2);font-size:var(--caption);margin-bottom:16px">${stats.join(' &middot; ')}</div>`;
       h += '<div style="color:var(--text-2);font-size:var(--body);max-width:320px;text-align:center;line-height:1.6">Doc can create your agent team based on what\'s here. Skills will be automatically grouped and assigned.</div>';
       if (guide) {
@@ -971,8 +969,7 @@ window.addEventListener('resize', () => {
 function showProfile(agentId) {
   const a=agents.find(x=>x.id===agentId); if(!a) return;
   const existing=conversations.filter(c=>c.agentId===agentId);
-  const backLabel = a.status === 'onTeam' ? 'Team' : 'Available';
-  let h=`<a class="profile-back" onclick="goHome()">&#8592; ${backLabel}</a>
+  let h=`<a class="profile-back" onclick="switchNav('team')">&#8592; Back</a>
     <div class="profile-header">
       <div class="profile-avatar" style="background:${a.colour}">${a.icon}</div>
       <div>
@@ -1069,6 +1066,8 @@ function persistConversation(convo) {
       sessionIds: convo.sessionIds || [],
       title: convo.title,
       status: convo.status,
+      pinned: convo.pinned || false,
+      pinnedAt: convo.pinnedAt || null,
       createdAt: convo.createdAt || new Date().toISOString()
     }
   }));
@@ -1091,6 +1090,8 @@ function handlePersistedConversations(persisted) {
       status: entry.status || 'done',
       sessionId: entry.sessionId || null,
       sessionIds: entry.sessionIds || [],
+      pinned: entry.pinned || false,
+      pinnedAt: entry.pinnedAt || null,
       createdAt: entry.createdAt,
       lastActiveAt: entry.lastActiveAt,
       persisted: true  // Flag: this was loaded from disk, has no in-memory messages
@@ -1110,11 +1111,19 @@ function handlePersistedConversations(persisted) {
   handleActiveProcesses(pendingActiveProcesses || []);
   pendingActiveProcesses = null;
 
-  // Auto-navigate to the conversation that's still processing
+  // Auto-navigate: processing > pinned > new conversation
   const processing = conversations.find(c => getConvoState(c.id).isProcessing);
   if (processing) {
     openConversation(processing.id);
     switchNav('conversations');
+  } else {
+    const pinned = conversations.filter(c => c.pinned && c.status !== 'done');
+    if (pinned.length) {
+      openConversation(pinned[0].id);
+      switchNav('conversations');
+    } else if (!activeConversation) {
+      newConversation();
+    }
   }
 
   // Request buffered messages now that conversations and state are ready
@@ -1301,11 +1310,21 @@ function deleteConversation(id, evt) {
   updateUnreadBadge();
   if (activeConversation?.id === id) {
     activeConversation = null;
-    showView('home');
+    const pinned = conversations.filter(c => c.pinned && c.status !== 'done');
+    if (pinned.length) { openConversation(pinned[0].id); } else { newConversation(); }
   }
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'delete_conversation', id }));
   }
+  renderConvoList();
+}
+function togglePin(id, evt) {
+  evt.stopPropagation();
+  const convo = conversations.find(c => c.id === id);
+  if (!convo) return;
+  convo.pinned = !convo.pinned;
+  convo.pinnedAt = convo.pinned ? new Date().toISOString() : null;
+  persistConversation(convo);
   renderConvoList();
 }
 function toggleConvoStatus() {
@@ -1323,10 +1342,21 @@ function renderConvoList() {
     renderSearchResults();
     return;
   }
-  // Current session conversations (have in-memory messages)
-  const current = conversations.filter(c => c.status !== 'done' && !c.persisted);
-  // Previous sessions (persisted from disk, no in-memory messages)
-  const previous = conversations.filter(c => c.persisted && c.status !== 'done');
+  // Current session conversations + pinned persisted conversations
+  const current = conversations.filter(c => c.status !== 'done' && (!c.persisted || c.pinned));
+  // Sort: pinned first (most recently active), then unpinned in existing order
+  current.sort((a, b) => {
+    if (a.pinned && !b.pinned) return -1;
+    if (!a.pinned && b.pinned) return 1;
+    if (a.pinned && b.pinned) {
+      const aTime = a.lastActiveAt || a.pinnedAt || a.createdAt || '';
+      const bTime = b.lastActiveAt || b.pinnedAt || b.createdAt || '';
+      return bTime.localeCompare(aTime); // most recent first
+    }
+    return 0; // preserve existing order for unpinned
+  });
+  // Previous sessions (persisted from disk, not pinned)
+  const previous = conversations.filter(c => c.persisted && !c.pinned && c.status !== 'done');
   const done = conversations.filter(c => c.status === 'done');
   let h = '';
   if (!current.length && !previous.length && !done.length) {
@@ -1342,8 +1372,11 @@ function renderConvoList() {
       const activeId = cState?.activeAgentId;
       const displayAgent = (activeId && agents.find(a => a.id === activeId)) || c.agent;
       const unread = unreadConvos.has(c.id);
-      h += `<div class="convo-item ${activeConversation?.id === c.id ? 'active' : ''}" onclick="openConversation('${c.id}')">
-        <span class="convo-title">${esc(c.title)}</span>
+      const pinIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="${c.pinned ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 11V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v7"/><path d="M5 17h14"/><path d="M7 11l-2 6h14l-2-6"/></svg>`;
+      const pinIndicator = c.pinned ? `<svg class="convo-pin-indicator" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 11V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v7"/><path d="M5 17h14"/><path d="M7 11l-2 6h14l-2-6"/></svg>` : '';
+      h += `<div class="convo-item ${activeConversation?.id === c.id ? 'active' : ''} ${c.pinned ? 'pinned-convo' : ''}" onclick="openConversation('${c.id}')">
+        <button class="convo-pin" onclick="togglePin('${c.id}', event)" title="${c.pinned ? 'Unpin conversation' : 'Pin conversation'}">${pinIcon}</button>
+        <div class="convo-title-row"><span class="convo-title">${esc(c.title)}</span>${pinIndicator}</div>
         <span class="convo-preview">${esc(preview)}</span>
         <div class="convo-meta"><div class="avatar xs" style="background:${displayAgent.colour}">${displayAgent.icon}</div><span>${displayAgent.displayName}</span>${unread ? '<span class="convo-unread"></span>' : ''}</div>
       </div>`;
@@ -2118,14 +2151,13 @@ function switchNav(nav) {
   if(nav !== 'conversations') clearConvoSearch();
   if(nav !== 'files') clearFileSearch();
   if(nav==='settings') { showView('settings'); showSettingsSection('workspace'); }
-  else if(nav==='files') showView('editor');
+  else if(nav==='files') { editorReturnView = 'editor'; if(currentFilePath && document.querySelector('.file-item.active')) { showView('editor'); } else { currentFilePath = null; document.getElementById('editor-header').classList.add('hidden'); document.getElementById('editor-content').classList.add('hidden'); document.getElementById('editor-textarea').classList.add('hidden'); document.getElementById('editor-empty').classList.remove('hidden'); showView('editor'); } }
   else if(nav==='skills') { showView('skills'); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } document.querySelectorAll('.skill-sidebar-item').forEach(el=>el.classList.remove('active')); document.querySelectorAll('.skill-row.expanded').forEach(r=>r.classList.remove('expanded')); }
-  else if(nav==='conversations') { if(activeConversation) { showView('chat'); if(unreadConvos.delete(activeConversation.id)) { updateUnreadBadge(); renderConvoList(); } } else newConversation(); }
-  else showView('home');
+  else if(nav==='conversations') { if(activeConversation) { showView('chat'); if(unreadConvos.delete(activeConversation.id)) { updateUnreadBadge(); renderConvoList(); } } else { const pinned = conversations.filter(c => c.pinned && c.status !== 'done'); if(pinned.length) { openConversation(pinned[0].id); } else { newConversation(); } } }
+  else if(nav==='team') { showView('home'); renderOrgChart(); }
 }
 function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }
-function goHome() { discardIfEmpty(); activeConversation=null; showView('home'); switchNav('team'); document.querySelectorAll('.agent-status-item').forEach(el=>el.classList.remove('active')); renderOrgChart(); }
-function goBack() { if(activeConversation) showProfile(activeConversation.agentId); else goHome(); }
+function goHome() { discardIfEmpty(); activeConversation=null; switchNav('conversations'); }
 
 // Theme
 function toggleTheme() { document.body.classList.toggle('light'); const isLight=document.body.classList.contains('light'); document.getElementById('theme-toggle').innerHTML=isLight?moonIcon:sunIcon; try{localStorage.setItem('rundock-theme',isLight?'light':'dark');}catch(e){} }
@@ -2164,7 +2196,8 @@ function buildTree(items,container) {
     } else {
       const fi=document.createElement('div'); fi.className='file-item';
       fi.innerHTML=`<svg class="file-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> ${esc(item.name)}`;
-      fi.onclick=()=>{document.querySelectorAll('.file-item').forEach(x=>x.classList.remove('active'));fi.classList.add('active');editorReturnView='home';ws.send(JSON.stringify({type:'read_file',path:item.path}));showView('editor');};
+      fi.dataset.path = item.path;
+      fi.onclick=()=>{document.querySelectorAll('.file-item').forEach(x=>x.classList.remove('active'));fi.classList.add('active');editorReturnView='editor';fileHistory=[];ws.send(JSON.stringify({type:'read_file',path:item.path}));showView('editor');};
       container.appendChild(fi);
     }
   }
@@ -2192,7 +2225,8 @@ function filterFiles(query) {
     const fi = document.createElement('div'); fi.className = 'file-item';
     const dir = item.path.includes('/') ? item.path.substring(0, item.path.lastIndexOf('/')) + '/' : '';
     fi.innerHTML = `<svg class="file-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><div><div>${esc(item.name)}</div>${dir ? `<div style="font-size:11px;color:var(--text-2);margin-top:1px">${esc(dir)}</div>` : ''}</div>`;
-    fi.onclick = () => { document.querySelectorAll('.file-item').forEach(x => x.classList.remove('active')); fi.classList.add('active'); editorReturnView = 'home'; ws.send(JSON.stringify({ type: 'read_file', path: item.path })); showView('editor'); };
+    fi.dataset.path = item.path;
+    fi.onclick = () => { document.querySelectorAll('.file-item').forEach(x => x.classList.remove('active')); fi.classList.add('active'); editorReturnView = 'editor'; fileHistory = []; ws.send(JSON.stringify({ type: 'read_file', path: item.path })); showView('editor'); };
     container.appendChild(fi);
   }
 }
@@ -2282,6 +2316,11 @@ function getFileContentForSave() {
 function openWikilink(name) {
   const baseName = name.split('#')[0].trim();
   const searchName = baseName.endsWith('.md') ? baseName : baseName + '.md';
+  editorReturnView = 'editor';
+
+  // Push current file onto history so back button returns to it
+  if (currentFilePath) fileHistory.push(currentFilePath);
+  if (fileHistory.length > 20) fileHistory.shift();
 
   // Search the cached file tree data (not the DOM)
   if (cachedFileTree) {
@@ -2290,6 +2329,7 @@ function openWikilink(name) {
       switchNav('files');
       ws.send(JSON.stringify({ type: 'read_file', path: match }));
       showView('editor');
+      highlightFileInSidebar(match);
       return;
     }
   }
@@ -2299,7 +2339,17 @@ function openWikilink(name) {
     ws.send(JSON.stringify({ type: 'read_file', path: searchName }));
     switchNav('files');
     showView('editor');
+    highlightFileInSidebar(searchName);
   }
+}
+
+function highlightFileInSidebar(filePath) {
+  document.querySelectorAll('.file-item').forEach(x => x.classList.remove('active'));
+  document.querySelectorAll('.file-item').forEach(fi => {
+    if (fi.dataset.path === filePath) {
+      fi.classList.add('active');
+    }
+  });
 }
 
 function findFileInTree(items, searchName) {
@@ -2325,17 +2375,38 @@ function findFileInTree(items, searchName) {
   return null;
 }
 
-let editorReturnView = 'home';
+let editorReturnView = 'editor';
+let fileHistory = [];
 
 function openSkillFile(filePath) {
   editorReturnView = 'skills';
+  fileHistory = [];
   ws.send(JSON.stringify({ type: 'read_file', path: filePath }));
   showView('editor');
 }
 
 function editorGoBack() {
-  showView(editorReturnView);
-  editorReturnView = 'home';
+  // If opened from another view (e.g. skills), return there
+  if (editorReturnView !== 'editor') {
+    showView(editorReturnView);
+    editorReturnView = 'editor';
+    fileHistory = [];
+    return;
+  }
+  // If there's a previous file in history, go back to it
+  if (fileHistory.length) {
+    const prev = fileHistory.pop();
+    ws.send(JSON.stringify({ type: 'read_file', path: prev }));
+    highlightFileInSidebar(prev);
+    return;
+  }
+  // Otherwise stay in files view: clear file content, show empty state
+  currentFilePath = null;
+  document.getElementById('editor-header').classList.add('hidden');
+  document.getElementById('editor-content').classList.add('hidden');
+  document.getElementById('editor-textarea').classList.add('hidden');
+  document.getElementById('editor-empty').classList.remove('hidden');
+  document.querySelectorAll('.file-item').forEach(x => x.classList.remove('active'));
 }
 
 // ===== 12. MARKDOWN RENDERING =====
@@ -2371,6 +2442,12 @@ function renderMarkdown(text, options = {}) {
   let html = marked.parse(src);
 
   // Post-processing: clean up marked output for our styling
+
+  // Convert relative file links to in-app wikilinks
+  // Matches href values that end in .md, .yaml, .yml, .json, .txt and don't start with http/mailto/obsidian
+  html = html.replace(/<a href="(?!https?:\/\/|mailto:|obsidian:\/\/)([^"]*\.(?:md|yaml|yml|json|txt))"([^>]*)>(.*?)<\/a>/g,
+    (match, href, attrs, text) => `<a class="wikilink" onclick="openWikilink('${href.replace(/'/g, "\\'")}')">${text}</a>`);
+
   // Checkboxes: add accent colour
   html = html.replace(/<input.*?checked.*?disabled.*?>/g, '<input type="checkbox" checked disabled style="margin-right:8px;accent-color:var(--accent)">');
   html = html.replace(/<input.*?disabled.*?type="checkbox".*?>/g, '<input type="checkbox" disabled style="margin-right:8px">');
@@ -2594,7 +2671,7 @@ function renderSettingsSection(section) {
       <div class="settings-card">
         <div class="settings-row">
           <span class="settings-label">Version</span>
-          <span class="settings-value" style="font-family:inherit">${state.serverVersion || 'unknown'}</span>
+          <span class="settings-value" style="font-family:inherit">${window._rundockVersion || 'unknown'}</span>
         </div>
         <div class="settings-row">
           <span class="settings-label">Feedback</span>
@@ -2724,8 +2801,12 @@ function onWorkspaceReady(dir, analysis) {
   // Different workspace: reset everything
   conversations = [];
   activeConversation = null;
-  showView('home');
-  switchNav('team');
+  // Activate conversations sidebar; handlePersistedConversations will
+  // open a pinned conversation or newConversation() once data arrives.
+  document.querySelectorAll('.nav-item[data-nav]').forEach(n=>n.classList.remove('active'));
+  document.querySelector('[data-nav="conversations"]')?.classList.add('active');
+  ['team','conversations','skills','files','settings'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
+  document.getElementById('sidebar-conversations').classList.remove('hidden');
 }
 
 // ===== 16. EVENT LISTENERS & INIT =====
