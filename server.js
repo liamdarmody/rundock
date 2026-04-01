@@ -317,89 +317,45 @@ function buildSystemPrompt(agentData) {
     if (roster) {
       delegationSection = [
         'DELEGATION (your primary job):',
-        'You are a router, not a doer. Your first action on every user message must be: check if a specialist on your team covers this domain. If yes, delegate immediately.',
+        'You are a router. On every user message, check if a specialist covers the domain. If yes, delegate immediately. Do not answer it yourself, read files, or use tools for questions that belong to a specialist.',
         '',
-        'DO NOT:',
-        '- Answer the question yourself, even partially, even if you know the answer',
-        '- Read files, search the vault, or use any tools to gather information for a question that belongs to a specialist',
-        '- Say you will delegate and then answer the question yourself in the same response',
-        '',
-        'Your ONLY job when a specialist covers the domain is: output the DELEGATE marker. Nothing else. No file reads, no analysis, no "let me check." Just route.',
-        '',
-        'When delegating, tell the user briefly who you are handing to and why, then output the DELEGATE marker and STOP. Do not generate any further text after the closing marker. Do not summarise, predict, or describe what the specialist will do.',
-        '',
-        'Format:',
-        '{Brief explanation to user of who you are handing to and why}',
+        'Format: tell the user briefly who you are handing to and why, then output the marker and STOP.',
         '',
         '<!-- RUNDOCK:DELEGATE agent={agent-name} -->',
-        '{Summarise the user request with full context so the specialist can act on it}',
+        '{Summarise the user request with full context}',
         '<!-- /RUNDOCK:DELEGATE -->',
         '',
-        'CRITICAL: Your response MUST end immediately after the closing <!-- /RUNDOCK:DELEGATE --> tag. Any text after it will be shown to the user and will be confusing. The specialist will appear in the conversation and handle the request. After they finish, you resume automatically.',
+        'Your response MUST end after the closing tag. The specialist appears in the conversation automatically.',
         '',
-        'NAMING RULE (most important):',
-        '- NEVER mention a specialist by name unless you are outputting a DELEGATE marker in the same response.',
-        '- If you handle something yourself, describe what YOU are doing. Do not say "Let me hand this to [specialist]" and then answer it yourself.',
-        '- This rule exists because the user sees specialists join the conversation when you delegate. If you name them but they never appear, it breaks trust.',
-        '',
-        'WHEN TO DELEGATE vs HANDLE YOURSELF:',
-        '- Delegate (DELEGATE marker): when a request clearly falls within a specialist\'s domain. The specialist appears in the conversation.',
-        '- Handle yourself: when no specialist fits, or when coordinating across multiple specialists.',
-        '- Background parallel work (Agent tool): only for running multiple independent tasks simultaneously. Never name a specialist when using the Agent tool.',
+        'RULES:',
+        '- Never mention a specialist by name unless you are outputting a DELEGATE marker in the same response. Users see specialists join the conversation; naming them without delegating breaks trust.',
+        '- Handle it yourself only when no specialist fits, or when coordinating across multiple specialists.',
+        '- Platform operations (agents, skills, workspace config): always delegate to the platform agent.',
+        '- When a specialist returns because the user asked for something outside their scope, pick up that request immediately. Do not ask the user to repeat themselves.',
         '',
         'YOUR TEAM:',
         roster,
-        '',
-        'ROUTING RULES:',
-        '- BEFORE answering any user request, check your team roster. If a specialist covers this domain, delegate immediately. Do not answer it yourself, even if you know the answer. The specialist exists for a reason and may have deeper tools and context.',
-        '- Platform operations (creating, editing, deleting agents, skills, or workspace config): always delegate to the platform agent (type: platform).',
-        '- If a request spans multiple specialists, handle the coordination yourself and delegate sub-tasks as needed.',
-        '- If no specialist fits, handle it yourself.',
-        '',
-        'AFTER A SPECIALIST RETURNS:',
-        'When a specialist hands back to you, read the conversation to understand why. If the specialist returned because the user asked for something outside their scope, pick up that request immediately: either handle it yourself or delegate to the right specialist. Do not ask the user to repeat themselves.',
       ].join('\n');
     }
   } else if (hasDirectReports) {
     delegationSection = [
       'DELEGATION:',
-      'You have a support team that reports to you. When a task falls within a team member\'s specialisation, delegate to them so they appear in the conversation and handle it directly.',
-      '',
-      'DELEGATION IS TEXT-ONLY. When you decide to delegate:',
-      '1. Write a brief explanation to the user',
-      '2. Output the DELEGATE marker immediately',
-      '3. STOP. Do not call any tools (Read, Grep, Glob, Bash, Agent, or any other tool) before, during, or after the marker.',
-      '',
-      'The delegation response must contain ONLY text and the marker. No tool calls whatsoever.',
-      '',
-      'Format:',
-      '{Brief explanation to user of who you are pulling in and why}',
+      'You have a support team. When a task falls within a team member\'s specialisation, delegate. Tell the user briefly, then output the marker and STOP. No tool calls in a delegation response.',
       '',
       '<!-- RUNDOCK:DELEGATE agent={agent-name} -->',
-      '{Summarise what you need from this team member with full context}',
+      '{Summarise what you need with full context}',
       '<!-- /RUNDOCK:DELEGATE -->',
       '',
-      'Your response MUST end immediately after the closing tag. Your team member will appear in the conversation and handle the request. After they finish, you resume automatically.',
+      'Your response MUST end after the closing tag. The team member appears in the conversation automatically.',
       '',
-      'NAMING RULE (most important):',
-      '- NEVER mention a team member by name unless you are outputting a DELEGATE marker in the same response.',
-      '- If you decide to do the work yourself, describe what YOU are doing: "I\'ll check the data", "I\'ll run the analysis." Do not say "Let me pull in [team member]" or "I\'ll have [name] look into this" and then do it yourself.',
-      '- This rule exists because the user sees your team members join the conversation when you delegate. If you name them but they never appear, it breaks trust.',
-      '',
-      'WHEN TO DELEGATE vs DO IT YOURSELF:',
-      '- Delegate (DELEGATE marker): when the task falls within a team member\'s core speciality. Check your agent instructions for mandatory delegation triggers. If your instructions say to delegate a task type to a specific team member, you MUST delegate. Do not do it yourself.',
-      '- Do it yourself: only for tasks that are YOUR core speciality (as defined in your agent instructions). If a team member is specifically designated for a task type, delegate even if you could do it.',
-      '- Background parallel work (Agent tool): only for running multiple independent tasks simultaneously where no single team member needs to interact with the user. Never name a team member when using the Agent tool.',
+      'RULES:',
+      '- Never mention a team member by name unless outputting a DELEGATE marker. Users see them join; naming without delegating breaks trust.',
+      '- Delegate when a task matches a team member\'s speciality. Do it yourself only for tasks in YOUR core domain.',
+      '- If a request falls outside your domain entirely, hand back to the orchestrator using <!-- RUNDOCK:RETURN -->.',
+      '- When a team member returns, pick up where you left off using their output. Do not ask the user to repeat themselves.',
       '',
       'YOUR SUPPORT TEAM:',
       directReportRoster,
-      '',
-      'ROUTING RULES:',
-      '- Only delegate to agents listed above. These are your direct reports.',
-      '- If a request falls outside your domain entirely, hand back to the orchestrator using <!-- RUNDOCK:RETURN --> instead of delegating.',
-      '',
-      'AFTER A TEAM MEMBER RETURNS:',
-      'When a team member hands back to you, pick up where you left off. Use their output to continue your work. Do not ask the user to repeat themselves.',
     ].join('\n');
   }
 
@@ -1353,6 +1309,20 @@ function saveTranscript(convoId) {
   fs.writeFileSync(path.join(dir, `${convoId}.json`), JSON.stringify(transcript, null, 2));
 }
 
+function buildToolSummary(toolCalls) {
+  if (!toolCalls || toolCalls.length === 0) return '';
+  const seen = new Set();
+  const parts = [];
+  for (const tc of toolCalls) {
+    const key = tc.arg ? `${tc.tool}: ${tc.arg}` : tc.tool;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    parts.push(tc.arg ? `[${tc.tool} ${tc.arg}]` : `[${tc.tool}]`);
+    if (parts.length >= 10) break;
+  }
+  return parts.join(' ');
+}
+
 function appendTranscript(convoId, role, agentId, text) {
   // Load from disk if not in memory (e.g. after server restart)
   if (!convoTranscripts.has(convoId)) {
@@ -1360,9 +1330,9 @@ function appendTranscript(convoId, role, agentId, text) {
     convoTranscripts.set(convoId, existing);
   }
   const transcript = convoTranscripts.get(convoId);
-  // Limit transcript to last 20 entries to avoid token bloat
-  if (transcript.length >= 20) transcript.splice(1, 1); // Keep first entry (original request)
-  transcript.push({ role, agent: agentId, text: (text || '').substring(0, 2000) });
+  // Soft cap at 100 entries to prevent unbounded growth
+  if (transcript.length >= 100) transcript.splice(1, 1);
+  transcript.push({ role, agent: agentId, text: text || '' });
   // Persist to disk
   saveTranscript(convoId);
 }
@@ -1486,9 +1456,28 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
           }
         }
 
-        // Track tool calls for activity summary
+        // Track tool calls for activity summary and transcript
         if (parsed.type === 'stream_event' && parsed.event?.type === 'content_block_start' && parsed.event?.content_block?.type === 'tool_use') {
-          entry.toolCalls.push({ tool: parsed.event.content_block.name, time: Date.now() });
+          const toolName = parsed.event.content_block.name;
+          entry.toolCalls.push({ tool: toolName, time: Date.now(), arg: null });
+          // Track input JSON for known tools to extract first argument
+          if (/^(Read|Edit|Write|Glob|Grep|Bash|WebFetch|WebSearch)$/.test(toolName)) {
+            entry._pendingToolArg = { blockIndex: parsed.event.index, inputJson: '' };
+          }
+        }
+        if (entry._pendingToolArg && parsed.type === 'stream_event' && parsed.event?.type === 'content_block_delta' && parsed.event?.index === entry._pendingToolArg.blockIndex && parsed.event?.delta?.type === 'input_json_delta') {
+          entry._pendingToolArg.inputJson += parsed.event.delta.partial_json;
+        }
+        if (entry._pendingToolArg && parsed.type === 'stream_event' && parsed.event?.type === 'content_block_stop' && parsed.event?.index === entry._pendingToolArg.blockIndex) {
+          try {
+            const input = JSON.parse(entry._pendingToolArg.inputJson);
+            const last = entry.toolCalls[entry.toolCalls.length - 1];
+            if (last) {
+              last.arg = input.file_path || input.path || input.pattern || input.query || input.url
+                || (input.command ? input.command.substring(0, 60) : null);
+            }
+          } catch (e) {}
+          entry._pendingToolArg = null;
         }
 
         // Accumulate response text
@@ -1593,7 +1582,11 @@ function handleScopeReturn(specialistEntry, convoId) {
   wireProcessHandlers(orchEntry, convoId, null, {
     enableInterception: true,
     onResult: (e) => {
-      if (e.responseText) appendTranscript(convoId, 'agent', e.agentId, e.responseText);
+      if (e.responseText) {
+            const toolSummary = buildToolSummary(e.toolCalls);
+            const textWithTools = toolSummary ? toolSummary + '\n' + e.responseText : e.responseText;
+            appendTranscript(convoId, 'agent', e.agentId, textWithTools);
+          }
       e.responseText = '';
       e.idle = true;
     }
@@ -1669,11 +1662,14 @@ function handleDelegation(msg, processes) {
     ? 'DELEGATION CONTEXT:\nYou have been delegated a task by another agent. Complete the task in a single response if possible. When the task is done (agent created, skill saved, file written, question answered, etc.), output <!-- RUNDOCK:RETURN --> at the very end of that same response. Do not wait for follow-up questions. Do not ask if there is anything else. Just complete the task, confirm what you did, and return immediately. If you genuinely need clarification before you can proceed, ask, but prefer using sensible defaults over asking.'
     : 'DELEGATION CONTEXT:\nYou have been brought into this conversation by the orchestrator to handle a specific request. Help the user with their request. Have a natural conversation. Stay in the conversation and keep helping with follow-up questions in your domain.\n\nIMPORTANT: Do NOT return after completing a single task. The user may have more questions for you. Wait for their next message.\n\nOnly return to the orchestrator (output <!-- RUNDOCK:RETURN --> at the very end of your response) when:\n- The user asks for something outside your area of expertise. Tell them briefly that this falls outside what you handle and you are handing them back so the right person can pick it up. Do NOT name other specialists or suggest who should handle it. That is the orchestrator\'s job. Then output the RETURN marker.\n\nDo not attempt tasks you are not designed for. Hand back promptly so the orchestrator can route correctly.';
 
+  const systemPrompt = buildSystemPrompt(targetAgent);
+  const fullPrompt = systemPrompt + '\n\n' + delegationContext;
+
   const delegateArgs = ['--output-format', 'stream-json', '--input-format', 'stream-json',
     '--verbose', '--include-partial-messages', '--permission-mode', 'acceptEdits',
     '--allowed-tools', ALLOWED_TOOLS_INTERACTIVE,
     '--disallowed-tools', DISALLOWED_TOOLS,
-    '--append-system-prompt', 'FORMATTING RULES (mandatory, apply to all output):\n- NEVER use em dashes (\u2014) or en dashes (\u2013) anywhere. This includes lists, headers, separators, and inline text. Wrong: "AI \u2014 your assistant". Right: "AI: your assistant". Use colons, full stops, commas, or restructure instead.\n- Use UK spelling throughout.\n\nPLATFORM RULES:\nRundock is a knowledge management platform focused on knowledge work. You can create and edit markdown, YAML, JSON, and text files freely. Writing or editing executable code files (.js, .ts, .py, .sh, etc.) is blocked by design.\n\n' + delegationContext + '\n\nFor terminal commands (Bash), use them whenever they are the best way to accomplish the task. Do not avoid Bash to be cautious. The user has a permission system that lets them approve or deny each command, so always attempt the command and let the user decide. If a command is denied, respect the decision without questioning it. Simply acknowledge it and offer an alternative if relevant. Do not describe denied commands as "blocked by the platform" or suggest the user lacks permissions. They chose to deny that specific request.\n\nDestructive commands (rm with force flags, sudo, chmod, chown) and piped install scripts (curl|sh, wget|sh) are blocked entirely and will not reach the user for approval.',
+    '--append-system-prompt', fullPrompt,
     '--agent', targetAgent.name];
 
   console.log(`[Delegate] convo=${convoId} from=${originalAgentId} to=${targetAgent.id} proc=${delegateProcessId}`);
@@ -1744,7 +1740,11 @@ function handleDelegation(msg, processes) {
       }
 
       e.finalResponseText = e.responseText;
-      if (e.responseText) appendTranscript(convoId, 'agent', e.agentId, e.responseText);
+      if (e.responseText) {
+            const toolSummary = buildToolSummary(e.toolCalls);
+            const textWithTools = toolSummary ? toolSummary + '\n' + e.responseText : e.responseText;
+            appendTranscript(convoId, 'agent', e.agentId, textWithTools);
+          }
       e.responseText = '';
       e.idle = true;
     }
@@ -1876,7 +1876,11 @@ function handleDelegation(msg, processes) {
       wireProcessHandlers(resumeEntry, convoId, null, {
         enableInterception: true,
         onResult: (e) => {
-          if (e.responseText) appendTranscript(convoId, 'agent', e.agentId, e.responseText);
+          if (e.responseText) {
+            const toolSummary = buildToolSummary(e.toolCalls);
+            const textWithTools = toolSummary ? toolSummary + '\n' + e.responseText : e.responseText;
+            appendTranscript(convoId, 'agent', e.agentId, textWithTools);
+          }
           e.responseText = '';
           e.idle = true;
         }
@@ -2061,7 +2065,11 @@ wss.on('connection', (ws) => {
                     }
                   }, 500);
                 }
-                if (e.responseText) appendTranscript(convoId, 'agent', e.agentId, e.responseText);
+                if (e.responseText) {
+            const toolSummary = buildToolSummary(e.toolCalls);
+            const textWithTools = toolSummary ? toolSummary + '\n' + e.responseText : e.responseText;
+            appendTranscript(convoId, 'agent', e.agentId, textWithTools);
+          }
                 e.responseText = '';
                 e.idle = true;
               }
