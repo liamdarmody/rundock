@@ -138,6 +138,7 @@ function handle(d) {
       // Track active process per conversation to ignore stale events
       if(d.subtype==='process_started' && convoId && d._processId) {
         const state = getConvoState(convoId);
+        console.log(`[Process] convo=${convoId} process_started pid=${d._processId} prev=${state.activeProcessId} agent=${d._agent||'?'}`);
         state.activeProcessId = d._processId;
         // Remove stale permission cards from the previous process
         document.querySelectorAll('.msg-permission').forEach(el => el.remove());
@@ -191,8 +192,12 @@ function handle(d) {
       // Only finish if this done event is from the currently active process
       if(d.subtype==='done' && convoId) {
         const state = getConvoState(convoId);
-        if(!d._processId || !state.activeProcessId || d._processId === state.activeProcessId) {
+        const match = !d._processId || !state.activeProcessId || d._processId === state.activeProcessId;
+        console.log(`[Done] convo=${convoId} pid=${d._processId} active=${state.activeProcessId} match=${match} isProcessing=${state.isProcessing}`);
+        if(match) {
           finishProcessing(convoId);
+        } else {
+          console.warn(`[Done] SKIPPED finishProcessing: process ID mismatch`);
         }
       }
       // Agent switch: delegation handoff or return
@@ -304,12 +309,15 @@ function getConvoState(convoId) {
 function isStaleProcess(d, convoId) {
   if(!d._processId) return false;
   const state = getConvoState(convoId);
-  return state.activeProcessId && d._processId !== state.activeProcessId;
+  const stale = state.activeProcessId && d._processId !== state.activeProcessId;
+  if(stale) console.warn(`[Stale] convo=${convoId} dropped ${d.type} from pid=${d._processId} (active=${state.activeProcessId})`);
+  return stale;
 }
 
 function handleStreamEvent(d, convoId) {
   const evt = d.event; if(!evt) return;
   const state = getConvoState(convoId);
+  state.lastStreamActivity = Date.now();
   const isActive = activeConversation?.id === convoId;
 
   // Text streaming: always accumulate raw text, only render DOM when active
@@ -385,6 +393,7 @@ function handleStreamEvent(d, convoId) {
 function handleAssistant(d, convoId) {
   const msg=d.message; if(!msg?.content) return;
   const state = getConvoState(convoId);
+  state.lastStreamActivity = Date.now();
   const isActive = activeConversation?.id === convoId;
 
   for(const block of msg.content) {
@@ -1638,6 +1647,18 @@ function sendMessage() {
 function startProcessing(convoId) {
   const state = getConvoState(convoId);
   state.isProcessing=true; state.latestText=''; state.latestAgentId=null;
+  state.lastStreamActivity = Date.now();
+  // Safety net: if no streaming activity for 90s, auto-finish to prevent stuck UI
+  if(state.processingTimeout) clearInterval(state.processingTimeout);
+  state.processingTimeout = setInterval(() => {
+    if(!state.isProcessing) { clearInterval(state.processingTimeout); state.processingTimeout=null; return; }
+    const idle = Date.now() - (state.lastStreamActivity || 0);
+    if(idle > 90000) {
+      console.warn(`[Timeout] convo=${convoId} no streaming activity for ${Math.round(idle/1000)}s, auto-finishing`);
+      clearInterval(state.processingTimeout); state.processingTimeout=null;
+      finishProcessing(convoId);
+    }
+  }, 10000);
   workingConvos.add(convoId);
   userScrolledUp = false; // Reset: follow the new response from the start
   renderConvoList();
@@ -1671,6 +1692,7 @@ function startProcessing(convoId) {
 function finishProcessing(convoId) {
   const state = getConvoState(convoId);
   state.isProcessing=false; state.currentStreamingMsg=null;
+  if(state.processingTimeout) { clearInterval(state.processingTimeout); state.processingTimeout=null; }
   workingConvos.delete(convoId);
   // If user isn't viewing this conversation, mark as unread
   const viewingChat = activeConversation?.id === convoId && currentView === 'chat';
