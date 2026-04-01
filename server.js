@@ -1634,6 +1634,14 @@ function handleDelegation(msg, processes) {
     return;
   }
 
+  // Prevent duplicate delegation: if the target agent is already the active process (e.g. Agent tool
+  // interception already spawned the delegate, then the DELEGATE marker triggers a second attempt)
+  const currentEntry = processes.get(convoId);
+  if (currentEntry && currentEntry.agentId === (targetAgent.id || targetAgent.name) && !currentEntry.exited) {
+    console.log(`[Delegate] convo=${convoId} skipping duplicate delegation to ${targetAgent.id || targetAgent.name} (already active)`);
+    return;
+  }
+
   // Prevent immediate re-delegation to the specialist that just scope-returned
   if (existing && existing.scopeReturnSource === targetAgent.id) {
     console.log(`[ScopeReturn] convo=${convoId} preventing loop: ${targetAgent.id} just scope-returned`);
@@ -1705,9 +1713,8 @@ function handleDelegation(msg, processes) {
   }));
   safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: delegateProcessId }));
 
-  // Send context as first message, including conversation transcript for context
-  // Exclude the delegate's own previous responses to prevent re-processing old requests
-  const transcript = formatTranscript(convoId, { excludeAgent: targetAgent.id });
+  // Send context as first message, including full conversation transcript
+  const transcript = formatTranscript(convoId);
   const contextWithHistory = transcript
     ? `CONVERSATION SO FAR:\n${transcript}\n\nYOUR TASK:\n${msg.context}`
     : msg.context;
