@@ -1272,7 +1272,12 @@ const wss = new WebSocketServer({
   verifyClient: ({ origin, req }) => {
     // Allow connections from the same host (localhost or configured host)
     if (!origin) return true; // Non-browser clients (e.g. CLI tools)
-    const allowed = [`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`];
+    // Check against both the configured PORT and the actual listening port
+    const actualPort = server.address()?.port || PORT;
+    const allowed = [
+      `http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`,
+      `http://localhost:${actualPort}`, `http://127.0.0.1:${actualPort}`,
+    ];
     return allowed.includes(origin);
   }
 });
@@ -2928,19 +2933,33 @@ function getFileTree(dir, prefix = '') {
 
 // ===== START =====
 
-server.listen(PORT, () => {
-  console.log(`\n  Rundock running at http://localhost:${PORT}`);
-  if (WORKSPACE) {
-    saveRecentWorkspace(WORKSPACE);
-    try { scaffoldWorkspace(WORKSPACE); } catch (e) { console.warn('Scaffold warning:', e.message); }
-    const agents = discoverAgents();
-    const totalRoutines = agents.reduce((sum, a) => sum + (a.routines?.length || 0), 0);
-    console.log(`  Workspace: ${WORKSPACE}`);
-    console.log(`  Agents: ${agents.map(a => a.displayName).join(', ')}`);
-    console.log(`  Routines: ${totalRoutines}`);
-    startScheduler();
-  } else {
-    console.log(`  No workspace set. Waiting for workspace selection.`);
-  }
-  console.log('');
-});
+function startServer(options = {}) {
+  const port = options.port != null ? options.port : PORT;
+  return new Promise((resolve) => {
+    server.listen(port, () => {
+      const actualPort = server.address().port;
+      console.log(`\n  Rundock running at http://localhost:${actualPort}`);
+      if (WORKSPACE) {
+        saveRecentWorkspace(WORKSPACE);
+        try { scaffoldWorkspace(WORKSPACE); } catch (e) { console.warn('Scaffold warning:', e.message); }
+        const agents = discoverAgents();
+        const totalRoutines = agents.reduce((sum, a) => sum + (a.routines?.length || 0), 0);
+        console.log(`  Workspace: ${WORKSPACE}`);
+        console.log(`  Agents: ${agents.map(a => a.displayName).join(', ')}`);
+        console.log(`  Routines: ${totalRoutines}`);
+        startScheduler();
+      } else {
+        console.log(`  No workspace set. Waiting for workspace selection.`);
+      }
+      console.log('');
+      resolve(actualPort);
+    });
+  });
+}
+
+// Run directly via `node server.js` (git-clone path)
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = { startServer };

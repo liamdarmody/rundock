@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rundock Setup</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+      background: #1A1A1A;
+      color: #F0EDE8;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      padding: 40px;
+      -webkit-app-region: drag;
+      -webkit-font-smoothing: antialiased;
+    }
+    h1 {
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 8px;
+      letter-spacing: -0.02em;
+    }
+    .subtitle {
+      color: #9A9590;
+      font-size: 14px;
+      margin-bottom: 32px;
+      text-align: center;
+      line-height: 1.5;
+    }
+    .status {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      width: 100%;
+      max-width: 380px;
+      margin-bottom: 32px;
+    }
+    .step {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      background: #212121;
+      border: 1px solid #3D3D3D;
+      border-radius: 8px;
+    }
+    .step.active {
+      border-color: #E87A5A;
+    }
+    .step.done {
+      border-color: #6BC67E;
+    }
+    .step-icon {
+      width: 24px;
+      height: 24px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+    .step-icon.pending { color: #9A9590; }
+    .step-icon.active { color: #E87A5A; }
+    .step-icon.done { color: #6BC67E; }
+    .step-text {
+      flex: 1;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+    .step-text a {
+      color: #E87A5A;
+      text-decoration: none;
+      -webkit-app-region: no-drag;
+    }
+    .step-text a:hover {
+      color: #F09070;
+    }
+    .step-text .hint {
+      color: #9A9590;
+      font-size: 12px;
+      margin-top: 4px;
+    }
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid #3D3D3D;
+      border-top-color: #E87A5A;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .btn {
+      -webkit-app-region: no-drag;
+      background: #E87A5A;
+      color: #fff;
+      border: none;
+      padding: 10px 24px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .btn:hover { background: #F09070; }
+    .btn:disabled {
+      background: #3D3D3D;
+      color: #9A9590;
+      cursor: default;
+    }
+    .btn-secondary {
+      -webkit-app-region: no-drag;
+      background: transparent;
+      color: #9A9590;
+      border: none;
+      padding: 8px 16px;
+      font-size: 13px;
+      cursor: pointer;
+      font-family: inherit;
+      margin-top: 8px;
+    }
+    .btn-secondary:hover { color: #F0EDE8; }
+  </style>
+</head>
+<body>
+  <h1>Rundock Setup</h1>
+  <p class="subtitle">Rundock needs Claude Code to power your agent team.</p>
+
+  <div class="status">
+    <div class="step" id="step-install">
+      <div class="step-icon pending" id="icon-install">1</div>
+      <div class="step-text">
+        <div>Install Claude Code</div>
+        <div class="hint"><a href="https://docs.anthropic.com/en/docs/claude-code/overview" target="_blank">Installation guide</a></div>
+      </div>
+    </div>
+    <div class="step" id="step-auth">
+      <div class="step-icon pending" id="icon-auth">2</div>
+      <div class="step-text">
+        <div>Sign in to Claude</div>
+        <div class="hint">Run <code style="background:#333;padding:2px 5px;border-radius:3px;font-size:12px">claude</code> in your terminal and follow the prompts</div>
+      </div>
+    </div>
+  </div>
+
+  <button class="btn" id="btn-check" onclick="checkNow()">Check again</button>
+  <button class="btn-secondary" id="btn-skip" onclick="skipAndQuit()">Quit</button>
+
+  <script>
+    let polling = null;
+
+    function updateStep(id, state) {
+      const step = document.getElementById('step-' + id);
+      const icon = document.getElementById('icon-' + id);
+      step.className = 'step ' + state;
+      icon.className = 'step-icon ' + state;
+      if (state === 'done') {
+        icon.innerHTML = '&#10003;';
+      } else if (state === 'active') {
+        icon.innerHTML = '<div class="spinner"></div>';
+      }
+    }
+
+    async function checkStatus() {
+      const result = await window.electronAPI.checkClaude();
+
+      if (result.status === 'not-installed') {
+        updateStep('install', 'active');
+        updateStep('auth', 'pending');
+        return false;
+      }
+
+      if (result.status === 'not-authenticated') {
+        updateStep('install', 'done');
+        updateStep('auth', 'active');
+        return false;
+      }
+
+      if (result.status === 'ready') {
+        updateStep('install', 'done');
+        updateStep('auth', 'done');
+        document.getElementById('btn-check').textContent = 'Continue';
+        document.getElementById('btn-check').onclick = () => window.electronAPI.wizardDone();
+        document.getElementById('btn-skip').style.display = 'none';
+        if (polling) { clearInterval(polling); polling = null; }
+        return true;
+      }
+    }
+
+    async function checkNow() {
+      const ready = await checkStatus();
+      if (!ready && !polling) {
+        // Start polling every 3 seconds
+        polling = setInterval(checkStatus, 3000);
+      }
+    }
+
+    function skipAndQuit() {
+      window.close();
+    }
+
+    // Initial check on load
+    checkNow();
+  </script>
+</body>
+</html>
