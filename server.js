@@ -28,7 +28,10 @@ const ALLOWED_TOOLS_LEGACY = 'Bash,WebFetch,WebSearch,mcp__*';
 const pendingPermissionRequests = new Map();
 
 // Recent workspaces (persisted to disk)
-const RECENT_FILE = path.join(__dirname, '.recent-workspaces.json');
+// In Electron, __dirname is inside the read-only asar. Use home directory instead.
+const RECENT_FILE = process.env.RUNDOCK_ELECTRON
+  ? path.join(require('os').homedir(), '.rundock-recent-workspaces.json')
+  : path.join(__dirname, '.recent-workspaces.json');
 function loadRecentWorkspaces() {
   try { return JSON.parse(fs.readFileSync(RECENT_FILE, 'utf-8')); } catch (e) { return []; }
 }
