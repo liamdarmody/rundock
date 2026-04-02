@@ -2,15 +2,55 @@
   "name": "rundock",
   "version": "0.7.2",
   "description": "A browser-based OS for AI agent teams. Built for knowledge work, powered by Claude Code.",
-  "main": "server.js",
+  "main": "electron/main.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "update": "git pull origin main && npm install && echo '\\n  Rundock updated. Run: npm start'"
+    "update": "git pull origin main && npm install && echo '\\n  Rundock updated. Run: npm start'",
+    "electron": "electron .",
+    "build:mac": "electron-builder --mac"
   },
   "dependencies": {
     "marked": "^17.0.5",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "^35.0.0",
+    "electron-builder": "^26.0.0",
+    "electron-updater": "^6.6.0"
+  },
+  "build": {
+    "appId": "ai.rundock.app",
+    "productName": "Rundock",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "server.js",
+      "public/**/*",
+      "scaffold/**/*",
+      "node_modules/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "icon": "electron/build/icon.icns",
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "electron/build/icon.icns",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "electron/build/entitlements.mac.plist",
+      "entitlementsInherit": "electron/build/entitlements.mac.plist",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "liamdarmody",
+      "repo": "rundock"
+    }
   },
   "engines": {
     "node": ">=20.0.0"
