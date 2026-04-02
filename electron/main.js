@@ -1,7 +1,14 @@
 const { app, BrowserWindow, Tray, Menu, nativeImage, dialog, ipcMain } = require('electron');
-const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const { execSync } = require('child_process');
+
+let autoUpdater;
+try {
+  autoUpdater = require('electron-updater').autoUpdater;
+} catch {
+  console.warn('[Electron] electron-updater not available, auto-updates disabled');
+  autoUpdater = null;
+}
 
 let mainWindow = null;
 let tray = null;
@@ -23,7 +30,25 @@ if (!gotLock) {
 
 // ===== CLAUDE CODE DETECTION =====
 
+// Electron packaged apps don't inherit the user's full shell PATH.
+// Ensure common install locations are on PATH so `which claude` works.
+function ensurePath() {
+  const home = require('os').homedir();
+  const extraDirs = [
+    path.join(home, '.local', 'bin'),
+    path.join(home, '.claude', 'bin'),
+    '/usr/local/bin',
+    '/opt/homebrew/bin',
+  ];
+  const current = process.env.PATH || '';
+  const missing = extraDirs.filter(d => !current.split(':').includes(d));
+  if (missing.length) {
+    process.env.PATH = missing.join(':') + ':' + current;
+  }
+}
+
 function findClaude() {
+  ensurePath();
   try {
     const bin = execSync('which claude', { timeout: 5000, encoding: 'utf-8' }).trim();
     execSync('claude --version', { timeout: 10000 });
@@ -130,7 +155,7 @@ function setupMenu() {
       label: 'Rundock',
       submenu: [
         { label: 'About Rundock', role: 'about' },
-        { label: 'Check for Updates', click: () => autoUpdater.checkForUpdates() },
+        { label: 'Check for Updates', click: () => { if (autoUpdater) autoUpdater.checkForUpdates(); } },
         { type: 'separator' },
         { label: 'Quit', accelerator: 'CmdOrCtrl+Q', click: () => { app.isQuitting = true; app.quit(); } },
       ],
@@ -157,6 +182,8 @@ function setupMenu() {
 // ===== AUTO-UPDATE =====
 
 function setupAutoUpdate() {
+  if (!autoUpdater) return;
+
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
 
