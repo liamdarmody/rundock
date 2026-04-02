@@ -22,9 +22,12 @@ If the user already provided enough detail, skip straight to drafting.
 
 ### 2. Choose identity
 
+**Naming convention:** The `name` (slug), filename, and `role` must all refer to the same thing. The slug is the hyphenated lowercase form of the role. Examples: role "Content Lead" = slug `content-lead`, role "Executive Assistant" = slug `executive-assistant`, role "Design Lead" = slug `design-lead`. The `displayName` is a separate, short human name unrelated to the role (e.g. "Penn", "Lea", "Des"). Never use the displayName as the slug.
+
 Suggest and confirm:
-- **displayName:** Short, memorable, character-style. Good: "Dex", "Intel", "Kit". Bad: "Meetings Agent", "Project Tracker". The `role` field carries the functional title.
-- **role:** 2-4 word title (e.g. "Meeting Intelligence", "Content Strategist")
+- **name (slug):** Hyphenated lowercase form of the role. This becomes both the `name` field and the filename (`{slug}.md`). Must describe the role, not the person.
+- **displayName:** Short, memorable, character-style name. Good: "Dex", "Intel", "Kit". Bad: "Meetings Agent", "Project Tracker". Must not match or resemble the slug. The `role` field carries the functional title.
+- **role:** 2-4 word title (e.g. "Meeting Intelligence", "Content Strategist"). The slug is derived from this.
 - **icon:** Single unicode character. Must be visually distinct from existing agents.
 - **colour:** Hex colour for avatar. Must be visually distinct from existing agents.
 - **order:** 0 for orchestrator, sequential integers for specialists. Use decimals for sub-agents (e.g. 1.1, 1.2 under a lead at order 1). Check existing agents to avoid collisions.
@@ -58,9 +61,9 @@ Output the complete agent file wrapped in the marker:
 <!-- RUNDOCK:SAVE_AGENT name={slug} -->
 ```
 ---
-name: {slug}
-displayName: {Human Name}
-role: {Short Role Title}
+name: {slug}              # Hyphenated lowercase of role (e.g. design-lead)
+displayName: {Human Name} # Short character name (e.g. Des), not the role
+role: {Short Role Title}  # 2-4 word title; slug is derived from this
 type: {orchestrator|specialist}
 order: {number}
 reportsTo: {parent-agent-slug}
