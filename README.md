@@ -103,6 +103,12 @@ prompts:
 | `prompts` | List of starter prompts shown as pills when starting a new conversation |
 | `reportsTo` | Agent slug this agent reports to. Enables multi-level org chart hierarchies |
 
+## No lock-in
+
+Your agents and skills are standard Claude Code files. They work in Claude Code, Claude.ai, the Claude Agent SDK, and any tool that supports Anthropic's agent format. Rundock adds the team layer on top: org chart, delegation, conversations, permissions. The extension fields (`displayName`, `role`, `type`, `order`, etc.) are optional and ignored by other tools.
+
+If you stop using Rundock, your agents and skills go with you. No export needed. They're already portable.
+
 ## Your data never leaves your computer
 
 ```
