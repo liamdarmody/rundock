@@ -4,6 +4,27 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## 0.7.3: Desktop App (2026-04-03)
+
+Rundock is now available as a native macOS desktop app. Download the .dmg, drag to Applications, and open. No terminal, no git clone, no npm install.
+
+### Added
+
+- **Desktop app:** Electron wrapper with embedded local server. Launches on a dynamic port with no terminal setup required.
+- **First-run wizard:** Checks for Claude Code installation and authentication on first launch. Guides users through setup before opening the main window.
+- **Tray icon:** Menu bar icon for quick access. Close the window and reopen from the tray.
+- **Auto-update scaffolding:** Update checks via GitHub Releases. Gracefully disabled when running unsigned builds.
+- **No lock-in section:** Added to README and website. Agents and skills are standard Claude Code files, fully portable without Rundock.
+- **Download button:** Rundock.ai hero and getting started section updated with desktop app as the primary install path.
+
+### Fixed
+
+- **PATH detection in packaged app:** Electron apps don't inherit the user's shell PATH. Added common install locations (~/.local/bin, /opt/homebrew/bin) so Claude Code is found.
+- **Recent workspaces in packaged app:** File was being written to the read-only asar archive. Redirected to home directory when running in Electron.
+- **Agent naming convention:** Scaffolding now enforces that slug, filename, and role all refer to the same thing. Shipped to all users via managed scaffold sync.
+
+---
+
 ## 0.7.2: Pinned Conversations and Scope Return (2026-03-31)
 
 Pinned conversations persist across refresh and sort to top of the active list. Specialists can now hand work back to the orchestrator when asked to do something outside their domain.
