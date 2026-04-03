@@ -252,8 +252,9 @@ function createMainWindow(port) {
 app.whenReady().then(async () => {
   console.log('[Electron] App ready');
 
-  // Set dock icon (in dev mode, Electron shows its own icon by default)
-  if (process.platform === 'darwin') {
+  // Set dock icon in dev mode only. In packaged builds, the .icns from the
+  // app bundle is used automatically and macOS applies its own corner mask.
+  if (process.platform === 'darwin' && !app.isPackaged) {
     try {
       const iconPath = path.join(__dirname, 'build', 'icon.png');
       const icon = nativeImage.createFromPath(iconPath);
