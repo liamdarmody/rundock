@@ -27,7 +27,7 @@
 const sunIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`;
 const moonIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
 
-let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false, currentWorkspacePath=null, workspaceAnalysis=null;
+let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false, currentWorkspacePath=null, workspaceAnalysis=null, workspaceIsEmpty=false, workspaceMode='knowledge';
 const agentLastActivity = {}; // { agentId: { time: Date, label: string } }
 // Per-conversation state: { convoId: { isProcessing, currentStreamingMsg, latestText } }
 const convoState = {};
@@ -124,7 +124,7 @@ function handle(d) {
   const convoId = d._conversationId;
   switch(d.type) {
     case 'workspaces': handleWorkspaces(d); break;
-    case 'workspace_set': onWorkspaceReady(d.path, d.analysis); break;
+    case 'workspace_set': onWorkspaceReady(d.path, d.analysis, d.isEmpty, d.workspaceMode, d.scaffoldError); break;
     case 'workspace_error': {
       const errEl = document.getElementById('workspace-error');
       if (errEl) { errEl.textContent = d.message; errEl.style.display = 'block'; }
@@ -1157,11 +1157,32 @@ function createConversation(agentId, title) {
   return convo;
 }
 
-function startConversation(agentId) {
+function startConversation(agentId, options) {
   const convo = createConversation(agentId);
   const agent = convo.agent;
-  // Show prompt pills if agent has prompts
-  if(agent.prompts && agent.prompts.length) {
+  const showWelcome = options && options.welcome;
+
+  if (showWelcome) {
+    // Path C: Pre-rendered welcome bubble (zero tokens, not an API call)
+    let h = '';
+    // Welcome message bubble
+    h += `<div class="msg msg-agent msg-welcome">`;
+    h += `<div class="msg-sender" style="color:${agent.colour}"><div class="avatar xs" style="background:${agent.colour}">${agent.icon}</div> ${esc(agent.displayName)}</div>`;
+    h += `<div class="msg-bubble"><p>Hey, I'm ${esc(agent.displayName)}. I'm your assistant in this workspace.</p>`;
+    h += `<p>What are you working on? I can help you draft something, think through a problem, or research a topic.</p></div>`;
+    h += `</div>`;
+    // Starter prompt pills
+    if (agent.prompts && agent.prompts.length) {
+      h += `<div id="chat-prompts" class="chat-prompts chat-prompts-inline">`;
+      h += `<div class="chat-prompts-list">`;
+      for (const p of agent.prompts) {
+        h += `<button class="prompt-pill" data-prompt="${escAttr(p)}">${esc(p)}</button>`;
+      }
+      h += `</div></div>`;
+    }
+    document.getElementById('messages').innerHTML = h;
+  } else if (agent.prompts && agent.prompts.length) {
+    // Standard prompt pills for non-Path-C conversations
     let h=`<div id="chat-prompts" class="chat-prompts">`;
     h+=`<div class="chat-prompts-avatar avatar" style="background:${agent.colour};width:56px;height:56px;font-size:24px">${agent.icon}</div>`;
     h+=`<div class="chat-prompts-title">How can I help?</div>`;
@@ -1268,7 +1289,18 @@ function newConversation() {
   // Empty workspace (only Doc): start with guide
   if (!teamAgents.length && guide) { startConversation(guide.id); return; }
   // Orchestrator exists: start with orchestrator
-  if (orchestrator) { startConversation(orchestrator.id); return; }
+  // Path C: show welcome bubble if this is the first conversation in a fresh workspace
+  if (orchestrator) {
+    const isFirstConvo = workspaceIsEmpty && conversations.filter(c => c.agentId !== 'rundock-guide').length === 0;
+    startConversation(orchestrator.id, isFirstConvo ? { welcome: true } : undefined);
+    if (isFirstConvo) {
+      // Mark conversation so the welcome context is injected on first message
+      const convo = conversations.find(c => c.agentId === orchestrator.id);
+      if (convo) convo.hasWelcomeContext = true;
+      workspaceIsEmpty = false; // Only show welcome once
+    }
+    return;
+  }
   // Team agents, no orchestrator: show agent picker
   showView('convo-empty');
 }
@@ -1623,6 +1655,16 @@ function dispatchMessage(convo, text) {
     renderConvoList();
   }
   startProcessing(convo.id);
+
+  // Path C: inject welcome context on first message so Claude knows what the user saw
+  let content = text;
+  if (convo.hasWelcomeContext && convo.messages.filter(m => m.role === 'user').length === 1) {
+    const agent = convo.agent;
+    const welcomeContext = `[CONTEXT: The user just opened a new workspace. They were shown this welcome message from you: "Hey, I'm ${agent.displayName}. I'm your assistant in this workspace. What are you working on? I can help you draft something, think through a problem, or research a topic." The user is now responding to that message.]\n\n`;
+    content = welcomeContext + text;
+    convo.hasWelcomeContext = false; // Only inject once
+  }
+
   // Use the last-active agent (e.g. a delegate) if available, otherwise the conversation's base agent.
   // Also resolve the correct session ID for that agent so --resume loads the right context.
   const state = getConvoState(convo.id);
@@ -1630,7 +1672,7 @@ function dispatchMessage(convo, text) {
   const resumeSessionId = (resumeAgent !== convo.agentId && convo.sessionIds)
     ? (convo.sessionIds.filter(s => s.agentId === resumeAgent).pop()?.sessionId || convo.sessionId)
     : convo.sessionId;
-  const chatMsg = { type: 'chat', content: text, agent: resumeAgent, conversationId: convo.id };
+  const chatMsg = { type: 'chat', content, agent: resumeAgent, conversationId: convo.id };
   if (resumeSessionId) chatMsg.sessionId = resumeSessionId;
   ws.send(JSON.stringify(chatMsg));
   persistConversation(convo);
@@ -2754,7 +2796,7 @@ function changeWorkspace() {
 function handleWorkspaces(d) {
   if (d.current) {
     // Server already has a workspace set (env var or previous selection)
-    onWorkspaceReady(d.current, d.analysis);
+    onWorkspaceReady(d.current, d.analysis, d.isEmpty, d.workspaceMode, d.scaffoldError);
     return;
   }
   // No workspace set, show picker
@@ -2842,10 +2884,17 @@ function createWorkspace() {
   ws.send(JSON.stringify({ type: 'create_workspace', name }));
 }
 
-function onWorkspaceReady(dir, analysis) {
+function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError) {
   const isSameWorkspace = (currentWorkspacePath === dir);
   currentWorkspacePath = dir;
   workspaceAnalysis = analysis || null;
+  workspaceIsEmpty = !!isEmpty;
+  workspaceMode = mode || 'knowledge';
+
+  // Handle scaffold error for Path C
+  if (scaffoldError) {
+    console.warn('[Workspace] Scaffold error:', scaffoldError);
+  }
   // Show nav and sidebar
   document.querySelector('.nav-rail').style.display = '';
   document.querySelector('.sidebar').style.display = '';

@@ -2552,6 +2552,7 @@ wss.on('connection', (ws) => {
         };
         if (WORKSPACE) {
           try { wsData.analysis = analyzeWorkspace(WORKSPACE, discoverAgents()); } catch (e) { console.warn('  Workspace analysis failed:', e.message); }
+          try { wsData.workspaceMode = readState().workspaceMode || 'knowledge'; } catch (e) { /* default */ }
         }
         ws.send(JSON.stringify(wsData));
       }

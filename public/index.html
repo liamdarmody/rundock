@@ -270,6 +270,11 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .chat-prompts-list { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; max-width: 480px; margin-top: 8px; }
 .prompt-pill { background: var(--card); border: 1px solid var(--border); border-radius: 20px; padding: 8px 16px; font-size: var(--body); color: var(--text-1); cursor: pointer; transition: all 0.15s ease; }
 .prompt-pill:hover { border-color: var(--accent); background: var(--accent-glow); }
+/* Path C: welcome bubble with inline prompt pills */
+.chat-prompts-inline { flex: none; padding: 0 0 0 44px; justify-content: flex-start; align-items: flex-start; }
+.chat-prompts-inline .chat-prompts-list { justify-content: flex-start; margin-top: 0; }
+.msg-welcome .msg-bubble p { margin: 0 0 8px 0; }
+.msg-welcome .msg-bubble p:last-child { margin-bottom: 0; }
 
 /* Editor */
 .editor-header { padding: 16px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
