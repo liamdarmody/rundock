@@ -25,6 +25,18 @@ process.stdin.on('end', () => {
     process.exit(0);
   }
 
+  // Code mode: auto-approve all commands (no permission card)
+  if (process.env.RUNDOCK_CODE_MODE === '1') {
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'allow',
+        permissionDecisionReason: 'Auto-approved: workspace is in Code mode'
+      }
+    }));
+    process.exit(0);
+  }
+
   let data;
   try {
     data = JSON.parse(input);
