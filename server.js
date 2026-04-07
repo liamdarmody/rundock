@@ -16,6 +16,7 @@ const readline = require('readline');
 const PKG_VERSION = require('./package.json').version;
 
 const PORT = process.env.PORT || 3000;
+let ACTUAL_PORT = PORT; // Updated after server.listen() with the real listening port
 let WORKSPACE = process.env.WORKSPACE || null;
 
 // Shared constants to avoid repetition across process spawn sites
@@ -1555,7 +1556,7 @@ function handleScopeReturn(specialistEntry, convoId) {
 
   const proc = spawn('claude', args, {
     cwd: WORKSPACE,
-    env: { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(PORT), RUNDOCK_CONVO_ID: convoId },
+    env: { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(ACTUAL_PORT), RUNDOCK_CONVO_ID: convoId },
     stdio: ['pipe', 'pipe', 'pipe']
   });
 
@@ -1684,7 +1685,7 @@ function handleDelegation(msg, processes) {
 
   const delegateProc = spawn('claude', delegateArgs, {
     cwd: WORKSPACE,
-    env: { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(PORT), RUNDOCK_CONVO_ID: convoId },
+    env: { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(ACTUAL_PORT), RUNDOCK_CONVO_ID: convoId },
     stdio: ['pipe', 'pipe', 'pipe']
   });
 
@@ -1855,7 +1856,7 @@ function handleDelegation(msg, processes) {
       const resumeProcessId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       const resumeProc = spawn('claude', resumeArgs, {
         cwd: WORKSPACE,
-        env: { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(PORT), RUNDOCK_CONVO_ID: convoId },
+        env: { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(ACTUAL_PORT), RUNDOCK_CONVO_ID: convoId },
         stdio: ['pipe', 'pipe', 'pipe']
       });
 
@@ -2040,7 +2041,7 @@ wss.on('connection', (ws) => {
 
             const proc = spawn('claude', args, {
               cwd: WORKSPACE,
-              env: { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(PORT), RUNDOCK_CONVO_ID: convoId },
+              env: { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(ACTUAL_PORT), RUNDOCK_CONVO_ID: convoId },
               stdio: ['pipe', 'pipe', 'pipe']
             });
 
@@ -2164,7 +2165,7 @@ wss.on('connection', (ws) => {
 
           const proc = spawn('claude', args, {
             cwd: WORKSPACE,
-            env: { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(PORT), RUNDOCK_CONVO_ID: convoId },
+            env: { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(ACTUAL_PORT), RUNDOCK_CONVO_ID: convoId },
             stdio: ['pipe', 'pipe', 'pipe']
           });
 
@@ -2941,6 +2942,7 @@ function startServer(options = {}) {
   return new Promise((resolve) => {
     server.listen(port, () => {
       const actualPort = server.address().port;
+      ACTUAL_PORT = actualPort;
       console.log(`\n  Rundock running at http://localhost:${actualPort}`);
       if (WORKSPACE) {
         saveRecentWorkspace(WORKSPACE);
