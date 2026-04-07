@@ -37,15 +37,21 @@ function getDisallowedTools() {
   return DISALLOWED_TOOLS_KNOWLEDGE;
 }
 
-// Returns the permission mode based on workspace mode.
-// Code mode: auto-approve everything (bypassPermissions).
-// Knowledge mode: accept edits, bash goes through permission cards.
+// Returns the permission mode. Always acceptEdits; code mode auto-approval
+// is handled by the permission hook via RUNDOCK_CODE_MODE env var.
 function getPermissionMode() {
+  return 'acceptEdits';
+}
+
+// Returns spawn env with workspace mode flag for the permission hook.
+function getSpawnEnv(convoId) {
+  const env = { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(ACTUAL_PORT) };
+  if (convoId) env.RUNDOCK_CONVO_ID = convoId;
   try {
     const state = readState();
-    if (state.workspaceMode === 'code') return 'bypassPermissions';
-  } catch (e) { /* default to knowledge mode */ }
-  return 'acceptEdits';
+    if (state.workspaceMode === 'code') env.RUNDOCK_CODE_MODE = '1';
+  } catch (e) { /* default knowledge mode */ }
+  return env;
 }
 
 // Pending permission requests from PreToolUse hooks (keyed by requestId).
@@ -746,7 +752,7 @@ function executeRoutine(agent, routine, key) {
 
   const proc = spawn('claude', args, {
     cwd: WORKSPACE,
-    env: { ...process.env, TERM: 'dumb', RUNDOCK: '1' },
+    env: getSpawnEnv(null),
     stdio: ['ignore', 'pipe', 'pipe']
   });
 
@@ -1786,7 +1792,7 @@ function handleScopeReturn(specialistEntry, convoId) {
 
   const proc = spawn('claude', args, {
     cwd: WORKSPACE,
-    env: { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(ACTUAL_PORT), RUNDOCK_CONVO_ID: convoId },
+    env: getSpawnEnv(convoId),
     stdio: ['pipe', 'pipe', 'pipe']
   });
 
@@ -1917,7 +1923,7 @@ function handleDelegation(msg, processes) {
 
   const delegateProc = spawn('claude', delegateArgs, {
     cwd: WORKSPACE,
-    env: { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(ACTUAL_PORT), RUNDOCK_CONVO_ID: convoId },
+    env: getSpawnEnv(convoId),
     stdio: ['pipe', 'pipe', 'pipe']
   });
 
@@ -2090,7 +2096,7 @@ function handleDelegation(msg, processes) {
       const resumeProcessId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       const resumeProc = spawn('claude', resumeArgs, {
         cwd: WORKSPACE,
-        env: { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(ACTUAL_PORT), RUNDOCK_CONVO_ID: convoId },
+        env: getSpawnEnv(convoId),
         stdio: ['pipe', 'pipe', 'pipe']
       });
 
@@ -2277,7 +2283,7 @@ wss.on('connection', (ws) => {
 
             const proc = spawn('claude', args, {
               cwd: WORKSPACE,
-              env: { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(ACTUAL_PORT), RUNDOCK_CONVO_ID: convoId },
+              env: getSpawnEnv(convoId),
               stdio: ['pipe', 'pipe', 'pipe']
             });
 
@@ -2403,7 +2409,7 @@ wss.on('connection', (ws) => {
 
           const proc = spawn('claude', args, {
             cwd: WORKSPACE,
-            env: { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(ACTUAL_PORT), RUNDOCK_CONVO_ID: convoId },
+            env: getSpawnEnv(convoId),
             stdio: ['pipe', 'pipe', 'pipe']
           });
 
