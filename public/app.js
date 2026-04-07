@@ -280,9 +280,11 @@ function handle(d) {
     case 'server_info':
       if (d.version) window._rundockVersion = d.version;
       break;
-    case 'control_request':
-      if(convoId) handlePermissionRequest(d, convoId);
+    case 'control_request': {
+      const targetConvo = convoId || activeConversation?.id;
+      if(targetConvo) handlePermissionRequest(d, targetConvo);
       break;
+    }
     case 'permission_timeout': {
       const card = document.getElementById('perm-' + d.requestId);
       if (card) {
