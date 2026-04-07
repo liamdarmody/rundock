@@ -20,9 +20,33 @@ let ACTUAL_PORT = PORT; // Updated after server.listen() with the real listening
 let WORKSPACE = process.env.WORKSPACE || null;
 
 // Shared constants to avoid repetition across process spawn sites
-const DISALLOWED_TOOLS = 'Write(*.js),Write(*.jsx),Write(*.ts),Write(*.tsx),Write(*.py),Write(*.sh),Write(*.bash),Write(*.rb),Write(*.pl),Write(*.exe),Write(*.dll),Write(*.so),Edit(*.js),Edit(*.jsx),Edit(*.ts),Edit(*.tsx),Edit(*.py),Edit(*.sh),Edit(*.bash),Edit(*.rb),Edit(*.pl),Edit(*.exe)';
+const DISALLOWED_TOOLS_KNOWLEDGE = 'Write(*.js),Write(*.jsx),Write(*.ts),Write(*.tsx),Write(*.py),Write(*.sh),Write(*.bash),Write(*.rb),Write(*.pl),Write(*.exe),Write(*.dll),Write(*.so),Edit(*.js),Edit(*.jsx),Edit(*.ts),Edit(*.tsx),Edit(*.py),Edit(*.sh),Edit(*.bash),Edit(*.rb),Edit(*.pl),Edit(*.exe)';
+// Backward compat: DISALLOWED_TOOLS used by existing code paths
+const DISALLOWED_TOOLS = DISALLOWED_TOOLS_KNOWLEDGE;
 const ALLOWED_TOOLS_INTERACTIVE = 'Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,ToolSearch,Agent,Skill,mcp__*';
 const ALLOWED_TOOLS_LEGACY = 'Bash,WebFetch,WebSearch,mcp__*';
+
+// Returns the disallowed-tools string based on workspace mode.
+// Code mode: no file type restrictions (empty string).
+// Knowledge mode: block executable file writes.
+function getDisallowedTools() {
+  try {
+    const state = readState();
+    if (state.workspaceMode === 'code') return '';
+  } catch (e) { /* default to knowledge mode restrictions */ }
+  return DISALLOWED_TOOLS_KNOWLEDGE;
+}
+
+// Returns the permission mode based on workspace mode.
+// Code mode: auto-approve everything (bypassPermissions).
+// Knowledge mode: accept edits, bash goes through permission cards.
+function getPermissionMode() {
+  try {
+    const state = readState();
+    if (state.workspaceMode === 'code') return 'bypassPermissions';
+  } catch (e) { /* default to knowledge mode */ }
+  return 'acceptEdits';
+}
 
 // Pending permission requests from PreToolUse hooks (keyed by requestId).
 // Each entry holds the HTTP response object so we can resolve it when the user decides.
@@ -281,13 +305,19 @@ function findDirectReportMatch(agentId, toolInput) {
 }
 
 function buildSystemPrompt(agentData) {
+  // Read workspace mode to adjust platform rules
+  let isCodeMode = false;
+  try { isCodeMode = readState().workspaceMode === 'code'; } catch (e) { /* default knowledge */ }
+
   const baseRules = [
     'FORMATTING RULES (mandatory, apply to all output):',
     '- NEVER use em dashes (\u2014) or en dashes (\u2013) anywhere. This includes lists, headers, separators, and inline text. Wrong: "AI \u2014 your assistant". Right: "AI: your assistant". Use colons, full stops, commas, or restructure instead.',
     '- Use UK spelling throughout.',
     '',
     'PLATFORM RULES:',
-    'Rundock is a knowledge management platform focused on knowledge work. You can create and edit markdown, YAML, JSON, and text files freely. Writing or editing executable code files (.js, .ts, .py, .sh, etc.) is blocked by design.',
+    isCodeMode
+      ? 'Rundock is running in Code mode. You can create and edit any file type and run commands freely.'
+      : 'Rundock is a knowledge management platform focused on knowledge work. You can create and edit markdown, YAML, JSON, and text files freely. Writing or editing executable code files (.js, .ts, .py, .sh, etc.) is blocked by design.',
     '',
     'FILES IN .claude/ DIRECTORY:',
     'Claude Code blocks Write and Edit tools for files inside .claude/. Do NOT use Write, Edit, or Bash to create, modify, or delete files in .claude/agents/ or .claude/skills/.',
@@ -1083,6 +1113,204 @@ function muteHooks(dir) {
   }
 }
 
+// ===== EMPTY WORKSPACE DETECTION (C1) =====
+
+// Returns true if the workspace has no user-created content: no agents (besides
+// Rundock-managed ones), no CLAUDE.md, no skills. The .claude/ directory and
+// .rundock/ directory are ignored since scaffoldWorkspace() creates those.
+function isEmptyWorkspace(dir, agentList) {
+  // Check for CLAUDE.md
+  if (fs.existsSync(path.join(dir, 'CLAUDE.md'))) return false;
+
+  // Check for user-created agents (exclude platform agents injected by Rundock)
+  const userAgents = (agentList || []).filter(a =>
+    a.type !== 'platform' && a.id !== 'rundock-guide'
+  );
+  if (userAgents.length > 0) return false;
+
+  // Check for skills (either location)
+  const skillDirs = [
+    path.join(dir, '.claude', 'skills'),
+    path.join(dir, 'System', 'Playbooks'),
+  ];
+  for (const sd of skillDirs) {
+    try {
+      if (fs.existsSync(sd)) {
+        const entries = fs.readdirSync(sd, { withFileTypes: true })
+          .filter(d => d.isDirectory() && !d.name.startsWith('rundock-'));
+        if (entries.length > 0) return false;
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  return true;
+}
+
+// ===== CODE SIGNAL AUTO-DETECTION (C2) =====
+
+// File extensions and config files that indicate a code project.
+const CODE_SIGNALS = [
+  // Extensions (checked against top-level files and one level deep)
+  '.js', '.jsx', '.ts', '.tsx', '.py', '.go', '.rs', '.rb', '.java',
+  '.c', '.cpp', '.h', '.cs', '.swift', '.kt',
+];
+const CODE_CONFIG_FILES = [
+  'package.json', 'requirements.txt', 'Cargo.toml', 'go.mod',
+  'Makefile', 'CMakeLists.txt', 'pyproject.toml', 'Gemfile',
+  'pom.xml', 'build.gradle', 'tsconfig.json', '.eslintrc.json',
+  'setup.py', 'setup.cfg', 'composer.json',
+];
+
+// Scans workspace for code files. Returns 'code' or 'knowledge'.
+function detectWorkspaceMode(dir) {
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+
+    for (const entry of entries) {
+      if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+
+      if (entry.isFile()) {
+        // Check config files
+        if (CODE_CONFIG_FILES.includes(entry.name)) return 'code';
+        // Check extensions
+        const ext = path.extname(entry.name).toLowerCase();
+        if (CODE_SIGNALS.includes(ext)) return 'code';
+      }
+
+      // Scan one level deep for code files
+      if (entry.isDirectory()) {
+        try {
+          const subEntries = fs.readdirSync(path.join(dir, entry.name));
+          for (const sub of subEntries) {
+            if (CODE_CONFIG_FILES.includes(sub)) return 'code';
+            const ext = path.extname(sub).toLowerCase();
+            if (CODE_SIGNALS.includes(ext)) return 'code';
+          }
+        } catch (e) { /* skip unreadable dirs */ }
+      }
+    }
+  } catch (e) {
+    console.warn('  Code signal detection failed:', e.message);
+  }
+  return 'knowledge';
+}
+
+// ===== DEFAULT WORKSPACE SCAFFOLDING (C3) =====
+
+// Creates default folders, CLAUDE.md, and orchestrator agent for new/empty workspaces.
+// Returns { success: true } or { success: false, error: string }.
+function scaffoldDefaults(dir) {
+  const folderName = path.basename(dir);
+  const assistantName = 'Sam';
+  const assistantSlug = 'sam';
+
+  try {
+    // Create default folders
+    const folders = ['0 Inbox', '1 Notes', '2 Projects', '3 Resources', '4 Archive'];
+    for (const folder of folders) {
+      fs.mkdirSync(path.join(dir, folder), { recursive: true });
+    }
+
+    // Create CLAUDE.md
+    const claudeMd = `# ${folderName}
+
+${assistantName} is your personal assistant. Ask it anything. It works best when
+it knows how you prefer to work, so tell it your preferences as you
+go and it will remember them.
+
+## Workspace structure
+
+- **0 Inbox/**: Put things here when you don't know where they go
+- **1 Notes/**: Meeting notes, ideas, quick captures
+- **2 Projects/**: Things you're actively working on
+- **3 Resources/**: Reference material you want to keep
+- **4 Archive/**: Finished work
+
+## How to grow this workspace
+
+As you use ${assistantName}, you'll develop preferences and repeated workflows.
+When that happens, ${assistantName} will suggest creating skills to handle them
+consistently. You can also ask Doc to add specialist agents, new
+folders, or integrations at any time.
+`;
+    fs.writeFileSync(path.join(dir, 'CLAUDE.md'), claudeMd);
+
+    // Create orchestrator agent file
+    const agentsDir = path.join(dir, '.claude', 'agents');
+    fs.mkdirSync(agentsDir, { recursive: true });
+
+    const agentContent = `---
+name: ${assistantSlug}
+displayName: ${assistantName}
+role: Personal Assistant
+type: orchestrator
+order: 0
+icon: brain
+colour: "#6366F1"
+model: sonnet
+description: Your personal assistant. Helps you get things done.
+prompts:
+  - Draft an email I've been putting off
+  - Help me plan my week
+  - Break down a problem I'm stuck on
+---
+
+You are ${assistantName}, a personal assistant.
+
+## How you work
+
+- Default to action. Ask only when getting it wrong costs more than
+  clarifying.
+- Lead with the answer, then explain.
+- Be direct. No filler, no buzzwords, no corporate cheerfulness.
+- Adapt tone to context: formal for stakeholder comms, conversational
+  for brainstorming, concise for quick questions.
+
+## Workspace
+
+Files live in a simple folder structure:
+- **0 Inbox/**: Things that haven't been sorted yet
+- **1 Notes/**: Meeting notes, ideas, quick captures
+- **2 Projects/**: Active work
+- **3 Resources/**: Reference material
+- **4 Archive/**: Finished work
+
+When creating files, put them in the most appropriate folder. If
+unsure, use 0 Inbox/.
+
+## Growing your workspace
+
+As you work together, you'll develop preferences and repeated
+workflows. When you notice the user asking for the same type of work
+three or more times, suggest creating a skill for it:
+
+"You've asked me to [describe pattern] a few times now. Want me to
+save your preferences as a skill so I handle it consistently every
+time?"
+
+If the user says yes, hand off to Doc to create the skill.
+
+If the user wants to add specialist agents, new folders, integrations,
+or customise how you work, hand off to Doc.
+
+## What you don't do
+
+- Don't create skills, agents, or modify workspace configuration
+  yourself. That's Doc's job.
+- Don't impose structure the user didn't ask for.
+- Don't reference tools, integrations, or capabilities that aren't
+  set up yet.
+`;
+    fs.writeFileSync(path.join(agentsDir, `${assistantSlug}.md`), agentContent);
+
+    console.log(`  [Scaffold] Created default workspace: ${folders.length} folders, CLAUDE.md, ${assistantSlug} agent`);
+    return { success: true };
+  } catch (e) {
+    console.error(`  [Scaffold] Default workspace creation failed: ${e.message}`);
+    return { success: false, error: e.message };
+  }
+}
+
 // ===== WORKSPACE SCAFFOLD =====
 
 // Rundock-owned files: synced from scaffold/ on every workspace open.
@@ -1545,10 +1773,12 @@ function handleScopeReturn(specialistEntry, convoId) {
   const processId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const systemPrompt = buildSystemPrompt(orchestrator);
 
+  const disallowed = getDisallowedTools();
+  const permMode = getPermissionMode();
   const args = ['--output-format', 'stream-json', '--input-format', 'stream-json',
-    '--verbose', '--include-partial-messages', '--permission-mode', 'acceptEdits',
+    '--verbose', '--include-partial-messages', '--permission-mode', permMode,
     '--allowed-tools', ALLOWED_TOOLS_INTERACTIVE,
-    '--disallowed-tools', DISALLOWED_TOOLS,
+    ...(disallowed ? ['--disallowed-tools', disallowed] : []),
     '--append-system-prompt', systemPrompt,
     '--agent', orchestrator.name];
 
@@ -1674,10 +1904,12 @@ function handleDelegation(msg, processes) {
   const systemPrompt = buildSystemPrompt(targetAgent);
   const fullPrompt = systemPrompt + '\n\n' + delegationContext;
 
+  const delegateDisallowed = getDisallowedTools();
+  const delegatePermMode = getPermissionMode();
   const delegateArgs = ['--output-format', 'stream-json', '--input-format', 'stream-json',
-    '--verbose', '--include-partial-messages', '--permission-mode', 'acceptEdits',
+    '--verbose', '--include-partial-messages', '--permission-mode', delegatePermMode,
     '--allowed-tools', ALLOWED_TOOLS_INTERACTIVE,
-    '--disallowed-tools', DISALLOWED_TOOLS,
+    ...(delegateDisallowed ? ['--disallowed-tools', delegateDisallowed] : []),
     '--append-system-prompt', fullPrompt,
     '--agent', targetAgent.name];
 
@@ -1845,10 +2077,12 @@ function handleDelegation(msg, processes) {
       const parentAgentData = parentAgentList.find(a => a.id === parentAgentId || a.name === parentAgentId);
       const parentSystemPrompt = parentAgentData ? buildSystemPrompt(parentAgentData) : '';
 
+      const resumeDisallowed = getDisallowedTools();
+      const resumePermMode = getPermissionMode();
       const resumeArgs = ['--output-format', 'stream-json', '--input-format', 'stream-json',
-        '--verbose', '--include-partial-messages', '--permission-mode', 'acceptEdits',
+        '--verbose', '--include-partial-messages', '--permission-mode', resumePermMode,
         '--allowed-tools', ALLOWED_TOOLS_INTERACTIVE,
-        '--disallowed-tools', DISALLOWED_TOOLS];
+        ...(resumeDisallowed ? ['--disallowed-tools', resumeDisallowed] : [])];
       if (parentSystemPrompt) resumeArgs.push('--append-system-prompt', parentSystemPrompt);
       if (parentAgentData?.name) resumeArgs.push('--agent', parentAgentData.name);
       if (parentSessionId) resumeArgs.push('--resume', parentSessionId);
@@ -2020,11 +2254,13 @@ wss.on('connection', (ws) => {
               || agentList.find(a => a.fileName && a.fileName.replace('.md', '') === requestedAgent);
 
             const systemPrompt = buildSystemPrompt(agentData);
+            const chatDisallowed = getDisallowedTools();
+            const chatPermMode = getPermissionMode();
 
             const args = ['--output-format', 'stream-json', '--input-format', 'stream-json',
-              '--verbose', '--include-partial-messages', '--permission-mode', 'acceptEdits',
+              '--verbose', '--include-partial-messages', '--permission-mode', chatPermMode,
               '--allowed-tools', ALLOWED_TOOLS_INTERACTIVE,
-              '--disallowed-tools', DISALLOWED_TOOLS,
+              ...(chatDisallowed ? ['--disallowed-tools', chatDisallowed] : []),
               '--append-system-prompt', systemPrompt];
 
             // Resume existing session if we have a session ID
@@ -2141,10 +2377,12 @@ wss.on('connection', (ws) => {
             processes.delete(convoId);
           }
 
+          const legacyDisallowed = getDisallowedTools();
+          const legacyPermMode = getPermissionMode();
           const args = ['--print', '--output-format', 'stream-json', '--input-format', 'stream-json',
-            '--verbose', '--include-partial-messages', '--permission-mode', 'acceptEdits',
+            '--verbose', '--include-partial-messages', '--permission-mode', legacyPermMode,
             '--allowed-tools', ALLOWED_TOOLS_LEGACY,
-            '--disallowed-tools', DISALLOWED_TOOLS,
+            ...(legacyDisallowed ? ['--disallowed-tools', legacyDisallowed] : []),
             '--append-system-prompt', 'FORMATTING RULES (mandatory, apply to all output):\n- NEVER use em dashes (—) or en dashes (–) anywhere. This includes lists, headers, separators, and inline text. Wrong: "AI — your assistant". Right: "AI: your assistant". Use colons, full stops, commas, or restructure instead.\n- Use UK spelling throughout.\n\nPLATFORM RULES:\nRundock is a knowledge management platform. You can create and edit markdown, YAML, JSON, and text files. Writing or editing executable code files (.js, .ts, .py, .sh, etc.) is blocked by design. Destructive commands (rm, sudo, chmod) are also blocked. If a user asks you to do something that hits these restrictions, explain that Rundock is designed for knowledge work, not software development, and suggest an alternative approach using supported file types. Never offer to change permission settings or suggest workarounds to bypass these restrictions.'];
 
           if (msg.sessionId) {
@@ -2334,13 +2572,37 @@ wss.on('connection', (ws) => {
           chatProcesses.clear();
           WORKSPACE = dir;
           saveRecentWorkspace(dir);
-          try { scaffoldWorkspace(dir); } catch (e) { console.warn('Scaffold warning:', e.message); }
-          console.log(`  Workspace changed to: ${WORKSPACE}`);
+
+          // Detect empty workspace before scaffolding (scaffoldWorkspace adds Doc/skills)
           let agentList = [];
           try { agentList = discoverAgents(); } catch (e) { console.warn('  Agent discovery failed:', e.message); }
+          const isEmpty = isEmptyWorkspace(dir, agentList);
+
+          // Path C: empty workspace gets default folders, CLAUDE.md, orchestrator
+          let scaffoldError = null;
+          if (isEmpty) {
+            const result = scaffoldDefaults(dir);
+            if (!result.success) scaffoldError = result.error;
+            invalidateAgentCache();
+          }
+
+          try { scaffoldWorkspace(dir); } catch (e) { console.warn('Scaffold warning:', e.message); }
+          console.log(`  Workspace changed to: ${WORKSPACE} (empty=${isEmpty})`);
+
+          // Re-discover agents after scaffolding (default agent now exists for Path C)
+          try { agentList = discoverAgents(); } catch (e) { console.warn('  Agent discovery failed:', e.message); }
+
+          // Auto-detect and store workspace mode
+          const state = readState();
+          if (!state.workspaceMode) {
+            state.workspaceMode = detectWorkspaceMode(dir);
+            writeState(state);
+            console.log(`  Workspace mode auto-detected: ${state.workspaceMode}`);
+          }
+
           let analysis = null;
           try { analysis = analyzeWorkspace(dir, agentList); } catch (e) { console.warn('  Workspace analysis failed:', e.message); }
-          ws.send(JSON.stringify({ type: 'workspace_set', path: WORKSPACE, analysis }));
+          ws.send(JSON.stringify({ type: 'workspace_set', path: WORKSPACE, analysis, isEmpty, workspaceMode: state.workspaceMode, scaffoldError }));
           ws.send(JSON.stringify({ type: 'agents', agents: agentList }));
           try { ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) })); } catch (e) { console.warn('  File tree failed:', e.message); }
         } else {
@@ -2363,11 +2625,24 @@ wss.on('connection', (ws) => {
             chatProcesses.clear();
             WORKSPACE = dir;
             saveRecentWorkspace(dir);
+
+            // New workspace is always empty: scaffold defaults
+            let scaffoldError = null;
+            const result = scaffoldDefaults(dir);
+            if (!result.success) scaffoldError = result.error;
+
             try { scaffoldWorkspace(dir); } catch (e) { console.warn('Scaffold warning:', e.message); }
             console.log(`  Workspace created: ${WORKSPACE}`);
+
             const agentList = discoverAgents();
             const analysis = analyzeWorkspace(dir, agentList);
-            ws.send(JSON.stringify({ type: 'workspace_set', path: WORKSPACE, analysis }));
+
+            // Auto-detect and store workspace mode
+            const state = readState();
+            state.workspaceMode = detectWorkspaceMode(dir);
+            writeState(state);
+
+            ws.send(JSON.stringify({ type: 'workspace_set', path: WORKSPACE, analysis, isEmpty: true, workspaceMode: state.workspaceMode, scaffoldError }));
             ws.send(JSON.stringify({ type: 'agents', agents: agentList }));
             ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) }));
           } catch (e) {
@@ -2390,6 +2665,25 @@ wss.on('connection', (ws) => {
         let skillList = [];
         try { skillList = discoverSkills(); } catch (e) { console.warn('  Skill discovery failed:', e.message); }
         ws.send(JSON.stringify({ type: 'skills', skills: skillList }));
+      }
+
+      // ===== WORKSPACE MODE =====
+
+      if (msg.type === 'set_workspace_mode') {
+        const mode = msg.mode;
+        if (mode !== 'code' && mode !== 'knowledge') {
+          ws.send(JSON.stringify({ type: 'workspace_error', message: 'Invalid workspace mode' }));
+        } else {
+          try {
+            const state = readState();
+            state.workspaceMode = mode;
+            writeState(state);
+            console.log(`  Workspace mode changed to: ${mode}`);
+            ws.send(JSON.stringify({ type: 'workspace_mode_changed', mode }));
+          } catch (e) {
+            ws.send(JSON.stringify({ type: 'workspace_error', message: 'Could not update workspace mode: ' + e.message }));
+          }
+        }
       }
 
       // ===== SESSION PERSISTENCE =====
