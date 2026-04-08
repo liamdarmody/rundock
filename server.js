@@ -2216,6 +2216,20 @@ wss.on('connection', (ws) => {
   ws.send(JSON.stringify({ type: 'active_processes', processes: active }));
   ws.send(JSON.stringify({ type: 'server_info', version: PKG_VERSION }));
 
+  // Re-send pending permission requests so permission cards reappear after reconnect
+  for (const [requestId, pending] of pendingPermissionRequests) {
+    ws.send(JSON.stringify({
+      type: 'control_request',
+      request_id: requestId,
+      request: {
+        subtype: 'can_use_tool',
+        tool_name: pending.toolName,
+        input: pending.toolInput || {}
+      },
+      _conversationId: pending.conversationId
+    }));
+  }
+
   // Alias for handlers that still reference local `processes`
   const processes = chatProcesses;
 
