@@ -1826,6 +1826,11 @@ function handleActiveProcesses(active) {
     const state = getConvoState(proc.conversationId);
     if (!state.isProcessing && convo) {
       state.activeProcessId = proc.processId;
+      // Restore active agent and delegation state from server
+      if (proc.agentId) {
+        state.activeAgentId = proc.agentId;
+        state.delegationActive = !!proc.delegation;
+      }
       // Restore any response text accumulated on the server while we were disconnected
       if (proc.responseText) {
         state.streamingRawText = proc.responseText;
