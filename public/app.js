@@ -906,18 +906,22 @@ function renderOrgChart() {
 
     if (hasContext && a) {
       h += '<div class="org-empty-state">';
-      h += `<div class="empty-title">Your Workspace</div>`;
+      // Identity: show workspace name from analysis, fall back to folder name
+      const identityName = a.identity.suggestedName || currentWorkspacePath?.split('/').pop() || 'Your Workspace';
+      const tagline = a.identity.suggestedTagline || a.identity.suggestedRole || 'Ready to set up your team';
+      h += `<div class="empty-title" style="font-size:var(--heading)">${esc(identityName)}</div>`;
+      h += `<div style="color:var(--text-2);font-size:var(--body);margin-bottom:12px">${esc(tagline)}</div>`;
+      // Stats line
       const stats = [];
       if (a.skills.total > 0) stats.push(`${a.skills.total} skill${a.skills.total !== 1 ? 's' : ''}`);
       if (a.structure.pattern !== 'unknown') {
         const acronyms = new Set(['para']);
         const patternLabel = a.structure.pattern.split('-').map(w => acronyms.has(w.toLowerCase()) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-        stats.push(patternLabel + ' structure');
+        stats.push(patternLabel);
       }
       const integrationCount = a.integrations.mcpReferences.length + a.integrations.configuredServers.length + a.integrations.mentionedTools.length;
       if (integrationCount > 0) stats.push(`${integrationCount} integration${integrationCount !== 1 ? 's' : ''}`);
       if (stats.length) h += `<div style="color:var(--text-2);font-size:var(--caption);margin-bottom:16px">${stats.join(' &middot; ')}</div>`;
-      h += '<div style="color:var(--text-2);font-size:var(--body);max-width:320px;text-align:center;line-height:1.6">Doc can create your agent team based on what\'s here. Skills will be automatically grouped and assigned.</div>';
       if (guide) {
         h += `<button class="empty-cta" style="margin-top:12px" onclick="startSetupConversation()">Set up your team</button>`;
       }
@@ -1122,7 +1126,7 @@ function handlePersistedConversations(persisted) {
   handleActiveProcesses(pendingActiveProcesses || []);
   pendingActiveProcesses = null;
 
-  // Auto-navigate: processing > pinned > new conversation
+  // Auto-navigate: processing > pinned > path detection > new conversation
   const processing = conversations.find(c => getConvoState(c.id).isProcessing);
   if (processing) {
     openConversation(processing.id);
@@ -1133,7 +1137,22 @@ function handlePersistedConversations(persisted) {
       openConversation(pinned[0].id);
       switchNav('conversations');
     } else if (!activeConversation) {
-      newConversation();
+      // Path detection: A vs B vs C routing
+      const teamAgents = getTeamAgents();
+      const a = workspaceAnalysis;
+      const hasContext = a && (a.identity.sources.length > 0 || a.skills.total > 0);
+
+      if (teamAgents.length > 0) {
+        // Path A: has team agents, go straight to dashboard
+        switchNav('team');
+      } else if (hasContext && !workspaceIsEmpty) {
+        // Path B: existing workspace with context but no team agents
+        // Show the team tab which renders the analysis card
+        switchNav('team');
+      } else {
+        // Path C: new/empty workspace
+        newConversation();
+      }
     }
   }
 
