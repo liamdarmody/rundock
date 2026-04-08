@@ -43,6 +43,27 @@ function getPermissionMode() {
   return 'acceptEdits';
 }
 
+// Returns --bare startup optimization args. --bare skips hooks, LSP, plugin sync,
+// auto-memory, prefetches, and CLAUDE.md auto-discovery for faster subprocess startup.
+// We restore hooks and CLAUDE.md via explicit flags so the permission system still works.
+function getBareArgs() {
+  if (!WORKSPACE) return [];
+  const args = ['--bare'];
+  // Restore CLAUDE.md discovery for the workspace
+  args.push('--add-dir', WORKSPACE);
+  // Restore hooks (permission system) from settings.local.json
+  const settingsPath = path.join(WORKSPACE, '.claude', 'settings.local.json');
+  if (fs.existsSync(settingsPath)) {
+    args.push('--settings', settingsPath);
+  }
+  // Restore MCP server access from .mcp.json
+  const mcpPath = path.join(WORKSPACE, '.mcp.json');
+  if (fs.existsSync(mcpPath)) {
+    args.push('--mcp-config', mcpPath);
+  }
+  return args;
+}
+
 // Returns spawn env with workspace mode flag for the permission hook.
 function getSpawnEnv(convoId) {
   const env = { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(ACTUAL_PORT) };
@@ -745,8 +766,9 @@ function executeRoutine(agent, routine, key) {
   // Notify connected clients
   broadcastRoutineUpdate();
 
-  // Routines run unattended (no user to approve), so bypass permissions
-  const args = ['--print', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
+  // Routines run unattended (no user to approve), so bypass permissions.
+  // --bare skips startup overhead (hooks, LSP, plugins, CLAUDE.md discovery).
+  const args = ['--bare', '--print', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
   if (agent.id !== 'default') args.push('--agent', agent.id);
   args.push(routine.prompt);
 
@@ -1781,7 +1803,7 @@ function handleScopeReturn(specialistEntry, convoId) {
 
   const disallowed = getDisallowedTools();
   const permMode = getPermissionMode();
-  const args = ['--output-format', 'stream-json', '--input-format', 'stream-json',
+  const args = [...getBareArgs(), '--output-format', 'stream-json', '--input-format', 'stream-json',
     '--verbose', '--include-partial-messages', '--permission-mode', permMode,
     '--allowed-tools', ALLOWED_TOOLS_INTERACTIVE,
     ...(disallowed ? ['--disallowed-tools', disallowed] : []),
@@ -1912,7 +1934,7 @@ function handleDelegation(msg, processes) {
 
   const delegateDisallowed = getDisallowedTools();
   const delegatePermMode = getPermissionMode();
-  const delegateArgs = ['--output-format', 'stream-json', '--input-format', 'stream-json',
+  const delegateArgs = [...getBareArgs(), '--output-format', 'stream-json', '--input-format', 'stream-json',
     '--verbose', '--include-partial-messages', '--permission-mode', delegatePermMode,
     '--allowed-tools', ALLOWED_TOOLS_INTERACTIVE,
     ...(delegateDisallowed ? ['--disallowed-tools', delegateDisallowed] : []),
@@ -2085,7 +2107,7 @@ function handleDelegation(msg, processes) {
 
       const resumeDisallowed = getDisallowedTools();
       const resumePermMode = getPermissionMode();
-      const resumeArgs = ['--output-format', 'stream-json', '--input-format', 'stream-json',
+      const resumeArgs = [...getBareArgs(), '--output-format', 'stream-json', '--input-format', 'stream-json',
         '--verbose', '--include-partial-messages', '--permission-mode', resumePermMode,
         '--allowed-tools', ALLOWED_TOOLS_INTERACTIVE,
         ...(resumeDisallowed ? ['--disallowed-tools', resumeDisallowed] : [])];
@@ -2263,7 +2285,7 @@ wss.on('connection', (ws) => {
             const chatDisallowed = getDisallowedTools();
             const chatPermMode = getPermissionMode();
 
-            const args = ['--output-format', 'stream-json', '--input-format', 'stream-json',
+            const args = [...getBareArgs(), '--output-format', 'stream-json', '--input-format', 'stream-json',
               '--verbose', '--include-partial-messages', '--permission-mode', chatPermMode,
               '--allowed-tools', ALLOWED_TOOLS_INTERACTIVE,
               ...(chatDisallowed ? ['--disallowed-tools', chatDisallowed] : []),
@@ -2385,7 +2407,7 @@ wss.on('connection', (ws) => {
 
           const legacyDisallowed = getDisallowedTools();
           const legacyPermMode = getPermissionMode();
-          const args = ['--print', '--output-format', 'stream-json', '--input-format', 'stream-json',
+          const args = [...getBareArgs(), '--print', '--output-format', 'stream-json', '--input-format', 'stream-json',
             '--verbose', '--include-partial-messages', '--permission-mode', legacyPermMode,
             '--allowed-tools', ALLOWED_TOOLS_LEGACY,
             ...(legacyDisallowed ? ['--disallowed-tools', legacyDisallowed] : []),
