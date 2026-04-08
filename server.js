@@ -3190,9 +3190,13 @@ function discoverSkills(existingAgents) {
           if (agent.type !== 'platform' && slug.startsWith('rundock-')) continue;
           const body = agentBody[agent.id] || '';
           if (slugPattern.test(body)) {
-            assignedAgents.push({ id: agent.id, name: agent.displayName, colour: agent.colour, icon: agent.icon });
+            assignedAgents.push({ id: agent.id, name: agent.displayName, role: agent.role || '', colour: agent.colour, icon: agent.icon });
           }
         }
+
+        // Extract body content (after frontmatter) for instructions display
+        const bodyMatch = content.match(/^---\n[\s\S]*?\n---\n([\s\S]*)/);
+        const instructions = bodyMatch ? bodyMatch[1].trim() : '';
 
         skills.push({
           id: dir.name,
@@ -3203,6 +3207,7 @@ function discoverSkills(existingAgents) {
           sourcePath: `${source.sourceLabel}/${dir.name}/`,
           filePath: `${source.sourceLabel}/${dir.name}/${source.defFile}`,
           assignedAgents,
+          instructions,
           status: assignedAgents.length > 0 ? 'assigned' : 'unassigned'
         });
       } catch (e) {
@@ -3211,11 +3216,8 @@ function discoverSkills(existingAgents) {
     }
   }
 
-  // Sort: assigned first, then alphabetical
-  skills.sort((a, b) => {
-    if (a.status !== b.status) return a.status === 'assigned' ? -1 : 1;
-    return a.name.localeCompare(b.name);
-  });
+  // Sort alphabetically
+  skills.sort((a, b) => a.name.localeCompare(b.name));
 
   return skills;
 }
