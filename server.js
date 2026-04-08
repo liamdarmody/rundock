@@ -772,7 +772,7 @@ function executeRoutine(agent, routine, key) {
   if (agent.id !== 'default') args.push('--agent', agent.id);
   args.push(routine.prompt);
 
-  const proc = spawn('claude', args, {
+  const proc = spawnClaude(args, {
     cwd: WORKSPACE,
     env: getSpawnEnv(null),
     stdio: ['ignore', 'pipe', 'pipe']
@@ -1812,7 +1812,7 @@ function handleScopeReturn(specialistEntry, convoId) {
 
   console.log(`[ScopeReturn] convo=${convoId} from=${specialistEntry.agentId} to=${orchestrator.id} proc=${processId}`);
 
-  const proc = spawn('claude', args, {
+  const proc = spawnClaude(args, {
     cwd: WORKSPACE,
     env: getSpawnEnv(convoId),
     stdio: ['pipe', 'pipe', 'pipe']
@@ -1943,7 +1943,7 @@ function handleDelegation(msg, processes) {
 
   console.log(`[Delegate] convo=${convoId} from=${originalAgentId} to=${targetAgent.id} proc=${delegateProcessId}`);
 
-  const delegateProc = spawn('claude', delegateArgs, {
+  const delegateProc = spawnClaude(delegateArgs, {
     cwd: WORKSPACE,
     env: getSpawnEnv(convoId),
     stdio: ['pipe', 'pipe', 'pipe']
@@ -2116,7 +2116,7 @@ function handleDelegation(msg, processes) {
       if (parentSessionId) resumeArgs.push('--resume', parentSessionId);
 
       const resumeProcessId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-      const resumeProc = spawn('claude', resumeArgs, {
+      const resumeProc = spawnClaude(resumeArgs, {
         cwd: WORKSPACE,
         env: getSpawnEnv(convoId),
         stdio: ['pipe', 'pipe', 'pipe']
@@ -2317,7 +2317,7 @@ wss.on('connection', (ws) => {
 
             console.log(`[Chat] convo=${convoId} proc=${processId} agent=${msg.agent} sessionId=${msg.sessionId||'new'} mode=interactive args=${args.filter(a=>a.startsWith('--')).join(' ')}`);
 
-            const proc = spawn('claude', args, {
+            const proc = spawnClaude(args, {
               cwd: WORKSPACE,
               env: getSpawnEnv(convoId),
               stdio: ['pipe', 'pipe', 'pipe']
@@ -2443,7 +2443,7 @@ wss.on('connection', (ws) => {
 
           console.log(`[Chat] convo=${convoId} proc=${processId} agent=${msg.agent} sessionId=${msg.sessionId||'new'} mode=legacy args=${args.filter(a=>a.startsWith('--')).join(' ')}`);
 
-          const proc = spawn('claude', args, {
+          const proc = spawnClaude(args, {
             cwd: WORKSPACE,
             env: getSpawnEnv(convoId),
             stdio: ['pipe', 'pipe', 'pipe']
@@ -2611,10 +2611,11 @@ wss.on('connection', (ws) => {
         const dir = msg.path;
         if (dir && fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
           // Kill all running processes when switching workspace
-          for (const [, entry] of chatProcesses) entry.process.kill();
-          chatProcesses.clear();
+          killAllChildren();
           WORKSPACE = dir;
           saveRecentWorkspace(dir);
+          // Clean up orphaned processes from previous sessions in this workspace
+          cleanOrphanedProcesses();
 
           // Detect empty workspace before scaffolding (scaffoldWorkspace adds Doc/skills)
           let agentList = [];
@@ -2664,8 +2665,7 @@ wss.on('connection', (ws) => {
             fs.mkdirSync(dir, { recursive: true });
             fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
             // Kill all running processes when creating/switching workspace
-            for (const [, entry] of chatProcesses) entry.process.kill();
-            chatProcesses.clear();
+            killAllChildren();
             WORKSPACE = dir;
             saveRecentWorkspace(dir);
 
@@ -3272,6 +3272,109 @@ function getFileTree(dir, prefix = '') {
   return entries;
 }
 
+// ===== PROCESS CLEANUP (S4) =====
+
+// PID file: track all spawned Claude Code process PIDs so orphans can be cleaned up
+// on restart if the parent crashes without running exit handlers.
+function pidFilePath() {
+  if (!WORKSPACE) return null;
+  return path.join(rundockDir(), 'child-pids.json');
+}
+
+function loadPidFile() {
+  const p = pidFilePath();
+  if (!p) return [];
+  try { return JSON.parse(fs.readFileSync(p, 'utf-8')); } catch (e) { return []; }
+}
+
+function savePidFile(pids) {
+  const p = pidFilePath();
+  if (!p) return;
+  try {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify(pids));
+  } catch (e) {}
+}
+
+function registerChildPid(pid) {
+  const pids = loadPidFile();
+  if (!pids.includes(pid)) {
+    pids.push(pid);
+    savePidFile(pids);
+  }
+}
+
+function unregisterChildPid(pid) {
+  const pids = loadPidFile().filter(p => p !== pid);
+  savePidFile(pids);
+}
+
+// Kill all tracked child processes (called on exit)
+function killAllChildren() {
+  for (const [, entry] of chatProcesses) {
+    if (!entry.exited) {
+      try { entry.process.kill('SIGTERM'); } catch (e) {}
+    }
+  }
+  chatProcesses.clear();
+  // Clear PID file since we handled cleanup
+  savePidFile([]);
+}
+
+// Clean up orphaned processes from a previous crash (PIDs left in the file)
+function cleanOrphanedProcesses() {
+  const pids = loadPidFile();
+  if (pids.length === 0) return;
+  let cleaned = 0;
+  for (const pid of pids) {
+    try {
+      // Check if process exists (signal 0 doesn't kill, just checks)
+      process.kill(pid, 0);
+      // Process exists: kill it
+      process.kill(pid, 'SIGTERM');
+      cleaned++;
+    } catch (e) {
+      // Process doesn't exist: already gone
+    }
+  }
+  if (cleaned > 0) {
+    console.log(`[Cleanup] Killed ${cleaned} orphaned Claude Code process(es) from previous session`);
+  }
+  savePidFile([]);
+}
+
+// Spawn a Claude Code process with PID tracking for crash cleanup.
+// Drop-in replacement for spawn('claude', ...) that registers/unregisters PIDs.
+function spawnClaude(args, options) {
+  const proc = spawn('claude', args, options);
+  if (proc.pid) {
+    registerChildPid(proc.pid);
+    proc.on('close', () => unregisterChildPid(proc.pid));
+  }
+  return proc;
+}
+
+// Graceful shutdown: kill children on exit signals.
+// SIGTERM/SIGINT: graceful (SIGTERM to children, then exit).
+// 'exit': last resort, use SIGKILL since we can't wait for graceful shutdown.
+let _shuttingDown = false;
+function gracefulShutdown() {
+  if (_shuttingDown) return;
+  _shuttingDown = true;
+  killAllChildren();
+  process.exit(0);
+}
+process.on('SIGTERM', gracefulShutdown);
+process.on('SIGINT', gracefulShutdown);
+process.on('exit', () => {
+  // 'exit' handler must be synchronous. Kill any stragglers with SIGKILL.
+  for (const [, entry] of chatProcesses) {
+    if (!entry.exited) {
+      try { entry.process.kill('SIGKILL'); } catch (e) {}
+    }
+  }
+});
+
 // ===== START =====
 
 function startServer(options = {}) {
@@ -3280,6 +3383,8 @@ function startServer(options = {}) {
     server.listen(port, () => {
       const actualPort = server.address().port;
       ACTUAL_PORT = actualPort;
+      // Clean up orphaned processes from a previous crash
+      if (WORKSPACE) cleanOrphanedProcesses();
       console.log(`\n  Rundock running at http://localhost:${actualPort}`);
       if (WORKSPACE) {
         saveRecentWorkspace(WORKSPACE);
