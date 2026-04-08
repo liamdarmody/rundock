@@ -1394,9 +1394,10 @@ function scaffoldWorkspace(dir) {
     // Auto-mute sound hooks for Rundock
     muteHooks(dir);
 
-    // Configure PreToolUse permission hook in .claude/settings.local.json.
-    // This makes Claude Code call our hook script before executing Bash commands,
+    // Configure PreToolUse permission hooks in .claude/settings.local.json.
+    // This makes Claude Code call our hook script before executing tools,
     // which bridges to the Rundock browser UI for user approval.
+    // Separate matchers for Bash commands and MCP tools (mcp__*).
     const hookScript = path.join(__dirname, 'scripts', 'permission-hook.js');
     const settingsLocalPath = path.join(dir, '.claude', 'settings.local.json');
     let settingsLocal = {};
@@ -1406,27 +1407,37 @@ function scaffoldWorkspace(dir) {
     if (!settingsLocal.hooks) settingsLocal.hooks = {};
     if (!settingsLocal.hooks.PreToolUse) settingsLocal.hooks.PreToolUse = [];
 
-    const hasPermHook = settingsLocal.hooks.PreToolUse.some(e =>
-      (e.hooks || []).some(h => h.command && h.command.includes('permission-hook'))
+    const hookEntry = (matcher) => ({
+      matcher,
+      hooks: [{
+        type: 'command',
+        command: `node "${hookScript}"`,
+        timeout: 300
+      }]
+    });
+
+    const hasMatcher = (matcher) => settingsLocal.hooks.PreToolUse.some(e =>
+      e.matcher === matcher && (e.hooks || []).some(h => h.command && h.command.includes('permission-hook'))
     );
-    if (!hasPermHook) {
-      settingsLocal.hooks.PreToolUse.push({
-        matcher: 'Bash',
-        hooks: [{
-          type: 'command',
-          command: `node "${hookScript}"`,
-          timeout: 300
-        }]
-      });
+
+    let dirty = false;
+    if (!hasMatcher('Bash')) {
+      settingsLocal.hooks.PreToolUse.push(hookEntry('Bash'));
+      dirty = true;
+    }
+    if (!hasMatcher('mcp__.*')) {
+      settingsLocal.hooks.PreToolUse.push(hookEntry('mcp__.*'));
+      dirty = true;
     }
     // Clean up Write/Edit hook entries if they exist from a previous version
     const before = settingsLocal.hooks.PreToolUse.length;
     settingsLocal.hooks.PreToolUse = settingsLocal.hooks.PreToolUse.filter(e =>
       !(e.matcher === 'Write' || e.matcher === 'Edit')
     );
-    if (!hasPermHook || settingsLocal.hooks.PreToolUse.length < before) {
+    if (settingsLocal.hooks.PreToolUse.length < before) dirty = true;
+    if (dirty) {
       fs.writeFileSync(settingsLocalPath, JSON.stringify(settingsLocal, null, 2));
-      console.log('  [Scaffold] Configured permission hook in .claude/settings.local.json');
+      console.log('  [Scaffold] Configured permission hooks in .claude/settings.local.json');
     }
   } catch (e) {
     console.warn(`  Warning: scaffold failed for ${dir}: ${e.message}`);
@@ -2284,10 +2295,10 @@ wss.on('connection', (ws) => {
             const processId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
             // Interactive chat: bidirectional stream-json, no --print.
-            // Permission flow: PreToolUse hook (configured in workspace .claude/settings.local.json)
-            // catches Bash commands, POSTs to /api/permission-request, Rundock shows a permission
-            // card in the browser, user clicks Allow/Deny, hook returns the decision to Claude Code.
-            // Read-only and knowledge-work tools are in allowed-tools (auto-approved, no card).
+            // Permission flow: PreToolUse hooks (configured in workspace .claude/settings.local.json)
+            // catch Bash commands and MCP tools, POST to /api/permission-request, Rundock shows a
+            // permission card in the browser, user clicks Allow/Deny, hook returns the decision to
+            // Claude Code. Read-only and knowledge-work tools are in allowed-tools (auto-approved, no card).
 
             // Look up agent data first so we can build a dynamic system prompt
             const agentList = discoverAgents();
