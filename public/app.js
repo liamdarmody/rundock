@@ -130,6 +130,11 @@ function handle(d) {
       if (errEl) { errEl.textContent = d.message; errEl.style.display = 'block'; }
       break;
     }
+    case 'workspace_mode_changed':
+      workspaceMode = d.mode;
+      // Re-render settings if currently viewing workspace settings
+      if (currentView === 'settings') renderSettingsSection('workspace');
+      break;
     case 'needs_workspace': showView('workspace'); break;
     case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesSidebar(); renderConvoList(); break;
     case 'skills': skills=d.skills; skillsLoaded=true; renderSkills(); break;
@@ -2766,6 +2771,10 @@ function renderSettingsSection(section) {
   if (section === 'workspace') {
     const agentCount = agents.filter(a => a.status === 'onTeam').length;
     const skillCount = skills.length;
+    const isCode = workspaceMode === 'code';
+    const modeDesc = isCode
+      ? 'Agents can write any file type and run commands without approval.'
+      : 'Agents work with documents only. Terminal commands need approval.';
     el.innerHTML = `<div class="settings-section-title">Workspace</div>
       <div class="settings-card">
         <div class="settings-row">
@@ -2779,6 +2788,16 @@ function renderSettingsSection(section) {
         <div class="settings-row">
           <span class="settings-label">Skills</span>
           <span class="settings-value">${skillCount}</span>
+        </div>
+      </div>
+      <div class="settings-card">
+        <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:12px">
+          <span class="settings-label">Workspace mode</span>
+          <div class="mode-toggle">
+            <button class="mode-toggle-btn${isCode ? '' : ' active'}" data-mode="knowledge" onclick="setWorkspaceMode('knowledge')">Knowledge mode</button>
+            <button class="mode-toggle-btn${isCode ? ' active' : ''}" data-mode="code" onclick="setWorkspaceMode('code')">Code mode</button>
+          </div>
+          <div class="mode-description" id="mode-description">${modeDesc}</div>
         </div>
       </div>
       <button class="settings-btn" onclick="changeWorkspace()">Change workspace</button>`;
@@ -2804,6 +2823,11 @@ function renderSettingsSection(section) {
         </div>
       </div>`;
   }
+}
+
+function setWorkspaceMode(mode) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: 'set_workspace_mode', mode }));
 }
 
 function changeWorkspace() {
