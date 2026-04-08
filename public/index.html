@@ -423,6 +423,11 @@ body.light .skill-row:hover { background: rgba(0,0,0,0.03); }
 .settings-btn:hover { border-color: var(--accent); color: var(--accent); }
 .settings-btn-primary { padding: 6px 14px; font-size: var(--caption); font-weight: 600; border-radius: 6px; background: var(--accent); color: white; border: none; transition: all 0.15s ease; cursor: pointer; }
 .settings-btn-primary:hover { background: var(--accent-hover); }
+.mode-toggle { display: flex; background: var(--bg); border-radius: 8px; padding: 3px; gap: 2px; }
+.mode-toggle-btn { flex: 1; padding: 8px 16px; font-size: var(--caption); font-weight: 600; border-radius: 6px; background: transparent; color: var(--text-2); transition: all 0.15s ease; cursor: pointer; text-align: center; }
+.mode-toggle-btn:hover { color: var(--text-1); }
+.mode-toggle-btn.active { background: var(--card); color: var(--accent); box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+.mode-description { font-size: var(--caption); color: var(--text-2); line-height: 1.5; padding: 8px 0 4px; }
 
 /* Empty state CTA */
 .empty-cta { padding: 10px 24px; background: var(--accent); color: white; font-size: var(--body); font-weight: 600; border-radius: 8px; transition: background 0.15s ease; cursor: pointer; }
