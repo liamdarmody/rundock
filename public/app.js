@@ -15,7 +15,7 @@
  * 10. VIEWS & NAVIGATION ............ switchNav, showView, goHome, toggleTheme
  * 11. FILE TREE & EDITOR ............ renderFileTree, buildTree, loadFileContent
  * 12. MARKDOWN RENDERING ............ renderMarkdown, processCalloutsSrc
- * 13. SKILLS ........................ renderSkills, renderSkillRow, selectSkill
+ * 13. SKILLS ........................ renderSkills, selectSkill, filterSkills
  * 14. SETTINGS ...................... showSettingsSection, renderSettingsSection
  * 15. WORKSPACE PICKER .............. handleWorkspaces, showWorkspacePicker
  * 16. EVENT LISTENERS & INIT ........ keydown, resize, connect()
@@ -2285,9 +2285,10 @@ function switchNav(nav) {
   // Clear search when navigating away
   if(nav !== 'conversations') clearConvoSearch();
   if(nav !== 'files') clearFileSearch();
+  if(nav !== 'skills') clearSkillSearch();
   if(nav==='settings') { showView('settings'); showSettingsSection('workspace'); }
   else if(nav==='files') { editorReturnView = 'editor'; if(currentFilePath && document.querySelector('.file-item.active')) { showView('editor'); } else { currentFilePath = null; document.getElementById('editor-header').classList.add('hidden'); document.getElementById('editor-content').classList.add('hidden'); document.getElementById('editor-textarea').classList.add('hidden'); document.getElementById('editor-empty').classList.remove('hidden'); showView('editor'); } }
-  else if(nav==='skills') { showView('skills'); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } document.querySelectorAll('.skill-sidebar-item').forEach(el=>el.classList.remove('active')); document.querySelectorAll('.skill-row.expanded').forEach(r=>r.classList.remove('expanded')); }
+  else if(nav==='skills') { showView('skills'); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } else if(skills.length && !currentSkillId) { selectSkill(skills[0].id); } clearSkillSearch(); }
   else if(nav==='conversations') { if(activeConversation) { showView('chat'); if(unreadConvos.delete(activeConversation.id)) { updateUnreadBadge(); renderConvoList(); } } else { const pinned = conversations.filter(c => c.pinned && c.status !== 'done'); if(pinned.length) { openConversation(pinned[0].id); } else { newConversation(); } } }
   else if(nav==='team') { showView('home'); renderOrgChart(); }
 }
@@ -2630,137 +2631,119 @@ function formatMdFull(text) { return renderMarkdown(text, { callouts: true }); }
 
 // ===== 13. SKILLS =====
 
+let currentSkillId = null;
+
 function renderSkills() {
-  const assigned = skills.filter(s => s.status === 'assigned');
-  const unassigned = skills.filter(s => s.status === 'unassigned');
+  // Progressive disclosure: hide skills nav tab when 0 skills
+  const skillsNav = document.querySelector('.nav-item[data-nav="skills"]');
+  if (skillsNav) {
+    if (skills.length === 0) { skillsNav.style.display = 'none'; return; }
+    else { skillsNav.style.display = ''; }
+  }
 
-  // Sidebar
+  renderSkillsSidebar(skills);
+
+  // Select first skill by default if none selected or current no longer exists
+  if (!currentSkillId || !skills.find(s => s.id === currentSkillId)) {
+    if (skills.length) selectSkill(skills[0].id);
+  }
+}
+
+function renderSkillsSidebar(list) {
   const sidebar = document.getElementById('skills-sidebar-list');
-  let sidebarHtml = '';
-
-  if (!assigned.length && !unassigned.length) {
-    sidebarHtml = `<div style="padding:12px 16px">
-      <div style="color:var(--text-2);font-size:var(--caption);line-height:1.6">No skills yet</div>
-    </div>`;
-  }
-  if (assigned.length) {
-    sidebarHtml += `<div style="padding:4px 8px 4px"><span class="sidebar-label">Assigned</span></div>`;
-    for (const s of assigned) {
-      const dots = s.assignedAgents.map(a => `<span class="skill-dot" style="background:${a.colour}" title="${a.name}"></span>`).join('');
-      sidebarHtml += `<div class="skill-sidebar-item" onclick="selectSkill('${s.id}')" data-skill="${s.id}">
-        <span class="skill-sidebar-name">${esc(s.name)}</span>
-        <span class="skill-dots">${dots}</span>
-      </div>`;
-    }
-  }
-
-  if (unassigned.length) {
-    sidebarHtml += `<div style="padding:12px 8px 4px"><span class="sidebar-label">Unassigned</span></div>`;
-    for (const s of unassigned) {
-      sidebarHtml += `<div class="skill-sidebar-item" onclick="selectSkill('${s.id}')" data-skill="${s.id}">
-        <span class="skill-sidebar-name">${esc(s.name)}</span>
-      </div>`;
-    }
-  }
-
-  sidebar.innerHTML = sidebarHtml;
-
-  // Main panel
-  const main = document.getElementById('skills-main-list');
-  let mainHtml = '';
-
-  if (assigned.length) {
-    mainHtml += `<div style="margin-bottom:24px">
-      <div class="section-label" style="margin-bottom:10px;padding-left:4px">Assigned</div>
-      <div class="skills-list-main">`;
-    for (const s of assigned) {
-      mainHtml += renderSkillRow(s);
-    }
-    mainHtml += `</div></div>`;
-  }
-
-  if (unassigned.length) {
-    mainHtml += `<div style="margin-bottom:24px">
-      <div class="section-label" style="margin-bottom:10px;padding-left:4px">Unassigned</div>
-      <div class="skills-list-main">`;
-    for (const s of unassigned) {
-      mainHtml += renderSkillRow(s);
-    }
-    mainHtml += `</div></div>`;
-  }
-
-  if (!skills.length) {
-    const guide = getGuide();
-    mainHtml = `<div class="org-empty-state" style="padding:48px 24px;text-align:center">
-      <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" class="empty-icon"><polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-      <div class="empty-title">No skills yet</div>
-      ${guide ? `<button class="empty-cta" style="margin-top:8px" onclick="startConversation('${guide.id}')">Talk to Doc</button>` : ''}
-    </div>`;
-  }
-
-  main.innerHTML = mainHtml;
-  // When empty, make the scroll wrapper a flex container so the empty state centers
-  const wrapper = document.getElementById('skills-scroll-wrapper');
-  if (wrapper) {
-    if (!skills.length) {
-      wrapper.style.display = 'flex';
-      wrapper.style.alignItems = 'center';
-      wrapper.style.justifyContent = 'center';
-      main.style.maxWidth = '';
-    } else {
-      wrapper.style.display = '';
-      wrapper.style.alignItems = '';
-      wrapper.style.justifyContent = '';
-      main.style.maxWidth = '720px';
-    }
-  }
+  sidebar.innerHTML = list.map(s => `
+    <div class="skill-sidebar-item${s.id === currentSkillId ? ' active' : ''}" data-skill="${s.id}" onclick="selectSkill('${s.id}')">
+      <span class="skill-sidebar-name">${esc(s.name)}</span>
+    </div>
+  `).join('');
 }
 
-function renderSkillRow(s) {
-  const dots = s.assignedAgents.map(a => `<span class="skill-dot" style="background:${a.colour}" title="${a.name}"></span>`).join('');
-
-  // Build detail grid rows dynamically
-  let gridRows = '';
-  if (s.assignedAgents.length) {
-    const agentList = s.assignedAgents.map(a => `<span style="display:flex;align-items:center;gap:6px"><span class="skill-dot" style="background:${a.colour}"></span> ${esc(a.name)}</span>`).join('');
-    gridRows += `<span class="skill-detail-label">Used by</span><span class="skill-detail-value">${agentList}</span>`;
-  }
-  gridRows += `<span class="skill-detail-label">Source</span><span class="skill-detail-value"><a onclick="event.stopPropagation();openSkillFile('${s.filePath}')" style="font-family:'SF Mono','Fira Code',monospace;font-size:var(--label);color:var(--accent);cursor:pointer;text-decoration:none">${esc(s.slug)}</a></span>`;
-
-  return `<div class="skill-row" data-skill-row="${s.id}" onclick="toggleSkillRow(this)">
-    <div class="skill-row-header">
-      <div class="skill-row-left">
-        <svg class="skill-row-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="14" height="14"><polyline points="6 9 12 15 18 9"/></svg>
-        <span class="skill-row-name">${esc(s.name)}</span>
-        <span class="skill-dots">${dots}</span>
-      </div>
-      <span class="skill-row-desc">${esc(s.description)}</span>
-    </div>
-    <div class="skill-row-detail">
-      <div class="skill-detail-grid">${gridRows}</div>
-      ${s.description ? `<div style="margin-top:10px;font-size:var(--caption);line-height:1.6;color:var(--text-2)">${esc(s.description)}</div>` : ''}
-    </div>
-  </div>`;
+function filterSkills(query) {
+  const clearBtn = document.getElementById('skill-search-clear');
+  const filtered = query
+    ? skills.filter(s => s.name.toLowerCase().includes(query.toLowerCase()))
+    : skills;
+  clearBtn.classList.toggle('hidden', !query);
+  renderSkillsSidebar(filtered);
 }
 
-function toggleSkillRow(el) {
-  el.classList.toggle('expanded');
+function clearSkillSearch() {
+  const input = document.getElementById('skill-search');
+  if (!input) return;
+  input.value = '';
+  filterSkills('');
 }
 
 function selectSkill(id) {
-  // Ensure skills view is visible
+  const s = skills.find(x => x.id === id);
+  if (!s) return;
+
+  currentSkillId = id;
   showView('skills');
 
-  // Highlight in sidebar
+  // Sidebar highlight
   document.querySelectorAll('.skill-sidebar-item').forEach(el => el.classList.remove('active'));
   document.querySelector(`.skill-sidebar-item[data-skill="${id}"]`)?.classList.add('active');
 
-  // Expand selected and scroll to it (leave others open)
-  const row = document.querySelector(`.skill-row[data-skill-row="${id}"]`);
-  if (row) {
-    row.classList.add('expanded');
-    setTimeout(() => row.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
+  // Build detail HTML using profile-* classes (matches agent profile pattern)
+  const boltSvg = '<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" stroke="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>';
+
+  let h = `
+    <div class="profile-header">
+      <div class="profile-avatar skill-avatar">${boltSvg}</div>
+      <div>
+        <div class="profile-name">${esc(s.name)}</div>
+        <div style="font-size:var(--body);color:var(--text-2)">Skill</div>
+      </div>
+    </div>`;
+
+  if (s.description) {
+    h += `<p class="profile-desc" style="margin-bottom:24px">${esc(s.description)}</p>`;
   }
+
+  // Used by card
+  if (s.assignedAgents.length) {
+    h += `<div class="profile-card"><div class="profile-card-section">
+      <div class="profile-section-label">Used by</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;padding-top:4px">`;
+    for (const a of s.assignedAgents) {
+      h += `<div class="agent-chip" title="View ${esc(a.name)}'s profile" onclick="switchNav('team');showProfile('${esc(a.id)}')">
+        <div class="avatar sm" style="background:${a.colour}">${a.icon}</div>
+        <div>
+          <div class="agent-chip-name">${esc(a.name)}</div>
+          <div class="agent-chip-role">${esc(a.role || '')}</div>
+        </div>
+      </div>`;
+    }
+    h += `</div></div></div>`;
+  } else {
+    const guide = getGuide();
+    h += `<div class="profile-card"><div class="profile-card-section">
+      <div class="profile-section-label">Used by</div>
+      <div class="profile-card-text" style="padding-top:4px">Available to all agents</div>
+      <div style="margin-top:8px;font-size:var(--caption);color:var(--text-2);line-height:1.5">
+        Want to assign this to a specific agent?
+        ${guide ? `<span style="font-size:var(--caption);font-weight:500;color:var(--accent);cursor:pointer" onclick="startConversation('${guide.id}')" title="Open a conversation with Doc">Talk to Doc</span>.` : ''}
+      </div>
+    </div></div>`;
+  }
+
+  // Collapsible instructions card
+  if (s.instructions) {
+    const instructionsId = `skill-instructions-${s.id}`;
+    h += `<div class="profile-card" style="cursor:pointer" onclick="document.getElementById('${instructionsId}').classList.toggle('hidden')">
+      <div class="profile-card-section">
+        <div class="profile-section-label">Instructions &#9662;</div>
+        <div id="${instructionsId}" class="hidden">
+          <div style="font-size:var(--caption);line-height:1.6;white-space:pre-wrap;max-height:400px;overflow-y:auto;color:var(--text-2);padding-top:8px">${esc(s.instructions)}</div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  const detail = document.getElementById('skill-detail-content');
+  detail.innerHTML = h;
+  detail.scrollTop = 0;
 }
 
 // ===== 14. SETTINGS =====
@@ -2952,6 +2935,7 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError) {
   ws.send(JSON.stringify({ type: 'get_skills' }));
   ws.send(JSON.stringify({ type: 'get_conversations' }));
   skillsLoaded = false;
+  currentSkillId = null;
 
   if (isSameWorkspace && currentView !== 'workspace') {
     // Reconnect to same workspace: keep in-memory conversations and active view intact.
