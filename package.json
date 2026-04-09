@@ -48,6 +48,17 @@
         "zip"
       ]
     },
+    "dmg": {
+      "title": "Rundock",
+      "window": { "width": 660, "height": 400 },
+      "backgroundColor": "#F2F1EF",
+      "iconSize": 120,
+      "iconTextSize": 11,
+      "contents": [
+        { "x": 165, "y": 185, "type": "file" },
+        { "x": 495, "y": 185, "type": "link", "path": "/Applications" }
+      ]
+    },
     "publish": {
       "provider": "github",
       "owner": "liamdarmody",
