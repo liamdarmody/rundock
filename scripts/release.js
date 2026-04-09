@@ -4,12 +4,11 @@
  * Release script for Rundock.
  *
  * Chains the full release pipeline:
- *   1. Build the .app via electron-builder (same as scripts/build.js)
+ *   1. Build the .app and .dmg via electron-builder
  *   2. Submit for Apple notarisation via xcrun notarytool
  *   3. Poll for notarisation completion (every 30s)
  *   4. Staple the notarisation ticket
- *   5. Create a .dmg via npx create-dmg
- *   6. Log the final .dmg path
+ *   5. Log the final .dmg path
  *
  * Usage:
  *   node scripts/release.js <version>
@@ -96,7 +95,7 @@ function build() {
   try {
     execFileSync(
       path.join(ROOT, 'node_modules', '.bin', 'electron-builder'),
-      ['--mac'],
+      ['--mac', '--publish', 'never'],
       { stdio: 'inherit', cwd: ROOT }
     );
   } catch (err) {
@@ -208,49 +207,6 @@ function staple() {
   log('staple', 'Stapled successfully');
 }
 
-function createDmg() {
-  // npx create-dmg (sindresorhus/create-dmg) handles the Applications symlink,
-  // window layout, and icon positioning automatically. It returns non-zero when
-  // it cannot find a signing identity, but still produces the .dmg.
-
-  const outputDir = path.dirname(DMG_PATH);
-
-  // Remove existing dmg if present
-  if (fs.existsSync(DMG_PATH)) {
-    fs.unlinkSync(DMG_PATH);
-    log('dmg', 'Removed existing .dmg');
-  }
-
-  log('dmg', 'Creating .dmg with npx create-dmg...');
-  try {
-    execSync(
-      [
-        'npx create-dmg',
-        '--overwrite',
-        '--no-version-in-filename',
-        '--dmg-title "Rundock"',
-        `"${APP_PATH}"`,
-        `"${outputDir}"`,
-      ].join(' '),
-      { stdio: 'inherit' }
-    );
-  } catch (err) {
-    // npx create-dmg exits non-zero when it cannot find a signing identity
-    // for the .dmg itself. The .dmg may still have been created successfully.
-    if (fs.existsSync(DMG_PATH)) {
-      log('dmg', 'create-dmg exited non-zero but .dmg was created (likely a signing warning)');
-    } else {
-      fail('dmg', 'create-dmg failed and no .dmg was produced');
-    }
-  }
-
-  if (!fs.existsSync(DMG_PATH)) {
-    fail('dmg', `Expected .dmg not found at ${DMG_PATH}`);
-  }
-
-  log('dmg', `Created ${DMG_PATH}`);
-}
-
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -261,7 +217,6 @@ build();
 const submissionId = submitNotarisation();
 pollNotarisation(submissionId);
 staple();
-createDmg();
 
 console.log('');
 log('done', `Release complete: ${DMG_PATH}`);
