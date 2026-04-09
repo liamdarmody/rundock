@@ -1230,16 +1230,19 @@ function detectWorkspaceMode(dir) {
 // Returns { success: true } or { success: false, error: string }.
 function scaffoldDefaults(dir) {
   const folderName = path.basename(dir);
+  const mode = detectWorkspaceMode(dir);
+  const isCode = mode === 'code';
 
   try {
-    // Create default folders
-    const folders = ['0 Inbox', '1 Notes', '2 Projects', '3 Resources', '4 Archive'];
-    for (const folder of folders) {
-      fs.mkdirSync(path.join(dir, folder), { recursive: true });
-    }
+    if (!isCode) {
+      // Knowledge workspace: create default folders
+      const folders = ['0 Inbox', '1 Notes', '2 Projects', '3 Resources', '4 Archive'];
+      for (const folder of folders) {
+        fs.mkdirSync(path.join(dir, folder), { recursive: true });
+      }
 
-    // Create minimal CLAUDE.md (Doc will add About section during onboarding)
-    const claudeMd = `# ${folderName}
+      // Create CLAUDE.md with folder structure
+      const claudeMd = `# ${folderName}
 
 ## Workspace structure
 
@@ -1249,14 +1252,19 @@ function scaffoldDefaults(dir) {
 - **3 Resources/**: Reference material you want to keep
 - **4 Archive/**: Finished work
 `;
-    fs.writeFileSync(path.join(dir, 'CLAUDE.md'), claudeMd);
+      fs.writeFileSync(path.join(dir, 'CLAUDE.md'), claudeMd);
+    } else {
+      // Code workspace: create minimal CLAUDE.md only, no folders
+      const claudeMd = `# ${folderName}\n`;
+      fs.writeFileSync(path.join(dir, 'CLAUDE.md'), claudeMd);
+    }
 
     // Mark setup as incomplete so onboarding flows through Doc
     const state = readState();
     state.setupComplete = false;
     writeState(state);
 
-    console.log(`  [Scaffold] Created default workspace: ${folders.length} folders, CLAUDE.md (no orchestrator, setup pending)`);
+    console.log(`  [Scaffold] Created default workspace (${mode}): CLAUDE.md${isCode ? '' : ' + folders'} (setup pending)`);
     return { success: true };
   } catch (e) {
     console.error(`  [Scaffold] Default workspace creation failed: ${e.message}`);
@@ -2587,6 +2595,26 @@ wss.on('connection', (ws) => {
           try { ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) })); } catch (e) { console.warn('  File tree failed:', e.message); }
         } else {
           ws.send(JSON.stringify({ type: 'workspace_error', message: 'Directory not found' }));
+        }
+      }
+
+      if (msg.type === 'pick_folder') {
+        try {
+          const { execSync } = require('child_process');
+          const result = execSync(
+            `osascript -e 'POSIX path of (choose folder with prompt "Choose a workspace folder")'`,
+            { encoding: 'utf-8', timeout: 60000 }
+          ).trim();
+          if (result) {
+            // Remove trailing slash if present
+            const dir = result.endsWith('/') ? result.slice(0, -1) : result;
+            ws.send(JSON.stringify({ type: 'folder_picked', path: dir }));
+          } else {
+            ws.send(JSON.stringify({ type: 'folder_picked', path: null }));
+          }
+        } catch (e) {
+          // User cancelled or osascript failed
+          ws.send(JSON.stringify({ type: 'folder_picked', path: null }));
         }
       }
 
