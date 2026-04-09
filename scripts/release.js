@@ -27,7 +27,7 @@ const fs = require('fs');
 
 const ROOT = path.join(__dirname, '..');
 const APP_PATH = '/tmp/rundock-dist/mac-arm64/Rundock.app';
-const DMG_PATH = '/tmp/rundock-dist/Rundock.dmg';
+const DIST_DIR = '/tmp/rundock-dist';
 const POLL_INTERVAL_MS = 30_000;
 
 // ---------------------------------------------------------------------------
@@ -218,5 +218,8 @@ const submissionId = submitNotarisation();
 pollNotarisation(submissionId);
 staple();
 
+const version = process.argv[2];
+const dmgPath = path.join(DIST_DIR, `Rundock-${version}-arm64.dmg`);
+
 console.log('');
-log('done', `Release complete: ${DMG_PATH}`);
+log('done', `Release complete: ${dmgPath}`);
