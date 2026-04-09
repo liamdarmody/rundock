@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, nativeImage, dialog, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, nativeImage, dialog, ipcMain } = require('electron');
 const path = require('path');
 const { execSync } = require('child_process');
 
@@ -11,7 +11,6 @@ try {
 }
 
 let mainWindow = null;
-let tray = null;
 let serverPort = null;
 
 // ===== SINGLE INSTANCE =====
@@ -123,30 +122,6 @@ ipcMain.handle('select-directory', async () => {
 
 ipcMain.handle('get-app-version', () => app.getVersion());
 
-// ===== TRAY =====
-
-function setupTray() {
-  // Use a simple template image for the tray (white on transparent, 18x18)
-  // For now, use the app icon resized; replace with a proper template image later
-  const iconPath = path.join(__dirname, 'build', 'tray-icon.png');
-  let icon;
-  try {
-    icon = nativeImage.createFromPath(iconPath).resize({ width: 18, height: 18 });
-  } catch {
-    // Fallback: no tray icon if file missing (dev mode)
-    return;
-  }
-
-  tray = new Tray(icon);
-  const contextMenu = Menu.buildFromTemplate([
-    { label: 'Open Rundock', click: () => { if (mainWindow) mainWindow.show(); } },
-    { type: 'separator' },
-    { label: 'Quit', click: () => { app.isQuitting = true; app.quit(); } },
-  ]);
-  tray.setContextMenu(contextMenu);
-  tray.on('click', () => { if (mainWindow) mainWindow.show(); });
-}
-
 // ===== APP MENU =====
 
 function setupMenu() {
@@ -157,7 +132,7 @@ function setupMenu() {
         { label: 'About Rundock', role: 'about' },
         { label: 'Check for Updates', click: () => { if (autoUpdater) autoUpdater.checkForUpdates(); } },
         { type: 'separator' },
-        { label: 'Quit', accelerator: 'CmdOrCtrl+Q', click: () => { app.isQuitting = true; app.quit(); } },
+        { label: 'Quit', accelerator: 'CmdOrCtrl+Q', click: () => { app.quit(); } },
       ],
     },
     {
@@ -234,14 +209,6 @@ function createMainWindow(port) {
     console.log('[Electron] Page loaded successfully');
   });
 
-  // Hide to tray instead of quitting
-  mainWindow.on('close', (e) => {
-    if (!app.isQuitting) {
-      e.preventDefault();
-      mainWindow.hide();
-    }
-  });
-
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -286,7 +253,6 @@ app.whenReady().then(async () => {
   // Open the main window
   createMainWindow(serverPort);
   setupMenu();
-  setupTray();
   setupAutoUpdate();
   console.log('[Electron] Ready');
 });
@@ -298,6 +264,3 @@ app.on('activate', () => {
   }
 });
 
-app.on('before-quit', () => {
-  app.isQuitting = true;
-});
