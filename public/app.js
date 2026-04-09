@@ -1149,15 +1149,15 @@ function handlePersistedConversations(persisted) {
       const a = workspaceAnalysis;
       const hasContext = a && (a.identity.sources.length > 0 || a.skills.total > 0);
 
-      if (!setupComplete) {
-        // New or unconfigured workspace: show team view with setup CTA
-        switchNav('team');
-      } else if (teamAgents.length > 0) {
-        // Configured workspace with agents: go straight to dashboard
-        switchNav('team');
+      if (teamAgents.length > 0) {
+        // Path A: configured workspace with agents, go straight to conversations
+        newConversation();
       } else if (hasContext) {
-        // Existing workspace with context but no team agents
+        // Path B: existing workspace with files/agents/skills but not yet Rundock-configured
         switchNav('team');
+      } else if (!setupComplete) {
+        // Path C: empty/new workspace, start Doc conversation directly
+        startSetupConversation();
       } else {
         newConversation();
       }
