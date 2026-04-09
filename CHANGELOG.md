@@ -4,6 +4,35 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## 0.8.0: Onboarding and Stability (2026-04-09)
+
+Rundock now adapts its first-run experience to the workspace it opens, distinguishes between knowledge and code workspaces, and delegates between agents reliably. Distributed as a signed and notarised .dmg.
+
+### Added
+
+- **Conversational onboarding:** New empty workspaces open straight into a conversation with Doc. No intermediary screens. Doc proposes an agent team, creates agents and skills, and configures the workspace through conversation.
+- **Workspace mode detection:** Rundock detects whether a workspace is for knowledge work or code and adjusts permissions accordingly. Knowledge mode auto-approves file edits. Code mode auto-approves read-only commands. Toggle available in settings.
+- **Smart default view:** Configured workspaces land on Conversations view. Workspaces with files but no agents land on Team view with detected context. Empty workspaces go straight into Doc onboarding.
+- **Skills UI redesign:** Replaced the flat skills panel with a sidebar list and detail page pattern. Shows skill instructions, assigned agent, and role context.
+- **Workspace audit:** Validates that skills have instructions, agents have assigned skills, and file references resolve correctly. Surfaces issues in the Team view so users can fix gaps before they cause routing failures.
+- **Signed .dmg installer:** Download, drag to Applications, and open. No Gatekeeper warnings, no terminal, no manual setup. macOS recognises Rundock as trusted software from a verified developer.
+
+### Changed
+
+- **Agent tool delegation:** Replaced marker-based delegation with Agent tool interception. The server intercepts Agent tool calls mid-stream and routes to the correct specialist. More reliable, and agent files stay Rundock-agnostic.
+- **Delegate context:** Delegates now receive the full system prompt instead of a hardcoded subset. Eliminates token duplication and ensures delegates get their complete role and scope instructions.
+- **Tool action summaries:** Conversation history now includes a summary of tool calls (files read, edited, commands run). The next agent in the chain sees what was done, not just what was said.
+- **Delegation history persistence:** Orchestrator responses are preserved during agent handoffs. Conversation history loads correctly on page refresh regardless of how many handoffs occurred.
+
+### Fixed
+
+- **Orphaned process cleanup:** Claude Code processes are cleaned up on crash or restart instead of accumulating.
+- **Permission restoration on reconnect:** Pending permission prompts and active agent state restore correctly after WebSocket reconnection.
+- **MCP tool permissions:** Added PreToolUse hook for MCP tools so they go through the permission card UI.
+- **Faster subprocess startup:** Agent processes start faster by skipping unnecessary shell profile loading.
+
+---
+
 ## 0.7.3: Desktop App (2026-04-03)
 
 Rundock is now available as a native macOS desktop app. Download the .dmg, drag to Applications, and open. No terminal, no git clone, no npm install.
