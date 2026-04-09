@@ -1,6 +1,6 @@
 {
   "name": "rundock",
-  "version": "0.7.3",
+  "version": "0.8.0",
   "description": "A browser-based OS for AI agent teams. Built for knowledge work, powered by Claude Code.",
   "main": "electron/main.js",
   "scripts": {
@@ -9,7 +9,8 @@
     "update": "git pull origin main && npm install && echo '\\n  Rundock updated. Run: npm start'",
     "electron": "electron .",
     "build:mac": "electron-builder --mac",
-    "dist": "node scripts/build.js"
+    "dist": "node scripts/build.js",
+    "release": "node scripts/release.js"
   },
   "dependencies": {
     "electron-updater": "^6.6.0",
