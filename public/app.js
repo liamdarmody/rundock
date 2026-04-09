@@ -125,6 +125,7 @@ function handle(d) {
   switch(d.type) {
     case 'workspaces': handleWorkspaces(d); break;
     case 'workspace_set': onWorkspaceReady(d.path, d.analysis, d.isEmpty, d.workspaceMode, d.scaffoldError, d.setupComplete); break;
+    case 'folder_picked': if (d.path) selectWorkspace(d.path); break;
     case 'workspace_error': {
       const errEl = document.getElementById('workspace-error');
       if (errEl) { errEl.textContent = d.message; errEl.style.display = 'block'; }
@@ -1262,11 +1263,15 @@ function startSetupConversation() {
   if (!setupComplete) {
     block += 'New workspace: true (scaffolded defaults, user has not seen folder structure yet)\n';
   }
+  block += `Workspace mode: ${workspaceMode}\n`;
   block += '[/WORKSPACE_ANALYSIS]\n\n';
-  if (!setupComplete) {
-    block += 'This is a new workspace. Start with Beat 1: orient the user on the folder structure before proposing a team. Do NOT skip to the team proposal.';
+  const markerReminder = ' CRITICAL: when creating agents, you MUST use <!-- RUNDOCK:SAVE_AGENT name={slug} --> markers. Without them, agents are not created.';
+  if (!setupComplete && workspaceMode === 'code') {
+    block += 'This is a new CODE workspace. Start with Beat 0: ask the user their name and what they will use the workspace for. After they respond, skip Beat 1 (the scaffolded folders are generic defaults, not relevant for a code project) and go straight to Beat 2 (team proposal). Propose dev-oriented agents suited to the codebase.' + markerReminder;
+  } else if (!setupComplete) {
+    block += 'This is a new workspace. Start with Beat 0: ask the user their name and what they will use the workspace for. After they respond, continue to Beat 1 (folder orientation), then Beat 2 (team proposal). Do NOT skip any beats.' + markerReminder;
   } else {
-    block += 'Propose an agent team for this workspace. Do NOT create agents yet. Show me the team plan first, then I will confirm.';
+    block += 'Propose an agent team for this workspace. Do NOT create agents yet. Show me the team plan first, then I will confirm.' + markerReminder;
   }
 
   // Start conversation with custom title (isSetup prevents title override on first user message)
@@ -1916,6 +1921,8 @@ function renderSessionHistory(d) {
   const defaultAgent = convo.agent;
   let lastAgentId = null;
   for (const msg of d.messages) {
+    // Skip hidden system messages (workspace analysis blocks, setup instructions)
+    if (msg.content && msg.content.includes('[WORKSPACE_ANALYSIS]')) continue;
     const div = document.createElement('div');
     div.style.animation = 'none';
     if (msg.role === 'user') {
@@ -1964,7 +1971,7 @@ function renderSessionHistory(d) {
   }
 
   // Store history messages in convo so they persist when navigating away and back
-  const historyMsgs = d.messages.map(m => ({
+  const historyMsgs = d.messages.filter(m => !m.content || !m.content.includes('[WORKSPACE_ANALYSIS]')).map(m => ({
     role: m.role === 'user' ? 'user' : 'agent',
     content: m.content,
     agentId: m.agentId || convo.agentId,
@@ -2872,7 +2879,7 @@ document.addEventListener('click', e => {
 });
 
 function showCreateForm() {
-  document.getElementById('create-workspace-btn').style.display = 'none';
+  document.getElementById('ws-picker-buttons').style.display = 'none';
   document.getElementById('create-workspace-form').style.display = 'block';
   document.getElementById('create-workspace-name').focus();
 }
@@ -2888,6 +2895,20 @@ function createWorkspace() {
     return;
   }
   ws.send(JSON.stringify({ type: 'create_workspace', name }));
+}
+
+async function openFolder() {
+  const errEl = document.getElementById('workspace-error');
+  if (errEl) errEl.style.display = 'none';
+
+  if (window.electronAPI && window.electronAPI.selectDirectory) {
+    // Electron: native folder picker
+    const dir = await window.electronAPI.selectDirectory();
+    if (dir) selectWorkspace(dir);
+  } else {
+    // Browser: ask server to open native macOS folder picker
+    ws.send(JSON.stringify({ type: 'pick_folder' }));
+  }
 }
 
 function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupComplete) {
@@ -2945,7 +2966,7 @@ msgInput.addEventListener('input',()=>{
   }
 });
 
-// Enter creates workspace
+// Enter submits workspace picker form
 document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && currentView === 'workspace' && document.activeElement?.id === 'create-workspace-name') {
     createWorkspace();

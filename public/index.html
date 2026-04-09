@@ -436,8 +436,9 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .ws-picker-subtitle { font-size: var(--body); color: var(--text-2); margin-bottom: 32px; }
 .ws-picker-divider { border-top: 1px solid var(--border); padding-top: 16px; display: flex; flex-direction: column; align-items: center; gap: 12px; }
 .ws-picker-or { font-size: var(--caption); color: var(--text-2); }
-.ws-picker-create-btn { padding: 10px 24px; background: var(--card); color: var(--text-1); font-size: var(--body); font-weight: 600; border-radius: 8px; border: 1px solid var(--border); transition: all 0.15s ease; cursor: pointer; }
-.ws-picker-create-btn:hover { border-color: var(--accent); color: var(--accent); }
+.ws-picker-btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }
+.ws-picker-create-btn, .ws-picker-open-btn { padding: 10px 24px; background: var(--card); color: var(--text-1); font-size: var(--body); font-weight: 600; border-radius: 8px; border: 1px solid var(--border); transition: all 0.15s ease; cursor: pointer; }
+.ws-picker-create-btn:hover, .ws-picker-open-btn:hover { border-color: var(--accent); color: var(--accent); }
 .ws-picker-input { flex: 1; padding: 10px 14px; background: var(--card); border-radius: 8px; font-size: var(--body); border: 1px solid var(--border); color: var(--text-1); transition: border-color 0.15s ease; }
 .ws-picker-input:focus { border-color: var(--accent); }
 .ws-picker-submit { padding: 10px 20px; background: var(--accent); color: white; font-size: var(--body); font-weight: 600; border-radius: 8px; transition: background 0.15s ease; flex-shrink: 0; cursor: pointer; }
@@ -585,7 +586,10 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
         <div id="workspace-discovered" style="margin-bottom:24px"></div>
         <div class="ws-picker-divider">
           <span class="ws-picker-or">or</span>
-          <button id="create-workspace-btn" class="ws-picker-create-btn" onclick="showCreateForm()">Create new workspace</button>
+          <div id="ws-picker-buttons" class="ws-picker-btn-row">
+            <button id="create-workspace-btn" class="ws-picker-create-btn" onclick="showCreateForm()">New workspace</button>
+            <button id="open-folder-btn" class="ws-picker-open-btn" onclick="openFolder()">Open folder</button>
+          </div>
           <div id="create-workspace-form" style="display:none;width:100%">
             <div style="display:flex;gap:8px;align-items:center">
               <input id="create-workspace-name" class="ws-picker-input" type="text" placeholder="Workspace name...">
