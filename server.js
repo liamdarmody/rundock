@@ -288,8 +288,11 @@ function buildTeamRoster(leaderId, scopedToDirectReports = false) {
   const allAgents = discoverAgents();
   const allSkills = discoverSkills(allAgents);
   // All agents use explicit reportsTo. Filter to direct reports of this leader.
+  // Match reportsTo against both id and name (the default agent has id='default' but name='team-lead').
   // Fallback: agents with no reportsTo are included for orchestrators (backward compat).
-  const teammates = allAgents.filter(a => a.status === 'onTeam' && a.id !== leaderId && a.id !== 'default' && (a.reportsTo === leaderId || (!scopedToDirectReports && !a.reportsTo)));
+  const leader = allAgents.find(a => a.id === leaderId);
+  const leaderName = leader ? leader.name : leaderId;
+  const teammates = allAgents.filter(a => a.status === 'onTeam' && a.id !== leaderId && a.id !== 'default' && (a.reportsTo === leaderId || a.reportsTo === leaderName || (!scopedToDirectReports && !a.reportsTo)));
   if (teammates.length === 0) return null;
   return teammates.map(a => {
     const agentSkills = allSkills.filter(s => s.assignedAgents.some(aa => aa.id === a.id));
@@ -375,22 +378,13 @@ function buildSystemPrompt(agentData) {
 
   if (isOrchestrator) {
     const roster = buildTeamRoster(agentData.id);
-
     if (roster) {
       delegationSection = [
         'DELEGATION (your primary job):',
-        'You are a router. On every user message, check if a specialist covers the domain. If yes, delegate immediately. Do not answer it yourself, read files, or use tools for questions that belong to a specialist.',
-        '',
-        'Format: tell the user briefly who you are handing to and why, then output the marker and STOP.',
-        '',
-        '<!-- RUNDOCK:DELEGATE agent={agent-name} -->',
-        '{Summarise the user request with full context}',
-        '<!-- /RUNDOCK:DELEGATE -->',
-        '',
-        'Your response MUST end after the closing tag. The specialist appears in the conversation automatically.',
+        'You are a router. When a user message falls within a specialist\'s domain, delegate to them using the Agent tool. Tell the user briefly who you are handing to, then use the Agent tool to pass the task with full context.',
         '',
         'RULES:',
-        '- Never mention a specialist by name unless you are outputting a DELEGATE marker in the same response. Users see specialists join the conversation; naming them without delegating breaks trust.',
+        '- Delegate immediately when a specialist covers the domain. Do not answer it yourself or use other tools first.',
         '- Handle it yourself only when no specialist fits, or when coordinating across multiple specialists.',
         '- Platform operations (agents, skills, workspace config): always delegate to the platform agent.',
         '- When a specialist returns because the user asked for something outside their scope, pick up that request immediately. Do not ask the user to repeat themselves.',
@@ -402,16 +396,9 @@ function buildSystemPrompt(agentData) {
   } else if (hasDirectReports) {
     delegationSection = [
       'DELEGATION:',
-      'You have a support team. When a task falls within a team member\'s specialisation, delegate. Tell the user briefly, then output the marker and STOP. No tool calls in a delegation response.',
-      '',
-      '<!-- RUNDOCK:DELEGATE agent={agent-name} -->',
-      '{Summarise what you need with full context}',
-      '<!-- /RUNDOCK:DELEGATE -->',
-      '',
-      'Your response MUST end after the closing tag. The team member appears in the conversation automatically.',
+      'You have a support team. When a task falls within a team member\'s specialisation, delegate using the Agent tool. Tell the user briefly, then use the Agent tool to pass the task with full context.',
       '',
       'RULES:',
-      '- Never mention a team member by name unless outputting a DELEGATE marker. Users see them join; naming without delegating breaks trust.',
       '- Delegate when a task matches a team member\'s speciality. Do it yourself only for tasks in YOUR core domain.',
       '- If a request falls outside your domain entirely, hand back to the orchestrator using <!-- RUNDOCK:RETURN -->.',
       '- When a team member returns, pick up where you left off using their output. Do not ask the user to repeat themselves.',
@@ -1647,6 +1634,13 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
                 if (target) {
                   console.log(`[AgentIntercept] convo=${convoId} agent=${entry.agentId} intercepting Agent tool call targeting: ${target.name}`);
                   intercepted = true;
+                  // Save orchestrator's response to transcript before killing the process
+                  // (the result event won't fire after SIGKILL, so we must persist here)
+                  if (entry.responseText) {
+                    const toolSummary = buildToolSummary(entry.toolCalls);
+                    const textWithTools = toolSummary ? toolSummary + '\n' + entry.responseText : entry.responseText;
+                    appendTranscript(convoId, 'agent', entry.agentId, textWithTools);
+                  }
                   try { entry.process.kill('SIGKILL'); } catch (e) {}
                   entry.exited = true;
                   handleDelegation({
@@ -3051,6 +3045,67 @@ wss.on('connection', (ws) => {
                 merged.push(m);
               }
             }
+            // Reconcile with transcript: fill in messages missing from JSONL
+            // (e.g. orchestrator responses lost when process was SIGKILL'd during Agent tool interception)
+            if (transcript && transcript.length > 0) {
+              // Helper: strip leading tool summary brackets like [Read ...] [Edit ...] for matching
+              const stripToolSummaries = (s) => (s || '').replace(/^(\[.*?\]\s*)+/s, '').trim();
+
+              // Build a set of merged assistant content prefixes for quick lookup
+              const mergedAssistantPrefixes = new Set();
+              for (const m of merged) {
+                if (m.role === 'assistant' && m.content) {
+                  mergedAssistantPrefixes.add(m.content.substring(0, 120));
+                }
+              }
+
+              // Check if transcript has assistant messages not in the JSONL merge
+              const missingFromMerge = [];
+              for (const t of transcript) {
+                if (t.role !== 'agent' || !t.text) continue;
+                const cleanText = stripToolSummaries(t.text);
+                if (!cleanText) continue;
+                // Check if this transcript message exists in merged
+                const found = mergedAssistantPrefixes.has(cleanText.substring(0, 120)) ||
+                  [...mergedAssistantPrefixes].some(p => p.includes(cleanText.substring(0, 80)) || cleanText.substring(0, 80).includes(p.substring(0, 80)));
+                if (!found) {
+                  missingFromMerge.push({
+                    role: 'assistant',
+                    content: cleanText,
+                    agentId: t.agent || null,
+                    _transcriptIdx: transcript.indexOf(t)
+                  });
+                }
+              }
+
+              // Insert missing messages at the right position using transcript ordering
+              if (missingFromMerge.length > 0) {
+                // Map merged messages to their transcript positions
+                const result = [];
+                let mergedIdx = 0;
+                for (const t of transcript) {
+                  const tRole = t.role === 'user' ? 'user' : 'assistant';
+                  // Check if this is a missing message we need to inject
+                  const missing = missingFromMerge.find(m => m._transcriptIdx === transcript.indexOf(t));
+                  if (missing) {
+                    result.push({ role: missing.role, content: missing.content, agentId: missing.agentId });
+                    continue;
+                  }
+                  // Otherwise advance through merged to find the matching entry
+                  if (mergedIdx < merged.length && merged[mergedIdx].role === tRole) {
+                    result.push(merged[mergedIdx]);
+                    mergedIdx++;
+                  }
+                }
+                // Append any remaining merged entries
+                while (mergedIdx < merged.length) {
+                  result.push(merged[mergedIdx++]);
+                }
+                merged.length = 0;
+                merged.push(...result);
+              }
+            }
+
             const total = merged.length;
             const lim = limit || 50;
             const off = offset || 0;
