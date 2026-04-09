@@ -941,11 +941,6 @@ function renderOrgChart() {
       }
       h += '</div>';
     }
-
-    // Setup nudge banner for workspaces that haven't completed onboarding
-    if (!setupComplete && guide) {
-      h += `<div class="setup-nudge">Your workspace is ready for a team. <button onclick="startSetupConversation()">Set up now</button><button class="dismiss" onclick="this.parentElement.remove()">&times;</button></div>`;
-    }
     chart.style.overflow = 'hidden';
     chart.style.justifyContent = 'center';
     chart.style.alignItems = 'center';
@@ -1264,11 +1259,19 @@ function startSetupConversation() {
   } else {
     block += 'Existing agents: none (Doc only)\n';
   }
+  if (!setupComplete) {
+    block += 'New workspace: true (scaffolded defaults, user has not seen folder structure yet)\n';
+  }
   block += '[/WORKSPACE_ANALYSIS]\n\n';
-  block += 'Propose an agent team for this workspace. Do NOT create agents yet. Show me the team plan first, then I will confirm.';
+  if (!setupComplete) {
+    block += 'This is a new workspace. Start with Beat 1: orient the user on the folder structure before proposing a team. Do NOT skip to the team proposal.';
+  } else {
+    block += 'Propose an agent team for this workspace. Do NOT create agents yet. Show me the team plan first, then I will confirm.';
+  }
 
-  // Start conversation with custom title
+  // Start conversation with custom title (isSetup prevents title override on first user message)
   const convo = createConversation(guide.id, `${a.identity.suggestedName || 'Workspace'} Team Setup`);
+  convo.isSetup = true;
 
   // Show a system-level status line (not a user or agent message)
   const summaryParts = [];
@@ -1680,7 +1683,7 @@ function sendMessage() {
   const state = getConvoState(activeConversation.id);
   if(!text||state.isProcessing) return;
   const promptsEl=document.getElementById('chat-prompts'); if(promptsEl) promptsEl.remove();
-  if(activeConversation.messages.filter(m=>m.role==='user').length===0) { activeConversation.title=text.substring(0,50)+(text.length>50?'...':''); document.getElementById('chat-title-input').value=activeConversation.title; renderConvoList(); }
+  if(activeConversation.messages.filter(m=>m.role==='user').length===0 && !activeConversation.isSetup) { activeConversation.title=text.substring(0,50)+(text.length>50?'...':''); document.getElementById('chat-title-input').value=activeConversation.title; renderConvoList(); }
   input.value=''; input.style.height='44px'; document.getElementById('send-btn').classList.remove('active');
   dispatchMessage(activeConversation, text);
 }

@@ -975,8 +975,9 @@ function analyzeWorkspace(dir, existingAgents) {
 
   let pattern = 'unknown';
   const hasNumbered = topLevelDirs.some(d => /^\d{2}[-_]/.test(d));
-  const paraNames = ['inbox', 'project', 'area', 'resource', 'archive'];
-  const hasPara = paraNames.filter(p => topLevelDirs.some(d => d.toLowerCase().includes(p))).length >= 3;
+  // PARA requires all four core folders: Projects, Areas, Resources, Archive
+  const paraCoreNames = ['project', 'area', 'resource', 'archive'];
+  const hasPara = paraCoreNames.every(p => topLevelDirs.some(d => d.toLowerCase().includes(p)));
   const hasDev = ['src', 'lib', 'test', 'tests'].filter(d => topLevelDirs.includes(d)).length >= 2;
   const hasFunctional = ['clients', 'marketing', 'finance', 'sales', 'engineering', 'hr'].filter(d =>
     topLevelDirs.some(td => td.toLowerCase() === d)
