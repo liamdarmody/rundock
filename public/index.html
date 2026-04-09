@@ -69,11 +69,11 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .agent-status-state.working { color: var(--success); }
 
 /* Conversation search */
-.sidebar-search-wrap { position: relative; padding: 0 8px 4px; }
+.sidebar-search-wrap { position: relative; padding: 0 8px; margin: 4px 0 10px; }
 .sidebar-search { width: 100%; box-sizing: border-box; padding: 7px 28px 7px 10px; font-size: var(--caption); font-family: inherit; color: var(--text-1); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; outline: none; transition: border-color 0.15s ease; }
 .sidebar-search:focus { border-color: var(--text-2); }
 .sidebar-search::placeholder { color: var(--text-2); opacity: 0.6; }
-.sidebar-search-clear { position: absolute; right: 16px; top: 50%; transform: translateY(-50%); margin-top: -2px; font-size: 16px; color: var(--text-2); cursor: pointer; line-height: 1; }
+.sidebar-search-clear { position: absolute; right: 16px; top: 50%; transform: translateY(-50%); font-size: 16px; color: var(--text-2); cursor: pointer; line-height: 1; }
 .sidebar-search-clear:hover { color: var(--text-1); }
 .sidebar-search-clear.hidden { display: none; }
 
@@ -132,10 +132,10 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .org-zoom .org-zoom-divider { height: 1px; background: var(--border); }
 /* org-chart-title removed: redundant label */
 .org-tree { display: flex; flex-direction: column; align-items: center; transform-origin: top center; position: relative; }
-.org-card { position: relative; background: var(--card); border-radius: 14px; padding: 24px 30px; display: flex; align-items: center; gap: 16px; cursor: pointer; transition: all 0.2s ease; border: 1px solid transparent; box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08); }
+.org-card { position: relative; background: var(--card); border-radius: 14px; padding: 24px 30px; display: flex; align-items: center; gap: 16px; cursor: pointer; transition: all 0.2s ease; border: 1px solid transparent; box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08); max-width: 320px; }
 .org-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.2), 0 0 0 1px var(--accent); }
 .org-card-name { font-size: var(--org-name); font-weight: 700; color: var(--text-1); }
-.org-card-role { font-size: var(--org-role); color: var(--text-2); max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.org-card-role { font-size: var(--org-role); color: var(--text-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .org-status-dot { position: absolute; top: 8px; right: 8px; border-radius: 50%; background: transparent; flex-shrink: 0; }
 .org-status-dot.working { background: var(--success); animation: orgPulse 2s ease-in-out infinite; }
 @keyframes orgPulse { 0%,100% { opacity: 0.3; transform: scale(0.95); } 50% { opacity: 1; transform: scale(1.1); } }
@@ -144,9 +144,9 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 /* All card dimensions are computed in JS and applied inline. */
 /* CSS here handles only positioning, overflow, and base visual styles. */
 .org-layout { position: relative; }
-.org-layout .org-card { position: absolute; transform: translate(-50%, 0); box-sizing: border-box; overflow: hidden; }
+.org-layout .org-card { position: absolute; transform: translate(-50%, 0); box-sizing: border-box; overflow: hidden; max-width: 320px; }
 .org-layout .org-card .avatar { flex-shrink: 0; }
-.org-layout .org-card .org-card-role { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.org-layout .org-card .org-card-role { white-space: normal; }
 .org-connectors { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; }
 .org-connectors g { opacity: 0.25; }
 .org-connectors path { fill: none; stroke: var(--text-2); stroke-width: 1; }
@@ -270,7 +270,7 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .chat-prompts-list { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; max-width: 480px; margin-top: 8px; }
 .prompt-pill { background: var(--card); border: 1px solid var(--border); border-radius: 20px; padding: 8px 16px; font-size: var(--body); color: var(--text-1); cursor: pointer; transition: all 0.15s ease; }
 .prompt-pill:hover { border-color: var(--accent); background: var(--accent-glow); }
-/* Path C: welcome bubble with inline prompt pills */
+/* Welcome bubble with inline prompt pills */
 .chat-prompts-inline { flex: none; padding: 0 0 0 44px; justify-content: flex-start; align-items: flex-start; }
 .chat-prompts-inline .chat-prompts-list { justify-content: flex-start; margin-top: 0; }
 .msg-welcome .msg-bubble p { margin: 0 0 8px 0; }
@@ -410,15 +410,22 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .settings-btn:hover { border-color: var(--accent); color: var(--accent); }
 .settings-btn-primary { padding: 6px 14px; font-size: var(--caption); font-weight: 600; border-radius: 6px; background: var(--accent); color: white; border: none; transition: all 0.15s ease; cursor: pointer; }
 .settings-btn-primary:hover { background: var(--accent-hover); }
-.mode-toggle { display: flex; background: var(--bg); border-radius: 8px; padding: 3px; gap: 2px; }
-.mode-toggle-btn { flex: 1; padding: 8px 16px; font-size: var(--caption); font-weight: 600; border-radius: 6px; background: transparent; color: var(--text-2); transition: all 0.15s ease; cursor: pointer; text-align: center; }
-.mode-toggle-btn:hover { color: var(--text-1); }
-.mode-toggle-btn.active { background: var(--card); color: var(--accent); box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+.mode-toggle { display: flex; background: var(--base); border: 1px solid var(--border); border-radius: 10px; padding: 4px; gap: 0; }
+.mode-toggle-btn { flex: 1; padding: 9px 16px; font-size: var(--caption); font-weight: 600; border-radius: 7px; border: 1px solid transparent; background: transparent; color: var(--text-2); transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease; cursor: pointer; text-align: center; }
+.mode-toggle-btn:hover:not(.active) { color: var(--text-1); background: var(--elevated); }
+.mode-toggle-btn.active { background: var(--card); color: var(--text-1); border-color: var(--border); box-shadow: 0 1px 3px rgba(0,0,0,0.18); }
 .mode-description { font-size: var(--caption); color: var(--text-2); line-height: 1.5; padding: 8px 0 4px; }
 
 /* Empty state CTA */
 .empty-cta { padding: 10px 24px; background: var(--accent); color: white; font-size: var(--body); font-weight: 600; border-radius: 8px; transition: background 0.15s ease; cursor: pointer; }
 .empty-cta:hover { background: var(--accent-hover); }
+
+/* Setup nudge banner */
+.setup-nudge { display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; font-size: var(--caption); color: var(--text-2); margin: 16px auto 0; max-width: 400px; }
+.setup-nudge button { padding: 4px 12px; font-size: var(--caption); font-weight: 600; border-radius: 6px; cursor: pointer; background: var(--accent); color: white; border: none; }
+.setup-nudge button:hover { background: var(--accent-hover); }
+.setup-nudge button.dismiss { background: none; color: var(--text-3); padding: 2px 6px; font-size: 16px; line-height: 1; }
+.setup-nudge button.dismiss:hover { color: var(--text-1); background: none; }
 
 /* View panels */
 .view-panel { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
@@ -481,7 +488,7 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .org-platform-section { display: flex; flex-direction: column; align-items: center; }
 .org-platform-divider { width: 60%; max-width: 200px; height: 1px; background: var(--border); margin-bottom: 24px; }
 .org-platform-label { font-size: var(--caption); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); margin-bottom: 16px; }
-.org-card-sm { padding: 12px 19px; }
+.org-card-sm { padding: 12px 19px; max-width: 240px; }
 .org-card-sm:hover { transform: none; }
 .org-card-sm .avatar { width: 28px; height: 28px; font-size: 12px; }
 .org-card-sm .org-card-name { font-size: var(--body); }
@@ -534,7 +541,7 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
       <div class="sidebar-header"><span class="sidebar-label">Conversations</span></div>
       <div class="sidebar-search-wrap">
         <input type="text" id="convo-search" class="sidebar-search" placeholder="Search conversations..." oninput="filterConversations(this.value)" onkeydown="if(event.key==='Escape'){clearConvoSearch();this.blur();}" />
-        <span class="sidebar-search-clear hidden" id="convo-search-clear" onclick="clearConvoSearch()">&times;</span>
+        <span class="sidebar-search-clear hidden" id="convo-search-clear" onclick="clearConvoSearch()"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="2" y1="2" x2="10" y2="10"/><line x1="10" y1="2" x2="2" y2="10"/></svg></span>
       </div>
       <div class="convo-list" id="convo-list"></div>
       <button class="add-btn" onclick="newConversation()">+ New conversation</button>
@@ -543,7 +550,7 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
       <div class="sidebar-header"><span class="sidebar-label">Skills</span></div>
       <div class="sidebar-search-wrap">
         <input type="text" id="skill-search" class="sidebar-search" placeholder="Search skills..." oninput="filterSkills(this.value)" onkeydown="if(event.key==='Escape'){clearSkillSearch();this.blur();}" />
-        <span class="sidebar-search-clear hidden" id="skill-search-clear" onclick="clearSkillSearch()">&times;</span>
+        <span class="sidebar-search-clear hidden" id="skill-search-clear" onclick="clearSkillSearch()"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="2" y1="2" x2="10" y2="10"/><line x1="10" y1="2" x2="2" y2="10"/></svg></span>
       </div>
       <div class="skills-sidebar-list" id="skills-sidebar-list"></div>
     </div>
@@ -551,7 +558,7 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
       <div class="sidebar-header"><span class="sidebar-label">Files</span></div>
       <div class="sidebar-search-wrap">
         <input type="text" id="file-search" class="sidebar-search" placeholder="Search files..." oninput="filterFiles(this.value)" onkeydown="if(event.key==='Escape'){clearFileSearch();this.blur();}" />
-        <span class="sidebar-search-clear hidden" id="file-search-clear" onclick="clearFileSearch()">&times;</span>
+        <span class="sidebar-search-clear hidden" id="file-search-clear" onclick="clearFileSearch()"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="2" y1="2" x2="10" y2="10"/><line x1="10" y1="2" x2="2" y2="10"/></svg></span>
       </div>
       <div class="file-tree" id="file-tree"></div>
     </div>

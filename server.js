@@ -43,20 +43,21 @@ function getPermissionMode() {
   return 'acceptEdits';
 }
 
-// Returns --bare startup optimization args. --bare skips hooks, LSP, plugin sync,
-// auto-memory, prefetches, and CLAUDE.md auto-discovery for faster subprocess startup.
-// We restore hooks and CLAUDE.md via explicit flags so the permission system still works.
+// Returns startup args that configure workspace context without using --bare.
+// Previously used --bare for faster startup, but --bare skips keychain/OAuth reads
+// which causes "Not logged in" errors for users who authenticate via `claude login`.
+// We now pass context flags explicitly without --bare so auth works normally.
 function getBareArgs() {
   if (!WORKSPACE) return [];
-  const args = ['--bare'];
-  // Restore CLAUDE.md discovery for the workspace
+  const args = [];
+  // Ensure CLAUDE.md discovery for the workspace
   args.push('--add-dir', WORKSPACE);
-  // Restore hooks (permission system) from settings.local.json
+  // Load hooks (permission system) from settings.local.json
   const settingsPath = path.join(WORKSPACE, '.claude', 'settings.local.json');
   if (fs.existsSync(settingsPath)) {
     args.push('--settings', settingsPath);
   }
-  // Restore MCP server access from .mcp.json
+  // Load MCP server access from .mcp.json
   const mcpPath = path.join(WORKSPACE, '.mcp.json');
   if (fs.existsSync(mcpPath)) {
     args.push('--mcp-config', mcpPath);
@@ -767,8 +768,7 @@ function executeRoutine(agent, routine, key) {
   broadcastRoutineUpdate();
 
   // Routines run unattended (no user to approve), so bypass permissions.
-  // --bare skips startup overhead (hooks, LSP, plugins, CLAUDE.md discovery).
-  const args = ['--bare', '--print', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
+  const args = [...getBareArgs(), '--print', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
   if (agent.id !== 'default') args.push('--agent', agent.id);
   args.push(routine.prompt);
 
@@ -1229,8 +1229,6 @@ function detectWorkspaceMode(dir) {
 // Returns { success: true } or { success: false, error: string }.
 function scaffoldDefaults(dir) {
   const folderName = path.basename(dir);
-  const assistantName = 'Sam';
-  const assistantSlug = 'sam';
 
   try {
     // Create default folders
@@ -1239,12 +1237,8 @@ function scaffoldDefaults(dir) {
       fs.mkdirSync(path.join(dir, folder), { recursive: true });
     }
 
-    // Create CLAUDE.md
+    // Create minimal CLAUDE.md (Doc will add About section during onboarding)
     const claudeMd = `# ${folderName}
-
-${assistantName} is your personal assistant. Ask it anything. It works best when
-it knows how you prefer to work, so tell it your preferences as you
-go and it will remember them.
 
 ## Workspace structure
 
@@ -1253,85 +1247,15 @@ go and it will remember them.
 - **2 Projects/**: Things you're actively working on
 - **3 Resources/**: Reference material you want to keep
 - **4 Archive/**: Finished work
-
-## How to grow this workspace
-
-As you use ${assistantName}, you'll develop preferences and repeated workflows.
-When that happens, ${assistantName} will suggest creating skills to handle them
-consistently. You can also ask Doc to add specialist agents, new
-folders, or integrations at any time.
 `;
     fs.writeFileSync(path.join(dir, 'CLAUDE.md'), claudeMd);
 
-    // Create orchestrator agent file
-    const agentsDir = path.join(dir, '.claude', 'agents');
-    fs.mkdirSync(agentsDir, { recursive: true });
+    // Mark setup as incomplete so onboarding flows through Doc
+    const state = readState();
+    state.setupComplete = false;
+    writeState(state);
 
-    const agentContent = `---
-name: ${assistantSlug}
-displayName: ${assistantName}
-role: Personal Assistant
-type: orchestrator
-order: 0
-icon: brain
-colour: "#6366F1"
-model: sonnet
-description: Your personal assistant. Helps you get things done.
-prompts:
-  - Draft an email I've been putting off
-  - Help me plan my week
-  - Break down a problem I'm stuck on
----
-
-You are ${assistantName}, a personal assistant.
-
-## How you work
-
-- Default to action. Ask only when getting it wrong costs more than
-  clarifying.
-- Lead with the answer, then explain.
-- Be direct. No filler, no buzzwords, no corporate cheerfulness.
-- Adapt tone to context: formal for stakeholder comms, conversational
-  for brainstorming, concise for quick questions.
-
-## Workspace
-
-Files live in a simple folder structure:
-- **0 Inbox/**: Things that haven't been sorted yet
-- **1 Notes/**: Meeting notes, ideas, quick captures
-- **2 Projects/**: Active work
-- **3 Resources/**: Reference material
-- **4 Archive/**: Finished work
-
-When creating files, put them in the most appropriate folder. If
-unsure, use 0 Inbox/.
-
-## Growing your workspace
-
-As you work together, you'll develop preferences and repeated
-workflows. When you notice the user asking for the same type of work
-three or more times, suggest creating a skill for it:
-
-"You've asked me to [describe pattern] a few times now. Want me to
-save your preferences as a skill so I handle it consistently every
-time?"
-
-If the user says yes, hand off to Doc to create the skill.
-
-If the user wants to add specialist agents, new folders, integrations,
-or customise how you work, hand off to Doc.
-
-## What you don't do
-
-- Don't create skills, agents, or modify workspace configuration
-  yourself. That's Doc's job.
-- Don't impose structure the user didn't ask for.
-- Don't reference tools, integrations, or capabilities that aren't
-  set up yet.
-`;
-    fs.writeFileSync(path.join(agentsDir, `${assistantSlug}.md`), agentContent);
-
-    console.log(`  [Scaffold] Created default workspace: ${folders.length} folders, CLAUDE.md, ${assistantSlug} agent`);
+    console.log(`  [Scaffold] Created default workspace: ${folders.length} folders, CLAUDE.md (no orchestrator, setup pending)`);
     return { success: true };
   } catch (e) {
     console.error(`  [Scaffold] Default workspace creation failed: ${e.message}`);
@@ -2605,7 +2529,7 @@ wss.on('connection', (ws) => {
         };
         if (WORKSPACE) {
           try { wsData.analysis = analyzeWorkspace(WORKSPACE, discoverAgents()); } catch (e) { console.warn('  Workspace analysis failed:', e.message); }
-          try { wsData.workspaceMode = readState().workspaceMode || 'knowledge'; } catch (e) { /* default */ }
+          try { const st = readState(); wsData.workspaceMode = st.workspaceMode || 'knowledge'; wsData.setupComplete = !!st.setupComplete; } catch (e) { /* default */ }
         }
         ws.send(JSON.stringify(wsData));
       }
@@ -2633,7 +2557,7 @@ wss.on('connection', (ws) => {
           try { agentList = discoverAgents(); } catch (e) { console.warn('  Agent discovery failed:', e.message); }
           const isEmpty = isEmptyWorkspace(dir, agentList);
 
-          // Path C: empty workspace gets default folders, CLAUDE.md, orchestrator
+          // Empty workspace: scaffold default folders and CLAUDE.md
           let scaffoldError = null;
           if (isEmpty) {
             const result = scaffoldDefaults(dir);
@@ -2644,7 +2568,7 @@ wss.on('connection', (ws) => {
           try { scaffoldWorkspace(dir); } catch (e) { console.warn('Scaffold warning:', e.message); }
           console.log(`  Workspace changed to: ${WORKSPACE} (empty=${isEmpty})`);
 
-          // Re-discover agents after scaffolding (default agent now exists for Path C)
+          // Re-discover agents after scaffolding
           try { agentList = discoverAgents(); } catch (e) { console.warn('  Agent discovery failed:', e.message); }
 
           // Auto-detect and store workspace mode
@@ -2657,7 +2581,7 @@ wss.on('connection', (ws) => {
 
           let analysis = null;
           try { analysis = analyzeWorkspace(dir, agentList); } catch (e) { console.warn('  Workspace analysis failed:', e.message); }
-          ws.send(JSON.stringify({ type: 'workspace_set', path: WORKSPACE, analysis, isEmpty, workspaceMode: state.workspaceMode, scaffoldError }));
+          ws.send(JSON.stringify({ type: 'workspace_set', path: WORKSPACE, analysis, isEmpty, workspaceMode: state.workspaceMode, setupComplete: !!state.setupComplete, scaffoldError }));
           ws.send(JSON.stringify({ type: 'agents', agents: agentList }));
           try { ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) })); } catch (e) { console.warn('  File tree failed:', e.message); }
         } else {
@@ -2696,7 +2620,7 @@ wss.on('connection', (ws) => {
             state.workspaceMode = detectWorkspaceMode(dir);
             writeState(state);
 
-            ws.send(JSON.stringify({ type: 'workspace_set', path: WORKSPACE, analysis, isEmpty: true, workspaceMode: state.workspaceMode, scaffoldError }));
+            ws.send(JSON.stringify({ type: 'workspace_set', path: WORKSPACE, analysis, isEmpty: true, workspaceMode: state.workspaceMode, setupComplete: false, scaffoldError }));
             ws.send(JSON.stringify({ type: 'agents', agents: agentList }));
             ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) }));
           } catch (e) {
