@@ -250,7 +250,8 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .permission-resolved.denied { background: rgba(232,122,90,0.12); color: var(--accent); }
 .permission-resolved.auto-allowed { background: rgba(107,198,126,0.06); color: var(--text-2); font-style: italic; }
 .chat-input { padding: 16px 24px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
-.chat-input textarea { flex: 1; padding: 12px 16px; background: var(--card); border-radius: 16px; font-size: var(--body); border: 1px solid transparent; transition: all 0.2s ease; resize: none; overflow-y: hidden; min-height: 44px; max-height: 200px; line-height: 1.5; font-family: inherit; color: var(--text-1); outline: none; }
+.chat-input textarea { flex: 1; padding: 12px 16px; background: var(--card); border-radius: 16px; font-size: var(--body); border: 1px solid transparent; transition: all 0.2s ease; resize: none; overflow-y: auto; min-height: 44px; max-height: 200px; line-height: 1.5; font-family: inherit; color: var(--text-1); outline: none; }
+.chat-input textarea::-webkit-scrollbar { display: none; }
 .chat-input textarea:focus { box-shadow: 0 0 0 2px rgba(232,122,90,0.2); }
 .chat-input textarea::placeholder { color: var(--text-2); }
 .chat-input textarea:disabled { opacity: 0.5; }
