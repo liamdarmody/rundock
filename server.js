@@ -463,7 +463,7 @@ function discoverAgents() {
         const fmName = meta.name || id;
         const displayName = meta.displayName || meta.name || titleCase(id);
         const role = meta.role || titleCase(id);
-        const bodyMatch = content.match(/^---\n[\s\S]*?\n---\n([\s\S]*)/);
+        const bodyMatch = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?([\s\S]*)/);
         let instructions = bodyMatch ? bodyMatch[1].trim() : '';
 
         // If this is the default agent, merge instructions from CLAUDE.md
@@ -3214,7 +3214,7 @@ function discoverSkills(existingAgents) {
         }
 
         // Extract body content (after frontmatter) for instructions display
-        const bodyMatch = content.match(/^---\n[\s\S]*?\n---\n([\s\S]*)/);
+        const bodyMatch = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?([\s\S]*)/);
         const instructions = bodyMatch ? bodyMatch[1].trim() : '';
 
         skills.push({
