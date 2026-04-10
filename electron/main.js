@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, nativeImage, dialog, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, nativeImage, dialog, ipcMain, shell } = require('electron');
 const path = require('path');
 const { execSync } = require('child_process');
 
@@ -207,6 +207,20 @@ function createMainWindow(port) {
 
   mainWindow.webContents.on('did-finish-load', () => {
     console.log('[Electron] Page loaded successfully');
+  });
+
+  // Prevent in-app navigation to external URLs; open them in the default browser
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith(`http://localhost:${port}`)) {
+      event.preventDefault();
+      shell.openExternal(url);
+    }
+  });
+
+  // Prevent target="_blank" links from opening a new Electron window
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url);
+    return { action: 'deny' };
   });
 
   mainWindow.on('closed', () => {
