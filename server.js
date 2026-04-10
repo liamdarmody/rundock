@@ -1826,7 +1826,8 @@ function handleDelegation(msg, processes) {
   }
 
   const agentList = discoverAgents();
-  const targetAgent = agentList.find(a => a.id === msg.targetAgent || a.name === msg.targetAgent);
+  const targetAgent = agentList.find(a => a.id === msg.targetAgent || a.name === msg.targetAgent)
+    || agentList.find(a => a.displayName && a.displayName.toLowerCase() === String(msg.targetAgent).toLowerCase());
   if (!targetAgent || !targetAgent.fileName) {
     safeSend(JSON.stringify({ type: 'system', subtype: 'delegation_error', content: `Agent "${msg.targetAgent}" not found`, _conversationId: convoId }));
     return;
