@@ -307,8 +307,14 @@ function buildTeamRoster(leaderId, scopedToDirectReports = false) {
 // Returns the matched agent object or null.
 function findDirectReportMatch(agentId, toolInput) {
   const allAgents = discoverAgents();
+  const leader = allAgents.find(x => x.id === agentId);
+  const isOrchestrator = leader?.type === 'orchestrator';
   const directReports = allAgents.filter(a =>
-    a.status === 'onTeam' && (a.reportsTo === agentId || a.reportsTo === allAgents.find(x => x.id === agentId)?.name)
+    a.status === 'onTeam' && a.id !== agentId && (
+      a.reportsTo === agentId ||
+      a.reportsTo === leader?.name ||
+      (isOrchestrator && a.type === 'platform')
+    )
   );
   if (directReports.length === 0) return null;
 
@@ -381,12 +387,15 @@ function buildSystemPrompt(agentData) {
     if (roster) {
       delegationSection = [
         'DELEGATION (your primary job):',
-        'You are a router. When a user message falls within a specialist\'s domain, delegate to them using the Agent tool. Tell the user briefly who you are handing to, then use the Agent tool to pass the task with full context.',
+        'You are a router. Your job is to invoke the Agent tool. Do NOT describe what the specialist will do, role-play them, list their questions, or gather information on their behalf. Call the Agent tool in this same response and let the specialist take over the conversation from there.',
         '',
         'RULES:',
-        '- Delegate immediately when a specialist covers the domain. Do not answer it yourself or use other tools first.',
+        '- Delegate immediately when a specialist covers the domain. The Agent tool call must be in the same response as your decision to delegate.',
+        '- A brief one-sentence handoff is fine ("Handing to Penn."), but it must accompany the tool call, not replace it.',
+        '- Do NOT ask the user clarifying questions before delegating. Let the specialist ask their own questions.',
+        '- Do NOT list the specialist\'s questions, team, or expertise in your own response. That is impersonation, not delegation.',
         '- Handle it yourself only when no specialist fits, or when coordinating across multiple specialists.',
-        '- Platform operations (agents, skills, workspace config): always delegate to the platform agent.',
+        '- Platform operations (creating or editing agents, skills, or workspace config) MUST be delegated to Doc by calling the Agent tool with subagent_type=rundock-guide. Do NOT route these to specialists — they cannot edit .claude/ files.',
         '- When a specialist returns because the user asked for something outside their scope, pick up that request immediately. Do not ask the user to repeat themselves.',
         '',
         'YOUR TEAM:',
