@@ -10,6 +10,8 @@
  *   4. Staple the notarisation ticket
  *   5. Publish all feed artifacts to a GitHub Release so electron-updater
  *      can auto-update existing installs
+ *   6. Bump the download buttons in the Rundock Site repo to the new DMG
+ *      and push (skipped if the site repo is dirty or not on main)
  *
  * Usage:
  *   node scripts/release.js <version>
@@ -289,6 +291,72 @@ function publishRelease(version) {
   log('publish', `Release ${tag} created with ${assets.length} assets`);
 }
 
+// Update the Rundock Site repo's download buttons to point at the new DMG,
+// then commit and push. Skips (with a warning) if the site repo is not on
+// main, has uncommitted changes, or is missing entirely — a failure here
+// should never block a release that has already been published.
+function updateSiteDownloadUrls(version) {
+  const sitePath = process.env.RUNDOCK_SITE_PATH
+    || path.resolve(ROOT, '..', 'Rundock Site');
+
+  if (!fs.existsSync(sitePath)) {
+    log('site', `Site repo not found at ${sitePath}; skipping`);
+    return;
+  }
+
+  const indexPath = path.join(sitePath, 'index.html');
+  if (!fs.existsSync(indexPath)) {
+    log('site', `index.html not found in ${sitePath}; skipping`);
+    return;
+  }
+
+  let branch, status;
+  try {
+    branch = execFileSync('git', ['-C', sitePath, 'symbolic-ref', '--short', 'HEAD'],
+      { encoding: 'utf8' }).trim();
+    status = execFileSync('git', ['-C', sitePath, 'status', '--porcelain'],
+      { encoding: 'utf8' });
+  } catch (err) {
+    log('site', `Failed to read site repo git state: ${err.message}; skipping`);
+    return;
+  }
+
+  if (branch !== 'main') {
+    log('site', `Site repo is on branch "${branch}", not main; skipping`);
+    return;
+  }
+  if (status.trim()) {
+    log('site', 'Site repo has uncommitted changes; skipping to avoid clobbering');
+    return;
+  }
+
+  const content = fs.readFileSync(indexPath, 'utf8');
+  const pattern = /releases\/download\/v\d+\.\d+\.\d+\/Rundock-\d+\.\d+\.\d+-arm64\.dmg/g;
+  const replacement = `releases/download/v${version}/Rundock-${version}-arm64.dmg`;
+  const updated = content.replace(pattern, replacement);
+
+  if (updated === content) {
+    log('site', 'No download URL changes needed');
+    return;
+  }
+
+  fs.writeFileSync(indexPath, updated, 'utf8');
+  log('site', `Updated download URLs in index.html to v${version}`);
+
+  const commitMessage = `chore: bump download buttons to v${version}\n\n` +
+    `Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n`;
+
+  try {
+    execFileSync('git', ['-C', sitePath, 'add', 'index.html'], { stdio: 'inherit' });
+    execFileSync('git', ['-C', sitePath, 'commit', '-m', commitMessage], { stdio: 'inherit' });
+    execFileSync('git', ['-C', sitePath, 'push', 'origin', 'main'], { stdio: 'inherit' });
+    log('site', `Pushed site update for v${version}`);
+  } catch (err) {
+    log('site', `Git operation failed: ${err.message}`);
+    log('site', 'Site repo changes left in working tree; review and push manually');
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -302,6 +370,7 @@ staple();
 
 const version = process.argv[2];
 publishRelease(version);
+updateSiteDownloadUrls(version);
 
 const dmgPath = path.join(DIST_DIR, `Rundock-${version}-arm64.dmg`);
 
