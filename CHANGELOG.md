@@ -4,6 +4,19 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## 0.8.1: Reliable Delegation (2026-04-11)
+
+Orchestrators now produce a real handoff to the platform agent when you ask for workspace, agent, or skill operations. Plus a handful of UX fixes across the message composer, external links, and the Skills detail page.
+
+### Fixed
+
+- **Orchestrators hand off to the platform agent for real:** Asking an orchestrator to create an agent, edit a skill, or change workspace config used to produce a convincing-looking narration ("Handing to Doc, he'll ask you three things...") without the platform agent ever actually joining the conversation. The orchestrator was describing the handoff instead of invoking it. The platform agent now appears as a full first-class participant with its own message bubble, asks its own questions, and stays in the conversation until the task is done.
+- **Skill and agent instructions render on the detail page:** Skills and agents created by the platform agent sometimes showed up in the sidebar list but opened to an empty detail page. The file reader expected a trailing newline after the closing frontmatter separator, which isn't always written. The reader is now tolerant of missing newlines and CRLF line endings, so affected files render correctly on next load.
+- **Mouse scroll in the message composer:** Pasting a long message into the composer used to cap the textarea's height but leave the hidden overflow unreachable by mouse or trackpad. Only the keyboard caret could move through it. The composer now accepts wheel and trackpad scroll, with the scrollbar itself hidden to keep the input area visually clean.
+- **External links open in the default browser:** Clicking an external link inside the Rundock window now launches the link in your default browser instead of navigating the main window away from Rundock or spawning a second Electron window.
+
+---
+
 ## 0.8.0: Onboarding and Stability (2026-04-09)
 
 Rundock now adapts its first-run experience to the workspace it opens, distinguishes between knowledge and code workspaces, and delegates between agents reliably. Distributed as a signed and notarised .dmg.
