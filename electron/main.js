@@ -130,7 +130,26 @@ function setupMenu() {
       label: 'Rundock',
       submenu: [
         { label: 'About Rundock', role: 'about' },
-        { label: 'Check for Updates', click: () => { if (autoUpdater) autoUpdater.checkForUpdates(); } },
+        { label: 'Check for Updates', click: () => {
+          if (!autoUpdater) {
+            dialog.showMessageBox(mainWindow, {
+              type: 'info',
+              message: 'Auto-update is not available in this build.',
+              buttons: ['OK'],
+            });
+            return;
+          }
+          isCheckingManually = true;
+          autoUpdater.checkForUpdates().catch((err) => {
+            isCheckingManually = false;
+            dialog.showMessageBox(mainWindow, {
+              type: 'error',
+              message: 'Could not check for updates',
+              detail: err && err.message ? err.message : String(err),
+              buttons: ['OK'],
+            });
+          });
+        } },
         { type: 'separator' },
         { label: 'Quit', accelerator: 'CmdOrCtrl+Q', click: () => { app.quit(); } },
       ],
@@ -156,6 +175,12 @@ function setupMenu() {
 
 // ===== AUTO-UPDATE =====
 
+// Set to true when the user clicks "Check for Updates" from the menu so the
+// event handlers below know to show a visible confirmation. Reset as soon as
+// the check resolves. The silent startup check leaves this false so it never
+// pops a dialog unprompted.
+let isCheckingManually = false;
+
 function setupAutoUpdate() {
   if (!autoUpdater) return;
 
@@ -165,6 +190,39 @@ function setupAutoUpdate() {
   autoUpdater.on('update-available', (info) => {
     if (mainWindow) {
       mainWindow.webContents.send('rundock-update', { type: 'available', version: info.version });
+    }
+    if (isCheckingManually) {
+      isCheckingManually = false;
+      dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        message: `Update available: ${info.version}`,
+        detail: 'Downloading in the background. Rundock will install the update on next quit.',
+        buttons: ['OK'],
+      });
+    }
+  });
+
+  autoUpdater.on('update-not-available', () => {
+    if (isCheckingManually) {
+      isCheckingManually = false;
+      dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        message: 'Rundock is up to date.',
+        detail: `You are running version ${app.getVersion()}.`,
+        buttons: ['OK'],
+      });
+    }
+  });
+
+  autoUpdater.on('error', (err) => {
+    if (isCheckingManually) {
+      isCheckingManually = false;
+      dialog.showMessageBox(mainWindow, {
+        type: 'error',
+        message: 'Could not check for updates',
+        detail: err && err.message ? err.message : String(err),
+        buttons: ['OK'],
+      });
     }
   });
 
