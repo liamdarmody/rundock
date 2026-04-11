@@ -4,11 +4,12 @@
  * Release script for Rundock.
  *
  * Chains the full release pipeline:
- *   1. Build the .app and .dmg via electron-builder
+ *   1. Build the .app, .dmg, and .zip via electron-builder
  *   2. Submit for Apple notarisation via xcrun notarytool
  *   3. Poll for notarisation completion (every 30s)
  *   4. Staple the notarisation ticket
- *   5. Log the final .dmg path
+ *   5. Publish all feed artifacts to a GitHub Release so electron-updater
+ *      can auto-update existing installs
  *
  * Usage:
  *   node scripts/release.js <version>
@@ -18,7 +19,9 @@
  *   npm run release -- 0.8.1
  *
  * Requires .env with: APPLE_API_KEY, APPLE_API_KEY_ID, APPLE_API_ISSUER,
- * CSC_LINK, CSC_KEY_PASSWORD, APPLE_TEAM_ID
+ * CSC_LINK, CSC_KEY_PASSWORD, APPLE_TEAM_ID.
+ *
+ * Requires gh CLI authenticated against the target repo.
  */
 
 const { execFileSync, execSync } = require('child_process');
@@ -207,6 +210,85 @@ function staple() {
   log('staple', 'Stapled successfully');
 }
 
+// Extract the title line and body of a specific version from CHANGELOG.md.
+// Returns { title, body } or null if not found. `title` is the heading text
+// without the leading "## ". `body` is everything between this heading and
+// the next "## " (or end of file), with trailing "---" separators stripped.
+function extractChangelogEntry(version) {
+  const changelogPath = path.join(ROOT, 'CHANGELOG.md');
+  if (!fs.existsSync(changelogPath)) return null;
+  const lines = fs.readFileSync(changelogPath, 'utf8').split('\n');
+  const headingPrefix = `## ${version}:`;
+  let start = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].startsWith(headingPrefix)) { start = i; break; }
+  }
+  if (start === -1) return null;
+  const title = lines[start].replace(/^## /, '').trim();
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (lines[i].startsWith('## ')) { end = i; break; }
+  }
+  const body = lines.slice(start + 1, end).join('\n')
+    .replace(/^---\s*$/gm, '')
+    .trim();
+  return { title, body };
+}
+
+function publishRelease(version) {
+  const tag = `v${version}`;
+  const dmg = path.join(DIST_DIR, `Rundock-${version}-arm64.dmg`);
+  const dmgBlockmap = `${dmg}.blockmap`;
+  const zip = path.join(DIST_DIR, `Rundock-${version}-arm64-mac.zip`);
+  const zipBlockmap = `${zip}.blockmap`;
+  const feed = path.join(DIST_DIR, 'latest-mac.yml');
+  const assets = [dmg, dmgBlockmap, zip, zipBlockmap, feed];
+
+  for (const a of assets) {
+    if (!fs.existsSync(a)) fail('publish', `Missing release artifact: ${a}`);
+  }
+
+  // Determine whether the release already exists.
+  let exists = false;
+  try {
+    execFileSync('gh', ['release', 'view', tag], { stdio: 'pipe' });
+    exists = true;
+  } catch (_) {
+    exists = false;
+  }
+
+  if (exists) {
+    log('publish', `Release ${tag} already exists, uploading assets (clobbering)`);
+    try {
+      execFileSync('gh', ['release', 'upload', tag, ...assets, '--clobber'], {
+        stdio: 'inherit',
+      });
+    } catch (err) {
+      fail('publish', `gh release upload failed: ${err.message}`);
+    }
+    log('publish', `Assets uploaded to ${tag}`);
+    return;
+  }
+
+  log('publish', `Creating GitHub release ${tag}`);
+  const entry = extractChangelogEntry(version);
+  const title = entry ? entry.title : `Rundock ${version}`;
+  const notes = entry && entry.body
+    ? entry.body
+    : `Rundock ${version}. See CHANGELOG.md for details.`;
+
+  try {
+    execFileSync(
+      'gh',
+      ['release', 'create', tag, ...assets, '--title', title, '--notes', notes],
+      { stdio: 'inherit' }
+    );
+  } catch (err) {
+    fail('publish', `gh release create failed: ${err.message}`);
+  }
+  log('publish', `Release ${tag} created with ${assets.length} assets`);
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -219,6 +301,8 @@ pollNotarisation(submissionId);
 staple();
 
 const version = process.argv[2];
+publishRelease(version);
+
 const dmgPath = path.join(DIST_DIR, `Rundock-${version}-arm64.dmg`);
 
 console.log('');
