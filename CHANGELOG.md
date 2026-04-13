@@ -4,6 +4,16 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## 0.8.2: Faster Scope Return (2026-04-13)
+
+### Fixed
+
+- **Scope return is now near-instant after long specialist sessions:** When a specialist handed scope back to the orchestrator for re-routing, the full conversation transcript was being prepended to the orchestrator's next prompt. On long or code-heavy sessions this bloated the context and made the LLM call slow. The transcript is no longer prepended on handoff; the orchestrator only needs the pending request to choose the next specialist. When the orchestrator delegates mid-conversation to another specialist, that specialist now receives the task brief rather than the full transcript. Delegations that start fresh are unchanged and still receive the full conversation history.
+
+- **"Check for Updates" now confirms the result:** Clicking "Check for Updates" from the menu used to silently poll the update feed, making it impossible to tell whether the check had actually run. The menu action now shows a clear dialog in all cases: up to date, update available (downloading in background), or error. The silent startup check is unchanged and still runs quietly.
+
+---
+
 ## 0.8.1: Reliable Delegation (2026-04-11)
 
 Orchestrators now produce a real handoff to the platform agent when you ask for workspace, agent, or skill operations. Plus a handful of UX fixes across the message composer, external links, and the Skills detail page.
