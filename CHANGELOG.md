@@ -4,6 +4,16 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## 0.8.3: Nav Rail State Reset (2026-04-13)
+
+Switching workspaces now leaves the nav rail in a clean state. Stale indicators from the previous workspace no longer bleed into the new one.
+
+### Fixed
+
+- **Nav rail indicators no longer carry over between workspaces:** The orange unread dot on Conversations and the working dot on Team were tracked in client-side state that persisted across workspace switches. Opening a different workspace could show an unread dot on a freshly created workspace before any conversation existed, and opening the current workspace's conversation would not clear it because the stale indicator belonged to a conversation from the previous workspace. A full page reload was the only way to clear it. Workspace switching now resets the indicator state and reconciles the nav rail badges so each workspace starts from a clean slate.
+
+---
+
 ## 0.8.2: Faster Scope Return (2026-04-13)
 
 Scope return after long specialist sessions is now near-instant. Plus a fix to the "Check for Updates" menu action so it actually confirms the result.
