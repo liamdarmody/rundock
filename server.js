@@ -1737,8 +1737,16 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
 }
 
 // ── SCOPE RETURN: specialist hands off to orchestrator ──
-// Called when a directly-started specialist (no delegation parent) emits <!-- RUNDOCK:RETURN -->
-function handleScopeReturn(specialistEntry, convoId) {
+// Called when a specialist emits <!-- RUNDOCK:RETURN -->. Two flavours:
+//   - Out-of-scope return (default): the specialist is handing back mid-task because the user
+//     asked for something outside its domain. We tag the new orchestrator entry with
+//     scopeReturnSource so the immediate-reuse guard in handleDelegation blocks the orchestrator
+//     from routing the very next user message straight back to the same specialist.
+//   - Pipeline-complete return (wasPipelineComplete=true): the specialist finished its delegated
+//     work cleanly and is handing back control with nothing outstanding. In that case the user's
+//     next message is a fresh request and the orchestrator must be free to route it anywhere,
+//     including back to the same specialist. Do not tag scopeReturnSource.
+function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false) {
   const agentList = discoverAgents();
   const orchestrator = agentList.find(a => a.type === 'orchestrator');
 
@@ -1777,7 +1785,7 @@ function handleScopeReturn(specialistEntry, convoId) {
     lastUserMessage: specialistEntry.lastUserMessage,
     pendingAgentTool: null,
     toolCalls: [], turnStartTime: Date.now(),
-    scopeReturnSource: specialistEntry.agentId
+    scopeReturnSource: wasPipelineComplete ? null : specialistEntry.agentId
   };
   chatProcesses.set(convoId, orchEntry);
 
@@ -2145,7 +2153,11 @@ function handleDelegation(msg, processes) {
         // it last saw, misattributing work.
         if (resumeEntry.scopeReturn && cur === resumeEntry) {
           console.log(`[ScopeReturn] convo=${convoId} resumed parent ${resumeEntry.agentId} exited with RETURN marker, spawning orchestrator`);
-          handleScopeReturn(resumeEntry, convoId);
+          // Resumed parents only reach this close handler after their delegated pipeline
+          // has completed (sub-agent returned, parent wrapped up, emitted RETURN). Treat as
+          // pipeline-complete so the orchestrator can freely re-delegate to the same
+          // specialist on the user's next turn.
+          handleScopeReturn(resumeEntry, convoId, true);
           return;
         }
 
