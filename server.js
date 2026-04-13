@@ -1784,12 +1784,9 @@ function handleScopeReturn(specialistEntry, convoId) {
   safeSend(JSON.stringify({ type: 'system', subtype: 'process_started',
     _conversationId: convoId, _processId: processId, autoContinue: true }));
 
-  // Build context for orchestrator
-  const transcript = formatTranscript(convoId);
+  // Build context for orchestrator (Tier 1: routing prompt, no transcript)
   const pendingRequest = specialistEntry.lastUserMessage || '';
-  const prompt = transcript
-    ? `[SYSTEM: A specialist (${specialistEntry.agentId}) was handling this conversation but the user asked for something outside their scope. Here is the conversation so far:\n\n${transcript}\n\nThe user's pending request is: "${pendingRequest}"\n\nRoute this request now. Delegate to the right specialist if one fits, or handle it yourself. Do not ask the user to repeat themselves.]`
-    : `[SYSTEM: A specialist returned because the user asked for something outside their scope. The user's request is: "${pendingRequest}"\n\nRoute this request to the right specialist or handle it yourself.]`;
+  const prompt = `[SYSTEM: A specialist (${specialistEntry.agentId}) has finished and the user needs routing to a different specialist. The user's request is: "${pendingRequest}"\n\nRoute this request now. Delegate to the right specialist. Do not ask the user to repeat themselves.]`;
 
   proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n');
 
@@ -1926,8 +1923,10 @@ function handleDelegation(msg, processes) {
   }));
   safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: delegateProcessId }));
 
-  // Send context as first message, including full conversation transcript
-  const transcript = formatTranscript(convoId);
+  // Send context as first message. Tier 2 for intercepted delegations (orchestrator's
+  // brief is sufficient, no transcript). Tier 3 for non-intercepted delegations
+  // (preserve full transcript as a safety net).
+  const transcript = isIntercepted ? null : formatTranscript(convoId);
   const contextWithHistory = transcript
     ? `CONVERSATION SO FAR:\n${transcript}\n\nYOUR TASK:\n${msg.context}`
     : msg.context;
@@ -2083,10 +2082,9 @@ function handleDelegation(msg, processes) {
       if (isOutOfScope) {
         safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: resumeProcessId, autoContinue: true }));
 
-        const resumeTranscript = formatTranscript(convoId);
-        const resumePrompt = resumeTranscript
-          ? `[SYSTEM: You are resuming after your team member handled part of the conversation. Here is the full conversation so far:\n\n${resumeTranscript}\n\nThe user's latest request was: "${delegateEntry.lastUserMessage || 'continue'}"\n\nPick up from here. Do not repeat what your team member already covered. Act on the user's latest request.]`
-          : `[SYSTEM: Your team member completed a task. The user's latest request was: "${delegateEntry.lastUserMessage || 'continue'}". Act on it.]`;
+        // Tier 1: routing prompt only. The parent is being resumed via --resume,
+        // which restores session context from disk. No transcript needed.
+        const resumePrompt = `[SYSTEM: Your team member returned because the user asked for something outside their scope. The user's latest request was: "${delegateEntry.lastUserMessage || 'continue'}"\n\nRoute this request to the right specialist. Do not ask the user to repeat themselves.]`;
         resumeProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: resumePrompt } }) + '\n');
       } else {
         console.log(`[AgentIntercept] convo=${convoId} delegate completed normally, parent ${parentAgentId} parked (no auto-prompt)`);
