@@ -413,7 +413,9 @@ function buildSystemPrompt(agentData) {
       '- Do NOT narrate the delegation brief in visible chat. Do not describe what the team member will do, list the steps they will take, announce which files they will load, or refer to the user in third person. That belongs inside the Agent tool prompt.',
       '- Do NOT ask clarifying questions on the team member\'s behalf. Let them ask their own if needed.',
       '- Use your team member\'s actual name when handing off. Do not invent labels or role titles.',
-      '- If a request falls outside your domain entirely, hand back to the orchestrator using <!-- RUNDOCK:RETURN -->.',
+      '- Hand control back to the orchestrator using <!-- RUNDOCK:RETURN --> (as the very last thing in your response, after any final summary) in either of these cases:',
+      '  1. A request falls outside your domain entirely. Tell the user briefly you are handing them back, do not name other specialists, then emit the marker.',
+      '  2. You were delegated a multi-step task by the orchestrator, your pipeline is complete, all deliverables are written, and there is no substantive next step the user is waiting on from you in your core domain. Post your final summary first, then emit the marker on its own line. Do not loiter waiting for a follow-up.',
       '- When a team member returns, pick up where you left off using their output. Do not ask the user to repeat themselves.',
       '',
       'YOUR SUPPORT TEAM:',
@@ -1873,10 +1875,17 @@ function handleDelegation(msg, processes) {
   const isPlatformDelegate = targetAgent.type === 'platform';
 
   // Platform delegates (Doc): transactional, auto-return after task completion
-  // Specialist delegates: conversational, user controls when to return
-  const delegationContext = isPlatformDelegate
-    ? 'DELEGATION CONTEXT:\nYou have been delegated a task by another agent. Complete the task in a single response if possible. When the task is done (agent created, skill saved, file written, question answered, etc.), output <!-- RUNDOCK:RETURN --> at the very end of that same response. Do not wait for follow-up questions. Do not ask if there is anything else. Just complete the task, confirm what you did, and return immediately. If you genuinely need clarification before you can proceed, ask, but prefer using sensible defaults over asking.'
-    : 'DELEGATION CONTEXT:\nYou have been brought into this conversation by the orchestrator to handle a specific request. Help the user with their request. Have a natural conversation. Stay in the conversation and keep helping with follow-up questions in your domain.\n\nIMPORTANT: Do NOT return after completing a single task. The user may have more questions for you. Wait for their next message.\n\nOnly return to the orchestrator (output <!-- RUNDOCK:RETURN --> at the very end of your response) when:\n- The user asks for something outside your area of expertise. Tell them briefly that this falls outside what you handle and you are handing them back so the right person can pick it up. Do NOT name other specialists or suggest who should handle it. That is the orchestrator\'s job. Then output the RETURN marker.\n\nDo not attempt tasks you are not designed for. Hand back promptly so the orchestrator can route correctly.';
+  // Specialists with direct reports: multi-step pipeline, return when the pipeline is complete
+  // Plain specialists: conversational, user controls when to return
+  const targetHasDirectReports = !!buildTeamRoster(targetAgent.id, true);
+  let delegationContext;
+  if (isPlatformDelegate) {
+    delegationContext = 'DELEGATION CONTEXT:\nYou have been delegated a task by another agent. Complete the task in a single response if possible. When the task is done (agent created, skill saved, file written, question answered, etc.), output <!-- RUNDOCK:RETURN --> at the very end of that same response. Do not wait for follow-up questions. Do not ask if there is anything else. Just complete the task, confirm what you did, and return immediately. If you genuinely need clarification before you can proceed, ask, but prefer using sensible defaults over asking.';
+  } else if (targetHasDirectReports) {
+    delegationContext = 'DELEGATION CONTEXT:\nYou have been brought into this conversation by the orchestrator to run a task in your domain. You lead a support team and may delegate parts of the work to them. Do the real work, write the deliverables, and report the outcome.\n\nYou MUST output <!-- RUNDOCK:RETURN --> at the very end of your response in either of these cases:\n1. The user asks for something outside your domain of expertise. Tell them briefly that this falls outside what you handle and you are handing them back so the right person can pick it up. Do NOT name other specialists or suggest who should handle it. Then emit the marker.\n2. Your delegated pipeline is complete. All deliverables are written, all steps are done, and there is no substantive next step you are waiting on from the user in your core domain. Post your final summary first, then put the RETURN marker on its own line at the very end. Do not linger asking "anything else?" — return control so the orchestrator can route whatever comes next.\n\nReturning on completion is how control flows back up the chain. If you silently stop, the user\'s next message will be routed to the wrong agent.';
+  } else {
+    delegationContext = 'DELEGATION CONTEXT:\nYou have been brought into this conversation by the orchestrator to handle a specific request. Help the user with their request. Have a natural conversation. Stay in the conversation and keep helping with follow-up questions in your domain.\n\nIMPORTANT: Do NOT return after completing a single task. The user may have more questions for you. Wait for their next message.\n\nOnly return to the orchestrator (output <!-- RUNDOCK:RETURN --> at the very end of your response) when:\n- The user asks for something outside your area of expertise. Tell them briefly that this falls outside what you handle and you are handing them back so the right person can pick it up. Do NOT name other specialists or suggest who should handle it. That is the orchestrator\'s job. Then output the RETURN marker.\n\nDo not attempt tasks you are not designed for. Hand back promptly so the orchestrator can route correctly.';
+  }
 
   const systemPrompt = buildSystemPrompt(targetAgent);
   const fullPrompt = systemPrompt + '\n\n' + delegationContext;
@@ -2097,6 +2106,20 @@ function handleDelegation(msg, processes) {
       wireProcessHandlers(resumeEntry, convoId, null, {
         enableInterception: true,
         onResult: (e) => {
+          // Detect RUNDOCK:RETURN on a parked-and-resumed parent. For specialists with
+          // direct reports, the marker has two meanings: out-of-scope hand-back, or
+          // delegated-pipeline-complete hand-back. Either way, route control back to the
+          // orchestrator so the next user message is not attributed to the specialist.
+          const hasReturn = /<!-- RUNDOCK:RETURN -->/.test(e.responseText);
+          if (hasReturn && !e.delegation) {
+            e.scopeReturn = true;
+            console.log(`[ScopeReturn] convo=${convoId} agent=${e.agentId} RETURN marker on resumed parent (completion or out-of-scope)`);
+            setTimeout(() => {
+              if (!e.exited) {
+                try { e.process.kill(); } catch (err) {}
+              }
+            }, 500);
+          }
           if (e.responseText) {
             const toolSummary = buildToolSummary(e.toolCalls);
             const textWithTools = toolSummary ? toolSummary + '\n' + e.responseText : e.responseText;
@@ -2109,6 +2132,23 @@ function handleDelegation(msg, processes) {
       resumeProc.on('close', (rCode) => {
         resumeEntry.exited = true;
         const cur = processes.get(convoId);
+
+        // If the resumed parent emitted RUNDOCK:RETURN (either because its multi-step
+        // pipeline just completed, or because the user asked for something out-of-scope
+        // while it was active), route control back to the orchestrator via the same
+        // machinery handleScopeReturn uses for directly-started specialists.
+        //
+        // Covers the flow: orchestrator -> specialist -> sub-agent (normal return)
+        // -> specialist resumes -> specialist completes and emits RUNDOCK:RETURN
+        // -> orchestrator. Without this branch, the resumed parent exits silently
+        // and the frontend keeps routing subsequent messages to whichever agent
+        // it last saw, misattributing work.
+        if (resumeEntry.scopeReturn && cur === resumeEntry) {
+          console.log(`[ScopeReturn] convo=${convoId} resumed parent ${resumeEntry.agentId} exited with RETURN marker, spawning orchestrator`);
+          handleScopeReturn(resumeEntry, convoId);
+          return;
+        }
+
         if (cur === resumeEntry) processes.delete(convoId);
         safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: rCode, _agent: resumeEntry.agentId, _conversationId: convoId, _processId: resumeProcessId }));
       });
