@@ -2943,6 +2943,15 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   // Different workspace: reset everything
   conversations = [];
   activeConversation = null;
+  // Clear per-conversation client state that keys by convoId. Leftover entries
+  // from the previous workspace can leak into nav rail indicators (unread dot,
+  // working dot) even though the convoIds no longer exist in this workspace.
+  unreadConvos.clear();
+  workingConvos.clear();
+  for (const key of Object.keys(convoState)) delete convoState[key];
+  // Reconcile the nav rail badge DOM elements now that the Sets are empty.
+  updateUnreadBadge();
+  updateWorkingBadge();
   // Activate conversations sidebar; handlePersistedConversations will
   // open a pinned conversation or newConversation() once data arrives.
   document.querySelectorAll('.nav-item[data-nav]').forEach(n=>n.classList.remove('active'));
