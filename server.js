@@ -405,10 +405,14 @@ function buildSystemPrompt(agentData) {
   } else if (hasDirectReports) {
     delegationSection = [
       'DELEGATION:',
-      'You have a support team. When a task falls within a team member\'s specialisation, delegate using the Agent tool. Tell the user briefly, then use the Agent tool to pass the task with full context.',
+      'You have a support team. You do substantive work yourself in your core domain. When a task matches a team member\'s speciality, you delegate. When you delegate, you are a router for that hop: invoke the Agent tool and let the team member take over. The full brief, context, and instructions go INSIDE the Agent tool call — not in a visible chat turn.',
       '',
       'RULES:',
       '- Delegate when a task matches a team member\'s speciality. Do it yourself only for tasks in YOUR core domain.',
+      '- When you delegate, call the Agent tool in the same response. A brief one-sentence handoff is fine ("Handing to [name]."), but it must accompany the tool call, not replace it.',
+      '- Do NOT narrate the delegation brief in visible chat. Do not describe what the team member will do, list the steps they will take, announce which files they will load, or refer to the user in third person. That belongs inside the Agent tool prompt.',
+      '- Do NOT ask clarifying questions on the team member\'s behalf. Let them ask their own if needed.',
+      '- Use your team member\'s actual name when handing off. Do not invent labels or role titles.',
       '- If a request falls outside your domain entirely, hand back to the orchestrator using <!-- RUNDOCK:RETURN -->.',
       '- When a team member returns, pick up where you left off using their output. Do not ask the user to repeat themselves.',
       '',
