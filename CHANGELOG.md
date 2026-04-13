@@ -6,6 +6,8 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ## 0.8.2: Faster Scope Return (2026-04-13)
 
+Scope return after long specialist sessions is now near-instant. Plus a fix to the "Check for Updates" menu action so it actually confirms the result.
+
 ### Fixed
 
 - **Scope return is now near-instant after long specialist sessions:** When a specialist handed scope back to the orchestrator for re-routing, the full conversation transcript was being prepended to the orchestrator's next prompt. On long or code-heavy sessions this bloated the context and made the LLM call slow. The transcript is no longer prepended on handoff; the orchestrator only needs the pending request to choose the next specialist. When the orchestrator delegates mid-conversation to another specialist, that specialist now receives the task brief rather than the full transcript. Delegations that start fresh are unchanged and still receive the full conversation history.
