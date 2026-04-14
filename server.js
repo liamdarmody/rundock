@@ -1738,7 +1738,8 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
 }
 
 // ── SCOPE RETURN: specialist hands off to orchestrator ──
-// Called when a specialist emits <!-- RUNDOCK:RETURN -->. Two flavours:
+// Called when a specialist emits a handoff marker (<!-- RUNDOCK:RETURN --> for out-of-scope,
+// <!-- RUNDOCK:COMPLETE --> for pipeline-complete). Two flavours:
 //   - Out-of-scope return (default): the specialist is handing back mid-task because the user
 //     asked for something outside its domain. We tag the new orchestrator entry with
 //     scopeReturnSource so the immediate-reuse guard in handleDelegation blocks the orchestrator
@@ -1967,19 +1968,24 @@ function handleDelegation(msg, processes) {
   wireProcessHandlers(delegateEntry, convoId, null, {
     enableInterception: true,
     onResult: (e) => {
-      const hasReturn = /<!-- RUNDOCK:RETURN -->/.test(e.responseText);
+      const hasOutOfScope = /<!-- RUNDOCK:RETURN -->/.test(e.responseText);
+      const hasComplete = /<!-- RUNDOCK:COMPLETE -->/.test(e.responseText);
       const hasCrudMarker = /<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT|<!-- RUNDOCK:DELETE_AGENT|<!-- RUNDOCK:SAVE_SKILL|<!-- RUNDOCK:DELETE_SKILL/.test(e.responseText);
+      const hasHandoff = hasOutOfScope || hasComplete;
       const shouldAutoReturn = e.isPlatformDelegate
-        ? (hasReturn || hasCrudMarker)
-        : hasReturn;
+        ? (hasHandoff || hasCrudMarker)
+        : hasHandoff;
 
-      if (hasReturn) {
-        e.returnedOutOfScope = true;
-        console.log(`[Delegate] convo=${convoId} agent=${e.agentId} RETURN marker detected, flagging out-of-scope`);
+      if (hasOutOfScope) {
+        e.returnMarkerSeen = 'return';
+        console.log(`[Delegate] convo=${convoId} agent=${e.agentId} RETURN marker detected (out-of-scope)`);
+      } else if (hasComplete) {
+        e.returnMarkerSeen = 'complete';
+        console.log(`[Delegate] convo=${convoId} agent=${e.agentId} COMPLETE marker detected (pipeline done)`);
       }
 
       if (shouldAutoReturn) {
-        console.log(`[Delegate] Server-side auto-return convo=${convoId} (marker=${hasReturn}, crud=${hasCrudMarker})`);
+        console.log(`[Delegate] Server-side auto-return convo=${convoId} (outOfScope=${hasOutOfScope}, complete=${hasComplete}, crud=${hasCrudMarker})`);
         setTimeout(() => {
           if (!e.exited) {
             try { e.process.kill(); } catch (err) {}
@@ -2024,16 +2030,26 @@ function handleDelegation(msg, processes) {
     // Restore original process
     const orig = delegateEntry.delegation.originalEntry;
     if (delegateEntry.isIntercepted) {
-      const hasReturnMarker = delegateEntry.returnedOutOfScope ||
-        /<!-- RUNDOCK:RETURN -->/.test(delegateEntry.finalResponseText || delegateEntry.responseText);
+      // Two distinct handoff markers: RETURN means the user asked for something outside
+      // the specialist's domain (route to another specialist); COMPLETE means the delegated
+      // pipeline finished end-to-end (orchestrator resumes silently).
+      let returnMarkerSeen = delegateEntry.returnMarkerSeen || null;
+      if (!returnMarkerSeen) {
+        const tail = delegateEntry.finalResponseText || delegateEntry.responseText || '';
+        if (/<!-- RUNDOCK:RETURN -->/.test(tail)) returnMarkerSeen = 'return';
+        else if (/<!-- RUNDOCK:COMPLETE -->/.test(tail)) returnMarkerSeen = 'complete';
+      }
+      const hasHandoffMarker = !!returnMarkerSeen;
+      const isOutOfScope = returnMarkerSeen === 'return';
+      const isPipelineComplete = returnMarkerSeen === 'complete';
       const orchestratorEntry = delegateEntry.delegation.orchestratorEntry;
       const orchestratorAgentId = delegateEntry.delegation.orchestratorAgentId;
 
-      console.log(`[AgentIntercept] convo=${convoId} close handler: isIntercepted=${delegateEntry.isIntercepted} returnedOutOfScope=${!!delegateEntry.returnedOutOfScope} hasReturnMarker=${hasReturnMarker} hasOrchestratorEntry=${!!orchestratorEntry} orchestratorExited=${orchestratorEntry?.exited}`);
+      console.log(`[AgentIntercept] convo=${convoId} close handler: isIntercepted=${delegateEntry.isIntercepted} marker=${returnMarkerSeen || 'none'} hasOrchestratorEntry=${!!orchestratorEntry} orchestratorExited=${orchestratorEntry?.exited}`);
 
-      if (hasReturnMarker && orchestratorEntry && !orchestratorEntry.exited) {
+      if (hasHandoffMarker && orchestratorEntry && !orchestratorEntry.exited) {
         // Skip mid-level parent, return directly to orchestrator
-        console.log(`[AgentIntercept] convo=${convoId} sub-delegate returned out-of-scope, skipping ${delegateEntry.delegation.originalAgentId}, restoring orchestrator ${orchestratorAgentId}`);
+        console.log(`[AgentIntercept] convo=${convoId} sub-delegate handed back (${returnMarkerSeen}), skipping ${delegateEntry.delegation.originalAgentId}, restoring orchestrator ${orchestratorAgentId}`);
 
         orchestratorEntry.idle = true;
         orchestratorEntry.delegation = null;
@@ -2044,18 +2060,23 @@ function handleDelegation(msg, processes) {
           fromAgent: delegateEntry.agentId, toAgent: orchestratorAgentId
         }));
 
-        // Auto-continue: nudge orchestrator to pick up the pending request
+        // Auto-continue: nudge orchestrator with the correct prompt for the marker seen
         if (orchestratorEntry.process.stdin && orchestratorEntry.process.stdin.writable && !orchestratorEntry.process.killed) {
           const pendingRequest = delegateEntry.lastUserMessage || '';
           setTimeout(() => {
             if (!orchestratorEntry.exited) {
-              console.log(`[AgentIntercept] convo=${convoId} auto-continuing orchestrator after skip-level return`);
+              console.log(`[AgentIntercept] convo=${convoId} auto-continuing orchestrator after skip-level ${returnMarkerSeen}`);
               orchestratorEntry.responseText = '';
               orchestratorEntry.idle = false;
               safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: orchestratorEntry.processId, autoContinue: true }));
-              const prompt = pendingRequest
-                ? `[SYSTEM: A specialist just returned because the user asked for something outside their scope. The user's pending request is: "${pendingRequest}"\n\nRoute this request now. Delegate to the right specialist if one fits, or handle it yourself. Do not summarise what the previous specialist did. Do not ask the user to repeat themselves. Respond to their request.]`
-                : '[SYSTEM: A specialist just returned. Ask the user what they need next.]';
+              let prompt;
+              if (isPipelineComplete) {
+                prompt = `[SYSTEM: pipeline-complete] ${delegateEntry.agentId} has finished the delegated work. Their output is already in the conversation history and any files they wrote. Control is back with you as the orchestrator. Do not re-delegate. Do not invoke any tools. Do not narrate. Do not write any text to the user in this turn. Exit this turn silently and wait for the user's next message.`;
+              } else {
+                prompt = pendingRequest
+                  ? `[SYSTEM: A specialist just returned because the user asked for something outside their scope. The user's pending request is: "${pendingRequest}"\n\nRoute this request now. Delegate to the right specialist if one fits, or handle it yourself. Do not summarise what the previous specialist did. Do not ask the user to repeat themselves. Respond to their request.]`
+                  : '[SYSTEM: A specialist just returned. Ask the user what they need next.]';
+              }
               try {
                 orchestratorEntry.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n');
               } catch (err) {
@@ -2072,8 +2093,7 @@ function handleDelegation(msg, processes) {
       // Intercepted return: restart mid-level parent with --resume
       const parentAgentId = delegateEntry.delegation.originalAgentId;
       const parentSessionId = delegateEntry.delegation.parentSessionId;
-      const isOutOfScope = hasReturnMarker;
-      console.log(`[AgentIntercept] convo=${convoId} delegate done, restarting parent ${parentAgentId} (session=${parentSessionId}) outOfScope=${isOutOfScope}`);
+      console.log(`[AgentIntercept] convo=${convoId} delegate done, restarting parent ${parentAgentId} (session=${parentSessionId}) marker=${returnMarkerSeen || 'none'}`);
 
       safeSend(JSON.stringify({
         type: 'system', subtype: 'agent_switch', _conversationId: convoId,
@@ -2109,8 +2129,13 @@ function handleDelegation(msg, processes) {
       };
       processes.set(convoId, resumeEntry);
 
-      // Only auto-prompt the parent if the delegate returned out-of-scope.
-      // Normal completion: parent restarts silently and waits for the next user message.
+      // Auto-prompt only on out-of-scope: parent is resumed with a routing request so
+      // it can delegate the pending user message to a different specialist. For
+      // pipeline-complete and no-marker exits, the parent restarts silently and waits
+      // for the user's next message. In the single-level case (delegate was direct
+      // from the orchestrator, so the parent IS the orchestrator), this is all that's
+      // needed. In deeper chains, the pipeline-complete marker would have fired the
+      // skip-level orchestratorEntry branch above and never reached this code path.
       if (isOutOfScope) {
         safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: resumeProcessId, autoContinue: true }));
 
@@ -2118,6 +2143,8 @@ function handleDelegation(msg, processes) {
         // which restores session context from disk. No transcript needed.
         const resumePrompt = `[SYSTEM: Your team member returned because the user asked for something outside their scope. The user's latest request was: "${delegateEntry.lastUserMessage || 'continue'}"\n\nRoute this request to the right specialist. Do not ask the user to repeat themselves.]`;
         resumeProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: resumePrompt } }) + '\n');
+      } else if (isPipelineComplete) {
+        console.log(`[AgentIntercept] convo=${convoId} delegate emitted COMPLETE, parent ${parentAgentId} parked silently`);
       } else {
         console.log(`[AgentIntercept] convo=${convoId} delegate completed normally, parent ${parentAgentId} parked (no auto-prompt)`);
       }
@@ -2125,14 +2152,16 @@ function handleDelegation(msg, processes) {
       wireProcessHandlers(resumeEntry, convoId, null, {
         enableInterception: true,
         onResult: (e) => {
-          // Detect RUNDOCK:RETURN on a parked-and-resumed parent. For specialists with
-          // direct reports, the marker has two meanings: out-of-scope hand-back, or
-          // delegated-pipeline-complete hand-back. Either way, route control back to the
-          // orchestrator so the next user message is not attributed to the specialist.
-          const hasReturn = /<!-- RUNDOCK:RETURN -->/.test(e.responseText);
-          if (hasReturn && !e.delegation) {
+          // Detect both handoff markers on a parked-and-resumed parent. scopeReturnMode
+          // records which one fired so the close handler can route correctly: 'return'
+          // means route the pending request to a different specialist, 'complete' means
+          // the delegated pipeline is finished and the orchestrator should resume silently.
+          const hasOutOfScope = /<!-- RUNDOCK:RETURN -->/.test(e.responseText);
+          const hasComplete = /<!-- RUNDOCK:COMPLETE -->/.test(e.responseText);
+          if ((hasOutOfScope || hasComplete) && !e.delegation) {
             e.scopeReturn = true;
-            console.log(`[ScopeReturn] convo=${convoId} agent=${e.agentId} RETURN marker on resumed parent (completion or out-of-scope)`);
+            e.scopeReturnMode = hasOutOfScope ? 'return' : 'complete';
+            console.log(`[ScopeReturn] convo=${convoId} agent=${e.agentId} ${e.scopeReturnMode} marker on resumed parent`);
             setTimeout(() => {
               if (!e.exited) {
                 try { e.process.kill(); } catch (err) {}
@@ -2152,23 +2181,14 @@ function handleDelegation(msg, processes) {
         resumeEntry.exited = true;
         const cur = processes.get(convoId);
 
-        // If the resumed parent emitted RUNDOCK:RETURN (either because its multi-step
-        // pipeline just completed, or because the user asked for something out-of-scope
-        // while it was active), route control back to the orchestrator via the same
-        // machinery handleScopeReturn uses for directly-started specialists.
-        //
-        // Covers the flow: orchestrator -> specialist -> sub-agent (normal return)
-        // -> specialist resumes -> specialist completes and emits RUNDOCK:RETURN
-        // -> orchestrator. Without this branch, the resumed parent exits silently
-        // and the frontend keeps routing subsequent messages to whichever agent
-        // it last saw, misattributing work.
+        // If the resumed parent itself emitted a handoff marker, route through
+        // handleScopeReturn. The mode selects the downstream prompt: 'return' produces
+        // a routing-request prompt to the orchestrator, 'complete' produces the
+        // silent-exit prompt that prevents re-delegation and narration.
         if (resumeEntry.scopeReturn && cur === resumeEntry) {
-          console.log(`[ScopeReturn] convo=${convoId} resumed parent ${resumeEntry.agentId} exited with RETURN marker, spawning orchestrator`);
-          // Resumed parents only reach this close handler after their delegated pipeline
-          // has completed (sub-agent returned, parent wrapped up, emitted RETURN). Treat as
-          // pipeline-complete so the orchestrator can freely re-delegate to the same
-          // specialist on the user's next turn.
-          handleScopeReturn(resumeEntry, convoId, true);
+          const wasComplete = resumeEntry.scopeReturnMode === 'complete';
+          console.log(`[ScopeReturn] convo=${convoId} resumed parent ${resumeEntry.agentId} exited with ${resumeEntry.scopeReturnMode} marker, spawning orchestrator (pipelineComplete=${wasComplete})`);
+          handleScopeReturn(resumeEntry, convoId, wasComplete);
           return;
         }
 
@@ -2354,11 +2374,15 @@ wss.on('connection', (ws) => {
             const stderrRef = wireProcessHandlers(entry, convoId, ws, {
               enableInterception: true,
               onResult: (e) => {
-                // Detect scope return: specialist wants to hand off to orchestrator
-                const hasReturn = /<!-- RUNDOCK:RETURN -->/.test(e.responseText);
-                if (hasReturn && !e.delegation) {
+                // Detect scope return on a directly-started specialist. Either marker
+                // triggers a handoff to the orchestrator; scopeReturnMode selects the
+                // downstream behaviour (routing request vs silent exit).
+                const hasOutOfScope = /<!-- RUNDOCK:RETURN -->/.test(e.responseText);
+                const hasComplete = /<!-- RUNDOCK:COMPLETE -->/.test(e.responseText);
+                if ((hasOutOfScope || hasComplete) && !e.delegation) {
                   e.scopeReturn = true;
-                  console.log(`[ScopeReturn] convo=${convoId} agent=${e.agentId} RETURN marker on non-delegated process`);
+                  e.scopeReturnMode = hasOutOfScope ? 'return' : 'complete';
+                  console.log(`[ScopeReturn] convo=${convoId} agent=${e.agentId} ${e.scopeReturnMode} marker on non-delegated process`);
                   setTimeout(() => {
                     if (!e.exited) {
                       try { e.process.kill(); } catch (err) {}
@@ -2380,10 +2404,13 @@ wss.on('connection', (ws) => {
               const current = processes.get(convoId);
               if (current && current.processId !== processId) return;
 
-              // Scope return: specialist wants to hand off to orchestrator
+              // Scope return: specialist wants to hand off to orchestrator.
+              // Pass wasPipelineComplete=true only when the specialist explicitly
+              // signalled pipeline completion; out-of-scope returns get the routing prompt.
               if (entry.scopeReturn) {
-                console.log(`[ScopeReturn] convo=${convoId} specialist ${entry.agentId} exited, spawning orchestrator`);
-                handleScopeReturn(entry, convoId);
+                const wasComplete = entry.scopeReturnMode === 'complete';
+                console.log(`[ScopeReturn] convo=${convoId} specialist ${entry.agentId} exited (${entry.scopeReturnMode}), spawning orchestrator (pipelineComplete=${wasComplete})`);
+                handleScopeReturn(entry, convoId, wasComplete);
                 return;
               }
 
