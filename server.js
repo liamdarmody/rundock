@@ -343,7 +343,7 @@ function buildPeerRoster(selfId) {
   if (peers.length === 0) return null;
   return peers.map(a => {
     const desc = extractSelfDescription(a);
-    const header = `### ${a.displayName} (${a.name}): ${a.role}`;
+    const header = `${a.displayName} (${a.name}): ${a.role}`;
     return desc ? `${header}\n${desc}` : header;
   }).join('\n\n');
 }
@@ -479,8 +479,7 @@ function buildSystemPrompt(agentData) {
     const peerRoster = buildPeerRoster(agentData.id);
     if (peerRoster) {
       delegationSection = [
-        '## Your teammates in this workspace',
-        '',
+        'YOUR TEAMMATES:',
         'These are the other agents in this workspace. You cannot delegate to them directly (that is the orchestrator\'s job). Use this list to recognise when a request belongs to a teammate\'s domain and hand back cleanly via the RUNDOCK:RETURN marker.',
         '',
         peerRoster,
@@ -499,7 +498,7 @@ function buildSystemPrompt(agentData) {
       '3. Do NOT attempt the task yourself. Even if you could do a reasonable job, the designated specialist has deeper tools and context.',
       '4. Output <!-- RUNDOCK:RETURN --> at the very end of your response.',
       '',
-      'When a request matches a teammate\'s self-described domain (see "Your teammates in this workspace" above, if present), that is a scope boundary. Emit the marker. The orchestrator will spawn into this conversation and route the request to the right specialist.',
+      'When a request matches a teammate\'s self-described domain (see YOUR TEAMMATES above, if present), that is a scope boundary. Emit the marker. The orchestrator will spawn into this conversation and route the request to the right specialist.',
       '',
       'This applies whether you were delegated to by another agent or started the conversation directly with the user.',
     ].join('\n');
