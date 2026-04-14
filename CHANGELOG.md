@@ -4,13 +4,35 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## 0.8.3: Nav Rail State Reset (2026-04-13)
+## 0.8.3: Permission Hook Repair and Delegation Hygiene (2026-04-14)
 
-Switching workspaces now leaves the nav rail in a clean state. Stale indicators from the previous workspace no longer bleed into the new one.
+Packaged builds now ship with a working permission hook, so tool auto-approval actually works in installed copies of Rundock. Existing installs auto-heal their workspace settings on first launch. Plus a substantial round of delegation fixes: specialists no longer narrate handoff briefs in chat, multi-step specialist pipelines return control to the orchestrator cleanly, and the UI clears stale working and unread indicators when you switch workspaces.
 
 ### Fixed
 
-- **Nav rail indicators no longer carry over between workspaces:** The orange unread dot on Conversations and the working dot on Team were tracked in client-side state that persisted across workspace switches. Opening a different workspace could show an unread dot on a freshly created workspace before any conversation existed, and opening the current workspace's conversation would not clear it because the stale indicator belonged to a conversation from the previous workspace. A full page reload was the only way to clear it. Workspace switching now resets the indicator state and reconciles the nav rail badges so each workspace starts from a clean slate.
+- **Permission hook is now bundled into packaged builds:** Every installed copy of Rundock since the hook architecture shipped was missing `scripts/permission-hook.js` entirely. Claude Code tried to execute a non-existent script as its pre-tool-use hook, so every tool call appeared to time out and auto-approval was silently broken in both Code mode and Knowledge mode. The script is now included in the `.app` bundle and extracted to a location where it can actually run. Existing installs are also repaired automatically: when you open a workspace in 0.8.3, Rundock detects a stale hook entry in your workspace settings and rewrites it to the correct path. No manual action required.
+
+- **Specialists no longer narrate delegation briefs to the user:** When a specialist with direct reports handed a task to a sub-agent, it was writing the full brief into chat first: a paragraph referring to the user in the third person, followed by the actual Agent tool call. Specialists now treat each delegation as a routing decision: at most a one-sentence handoff in chat, with the full brief passed inside the tool call itself.
+
+- **Multi-step specialist work returns control to the orchestrator:** When the orchestrator delegated a multi-step task to a specialist that then delegated to a sub-agent and resumed after it finished, the conversation could get stuck attributing subsequent user messages to the wrong agent. The sub-agent would appear to stay active in the UI and receive messages intended for the orchestrator. Specialists now signal pipeline completion explicitly, and the server routes control back through the same machinery used for out-of-scope returns, so the UI and message routing stay in sync.
+
+- **Silent resume after a specialist finishes:** When a specialist completed a delegated pipeline, the orchestrator used to spin up a fresh process and re-read the original user message, which caused it to run the same specialist again or narrate invented "next steps". On pipeline completion the orchestrator now resumes silently with no tool calls and no new chat output, simply waiting for the next user message.
+
+- **Pipeline completion and out-of-scope returns are now distinct:** Specialists were using a single marker for two different situations, "user asked for something outside my domain" and "the delegated work is done". The latter clause fired at every human-review gate, so specialists would hand back control mid-pipeline whenever they presented options or drafts for approval. These are now two separate markers with explicit instructions about when each applies, so review gates no longer trigger a premature hand-back.
+
+- **Re-delegation after a clean pipeline completion:** After a specialist cleanly finished its work, the orchestrator could be blocked from routing the user's next message back to the same specialist by a guard that only applies to out-of-scope returns. Completion returns now leave that guard unset, so any next message is free to route anywhere.
+
+- **No stray "routing" text when control returns to the orchestrator:** On some scope returns, the orchestrator emitted placeholder filler into the transcript ("No response requested.") before invoking its next tool call. The routing prompt now explicitly forbids any user-facing text on that turn, so the transition is clean.
+
+- **Delegation briefs no longer replay as user messages on session resume:** Briefs written straight to a specialist's input were being stored in the session history as plain user messages. On resume, the rehydrate step was replaying them as if the user had typed the brief. Briefs are now tagged so the rehydrate filter drops them.
+
+- **Working indicator clears on the outgoing agent during handoffs:** When a conversation handed off from one agent to another, the outgoing agent's sidebar row and org chart dot stayed pinned to the "working" state until the next full re-render. On return handoffs this could persist indefinitely. The agent switch now explicitly clears the working state on the outgoing agent, while leaving it alone if that agent is still processing another conversation.
+
+- **Chat header clears on workspace switch:** The conversation header status element is a single DOM node. Switching workspaces while a reply was in flight left stale "working..." text in the header on the new workspace. The header now resets alongside the rest of the workspace state.
+
+- **Nav rail indicators no longer carry over between workspaces:** The orange unread dot on Conversations and the working dot on Team were tracked in client-side state that persisted across workspace switches. Opening a different workspace could show an unread dot on a freshly created workspace before any conversation existed, and opening the current workspace's conversation would not clear it because the stale indicator belonged to a conversation from the previous workspace. Workspace switching now resets the indicator state and reconciles the nav rail badges so each workspace starts from a clean slate.
+
+- **Late responses no longer dirty unread state on the wrong workspace:** If a response completed after you had already navigated to a different workspace, the unread mark could land on an unrelated conversation in the newly loaded workspace. Unread marks are now gated on the conversation still belonging to the currently loaded workspace, so late arrivals from a workspace you have left are dropped.
 
 ---
 
