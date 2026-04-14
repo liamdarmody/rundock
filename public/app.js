@@ -2967,6 +2967,8 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   // Reconcile the nav rail badge DOM elements now that the Sets are empty.
   updateUnreadBadge();
   updateWorkingBadge();
+  const cs = document.getElementById('chat-status');
+  if (cs) { cs.textContent = ''; cs.classList.remove('working'); }
   // Activate conversations sidebar; handlePersistedConversations will
   // open a pinned conversation or newConversation() once data arrives.
   document.querySelectorAll('.nav-item[data-nav]').forEach(n=>n.classList.remove('active'));
