@@ -303,6 +303,51 @@ function buildTeamRoster(leaderId, scopedToDirectReports = false) {
   }).join('\n');
 }
 
+// Extract the first non-heading paragraph from an agent's instructions body.
+// This is the agent's self-description, used when injecting peers into a plain
+// specialist's system prompt. Fallback chain: first-non-heading-paragraph ->
+// description -> capabilities.does -> ''. Empty return is safe — the caller
+// renders the header line alone if no description is available.
+function extractSelfDescription(agentData) {
+  const body = (agentData && agentData.instructions) || '';
+  if (body) {
+    const blocks = body.split(/\n\s*\n/);
+    for (const raw of blocks) {
+      const block = raw.trim();
+      if (!block) continue;
+      if (block.startsWith('#')) continue;
+      return block;
+    }
+  }
+  if (agentData && agentData.description) return agentData.description.trim();
+  if (agentData && agentData.capabilities && agentData.capabilities.does) {
+    return agentData.capabilities.does.trim();
+  }
+  return '';
+}
+
+// Build a peer roster for a plain specialist. Lists every other onTeam agent
+// in the workspace with displayName, name, role, and a self-description
+// paragraph pulled from that agent's own file via extractSelfDescription.
+// Unlike buildTeamRoster, this is NOT a delegation manual: plain specialists
+// cannot delegate. The roster is a recognition aid that turns "this is outside
+// my lane" into a one-step check against a known list, and makes hallucinated
+// peers impossible by construction.
+function buildPeerRoster(selfId) {
+  const allAgents = discoverAgents();
+  const peers = allAgents.filter(a =>
+    a.status === 'onTeam' &&
+    a.id !== selfId &&
+    a.id !== 'default'
+  );
+  if (peers.length === 0) return null;
+  return peers.map(a => {
+    const desc = extractSelfDescription(a);
+    const header = `### ${a.displayName} (${a.name}): ${a.role}`;
+    return desc ? `${header}\n${desc}` : header;
+  }).join('\n\n');
+}
+
 // Check if an Agent tool call targets a direct report of the given agent.
 // Returns the matched agent object or null.
 function findDirectReportMatch(agentId, toolInput) {
@@ -423,27 +468,22 @@ function buildSystemPrompt(agentData) {
       directReportRoster,
     ].join('\n');
   } else if (agentData && agentData.type === 'specialist') {
-    // Plain specialists: inject a full team roster so the specialist has a structural
+    // Plain specialists: inject a full peer roster so the specialist has a structural
     // representation of every other agent in the workspace. Without this, a specialist
     // asked to do work in a peer's domain has no way to recognise "this is not my lane"
     // beyond rationalising against their own negative list, and can hallucinate peers
-    // that exist in the user's mental model but not in the system prompt.
-    const allAgents = discoverAgents();
-    const teammates = allAgents.filter(a =>
-      a.status === 'onTeam' &&
-      a.id !== agentData.id &&
-      a.id !== 'default'
-    );
-    if (teammates.length > 0) {
-      const rosterLines = teammates.map(a => {
-        const capsDoes = a.capabilities && a.capabilities.does ? `: ${a.capabilities.does}` : '';
-        return `- ${a.displayName} (${a.name}), ${a.role}${capsDoes}`;
-      }).join('\n');
+    // that exist in the user's mental model but not in the system prompt. Each entry
+    // is enriched with a self-description paragraph pulled from the peer's own agent
+    // file, so renaming or rescoping a peer updates every other specialist's view
+    // without touching any other file. Spec: 0.8.4 Dynamic Specialist Roster.
+    const peerRoster = buildPeerRoster(agentData.id);
+    if (peerRoster) {
       delegationSection = [
-        'YOUR TEAMMATES:',
-        'These are the other agents in this workspace. You cannot delegate to them directly (that is the orchestrator\'s job). Use this list to recognise when a request belongs to a teammate\'s domain and hand back cleanly.',
+        '## Your teammates in this workspace',
         '',
-        rosterLines,
+        'These are the other agents in this workspace. You cannot delegate to them directly (that is the orchestrator\'s job). Use this list to recognise when a request belongs to a teammate\'s domain and hand back cleanly via the RUNDOCK:RETURN marker.',
+        '',
+        peerRoster,
       ].join('\n');
     }
   }
@@ -459,7 +499,7 @@ function buildSystemPrompt(agentData) {
       '3. Do NOT attempt the task yourself. Even if you could do a reasonable job, the designated specialist has deeper tools and context.',
       '4. Output <!-- RUNDOCK:RETURN --> at the very end of your response.',
       '',
-      'When a request matches a teammate\'s domain (see YOUR TEAMMATES above, if present), that is a scope boundary. Emit the marker. The orchestrator will spawn into this conversation and route the request to the right specialist.',
+      'When a request matches a teammate\'s self-described domain (see "Your teammates in this workspace" above, if present), that is a scope boundary. Emit the marker. The orchestrator will spawn into this conversation and route the request to the right specialist.',
       '',
       'This applies whether you were delegated to by another agent or started the conversation directly with the user.',
     ].join('\n');
