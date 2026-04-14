@@ -559,7 +559,8 @@ function handleResult(d, convoId) {
   if(responseText && convo) {
     convo.messages.push({role:'agent', content: responseText, agentId});
     const viewingChat = isActive && currentView === 'chat';
-    if (!viewingChat) {
+    const convoInWorkspace = conversations.some(c => c.id === convoId);
+    if (convoInWorkspace && !viewingChat) {
       unreadConvos.add(convoId);
       updateUnreadBadge();
     }
@@ -1759,7 +1760,8 @@ function finishProcessing(convoId) {
   workingConvos.delete(convoId);
   // If user isn't viewing this conversation, mark as unread
   const viewingChat = activeConversation?.id === convoId && currentView === 'chat';
-  if (!viewingChat) {
+  const convoInWorkspace = conversations.some(c => c.id === convoId);
+  if (convoInWorkspace && !viewingChat) {
     unreadConvos.add(convoId);
     updateUnreadBadge();
   }
