@@ -4,6 +4,20 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## 0.8.4: Structural Teammate Awareness (2026-04-14)
+
+Specialists now have structural awareness of their teammates and can hand work back when a request lands outside their scope. Previously, a specialist addressed directly about work in a peer's domain could complete the out-of-scope work, or reference a teammate that did not exist in the workspace. Both failure modes are now resolved structurally: every plain specialist receives the full list of other agents in the workspace as part of its system prompt, and the existing handback path routes the original request to the right specialist without the user having to repeat themselves.
+
+### Added
+
+- **Teammate roster in plain specialist system prompts:** Orchestrators and team leads with direct reports already received a roster of the agents they could delegate to. Plain specialists did not: they knew their own domain but had no structural representation of their peers. When a user expected a teammate to exist, a plain specialist could complete work outside its scope or reference a peer that was not in the workspace at all. Plain specialists now receive a YOUR TEAMMATES block listing every other agent in the workspace with its role and capabilities, so recognising "this belongs to someone else" becomes a one-step check against a known list. The roster reflects the live state of `.claude/agents/`: adding or removing an agent file updates it on the next specialist turn.
+
+### Fixed
+
+- **Handback path verified for directly-addressed specialists:** When a specialist is addressed directly by the user (not via delegation) and the request falls outside its scope, the specialist emits a return marker. Rundock now spawns the orchestrator into the same conversation and gives it the original request to route. This path was wired into the server as part of 0.8.3 without explicit coverage; 0.8.4 verifies it end-to-end and makes it reachable by structural means, not prompt-level nagging.
+
+---
+
 ## 0.8.3: Permission Hook Repair and Delegation Hygiene (2026-04-14)
 
 Packaged builds now ship with a working permission hook, so tool auto-approval actually works in installed copies of Rundock. Existing installs auto-heal their workspace settings on first launch. Plus a substantial round of delegation fixes: specialists no longer narrate handoff briefs in chat, multi-step specialist pipelines return control to the orchestrator cleanly, and the UI clears stale working and unread indicators when you switch workspaces.
