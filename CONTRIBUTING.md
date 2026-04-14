@@ -48,6 +48,7 @@ Before opening a PR:
 ### Conventions
 
 - **No build step.** Rundock ships plain JS. No transpilation, no bundling, no minification. Keep it that way.
+- **Changelog entries go under `## Unreleased`.** New entries accumulate at the top of `CHANGELOG.md` under a single `## Unreleased` heading. Start the body with a `**Name:** <release name>` line so the release script can promote it to a titled heading at release time. The release script auto-promotes `## Unreleased` to `## X.Y.Z: <Name> (YYYY-MM-DD)` when you run `npm run release -- X.Y.Z`.
 - **No new dependencies** without discussion. The two-dependency footprint is deliberate.
 - **Vanilla JS only.** No frameworks, no TypeScript. The codebase is readable without tooling.
 - **Commit messages:** Start with a verb in imperative mood. Keep the first line under 72 characters. Examples: `fix permission card timeout race condition`, `add workspace mode toggle to settings panel`.

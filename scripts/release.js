@@ -220,10 +220,15 @@ function extractChangelogEntry(version) {
   const changelogPath = path.join(ROOT, 'CHANGELOG.md');
   if (!fs.existsSync(changelogPath)) return null;
   const lines = fs.readFileSync(changelogPath, 'utf8').split('\n');
-  const headingPrefix = `## ${version}:`;
+  // Accept either a versioned heading ("## 1.2.3:") or the literal
+  // "## Unreleased" heading used in-flight before a release is cut.
+  const matchesHeading = (line) => {
+    if (version === 'Unreleased') return /^## Unreleased\s*$/.test(line);
+    return line.startsWith(`## ${version}:`);
+  };
   let start = -1;
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i].startsWith(headingPrefix)) { start = i; break; }
+    if (matchesHeading(lines[i])) { start = i; break; }
   }
   if (start === -1) return null;
   const title = lines[start].replace(/^## /, '').trim();
@@ -235,6 +240,62 @@ function extractChangelogEntry(version) {
     .replace(/^---\s*$/gm, '')
     .trim();
   return { title, body };
+}
+
+// Promote the `## Unreleased` changelog heading to the versioned heading
+// for the current release. If `## ${version}:` already exists, no-op. If
+// neither exists, abort: we must not publish a release without notes.
+//
+// The release name is read from a `**Name:** <name>` line at the top of
+// the Unreleased body (see CONTRIBUTING.md). If missing, logs a warning
+// and falls back to "Release" so the release still ships.
+function promoteUnreleasedChangelog(version) {
+  const changelogPath = path.join(ROOT, 'CHANGELOG.md');
+  if (!fs.existsSync(changelogPath)) {
+    fail('changelog', `CHANGELOG.md not found at ${changelogPath}`);
+  }
+  const original = fs.readFileSync(changelogPath, 'utf8');
+
+  // If a versioned heading for this release already exists, nothing to do.
+  const versionHeadingRe = new RegExp(
+    `^## ${version.replace(/\./g, '\\.')}:`,
+    'm'
+  );
+  if (versionHeadingRe.test(original)) {
+    log('changelog', `Versioned heading for ${version} already present, skipping promotion`);
+    return;
+  }
+
+  // Otherwise we need an Unreleased heading to promote.
+  const unreleasedRe = /^## Unreleased\s*$/m;
+  if (!unreleasedRe.test(original)) {
+    fail(
+      'changelog',
+      `No "## Unreleased" block and no "## ${version}:" block in CHANGELOG.md. ` +
+      `Add release notes under "## Unreleased" before running release.`
+    );
+  }
+
+  // Read the Unreleased body to extract the release name.
+  const entry = extractChangelogEntry('Unreleased');
+  const nameMatch = entry && entry.body.match(/^\s*\*\*Name:\*\*\s*(.+?)\s*$/m);
+  let name;
+  if (nameMatch) {
+    name = nameMatch[1];
+  } else {
+    log('changelog', 'WARNING: No "**Name:**" line in Unreleased body, falling back to "Release"');
+    name = 'Release';
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const newHeading = `## ${version}: ${name} (${today})`;
+  // Also strip the **Name:** line from the body now that it's been
+  // lifted into the heading, so it doesn't show up twice in release notes.
+  let updated = original.replace(unreleasedRe, newHeading);
+  updated = updated.replace(/^\s*\*\*Name:\*\*\s*.+?\s*$\n?/m, '');
+
+  fs.writeFileSync(changelogPath, updated, 'utf8');
+  log('changelog', `Promoted "## Unreleased" to "${newHeading}"`);
 }
 
 function publishRelease(version) {
@@ -363,6 +424,7 @@ function updateSiteDownloadUrls(version) {
 
 setVersion();
 loadEnv();
+promoteUnreleasedChangelog(process.argv[2]);
 build();
 const submissionId = submitNotarisation();
 pollNotarisation(submissionId);
