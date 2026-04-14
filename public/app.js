@@ -211,8 +211,23 @@ function handle(d) {
         const toAgent = agents.find(a => a.id === d.toAgent);
         const fromAgent = agents.find(a => a.id === d.fromAgent);
         const state = getConvoState(convoId);
+        // Capture the agent we're switching away from so we can clear its
+        // working indicator. Without this, the outgoing agent stays pinned
+        // to "working" in the sidebar row and org chart dot forever.
+        const outgoingAgentId = state.activeAgentId || conversations.find(c=>c.id===convoId)?.agentId;
         state.delegationActive = !!toAgent && toAgent.type !== 'orchestrator';
         state.activeAgentId = d.toAgent;
+        // Clear the outgoing agent's working indicator, but only if it isn't
+        // still legitimately working on another conversation. Also stamp
+        // last-activity so the sidebar row shows a timestamp instead of blank.
+        if (outgoingAgentId && outgoingAgentId !== d.toAgent && !getWorkingAgentIds().has(outgoingAgentId)) {
+          const convo = conversations.find(c => c.id === convoId);
+          agentLastActivity[outgoingAgentId] = { time: new Date(), label: convo?.title || '' };
+          const outRow = document.querySelector(`[data-status="${outgoingAgentId}"]`);
+          if (outRow) { outRow.textContent = formatTimeAgo(new Date()); outRow.classList.remove('working'); }
+          const outDot = document.querySelector(`[data-org-status="${outgoingAgentId}"]`);
+          if (outDot) outDot.classList.remove('working');
+        }
         // Always reset streaming state on agent switch so the new agent gets a fresh bubble
         state.currentStreamingMsg = null;
         state.streamingRawText = '';
