@@ -1798,9 +1798,19 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
   safeSend(JSON.stringify({ type: 'system', subtype: 'process_started',
     _conversationId: convoId, _processId: processId, autoContinue: true }));
 
-  // Build context for orchestrator (Tier 1: routing prompt, no transcript)
-  const pendingRequest = specialistEntry.lastUserMessage || '';
-  const prompt = `[SYSTEM: routing-request] A specialist (${specialistEntry.agentId}) has finished and control is back with you. The user's pending request is: "${pendingRequest}". Delegate to the right specialist now using the Agent tool. Do not write any text to the user in this turn. Just invoke the Agent tool with the brief.`;
+  // Build context for orchestrator. Two shapes:
+  //  - Pipeline complete: the specialist finished the delegated work. There is no pending
+  //    request and no routing to do. The orchestrator must return to standby silently so the
+  //    frontend shows it as active for the user's next message.
+  //  - Out of scope: the specialist could not handle the request and handed control back.
+  //    The orchestrator must route the original message to the correct specialist.
+  let prompt;
+  if (wasPipelineComplete) {
+    prompt = `[SYSTEM: pipeline-complete] ${specialistEntry.agentId} has finished the delegated work. Their output is already in the conversation history and any files they wrote. Control is back with you as the orchestrator. Do not re-delegate. Do not invoke any tools. Do not narrate. Do not write any text to the user in this turn. Exit this turn silently and wait for the user's next message.`;
+  } else {
+    const pendingRequest = specialistEntry.lastUserMessage || '';
+    prompt = `[SYSTEM: routing-request] A specialist (${specialistEntry.agentId}) has finished and control is back with you. The user's pending request is: "${pendingRequest}". Delegate to the right specialist now using the Agent tool. Do not write any text to the user in this turn. Just invoke the Agent tool with the brief.`;
+  }
 
   proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n');
 
