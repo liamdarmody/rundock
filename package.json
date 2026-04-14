@@ -31,9 +31,13 @@
       "server.js",
       "public/**/*",
       "scaffold/**/*",
+      "scripts/**/*",
       "node_modules/**/*",
       "electron/**/*",
       "package.json"
+    ],
+    "asarUnpack": [
+      "scripts/**/*"
     ],
     "icon": "electron/build/icon.icns",
     "afterPack": "scripts/afterPack.js",

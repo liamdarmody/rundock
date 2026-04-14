@@ -1334,7 +1334,13 @@ function scaffoldWorkspace(dir) {
     // This makes Claude Code call our hook script before executing tools,
     // which bridges to the Rundock browser UI for user approval.
     // Separate matchers for Bash commands and MCP tools (mcp__*).
-    const hookScript = path.join(__dirname, 'scripts', 'permission-hook.js');
+    // In Electron, __dirname is inside the read-only asar. The scripts/
+    // directory is marked asarUnpack in package.json, so it exists on disk
+    // at app.asar.unpacked/scripts/ and must be referenced from there.
+    const hookScript = process.env.RUNDOCK_ELECTRON
+      ? path.join(__dirname.replace(/app\.asar(?!\.unpacked)/, 'app.asar.unpacked'), 'scripts', 'permission-hook.js')
+      : path.join(__dirname, 'scripts', 'permission-hook.js');
+    const expectedHookCommand = `node "${hookScript}"`;
     const settingsLocalPath = path.join(dir, '.claude', 'settings.local.json');
     let settingsLocal = {};
     if (fs.existsSync(settingsLocalPath)) {
@@ -1347,16 +1353,29 @@ function scaffoldWorkspace(dir) {
       matcher,
       hooks: [{
         type: 'command',
-        command: `node "${hookScript}"`,
+        command: expectedHookCommand,
         timeout: 300
       }]
     });
 
+    // Drop any existing permission-hook entries whose command does NOT match
+    // the current expected path. This forces rewrite of stale entries left
+    // behind by earlier versions where the hook path pointed at a location
+    // that no longer exists (e.g. inside the read-only asar archive).
+    const beforeStale = settingsLocal.hooks.PreToolUse.length;
+    settingsLocal.hooks.PreToolUse = settingsLocal.hooks.PreToolUse.filter(e => {
+      const hooks = e.hooks || [];
+      const hasStaleHook = hooks.some(h =>
+        h.command && h.command.includes('permission-hook') && h.command !== expectedHookCommand
+      );
+      return !hasStaleHook;
+    });
+    let dirty = settingsLocal.hooks.PreToolUse.length < beforeStale;
+
     const hasMatcher = (matcher) => settingsLocal.hooks.PreToolUse.some(e =>
-      e.matcher === matcher && (e.hooks || []).some(h => h.command && h.command.includes('permission-hook'))
+      e.matcher === matcher && (e.hooks || []).some(h => h.command === expectedHookCommand)
     );
 
-    let dirty = false;
     if (!hasMatcher('Bash')) {
       settingsLocal.hooks.PreToolUse.push(hookEntry('Bash'));
       dirty = true;
