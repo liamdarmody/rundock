@@ -4,9 +4,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## Unreleased
-
-**Name:** Structural Teammate Awareness
+## 0.8.4: Structural Teammate Awareness (2026-04-14)
 
 Specialists now recognise when a request belongs to someone else on the team and hand it back cleanly. When you talk to a specialist directly about work outside their domain, they no longer attempt the work themselves or refer to a teammate that does not exist in your workspace. The handback routes your original request to the right specialist without you having to repeat yourself.
 
