@@ -1800,7 +1800,7 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
 
   // Build context for orchestrator (Tier 1: routing prompt, no transcript)
   const pendingRequest = specialistEntry.lastUserMessage || '';
-  const prompt = `[SYSTEM: A specialist (${specialistEntry.agentId}) has finished and the user needs routing to a different specialist. The user's request is: "${pendingRequest}"\n\nRoute this request now. Delegate to the right specialist. Do not ask the user to repeat themselves.]`;
+  const prompt = `[SYSTEM: routing-request] A specialist (${specialistEntry.agentId}) has finished and control is back with you. The user's pending request is: "${pendingRequest}". Delegate to the right specialist now using the Agent tool. Do not write any text to the user in this turn. Just invoke the Agent tool with the brief.`;
 
   proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n');
 
