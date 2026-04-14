@@ -4,7 +4,9 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## 0.8.4: Structural Teammate Awareness (2026-04-14)
+## Unreleased
+
+**Name:** Structural Teammate Awareness
 
 Specialists now have structural awareness of their teammates and can hand work back when a request lands outside their scope. Previously, a specialist addressed directly about work in a peer's domain could complete the out-of-scope work, or reference a teammate that did not exist in the workspace. Both failure modes are now resolved structurally: every plain specialist receives the full list of other agents in the workspace as part of its system prompt, and the existing handback path routes the original request to the right specialist without the user having to repeat themselves.
 
