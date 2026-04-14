@@ -48,11 +48,21 @@ Before opening a PR:
 ### Conventions
 
 - **No build step.** Rundock ships plain JS. No transpilation, no bundling, no minification. Keep it that way.
-- **Changelog entries go under `## Unreleased`.** New entries accumulate at the top of `CHANGELOG.md` under a single `## Unreleased` heading. Start the body with a `**Name:** <release name>` line so the release script can promote it to a titled heading at release time. The release script auto-promotes `## Unreleased` to `## X.Y.Z: <Name> (YYYY-MM-DD)` when you run `npm run release -- X.Y.Z`.
+- **Changelog entries go under `## Unreleased`.** New entries accumulate at the top of `CHANGELOG.md` under a single `## Unreleased` heading. Start the body with a `**Name:** <release name>` line so the release script can promote it to a titled heading at release time. The release script auto-promotes `## Unreleased` to `## X.Y.Z: <Name> (YYYY-MM-DD)` when you run `npm run release -- X.Y.Z`. Entries follow the structure and voice rules in [Changelog entry standards](#changelog-entry-standards) below.
 - **No new dependencies** without discussion. The two-dependency footprint is deliberate.
 - **Vanilla JS only.** No frameworks, no TypeScript. The codebase is readable without tooling.
 - **Commit messages:** Start with a verb in imperative mood. Keep the first line under 72 characters. Examples: `fix permission card timeout race condition`, `add workspace mode toggle to settings panel`.
 - **UK spelling** in user-facing strings, comments, and documentation.
+
+### Changelog entry standards
+
+Every entry in `CHANGELOG.md` should follow the same shape so release notes read consistently from version to version. The mechanics of the `## Unreleased` heading are covered in Conventions above; this section covers the content.
+
+- **Opening paragraph.** 1-3 sentences describing what the user now experiences, written from the user's point of view rather than from the implementer's. Lead with the behaviour change, not with what was built.
+- **Sections.** Use `### Added`, `### Changed`, and `### Fixed` in that order (per Keep a Changelog). Omit any section with no entries.
+- **Bullets.** Each bullet starts with a short title in bold followed by a colon: `- **Short user-visible behaviour title:** body`. The title is a behaviour statement, not an internal component name.
+- **Bullet body.** Use before-and-after framing where relevant ("was X, is now Y"). Be concrete and specific. Technical detail is welcome when it clarifies what actually changed, but it should support the behaviour description, not replace it.
+- **Voice.** Plain UK English, user-facing. No marketing language. Refer to agents by their type or role (orchestrator, specialist, platform agent) rather than by workspace-specific names that would only be meaningful in the author's own workspace.
 
 ### Testing your changes
 
