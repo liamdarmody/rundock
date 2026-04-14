@@ -422,6 +422,30 @@ function buildSystemPrompt(agentData) {
       'YOUR SUPPORT TEAM:',
       directReportRoster,
     ].join('\n');
+  } else if (agentData && agentData.type === 'specialist') {
+    // Plain specialists: inject a full team roster so the specialist has a structural
+    // representation of every other agent in the workspace. Without this, a specialist
+    // asked to do work in a peer's domain has no way to recognise "this is not my lane"
+    // beyond rationalising against their own negative list, and can hallucinate peers
+    // that exist in the user's mental model but not in the system prompt.
+    const allAgents = discoverAgents();
+    const teammates = allAgents.filter(a =>
+      a.status === 'onTeam' &&
+      a.id !== agentData.id &&
+      a.id !== 'default'
+    );
+    if (teammates.length > 0) {
+      const rosterLines = teammates.map(a => {
+        const capsDoes = a.capabilities && a.capabilities.does ? `: ${a.capabilities.does}` : '';
+        return `- ${a.displayName} (${a.name}), ${a.role}${capsDoes}`;
+      }).join('\n');
+      delegationSection = [
+        'YOUR TEAMMATES:',
+        'These are the other agents in this workspace. You cannot delegate to them directly (that is the orchestrator\'s job). Use this list to recognise when a request belongs to a teammate\'s domain and hand back cleanly.',
+        '',
+        rosterLines,
+      ].join('\n');
+    }
   }
 
   // Scope boundary: non-orchestrator agents must return when asked to do work outside their domain
@@ -434,6 +458,8 @@ function buildSystemPrompt(agentData) {
       '2. Do NOT name other specialists or suggest who should handle it. That is the orchestrator\'s job.',
       '3. Do NOT attempt the task yourself. Even if you could do a reasonable job, the designated specialist has deeper tools and context.',
       '4. Output <!-- RUNDOCK:RETURN --> at the very end of your response.',
+      '',
+      'When a request matches a teammate\'s domain (see YOUR TEAMMATES above, if present), that is a scope boundary. Emit the marker. The orchestrator will spawn into this conversation and route the request to the right specialist.',
       '',
       'This applies whether you were delegated to by another agent or started the conversation directly with the user.',
     ].join('\n');
