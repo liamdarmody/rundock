@@ -1950,7 +1950,7 @@ function handleDelegation(msg, processes) {
   const transcript = isIntercepted ? null : formatTranscript(convoId);
   const contextWithHistory = transcript
     ? `CONVERSATION SO FAR:\n${transcript}\n\nYOUR TASK:\n${msg.context}`
-    : msg.context;
+    : `[DELEGATION BRIEF]\n${msg.context}`;
   delegateProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: contextWithHistory } }) + '\n');
 
   wireProcessHandlers(delegateEntry, convoId, null, {
@@ -3088,7 +3088,7 @@ wss.on('connection', (ws) => {
                 if (m.role === 'user') {
                   const key = m.content.substring(0, 200);
                   if (seenUserMsgs.has(key)) continue;
-                  if (m.content.startsWith('CONVERSATION SO FAR:') || m.content.startsWith('[SYSTEM:')) continue;
+                  if (m.content.startsWith('CONVERSATION SO FAR:') || m.content.startsWith('[SYSTEM:') || m.content.startsWith('[DELEGATION BRIEF]')) continue;
                   seenUserMsgs.add(key);
                 }
                 // Match against transcript for correct agent attribution
