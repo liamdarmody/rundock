@@ -4,6 +4,16 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** TBD
+
+### Fixed
+
+- **`rundock-guide` no longer applies the onboarding default orchestrator slug to specialists created in existing workspaces:** The platform guide agent was carrying a hardcoded onboarding default in a general quality-rules section, which caused new specialists created in an existing workspace to be written with a `reportsTo` value that did not match that workspace's actual orchestrator slug. The specialist then failed to appear on the org chart because the parent reference did not resolve. The default is now explicitly gated to onboarding mode, and a new existing-workspace section tells the guide to read the runtime `YOUR TEAM` roster for the actual orchestrator slug before emitting `reportsTo`, then verify the write by reading the file back. New specialists created in existing workspaces now land on the org chart with a valid parent reference.
+
+---
+
 ## 0.8.4: Structural Teammate Awareness (2026-04-14)
 
 Specialists now recognise when a request belongs to someone else on the team and hand it back cleanly. When you talk to a specialist directly about work outside their domain, they no longer attempt the work themselves or refer to a teammate that does not exist in your workspace. The handback routes your original request to the right specialist without you having to repeat yourself.
