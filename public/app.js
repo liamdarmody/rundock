@@ -149,7 +149,7 @@ function handle(d) {
         // Remove stale permission cards from the previous process
         document.querySelectorAll('.msg-permission').forEach(el => el.remove());
         // Auto-continue: orchestrator picking up after specialist return
-        if(d.autoContinue) startProcessing(convoId);
+        if(d.autoContinue) { flushResumeBadge(convoId); startProcessing(convoId); }
       }
       // Capture session ID from init message and persist for resume after refresh
       if(d.subtype==='init' && d._sessionId && convoId) {
@@ -200,6 +200,9 @@ function handle(d) {
         const state = getConvoState(convoId);
         const match = !d._processId || !state.activeProcessId || d._processId === state.activeProcessId;
         console.log(`[Done] convo=${convoId} pid=${d._processId} active=${state.activeProcessId} match=${match} isProcessing=${state.isProcessing}`);
+        // Discard deferred "resumed" badge if the orchestrator was parked
+        // silently (COMPLETE path) and produced no output.
+        if(state.pendingResumeBadge) state.pendingResumeBadge = null;
         if(match) {
           finishProcessing(convoId);
         } else {
@@ -238,14 +241,21 @@ function handle(d) {
         // vs a forward delegation (orchestrator->specialist or specialist->sub-specialist)
         const isReturn = toAgent?.type === 'orchestrator';
         if(activeConversation?.id === convoId) {
-          const m = document.getElementById('messages');
-          const divider = document.createElement('div');
-          divider.className = 'msg-delegation';
-          if(toAgent && fromAgent) {
-            divider.innerHTML = `<div class="delegation-line"></div><div class="delegation-badge" style="color:${toAgent.colour}"><span class="avatar xs" style="background:${toAgent.colour}">${toAgent.icon}</span>${isReturn ? toAgent.displayName + ' resumed' : toAgent.displayName + ' joined'}</div><div class="delegation-line"></div>`;
+          if(isReturn && toAgent && fromAgent) {
+            // Defer the "resumed" badge: only render it when the orchestrator
+            // actually produces output. If the orchestrator is parked silently
+            // after COMPLETE, the badge never appears.
+            state.pendingResumeBadge = `<div class="delegation-line"></div><div class="delegation-badge" style="color:${toAgent.colour}"><span class="avatar xs" style="background:${toAgent.colour}">${toAgent.icon}</span>${toAgent.displayName} resumed</div><div class="delegation-line"></div>`;
+          } else {
+            const m = document.getElementById('messages');
+            const divider = document.createElement('div');
+            divider.className = 'msg-delegation';
+            if(toAgent && fromAgent) {
+              divider.innerHTML = `<div class="delegation-line"></div><div class="delegation-badge" style="color:${toAgent.colour}"><span class="avatar xs" style="background:${toAgent.colour}">${toAgent.icon}</span>${toAgent.displayName} joined</div><div class="delegation-line"></div>`;
+            }
+            m.appendChild(divider);
+            scrollBottom();
           }
-          m.appendChild(divider);
-          scrollBottom();
           // Update chat header
           if(toAgent) {
             const headerLabel = document.getElementById('chat-agent-label');
@@ -330,6 +340,20 @@ function getConvoState(convoId) {
   if(!convoState[convoId]) convoState[convoId] = { isProcessing: false, currentStreamingMsg: null, latestText: '', streamingRawText: '', latestAgentId: null, activeProcessId: null };
   return convoState[convoId];
 }
+// Flush a deferred "resumed" badge into the message stream.
+// Called when the orchestrator actually produces output after returning.
+function flushResumeBadge(convoId) {
+  const state = getConvoState(convoId);
+  if(!state.pendingResumeBadge) return;
+  if(activeConversation?.id !== convoId) { state.pendingResumeBadge = null; return; }
+  const m = document.getElementById('messages');
+  const divider = document.createElement('div');
+  divider.className = 'msg-delegation';
+  divider.innerHTML = state.pendingResumeBadge;
+  m.appendChild(divider);
+  state.pendingResumeBadge = null;
+  scrollBottom();
+}
 function isStaleProcess(d, convoId) {
   if(!d._processId) return false;
   const state = getConvoState(convoId);
@@ -358,6 +382,8 @@ function handleStreamEvent(d, convoId) {
     if(isActive) {
       // Create streaming message bubble if it doesn't exist yet
       if(!state.currentStreamingMsg) {
+        // Flush deferred "resumed" badge before the first output bubble
+        flushResumeBadge(convoId);
         // Remove thinking indicator, replace with streaming bubble
         const t = document.getElementById('thinking-indicator'); if(t) t.remove();
         const agentId = d._agent || state.activeAgentId || state.latestAgentId;
