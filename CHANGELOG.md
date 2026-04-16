@@ -10,6 +10,8 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Fixed
 
+- **Platform delegates default to COMPLETE regardless of marker emitted:** The platform delegate delegation context was telling Doc to emit `RUNDOCK:RETURN` on completion, contradicting the scaffold instruction to use `RUNDOCK:COMPLETE`. Fixed the delegation context to use COMPLETE. Added a server-side safety net: when a platform delegate emits RETURN but the response contains no out-of-scope language ("outside my scope", "I can't help with this", etc.), the server overrides it to COMPLETE. This makes the COMPLETE path reliable without depending on model compliance.
+
 - **COMPLETE marker takes priority over RETURN when both are present:** Platform delegates (Doc) sometimes emit both `RUNDOCK:RETURN` and `RUNDOCK:COMPLETE` in the same response. Previously the server checked RETURN first, so these responses were treated as out-of-scope returns, triggering unnecessary orchestrator auto-resumes. COMPLETE now takes priority at all three detection points (onResult handler, close handler fallback, and resumed parent scope-return detection). If the agent did the work and emitted COMPLETE, the response is always treated as pipeline-complete regardless of a stray RETURN marker.
 
 - **COMPLETE-path auto-resume gate:** When a specialist emitted a COMPLETE marker on the sub-delegate handoff path, the orchestrator was auto-resumed with a "stay silent" prompt that it routinely ignored, causing it to silently re-delegate or narrate. The orchestrator is now left idle after COMPLETE, returning control to the user without any hidden prompt.
