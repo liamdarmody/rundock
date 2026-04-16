@@ -10,6 +10,14 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Fixed
 
+- **Page refresh no longer re-invokes orchestrator on completed conversations:** When a specialist emitted COMPLETE on the parked-parent delegation path, the resumed orchestrator process was parked correctly (no auto-prompt sent) but was not marked as idle. On browser refresh, `handleActiveProcesses` found this non-idle process and called `startProcessing`, which re-invoked the orchestrator on a conversation that had already completed. The parked-parent COMPLETE and no-marker branches now set `idle = true` on the resume entry, so `handleActiveProcesses` skips them on reconnect.
+
+### Added
+
+- **Skills frontmatter field for explicit skill-to-agent assignment:** Agent files now support a `skills:` frontmatter field listing skill slugs that the agent owns. The skill discovery logic checks this field first and falls back to the existing body-text scan for agents without it. This gives workspace authors explicit control over skill assignment without needing to mention the slug in the agent's body text. Both methods can coexist: frontmatter matches take priority, body-text matches fill in the rest, and duplicates are suppressed.
+
+### Fixed
+
 - **Agent identity included in process_started events:** All `process_started` events now include the `_agent` field with the agent slug. Previously the frontend logged `agent=?` because the payload was missing this field. No frontend changes needed; the existing `d._agent` read now resolves correctly.
 
 - **SAVE_AGENT and SAVE_SKILL marker parser no longer truncates at inner code fences:** The marker extraction regex used optional code fence groups as parsing boundaries. When an agent body contained inner triple-backtick lines (e.g. Doc's scaffold with frontmatter templates), the lazy capture stopped at the first inner fence and silently dropped everything after it. The parser now extracts content purely between the HTML comment markers and strips leading/trailing code fences as a post-processing step. Fences are cosmetic formatting, not structural delimiters.
