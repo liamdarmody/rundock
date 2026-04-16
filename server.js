@@ -442,6 +442,7 @@ function buildSystemPrompt(agentData) {
         '- Handle it yourself only when no specialist fits, or when coordinating across multiple specialists.',
         '- Platform operations (creating or editing agents, skills, or workspace config) MUST be delegated to Doc by calling the Agent tool with subagent_type=rundock-guide. Do NOT route these to specialists — they cannot edit .claude/ files.',
         '- When a specialist returns because the user asked for something outside their scope, pick up that request immediately. Do not ask the user to repeat themselves.',
+        '- When a specialist returns control to you (for any reason), do not delegate back to the same specialist on your next turn. Either delegate to a different specialist, handle the request yourself, or present results to the user.',
         '',
         'YOUR TEAM:',
         roster,
@@ -1986,10 +1987,11 @@ function handleDelegation(msg, processes) {
   if (existing && existing.scopeReturnSource === targetAgent.id) {
     console.log(`[ScopeReturn] convo=${convoId} preventing loop: ${targetAgent.id} just scope-returned`);
     existing.scopeReturnSource = null;
+    const displayName = targetAgent.displayName || targetAgent.name;
     safeSend(JSON.stringify({
-      type: 'system', subtype: 'delegation_error',
-      content: `Cannot delegate back to ${targetAgent.id} immediately after scope return`,
-      _conversationId: convoId
+      type: 'assistant',
+      message: { role: 'assistant', content: `${displayName} has already completed this task. Send your next message to continue.` },
+      _agent: existing.agentId, _conversationId: convoId
     }));
     return;
   }
