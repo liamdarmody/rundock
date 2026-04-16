@@ -92,7 +92,7 @@ function loadRecentWorkspaces() {
   if (valid.length < recent.length) {
     try { fs.writeFileSync(RECENT_FILE, JSON.stringify(valid, null, 2)); } catch (e) {}
   }
-  return valid;
+  return valid.map(r => ({ ...r, name: path.basename(r.path) }));
 }
 function saveRecentWorkspace(dir) {
   const recent = loadRecentWorkspaces().filter(r => r.path !== dir);
