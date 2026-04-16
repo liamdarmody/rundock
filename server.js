@@ -399,10 +399,10 @@ function buildSystemPrompt(agentData) {
     'PLATFORM RULES:',
     isCodeMode
       ? 'Rundock is running in Code mode. You can create and edit any file type and run commands freely.'
-      : 'Rundock is a knowledge management platform focused on knowledge work. You can create and edit markdown, YAML, JSON, and text files freely. Writing or editing executable code files (.js, .ts, .py, .sh, etc.) is blocked by design.',
+      : 'Rundock is a knowledge management platform focused on knowledge work. You can create and edit markdown, YAML, JSON, and text files freely. Executable code files (.js, .ts, .py, .sh, etc.) are outside the supported file types for this workspace.',
     '',
     'FILES IN .claude/ DIRECTORY:',
-    'Claude Code blocks Write and Edit tools for files inside .claude/. Do NOT use Write, Edit, or Bash to create, modify, or delete files in .claude/agents/ or .claude/skills/.',
+    'Files inside .claude/agents/ and .claude/skills/ are managed through SAVE_AGENT and SAVE_SKILL markers, not through Write, Edit, or Bash. Do not attempt to create, modify, or delete files in .claude/ directly.',
     '',
     'FILE LINKS:',
     'When referencing workspace files, use wikilink syntax. This is the ONLY format that creates clickable links in Rundock.',
@@ -415,9 +415,9 @@ function buildSystemPrompt(agentData) {
   ].join('\n');
 
   const bashRules = [
-    'For terminal commands (Bash), use them whenever they are the best way to accomplish the task. Do not avoid Bash to be cautious. The user has a permission system that lets them approve or deny each command, so always attempt the command and let the user decide. If a command is denied, respect the decision without questioning it. Simply acknowledge it and offer an alternative if relevant. Do not describe denied commands as "blocked by the platform" or suggest the user lacks permissions. They chose to deny that specific request.',
+    'For terminal commands (Bash), use them whenever they are the best way to accomplish the task. Do not avoid Bash to be cautious. The workspace has a permission system that lets the user approve or deny each command, so always attempt the command and let the user decide. If a command does not succeed, acknowledge it and offer an alternative if relevant. Do not speculate about why it did not succeed or describe general platform rules based on a single outcome.',
     '',
-    'Destructive commands (rm with force flags, sudo, chmod, chown) and piped install scripts (curl|sh, wget|sh) are blocked entirely and will not reach the user for approval.'
+    'Destructive commands (rm with force flags, sudo, chmod, chown) and piped install scripts (curl|sh, wget|sh) are not supported and will not reach the user for approval.'
   ].join('\n');
 
   // Build delegation section for agents that lead other agents
@@ -2645,7 +2645,7 @@ wss.on('connection', (ws) => {
             '--verbose', '--include-partial-messages', '--permission-mode', legacyPermMode,
             '--allowed-tools', ALLOWED_TOOLS_LEGACY,
             ...(legacyDisallowed ? ['--disallowed-tools', legacyDisallowed] : []),
-            '--append-system-prompt', 'FORMATTING RULES (mandatory, apply to all output):\n- NEVER use em dashes (—) or en dashes (–) anywhere. This includes lists, headers, separators, and inline text. Wrong: "AI — your assistant". Right: "AI: your assistant". Use colons, full stops, commas, or restructure instead.\n- Use UK spelling throughout.\n\nPLATFORM RULES:\nRundock is a knowledge management platform. You can create and edit markdown, YAML, JSON, and text files. Writing or editing executable code files (.js, .ts, .py, .sh, etc.) is blocked by design. Destructive commands (rm, sudo, chmod) are also blocked. If a user asks you to do something that hits these restrictions, explain that Rundock is designed for knowledge work, not software development, and suggest an alternative approach using supported file types. Never offer to change permission settings or suggest workarounds to bypass these restrictions.'];
+            '--append-system-prompt', 'FORMATTING RULES (mandatory, apply to all output):\n- NEVER use em dashes (—) or en dashes (–) anywhere. This includes lists, headers, separators, and inline text. Wrong: "AI — your assistant". Right: "AI: your assistant". Use colons, full stops, commas, or restructure instead.\n- Use UK spelling throughout.\n\nPLATFORM RULES:\nRundock is a knowledge management platform. You can create and edit markdown, YAML, JSON, and text files. Executable code files (.js, .ts, .py, .sh, etc.) are outside the supported file types. Destructive commands (rm, sudo, chmod) are not supported. If a user asks you to do something outside these capabilities, explain that Rundock is designed for knowledge work and suggest an alternative approach using supported file types.'];
 
           if (msg.sessionId) {
             args.push('--resume', msg.sessionId);

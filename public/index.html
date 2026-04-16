@@ -116,7 +116,8 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .file-item-icon { width: 14px; height: 14px; color: var(--text-2); }
 
 /* Add button */
-.add-btn { display: flex; align-items: center; gap: 8px; padding: 12px 16px; margin: 4px 8px 12px; border-radius: 8px; font-size: var(--body); font-weight: 500; color: var(--text-2); transition: all 0.15s ease; }
+.convo-footer { border-top: 1px solid var(--border); background: var(--surface); flex-shrink: 0; padding: 8px 0 4px; }
+.add-btn { display: flex; align-items: center; gap: 8px; padding: 12px 16px; margin: 0 8px; border-radius: 8px; font-size: var(--body); font-weight: 500; color: var(--text-2); transition: all 0.15s ease; }
 .add-btn:hover { color: var(--accent); background: var(--accent-glow); }
 
 /* Main panel */
@@ -539,7 +540,9 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
         <span class="sidebar-search-clear hidden" id="convo-search-clear" onclick="clearConvoSearch()"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="2" y1="2" x2="10" y2="10"/><line x1="10" y1="2" x2="2" y2="10"/></svg></span>
       </div>
       <div class="convo-list" id="convo-list"></div>
-      <button class="add-btn" onclick="newConversation()">+ New conversation</button>
+      <div class="convo-footer">
+        <button class="add-btn" onclick="newConversation()">+ New conversation</button>
+      </div>
     </div>
     <div id="sidebar-skills" class="hidden">
       <div class="sidebar-header"><span class="sidebar-label">Skills</span></div>
