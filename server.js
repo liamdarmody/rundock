@@ -2089,12 +2089,19 @@ function handleDelegation(msg, processes) {
         ? (hasHandoff || hasCrudMarker)
         : hasHandoff;
 
-      if (hasOutOfScope) {
+      // COMPLETE takes priority when both markers are present. Platform delegates
+      // (Doc) sometimes emit RETURN out of habit even after completing the work.
+      // The COMPLETE marker is the stronger signal: the task was done.
+      if (hasComplete) {
+        e.returnMarkerSeen = 'complete';
+        if (hasOutOfScope) {
+          console.log(`[Delegate] convo=${convoId} agent=${e.agentId} both RETURN and COMPLETE markers detected, treating as COMPLETE (pipeline done)`);
+        } else {
+          console.log(`[Delegate] convo=${convoId} agent=${e.agentId} COMPLETE marker detected (pipeline done)`);
+        }
+      } else if (hasOutOfScope) {
         e.returnMarkerSeen = 'return';
         console.log(`[Delegate] convo=${convoId} agent=${e.agentId} RETURN marker detected (out-of-scope)`);
-      } else if (hasComplete) {
-        e.returnMarkerSeen = 'complete';
-        console.log(`[Delegate] convo=${convoId} agent=${e.agentId} COMPLETE marker detected (pipeline done)`);
       }
 
       if (shouldAutoReturn) {
@@ -2149,8 +2156,11 @@ function handleDelegation(msg, processes) {
       let returnMarkerSeen = delegateEntry.returnMarkerSeen || null;
       if (!returnMarkerSeen) {
         const tail = delegateEntry.finalResponseText || delegateEntry.responseText || '';
-        if (/<!-- RUNDOCK:RETURN -->/.test(tail)) returnMarkerSeen = 'return';
-        else if (/<!-- RUNDOCK:COMPLETE -->/.test(tail)) returnMarkerSeen = 'complete';
+        const tailHasComplete = /<!-- RUNDOCK:COMPLETE -->/.test(tail);
+        const tailHasReturn = /<!-- RUNDOCK:RETURN -->/.test(tail);
+        // COMPLETE takes priority (same logic as onResult handler)
+        if (tailHasComplete) returnMarkerSeen = 'complete';
+        else if (tailHasReturn) returnMarkerSeen = 'return';
       }
       const hasHandoffMarker = !!returnMarkerSeen;
       const isOutOfScope = returnMarkerSeen === 'return';
@@ -2292,7 +2302,8 @@ function handleDelegation(msg, processes) {
           const hasComplete = /<!-- RUNDOCK:COMPLETE -->/.test(e.responseText);
           if ((hasOutOfScope || hasComplete) && !e.delegation) {
             e.scopeReturn = true;
-            e.scopeReturnMode = hasOutOfScope ? 'return' : 'complete';
+            // COMPLETE takes priority when both markers are present
+            e.scopeReturnMode = hasComplete ? 'complete' : 'return';
             console.log(`[ScopeReturn] convo=${convoId} agent=${e.agentId} ${e.scopeReturnMode} marker on resumed parent`);
             setTimeout(() => {
               if (!e.exited) {
