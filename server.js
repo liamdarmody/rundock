@@ -3492,7 +3492,7 @@ function discoverSkills(existingAgents) {
 
         // Extract body content (after frontmatter) for instructions display
         const bodyMatch = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?([\s\S]*)/);
-        const instructions = bodyMatch ? bodyMatch[1].trim() : '';
+        const instructions = bodyMatch ? bodyMatch[1].trim() : content.trim();
 
         skills.push({
           id: dir.name,
