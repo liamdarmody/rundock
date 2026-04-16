@@ -10,6 +10,8 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Fixed
 
+- **SAVE_AGENT and SAVE_SKILL marker parser no longer truncates at inner code fences:** The marker extraction regex used optional code fence groups as parsing boundaries. When an agent body contained inner triple-backtick lines (e.g. Doc's scaffold with frontmatter templates), the lazy capture stopped at the first inner fence and silently dropped everything after it. The parser now extracts content purely between the HTML comment markers and strips leading/trailing code fences as a post-processing step. Fences are cosmetic formatting, not structural delimiters.
+
 - **No spurious "resumed" badge when orchestrator is parked after COMPLETE:** When a specialist emitted COMPLETE, the server correctly parked the orchestrator silently, but the frontend rendered an "[Agent] resumed" badge on the `agent_switch` event before the server parked it. The badge is now deferred until the orchestrator actually produces output (a text chunk or `autoContinue` process start). If the orchestrator is parked without producing output, the badge is discarded on the `done` event and never appears.
 
 - **Platform delegates default to COMPLETE regardless of marker emitted:** The platform delegate delegation context was telling Doc to emit `RUNDOCK:RETURN` on completion, contradicting the scaffold instruction to use `RUNDOCK:COMPLETE`. Fixed the delegation context to use COMPLETE. Added a server-side safety net: when a platform delegate emits RETURN but the response contains no out-of-scope language ("outside my scope", "I can't help with this", etc.), the server overrides it to COMPLETE. This makes the COMPLETE path reliable without depending on model compliance.

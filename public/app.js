@@ -478,19 +478,24 @@ function handleResult(d, convoId) {
     let filesCreated = 0;
 
     // SAVE_AGENT and CREATE_AGENT markers (both route to save_agent for upsert)
-    // Code fences between markers are optional: model may output with or without them.
-    const agentMarkerPattern = /<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT name=([\w-]+) -->\n(?:```[^\n]*\n)?([\s\S]*?)(?:```\n)?<!-- \/RUNDOCK:(?:SAVE|CREATE)_AGENT -->/g;
+    // Content is extracted between HTML comment markers. Code fences inside
+    // are cosmetic (formatting in Claude's output) and stripped if present,
+    // but NOT used as parsing delimiters. This prevents truncation when the
+    // agent body contains inner code fences (e.g. frontmatter templates).
+    const agentMarkerPattern = /<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT name=([\w-]+) -->\n([\s\S]*?)<!-- \/RUNDOCK:(?:SAVE|CREATE)_AGENT -->/g;
     let match;
     while((match = agentMarkerPattern.exec(textToScan)) !== null) {
-      ws.send(JSON.stringify({ type: 'save_agent', name: match[1], content: match[2].trim() }));
+      const content = match[2].replace(/^```[^\n]*\n/, '').replace(/\n```\s*$/, '').trim();
+      ws.send(JSON.stringify({ type: 'save_agent', name: match[1], content }));
       filesCreated++;
       console.log('[Agent] Marker save:', match[1]);
     }
 
-    // SAVE_SKILL markers (code fences optional)
-    const skillMarkerPattern = /<!-- RUNDOCK:SAVE_SKILL name=([\w-]+) -->\n(?:```[^\n]*\n)?([\s\S]*?)(?:```\n)?<!-- \/RUNDOCK:SAVE_SKILL -->/g;
+    // SAVE_SKILL markers (same fence-stripping approach)
+    const skillMarkerPattern = /<!-- RUNDOCK:SAVE_SKILL name=([\w-]+) -->\n([\s\S]*?)<!-- \/RUNDOCK:SAVE_SKILL -->/g;
     while((match = skillMarkerPattern.exec(textToScan)) !== null) {
-      ws.send(JSON.stringify({ type: 'save_skill', name: match[1], content: match[2].trim() }));
+      const content = match[2].replace(/^```[^\n]*\n/, '').replace(/\n```\s*$/, '').trim();
+      ws.send(JSON.stringify({ type: 'save_skill', name: match[1], content }));
       filesCreated++;
       console.log('[Skill] Marker save:', match[1]);
     }
@@ -578,8 +583,8 @@ function handleResult(d, convoId) {
   // DELEGATE: strip the marker block AND any text after it (orchestrator should stop after delegating)
   responseText = responseText.replace(/<!-- RUNDOCK:DELEGATE agent=[\w-]+ -->\n?[\s\S]*/g, '').trim();
   responseText = responseText.replace(/<!-- RUNDOCK:RETURN -->/g, '').trim();
-  responseText = responseText.replace(/<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT name=[\w-]+ -->\n?(?:```[^\n]*\n)?[\s\S]*?(?:```\n)?<!-- \/RUNDOCK:(?:SAVE|CREATE)_AGENT -->/g, '').trim();
-  responseText = responseText.replace(/<!-- RUNDOCK:SAVE_SKILL name=[\w-]+ -->\n?(?:```[^\n]*\n)?[\s\S]*?(?:```\n)?<!-- \/RUNDOCK:SAVE_SKILL -->/g, '').trim();
+  responseText = responseText.replace(/<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT name=[\w-]+ -->\n?[\s\S]*?<!-- \/RUNDOCK:(?:SAVE|CREATE)_AGENT -->/g, '').trim();
+  responseText = responseText.replace(/<!-- RUNDOCK:SAVE_SKILL name=[\w-]+ -->\n?[\s\S]*?<!-- \/RUNDOCK:SAVE_SKILL -->/g, '').trim();
   responseText = responseText.replace(/<!-- RUNDOCK:DELETE_(?:SKILL|AGENT) name=[\w-]+ -->/g, '').trim();
 
   if(responseText && convo) {
