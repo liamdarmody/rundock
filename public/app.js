@@ -2673,11 +2673,15 @@ function renderSkills() {
 
   renderSkillsSidebar(skills);
 
-  // Re-select current skill to refresh detail panel, or pick first if stale
-  if (currentSkillId && skills.find(s => s.id === currentSkillId)) {
-    selectSkill(currentSkillId);
-  } else if (skills.length) {
-    selectSkill(skills[0].id);
+  // Only refresh the detail panel if the user is already on the skills view.
+  // Without this guard, background saves (SAVE_SKILL markers) would yank
+  // the user out of the conversation and into the skills detail page.
+  if (currentView === 'skills') {
+    if (currentSkillId && skills.find(s => s.id === currentSkillId)) {
+      selectSkill(currentSkillId);
+    } else if (skills.length) {
+      selectSkill(skills[0].id);
+    }
   }
 }
 
