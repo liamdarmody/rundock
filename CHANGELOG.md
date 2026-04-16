@@ -10,6 +10,8 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Fixed
 
+- **Scaffold no longer recreates deleted workspace directories:** `scaffoldWorkspace` now bails if the target directory does not exist, preventing ghost directories from being created when a workspace is renamed or deleted externally. The `get_workspaces` handler and server startup both validate that `WORKSPACE` still exists on disk before using it, clearing the pointer and returning the client to the workspace picker if the path is gone.
+
 - **Stale entries filtered from recent workspaces list:** `loadRecentWorkspaces` now checks `fs.existsSync` on each entry's path and drops any that no longer exist on disk. The filtered list is persisted back to `.recent-workspaces.json` so stale entries do not reappear on subsequent loads.
 
 - **Neutral tool-failure error messaging:** System prompts and permission hook messages no longer use loaded words ("blocked", "denied", "not allowed") that invite the model to confabulate generalised platform rules from a single tool failure. Error strings now describe what happened factually ("not completed within the time limit", "outside the supported file types") without ascribing cause. The `.claude/` directory instruction now explains the correct mechanism (SAVE_AGENT/SAVE_SKILL markers) instead of stating a prohibition. The legacy system prompt path receives the same treatment.
