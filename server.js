@@ -1375,6 +1375,9 @@ const RUNDOCK_MANAGED_FILES = [
 ];
 
 function scaffoldWorkspace(dir) {
+  // Never create the workspace directory as a side effect. If it was
+  // deleted or renamed externally, bail so callers can handle the miss.
+  if (!fs.existsSync(dir)) return;
   try {
     fs.mkdirSync(path.join(dir, '.claude', 'agents'), { recursive: true });
 
@@ -2812,6 +2815,11 @@ wss.on('connection', (ws) => {
       }
 
       if (msg.type === 'get_workspaces') {
+        // Clear stale workspace pointer if the directory no longer exists
+        if (WORKSPACE && !fs.existsSync(WORKSPACE)) {
+          console.log(`[Workspace] Current workspace no longer exists: ${WORKSPACE}`);
+          WORKSPACE = null;
+        }
         const wsData = {
           type: 'workspaces',
           current: WORKSPACE,
@@ -3705,6 +3713,10 @@ function startServer(options = {}) {
       // Clean up orphaned processes from a previous crash
       if (WORKSPACE) cleanOrphanedProcesses();
       console.log(`\n  Rundock running at http://localhost:${actualPort}`);
+      if (WORKSPACE && !fs.existsSync(WORKSPACE)) {
+        console.log(`  Workspace no longer exists: ${WORKSPACE}`);
+        WORKSPACE = null;
+      }
       if (WORKSPACE) {
         saveRecentWorkspace(WORKSPACE);
         try { scaffoldWorkspace(WORKSPACE); } catch (e) { console.warn('Scaffold warning:', e.message); }
