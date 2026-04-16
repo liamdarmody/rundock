@@ -6,7 +6,9 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ## Unreleased
 
-**Name:** TBD
+**Name:** Conversation Integrity
+
+Conversations are now reliable end to end. Delegation no longer loops or silently re-invokes specialists after they finish. Page refresh preserves message order and agent attribution from the live session instead of reordering or injecting ghost messages. Error messages describe what happened factually, so agents stop inventing platform rules from a single tool failure. The platform guide now proposes changes before executing them and creates well-formed skill files from the start.
 
 ### Fixed
 
@@ -30,7 +32,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Fixed
 
-- **Agent identity included in process_started events:** All `process_started` events now include the `_agent` field with the agent slug. Previously the frontend logged `agent=?` because the payload was missing this field. No frontend changes needed; the existing `d._agent` read now resolves correctly.
+- **Agent identity included in process_started events:** The frontend expected an `_agent` field on every `process_started` event so it could attribute the working indicator to the correct agent. The server was not including it, so the frontend logged `agent=?` and the indicator could not resolve which agent was active. All `process_started` events now include the agent slug in the payload. No frontend changes needed; the existing `d._agent` read now resolves correctly.
 
 - **SAVE_AGENT and SAVE_SKILL marker parser no longer truncates at inner code fences:** The marker extraction regex used optional code fence groups as parsing boundaries. When an agent body contained inner triple-backtick lines (e.g. Doc's scaffold with frontmatter templates), the lazy capture stopped at the first inner fence and silently dropped everything after it. The parser now extracts content purely between the HTML comment markers and strips leading/trailing code fences as a post-processing step. Fences are cosmetic formatting, not structural delimiters.
 
@@ -49,6 +51,26 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 - **Delegation loop circuit breaker:** Two-layer defense against infinite delegation loops. First, the parked-parent resume path now sets `scopeReturnSource` on the resumed orchestrator entry, so the existing same-specialist re-delegation guard catches immediate loops (orchestrator delegates to A, A returns, orchestrator tries to delegate to A again: blocked). Previously this guard only worked for the `handleScopeReturn` path, leaving the parked-parent path unprotected. Second, a per-conversation counter tracks consecutive auto-resume events with no intervening user message. After 3 consecutive auto-resumes (configurable via `MAX_CONSECUTIVE_AGENT_RESUMES`), the system auto-pauses and presents a summary to the user. This catches multi-agent loops that the same-specialist guard cannot (e.g. A returns, routes to B, B returns, routes to A). The counter resets on each user message. The scaffold orchestrator prompt now instructs the orchestrator not to re-delegate to a specialist that just returned, and the guard message uses the agent's display name instead of a raw slug.
 
 - **`rundock-guide` no longer applies the onboarding default orchestrator slug to specialists created in existing workspaces:** The platform guide agent was carrying a hardcoded onboarding default in a general quality-rules section, which caused new specialists created in an existing workspace to be written with a `reportsTo` value that did not match that workspace's actual orchestrator slug. The specialist then failed to appear on the org chart because the parent reference did not resolve. The default is now explicitly gated to onboarding mode, and a new existing-workspace section tells the guide to read the runtime `YOUR TEAM` roster for the actual orchestrator slug before emitting `reportsTo`, then verify the write by reading the file back. New specialists created in existing workspaces now land on the org chart with a valid parent reference.
+
+- **Workspace display name derived from path:** The workspace picker and sidebar displayed a name stored as a static field in `recent-workspaces.json`. Renaming the workspace directory externally left the old name visible in the UI with no way to update it short of editing the JSON file by hand. The display name is now derived from the path via `path.basename()` on every load, so it always reflects the actual directory name without any stored state to go stale.
+
+- **Stale activeAgentId pointers reconciled on conversation load:** When conversations were loaded from disk, the `activeAgentId` could point to a delegate that had already returned control. Pre-0.8.5 delegations that never emitted COMPLETE markers left this pointer stuck on the wrong agent, causing the sidebar and chat header to show the delegate instead of the orchestrator. On load, any `activeAgentId` that differs from the conversation's base `agentId` is now reset to the orchestrator. The corrected pointers are persisted so reconciliation does not re-run every load.
+
+- **Rehydrate rendering sets activeAgentId to orchestrator:** On session history load, the frontend was setting `activeAgentId` to the last assistant message's agent from history, which could be a delegate that had already returned. The active agent is now always set to the conversation's orchestrator on rehydrate, since the conversation is dormant and the orchestrator is the correct next responder.
+
+- **Skill "Used By" list refreshes after SAVE_AGENT updates agent skills:** When a SAVE_AGENT marker updated an agent's skill assignments (adding or removing a skill from the agent's `skills:` frontmatter), the skills panel did not re-render. The current skill's detail view continued showing the old "Used By" list until the user manually refreshed the page. The detail panel now re-renders after any agent or skill save, so the "Used By" list reflects the current assignments immediately.
+
+- **SAVE_SKILL no longer auto-navigates to skill detail view:** When the platform agent saved a skill during a conversation, the SAVE_SKILL handler called `selectSkill()` unconditionally. This pulled the user out of the active conversation and into the skills detail page mid-flow, with no way to prevent it. The navigation is now gated on the user already being in the skills view. Background saves during conversations update the data silently without disrupting the current view.
+
+- **Sidebar footer chrome updated to Ive design spec:** The conversations sidebar footer used a text "+" character for the new-conversation button, had inconsistent height relative to adjacent panels, and offered a narrow click target. The footer now uses a fixed 76px height with vertically centered content, an SVG plus icon, and a subtle border-on-hover treatment. The button fills the full footer width for a larger click target that is easier to hit.
+
+- **Skills without frontmatter show full content as instructions:** When a skill file had no YAML frontmatter, the instructions field was set to an empty string because the frontmatter regex did not match. The fallback now uses the full file content (trimmed) as the instructions, so legacy or hand-written skill files without frontmatter still display their content in the detail view.
+
+- **SAVE_SKILL template includes frontmatter example:** The platform guide's scaffold showed a generic SAVE_SKILL marker template with no concrete frontmatter structure. The model frequently emitted skill files missing `name` or `description` fields, which then appeared as untitled entries in the skills panel and required manual correction. The template now includes a concrete YAML frontmatter block (`name`, `description`, and body), so newly created skills arrive with proper metadata from the first save.
+
+- **Audit guidance for detecting and fixing missing frontmatter:** Before this change, the platform guide had no instructions for validating existing workspace objects. Agents or skills created by earlier versions could be missing frontmatter fields (`name`, `description`, `skills`, `reportsTo`), causing blank detail views, broken org chart references, or skills that did not appear under their assigned agent. The scaffold now includes audit checklists that tell the guide what fields to verify, what symptoms indicate missing metadata, and how to repair affected files by re-saving them through the marker system.
+
+- **Release script: changelog blank-line preservation, auto-commit, deterministic tag:** The release script had three rough edges. First, promoting the Unreleased section to a versioned heading left a double blank line where the `**Name:**` line was removed, requiring a manual edit before committing. Second, the script performed the version bump and changelog promotion but left the commit and tag to the developer, which was easy to forget or do out of order. Third, tag names were not enforced, so different releases could use inconsistent formats. The script now strips the extra blank line, commits the version bump and changelog promotion automatically, and creates a `v{version}` tag in a single deterministic flow.
 
 ---
 
