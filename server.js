@@ -1578,7 +1578,7 @@ const chatProcesses = new Map(); // conversationId -> { process, buffer, process
 const convoTranscripts = new Map(); // conversationId -> [{ role: 'user'|'agent', agent: string, text: string }]
 
 // Circuit breaker: consecutive agent auto-resume events with no user message.
-// Prevents infinite delegation loops (e.g. Cos -> Doc -> Cos -> Doc ...).
+// Prevents infinite delegation loops (e.g. orchestrator -> specialist -> orchestrator -> specialist ...).
 const MAX_CONSECUTIVE_AGENT_RESUMES = 3;
 const agentAutoResumeCount = new Map(); // conversationId -> number
 
@@ -2241,7 +2241,11 @@ function handleDelegation(msg, processes) {
         process: resumeProc, buffer: '', processId: resumeProcessId,
         agentId: parentAgentId, responseText: '', exited: false, resultSent: false,
         pendingAgentTool: null,
-        toolCalls: [], turnStartTime: Date.now()
+        toolCalls: [], turnStartTime: Date.now(),
+        // Tag with returning specialist so handleDelegation's scopeReturnSource
+        // guard blocks immediate re-delegation to the same agent. Only set for
+        // out-of-scope returns; pipeline-complete should allow re-delegation.
+        scopeReturnSource: isOutOfScope ? delegateEntry.agentId : null
       };
       processes.set(convoId, resumeEntry);
 
