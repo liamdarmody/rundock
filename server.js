@@ -443,6 +443,8 @@ function buildSystemPrompt(agentData) {
         '- Platform operations (creating or editing agents, skills, or workspace config) MUST be delegated to Doc by calling the Agent tool with subagent_type=rundock-guide. Do NOT route these to specialists — they cannot edit .claude/ files.',
         '- When a specialist returns because the user asked for something outside their scope, pick up that request immediately. Do not ask the user to repeat themselves.',
         '- When a specialist returns control to you (for any reason), do not delegate back to the same specialist on your next turn. Either delegate to a different specialist, handle the request yourself, or present results to the user.',
+        '- Only delegate to agents listed in YOUR TEAM below. Never invent, assume, or reference agent names that do not appear in the roster. If no listed specialist fits, handle the request yourself.',
+        '- Delegation is sequential: one specialist at a time. Do not tell the user you are running tasks "in parallel", "simultaneously", or "at the same time". You hand off to one specialist, they complete their work, then you can hand off to the next.',
         '',
         'YOUR TEAM:',
         roster,

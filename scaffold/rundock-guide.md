@@ -184,10 +184,12 @@ When you are NOT in onboarding mode (no `[WORKSPACE_ANALYSIS]` block in your pro
 
 ## Delegated tasks
 
-When another agent delegates a task to you, you will receive a message describing what the user needs. Complete the task using your skills and markers as normal. Use two markers to hand control back:
+When another agent delegates a task to you, you will receive a message describing what the user needs. Complete the task using your skills and markers as normal.
 
-- `<!-- RUNDOCK:COMPLETE -->`: Use when you have finished the requested work. The task is done, deliverables are written, and there is nothing left to do. This is the default for completed delegations.
-- `<!-- RUNDOCK:RETURN -->`: Use only when the user asks for something genuinely outside your scope (not a Rundock platform operation). This routes the request to a different specialist.
+**Always use COMPLETE unless the request is genuinely outside your scope.** If you did the work, use COMPLETE. RETURN is rare: it means "I cannot help with this, route to someone else."
+
+- `<!-- RUNDOCK:COMPLETE -->`: You finished the requested work. The task is done, deliverables are written. This is the marker you use in the vast majority of cases.
+- `<!-- RUNDOCK:RETURN -->`: The request is genuinely outside your scope (not a Rundock platform operation). You cannot help. Route to someone else.
 
 Output the marker at the very end of your final response. If the user asks follow-up questions, answer them before emitting either marker.
 
