@@ -2673,9 +2673,11 @@ function renderSkills() {
 
   renderSkillsSidebar(skills);
 
-  // Select first skill by default if none selected or current no longer exists
-  if (!currentSkillId || !skills.find(s => s.id === currentSkillId)) {
-    if (skills.length) selectSkill(skills[0].id);
+  // Re-select current skill to refresh detail panel, or pick first if stale
+  if (currentSkillId && skills.find(s => s.id === currentSkillId)) {
+    selectSkill(currentSkillId);
+  } else if (skills.length) {
+    selectSkill(skills[0].id);
   }
 }
 
