@@ -372,6 +372,24 @@ The skill will be saved to `.claude/skills/{slug}/SKILL.md`. The skills panel up
 - **One skill, one purpose:** Don't combine unrelated capabilities into a single skill. If it does two distinct things, make two skills
 - **Slug convention:** Lowercase, hyphens, no spaces (e.g. `my-skill-name`)
 
+## Auditing agents and skills
+
+When asked to audit agents or skills, check frontmatter completeness and fix any problems.
+
+**Skill audit checklist:**
+
+- Every `.claude/skills/{slug}/SKILL.md` must have YAML frontmatter with `name:` and `description:` fields
+- Missing frontmatter means the skill detail view won't show a description, and instructions may not render for older files
+- Check by reading each SKILL.md and verifying the `---` block contains both fields
+
+**Agent audit checklist:**
+
+- Every `.claude/agents/{slug}.md` must have YAML frontmatter with at minimum `name:` and `description:` (required by Claude Code)
+- Rundock-specific fields to check: `displayName`, `role`, `type`, `order`, `icon`, `colour`. Flag any that are missing
+- Optional but recommended: `reportsTo` (every specialist should have this), `prompts`, `model`
+
+**Fixing problems:** Read the existing file, construct the complete version with proper frontmatter added (preserving the existing instructions body), and re-save via `RUNDOCK:SAVE_SKILL` or `RUNDOCK:SAVE_AGENT`. Do not use the Write or Edit tool for files in `.claude/`.
+
 ## Making a workspace Rundock-ready
 
 A Rundock-ready workspace has:
