@@ -86,7 +86,13 @@ const RECENT_FILE = process.env.RUNDOCK_ELECTRON
   ? path.join(require('os').homedir(), '.rundock-recent-workspaces.json')
   : path.join(__dirname, '.recent-workspaces.json');
 function loadRecentWorkspaces() {
-  try { return JSON.parse(fs.readFileSync(RECENT_FILE, 'utf-8')); } catch (e) { return []; }
+  let recent;
+  try { recent = JSON.parse(fs.readFileSync(RECENT_FILE, 'utf-8')); } catch (e) { return []; }
+  const valid = recent.filter(r => r.path && fs.existsSync(r.path));
+  if (valid.length < recent.length) {
+    try { fs.writeFileSync(RECENT_FILE, JSON.stringify(valid, null, 2)); } catch (e) {}
+  }
+  return valid;
 }
 function saveRecentWorkspace(dir) {
   const recent = loadRecentWorkspaces().filter(r => r.path !== dir);
