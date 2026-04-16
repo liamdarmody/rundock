@@ -2993,18 +2993,18 @@ wss.on('connection', (ws) => {
         const fiveMinAgo = Date.now() - 5 * 60 * 1000;
         const cleaned = convos.filter(c => c.sessionId || new Date(c.lastActiveAt || c.createdAt).getTime() > fiveMinAgo);
         if (cleaned.length < convos.length) writeConversations(cleaned);
-        // Enrich activeAgentId from transcript so sidebar shows correct agent on load
+        // Reconcile activeAgentId on load. When loading from disk there is no active
+        // process, so any pointer to a delegatee is stale (the orchestrator always
+        // resumes after a delegate returns or the conversation goes idle). Pre-0.8.3
+        // delegations that never emitted COMPLETE markers left this stuck; this pass
+        // normalizes it. The orchestrator's agentId is the canonical fallback.
         for (const c of cleaned) {
-          const transcript = loadTranscript(c.id);
-          if (transcript && transcript.length > 0) {
-            const lastAssistant = [...transcript].reverse().find(t => t.role !== 'user' && t.agent);
-            if (lastAssistant) c.activeAgentId = lastAssistant.agent;
-          } else if (c.activeAgentId && c.activeAgentId !== c.agentId) {
-            // No transcript: stale activeAgentId from a delegation that ended.
-            // Fall back to base agent (orchestrator) since they resume after delegates return.
+          if (c.activeAgentId && c.activeAgentId !== c.agentId) {
             c.activeAgentId = c.agentId;
           }
         }
+        // Persist corrected pointers so reconciliation doesn't re-run every load
+        writeConversations(cleaned);
         ws.send(JSON.stringify({ type: 'conversations', conversations: cleaned }));
       }
 
