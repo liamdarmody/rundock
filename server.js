@@ -1576,6 +1576,21 @@ const wss = new WebSocketServer({
 // Module-level process tracking: survives WebSocket reconnects
 const chatProcesses = new Map(); // conversationId -> { process, buffer, processId, agentId, responseText }
 const convoTranscripts = new Map(); // conversationId -> [{ role: 'user'|'agent', agent: string, text: string }]
+
+// Circuit breaker: consecutive agent auto-resume events with no user message.
+// Prevents infinite delegation loops (e.g. Cos -> Doc -> Cos -> Doc ...).
+const MAX_CONSECUTIVE_AGENT_RESUMES = 3;
+const agentAutoResumeCount = new Map(); // conversationId -> number
+
+function incrementAutoResume(convoId) {
+  const count = (agentAutoResumeCount.get(convoId) || 0) + 1;
+  agentAutoResumeCount.set(convoId, count);
+  return count;
+}
+
+function resetAutoResume(convoId) {
+  agentAutoResumeCount.set(convoId, 0);
+}
 const connectedClients = new Set(); // All active WebSocket connections
 const disconnectBuffer = []; // Messages queued while no clients are connected
 
@@ -1884,21 +1899,31 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
   safeSend(JSON.stringify({ type: 'system', subtype: 'process_started',
     _conversationId: convoId, _processId: processId, autoContinue: true }));
 
-  // Build context for orchestrator. Two shapes:
-  //  - Pipeline complete: the specialist finished the delegated work. There is no pending
-  //    request and no routing to do. The orchestrator must return to standby silently so the
-  //    frontend shows it as active for the user's next message.
-  //  - Out of scope: the specialist could not handle the request and handed control back.
-  //    The orchestrator must route the original message to the correct specialist.
-  let prompt;
-  if (wasPipelineComplete) {
-    prompt = `[SYSTEM: pipeline-complete] ${specialistEntry.agentId} has finished the delegated work. Their output is already in the conversation history and any files they wrote. Control is back with you as the orchestrator. Do not re-delegate. Do not invoke any tools. Do not narrate. Do not write any text to the user in this turn. Exit this turn silently and wait for the user's next message.`;
+  // Circuit breaker: check consecutive auto-resume count before sending prompt.
+  // COMPLETE paths are low-risk (orchestrator goes silent) but still count.
+  const resumeCount = incrementAutoResume(convoId);
+  if (resumeCount >= MAX_CONSECUTIVE_AGENT_RESUMES) {
+    console.log(`[CircuitBreaker] convo=${convoId} ${resumeCount} consecutive agent resumes in handleScopeReturn, pausing orchestrator`);
+    resetAutoResume(convoId);
+    orchEntry.idle = true;
+    safeSend(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: `[Auto-paused: ${resumeCount} consecutive agent handoffs without user input. Last specialist: ${specialistEntry.agentId}. Please review the output above and send your next message to continue.]` }, _agent: orchestrator.id, _conversationId: convoId }));
   } else {
-    const pendingRequest = specialistEntry.lastUserMessage || '';
-    prompt = `[SYSTEM: routing-request] A specialist (${specialistEntry.agentId}) has finished and control is back with you. The user's pending request is: "${pendingRequest}". Delegate to the right specialist now using the Agent tool. Do not write any text to the user in this turn. Just invoke the Agent tool with the brief.`;
-  }
+    // Build context for orchestrator. Two shapes:
+    //  - Pipeline complete: the specialist finished the delegated work. There is no pending
+    //    request and no routing to do. The orchestrator must return to standby silently so the
+    //    frontend shows it as active for the user's next message.
+    //  - Out of scope: the specialist could not handle the request and handed control back.
+    //    The orchestrator must route the original message to the correct specialist.
+    let prompt;
+    if (wasPipelineComplete) {
+      prompt = `[SYSTEM: pipeline-complete] ${specialistEntry.agentId} has finished the delegated work. Their output is already in the conversation history and any files they wrote. Control is back with you as the orchestrator. Do not re-delegate. Do not invoke any tools. Do not narrate. Do not write any text to the user in this turn. Exit this turn silently and wait for the user's next message.`;
+    } else {
+      const pendingRequest = specialistEntry.lastUserMessage || '';
+      prompt = `[SYSTEM: routing-request] A specialist (${specialistEntry.agentId}) has finished and control is back with you. The user's pending request is: "${pendingRequest}". Delegate to the right specialist now using the Agent tool. Do not write any text to the user in this turn. Just invoke the Agent tool with the brief.`;
+    }
 
-  proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n');
+    proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n');
+  }
 
   wireProcessHandlers(orchEntry, convoId, null, {
     enableInterception: true,
@@ -2144,30 +2169,37 @@ function handleDelegation(msg, processes) {
           fromAgent: delegateEntry.agentId, toAgent: orchestratorAgentId
         }));
 
-        // Auto-continue: nudge orchestrator with the correct prompt for the marker seen
-        if (orchestratorEntry.process.stdin && orchestratorEntry.process.stdin.writable && !orchestratorEntry.process.killed) {
-          const pendingRequest = delegateEntry.lastUserMessage || '';
-          setTimeout(() => {
-            if (!orchestratorEntry.exited) {
-              console.log(`[AgentIntercept] convo=${convoId} auto-continuing orchestrator after skip-level ${returnMarkerSeen}`);
-              orchestratorEntry.responseText = '';
-              orchestratorEntry.idle = false;
-              safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: orchestratorEntry.processId, autoContinue: true }));
-              let prompt;
-              if (isPipelineComplete) {
-                prompt = `[SYSTEM: pipeline-complete] ${delegateEntry.agentId} has finished the delegated work. Their output is already in the conversation history and any files they wrote. Control is back with you as the orchestrator. Do not re-delegate. Do not invoke any tools. Do not narrate. Do not write any text to the user in this turn. Exit this turn silently and wait for the user's next message.`;
-              } else {
-                prompt = pendingRequest
+        // COMPLETE gate: when the specialist finished the delegated pipeline,
+        // do NOT auto-resume the orchestrator. Leave it idle so the user sees
+        // the specialist's output and decides what to do next.
+        if (isPipelineComplete) {
+          console.log(`[AgentIntercept] convo=${convoId} COMPLETE gate: specialist ${delegateEntry.agentId} finished, orchestrator ${orchestratorAgentId} stays idle`);
+        } else if (orchestratorEntry.process.stdin && orchestratorEntry.process.stdin.writable && !orchestratorEntry.process.killed) {
+          // RETURN path: auto-continue to route the pending request to another specialist
+          const resumeCount = incrementAutoResume(convoId);
+          if (resumeCount >= MAX_CONSECUTIVE_AGENT_RESUMES) {
+            console.log(`[CircuitBreaker] convo=${convoId} ${resumeCount} consecutive agent resumes, pausing orchestrator`);
+            resetAutoResume(convoId);
+            safeSend(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: `[Auto-paused: ${resumeCount} consecutive agent handoffs without user input. Agents involved: ${delegateEntry.agentId} → ${orchestratorAgentId}. Please review the output above and send your next message to continue.]` }, _agent: orchestratorAgentId, _conversationId: convoId }));
+          } else {
+            const pendingRequest = delegateEntry.lastUserMessage || '';
+            setTimeout(() => {
+              if (!orchestratorEntry.exited) {
+                console.log(`[AgentIntercept] convo=${convoId} auto-continuing orchestrator after skip-level ${returnMarkerSeen} (resume ${resumeCount}/${MAX_CONSECUTIVE_AGENT_RESUMES})`);
+                orchestratorEntry.responseText = '';
+                orchestratorEntry.idle = false;
+                safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: orchestratorEntry.processId, autoContinue: true }));
+                const prompt = pendingRequest
                   ? `[SYSTEM: A specialist just returned because the user asked for something outside their scope. The user's pending request is: "${pendingRequest}"\n\nRoute this request now. Delegate to the right specialist if one fits, or handle it yourself. Do not summarise what the previous specialist did. Do not ask the user to repeat themselves. Respond to their request.]`
                   : '[SYSTEM: A specialist just returned. Ask the user what they need next.]';
+                try {
+                  orchestratorEntry.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n');
+                } catch (err) {
+                  console.warn(`[AgentIntercept] convo=${convoId} failed to write to orchestrator stdin: ${err.message}`);
+                }
               }
-              try {
-                orchestratorEntry.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n');
-              } catch (err) {
-                console.warn(`[AgentIntercept] convo=${convoId} failed to write to orchestrator stdin: ${err.message}`);
-              }
-            }
-          }, 300);
+            }, 300);
+          }
         }
 
         safeSend(JSON.stringify({ type: 'system', subtype: 'done', code, _agent: delegateEntry.agentId, _conversationId: convoId, _processId: delegateProcessId }));
@@ -2221,12 +2253,20 @@ function handleDelegation(msg, processes) {
       // needed. In deeper chains, the pipeline-complete marker would have fired the
       // skip-level orchestratorEntry branch above and never reached this code path.
       if (isOutOfScope) {
-        safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: resumeProcessId, autoContinue: true }));
+        const resumeCount = incrementAutoResume(convoId);
+        if (resumeCount >= MAX_CONSECUTIVE_AGENT_RESUMES) {
+          console.log(`[CircuitBreaker] convo=${convoId} ${resumeCount} consecutive agent resumes on parked-parent RETURN path, pausing`);
+          resetAutoResume(convoId);
+          resumeEntry.idle = true;
+          safeSend(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: `[Auto-paused: ${resumeCount} consecutive agent handoffs without user input. Last specialist: ${delegateEntry.agentId}. Please review the output above and send your next message to continue.]` }, _agent: delegateEntry.delegation.originalAgentId, _conversationId: convoId }));
+        } else {
+          safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: resumeProcessId, autoContinue: true }));
 
-        // Tier 1: routing prompt only. The parent is being resumed via --resume,
-        // which restores session context from disk. No transcript needed.
-        const resumePrompt = `[SYSTEM: Your team member returned because the user asked for something outside their scope. The user's latest request was: "${delegateEntry.lastUserMessage || 'continue'}"\n\nRoute this request to the right specialist. Do not ask the user to repeat themselves.]`;
-        resumeProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: resumePrompt } }) + '\n');
+          // Tier 1: routing prompt only. The parent is being resumed via --resume,
+          // which restores session context from disk. No transcript needed.
+          const resumePrompt = `[SYSTEM: Your team member returned because the user asked for something outside their scope. The user's latest request was: "${delegateEntry.lastUserMessage || 'continue'}"\n\nRoute this request to the right specialist. Do not ask the user to repeat themselves.]`;
+          resumeProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: resumePrompt } }) + '\n');
+        }
       } else if (isPipelineComplete) {
         console.log(`[AgentIntercept] convo=${convoId} delegate emitted COMPLETE, parent ${parentAgentId} parked silently`);
       } else {
@@ -2291,23 +2331,31 @@ function handleDelegation(msg, processes) {
       }));
 
       if (!delegateEntry.isPlatformDelegate && delegateEntry.receivedFollowUp && orig.process.stdin && orig.process.stdin.writable) {
-        const pendingRequest = delegateEntry.lastUserMessage || '';
-        setTimeout(() => {
-          if (!orig.exited) {
-            console.log(`[Delegate] convo=${convoId} auto-continuing orchestrator after specialist return`);
-            orig.responseText = '';
-            orig.idle = false;
-            safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: orig.processId, autoContinue: true }));
-            const prompt = pendingRequest
-              ? `[SYSTEM: The specialist just returned because the user asked for something outside their scope. The user's pending request is: "${pendingRequest}"\n\nRoute this request now. Delegate to the right specialist if one fits, or handle it yourself. Do not summarise what the previous specialist did. Do not ask the user to repeat themselves. Respond to their request.]`
-              : '[SYSTEM: The specialist just returned. The user indicated they were done with that specialist. Ask the user what they need next.]';
-            try {
-              orig.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n');
-            } catch (err) {
-              console.warn(`[Delegate] convo=${convoId} failed to write to orchestrator stdin: ${err.message}`);
+        const resumeCount = incrementAutoResume(convoId);
+        if (resumeCount >= MAX_CONSECUTIVE_AGENT_RESUMES) {
+          console.log(`[CircuitBreaker] convo=${convoId} ${resumeCount} consecutive agent resumes on delegate return path, pausing`);
+          resetAutoResume(convoId);
+          orig.idle = true;
+          safeSend(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: `[Auto-paused: ${resumeCount} consecutive agent handoffs without user input. Last specialist: ${delegateEntry.agentId}. Please review the output above and send your next message to continue.]` }, _agent: orig.agentId, _conversationId: convoId }));
+        } else {
+          const pendingRequest = delegateEntry.lastUserMessage || '';
+          setTimeout(() => {
+            if (!orig.exited) {
+              console.log(`[Delegate] convo=${convoId} auto-continuing orchestrator after specialist return (resume ${resumeCount}/${MAX_CONSECUTIVE_AGENT_RESUMES})`);
+              orig.responseText = '';
+              orig.idle = false;
+              safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: orig.processId, autoContinue: true }));
+              const prompt = pendingRequest
+                ? `[SYSTEM: The specialist just returned because the user asked for something outside their scope. The user's pending request is: "${pendingRequest}"\n\nRoute this request now. Delegate to the right specialist if one fits, or handle it yourself. Do not summarise what the previous specialist did. Do not ask the user to repeat themselves. Respond to their request.]`
+                : '[SYSTEM: The specialist just returned. The user indicated they were done with that specialist. Ask the user what they need next.]';
+              try {
+                orig.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n');
+              } catch (err) {
+                console.warn(`[Delegate] convo=${convoId} failed to write to orchestrator stdin: ${err.message}`);
+              }
             }
-          }
-        }, 300);
+          }, 300);
+        }
       }
     } else {
       processes.delete(convoId);
@@ -2388,6 +2436,7 @@ wss.on('connection', (ws) => {
             existing.turnStartTime = Date.now();
             existing.lastUserMessage = msg.content;
             existing.scopeReturnSource = null; // User sent new message, allow re-delegation
+            resetAutoResume(convoId); // User spoke, reset circuit breaker
             if (existing.delegation) { existing.receivedFollowUp = true; }
             existing.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: msg.content } }) + '\n');
           } else {
