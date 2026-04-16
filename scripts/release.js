@@ -267,7 +267,7 @@ function promoteUnreleasedChangelog(version) {
   }
 
   // Otherwise we need an Unreleased heading to promote.
-  const unreleasedRe = /^## Unreleased\s*$/m;
+  const unreleasedRe = /^## Unreleased[ \t]*$/m;
   if (!unreleasedRe.test(original)) {
     fail(
       'changelog',
@@ -292,10 +292,81 @@ function promoteUnreleasedChangelog(version) {
   // Also strip the **Name:** line from the body now that it's been
   // lifted into the heading, so it doesn't show up twice in release notes.
   let updated = original.replace(unreleasedRe, newHeading);
-  updated = updated.replace(/^\s*\*\*Name:\*\*\s*.+?\s*$\n?/m, '');
+  updated = updated.replace(/^[ \t]*\*\*Name:\*\*[ \t]*.+?[ \t]*$\n?/m, '');
+  // Collapsing 3+ consecutive newlines to 2 prevents a double blank line
+  // where the Name line used to sit (between heading and body).
+  updated = updated.replace(/\n{3,}/g, '\n\n');
 
   fs.writeFileSync(changelogPath, updated, 'utf8');
   log('changelog', `Promoted "## Unreleased" to "${newHeading}"`);
+}
+
+function commitAndPush(version) {
+  // Pre-flight: must be on main
+  let branch;
+  try {
+    branch = execFileSync('git', ['symbolic-ref', '--short', 'HEAD'],
+      { cwd: ROOT, encoding: 'utf8' }).trim();
+  } catch (err) {
+    fail('commit', `Could not determine current branch: ${err.message}`);
+  }
+  if (branch !== 'main') {
+    fail('commit', `Must be on main to release (currently on "${branch}")`);
+  }
+
+  // Pre-flight: working tree clean aside from expected files
+  let status;
+  try {
+    status = execFileSync('git', ['status', '--porcelain'],
+      { cwd: ROOT, encoding: 'utf8' });
+  } catch (err) {
+    fail('commit', `git status failed: ${err.message}`);
+  }
+  const unexpected = status.split('\n').filter(line => {
+    if (!line.trim()) return false;
+    // Allow modifications to package.json and CHANGELOG.md
+    return !/ (package\.json|CHANGELOG\.md)$/.test(line);
+  });
+  if (unexpected.length) {
+    fail('commit', `Working tree has unexpected changes:\n${unexpected.join('\n')}\nCommit or stash them before releasing.`);
+  }
+
+  // Pre-flight: fetch and check sync with origin/main
+  try {
+    execFileSync('git', ['fetch', 'origin', 'main'], { cwd: ROOT, stdio: 'pipe' });
+  } catch (err) {
+    fail('commit', `git fetch origin main failed: ${err.message}`);
+  }
+  let localHead, remoteHead;
+  try {
+    localHead = execFileSync('git', ['rev-parse', 'HEAD'],
+      { cwd: ROOT, encoding: 'utf8' }).trim();
+    remoteHead = execFileSync('git', ['rev-parse', 'origin/main'],
+      { cwd: ROOT, encoding: 'utf8' }).trim();
+  } catch (err) {
+    fail('commit', `Could not compare HEAD with origin/main: ${err.message}`);
+  }
+
+  // Local must be at or ahead of origin/main (not behind)
+  try {
+    const behind = execFileSync('git', ['rev-list', '--count', 'HEAD..origin/main'],
+      { cwd: ROOT, encoding: 'utf8' }).trim();
+    if (parseInt(behind, 10) > 0) {
+      fail('commit', `Local main is ${behind} commit(s) behind origin/main. Pull before releasing.`);
+    }
+  } catch (err) {
+    fail('commit', `Could not check if behind origin/main: ${err.message}`);
+  }
+
+  // Stage, commit, push
+  try {
+    execFileSync('git', ['add', 'package.json', 'CHANGELOG.md'], { cwd: ROOT, stdio: 'inherit' });
+    execFileSync('git', ['commit', '-m', `chore: bump version to ${version}`], { cwd: ROOT, stdio: 'inherit' });
+    execFileSync('git', ['push', 'origin', 'main'], { cwd: ROOT, stdio: 'inherit' });
+  } catch (err) {
+    fail('commit', `Git commit/push failed: ${err.message}`);
+  }
+  log('commit', `Committed and pushed version bump to ${version}`);
 }
 
 function publishRelease(version) {
@@ -333,7 +404,23 @@ function publishRelease(version) {
     return;
   }
 
-  log('publish', `Creating GitHub release ${tag}`);
+  // Pre-flight: verify local HEAD matches origin/main so the tag lands on
+  // the correct commit. After commitAndPush they should be identical, but
+  // this guards against manual intervention between steps.
+  let localHead, remoteHead;
+  try {
+    localHead = execFileSync('git', ['rev-parse', 'HEAD'],
+      { cwd: ROOT, encoding: 'utf8' }).trim();
+    remoteHead = execFileSync('git', ['rev-parse', 'origin/main'],
+      { cwd: ROOT, encoding: 'utf8' }).trim();
+  } catch (err) {
+    fail('publish', `Could not compare HEAD with origin/main: ${err.message}`);
+  }
+  if (localHead !== remoteHead) {
+    fail('publish', `Local HEAD (${localHead.slice(0, 8)}) does not match origin/main (${remoteHead.slice(0, 8)}). Push before creating the release.`);
+  }
+
+  log('publish', `Creating GitHub release ${tag} at ${localHead.slice(0, 8)}`);
   const entry = extractChangelogEntry(version);
   const title = entry ? entry.title : `Rundock ${version}`;
   const notes = entry && entry.body
@@ -343,7 +430,7 @@ function publishRelease(version) {
   try {
     execFileSync(
       'gh',
-      ['release', 'create', tag, ...assets, '--title', title, '--notes', notes],
+      ['release', 'create', tag, '--target', localHead, ...assets, '--title', title, '--notes', notes],
       { stdio: 'inherit' }
     );
   } catch (err) {
@@ -425,6 +512,7 @@ function updateSiteDownloadUrls(version) {
 setVersion();
 loadEnv();
 promoteUnreleasedChangelog(process.argv[2]);
+commitAndPush(process.argv[2]);
 build();
 const submissionId = submitNotarisation();
 pollNotarisation(submissionId);
