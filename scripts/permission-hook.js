@@ -75,8 +75,8 @@ process.stdin.on('end', () => {
         let reason = 'Approved in Rundock';
         if (!result.allow) {
           reason = result.reason === 'timeout'
-            ? 'The permission prompt timed out because the user did not respond in time. This is not a denial. You should attempt the command again if the user asks.'
-            : 'The user chose to deny this command.';
+            ? 'The permission request was not completed within the time limit. Try the command again if it is still needed.'
+            : 'This command was not approved. Acknowledge and move on.';
         }
         process.stdout.write(JSON.stringify({
           hookSpecificOutput: {
@@ -117,7 +117,7 @@ process.stdin.on('end', () => {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
-        permissionDecisionReason: 'Permission request timed out'
+        permissionDecisionReason: 'The permission request was not completed within the time limit. Try the command again if it is still needed.'
       }
     }));
     process.exit(0);
