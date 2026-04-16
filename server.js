@@ -2013,7 +2013,7 @@ function handleDelegation(msg, processes) {
   const targetHasDirectReports = !!buildTeamRoster(targetAgent.id, true);
   let delegationContext;
   if (isPlatformDelegate) {
-    delegationContext = 'DELEGATION CONTEXT:\nYou have been delegated a task by another agent. Complete the task in a single response if possible. When the task is done (agent created, skill saved, file written, question answered, etc.), output <!-- RUNDOCK:RETURN --> at the very end of that same response. Do not wait for follow-up questions. Do not ask if there is anything else. Just complete the task, confirm what you did, and return immediately. If you genuinely need clarification before you can proceed, ask, but prefer using sensible defaults over asking.';
+    delegationContext = 'DELEGATION CONTEXT:\nYou have been delegated a task by another agent. Complete the task in a single response if possible. When the task is done (agent created, skill saved, file written, question answered, etc.), output <!-- RUNDOCK:COMPLETE --> at the very end of that same response. Do not wait for follow-up questions. Do not ask if there is anything else. Just complete the task, confirm what you did, and return immediately. If you genuinely need clarification before you can proceed, ask, but prefer using sensible defaults over asking.\n\nOnly use <!-- RUNDOCK:RETURN --> if the request is genuinely outside your scope and you cannot help. This is rare.';
   } else if (targetHasDirectReports) {
     delegationContext = 'DELEGATION CONTEXT:\nYou have been brought into this conversation by the orchestrator to run a task in your domain. You lead a support team and may delegate parts of the work to them. Do the real work, write the deliverables, and report the outcome.\n\nYou MUST hand control back using one of two markers, on its own line, as the very last thing in your response (after any final summary):\n\n- <!-- RUNDOCK:RETURN --> when the user asks for something outside your domain of expertise. Tell them briefly that this falls outside what you handle and you are handing them back so the right person can pick it up. Do NOT name other specialists or suggest who should handle it. Then emit the marker.\n\n- <!-- RUNDOCK:COMPLETE --> when the orchestrator\'s original delegated pipeline is finished end-to-end. All deliverables are written to their final locations and the workflow has reached its final status (for example content moved to Ready for Review, spec written and linked, final audit posted). Post your final summary first, then emit the marker.\n\nDo NOT emit either marker when you are pausing at a decision point to let the user choose between options, presenting drafts, hooks, options, or recommendations for user review, asking the user to confirm something before continuing, or waiting at a human gate midway through a multi-phase pipeline. Those are pauses, not completions. Stay in the conversation as the active agent and wait for the user\'s next message. You will pick up where you left off when they respond.\n\nReturning on completion is how control flows back up the chain. If you silently stop, the user\'s next message will be routed to the wrong agent.';
   } else {
@@ -2089,9 +2089,7 @@ function handleDelegation(msg, processes) {
         ? (hasHandoff || hasCrudMarker)
         : hasHandoff;
 
-      // COMPLETE takes priority when both markers are present. Platform delegates
-      // (Doc) sometimes emit RETURN out of habit even after completing the work.
-      // The COMPLETE marker is the stronger signal: the task was done.
+      // COMPLETE takes priority when both markers are present.
       if (hasComplete) {
         e.returnMarkerSeen = 'complete';
         if (hasOutOfScope) {
@@ -2100,8 +2098,19 @@ function handleDelegation(msg, processes) {
           console.log(`[Delegate] convo=${convoId} agent=${e.agentId} COMPLETE marker detected (pipeline done)`);
         }
       } else if (hasOutOfScope) {
-        e.returnMarkerSeen = 'return';
-        console.log(`[Delegate] convo=${convoId} agent=${e.agentId} RETURN marker detected (out-of-scope)`);
+        // Platform delegates are transactional: they do the task and return.
+        // If a platform delegate emits RETURN but actually did the work (no
+        // out-of-scope language in the response), treat it as COMPLETE.
+        // This is a server-side safety net for models that ignore the
+        // COMPLETE instruction in the delegation context.
+        const outOfScopePhrases = /outside (my|what I|this agent's) scope|I can('|no)t help with th|falls outside what I handle|not (something|a task) I (can |)handle|genuinely outside my/i;
+        if (e.isPlatformDelegate && !outOfScopePhrases.test(e.responseText)) {
+          e.returnMarkerSeen = 'complete';
+          console.log(`[Delegate] convo=${convoId} agent=${e.agentId} platform delegate RETURN overridden to COMPLETE (no out-of-scope language detected)`);
+        } else {
+          e.returnMarkerSeen = 'return';
+          console.log(`[Delegate] convo=${convoId} agent=${e.agentId} RETURN marker detected (out-of-scope)`);
+        }
       }
 
       if (shouldAutoReturn) {
