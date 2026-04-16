@@ -2029,15 +2029,15 @@ function renderSessionHistory(d) {
   convo.messages = [...historyMsgs, ...convo.messages];
   convo._historyCount = (convo._historyCount || 0) + historyMsgs.length;
 
-  // Update activeAgentId to the last responding agent from history
-  // This fixes sidebar/title showing wrong agent after restart
-  const lastAssistantMsg = [...d.messages].reverse().find(m => m.role === 'assistant' && m.agentId);
-  if (lastAssistantMsg) {
-    const state = getConvoState(convo.id);
-    state.activeAgentId = lastAssistantMsg.agentId;
-    // Update header and sidebar to reflect the correct agent
-    if (activeConversation?.id === convo.id) {
-      const agent = agents.find(a => a.id === lastAssistantMsg.agentId) || convo.agent;
+  // Set activeAgentId to the conversation's orchestrator on history load.
+  // The conversation is dormant (loaded from disk, no active process), so the
+  // orchestrator is always the correct next responder. Don't use the last
+  // assistant from history since that could be a delegate who already returned.
+  const state = getConvoState(convo.id);
+  state.activeAgentId = convo.agentId;
+  if (activeConversation?.id === convo.id) {
+    const agent = convo.agent || agents.find(a => a.id === convo.agentId);
+    if (agent) {
       document.getElementById('chat-agent-label').textContent = agent.displayName;
       document.getElementById('chat-agent-avatar').style.background = agent.colour;
       document.getElementById('chat-agent-avatar').textContent = agent.icon;

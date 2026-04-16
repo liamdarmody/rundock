@@ -3290,115 +3290,86 @@ wss.on('connection', (ws) => {
       if (msg.type === 'get_session_history') {
         const { sessionId, sessionIds, conversationId, limit, offset } = msg;
 
-        // Multi-session merge: load from all sessions in the delegation chain.
-        // Use the conversation transcript as the primary source for agent attribution,
-        // since JSONL sessions can contain messages from multiple agents after restarts.
+        // Multi-session merge: load JSONL content from all sessions, then use the
+        // conversation transcript as the ordering and attribution authority.
+        // The transcript records the correct interleaved order from live use;
+        // JSONL sessions group messages per-process and can reorder across agents.
         if (sessionIds && sessionIds.length > 0) {
           Promise.all(sessionIds.map(async (s) => {
             const result = await parseSessionHistory(s.sessionId, 999, 0).catch(() => ({ messages: [] }));
-            return result.messages.map(m => ({ ...m, _sessionAgentId: s.agentId || null }));
+            return result.messages;
           })).then(allSessions => {
-            // Load transcript for accurate agent attribution
             const transcript = loadTranscript(conversationId);
-            const transcriptAgents = []; // Build ordered list of { role, agentId, contentPrefix }
-            if (transcript && transcript.length > 0) {
-              for (const t of transcript) {
-                transcriptAgents.push({
-                  role: t.role === 'user' ? 'user' : 'assistant',
-                  agentId: t.agent,
-                  contentPrefix: (t.text || '').substring(0, 200)
-                });
+
+            // Build a pool of JSONL messages for content lookup
+            const stripToolSummaries = (s) => (s || '').replace(/^(\[.*?\]\s*)+/s, '').trim();
+            const jsonlPool = [];
+            for (const sessionMsgs of allSessions) {
+              for (const m of sessionMsgs) {
+                // Skip internal delegation messages
+                if (m.role === 'user' && m.content && (
+                  m.content.startsWith('CONVERSATION SO FAR:') ||
+                  m.content.startsWith('[SYSTEM:') ||
+                  m.content.startsWith('[DELEGATION BRIEF]')
+                )) continue;
+                // Skip ghost bubbles: empty resume artifacts from orchestrator
+                if (m.role === 'assistant' && m.content && m.content.trim() === 'No response requested.') continue;
+                jsonlPool.push({ ...m, _used: false });
               }
             }
 
-            // Merge all sessions in order, deduplicating user messages
+            // If we have a transcript, use it as the ordering authority
             const merged = [];
-            const seenUserMsgs = new Set();
-            let transcriptIdx = 0;
-            for (const sessionMsgs of allSessions) {
-              for (const m of sessionMsgs) {
-                if (m.role === 'user') {
-                  const key = m.content.substring(0, 200);
+            if (transcript && transcript.length > 0) {
+              const seenUserMsgs = new Set();
+              for (const t of transcript) {
+                const role = t.role === 'user' ? 'user' : 'assistant';
+                const tText = t.text || '';
+
+                if (role === 'user') {
+                  const key = tText.substring(0, 200);
                   if (seenUserMsgs.has(key)) continue;
-                  if (m.content.startsWith('CONVERSATION SO FAR:') || m.content.startsWith('[SYSTEM:') || m.content.startsWith('[DELEGATION BRIEF]')) continue;
                   seenUserMsgs.add(key);
-                }
-                // Match against transcript for correct agent attribution
-                let agentId = m._sessionAgentId;
-                if (m.role === 'assistant' && transcriptAgents.length > 0) {
-                  // Find the next transcript entry that matches this message's role and content
-                  for (let ti = transcriptIdx; ti < transcriptAgents.length; ti++) {
-                    const te = transcriptAgents[ti];
-                    if (te.role === 'assistant' && m.content && te.contentPrefix.length > 10 && m.content.substring(0, 200).includes(te.contentPrefix.substring(0, 100))) {
-                      agentId = te.agentId;
-                      transcriptIdx = ti + 1;
-                      break;
+                  // Find matching JSONL entry for full content
+                  const match = jsonlPool.find(m => !m._used && m.role === 'user' &&
+                    m.content && m.content.substring(0, 200) === key);
+                  if (match) {
+                    match._used = true;
+                    merged.push({ role: 'user', content: match.content, agentId: null });
+                  } else if (tText) {
+                    merged.push({ role: 'user', content: tText, agentId: null });
+                  }
+                } else {
+                  // Agent message: match by content prefix (transcript stores ~200 chars)
+                  const cleanPrefix = stripToolSummaries(tText).substring(0, 100);
+                  if (!cleanPrefix) continue;
+                  const match = jsonlPool.find(m => !m._used && m.role === 'assistant' &&
+                    m.content && (
+                      m.content.substring(0, 100).includes(cleanPrefix.substring(0, 60)) ||
+                      cleanPrefix.includes(m.content.substring(0, 60))
+                    ));
+                  if (match) {
+                    match._used = true;
+                    merged.push({ role: 'assistant', content: match.content, agentId: t.agent || null });
+                  } else {
+                    // No JSONL match: use transcript text (may be truncated but better than dropping)
+                    const cleanText = stripToolSummaries(tText);
+                    if (cleanText) {
+                      merged.push({ role: 'assistant', content: cleanText, agentId: t.agent || null });
                     }
                   }
                 }
-                delete m._sessionAgentId;
-                m.agentId = m.role === 'user' ? null : agentId;
-                merged.push(m);
               }
-            }
-            // Reconcile with transcript: fill in messages missing from JSONL
-            // (e.g. orchestrator responses lost when process was SIGKILL'd during Agent tool interception)
-            if (transcript && transcript.length > 0) {
-              // Helper: strip leading tool summary brackets like [Read ...] [Edit ...] for matching
-              const stripToolSummaries = (s) => (s || '').replace(/^(\[.*?\]\s*)+/s, '').trim();
-
-              // Build a set of merged assistant content prefixes for quick lookup
-              const mergedAssistantPrefixes = new Set();
-              for (const m of merged) {
-                if (m.role === 'assistant' && m.content) {
-                  mergedAssistantPrefixes.add(m.content.substring(0, 120));
+            } else {
+              // No transcript: fall back to JSONL pool in order, deduplicated
+              const seenUserMsgs = new Set();
+              for (const m of jsonlPool) {
+                if (m.role === 'user') {
+                  const key = m.content.substring(0, 200);
+                  if (seenUserMsgs.has(key)) continue;
+                  seenUserMsgs.add(key);
                 }
-              }
-
-              // Check if transcript has assistant messages not in the JSONL merge
-              const missingFromMerge = [];
-              for (const t of transcript) {
-                if (t.role !== 'agent' || !t.text) continue;
-                const cleanText = stripToolSummaries(t.text);
-                if (!cleanText) continue;
-                // Check if this transcript message exists in merged
-                const found = mergedAssistantPrefixes.has(cleanText.substring(0, 120)) ||
-                  [...mergedAssistantPrefixes].some(p => p.includes(cleanText.substring(0, 80)) || cleanText.substring(0, 80).includes(p.substring(0, 80)));
-                if (!found) {
-                  missingFromMerge.push({
-                    role: 'assistant',
-                    content: cleanText,
-                    agentId: t.agent || null,
-                    _transcriptIdx: transcript.indexOf(t)
-                  });
-                }
-              }
-
-              // Insert missing messages at the right position using transcript ordering
-              if (missingFromMerge.length > 0) {
-                // Map merged messages to their transcript positions
-                const result = [];
-                let mergedIdx = 0;
-                for (const t of transcript) {
-                  const tRole = t.role === 'user' ? 'user' : 'assistant';
-                  // Check if this is a missing message we need to inject
-                  const missing = missingFromMerge.find(m => m._transcriptIdx === transcript.indexOf(t));
-                  if (missing) {
-                    result.push({ role: missing.role, content: missing.content, agentId: missing.agentId });
-                    continue;
-                  }
-                  // Otherwise advance through merged to find the matching entry
-                  if (mergedIdx < merged.length && merged[mergedIdx].role === tRole) {
-                    result.push(merged[mergedIdx]);
-                    mergedIdx++;
-                  }
-                }
-                // Append any remaining merged entries
-                while (mergedIdx < merged.length) {
-                  result.push(merged[mergedIdx++]);
-                }
-                merged.length = 0;
-                merged.push(...result);
+                merged.push({ role: m.role, content: m.content, agentId: m.role === 'user' ? null : null });
               }
             }
 
