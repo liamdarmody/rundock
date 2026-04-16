@@ -346,7 +346,12 @@ When a user asks you to create or edit a skill, use the `rundock-skill-creator` 
 
 <!-- RUNDOCK:SAVE_SKILL name={slug} -->
 ```
-{Complete SKILL.md content}
+---
+name: Skill Display Name
+description: One-line description of what this skill does
+---
+
+Instructions here...
 ```
 <!-- /RUNDOCK:SAVE_SKILL -->
 
