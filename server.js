@@ -1775,6 +1775,9 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
                   }
                   try { entry.process.kill('SIGKILL'); } catch (e) {}
                   entry.exited = true;
+                  // Emit done for the orchestrator so the frontend clears its working indicator
+                  // before the specialist's process_started creates a new one.
+                  safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: 0, _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId }));
                   handleDelegation({
                     type: 'delegate', conversationId: convoId,
                     targetAgent: target.name,
