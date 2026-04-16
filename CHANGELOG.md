@@ -10,6 +10,8 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Fixed
 
+- **Delegation context no longer forces COMPLETE after a proposal waiting for user confirmation:** The platform delegate delegation context told specialists to "complete the task in a single response if possible" and emit COMPLETE immediately. This conflicted with Doc's scaffold instruction to propose before executing: Doc would propose a plan, emit COMPLETE (killing the delegation), and when the user said "go ahead" a fresh delegation started with no memory of the proposal. The delegation context now includes an exception: if the specialist proposed a plan and is waiting for user confirmation, it stays in the conversation without emitting COMPLETE until the task is genuinely finished.
+
 - **Page refresh no longer re-invokes orchestrator on completed conversations:** When a specialist emitted COMPLETE on the parked-parent delegation path, the resumed orchestrator process was parked correctly (no auto-prompt sent) but was not marked as idle. On browser refresh, `handleActiveProcesses` found this non-idle process and called `startProcessing`, which re-invoked the orchestrator on a conversation that had already completed. The parked-parent COMPLETE and no-marker branches now set `idle = true` on the resume entry, so `handleActiveProcesses` skips them on reconnect.
 
 ### Added
