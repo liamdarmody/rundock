@@ -10,6 +10,8 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Fixed
 
+- **COMPLETE marker takes priority over RETURN when both are present:** Platform delegates (Doc) sometimes emit both `RUNDOCK:RETURN` and `RUNDOCK:COMPLETE` in the same response. Previously the server checked RETURN first, so these responses were treated as out-of-scope returns, triggering unnecessary orchestrator auto-resumes. COMPLETE now takes priority at all three detection points (onResult handler, close handler fallback, and resumed parent scope-return detection). If the agent did the work and emitted COMPLETE, the response is always treated as pipeline-complete regardless of a stray RETURN marker.
+
 - **COMPLETE-path auto-resume gate:** When a specialist emitted a COMPLETE marker on the sub-delegate handoff path, the orchestrator was auto-resumed with a "stay silent" prompt that it routinely ignored, causing it to silently re-delegate or narrate. The orchestrator is now left idle after COMPLETE, returning control to the user without any hidden prompt.
 
 - **Orchestrator scaffold: roster constraint and no parallel claims:** The orchestrator prompt now instructs the orchestrator to only delegate to agents listed in its roster, preventing hallucinated agent names (e.g. referencing "Explorer" when no such agent exists). The prompt also states that delegation is sequential (one specialist at a time) and the orchestrator must not claim it is running tasks in parallel, since the architecture does not support parallel agent delegation.
