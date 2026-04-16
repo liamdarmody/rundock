@@ -558,6 +558,7 @@ function discoverAgents() {
         const caps = parseCapabilities(fmText);
         const routines = parseRoutines(fmText);
         const prompts = parsePrompts(fmText);
+        const skills = parseSkills(fmText);
 
         const agentType = meta.type || null; // orchestrator, specialist, platform, or null
         const hasOrder = meta.order !== undefined && meta.order !== '';
@@ -582,6 +583,7 @@ function discoverAgents() {
           capabilities: caps,
           routines: routines,
           prompts: prompts.length > 0 ? prompts : null,
+          skills: skills.length > 0 ? skills : null,
           model: meta.model || null,
           order: orderNum,
           reportsTo: meta.reportsTo || null,
@@ -763,6 +765,18 @@ function parsePrompts(fmText) {
     if (item && item[1].trim()) prompts.push(item[1].trim());
   }
   return prompts;
+}
+
+function parseSkills(fmText) {
+  const match = fmText.match(/skills:\n((?:  - [^\n]*(?:\n|$))+)/);
+  if (!match) return [];
+  const skills = [];
+  for (const line of match[1].split('\n')) {
+    if (!line.trim()) continue;
+    const item = line.match(/^\s+-\s*"?(.*?)"?\s*$/);
+    if (item && item[1].trim()) skills.push(item[1].trim());
+  }
+  return skills;
 }
 
 // ===== SCHEDULER =====
@@ -2295,8 +2309,10 @@ function handleDelegation(msg, processes) {
           resumeProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: resumePrompt } }) + '\n');
         }
       } else if (isPipelineComplete) {
+        resumeEntry.idle = true;
         console.log(`[AgentIntercept] convo=${convoId} delegate emitted COMPLETE, parent ${parentAgentId} parked silently`);
       } else {
+        resumeEntry.idle = true;
         console.log(`[AgentIntercept] convo=${convoId} delegate completed normally, parent ${parentAgentId} parked (no auto-prompt)`);
       }
 
@@ -3457,18 +3473,28 @@ function discoverSkills(existingAgents) {
         const content = fs.readFileSync(defPath, 'utf-8');
         const parsed = parseSkillFile(content, dir.name);
 
-        // Match skill to agents dynamically:
-        // Check if the exact slug appears as a distinct reference in the agent's body text.
-        // Requires the slug to be bounded by non-word, non-hyphen characters (e.g. backticks,
-        // quotes, line start/end, spaces) to avoid false matches from prose.
+        // Match skill to agents via two methods:
+        // 1. Explicit: agent frontmatter has skills: array listing this slug
+        // 2. Fallback: body-text scan for the slug as a distinct reference
         const slug = dir.name.toLowerCase();
         const slugPattern = new RegExp('(?<![\\w-])' + slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\w-])', 'i');
         const assignedAgents = [];
+        const assignedIds = new Set();
 
+        // Pass 1: explicit frontmatter skills
         for (const agent of agents.filter(a => a.status === 'onTeam')) {
-          // Platform agents (Doc) only match rundock-* skills
           if (agent.type === 'platform' && !slug.startsWith('rundock-')) continue;
-          // Non-platform agents never match rundock-* skills
+          if (agent.type !== 'platform' && slug.startsWith('rundock-')) continue;
+          if (agent.skills && agent.skills.some(s => s.toLowerCase() === slug)) {
+            assignedAgents.push({ id: agent.id, name: agent.displayName, role: agent.role || '', colour: agent.colour, icon: agent.icon });
+            assignedIds.add(agent.id);
+          }
+        }
+
+        // Pass 2: body-text scan fallback (skip agents already matched)
+        for (const agent of agents.filter(a => a.status === 'onTeam')) {
+          if (assignedIds.has(agent.id)) continue;
+          if (agent.type === 'platform' && !slug.startsWith('rundock-')) continue;
           if (agent.type !== 'platform' && slug.startsWith('rundock-')) continue;
           const body = agentBody[agent.id] || '';
           if (slugPattern.test(body)) {
