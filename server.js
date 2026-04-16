@@ -1900,7 +1900,7 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
     fromAgent: specialistEntry.agentId, toAgent: orchestrator.id
   }));
   safeSend(JSON.stringify({ type: 'system', subtype: 'process_started',
-    _conversationId: convoId, _processId: processId, autoContinue: true }));
+    _conversationId: convoId, _processId: processId, _agent: orchestrator.id, autoContinue: true }));
 
   // Circuit breaker: check consecutive auto-resume count before sending prompt.
   // COMPLETE paths are low-risk (orchestrator goes silent) but still count.
@@ -2067,7 +2067,7 @@ function handleDelegation(msg, processes) {
     type: 'system', subtype: 'agent_switch', _conversationId: convoId, _processId: delegateProcessId,
     fromAgent: originalAgentId, toAgent: targetAgent.id
   }));
-  safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: delegateProcessId }));
+  safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: delegateProcessId, _agent: targetAgent.id }));
 
   // Send context as first message. Tier 2 for intercepted delegations (orchestrator's
   // brief is sufficient, no transcript). Tier 3 for non-intercepted delegations
@@ -2211,7 +2211,7 @@ function handleDelegation(msg, processes) {
                 console.log(`[AgentIntercept] convo=${convoId} auto-continuing orchestrator after skip-level ${returnMarkerSeen} (resume ${resumeCount}/${MAX_CONSECUTIVE_AGENT_RESUMES})`);
                 orchestratorEntry.responseText = '';
                 orchestratorEntry.idle = false;
-                safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: orchestratorEntry.processId, autoContinue: true }));
+                safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: orchestratorEntry.processId, _agent: orchestratorAgentId, autoContinue: true }));
                 const prompt = pendingRequest
                   ? `[SYSTEM: A specialist just returned because the user asked for something outside their scope. The user's pending request is: "${pendingRequest}"\n\nRoute this request now. Delegate to the right specialist if one fits, or handle it yourself. Do not summarise what the previous specialist did. Do not ask the user to repeat themselves. Respond to their request.]`
                   : '[SYSTEM: A specialist just returned. Ask the user what they need next.]';
@@ -2287,7 +2287,7 @@ function handleDelegation(msg, processes) {
           resumeEntry.idle = true;
           safeSend(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: `[Auto-paused: ${resumeCount} consecutive agent handoffs without user input. Last specialist: ${delegateEntry.agentId}. Please review the output above and send your next message to continue.]` }, _agent: delegateEntry.delegation.originalAgentId, _conversationId: convoId }));
         } else {
-          safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: resumeProcessId, autoContinue: true }));
+          safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: resumeProcessId, _agent: parentAgentId, autoContinue: true }));
 
           // Tier 1: routing prompt only. The parent is being resumed via --resume,
           // which restores session context from disk. No transcript needed.
@@ -2372,7 +2372,7 @@ function handleDelegation(msg, processes) {
               console.log(`[Delegate] convo=${convoId} auto-continuing orchestrator after specialist return (resume ${resumeCount}/${MAX_CONSECUTIVE_AGENT_RESUMES})`);
               orig.responseText = '';
               orig.idle = false;
-              safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: orig.processId, autoContinue: true }));
+              safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: orig.processId, _agent: orig.agentId, autoContinue: true }));
               const prompt = pendingRequest
                 ? `[SYSTEM: The specialist just returned because the user asked for something outside their scope. The user's pending request is: "${pendingRequest}"\n\nRoute this request now. Delegate to the right specialist if one fits, or handle it yourself. Do not summarise what the previous specialist did. Do not ask the user to repeat themselves. Respond to their request.]`
                 : '[SYSTEM: The specialist just returned. The user indicated they were done with that specialist. Ask the user what they need next.]';
@@ -2457,7 +2457,7 @@ wss.on('connection', (ws) => {
           if (existing && !existing.exited && existing.process.stdin && existing.process.stdin.writable) {
             const processId = existing.processId;
             console.log(`[Chat] convo=${convoId} proc=${processId} FOLLOW-UP (interactive stdin)`);
-            safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId }));
+            safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId, _agent: existing.agentId }));
             existing.responseText = '';
             existing.idle = false;
             existing.toolCalls = [];
@@ -2527,7 +2527,7 @@ wss.on('connection', (ws) => {
             };
             processes.set(convoId, entry);
 
-            safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId }));
+            safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId, _agent: entry.agentId }));
 
             // Send the first message via stdin
             proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: msg.content } }) + '\n');
@@ -2653,7 +2653,7 @@ wss.on('connection', (ws) => {
           const entry = { process: proc, buffer: '', processId, agentId: msg.agent || 'default', responseText: '', exited: false, resultSent: false, lastUserMessage: msg.content, toolCalls: [], turnStartTime: Date.now() };
           processes.set(convoId, entry);
 
-          safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId }));
+          safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId, _agent: entry.agentId }));
 
           proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: msg.content } }) + '\n');
 

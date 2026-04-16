@@ -10,6 +10,8 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Fixed
 
+- **Agent identity included in process_started events:** All `process_started` events now include the `_agent` field with the agent slug. Previously the frontend logged `agent=?` because the payload was missing this field. No frontend changes needed; the existing `d._agent` read now resolves correctly.
+
 - **SAVE_AGENT and SAVE_SKILL marker parser no longer truncates at inner code fences:** The marker extraction regex used optional code fence groups as parsing boundaries. When an agent body contained inner triple-backtick lines (e.g. Doc's scaffold with frontmatter templates), the lazy capture stopped at the first inner fence and silently dropped everything after it. The parser now extracts content purely between the HTML comment markers and strips leading/trailing code fences as a post-processing step. Fences are cosmetic formatting, not structural delimiters.
 
 - **No spurious "resumed" badge when orchestrator is parked after COMPLETE:** When a specialist emitted COMPLETE, the server correctly parked the orchestrator silently, but the frontend rendered an "[Agent] resumed" badge on the `agent_switch` event before the server parked it. The badge is now deferred until the orchestrator actually produces output (a text chunk or `autoContinue` process start). If the orchestrator is parked without producing output, the badge is discarded on the `done` event and never appears.
