@@ -10,6 +10,8 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Fixed
 
+- **Stale entries filtered from recent workspaces list:** `loadRecentWorkspaces` now checks `fs.existsSync` on each entry's path and drops any that no longer exist on disk. The filtered list is persisted back to `.recent-workspaces.json` so stale entries do not reappear on subsequent loads.
+
 - **Neutral tool-failure error messaging:** System prompts and permission hook messages no longer use loaded words ("blocked", "denied", "not allowed") that invite the model to confabulate generalised platform rules from a single tool failure. Error strings now describe what happened factually ("not completed within the time limit", "outside the supported file types") without ascribing cause. The `.claude/` directory instruction now explains the correct mechanism (SAVE_AGENT/SAVE_SKILL markers) instead of stating a prohibition. The legacy system prompt path receives the same treatment.
 
 - **Conversations sidebar footer chrome:** The "+ New conversation" button at the bottom of the conversations sidebar now has a visible 1px top border separator and an opaque background, preventing scroll content from blending into the footer. Footer height aligns with adjacent panel footers.
