@@ -4,6 +4,18 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** TBD
+
+### Fixed
+
+- **Re-delegated specialists resume their prior session instead of starting fresh:** When the orchestrator delegates to a specialist that already has a session in the current conversation, the delegate now spawns with `--resume <prior-session-id>` instead of cold-starting. The delegate retains its internal context (tool results, reasoning, working state) from earlier turns and receives only the new delegation brief, not a full transcript replay. This eliminates redundant file reads, Notion searches, and state re-derivation on re-delegation. Platform delegates (Doc) continue to use their transactional one-shot pattern. Session ID bookkeeping is unchanged: the CLI extends the existing JSONL in place on resume, so the frontend's dedup check skips the re-add.
+
+- **Sidebar shows last speaker and message preview instead of orchestrator:** On workspace load, every persisted conversation showed the orchestrator (e.g. Cos) in the sidebar with "No messages yet", even when the last actual speaker was a specialist. The server now enriches each conversation entry with `lastAgentId` and `lastMessagePreview` derived from the final agent message in the transcript. The sidebar renders the last speaker's avatar and name for idle conversations, the currently-active agent during live delegation, and the preview text from the transcript when messages have not been loaded into memory.
+
+---
+
 ## 0.8.5: Conversation Integrity (2026-04-17)
 
 Conversations are now reliable end to end. Delegation no longer loops or silently re-invokes specialists after they finish. Page refresh preserves message order and agent attribution from the live session instead of reordering or injecting ghost messages. Error messages describe what happened factually, so agents stop inventing platform rules from a single tool failure. The platform guide now proposes changes before executing them and creates well-formed skill files from the start.

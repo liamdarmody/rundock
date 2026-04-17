@@ -2049,6 +2049,22 @@ function handleDelegation(msg, processes) {
   const systemPrompt = buildSystemPrompt(targetAgent);
   const fullPrompt = systemPrompt + '\n\n' + delegationContext;
 
+  // Look up prior session for this target agent in this conversation.
+  // If found, resume instead of cold-spawning so the delegate retains its
+  // internal context (tool results, reasoning, working state) from earlier turns.
+  // Platform delegates are excluded: they are transactional one-shot processes.
+  let priorSessionId = null;
+  if (!isPlatformDelegate) {
+    try {
+      const convos = readConversations();
+      const convo = convos.find(c => c.id === convoId);
+      if (convo && convo.sessionIds) {
+        const match = convo.sessionIds.filter(s => s.agentId === targetAgent.id).pop();
+        if (match) priorSessionId = match.sessionId;
+      }
+    } catch (e) { /* cold spawn on failure */ }
+  }
+
   const delegateDisallowed = getDisallowedTools();
   const delegatePermMode = getPermissionMode();
   const delegateArgs = [...getBareArgs(), '--output-format', 'stream-json', '--input-format', 'stream-json',
@@ -2056,9 +2072,10 @@ function handleDelegation(msg, processes) {
     '--allowed-tools', ALLOWED_TOOLS_INTERACTIVE,
     ...(delegateDisallowed ? ['--disallowed-tools', delegateDisallowed] : []),
     '--append-system-prompt', fullPrompt,
+    ...(priorSessionId ? ['--resume', priorSessionId] : []),
     '--agent', targetAgent.name];
 
-  console.log(`[Delegate] convo=${convoId} from=${originalAgentId} to=${targetAgent.id} proc=${delegateProcessId}`);
+  console.log(`[Delegate] convo=${convoId} from=${originalAgentId} to=${targetAgent.id} proc=${delegateProcessId}${priorSessionId ? ` resume=${priorSessionId}` : ''}`);
 
   const delegateProc = spawnClaude(delegateArgs, {
     cwd: WORKSPACE,
@@ -2095,10 +2112,12 @@ function handleDelegation(msg, processes) {
   }));
   safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: delegateProcessId, _agent: targetAgent.id }));
 
-  // Send context as first message. Tier 2 for intercepted delegations (orchestrator's
-  // brief is sufficient, no transcript). Tier 3 for non-intercepted delegations
-  // (preserve full transcript as a safety net).
-  const transcript = isIntercepted ? null : formatTranscript(convoId);
+  // Send context as first message:
+  // - Resumed delegate: brief only (session has prior context on disk)
+  // - Intercepted cold spawn: brief only (orchestrator's brief is sufficient)
+  // - Non-intercepted cold spawn: full transcript as safety net
+  const needsTranscript = !priorSessionId && !isIntercepted;
+  const transcript = needsTranscript ? formatTranscript(convoId) : null;
   const contextWithHistory = transcript
     ? `CONVERSATION SO FAR:\n${transcript}\n\nYOUR TASK:\n${msg.context}`
     : `[DELEGATION BRIEF]\n${msg.context}`;
@@ -3005,6 +3024,26 @@ wss.on('connection', (ws) => {
         }
         // Persist corrected pointers so reconciliation doesn't re-run every load
         writeConversations(cleaned);
+        // Enrich each conversation with the last agent message from the transcript
+        // for sidebar display: who spoke last and a preview of what they said.
+        for (const c of cleaned) {
+          try {
+            const transcript = loadTranscript(c.id);
+            if (!transcript || !transcript.length) continue;
+            // Walk backwards to find the last agent entry with text
+            for (let i = transcript.length - 1; i >= 0; i--) {
+              if (transcript[i].role === 'agent' && transcript[i].text) {
+                c.lastAgentId = transcript[i].agent || null;
+                c.lastMessagePreview = transcript[i].text
+                  .replace(/<!--[\s\S]*?-->/g, '')
+                  .replace(/\n/g, ' ')
+                  .trim()
+                  .substring(0, 80);
+                break;
+              }
+            }
+          } catch (e) { /* no enrichment on failure */ }
+        }
         ws.send(JSON.stringify({ type: 'conversations', conversations: cleaned }));
       }
 
