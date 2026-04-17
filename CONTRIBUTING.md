@@ -63,6 +63,9 @@ Every entry in `CHANGELOG.md` should follow the same shape so release notes read
 - **Bullets.** Each bullet starts with a short title in bold followed by a colon: `- **Short user-visible behaviour title:** body`. The title is a behaviour statement, not an internal component name.
 - **Bullet body.** Use before-and-after framing where relevant ("was X, is now Y"). Be concrete and specific. Technical detail is welcome when it clarifies what actually changed, but it should support the behaviour description, not replace it.
 - **Voice.** Plain UK English, user-facing. No marketing language. Refer to agents by their type or role (orchestrator, specialist, platform agent) rather than by workspace-specific names that would only be meaningful in the author's own workspace.
+- **Granularity.** Group by user-visible outcome, not by commit or backlog card. If the user experienced one problem and we shipped five commits to fix it, that is one changelog entry, not five. Ask: "Would the user have noticed this as a separate issue?" If not, merge it into the parent entry.
+- **Internal changes.** Scaffold improvements, release script fixes, and other tooling changes that users never see directly should be collapsed into a single grouped line (e.g. "Internal: scaffold and release pipeline improvements") or omitted entirely. The git log has the detail.
+- **Volume.** Aim for 5-10 entries for a patch release, 10-15 for a minor release. If you are significantly over that, you are too granular. Write the changelog at release time from the Done column, not by accumulating one entry per commit during development.
 
 ### Testing your changes
 
