@@ -72,6 +72,7 @@ function updateUnreadBadge() {
 function esc(t){const d=document.createElement('div');d.textContent=t;return d.innerHTML;}
 function escAttr(t){return t.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function stripMd(t){return t.replace(/\*\*(.*?)\*\*/g,'$1').replace(/\*(.*?)\*/g,'$1').replace(/~~(.*?)~~/g,'$1').replace(/`([^`]+)`/g,'$1').replace(/^#+\s/gm,'').replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g,'$2').replace(/\[\[([^\]]+)\]\]/g,'$1').replace(/==(.*?)==/g,'$1');}
+function stripRundockMarkers(t){return t.replace(/<!-- RUNDOCK:RETURN -->/g,'').replace(/<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:(?:SAVE|CREATE)_AGENT -->/g,'').replace(/<!-- RUNDOCK:SAVE_SKILL name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:SAVE_SKILL -->/g,'').replace(/<!-- RUNDOCK:DELETE_(?:SKILL|AGENT) name=[\w-]+ -->/g,'');}
 
 function formatTimeAgo(input) {
   if (!input) return 'never';
@@ -582,10 +583,7 @@ function handleResult(d, convoId) {
   // Strip RUNDOCK markers from displayed text
   // DELEGATE: strip the marker block AND any text after it (orchestrator should stop after delegating)
   responseText = responseText.replace(/<!-- RUNDOCK:DELEGATE agent=[\w-]+ -->\n?[\s\S]*/g, '').trim();
-  responseText = responseText.replace(/<!-- RUNDOCK:RETURN -->/g, '').trim();
-  responseText = responseText.replace(/<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT name=[\w-]+ -->\n?[\s\S]*?<!-- \/RUNDOCK:(?:SAVE|CREATE)_AGENT -->/g, '').trim();
-  responseText = responseText.replace(/<!-- RUNDOCK:SAVE_SKILL name=[\w-]+ -->\n?[\s\S]*?<!-- \/RUNDOCK:SAVE_SKILL -->/g, '').trim();
-  responseText = responseText.replace(/<!-- RUNDOCK:DELETE_(?:SKILL|AGENT) name=[\w-]+ -->/g, '').trim();
+  responseText = stripRundockMarkers(responseText).trim();
 
   if(responseText && convo) {
     convo.messages.push({role:'agent', content: responseText, agentId});
@@ -2032,7 +2030,7 @@ function renderSessionHistory(d) {
   // Store history messages in convo so they persist when navigating away and back
   const historyMsgs = d.messages.filter(m => !m.content || !m.content.includes('[WORKSPACE_ANALYSIS]')).map(m => ({
     role: m.role === 'user' ? 'user' : 'agent',
-    content: m.content,
+    content: m.role !== 'user' ? stripRundockMarkers(m.content || '').trim() : m.content,
     agentId: m.agentId || convo.agentId,
     isHistory: true
   }));
