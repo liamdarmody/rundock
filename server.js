@@ -142,6 +142,46 @@ function extractSnippet(text, query, contextChars = 60) {
   return snippet;
 }
 
+// Strip RUNDOCK markers from text (server-side mirror of client stripRundockMarkers).
+// Used to sanitize specialist output before injecting into orchestrator prompts.
+function stripRundockMarkers(t) {
+  return t
+    .replace(/<!-- RUNDOCK:DELEGATE agent=[\w-]+ -->\n?[\s\S]*/g, '')
+    .replace(/<!-- RUNDOCK:RETURN -->/g, '')
+    .replace(/<!-- RUNDOCK:COMPLETE -->/g, '')
+    .replace(/<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:(?:SAVE|CREATE)_AGENT -->/g, '')
+    .replace(/<!-- RUNDOCK:SAVE_SKILL name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:SAVE_SKILL -->/g, '')
+    .replace(/<!-- RUNDOCK:DELETE_(?:SKILL|AGENT) name=[\w-]+ -->/g, '');
+}
+
+// Check whether a silent-park response is effectively empty (sentinel, near-empty, or no-op).
+// Returns true if the response should be treated as empty and not appended to transcript.
+function isSilentParkResponse(text) {
+  if (!text) return true;
+  // Strip the <silent> sentinel
+  let cleaned = text.replace(/<silent>/gi, '').trim();
+  // Strip RUNDOCK markers that might wrap the sentinel
+  cleaned = stripRundockMarkers(cleaned).trim();
+  // Treat as empty if under 10 non-whitespace chars or matches known no-op patterns
+  const nonWs = cleaned.replace(/\s/g, '');
+  if (nonWs.length < 10) return true;
+  const noOpPatterns = ['No response requested.', 'OK', 'Understood.', 'Acknowledged.'];
+  if (noOpPatterns.includes(cleaned)) return true;
+  return false;
+}
+
+// Prepare specialist output for injection into orchestrator handback prompt.
+// Strips markers, trims whitespace, and caps length to avoid blowing context.
+const SPECIALIST_OUTPUT_MAX_CHARS = 12000;
+function sanitizeSpecialistOutput(text) {
+  if (!text) return '';
+  let cleaned = stripRundockMarkers(text).trim();
+  if (cleaned.length > SPECIALIST_OUTPUT_MAX_CHARS) {
+    cleaned = cleaned.substring(0, SPECIALIST_OUTPUT_MAX_CHARS) + '\n\n[... output truncated for brevity ...]';
+  }
+  return cleaned;
+}
+
 // Session history: read Claude Code JSONL transcripts from disk
 function getSessionJsonlPath(sessionId) {
   if (!WORKSPACE || !sessionId) return null;
@@ -1926,7 +1966,8 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
     fromAgent: specialistEntry.agentId, toAgent: orchestrator.id
   }));
   safeSend(JSON.stringify({ type: 'system', subtype: 'process_started',
-    _conversationId: convoId, _processId: processId, _agent: orchestrator.id, autoContinue: true }));
+    _conversationId: convoId, _processId: processId, _agent: orchestrator.id, autoContinue: true,
+    ...(wasPipelineComplete ? { silent: true } : {}) }));
 
   // Circuit breaker: check consecutive auto-resume count before sending prompt.
   // COMPLETE paths are low-risk (orchestrator goes silent) but still count.
@@ -1937,18 +1978,20 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
     orchEntry.idle = true;
     safeSend(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: `[Auto-paused: ${resumeCount} consecutive agent handoffs without user input. Last specialist: ${specialistEntry.agentId}. Please review the output above and send your next message to continue.]` }, _agent: orchestrator.id, _conversationId: convoId }));
   } else {
-    // Build context for orchestrator. Two shapes:
-    //  - Pipeline complete: the specialist finished the delegated work. There is no pending
-    //    request and no routing to do. The orchestrator must return to standby silently so the
-    //    frontend shows it as active for the user's next message.
-    //  - Out of scope: the specialist could not handle the request and handed control back.
-    //    The orchestrator must route the original message to the correct specialist.
+    // Build context for orchestrator. Both shapes inject the specialist's final output
+    // so the orchestrator has visibility into what was delivered. Without this, the
+    // orchestrator's JSONL only contains its own pre-delegation state and it has to
+    // guess or re-read files to know what the specialist did.
+    const specialistOutput = sanitizeSpecialistOutput(specialistEntry.finalResponseText || specialistEntry.responseText);
+    const outputBlock = specialistOutput
+      ? `\n\n--- ${specialistEntry.agentId} ---\n${specialistOutput}\n---`
+      : '';
     let prompt;
     if (wasPipelineComplete) {
-      prompt = `[SYSTEM: pipeline-complete] ${specialistEntry.agentId} has finished the delegated work. Their output is already in the conversation history and any files they wrote. Control is back with you as the orchestrator. Do not re-delegate. Do not invoke any tools. Do not narrate. Do not write any text to the user in this turn. Exit this turn silently and wait for the user's next message.`;
+      prompt = `[SYSTEM: pipeline-complete] ${specialistEntry.agentId} has finished the delegated work. Here is their final message to the conversation:${outputBlock}\n\nYour output for this turn MUST be exactly the literal string <silent> and nothing else. Do not narrate, summarise, or quote the specialist's output. Do not invoke any tools. Do not emit any other text. Just output <silent> and stop.`;
     } else {
       const pendingRequest = specialistEntry.lastUserMessage || '';
-      prompt = `[SYSTEM: routing-request] A specialist (${specialistEntry.agentId}) has finished and control is back with you. The user's pending request is: "${pendingRequest}". Delegate to the right specialist now using the Agent tool. Do not write any text to the user in this turn. Just invoke the Agent tool with the brief.`;
+      prompt = `[SYSTEM: routing-request] ${specialistEntry.agentId} returned because the request was outside their scope. Here is what they said:${outputBlock}\n\nThe user's latest request was: "${pendingRequest}". Respond with full awareness of what ${specialistEntry.agentId} delivered. Do not re-delegate work already done. Route to the right specialist using the Agent tool.`;
     }
 
     proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n');
@@ -1957,11 +2000,12 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
   wireProcessHandlers(orchEntry, convoId, null, {
     enableInterception: true,
     onResult: (e) => {
-      if (e.responseText) {
-            const toolSummary = buildToolSummary(e.toolCalls);
-            const textWithTools = toolSummary ? toolSummary + '\n' + e.responseText : e.responseText;
-            appendTranscript(convoId, 'agent', e.agentId, textWithTools);
-          }
+      // Filter silent-park responses: strip sentinel and suppress near-empty/no-op output
+      if (e.responseText && !isSilentParkResponse(e.responseText)) {
+        const toolSummary = buildToolSummary(e.toolCalls);
+        const textWithTools = toolSummary ? toolSummary + '\n' + e.responseText : e.responseText;
+        appendTranscript(convoId, 'agent', e.agentId, textWithTools);
+      }
       e.responseText = '';
       e.idle = true;
     }
@@ -2324,6 +2368,15 @@ function handleDelegation(msg, processes) {
       // from the orchestrator, so the parent IS the orchestrator), this is all that's
       // needed. In deeper chains, the pipeline-complete marker would have fired the
       // skip-level orchestratorEntry branch above and never reached this code path.
+      // Inject specialist output into the handback prompt so the parent has
+      // visibility into what was delivered. The parent's --resume session only
+      // contains its own pre-delegation state; the specialist's work is invisible
+      // without this injection.
+      const delegateOutput = sanitizeSpecialistOutput(delegateEntry.finalResponseText || delegateEntry.responseText);
+      const delegateOutputBlock = delegateOutput
+        ? `\n\n--- ${delegateEntry.agentId} ---\n${delegateOutput}\n---`
+        : '';
+
       if (isOutOfScope) {
         const resumeCount = incrementAutoResume(convoId);
         if (resumeCount >= MAX_CONSECUTIVE_AGENT_RESUMES) {
@@ -2334,17 +2387,24 @@ function handleDelegation(msg, processes) {
         } else {
           safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: resumeProcessId, _agent: parentAgentId, autoContinue: true }));
 
-          // Tier 1: routing prompt only. The parent is being resumed via --resume,
-          // which restores session context from disk. No transcript needed.
-          const resumePrompt = `[SYSTEM: Your team member returned because the user asked for something outside their scope. The user's latest request was: "${delegateEntry.lastUserMessage || 'continue'}"\n\nRoute this request to the right specialist. Do not ask the user to repeat themselves.]`;
+          const resumePrompt = `[SYSTEM: ${delegateEntry.agentId} returned because the request was outside their scope. Here is what they said:${delegateOutputBlock}\n\nThe user's latest request was: "${delegateEntry.lastUserMessage || 'continue'}". Respond with full awareness of what ${delegateEntry.agentId} delivered. Do not re-delegate work already done. Route to the right specialist using the Agent tool.]`;
           resumeProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: resumePrompt } }) + '\n');
         }
       } else if (isPipelineComplete) {
+        // Park silently but inject specialist output so the next user message
+        // resumes with real context about what was delivered.
+        safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: resumeProcessId, _agent: parentAgentId, autoContinue: true, silent: true }));
+        const completePrompt = `[SYSTEM: pipeline-complete] ${delegateEntry.agentId} has finished the delegated work. Here is their final message to the conversation:${delegateOutputBlock}\n\nYour output for this turn MUST be exactly the literal string <silent> and nothing else. Do not narrate, summarise, or quote the specialist's output. Do not invoke any tools. Do not emit any other text. Just output <silent> and stop.`;
+        resumeProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: completePrompt } }) + '\n');
         resumeEntry.idle = true;
-        console.log(`[AgentIntercept] convo=${convoId} delegate emitted COMPLETE, parent ${parentAgentId} parked silently`);
+        console.log(`[AgentIntercept] convo=${convoId} delegate emitted COMPLETE, parent ${parentAgentId} parked with specialist output`);
       } else {
+        // Normal exit (no marker). Inject specialist output for context, then park.
+        safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: resumeProcessId, _agent: parentAgentId, autoContinue: true, silent: true }));
+        const normalPrompt = `[SYSTEM: pipeline-complete] ${delegateEntry.agentId} completed their work. Here is their final message to the conversation:${delegateOutputBlock}\n\nYour output for this turn MUST be exactly the literal string <silent> and nothing else. Do not narrate, summarise, or quote the specialist's output. Do not invoke any tools. Do not emit any other text. Just output <silent> and stop.`;
+        resumeProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: normalPrompt } }) + '\n');
         resumeEntry.idle = true;
-        console.log(`[AgentIntercept] convo=${convoId} delegate completed normally, parent ${parentAgentId} parked (no auto-prompt)`);
+        console.log(`[AgentIntercept] convo=${convoId} delegate completed normally, parent ${parentAgentId} parked with specialist output`);
       }
 
       wireProcessHandlers(resumeEntry, convoId, null, {
@@ -2367,7 +2427,8 @@ function handleDelegation(msg, processes) {
               }
             }, 500);
           }
-          if (e.responseText) {
+          // Filter silent-park responses: strip sentinel and suppress near-empty/no-op output
+          if (e.responseText && !isSilentParkResponse(e.responseText)) {
             const toolSummary = buildToolSummary(e.toolCalls);
             const textWithTools = toolSummary ? toolSummary + '\n' + e.responseText : e.responseText;
             appendTranscript(convoId, 'agent', e.agentId, textWithTools);
