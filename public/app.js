@@ -232,7 +232,32 @@ function handle(d) {
           const outDot = document.querySelector(`[data-org-status="${outgoingAgentId}"]`);
           if (outDot) outDot.classList.remove('working');
         }
-        // Always reset streaming state on agent switch so the new agent gets a fresh bubble
+        // Finalize any in-progress orchestrator text before resetting streaming state.
+        // Without this, the orchestrator's handoff message (e.g. "I'll delegate this to Dev")
+        // is orphaned when currentStreamingMsg is nulled and the specialist's stream overwrites it.
+        if (state.streamingRawText) {
+          let handoffText = state.streamingRawText;
+          // Strip RUNDOCK markers (DELEGATE, SAVE_AGENT, etc.) from the finalized text
+          handoffText = handoffText.replace(/<!-- RUNDOCK:DELEGATE agent=[\w-]+ -->\n?[\s\S]*/g, '').trim();
+          handoffText = stripRundockMarkers(handoffText).trim();
+          if (handoffText) {
+            const convo = conversations.find(c => c.id === convoId);
+            const orchestratorAgentId = outgoingAgentId || convo?.agentId;
+            if (convo) {
+              convo.messages.push({ role: 'agent', content: handoffText, agentId: orchestratorAgentId });
+            }
+            // If the streaming bubble exists in the DOM, promote it to a permanent node
+            // by clearing the streaming-text class and re-rendering with final content
+            if (state.currentStreamingMsg && activeConversation?.id === convoId) {
+              const streamEl = state.currentStreamingMsg.querySelector('.streaming-text');
+              if (streamEl) {
+                streamEl.classList.remove('streaming-text');
+                streamEl.innerHTML = formatMd(handoffText);
+              }
+            }
+          }
+        }
+        // Reset streaming state so the new agent gets a fresh bubble
         state.currentStreamingMsg = null;
         state.streamingRawText = '';
         state.latestText = '';
