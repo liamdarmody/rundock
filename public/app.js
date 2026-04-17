@@ -1165,6 +1165,8 @@ function handlePersistedConversations(persisted) {
       pinnedAt: entry.pinnedAt || null,
       createdAt: entry.createdAt,
       lastActiveAt: entry.lastActiveAt,
+      lastAgentId: entry.lastAgentId || null,
+      lastMessagePreview: entry.lastMessagePreview || null,
       persisted: true  // Flag: this was loaded from disk, has no in-memory messages
     };
     conversations.push(convo);
