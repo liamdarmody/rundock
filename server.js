@@ -3051,6 +3051,8 @@ wss.on('connection', (ws) => {
                 c.lastAgentId = transcript[i].agent || null;
                 c.lastMessagePreview = stripMdServer(
                   transcript[i].text
+                    .replace(/<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:(?:SAVE|CREATE)_AGENT -->/g, '')
+                    .replace(/<!-- RUNDOCK:SAVE_SKILL name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:SAVE_SKILL -->/g, '')
                     .replace(/<!--[\s\S]*?-->/g, '')
                     .replace(/\n/g, ' ')
                     .replace(/^(\s*\[[^\]]+\]\s*)+/, '')
