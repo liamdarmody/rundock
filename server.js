@@ -3024,6 +3024,21 @@ wss.on('connection', (ws) => {
         }
         // Persist corrected pointers so reconciliation doesn't re-run every load
         writeConversations(cleaned);
+        // Strip markdown formatting for plain-text previews (mirrors frontend stripMd)
+        function stripMdServer(t) {
+          return t
+            .replace(/\*\*(.*?)\*\*/g, '$1')       // bold
+            .replace(/\*(.*?)\*/g, '$1')            // italic *
+            .replace(/_(.*?)_/g, '$1')              // italic _
+            .replace(/~~(.*?)~~/g, '$1')            // strikethrough
+            .replace(/`([^`]+)`/g, '$1')            // inline code
+            .replace(/^#+\s*/gm, '')                // headings
+            .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // links
+            .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '$2') // wikilinks with alias
+            .replace(/\[\[([^\]]+)\]\]/g, '$1')     // wikilinks
+            .replace(/==(.*?)==/g, '$1')             // highlights
+            .replace(/^[\s]*[-*+]\s/gm, '');         // list markers
+        }
         // Enrich each conversation with the last agent message from the transcript
         // for sidebar display: who spoke last and a preview of what they said.
         for (const c of cleaned) {
@@ -3034,12 +3049,12 @@ wss.on('connection', (ws) => {
             for (let i = transcript.length - 1; i >= 0; i--) {
               if (transcript[i].role === 'agent' && transcript[i].text) {
                 c.lastAgentId = transcript[i].agent || null;
-                c.lastMessagePreview = transcript[i].text
-                  .replace(/<!--[\s\S]*?-->/g, '')
-                  .replace(/\n/g, ' ')
-                  .replace(/^(\s*\[[^\]]+\]\s*)+/, '')
-                  .trim()
-                  .substring(0, 80);
+                c.lastMessagePreview = stripMdServer(
+                  transcript[i].text
+                    .replace(/<!--[\s\S]*?-->/g, '')
+                    .replace(/\n/g, ' ')
+                    .replace(/^(\s*\[[^\]]+\]\s*)+/, '')
+                ).trim().substring(0, 80);
                 break;
               }
             }
