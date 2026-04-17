@@ -2038,14 +2038,17 @@ function renderSessionHistory(d) {
   convo.messages = [...historyMsgs, ...convo.messages];
   convo._historyCount = (convo._historyCount || 0) + historyMsgs.length;
 
-  // Set activeAgentId to the conversation's orchestrator on history load.
-  // The conversation is dormant (loaded from disk, no active process), so the
-  // orchestrator is always the correct next responder. Don't use the last
-  // assistant from history since that could be a delegate who already returned.
+  // Set activeAgentId to the conversation's orchestrator on history load,
+  // but only if no live process is running. If a specialist has a live process,
+  // handleActiveProcesses already set the correct activeAgentId; overriding it
+  // here would desync the header/placeholder from actual message routing.
   const state = getConvoState(convo.id);
-  state.activeAgentId = convo.agentId;
+  if (!state.isProcessing) {
+    state.activeAgentId = convo.agentId;
+  }
   if (activeConversation?.id === convo.id) {
-    const agent = convo.agent || agents.find(a => a.id === convo.agentId);
+    const displayId = state.activeAgentId || convo.agentId;
+    const agent = agents.find(a => a.id === displayId) || convo.agent;
     if (agent) {
       document.getElementById('chat-agent-label').textContent = agent.displayName;
       document.getElementById('chat-agent-avatar').style.background = agent.colour;
