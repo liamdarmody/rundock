@@ -2450,8 +2450,7 @@ wss.on('connection', (ws) => {
   // Always send this message, even when empty, so the client can reconcile stale state.
   const active = [];
   for (const [convoId, entry] of chatProcesses) {
-    if (entry.idle) continue; // Don't report idle processes as active
-    active.push({ conversationId: convoId, processId: entry.processId, agentId: entry.agentId, responseText: entry.responseText || '', delegation: entry.delegation ? { originalAgentId: entry.delegation.originalAgentId } : null });
+    active.push({ conversationId: convoId, processId: entry.processId, agentId: entry.agentId, idle: !!entry.idle, responseText: entry.responseText || '', delegation: entry.delegation ? { originalAgentId: entry.delegation.originalAgentId } : null });
   }
   ws.send(JSON.stringify({ type: 'active_processes', processes: active }));
   ws.send(JSON.stringify({ type: 'server_info', version: PKG_VERSION }));

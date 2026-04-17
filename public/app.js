@@ -1857,22 +1857,24 @@ function cancelProcessing() {
 function handleActiveProcesses(active) {
   const activeConvoIds = new Set(active.map(p => p.conversationId));
 
-  // Restore thinking indicators for conversations that are still processing
+  // Restore state for conversations with live processes on the server.
+  // Non-idle: actively generating output — restore thinking indicator.
+  // Idle: specialist waiting for input — record agent identity so
+  // header/placeholder reflect the correct recipient, but no indicator.
   for (const proc of active) {
     const convo = conversations.find(c => c.id === proc.conversationId);
     const state = getConvoState(proc.conversationId);
-    if (!state.isProcessing && convo) {
-      state.activeProcessId = proc.processId;
-      // Restore active agent and delegation state from server
-      if (proc.agentId) {
-        state.activeAgentId = proc.agentId;
-        state.delegationActive = !!proc.delegation;
-      }
-      // Restore any response text accumulated on the server while we were disconnected
+    if (!convo) continue;
+    state.activeProcessId = proc.processId;
+    if (proc.agentId) {
+      state.activeAgentId = proc.agentId;
+      state.delegationActive = !!proc.delegation;
+    }
+    if (proc.idle) continue; // No thinking indicator for idle processes
+    if (!state.isProcessing) {
       if (proc.responseText) {
         state.streamingRawText = proc.responseText;
       }
-      // startProcessing sets isProcessing, updates sidebar, org chart dots, and nav badge
       startProcessing(proc.conversationId);
     }
   }
@@ -2039,11 +2041,12 @@ function renderSessionHistory(d) {
   convo._historyCount = (convo._historyCount || 0) + historyMsgs.length;
 
   // Set activeAgentId to the conversation's orchestrator on history load,
-  // but only if no live process is running. If a specialist has a live process,
-  // handleActiveProcesses already set the correct activeAgentId; overriding it
-  // here would desync the header/placeholder from actual message routing.
+  // but only if no live process exists (active or idle). If a specialist has
+  // a live process, handleActiveProcesses already set the correct activeAgentId
+  // and activeProcessId; overriding it here would desync the header/placeholder
+  // from actual message routing.
   const state = getConvoState(convo.id);
-  if (!state.isProcessing) {
+  if (!state.activeProcessId) {
     state.activeAgentId = convo.agentId;
   }
   if (activeConversation?.id === convo.id) {
