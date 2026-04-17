@@ -4,17 +4,21 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## Unreleased
+## 0.8.6: Conversation Continuity (2026-04-17)
 
-**Name:** TBD
+Conversations are now coherent end to end. Specialists retain the context they built in earlier turns so they do not re-derive state on re-delegation. The sidebar shows who actually spoke last in each conversation, the chat input labels the agent who will receive your next message, and delegation handoffs are visible during the turn in which they occur.
 
 ### Fixed
 
-- **Re-delegated specialists resume their prior session instead of starting fresh:** When the orchestrator delegates to a specialist that already has a session in the current conversation, the delegate now spawns with `--resume <prior-session-id>` instead of cold-starting. The delegate retains its internal context (tool results, reasoning, working state) from earlier turns and receives only the new delegation brief, not a full transcript replay. This eliminates redundant file reads, Notion searches, and state re-derivation on re-delegation. Platform delegates (Doc) continue to use their transactional one-shot pattern. Session ID bookkeeping is unchanged: the CLI extends the existing JSONL in place on resume, so the frontend's dedup check skips the re-add.
+- **Specialists retain context on re-delegation:** When the orchestrator delegates to a specialist who already has a session in the current conversation, the specialist now resumes their prior session instead of cold-starting. Tool results, reasoning, and working state from earlier turns carry forward, so follow-up questions do not cause the specialist to re-read files, re-run searches, or rebuild state that already exists in their session context. Platform agents continue to use their transactional one-shot pattern.
 
-- **Chat input label and header match actual message recipient on reload:** After refreshing a conversation where a specialist had a live process, the chat input placeholder and header showed the orchestrator instead of the specialist who would actually receive the message. The history-load reconciliation now preserves the live-process agent identity set by the server's `active_processes` message instead of unconditionally resetting to the orchestrator.
+- **Sidebar shows the last speaker and their last message:** Before, every persisted conversation in the sidebar showed the orchestrator and "No messages yet", even when a specialist had spoken last and the conversation had substantial content. The sidebar now shows the avatar and name of the agent who wrote the most recent message, and a plain-text preview of what they said. The preview strips tool-call markers, internal save markers, markdown formatting, and file-definition payloads that are not meaningful outside the chat view. During live delegation the sidebar reflects the currently-active agent; when a conversation idles, it returns to showing the last speaker.
 
-- **Sidebar shows last speaker and message preview instead of orchestrator:** On workspace load, every persisted conversation showed the orchestrator (e.g. Cos) in the sidebar with "No messages yet", even when the last actual speaker was a specialist. The server now enriches each conversation entry with `lastAgentId` and `lastMessagePreview` derived from the final agent message in the transcript. The sidebar renders the last speaker's avatar and name for idle conversations, the currently-active agent during live delegation, and the preview text from the transcript when messages have not been loaded into memory.
+- **Chat input and header match the actual message recipient:** After a page refresh in a conversation where a specialist still had a live process, the chat input placeholder and header showed the orchestrator while messages silently routed to the specialist. The chat surface now reflects the agent who will actually receive the next message — idle-but-alive specialists are preserved through the reload rather than being overwritten by the default orchestrator attribution.
+
+- **Orchestrator handoff text and "agent joined" divider render on live delegations:** When the orchestrator delegated mid-stream, its brief handoff message and the "[specialist] joined" divider were both missing from the live view, even though the transcript stored them correctly. Both now render in the right position during the delegation turn.
+
+- **Sidebar header and search area separated from scrollable content:** The conversations, skills, and files sidebars now each have a visible horizontal rule below the search input, matching the treatment applied to the footer.
 
 ---
 
