@@ -4,9 +4,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## Unreleased
-
-**Name:** Conversation Integrity
+## 0.8.5: Conversation Integrity (2026-04-17)
 
 Conversations are now reliable end to end. Delegation no longer loops or silently re-invokes specialists after they finish. Page refresh preserves message order and agent attribution from the live session instead of reordering or injecting ghost messages. Error messages describe what happened factually, so agents stop inventing platform rules from a single tool failure. The platform guide now proposes changes before executing them and creates well-formed skill files from the start.
 
