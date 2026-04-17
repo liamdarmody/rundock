@@ -3037,6 +3037,7 @@ wss.on('connection', (ws) => {
                 c.lastMessagePreview = transcript[i].text
                   .replace(/<!--[\s\S]*?-->/g, '')
                   .replace(/\n/g, ' ')
+                  .replace(/^(\s*\[[^\]]+\]\s*)+/, '')
                   .trim()
                   .substring(0, 80);
                 break;
