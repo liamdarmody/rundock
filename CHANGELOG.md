@@ -4,6 +4,20 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** Delegation Memory
+
+After a specialist finishes, the orchestrator remembers what they delivered. Follow-up questions get informed answers instead of blank-slate re-delegation, and the transition between agents is visually clean with no phantom UI.
+
+### Fixed
+
+- **Orchestrator remembers specialist output after delegation completes:** Asking the orchestrator a follow-up after a specialist finished would get a blank-slate response: re-offering work already completed, describing delivered output as planned, or invoking file-reading tools to discover results the specialist had already surfaced. The orchestrator's session now includes the specialist's final message, so it responds with full awareness of what was delivered.
+
+- **Clean transitions when specialists finish:** When a specialist completed and control returned to the orchestrator, a brief "Thinking" flash, an empty chat bubble, or a full re-narration of the specialist's output would appear before settling. The internal bookkeeping turn is now fully suppressed. Delegation dividers ("joined" on forward delegation, "resumed" on return) show the correct label and persist when navigating between conversations.
+
+---
+
 ## 0.8.6: Conversation Continuity (2026-04-17)
 
 Conversations are now coherent end to end. Specialists retain the context they built in earlier turns so they do not re-derive state on re-delegation. The sidebar shows who actually spoke last in each conversation, the chat input labels the agent who will receive your next message, and delegation handoffs are visible during the turn in which they occur.

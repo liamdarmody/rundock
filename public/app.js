@@ -149,8 +149,10 @@ function handle(d) {
         state.activeProcessId = d._processId;
         // Remove stale permission cards from the previous process
         document.querySelectorAll('.msg-permission').forEach(el => el.remove());
+        // Silent-park turn: suppress all UI (no thinking indicator, no resume badge)
+        state.silentTurn = d.silent === true;
         // Auto-continue: orchestrator picking up after specialist return
-        if(d.autoContinue) { flushResumeBadge(convoId); startProcessing(convoId); }
+        if(d.autoContinue && !state.silentTurn) { startProcessing(convoId); }
       }
       // Capture session ID from init message and persist for resume after refresh
       if(d.subtype==='init' && d._sessionId && convoId) {
@@ -201,9 +203,6 @@ function handle(d) {
         const state = getConvoState(convoId);
         const match = !d._processId || !state.activeProcessId || d._processId === state.activeProcessId;
         console.log(`[Done] convo=${convoId} pid=${d._processId} active=${state.activeProcessId} match=${match} isProcessing=${state.isProcessing}`);
-        // Discard deferred "resumed" badge if the orchestrator was parked
-        // silently (COMPLETE path) and produced no output.
-        if(state.pendingResumeBadge) state.pendingResumeBadge = null;
         if(match) {
           finishProcessing(convoId);
         } else {
@@ -267,20 +266,15 @@ function handle(d) {
         // vs a forward delegation (orchestrator->specialist or specialist->sub-specialist)
         const isReturn = toAgent?.type === 'orchestrator';
         if(activeConversation?.id === convoId) {
-          if(isReturn && toAgent && fromAgent) {
-            // Defer the "resumed" badge: only render it when the orchestrator
-            // actually produces output. If the orchestrator is parked silently
-            // after COMPLETE, the badge never appears.
-            state.pendingResumeBadge = `<div class="delegation-line"></div><div class="delegation-badge" style="color:${toAgent.colour}"><span class="avatar xs" style="background:${toAgent.colour}">${toAgent.icon}</span>${toAgent.displayName} resumed</div><div class="delegation-line"></div>`;
-          } else {
+          if(toAgent && fromAgent) {
             const m = document.getElementById('messages');
-            const divider = document.createElement('div');
-            divider.className = 'msg-delegation';
-            if(toAgent && fromAgent) {
-              divider.innerHTML = `<div class="delegation-line"></div><div class="delegation-badge" style="color:${toAgent.colour}"><span class="avatar xs" style="background:${toAgent.colour}">${toAgent.icon}</span>${toAgent.displayName} joined</div><div class="delegation-line"></div>`;
-            }
-            m.appendChild(divider);
+            m.appendChild(buildDelegationDivider(toAgent, isReturn));
             scrollBottom();
+            // Persist divider as explicit marker so it survives navigate-away/back
+            const convo = conversations.find(c => c.id === convoId);
+            if (convo) {
+              convo.messages.push({ role: 'divider', agentId: d.toAgent, fromAgentId: d.fromAgent, isReturn });
+            }
           }
           // Update chat header
           if(toAgent) {
@@ -367,19 +361,19 @@ function getConvoState(convoId) {
   return convoState[convoId];
 }
 // Flush a deferred "resumed" badge into the message stream.
-// Called when the orchestrator actually produces output after returning.
-function flushResumeBadge(convoId) {
-  const state = getConvoState(convoId);
-  if(!state.pendingResumeBadge) return;
-  if(activeConversation?.id !== convoId) { state.pendingResumeBadge = null; return; }
-  const m = document.getElementById('messages');
+// Build a delegation divider element. Used by live agent_switch, in-memory replay, and history replay.
+function buildDelegationDivider(agentData, isReturn, opts = {}) {
   const divider = document.createElement('div');
-  divider.className = 'msg-delegation';
-  divider.innerHTML = state.pendingResumeBadge;
-  m.appendChild(divider);
-  state.pendingResumeBadge = null;
-  scrollBottom();
+  divider.className = 'msg-delegation' + (opts.historyClass ? ' history-msg' : '');
+  if (opts.noAnimation) divider.style.animation = 'none';
+  const label = isReturn ? 'resumed' : 'joined';
+  const colour = agentData?.colour || 'var(--accent)';
+  const icon = agentData?.icon || '?';
+  const name = agentData?.displayName || 'Agent';
+  divider.innerHTML = `<div class="delegation-line"></div><div class="delegation-badge" style="color:${colour}"><span class="avatar xs" style="background:${colour}">${icon}</span>${name} ${label}</div><div class="delegation-line"></div>`;
+  return divider;
 }
+
 function isStaleProcess(d, convoId) {
   if(!d._processId) return false;
   const state = getConvoState(convoId);
@@ -405,11 +399,9 @@ function handleStreamEvent(d, convoId) {
 
     state.streamingRawText += text;
 
-    if(isActive) {
+    if(isActive && !state.silentTurn) {
       // Create streaming message bubble if it doesn't exist yet
       if(!state.currentStreamingMsg) {
-        // Flush deferred "resumed" badge before the first output bubble
-        flushResumeBadge(convoId);
         // Remove thinking indicator, replace with streaming bubble
         const t = document.getElementById('thinking-indicator'); if(t) t.remove();
         const agentId = d._agent || state.activeAgentId || state.latestAgentId;
@@ -442,7 +434,7 @@ function handleStreamEvent(d, convoId) {
     state.afterToolUse = true;
     const toolName = evt.content_block.name || '';
 
-    if(isActive) {
+    if(isActive && !state.silentTurn) {
       let status = document.getElementById('thinking-status');
       if(!status) {
         // Thinking indicator was removed when streaming started; re-add it below the streaming message
@@ -610,6 +602,21 @@ function handleResult(d, convoId) {
   responseText = responseText.replace(/<!-- RUNDOCK:DELEGATE agent=[\w-]+ -->\n?[\s\S]*/g, '').trim();
   responseText = stripRundockMarkers(responseText).trim();
 
+  // Strip silent-park sentinel and drop if response is a no-op
+  const silentStripped = responseText.replace(/<silent>/gi, '').trim();
+  const isNoOp = silentStripped.length < 10 || /^(No response requested\.|\.|OK|ok|Understood\.|Acknowledged\.)$/i.test(silentStripped);
+  if (isNoOp && responseText) {
+    // Silent-park turn: remove any streaming bubble and deferred resume badge from the DOM, reset state, skip render
+    if (state.currentStreamingMsg) {
+      state.currentStreamingMsg.remove();
+    }
+    state.currentStreamingMsg = null; state.streamingRawText = ''; state.latestText = ''; state.latestAgentId = null; state.silentTurn = false;
+    if (!delegationTriggered) finishProcessing(convoId);
+    renderConvoList();
+    return;
+  }
+  responseText = silentStripped;
+
   if(responseText && convo) {
     convo.messages.push({role:'agent', content: responseText, agentId});
     convo.lastAgentId = agentId;
@@ -641,7 +648,7 @@ function handleResult(d, convoId) {
   } catch(err) {
     console.error('[handleResult] Error:', err);
   }
-  state.currentStreamingMsg=null; state.streamingRawText=''; state.latestText=''; state.latestAgentId=null;
+  state.currentStreamingMsg=null; state.streamingRawText=''; state.latestText=''; state.latestAgentId=null; state.silentTurn=false;
   // Don't finish processing when the orchestrator just delegated: the delegate is about to start
   if (!delegationTriggered) finishProcessing(convoId);
   renderConvoList();
@@ -1685,10 +1692,19 @@ function openConversation(id) {
     renderConvoList();
   } else {
     const historyCount = c._historyCount || 0;
+    let replayLastAgentId = null;
     for(let i=0; i<c.messages.length; i++) {
       const m = c.messages[i];
       if(m.role==='user') addUserMsg(m.content,false);
-      else if(m.role==='agent') addAgentMsg(m.content,m.agentId,false);
+      else if(m.role==='divider') {
+        const msgAgent = agents.find(a => a.id === m.agentId);
+        if (msgAgent) el.appendChild(buildDelegationDivider(msgAgent, m.isReturn));
+        replayLastAgentId = m.agentId;
+      }
+      else if(m.role==='agent') {
+        replayLastAgentId = m.agentId || replayLastAgentId;
+        addAgentMsg(m.content,m.agentId,false);
+      }
       if(m.isHistory) {
         const last = el.lastElementChild;
         if(last) last.classList.add('history-msg');
@@ -2017,11 +2033,8 @@ function renderSessionHistory(d) {
       const msgAgent = msg.agentId ? (agents.find(a => a.id === msg.agentId) || defaultAgent) : defaultAgent;
       // Add delegation divider if agent changed
       if (msg.agentId && msg.agentId !== lastAgentId && lastAgentId !== null) {
-        const divider = document.createElement('div');
-        divider.className = 'msg-delegation history-msg';
-        divider.style.animation = 'none';
-        divider.innerHTML = `<div class="delegation-line"></div><div class="delegation-badge" style="color:${msgAgent?.colour||'var(--accent)'}"><span class="avatar xs" style="background:${msgAgent?.colour||'var(--accent)'}">${msgAgent?.icon||'?'}</span>${msgAgent?.displayName||'Agent'} joined</div><div class="delegation-line"></div>`;
-        frag.appendChild(divider);
+        const isReturn = msgAgent?.type === 'orchestrator';
+        frag.appendChild(buildDelegationDivider(msgAgent, isReturn, { historyClass: true, noAnimation: true }));
       }
       lastAgentId = msg.agentId || lastAgentId;
       div.className = 'msg msg-agent history-msg';
