@@ -589,6 +589,8 @@ function handleResult(d, convoId) {
 
   if(responseText && convo) {
     convo.messages.push({role:'agent', content: responseText, agentId});
+    convo.lastAgentId = agentId;
+    convo.lastMessagePreview = stripMd(responseText).substring(0, 80);
     const viewingChat = isActive && currentView === 'chat';
     const convoInWorkspace = conversations.some(c => c.id === convoId);
     if (convoInWorkspace && !viewingChat) {
@@ -1469,10 +1471,13 @@ function renderConvoList() {
   if (current.length) {
     for (const c of current) {
       const lastMsg = c.messages.filter(m => m.role === 'agent').pop();
-      const preview = lastMsg ? stripMd(lastMsg.content).substring(0, 60) + '...' : 'No messages yet';
+      const preview = lastMsg ? stripMd(lastMsg.content).substring(0, 60) + '...' : (c.lastMessagePreview || 'No messages yet');
       const cState = convoState[c.id];
       const activeId = cState?.activeAgentId;
-      const displayAgent = (activeId && agents.find(a => a.id === activeId)) || c.agent;
+      // Live (processing): show currently-speaking agent. Idle: show last speaker from transcript.
+      const lastSpeaker = c.lastAgentId && agents.find(a => a.id === c.lastAgentId);
+      const displayAgent = (workingConvos.has(c.id) && activeId && agents.find(a => a.id === activeId))
+        || lastSpeaker || (activeId && agents.find(a => a.id === activeId)) || c.agent;
       const working = workingConvos.has(c.id);
       const unread = !working && unreadConvos.has(c.id);
       const indicator = working ? '<span class="convo-working"></span>' : unread ? '<span class="convo-unread"></span>' : '';
@@ -1497,13 +1502,16 @@ function renderConvoList() {
       const suffix = agentGone ? ' (agent removed)' : '';
       const pState = convoState[c.id];
       const pActiveId = pState?.activeAgentId;
-      const pDisplayAgent = (pActiveId && agents.find(a => a.id === pActiveId)) || c.agent;
+      const pLastSpeaker = c.lastAgentId && agents.find(a => a.id === c.lastAgentId);
+      const pDisplayAgent = pLastSpeaker || (pActiveId && agents.find(a => a.id === pActiveId)) || c.agent;
       const pWorking = workingConvos.has(c.id);
       const pUnread = !pWorking && unreadConvos.has(c.id);
       const pIndicator = pWorking ? '<span class="convo-working"></span>' : pUnread ? '<span class="convo-unread"></span>' : '';
+      const pPreview = c.lastMessagePreview || '';
       h += `<div class="convo-item ${activeConversation?.id === c.id ? 'active' : ''}" onclick="openConversation('${c.id}')" style="${opacity}">
         <button class="convo-delete" onclick="deleteConversation('${c.id}', event)" title="Delete conversation"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
         <span class="convo-title">${esc(c.title)}${suffix}</span>
+        ${pPreview ? `<span class="convo-preview">${esc(pPreview)}</span>` : ''}
         <div class="convo-meta"><div class="avatar xs" style="background:${pDisplayAgent.colour}">${pDisplayAgent.icon}</div><span>${pDisplayAgent.displayName}</span>${pIndicator}</div>
       </div>`;
     }
@@ -1516,10 +1524,11 @@ function renderConvoList() {
     h += `<div id="done-convos" class="${doneOpen ? '' : 'hidden'}">`;
     for (const c of done) {
       const lastMsg = c.messages.filter(m => m.role === 'agent').pop();
-      const preview = lastMsg ? stripMd(lastMsg.content).substring(0, 50) + '...' : '';
+      const preview = lastMsg ? stripMd(lastMsg.content).substring(0, 50) + '...' : (c.lastMessagePreview || '');
       const dState = convoState[c.id];
       const dActiveId = dState?.activeAgentId;
-      const dDisplayAgent = (dActiveId && agents.find(a => a.id === dActiveId)) || c.agent;
+      const dLastSpeaker = c.lastAgentId && agents.find(a => a.id === c.lastAgentId);
+      const dDisplayAgent = dLastSpeaker || (dActiveId && agents.find(a => a.id === dActiveId)) || c.agent;
       const dWorking = workingConvos.has(c.id);
       const dUnread = !dWorking && unreadConvos.has(c.id);
       const dIndicator = dWorking ? '<span class="convo-working"></span>' : dUnread ? '<span class="convo-unread"></span>' : '';
