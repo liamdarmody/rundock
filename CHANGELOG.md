@@ -4,9 +4,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## Unreleased
-
-**Name:** Delegation Memory
+## 0.8.7: Delegation Memory (2026-04-18)
 
 After a specialist finishes, the orchestrator remembers what they delivered. Follow-up questions get informed answers instead of blank-slate re-delegation, and the transition between agents is visually clean with no phantom UI.
 
