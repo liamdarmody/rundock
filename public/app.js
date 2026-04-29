@@ -1141,7 +1141,8 @@ function showProfile(agentId) {
   if(existing.length) {
     h+=`<div class="profile-existing"><div class="profile-section-label">Existing conversations</div>`;
     for(const c of existing) {
-      h+=`<div class="profile-existing-item" onclick="openConversation('${c.id}')"><span class="profile-existing-title">${esc(c.title)}</span><span class="profile-existing-meta">${c.messageCount ?? c.messages.length} msg</span></div>`;
+      const n = c.messageCount ?? c.messages.length;
+      h+=`<div class="profile-existing-item" onclick="openConversation('${c.id}')"><span class="profile-existing-title">${esc(c.title)}</span><span class="profile-existing-meta">${n} message${n === 1 ? '' : 's'}</span></div>`;
     }
     h+=`</div>`;
   }
