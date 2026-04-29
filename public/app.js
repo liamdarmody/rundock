@@ -1198,6 +1198,7 @@ function handlePersistedConversations(persisted) {
       lastActiveAt: entry.lastActiveAt,
       lastAgentId: entry.lastAgentId || null,
       lastMessagePreview: entry.lastMessagePreview || null,
+      messageCount: entry.messageCount,  // Server-enriched count; client falls back to messages.length when undefined
       persisted: true  // Flag: this was loaded from disk, has no in-memory messages
     };
     conversations.push(convo);
