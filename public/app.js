@@ -243,7 +243,7 @@ function handle(d) {
             const convo = conversations.find(c => c.id === convoId);
             const orchestratorAgentId = outgoingAgentId || convo?.agentId;
             if (convo) {
-              convo.messages.push({ role: 'agent', content: handoffText, agentId: orchestratorAgentId });
+              convo.messages.push({ role: 'agent', content: handoffText, agentId: orchestratorAgentId, timestamp: new Date().toISOString() });
             }
             // If the streaming bubble exists in the DOM, promote it to a permanent node
             // by clearing the streaming-text class and re-rendering with final content
@@ -618,7 +618,7 @@ function handleResult(d, convoId) {
   responseText = silentStripped;
 
   if(responseText && convo) {
-    convo.messages.push({role:'agent', content: responseText, agentId});
+    convo.messages.push({role:'agent', content: responseText, agentId, timestamp: new Date().toISOString()});
     convo.lastAgentId = agentId;
     convo.lastMessagePreview = stripMd(responseText).substring(0, 80);
     const viewingChat = isActive && currentView === 'chat';
@@ -1086,14 +1086,6 @@ function showProfile(agentId) {
   } else {
     h+=`<div class="profile-cta"><button class="profile-cta-btn" onclick="startConversation('${a.id}')">New conversation</button></div>`;
   }
-  // Existing conversations
-  if(existing.length) {
-    h+=`<div class="profile-existing"><div class="profile-section-label">Existing conversations</div>`;
-    for(const c of existing) {
-      h+=`<div class="profile-existing-item" onclick="openConversation('${c.id}')"><span class="profile-existing-title">${esc(c.title)}</span><span class="profile-existing-meta">${c.messages.length} msg</span></div>`;
-    }
-    h+=`</div>`;
-  }
   // Capabilities card
   if(a.capabilities) {
     const c = a.capabilities;
@@ -1144,6 +1136,15 @@ function showProfile(agentId) {
     <div class="profile-card-section"><div class="profile-section-label">Instructions ▾</div>
     <div id="agent-instructions" class="hidden"><div style="font-size:var(--caption);line-height:1.6;white-space:pre-wrap;max-height:400px;overflow-y:auto;color:var(--text-2);padding-top:8px">${esc(a.instructions)}</div></div>
     </div></div>`;
+  // Existing conversations (rendered last so the page reads as a profile first,
+  // conversation index second; preserves the hide-when-empty guard).
+  if(existing.length) {
+    h+=`<div class="profile-existing"><div class="profile-section-label">Existing conversations</div>`;
+    for(const c of existing) {
+      h+=`<div class="profile-existing-item" onclick="openConversation('${c.id}')"><span class="profile-existing-title">${esc(c.title)}</span><span class="profile-existing-meta">${c.messages.length} msg</span></div>`;
+    }
+    h+=`</div>`;
+  }
   document.getElementById('profile-content').innerHTML=h;
   showView('profile');
   // Highlight in sidebar
@@ -1703,7 +1704,7 @@ function openConversation(id) {
       }
       else if(m.role==='agent') {
         replayLastAgentId = m.agentId || replayLastAgentId;
-        addAgentMsg(m.content,m.agentId,false);
+        addAgentMsg(m.content,m.agentId,false,m.timestamp || null);
       }
       if(m.isHistory) {
         const last = el.lastElementChild;
@@ -1755,7 +1756,7 @@ function openConversation(id) {
 function dispatchMessage(convo, text) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   addUserMsg(text);
-  convo.messages.push({ role: 'user', content: text });
+  convo.messages.push({ role: 'user', content: text, timestamp: new Date().toISOString() });
   // Promote from "Previous" to current session when user sends a message
   if (convo.persisted) {
     convo.persisted = false;
@@ -1926,7 +1927,7 @@ function handleActiveProcesses(active) {
       // If we have accumulated response text, save it as a message before clearing
       const convo = conversations.find(c => c.id === convoId);
       if (state.streamingRawText && convo) {
-        convo.messages.push({ role: 'agent', content: state.streamingRawText, agentId: convo.agentId });
+        convo.messages.push({ role: 'agent', content: state.streamingRawText, agentId: convo.agentId, timestamp: new Date().toISOString() });
         // If this conversation is visible, render the text (without thinking bubble)
         if (activeConversation?.id === convoId) {
           const existingStream = state.currentStreamingMsg;
@@ -1956,10 +1957,13 @@ setInterval(() => {
 }, 60000);
 
 // UI helpers
-function addAgentMsg(text,agentId,anim=true) {
+function addAgentMsg(text,agentId,anim=true,timestamp=null) {
   const a=agents.find(x=>x.id===agentId)||activeConversation?.agent||agents[0],m=document.getElementById('messages'),d=document.createElement('div');
   d.className='msg msg-agent'; if(!anim)d.style.animation='none';
-  d.innerHTML=`<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.displayName||'Agent'}<span class="msg-time">${new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></div><div class="msg-bubble">${formatMd(text)}</div>`;
+  const t = timestamp ? new Date(timestamp) : new Date();
+  const timeStr = isNaN(t.getTime()) ? '' : t.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  const timeSpan = timeStr ? `<span class="msg-time">${timeStr}</span>` : '';
+  d.innerHTML=`<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.displayName||'Agent'}${timeSpan}</div><div class="msg-bubble">${formatMd(text)}</div>`;
   m.appendChild(d); scrollBottom(); return d;
 }
 function addUserMsg(text,anim=true) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg msg-user'; if(!anim)d.style.animation='none'; d.innerHTML=`<div class="msg-bubble">${esc(text)}</div>`; m.appendChild(d); scrollBottom(true); }
@@ -2023,6 +2027,13 @@ function renderSessionHistory(d) {
   for (const msg of d.messages) {
     // Skip hidden system messages (workspace analysis blocks, setup instructions)
     if (msg.content && msg.content.includes('[WORKSPACE_ANALYSIS]')) continue;
+    // Routing entries: orchestrator immediate-routing turns (no prose). Don't
+    // render a chat bubble — the agent-change divider on the next message
+    // carries the visible handoff. Update lastAgentId so the divider triggers.
+    if (msg.type === 'routing') {
+      lastAgentId = msg.agentId || lastAgentId;
+      continue;
+    }
     const div = document.createElement('div');
     div.style.animation = 'none';
     if (msg.role === 'user') {
@@ -2038,7 +2049,10 @@ function renderSessionHistory(d) {
       }
       lastAgentId = msg.agentId || lastAgentId;
       div.className = 'msg msg-agent history-msg';
-      div.innerHTML = `<div class="msg-sender" style="color:${msgAgent?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${msgAgent?.colour||'var(--accent)'}">${msgAgent?.icon||'?'}</div> ${msgAgent?.displayName||'Agent'}</div><div class="msg-bubble">${formatMd(msg.content)}</div>`;
+      const ht = msg.timestamp ? new Date(msg.timestamp) : null;
+      const htStr = ht && !isNaN(ht.getTime()) ? ht.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '';
+      const htSpan = htStr ? `<span class="msg-time">${htStr}</span>` : '';
+      div.innerHTML = `<div class="msg-sender" style="color:${msgAgent?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${msgAgent?.colour||'var(--accent)'}">${msgAgent?.icon||'?'}</div> ${msgAgent?.displayName||'Agent'}${htSpan}</div><div class="msg-bubble">${formatMd(msg.content)}</div>`;
     }
     frag.appendChild(div);
   }
@@ -2067,11 +2081,14 @@ function renderSessionHistory(d) {
     divider.scrollIntoView({ behavior: 'auto', block: 'end' });
   }
 
-  // Store history messages in convo so they persist when navigating away and back
+  // Store history messages in convo so they persist when navigating away and back.
+  // Routing entries keep their dedicated role so sidebar preview filters them out
+  // and the replay loop skips them (auto-divider on the following agent triggers).
   const historyMsgs = d.messages.filter(m => !m.content || !m.content.includes('[WORKSPACE_ANALYSIS]')).map(m => ({
-    role: m.role === 'user' ? 'user' : 'agent',
+    role: m.type === 'routing' ? 'routing' : (m.role === 'user' ? 'user' : 'agent'),
     content: m.role !== 'user' ? stripRundockMarkers(m.content || '').trim() : m.content,
     agentId: m.agentId || convo.agentId,
+    timestamp: m.timestamp || null,
     isHistory: true
   }));
   // Prepend to existing messages (load-more adds older messages before existing ones)
