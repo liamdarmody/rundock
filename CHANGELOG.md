@@ -4,6 +4,26 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** Conversation Polish
+
+A handful of fixes that make conversations behave the way users expect and make agent profiles a useful place to find your work. Multi-paragraph messages survive Send, every message in a transcript shows its own timestamp, orchestrator handoffs persist properly through reload, and agent profiles now list every conversation an agent participated in with an accurate message count.
+
+### Fixed
+
+- **Line breaks preserved in sent messages:** Multi-paragraph messages composed with Shift+Enter or pasted from elsewhere previously arrived as a single flattened paragraph in the chat bubble, transcript, and agent prompt. Line breaks now survive end-to-end through the send pipeline and render with paragraph spacing in chat.
+
+- **Orchestrator handoff text persists in transcript:** When the orchestrator routed a request via the Agent tool and a specialist took over, the orchestrator's brief handoff message ("Routing to Dev") would appear briefly during the live turn, then disappear when the specialist's first message rendered. On any subsequent reload the orchestrator's turn was completely missing from the conversation. Handoff text now persists correctly during the live turn and through page refresh; orchestrator routing turns with no prose write a transcript entry too, so re-renders no longer skip them.
+
+- **Each message shows its own send timestamp:** Every message in a conversation rendered with the same timestamp on rehydrate (for example, all 19:51 if the conversation was reopened at 19:51). Per-message timestamps are now sourced from the session transcript, captured at message-send time for live messages, and rendered correctly in both live and rehydrated views.
+
+- **Existing Conversations moved below Instructions on agent profile:** The conversation list previously sat above Capabilities, Skills, and Instructions, making the page read as a conversation index rather than a profile. The list now renders at the bottom of the profile, after the agent's configuration sections.
+
+- **Agent profile lists every conversation the agent participated in:** Previously, a profile only listed conversations that started with that agent: almost always an empty list for specialists, who join conversations via delegation rather than starting them. The profile now includes every conversation the agent participated in, ordered by most recent activity.
+
+- **Accurate message counts on agent profile listings:** The message count badge next to each conversation showed "0 msg" until the conversation was opened. Counts are now sourced from session transcripts at workspace load, sum across every delegated session, and render correctly on first paint. Label updated to "1 message" / "N messages" with proper plurality.
+
 ## 0.8.7: Delegation Memory (2026-04-18)
 
 After a specialist finishes, the orchestrator remembers what they delivered. Follow-up questions get informed answers instead of blank-slate re-delegation, and the transition between agents is visually clean with no phantom UI.
