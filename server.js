@@ -3120,26 +3120,38 @@ wss.on('connection', (ws) => {
         }
         // Enrich each conversation with the last agent message from the transcript
         // for sidebar display: who spoke last and a preview of what they said.
+        // Also surface a messageCount so profile listings can show an accurate
+        // badge without first opening the conversation (lazy-loaded c.messages
+        // is empty until then). Count user + agent entries, skipping routing
+        // tool-summary entries that aren't "messages exchanged."
         for (const c of cleaned) {
+          c.messageCount = 0;
           try {
             const transcript = loadTranscript(c.id);
             if (!transcript || !transcript.length) continue;
-            // Walk backwards to find the last agent entry with text
+            let count = 0;
+            let previewSet = false;
+            // Single pass: count messages and find the last agent entry with text.
             for (let i = transcript.length - 1; i >= 0; i--) {
-              if (transcript[i].role === 'agent' && transcript[i].text) {
-                c.lastAgentId = transcript[i].agent || null;
+              const entry = transcript[i];
+              if ((entry.role === 'user' || entry.role === 'agent') && entry.type !== 'routing') {
+                count++;
+              }
+              if (!previewSet && entry.role === 'agent' && entry.text) {
+                c.lastAgentId = entry.agent || null;
                 c.lastMessagePreview = stripMdServer(
-                  transcript[i].text
+                  entry.text
                     .replace(/<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:(?:SAVE|CREATE)_AGENT -->/g, '')
                     .replace(/<!-- RUNDOCK:SAVE_SKILL name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:SAVE_SKILL -->/g, '')
                     .replace(/<!--[\s\S]*?-->/g, '')
                     .replace(/\n/g, ' ')
                     .replace(/^(\s*\[[^\]]+\]\s*)+/, '')
                 ).trim().substring(0, 80);
-                break;
+                previewSet = true;
               }
             }
-          } catch (e) { /* no enrichment on failure */ }
+            c.messageCount = count;
+          } catch (e) { /* no enrichment on failure; messageCount stays 0 */ }
         }
         ws.send(JSON.stringify({ type: 'conversations', conversations: cleaned }));
       }
