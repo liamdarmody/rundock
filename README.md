@@ -1,29 +1,47 @@
 # Rundock
 
-Your AI agent team, visible and working in the browser. Built for knowledge work, powered by Claude Code.
+[![License: PolyForm Perimeter 1.0.0](https://img.shields.io/badge/license-PolyForm%20Perimeter%201.0.0-blue.svg)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/liamdarmody/rundock)](https://github.com/liamdarmody/rundock/releases)
 
-Point Rundock at your workspace and get a team of AI agents built around what you do. They show up on an org chart, you talk to them through the browser, and they delegate to each other like a real team. For product managers, researchers, strategists, consultants, writers, analysts, and operations leads.
+A visual interface for AI agent teams. Built by someone running their own business, for people running their own.
 
-**Already using Claude Code?** Rundock surfaces what the terminal hides: which agents you have, which skills they use, and what's happening across your conversations. Same `.claude/` directory, same agent files, new visibility.
-
-**Rundock is built for knowledge work.** It's designed around markdown files and knowledge workspaces. Code mode is available for software workspaces, but knowledge work is the primary use case.
+You run content, ops, sales, admin, and research. When you started, there was nobody else, so the work fell to you. A single chatbot is a single assistant. An agent platform built for developers assumes you can write code. Rundock gives you a team you can actually manage: an org chart of named specialists, conversations through the browser, and delegation that happens in front of you. One beta user described it as having a virtual team of highly paid experts, running in parallel. That is the experience.
 
 ![Rundock org chart showing an AI agent team](docs/rundock-agent-team-org-chart.png)
 
-## Prerequisites
+## Principles
 
-- **Claude Code** installed and signed in ([install guide](https://docs.anthropic.com/en/docs/claude-code/overview)). Run `claude` in your terminal to sign in. Claude Code requires a Claude Pro or Max subscription.
-- **Node.js 20+** ([nodejs.org](https://nodejs.org)), only needed if building from source
+These are the choices that shape every part of Rundock.
 
-Already set up? Skip to quick start.
+**Roles, not systems.** People think in terms of "I need someone to handle my content," not "I need a content generation pipeline." Rundock turns system-building into team-building. Same capability, completely different experience.
 
-## Quick start
+**The team is the unit of value.** Individual agents are commodities. A configured team that works together, with delegation chains, shared knowledge, and an org chart you can read at a glance, is what nobody else sells. The team is the product.
 
-### Download the app (recommended)
+**The human leads. The AI delivers.** You provide taste, direction, and decisions. The AI team handles execution. Every feature reinforces your authority and judgement, never replaces it. That is the entire brand.
 
-Download the latest `.dmg` from [GitHub Releases](https://github.com/liamdarmody/rundock/releases). Open the `.dmg`, drag Rundock to Applications, and launch it. The app is signed and notarised.
+**Local-first.** The whole stack runs on your machine. Your files, your agents, your conversations stay on disk in your workspace. Rundock makes zero outbound network calls.
 
-### Build from source
+**Markdown all the way down.** Your agents and skills are plain markdown files in your workspace. Take them with you whenever you like. They work in Rundock, in Claude Code on the terminal, in Claude.ai, and in any tool that supports Anthropic's agent format.
+
+**Open source, with one restriction.** Fork it, audit it, learn from it. Licensed under PolyForm Perimeter 1.0.0. The one thing you cannot do is use the source to build a product that competes with Rundock.
+
+**Built from real use.** I run my own business on this. The features in Rundock exist because I needed them. There is no roadmap of speculative work; there is the next thing my team needs. Most mornings, my briefing is on my desk before I open the app: a routine on the orchestrator that fires at 5am whether I am there or not.
+
+That's what Rundock is for.
+
+## Getting started
+
+You do not need to write code. You need Claude Code and a folder to call your workspace.
+
+1. Install [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview) and sign in. Requires a Claude Pro or Max subscription.
+2. Download the latest [Rundock release](https://github.com/liamdarmody/rundock/releases) (`.dmg` for Apple Silicon Macs, M1 or later). For Intel Mac, Windows, or Linux, see Local setup below.
+3. Open Rundock and follow Doc, the built-in guide, through first-run setup. Doc walks you through choosing a workspace and creating your first agents.
+
+## Local setup (for contributors and other platforms)
+
+For Intel Macs, Windows, Linux, or anyone wanting to build from source.
+
+**Requirements:** Node.js 20+ and Claude Code authenticated (`claude --version` should work in your terminal).
 
 ```bash
 git clone https://github.com/liamdarmody/rundock.git
@@ -32,170 +50,55 @@ npm install
 npm start
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser.
-
-To open a specific workspace directly:
+Open [http://localhost:3000](http://localhost:3000) in your browser. To open a specific workspace directly:
 
 ```bash
 WORKSPACE=/path/to/your/folder npm start
 ```
 
-### Getting started
+To pull updates later, run `npm run update` in the install directory.
 
-You'll see a workspace picker. Choose a folder that contains (or will contain) your knowledge base and agents. A workspace is any folder where you keep your work: documents, research, projects. This should be separate from the Rundock install folder. If you already have a `.claude/agents/` directory, Rundock will discover it automatically.
+## Tech docs
 
-**What happens when you open a workspace depends on what's already there:**
+- [ARCHITECTURE.md](ARCHITECTURE.md): the process model, workspace directory, and codebase structure.
+- [AGENTS.md](AGENTS.md): the agent file format reference. Frontmatter fields, the markdown body, workspace modes, and a complete example.
+- [SKILLS.md](SKILLS.md): the skill file format, discovery, and the assignment model.
+- [ROUTINES.md](ROUTINES.md): the schedule format, scheduler behaviour, and where output goes.
+- [CONTRIBUTING.md](CONTRIBUTING.md): dev setup, code structure, conventions, changelog standards.
+- [CHANGELOG.md](CHANGELOG.md): release history.
+- [LICENSE](LICENSE): PolyForm Perimeter 1.0.0.
 
-- **Existing agents detected.** Rundock discovers your `.claude/agents/` directory and takes you straight to the dashboard. Your team appears on the org chart immediately.
-- **Files exist but no agents.** Doc, the built-in guide, presents an analysis card for your workspace and proposes an agent team. Say go, and your agents appear on the org chart.
-- **Empty folder.** Rundock scaffolds sensible defaults and shows a welcome screen. Doc walks you through creating your first agent.
+## Security
 
-## Updating
-
-### App (.dmg) installs
-
-Rundock checks for updates automatically via GitHub Releases. When a new version is available, you'll be prompted to download and install it.
-
-### Source installs
-
-From the Rundock install directory (where you cloned the repo):
-
-```bash
-cd /path/to/rundock
-npm run update
-```
-
-Pulls the latest changes and reinstalls dependencies. Then run `npm start` as usual.
-
-## Your team at a glance
-
-**Team:** See your agents on an org chart with zoom controls. Click any agent to view their profile with role, capabilities, skills, and routines. The chart scales to any team size.
-
-**Delegation:** Orchestrator agents route work to the right specialist mid-conversation. You see who's active in the sidebar, and specialists hand back when the request moves outside their domain. The orchestrator picks up where they left off. Specialists can lead their own sub-teams: a content lead delegates analytics to an analyst, who appears in the conversation and handles it directly.
-
-**Conversations:** Chat with any agent through the browser. Run multiple conversations in parallel, each with its own agent and session context. Search across conversation titles and full transcript history to find past work. Cancel a running agent with the stop button if it goes down the wrong path. Delete old conversations from the sidebar. Claude Code has no built-in way to search session content; Rundock does.
-
-**Skills:** Browse skills in a dedicated sidebar with search and filtering. Each skill shows its full instructions on a detail page, with collapsible sections for long content. Agent chips on each skill show which agents use it. In Claude Code, skill-to-agent assignments are invisible. Rundock surfaces the full map.
-
-**Files:** Your agents read and write files in your workspace. Browse, preview, and edit those same files with full markdown rendering.
-
-## Setting up your workspace
-
-**Already have Claude Code agents?** Rundock discovers them from `.claude/agents/`. They'll appear on the org chart. Add a few optional frontmatter fields to customise how they display.
-
-**Starting fresh?** Create a new workspace from the picker, or open any folder. Rundock includes a built-in guide called Doc who will walk you through creating your first agent and setting up your workspace.
-
-### Agent frontmatter
-
-Rundock reads standard Claude Code agent frontmatter and adds optional fields for the visual layer:
-
-```yaml
----
-# Standard Claude Code fields
-name: project-manager
-description: >
-  Tracks projects, surfaces blockers, and keeps work on schedule.
-model: sonnet
-
-# Rundock extension fields (all optional)
-displayName: Marshall
-role: Project Manager
-type: specialist
-order: 1
-icon: ◎
-colour: #6B9EF0
-prompts:
-  - "What needs my attention today?"
-  - "Help me plan next week"
----
-```
-
-| Field | Purpose |
-|---|---|
-| `displayName` | Human-friendly name for the UI. Falls back to title-cased `name` if not set |
-| `role` | Short title on org chart (2-4 words) |
-| `type` | `orchestrator`, `specialist`, or `platform`. Determines org chart position |
-| `order` | Position on org chart. Orchestrator is 0, specialists numbered after. Decimals for sub-agents (1.1, 1.2) |
-| `icon` | Single unicode character for the avatar circle |
-| `colour` | Hex colour for the avatar background |
-| `prompts` | List of starter prompts shown as pills when starting a new conversation |
-| `reportsTo` | Agent slug this agent reports to. Enables multi-level org chart hierarchies |
-
-## Workspace modes
-
-Rundock supports two workspace modes that control what agents can do.
-
-**Knowledge mode** is the default. Agents can read all files and write markdown and knowledge files freely. Bash commands and MCP tool calls surface as permission cards: you see what the agent wants to run, the risk level, and Allow/Deny buttons before anything executes. Executable file types (.js, .ts, .py, .sh, and others) are restricted from writes. This mode is designed for knowledge work where you want visibility over agent actions.
-
-**Code mode** unlocks all file types for reading and writing, and auto-approves Bash and MCP tool calls. This mode is for workspaces where you're building software and want agents to move without friction. Use it when your workspace is a codebase, not a knowledge base.
-
-Rundock detects which mode suits your workspace on first open. You can switch modes at any time from the workspace settings.
-
-## No lock-in
-
-Your agents and skills are standard Claude Code files. They work in Claude Code, Claude.ai, the Claude Agent SDK, and any tool that supports Anthropic's agent format. Rundock adds the team layer on top: org chart, delegation, conversations, permissions. The extension fields (`displayName`, `role`, `type`, `order`, etc.) are optional and ignored by other tools.
-
-If you stop using Rundock, your agents and skills go with you. No export needed. They're already portable.
-
-## Your data never leaves your computer
-
-```
-Browser (WebSocket) <-> Node.js server <-> Claude Code CLI (one process per conversation, delegates spawn additional processes)
-```
-
-- **server.js:** Discovers agents, skills, and files. Spawns Claude Code processes for conversations. Manages single and multi-level delegation between agents, conversation transcripts, permission cards, workspace mode detection, and session continuity (~3,400 lines).
-- **public/app.js:** Single-page client application (~3,000 lines). Handles streaming, delegation UI, permission cards, cancel/interrupt, and conversation management.
-- **public/index.html:** Layout and styles. Nav rail, sidebar, and main panel (~650 lines).
-- **Claude Code:** Runs as child processes in interactive stream-json mode. Each conversation gets its own persistent process with session continuity via `--resume`. Follow-up messages push to stdin rather than spawning new processes. Delegation spawns additional processes for specialists, with multi-level chains supported (orchestrator to lead to sub-agent).
-
-Everything runs on your machine. No data is sent anywhere other than Anthropic's API (through Claude Code). Same workspace files are accessible to Rundock, Claude Code, Obsidian, VS Code, or any other tool simultaneously.
-
-## Security and privacy
-
-**Rundock runs entirely on your machine.** There is no cloud service, no account to create, no database, and no telemetry. Here's what that means in practice.
-
-**Your data stays local.** Rundock is a local Node.js server that talks to Claude Code on your computer. The only external connection is from Claude Code to Anthropic's API, which is how Claude processes your messages. Rundock itself makes zero outbound network calls.
-
-**Your API key is managed by Claude Code, not Rundock.** When you install Claude Code and sign in, it stores your authentication locally on your machine. Rundock never sees, stores, or transmits your API key. If you've already authenticated with Claude Code in your terminal, Rundock uses that same session.
-
-**Agents can read and write knowledge files in your workspace.** Rundock runs Claude Code with permissions that allow agents to read files, write markdown and knowledge files, and browse your workspace freely. Agents do not have access to files outside your workspace.
-
-**Terminal and MCP tool commands require your approval.** When an agent needs to run a Bash command or call an MCP tool, a permission card appears in the conversation with the command details, risk level, and Allow/Deny buttons. You can also choose "Always Allow" to auto-approve a command pattern for the rest of your session. High-risk commands (rm, sudo, chmod) are flagged with a warning. Cards auto-deny after two minutes if you don't respond. In Code mode, these are auto-approved.
-
-**Executable code writes are restricted in Knowledge mode.** Agents cannot write or edit code files (.js, .ts, .py, .sh, and other executable formats) unless you switch to Code mode. Knowledge mode is the default, designed for knowledge work where agents handle documents, not source code. Code mode lifts this restriction for software workspaces.
-
-**The codebase is small and auditable.** Three source files totalling ~7,000 lines (server.js, public/app.js, public/index.html), two dependencies (a markdown renderer and a WebSocket library). No build step, no bundler. You can read the entire codebase in an afternoon.
-
-**Nothing is stored in the cloud.** Conversation metadata (title, agent, session ID) is saved to a `.rundock/` directory in your workspace so sessions persist across page reloads. Message content is read from Claude Code's own JSONL transcript files on disk when resuming a previous conversation. Rundock does not store message content separately. Your workspace files are plain files on disk. Theme preference is saved in your browser's local storage. A list of recently opened workspaces is saved to a local file in the Rundock install directory. That's it.
-
-For technical users: the full source is in `server.js` (Node.js HTTP + WebSocket server, agent/skill discovery, multi-level delegation, transcripts, process management) and `public/app.js` (single-page client application). No build step, no bundler, no minification.
-
-## Common issues
-
-**"Command not found: claude"**
-
-Claude Code isn't installed or isn't in your PATH. Install it from [code.claude.com](https://code.claude.com) and verify `claude --version` works in your terminal.
-
-**No agents on the org chart**
-
-Your workspace doesn't have `.claude/agents/` or the agent files are missing Rundock frontmatter. Add `type` and `order` fields to place agents on the org chart.
-
-**Agent shows as a title-cased slug instead of a name**
-
-Add `displayName: Your Name` to the agent's frontmatter. Without it, Rundock title-cases the `name` field (e.g. `project-manager` becomes "Project Manager").
-
-**Skills list is empty**
-
-Rundock looks for skills in `.claude/skills/` (SKILL.md files). Skills are also discovered from `System/Playbooks/` (PLAYBOOK.md files) if that directory exists in your workspace.
-
-**Conversations disappear on refresh**
-
-Conversation metadata persists across reloads. Previous conversations appear in a collapsible "Previous" section in the sidebar. Click one to resume: Rundock loads the message history from Claude Code's JSONL transcript files on disk. Messages from the previous session appear faded with a "Previous session" divider.
+The entire stack runs on your machine. Rundock never sends your files, your agents, or your conversations anywhere. The only external connection is from Claude Code to Anthropic's API, which is how Claude processes your messages. Only the active conversation is sent to Anthropic for processing. Rundock itself makes zero outbound network calls. There is no cloud service, no account to create, no database, no telemetry. Your API key is managed by Claude Code, not Rundock.
 
 ## Licence
 
-PolyForm Perimeter 1.0.0. Use Rundock for any purpose, including commercial. The one restriction: you cannot use this code to build a product that competes with Rundock. See [LICENSE](LICENSE) for the full terms.
+PolyForm Perimeter 1.0.0. See [LICENSE](LICENSE).
 
 ## Feedback
 
-Early access. If you find bugs or have ideas, open an issue at [github.com/liamdarmody/rundock/issues](https://github.com/liamdarmody/rundock/issues).
+Early access. Bugs and ideas welcome at [github.com/liamdarmody/rundock/issues](https://github.com/liamdarmody/rundock/issues).
+
+<!--
+================================================================================
+OPTIONAL: WALKTHROUGHS SECTION TEMPLATE
+================================================================================
+If Liam records three short Loom walkthroughs (60-90 seconds each) covering
+(a) opening Rundock and seeing the org chart, (b) starting a conversation and
+watching delegation happen, (c) adding or editing a skill, paste the section
+below directly after the hero screenshot and above the Principles section.
+Replace the TODO placeholder URLs with the real Loom share URLs.
+
+## Walkthroughs
+
+Three short videos. Each is around 60 to 90 seconds.
+
+- [Opening Rundock and seeing your team](https://www.loom.com/share/TODO-org-chart): workspace picker, org chart, agent profiles.
+- [Starting a conversation and watching delegation happen](https://www.loom.com/share/TODO-delegation): talk to one agent, watch them hand work to a specialist.
+- [Adding and editing a skill](https://www.loom.com/share/TODO-skills): what skills are, who they belong to, and how to write one.
+
+================================================================================
+END OPTIONAL TEMPLATE
+================================================================================
+-->
