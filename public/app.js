@@ -1069,7 +1069,7 @@ window.addEventListener('resize', () => {
 
 function showProfile(agentId) {
   const a=agents.find(x=>x.id===agentId); if(!a) return;
-  const existing=conversations.filter(c=>c.agentId===agentId);
+  const existing=conversations.filter(c=>c.agentId===agentId||(c.sessionIds||[]).some(s=>s.agentId===agentId));
   let h=`<a class="profile-back" onclick="switchNav('team')">&#8592; Back</a>
     <div class="profile-header">
       <div class="profile-avatar" style="background:${a.colour}">${a.icon}</div>
