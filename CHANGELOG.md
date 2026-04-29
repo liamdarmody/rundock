@@ -4,9 +4,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## Unreleased
-
-**Name:** Conversation Polish
+## 0.8.8: Conversation Polish (2026-04-29)
 
 A handful of fixes that make conversations behave the way users expect and make agent profiles a useful place to find your work. Multi-paragraph messages survive Send, every message in a transcript shows its own timestamp, orchestrator handoffs persist properly through reload, and agent profiles now list every conversation an agent participated in with an accurate message count.
 
