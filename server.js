@@ -240,6 +240,68 @@ async function parseSessionHistory(sessionId, limit = 20, offset = 0) {
   return { messages, totalCount, hasMore };
 }
 
+// Count user/assistant text turns in a single Claude Code session JSONL.
+// Sync read to keep the get_conversations enrichment loop simple. Mirrors the
+// inclusion filter in parseSessionHistory (a turn counts iff it produces a
+// rendered chat bubble), and additionally skips internal injection messages
+// (transcript handoffs, system markers, delegation briefs) and resume ghosts.
+// Returns 0 on any I/O or parse failure so a single bad file doesn't poison
+// the conversation total.
+function countSessionMessagesSync(sessionId) {
+  const filePath = getSessionJsonlPath(sessionId);
+  if (!filePath) return 0;
+  let raw;
+  try {
+    raw = fs.readFileSync(filePath, 'utf-8');
+  } catch (e) { return 0; }
+  let count = 0;
+  for (const line of raw.split('\n')) {
+    if (!line) continue;
+    let obj;
+    try { obj = JSON.parse(line); } catch (e) { continue; }
+    // User text turns: tool_result entries have array content and are excluded
+    // by the typeof === 'string' guard.
+    if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
+      const text = obj.message.content;
+      // Skip Rundock-injected priming messages — these aren't user-visible bubbles.
+      if (text.startsWith('CONVERSATION SO FAR:') ||
+          text.startsWith('[SYSTEM:') ||
+          text.startsWith('[DELEGATION BRIEF]')) continue;
+      count++;
+      continue;
+    }
+    // Assistant turns: count iff at least one text block has non-empty text.
+    // Pure tool_use turns and pure thinking turns produce no chat bubble.
+    if (obj.message && obj.message.role === 'assistant' && Array.isArray(obj.message.content)) {
+      const textParts = obj.message.content
+        .filter(b => b.type === 'text' && b.text && b.text.trim())
+        .map(b => b.text);
+      if (textParts.length === 0) continue;
+      // Skip resume ghosts: empty placeholder bubbles emitted on session resume.
+      if (textParts.join('\n\n').trim() === 'No response requested.') continue;
+      count++;
+    }
+  }
+  return count;
+}
+
+// Sum displayable turns across every Claude Code session a Rundock conversation
+// touches (orchestrator + each delegated specialist's session). Falls back to
+// the legacy single sessionId for conversations created before sessionIds[]
+// tracking landed.
+function countConversationMessages(convo) {
+  const ids = new Set();
+  if (Array.isArray(convo.sessionIds)) {
+    for (const s of convo.sessionIds) {
+      if (s && s.sessionId) ids.add(s.sessionId);
+    }
+  }
+  if (ids.size === 0 && convo.sessionId) ids.add(convo.sessionId);
+  let total = 0;
+  for (const sid of ids) total += countSessionMessagesSync(sid);
+  return total;
+}
+
 // Scan common locations for workspaces (directories with .claude/ or CLAUDE.md)
 function discoverWorkspaces() {
   const candidates = [];
@@ -3118,26 +3180,24 @@ wss.on('connection', (ws) => {
             .replace(/==(.*?)==/g, '$1')             // highlights
             .replace(/^[\s]*[-*+]\s/gm, '');         // list markers
         }
-        // Enrich each conversation with the last agent message from the transcript
-        // for sidebar display: who spoke last and a preview of what they said.
-        // Also surface a messageCount so profile listings can show an accurate
-        // badge without first opening the conversation (lazy-loaded c.messages
-        // is empty until then). Count user + agent entries, skipping routing
-        // tool-summary entries that aren't "messages exchanged."
+        // Enrich each conversation for sidebar/profile display. Two passes:
+        //   1. messageCount: sum of user/assistant chat-bubble turns across
+        //      every Claude Code session JSONL the conversation touches. This
+        //      is the canonical source — Rundock's own transcript only covers
+        //      messages emitted after appendTranscript started running and is
+        //      partial or missing for older conversations.
+        //   2. lastAgentId / lastMessagePreview: still sourced from the
+        //      transcript, which is the only place the orchestrator/specialist
+        //      attribution is recorded for the last visible turn.
         for (const c of cleaned) {
-          c.messageCount = 0;
+          try { c.messageCount = countConversationMessages(c); }
+          catch (e) { c.messageCount = 0; }
           try {
             const transcript = loadTranscript(c.id);
             if (!transcript || !transcript.length) continue;
-            let count = 0;
-            let previewSet = false;
-            // Single pass: count messages and find the last agent entry with text.
             for (let i = transcript.length - 1; i >= 0; i--) {
               const entry = transcript[i];
-              if ((entry.role === 'user' || entry.role === 'agent') && entry.type !== 'routing') {
-                count++;
-              }
-              if (!previewSet && entry.role === 'agent' && entry.text) {
+              if (entry.role === 'agent' && entry.text) {
                 c.lastAgentId = entry.agent || null;
                 c.lastMessagePreview = stripMdServer(
                   entry.text
@@ -3147,11 +3207,10 @@ wss.on('connection', (ws) => {
                     .replace(/\n/g, ' ')
                     .replace(/^(\s*\[[^\]]+\]\s*)+/, '')
                 ).trim().substring(0, 80);
-                previewSet = true;
+                break;
               }
             }
-            c.messageCount = count;
-          } catch (e) { /* no enrichment on failure; messageCount stays 0 */ }
+          } catch (e) { /* preview enrichment is best-effort */ }
         }
         ws.send(JSON.stringify({ type: 'conversations', conversations: cleaned }));
       }
