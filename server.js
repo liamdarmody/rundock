@@ -215,7 +215,7 @@ async function parseSessionHistory(sessionId, limit = 20, offset = 0) {
       const obj = JSON.parse(line);
       // User text messages (not tool results)
       if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
-        displayable.push({ role: 'user', content: obj.message.content });
+        displayable.push({ role: 'user', content: obj.message.content, timestamp: obj.timestamp || null });
         continue;
       }
       // Assistant messages with text content
@@ -224,7 +224,7 @@ async function parseSessionHistory(sessionId, limit = 20, offset = 0) {
           .filter(b => b.type === 'text' && b.text)
           .map(b => b.text);
         if (textParts.length > 0) {
-          displayable.push({ role: 'assistant', content: textParts.join('\n\n') });
+          displayable.push({ role: 'assistant', content: textParts.join('\n\n'), timestamp: obj.timestamp || null });
         }
       }
     } catch (e) { /* skip unparseable lines */ }
@@ -1700,7 +1700,7 @@ function buildToolSummary(toolCalls) {
   return parts.join(' ');
 }
 
-function appendTranscript(convoId, role, agentId, text) {
+function appendTranscript(convoId, role, agentId, text, type) {
   // Load from disk if not in memory (e.g. after server restart)
   if (!convoTranscripts.has(convoId)) {
     const existing = loadTranscript(convoId);
@@ -1709,7 +1709,9 @@ function appendTranscript(convoId, role, agentId, text) {
   const transcript = convoTranscripts.get(convoId);
   // Soft cap at 100 entries to prevent unbounded growth
   if (transcript.length >= 100) transcript.splice(1, 1);
-  transcript.push({ role, agent: agentId, text: text || '' });
+  const entry = { role, agent: agentId, text: text || '', timestamp: new Date().toISOString() };
+  if (type) entry.type = type;
+  transcript.push(entry);
   // Persist to disk
   saveTranscript(convoId);
 }
@@ -1815,24 +1817,41 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
                 if (target) {
                   console.log(`[AgentIntercept] convo=${convoId} agent=${entry.agentId} intercepting Agent tool call targeting: ${target.name}`);
                   intercepted = true;
-                  // Save orchestrator's response to transcript before killing the process
-                  // (the result event won't fire after SIGKILL, so we must persist here)
+                  // Save orchestrator's response to transcript before killing the process.
+                  // The result event won't fire after SIGKILL so we must persist here.
+                  // With prose: append the prose (with tools prefix) as a regular agent
+                  // entry so it renders in the chat and survives navigate-away/back.
+                  // Without prose: still append a routing-typed entry so the orchestrator's
+                  // turn is recorded in the transcript (otherwise the turn is invisible
+                  // on rehydrate). The renderer skips routing entries from chat bubbles.
                   if (entry.responseText) {
                     const toolSummary = buildToolSummary(entry.toolCalls);
                     const textWithTools = toolSummary ? toolSummary + '\n' + entry.responseText : entry.responseText;
                     appendTranscript(convoId, 'agent', entry.agentId, textWithTools);
+                  } else {
+                    const toolSummary = buildToolSummary(entry.toolCalls);
+                    appendTranscript(convoId, 'agent', entry.agentId, toolSummary, 'routing');
                   }
                   try { entry.process.kill('SIGKILL'); } catch (e) {}
                   entry.exited = true;
-                  // Emit done for the orchestrator so the frontend clears its working indicator
-                  // before the specialist's process_started creates a new one.
-                  safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: 0, _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId }));
+                  // Order matters: handleDelegation sends agent_switch synchronously,
+                  // which the client uses to promote the orchestrator's streaming
+                  // bubble (state.currentStreamingMsg) into a permanent message.
+                  // If 'done' fires first, finishProcessing nulls currentStreamingMsg
+                  // and the handoff text is orphaned. Send 'done' AFTER handleDelegation
+                  // so agent_switch (and the specialist's process_started, also sent
+                  // inside handleDelegation) reach the client first. By then
+                  // activeProcessId points at the specialist, so the orchestrator's
+                  // 'done' fails the process-id match in finishProcessing — exactly
+                  // what we want: the orchestrator's working indicator clears via
+                  // agent_switch, not via 'done'.
                   handleDelegation({
                     type: 'delegate', conversationId: convoId,
                     targetAgent: target.name,
                     context: toolInput.prompt || toolInput.description || 'Handle this request.',
                     _intercepted: true, _parentSessionId: entry.sessionId, _parentAgentId: entry.agentId
                   }, chatProcesses);
+                  safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: 0, _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId }));
                 }
               } catch (e) {
                 console.log(`[AgentIntercept] convo=${convoId} failed to parse Agent tool input: ${e.message}`);
@@ -3443,6 +3462,14 @@ wss.on('connection', (ws) => {
                 const role = t.role === 'user' ? 'user' : 'assistant';
                 const tText = t.text || '';
 
+                // Routing entries: orchestrator turn that was an immediate Agent-tool
+                // call with no prose. Pass through with type so the client preserves
+                // the agent change for divider rendering but skips the chat bubble.
+                if (t.type === 'routing') {
+                  merged.push({ role: 'assistant', content: tText, agentId: t.agent || null, type: 'routing', timestamp: t.timestamp || null });
+                  continue;
+                }
+
                 if (role === 'user') {
                   const key = tText.substring(0, 200);
                   if (seenUserMsgs.has(key)) continue;
@@ -3452,9 +3479,9 @@ wss.on('connection', (ws) => {
                     m.content && m.content.substring(0, 200) === key);
                   if (match) {
                     match._used = true;
-                    merged.push({ role: 'user', content: match.content, agentId: null });
+                    merged.push({ role: 'user', content: match.content, agentId: null, timestamp: match.timestamp || t.timestamp || null });
                   } else if (tText) {
-                    merged.push({ role: 'user', content: tText, agentId: null });
+                    merged.push({ role: 'user', content: tText, agentId: null, timestamp: t.timestamp || null });
                   }
                 } else {
                   // Agent message: match by content prefix (transcript stores ~200 chars)
@@ -3467,12 +3494,12 @@ wss.on('connection', (ws) => {
                     ));
                   if (match) {
                     match._used = true;
-                    merged.push({ role: 'assistant', content: match.content, agentId: t.agent || null });
+                    merged.push({ role: 'assistant', content: match.content, agentId: t.agent || null, timestamp: match.timestamp || t.timestamp || null });
                   } else {
                     // No JSONL match: use transcript text (may be truncated but better than dropping)
                     const cleanText = stripToolSummaries(tText);
                     if (cleanText) {
-                      merged.push({ role: 'assistant', content: cleanText, agentId: t.agent || null });
+                      merged.push({ role: 'assistant', content: cleanText, agentId: t.agent || null, timestamp: t.timestamp || null });
                     }
                   }
                 }
@@ -3486,7 +3513,7 @@ wss.on('connection', (ws) => {
                   if (seenUserMsgs.has(key)) continue;
                   seenUserMsgs.add(key);
                 }
-                merged.push({ role: m.role, content: m.content, agentId: m.role === 'user' ? null : null });
+                merged.push({ role: m.role, content: m.content, agentId: m.role === 'user' ? null : null, timestamp: m.timestamp || null });
               }
             }
 
