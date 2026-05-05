@@ -7,7 +7,7 @@ A visual interface for AI agent teams. Built by someone running their own busine
 
 You run content, ops, sales, admin, and research. When you started, there was nobody else, so the work fell to you. A single chatbot is a single assistant. An agent platform built for developers assumes you can write code. Rundock gives you a team you can actually manage: an org chart of named specialists, conversations through the browser, and delegation that happens in front of you. One beta user described it as having a virtual team of highly paid experts, running in parallel. That is the experience.
 
-![Rundock org chart showing an AI agent team](docs/rundock-agent-team-org-chart.png)
+![Rundock app: an AI agent team org chart with the orchestrator at the top, six specialists, and a routines panel showing scheduled automations](docs/rundock-app-hero.png)
 
 ## Principles
 
