@@ -1856,6 +1856,21 @@ function sendMessage() {
   if(!activeConversation||!ws) return;
   const state = getConvoState(activeConversation.id);
   if(!text||state.isProcessing) return;
+  // If the user is continuing a conversation that was marked Done, treat the
+  // new message as an implicit reactivation: flip the status back to active so
+  // the conversation moves out of the Done section, the badge updates in the
+  // chat header, and persistConversation downstream writes the change to disk.
+  if (activeConversation.status === 'done') {
+    activeConversation.status = 'active';
+    const statusEl = document.getElementById('chat-convo-status');
+    if (statusEl) {
+      const stateLabel = statusEl.querySelector('.state-label');
+      const actionLabel = statusEl.querySelector('.action-label');
+      if (stateLabel) stateLabel.textContent = 'Active';
+      if (actionLabel) actionLabel.textContent = '→ Mark Done';
+      statusEl.className = 'chat-convo-status active-convo';
+    }
+  }
   const promptsEl=document.getElementById('chat-prompts'); if(promptsEl) promptsEl.remove();
   if(activeConversation.messages.filter(m=>m.role==='user').length===0 && !activeConversation.isSetup) { activeConversation.title=text.substring(0,50)+(text.length>50?'...':''); document.getElementById('chat-title-input').value=activeConversation.title; renderConvoList(); }
   input.value=''; input.style.height='44px'; document.getElementById('send-btn').classList.remove('active');
