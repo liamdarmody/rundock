@@ -4,6 +4,12 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+### Added
+
+- **One-command Windows from-source bootstrap.** A new PowerShell script at `scripts/install-windows-source.ps1` gets non-developer Windows users into Rundock without a real terminal session. The one-liner `irm https://raw.githubusercontent.com/liamdarmody/rundock/main/scripts/install-windows-source.ps1 | iex` checks for Node.js 20+ and Git (installing via winget if missing), checks for Claude Code (prompting to run Anthropic's installer if missing), clones Rundock to `%USERPROFILE%\Rundock`, runs `npm install`, and creates a Desktop and Start Menu shortcut so the app launches like any other Windows app. The README gains a "Run on Windows (interim)" section above the existing Local setup section. This path is interim and will be retired when the proper Windows installer ships.
+
 ## 0.8.8: Conversation Polish (2026-04-29)
 
 A handful of fixes that make conversations behave the way users expect and make agent profiles a useful place to find your work. Multi-paragraph messages survive Send, every message in a transcript shows its own timestamp, orchestrator handoffs persist properly through reload, and agent profiles now list every conversation an agent participated in with an accurate message count.

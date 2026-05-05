@@ -39,6 +39,35 @@ You do not need to write code. You need Claude Code and a folder to call your wo
 2. Download the latest [Rundock release](https://github.com/liamdarmody/rundock/releases) (`.dmg` for Apple Silicon Macs, M1 or later). For Intel Mac, Windows, or Linux, see Local setup below.
 3. Open Rundock and follow Doc, the built-in guide, through first-run setup. Doc walks you through choosing a workspace and creating your first agents.
 
+## Run on Windows (interim)
+
+A proper Windows installer is on the way. Until it ships, the recommended path for non-developer Windows users is the from-source bootstrap below.
+
+Open PowerShell and run:
+
+```powershell
+irm https://raw.githubusercontent.com/liamdarmody/rundock/main/scripts/install-windows-source.ps1 | iex
+```
+
+The bootstrap takes care of five things end to end: it checks for Node.js 20+ and Git (and installs them via `winget` if missing), checks for Claude Code (and prompts to run Anthropic's installer if missing), clones Rundock to `%USERPROFILE%\Rundock`, runs `npm install`, and creates a Desktop and Start Menu shortcut. After it finishes, double-click the Rundock shortcut to launch.
+
+If `winget` itself is missing on an older Windows 10 machine, install **App Installer** from the Microsoft Store:
+
+```
+ms-windows-store://pdp/?productid=9NBLGGH4NNS1
+```
+
+If you would prefer to install Claude Code yourself first, run Anthropic's installer in PowerShell, then run the Rundock bootstrap:
+
+```powershell
+irm https://claude.ai/install.ps1 | iex
+irm https://raw.githubusercontent.com/liamdarmody/rundock/main/scripts/install-windows-source.ps1 | iex
+```
+
+Re-running the bootstrap one-liner is safe at any time. It updates the existing checkout in place.
+
+This path is interim and will be retired when the proper Windows installer ships.
+
 ## Local setup (for contributors and other platforms)
 
 For Intel Macs, Windows, Linux, or anyone wanting to build from source.
