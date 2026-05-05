@@ -3899,30 +3899,46 @@ function handleChatSpawnError(err, convoId) {
     if (entry && entry.cancelled) return;
 
     // Dedupe consecutive identical errors per conversation within 30 seconds.
+    // The dedupe applies to the user-facing pill only; the 'done' signal at
+    // the bottom of this handler must always fire so the client clears its
+    // thinking indicator on every spawn attempt.
     const key = String(convoId || '');
     const last = recentSpawnErrors.get(key);
     const now = Date.now();
-    if (last && last.code === err.code && (now - last.ts) < 30000) {
+    const isDupe = last && last.code === err.code && (now - last.ts) < 30000;
+
+    if (isDupe) {
       console.error(`[SpawnError] convo=${convoId} code=${err.code} (deduped within 30s)`);
-      return;
-    }
-    recentSpawnErrors.set(key, { code: err.code, ts: now });
-
-    // Distinct copy per error code.
-    let userMessage;
-    if (err.code === 'ENOENT') {
-      userMessage = 'Claude Code not found on PATH. Run `claude --version` to check your install.';
-    } else if (err.code === 'EACCES') {
-      userMessage = "Couldn't start Claude Code: permission denied. Check your install.";
     } else {
-      userMessage = `Couldn't start Claude Code: ${err.message}. Run \`claude --version\` to check your install.`;
+      recentSpawnErrors.set(key, { code: err.code, ts: now });
+
+      // Distinct copy per error code.
+      let userMessage;
+      if (err.code === 'ENOENT') {
+        userMessage = 'Claude Code not found on PATH. Run `claude --version` to check your install.';
+      } else if (err.code === 'EACCES') {
+        userMessage = "Couldn't start Claude Code: permission denied. Check your install.";
+      } else {
+        userMessage = `Couldn't start Claude Code: ${err.message}. Run \`claude --version\` to check your install.`;
+      }
+
+      safeSend(JSON.stringify({
+        type: 'system',
+        subtype: 'info',
+        content: userMessage,
+        _conversationId: convoId,
+      }));
     }
 
+    // Send done so the client unblocks. The close handler is gated by
+    // spawnFailed and won't emit its own 'done', so without this the
+    // conversation would spin in the thinking state forever after a
+    // spawn failure.
     safeSend(JSON.stringify({
-      type: 'system',
-      subtype: 'info',
-      content: userMessage,
+      type: 'system', subtype: 'done', code: null,
       _conversationId: convoId,
+      _processId: entry ? entry.processId : undefined,
+      _agent: entry ? entry.agentId : undefined,
     }));
 
     if (convoId && entry) chatProcesses.delete(convoId);
