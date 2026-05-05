@@ -18,6 +18,8 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Fixed
 
+- **Agent and skill frontmatter parses correctly on Windows.** Files cloned with CRLF line endings (the default for Git for Windows with `core.autocrlf=true`) previously failed to parse because several frontmatter regexes required LF. The most visible symptom was Doc appearing as "Rundock Guide" with the wrong icon and colour, losing its `type: 'platform'` designation, and duplicating in the sidebar alongside the built-in fallback. The same silent degradation hit any agent or skill file on disk with CRLF endings. Frontmatter reads now normalise CRLF to LF at the read boundary via a new `readNormalisedFile` helper, so parsing is correct on every platform regardless of how files arrived on disk. A new `.gitattributes` enforces LF on future clones; existing Windows clones can re-clone or run `git rm --cached -r . && git reset --hard` to refresh.
+
 - **Workspace picker hides immediately on selection:** Selecting a workspace previously left the picker visible in the right-hand main panel for a beat as conversation data round-tripped from the server, producing a noticeable shift-squash-snap as the chat view eventually replaced it. The view now swaps to the empty conversation state the moment the workspace is set; `handlePersistedConversations` then routes to chat, a pinned conversation, or a new conversation as conversation data arrives. The same-workspace reconnect path is unchanged and still preserves the active view and in-memory conversations.
 
 ## 0.8.8: Conversation Polish (2026-04-29)
