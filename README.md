@@ -27,7 +27,7 @@ These are the choices that shape every part of Rundock.
 
 **Open source, with one restriction.** Fork it, audit it, learn from it. Licensed under PolyForm Perimeter 1.0.0. The one thing you cannot do is use the source to build a product that competes with Rundock.
 
-**Built from real use.** [I](https://liamdarmody.com) run my own business on this. The features in Rundock exist because I needed them. There is no roadmap of speculative work; there is the next thing my team needs. Most mornings, my briefing is on my desk before I open the app: a routine on the orchestrator that fires at 5am whether I am there or not.
+**Built from real use.** [I run my own business](https://liamdarmody.com) on this. The features in Rundock exist because I needed them. There is no roadmap of speculative work; there is the next thing my team needs. Most mornings, my briefing is on my desk before I open the app: a routine on the orchestrator that fires at 5am whether I am there or not.
 
 That's what Rundock is for.
 
