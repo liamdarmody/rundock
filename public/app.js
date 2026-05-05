@@ -3086,6 +3086,11 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   document.querySelector('[data-nav="conversations"]')?.classList.add('active');
   ['team','conversations','skills','files','settings'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
   document.getElementById('sidebar-conversations').classList.remove('hidden');
+  // Hide the workspace picker immediately so it does not linger as the
+  // get_conversations round-trip lands. handlePersistedConversations will
+  // replace this with chat (pinned, processing, or new conversation) once
+  // conversation data arrives, or leave it on convo-empty if there are none.
+  showView('convo-empty');
 }
 
 // ===== 16. EVENT LISTENERS & INIT =====
