@@ -94,7 +94,6 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .convo-item.pinned-convo { border-left: 2px solid var(--accent); }
 .convo-item.pinned-convo.pinned-working { border-left-color: var(--success); }
 .sidebar-label-unread { display: inline-block; width: 6px; height: 6px; background: var(--accent); border-radius: 50%; margin-left: 6px; vertical-align: middle; }
-::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation-duration: 600ms; }
 .convo-pin-indicator { width: 12px; height: 12px; color: var(--accent); flex-shrink: 0; opacity: 0.7; margin-left: 4px; }
 .convo-title-row { display: flex; align-items: center; gap: 0; min-width: 0; }
 .convo-title-row .convo-title { flex: 1; min-width: 0; }
@@ -191,7 +190,12 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .chat-title-input:focus { border-color: var(--accent); background: var(--card); }
 .chat-convo-status { font-size: var(--caption); font-weight: 600; padding: 3px 10px; border-radius: 6px; cursor: pointer; transition: all 0.15s ease; flex-shrink: 0; }
 .chat-convo-status.active-convo { background: rgba(107,198,126,0.12); color: var(--success); }
+.chat-convo-status.active-convo:hover { background: rgba(107,198,126,0.22); }
 .chat-convo-status.done-convo { background: var(--card); color: var(--text-2); }
+.chat-convo-status.done-convo:hover { background: var(--elevated); color: var(--text-1); }
+.chat-convo-status .action-label { display: none; }
+.chat-convo-status:hover .state-label { display: none; }
+.chat-convo-status:hover .action-label { display: inline; }
 .chat-status { font-size: var(--caption); color: var(--idle); font-weight: 500; display: none; }
 .chat-status.working { color: var(--success); display: inline; margin-left: 6px; }
 .messages { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
@@ -629,7 +633,7 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
             <span class="chat-status" id="chat-status"></span>
           </div>
         </div>
-        <span class="chat-convo-status" id="chat-convo-status" onclick="toggleConvoStatus()">Active</span>
+        <span class="chat-convo-status" id="chat-convo-status" onclick="toggleConvoStatus()"><span class="state-label">Active</span><span class="action-label">→ Mark Done</span></span>
       </div>
       <div class="messages" id="messages"></div>
       <div class="chat-input">

@@ -14,7 +14,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Changed
 
-- **Conversation sidebar surfaces what needs attention.** Pinned conversations now sort by last activity, so the one you just used sits at the top of pinned. Active conversations sort with working agents first, then unread messages, then idle. The Done section keeps a small unread dot on its header when any done conversation has unread messages. A green border highlights a pinned conversation while its agent is busy.
+- **Conversation sidebar surfaces what needs attention.** Pinned conversations sort by last activity. Active conversations sort with working agents first, then unread, then idle. Idle conversations older than seven days fold under a collapsible "Older" section so the sidebar stays compact, while working and unread always show at the top regardless of age. Done stays collapsed at the bottom with an unread dot when any done conversation has unread messages. Pinned conversations whose agent is busy show a green left border. The Active/Done badge in the chat header now reveals "Mark Done" or "Mark Active" on hover so the toggle is discoverable.
 
 ### Fixed
 
