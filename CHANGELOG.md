@@ -4,7 +4,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## Unreleased
+## Unreleased: Sidebar Polish & Windows Readiness
 
 ### Added
 
@@ -16,17 +16,19 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 - **Continuing a Done conversation reactivates it; opening one to read does not.** Sending a new message in a conversation marked Done now flips its status back to Active, similar to replying to an archived email. Opening a Done conversation just to look at past context no longer reactivates it (previous behaviour silently flipped the status the moment you clicked the row, defeating the user's explicit "I'm done with this" state). Status changes only on deliberate signals: sending a new message, or clicking the Active/Done badge in the chat header.
 
-- **Conversation sidebar surfaces what needs attention.** Pinned conversations sort by last activity. Active conversations sort with working agents first, then unread, then idle. Idle conversations older than seven days fold under a collapsible "Older" section so the sidebar stays compact, while working and unread always show at the top regardless of age. Done stays collapsed at the bottom with an unread dot when any done conversation has unread messages. Pinned conversations whose agent is busy show a green left border. The Active/Done badge in the chat header now reveals "Mark Done" or "Mark Active" on hover so the toggle is discoverable.
+- **Conversation sidebar prioritises what needs attention.** Pinned conversations sort by last activity. Active conversations show working agents first, then unread, then idle. Idle conversations older than seven days fold under a collapsible "Older" section. Done collapses at the bottom and shows an unread dot when any done conversation has unread messages. Pinned conversations whose agent is currently busy show a green left border so you can see at a glance which work is in flight.
+
+- **Mark Done / Mark Active toggle is easier to find.** The Active/Done badge in the chat header now reveals "Mark Done" or "Mark Active" on hover, so the toggle is discoverable rather than hidden.
 
 ### Fixed
 
-- **Sidebar sort updates immediately when a conversation becomes active.** Sending a message in a pinned conversation, or having an agent finish in any conversation, now floats that conversation to the top of its section right away. Previously the sort key (`lastActiveAt`) was only refreshed on workspace reload, so a pinned conversation that was being actively used stayed at whatever position it had when the workspace last loaded. The client now bumps the timestamp locally on user-message-send and on agent-finish; the server still stamps its own value on save, the local update just keeps the visible sidebar in sync without waiting for a round-trip.
+- **Sidebar position updates immediately when a conversation becomes active.** Sending a message in a pinned conversation, or having an agent finish in any conversation, now floats that conversation to the top of its section right away. Previously the sidebar position only refreshed on workspace reload, so an actively-used pinned conversation stayed wherever it was when you last opened Rundock.
 
-- **Spawn failures show up in chat instead of dropping the connection.** When Rundock can't start Claude Code for any reason (not installed, PATH issue, permissions), the chat now explains the cause and how to fix it, rather than disconnecting and reconnecting silently with no information.
+- **Clearer message when Claude Code can't start.** When Rundock can't start Claude Code for any reason (not installed, PATH issue, permissions), the chat now explains the cause and how to fix it, rather than disconnecting and reconnecting silently with no information. The conversation also unblocks straight away rather than spinning on the "thinking" indicator after the error appears.
 
-- **No duplicate Doc in the sidebar when the scaffold file is broken.** Doc appears once even if its agent file has malformed frontmatter, rather than showing twice with the same name and icon.
+- **Doc never shows up twice in the sidebar.** Doc appears once in the agents list even if its agent file has malformed frontmatter, rather than showing twice with the same name and icon.
 
-- **Agent and skill files parse correctly on Windows.** Files with Windows-style line endings (the default in Git for Windows) used to fail to parse, which made Doc appear as "Rundock Guide" with the wrong icon, lose its built-in role, and show up twice in the sidebar. Frontmatter now reads correctly regardless of line-ending style on every platform. Existing Windows users can re-clone the repo or run `git rm --cached -r . && git reset --hard` to refresh.
+- **Agent and skill files parse correctly on Windows.** Files with Windows-style line endings (the default in Git for Windows) used to fail to parse, which made Doc appear as "Rundock Guide" with the wrong icon, lose its built-in role, and show up twice in the sidebar. Frontmatter now reads correctly regardless of line-ending style on every platform. Existing Windows users: re-clone the repo to pick up the fix.
 
 - **Workspace picker hides immediately on selection.** Choosing a workspace used to leave the picker visible in the main panel for a beat as conversations loaded, producing a noticeable shift-snap. The picker now disappears the moment the workspace is set, with conversations populating the sidebar as they arrive.
 
