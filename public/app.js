@@ -1481,102 +1481,148 @@ function renderConvoList() {
     renderSearchResults();
     return;
   }
-  // Current session conversations + pinned persisted conversations
-  const current = conversations.filter(c => c.status !== 'done' && (!c.persisted || c.pinned));
-  // Sort: pinned first (most recently active), then unpinned in existing order
-  current.sort((a, b) => {
-    if (a.pinned && !b.pinned) return -1;
-    if (!a.pinned && b.pinned) return 1;
-    if (a.pinned && b.pinned) {
-      const aTime = a.lastActiveAt || a.pinnedAt || a.createdAt || '';
-      const bTime = b.lastActiveAt || b.pinnedAt || b.createdAt || '';
-      return bTime.localeCompare(aTime); // most recent first
-    }
-    return 0; // preserve existing order for unpinned
-  });
-  // Previous sessions (persisted from disk, not pinned)
-  const previous = conversations.filter(c => c.persisted && !c.pinned && c.status !== 'done');
-  const done = conversations.filter(c => c.status === 'done');
+  // Three sections:
+  //   A (Pinned)   pinned, non-done. Sorted by lastActiveAt desc.
+  //   B (Active)   non-pinned, non-done. Three-tier compound sort:
+  //                working > unread > idle, each by lastActiveAt desc.
+  //   C (Done)     done. Existing collapsible third section. Header
+  //                shows an unread dot when any done convo is unread.
+  const sortKeyTime = c => c.lastActiveAt || c.pinnedAt || c.createdAt || '';
+  const compareTimeDesc = (a, b) => sortKeyTime(b).localeCompare(sortKeyTime(a));
+  const tierKey = c => {
+    if (workingConvos.has(c.id)) return 0;
+    if (unreadConvos.has(c.id)) return 1;
+    return 2;
+  };
+  const sectionA = conversations
+    .filter(c => c.pinned && c.status !== 'done')
+    .sort(compareTimeDesc);
+  const sectionB = conversations
+    .filter(c => !c.pinned && c.status !== 'done')
+    .sort((a, b) => {
+      const ka = tierKey(a), kb = tierKey(b);
+      if (ka !== kb) return ka - kb;
+      return compareTimeDesc(a, b);
+    });
+  const done = conversations
+    .filter(c => c.status === 'done')
+    .sort(compareTimeDesc);
   let h = '';
-  if (!current.length && !previous.length && !done.length) {
+  if (!sectionA.length && !sectionB.length && !done.length) {
     h = `<div style="padding:12px 16px">
       <div style="color:var(--text-2);font-size:var(--caption);line-height:1.6">No conversations yet</div>
     </div>`;
   }
-  if (current.length) {
-    for (const c of current) {
-      const lastMsg = c.messages.filter(m => m.role === 'agent').pop();
-      const preview = lastMsg ? stripMd(lastMsg.content).substring(0, 60) + '...' : (c.lastMessagePreview || 'No messages yet');
-      const cState = convoState[c.id];
-      const activeId = cState?.activeAgentId;
-      // Live (processing): show currently-speaking agent. Idle: show last speaker from transcript.
-      const lastSpeaker = c.lastAgentId && agents.find(a => a.id === c.lastAgentId);
-      const displayAgent = (workingConvos.has(c.id) && activeId && agents.find(a => a.id === activeId))
-        || lastSpeaker || (activeId && agents.find(a => a.id === activeId)) || c.agent;
-      const working = workingConvos.has(c.id);
-      const unread = !working && unreadConvos.has(c.id);
-      const indicator = working ? '<span class="convo-working"></span>' : unread ? '<span class="convo-unread"></span>' : '';
-      const pinIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="${c.pinned ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 11V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v7"/><path d="M5 17h14"/><path d="M7 11l-2 6h14l-2-6"/></svg>`;
-      const pinIndicator = c.pinned ? `<svg class="convo-pin-indicator" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 11V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v7"/><path d="M5 17h14"/><path d="M7 11l-2 6h14l-2-6"/></svg>` : '';
-      h += `<div class="convo-item ${activeConversation?.id === c.id ? 'active' : ''} ${c.pinned ? 'pinned-convo' : ''}" onclick="openConversation('${c.id}')">
-        <button class="convo-pin" onclick="togglePin('${c.id}', event)" title="${c.pinned ? 'Unpin conversation' : 'Pin conversation'}">${pinIcon}</button>
-        <div class="convo-title-row"><span class="convo-title">${esc(c.title)}</span>${pinIndicator}</div>
-        <span class="convo-preview">${esc(preview)}</span>
-        <div class="convo-meta"><div class="avatar xs" style="background:${displayAgent.colour}">${displayAgent.icon}</div><span>${displayAgent.displayName}</span>${indicator}</div>
-      </div>`;
-    }
-  }
-  if (previous.length) {
-    const prevEl = document.getElementById('prev-convos');
-    const prevOpen = prevEl ? !prevEl.classList.contains('hidden') : false;
-    h += `<div style="padding:12px 8px 6px"><span class="sidebar-label" style="cursor:pointer" onclick="document.getElementById('prev-convos').classList.toggle('hidden')">Previous (${previous.length}) &#x25BE;</span></div>`;
-    h += `<div id="prev-convos" class="${prevOpen ? '' : 'hidden'}">`;
-    for (const c of previous) {
-      const agentGone = !agents.find(a => a.id === c.agentId);
-      const opacity = agentGone ? 'opacity:0.5' : 'opacity:0.8';
-      const suffix = agentGone ? ' (agent removed)' : '';
-      const pState = convoState[c.id];
-      const pActiveId = pState?.activeAgentId;
-      const pLastSpeaker = c.lastAgentId && agents.find(a => a.id === c.lastAgentId);
-      const pDisplayAgent = pLastSpeaker || (pActiveId && agents.find(a => a.id === pActiveId)) || c.agent;
-      const pWorking = workingConvos.has(c.id);
-      const pUnread = !pWorking && unreadConvos.has(c.id);
-      const pIndicator = pWorking ? '<span class="convo-working"></span>' : pUnread ? '<span class="convo-unread"></span>' : '';
-      const pPreview = c.lastMessagePreview || '';
-      h += `<div class="convo-item ${activeConversation?.id === c.id ? 'active' : ''}" onclick="openConversation('${c.id}')" style="${opacity}">
-        <button class="convo-delete" onclick="deleteConversation('${c.id}', event)" title="Delete conversation"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
-        <span class="convo-title">${esc(c.title)}${suffix}</span>
-        ${pPreview ? `<span class="convo-preview">${esc(pPreview)}</span>` : ''}
-        <div class="convo-meta"><div class="avatar xs" style="background:${pDisplayAgent.colour}">${pDisplayAgent.icon}</div><span>${pDisplayAgent.displayName}</span>${pIndicator}</div>
-      </div>`;
-    }
-    h += `</div>`;
-  }
+  // Section A (Pinned). Pinned items render with the active-session shape;
+  // pinned-while-working gets a subtle border highlight via the pinned-working class.
+  for (const c of sectionA) h += renderConvoItem(c, 'pinned');
+  // Section B (Active). Items keep their existing affordances based on c.persisted:
+  // active-session items show the pin button; persisted-from-disk items show the
+  // delete button (matching the previous "Previous" section). All sorted together
+  // by tier > lastActiveAt.
+  for (const c of sectionB) h += renderConvoItem(c, c.persisted ? 'previous' : 'current');
+  // Section C (Done). Collapsible third section, with an unread dot on the header
+  // when any done conversation has unread messages.
   if (done.length) {
     const doneEl = document.getElementById('done-convos');
     const doneOpen = doneEl ? !doneEl.classList.contains('hidden') : false;
-    h += `<div style="padding:12px 8px 6px"><span class="sidebar-label" style="cursor:pointer" onclick="document.getElementById('done-convos').classList.toggle('hidden')">Done (${done.length}) &#x25BE;</span></div>`;
+    const doneHasUnread = done.some(c => unreadConvos.has(c.id));
+    const unreadDot = doneHasUnread ? '<span class="sidebar-label-unread" title="Unread in Done"></span>' : '';
+    h += `<div style="padding:12px 8px 6px"><span class="sidebar-label" style="cursor:pointer" onclick="document.getElementById('done-convos').classList.toggle('hidden')">Done (${done.length})${unreadDot} &#x25BE;</span></div>`;
     h += `<div id="done-convos" class="${doneOpen ? '' : 'hidden'}">`;
-    for (const c of done) {
-      const lastMsg = c.messages.filter(m => m.role === 'agent').pop();
-      const preview = lastMsg ? stripMd(lastMsg.content).substring(0, 50) + '...' : (c.lastMessagePreview || '');
-      const dState = convoState[c.id];
-      const dActiveId = dState?.activeAgentId;
-      const dLastSpeaker = c.lastAgentId && agents.find(a => a.id === c.lastAgentId);
-      const dDisplayAgent = dLastSpeaker || (dActiveId && agents.find(a => a.id === dActiveId)) || c.agent;
-      const dWorking = workingConvos.has(c.id);
-      const dUnread = !dWorking && unreadConvos.has(c.id);
-      const dIndicator = dWorking ? '<span class="convo-working"></span>' : dUnread ? '<span class="convo-unread"></span>' : '';
-      h += `<div class="convo-item ${activeConversation?.id === c.id ? 'active' : ''}" onclick="openConversation('${c.id}')" style="opacity:0.7">
-        <button class="convo-delete" onclick="deleteConversation('${c.id}', event)" title="Delete conversation"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
-        <span class="convo-title">${esc(c.title)}</span>
-        <span class="convo-preview">${esc(preview)}</span>
-        <div class="convo-meta"><div class="avatar xs" style="background:${dDisplayAgent.colour}">${dDisplayAgent.icon}</div><span>${dDisplayAgent.displayName}</span>${dIndicator}</div>
-      </div>`;
-    }
+    for (const c of done) h += renderConvoItem(c, 'done');
     h += `</div>`;
   }
-  document.getElementById('convo-list').innerHTML = h;
+  // Apply with a view transition when supported, so tier shifts in Section B
+  // (working -> idle, etc.) animate over ~600ms rather than snapping. The
+  // ::view-transition-group(*) duration override in CSS controls the timing.
+  const target = document.getElementById('convo-list');
+  if (document.startViewTransition) {
+    document.startViewTransition(() => { target.innerHTML = h; });
+  } else {
+    target.innerHTML = h;
+  }
+}
+
+// Per-item render helper for the conversation sidebar. Variants:
+//   'pinned'   -> Section A. Pin button, working-aware agent attribution,
+//                 pinned-convo border, pinned-working border highlight if busy.
+//   'current'  -> Section B, active-session item. Pin button, working-aware.
+//   'previous' -> Section B, persisted-from-disk item. Delete button, opacity
+//                 dimming if the agent has since been removed.
+//   'done'     -> Section C. Delete button, fixed 0.7 opacity.
+function renderConvoItem(c, variant) {
+  const isActive = activeConversation?.id === c.id;
+  const cState = convoState[c.id];
+  const activeId = cState?.activeAgentId;
+  const lastSpeaker = c.lastAgentId && agents.find(a => a.id === c.lastAgentId);
+  const working = workingConvos.has(c.id);
+  const unread = !working && unreadConvos.has(c.id);
+  const liveStyle = (variant === 'pinned' || variant === 'current');
+
+  // Display agent: live variants use the working-aware fallback chain; the
+  // others use the persisted shape (last speaker, then active, then convo agent).
+  const displayAgent = liveStyle
+    ? ((working && activeId && agents.find(a => a.id === activeId))
+       || lastSpeaker
+       || (activeId && agents.find(a => a.id === activeId))
+       || c.agent)
+    : (lastSpeaker || (activeId && agents.find(a => a.id === activeId)) || c.agent);
+
+  // Preview text. Lengths and sources match the previous per-section render.
+  let preview;
+  if (variant === 'previous') {
+    preview = c.lastMessagePreview || '';
+  } else if (variant === 'done') {
+    const lastMsg = c.messages.filter(m => m.role === 'agent').pop();
+    preview = lastMsg ? stripMd(lastMsg.content).substring(0, 50) + '...' : (c.lastMessagePreview || '');
+  } else {
+    const lastMsg = c.messages.filter(m => m.role === 'agent').pop();
+    preview = lastMsg ? stripMd(lastMsg.content).substring(0, 60) + '...' : (c.lastMessagePreview || 'No messages yet');
+  }
+
+  const indicator = working ? '<span class="convo-working"></span>' : unread ? '<span class="convo-unread"></span>' : '';
+
+  const classes = ['convo-item'];
+  if (isActive) classes.push('active');
+  if (c.pinned) classes.push('pinned-convo');
+  if (variant === 'pinned' && working) classes.push('pinned-working');
+
+  // view-transition-name must be a valid CSS ident; guard against unusual id chars.
+  const vtName = `convo-${String(c.id).replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+  const inline = [`view-transition-name: ${vtName}`];
+  if (variant === 'previous') {
+    const agentGone = !agents.find(a => a.id === c.agentId);
+    inline.push(agentGone ? 'opacity: 0.5' : 'opacity: 0.8');
+  } else if (variant === 'done') {
+    inline.push('opacity: 0.7');
+  }
+  const styleAttr = `style="${inline.join('; ')}"`;
+
+  const agentGone = variant === 'previous' && !agents.find(a => a.id === c.agentId);
+  const titleSuffix = agentGone ? ' (agent removed)' : '';
+  const pinIndicatorSvg = c.pinned
+    ? `<svg class="convo-pin-indicator" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 11V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v7"/><path d="M5 17h14"/><path d="M7 11l-2 6h14l-2-6"/></svg>`
+    : '';
+  const titleSection = liveStyle
+    ? `<div class="convo-title-row"><span class="convo-title">${esc(c.title)}</span>${pinIndicatorSvg}</div>`
+    : `<span class="convo-title">${esc(c.title)}${titleSuffix}</span>`;
+
+  let leftButton;
+  if (liveStyle) {
+    const pinIconSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="${c.pinned ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 11V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v7"/><path d="M5 17h14"/><path d="M7 11l-2 6h14l-2-6"/></svg>`;
+    leftButton = `<button class="convo-pin" onclick="togglePin('${c.id}', event)" title="${c.pinned ? 'Unpin conversation' : 'Pin conversation'}">${pinIconSvg}</button>`;
+  } else {
+    const deleteSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
+    leftButton = `<button class="convo-delete" onclick="deleteConversation('${c.id}', event)" title="Delete conversation">${deleteSvg}</button>`;
+  }
+
+  return `<div class="${classes.join(' ')}" ${styleAttr} onclick="openConversation('${c.id}')">
+    ${leftButton}
+    ${titleSection}
+    ${preview ? `<span class="convo-preview">${esc(preview)}</span>` : ''}
+    <div class="convo-meta"><div class="avatar xs" style="background:${displayAgent.colour}">${displayAgent.icon}</div><span>${displayAgent.displayName}</span>${indicator}</div>
+  </div>`;
 }
 
 // ===== CONVERSATION SEARCH =====
@@ -1852,6 +1898,9 @@ function finishProcessing(convoId) {
   renderConvoList();
   const isActive = activeConversation?.id === convoId;
   const convo = conversations.find(c=>c.id===convoId);
+  // Update lastActiveAt on agent finish so the conversation moves cleanly from
+  // Section B's working tier to its idle tier in the sidebar order.
+  if (convo) persistConversation(convo);
 
   if(isActive) {
     const tt=document.getElementById('thinking-indicator'); if(tt) tt.remove();
