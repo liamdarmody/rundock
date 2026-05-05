@@ -1742,7 +1742,11 @@ function openConversation(id) {
   activeConversation=c;
   unreadConvos.delete(id);
   updateUnreadBadge();
-  if(c.status==='done') { c.status='active'; }
+  // Done status is the user's explicit "I'm finished with this thread" state;
+  // opening a Done conversation to read past context should not silently
+  // override that. Status flips back to active only on deliberate signals:
+  // sending a new message (handled in sendMessage) or clicking the Active/Done
+  // badge in the chat header (handled in toggleConvoStatus).
   setupChat(c);
   const el=document.getElementById('messages'); el.innerHTML='';
   if(c.persisted && c.messages.length===0 && (c.sessionId || (c.sessionIds && c.sessionIds.length))) {
