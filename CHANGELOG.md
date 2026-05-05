@@ -14,7 +14,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Changed
 
-- **Continuing a Done conversation reactivates it.** Sending a new message in a conversation marked Done now flips its status back to Active automatically, similar to replying to an archived email. The conversation moves out of the collapsed Done section into Active, and the chat header badge updates to match. Status remains a manual toggle elsewhere; only the user's deliberate act of sending a message triggers reactivation.
+- **Continuing a Done conversation reactivates it; opening one to read does not.** Sending a new message in a conversation marked Done now flips its status back to Active, similar to replying to an archived email. Opening a Done conversation just to look at past context no longer reactivates it (previous behaviour silently flipped the status the moment you clicked the row, defeating the user's explicit "I'm done with this" state). Status changes only on deliberate signals: sending a new message, or clicking the Active/Done badge in the chat header.
 
 - **Conversation sidebar surfaces what needs attention.** Pinned conversations sort by last activity. Active conversations sort with working agents first, then unread, then idle. Idle conversations older than seven days fold under a collapsible "Older" section so the sidebar stays compact, while working and unread always show at the top regardless of age. Done stays collapsed at the bottom with an unread dot when any done conversation has unread messages. Pinned conversations whose agent is busy show a green left border. The Active/Done badge in the chat header now reveals "Mark Done" or "Mark Active" on hover so the toggle is discoverable.
 
