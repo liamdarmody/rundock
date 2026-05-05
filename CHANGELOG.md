@@ -4,7 +4,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## Unreleased: Sidebar Polish & Windows Readiness
+## 0.8.9: Sidebar Polish & Windows Readiness (2026-05-05)
 
 ### Added
 
