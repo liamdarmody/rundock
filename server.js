@@ -2048,7 +2048,7 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
     cwd: WORKSPACE,
     env: getSpawnEnv(convoId),
     stdio: ['pipe', 'pipe', 'pipe']
-  });
+  }, (err) => handleChatSpawnError(err, convoId));
 
   const orchEntry = {
     process: proc, buffer: '', processId, agentId: orchestrator.id,
@@ -2113,6 +2113,7 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
   });
 
   proc.on('close', (orchCode) => {
+    if (orchEntry.spawnFailed) return; // error handler already surfaced
     orchEntry.exited = true;
     const current = chatProcesses.get(convoId);
     if (current === orchEntry) chatProcesses.delete(convoId);
@@ -2226,7 +2227,7 @@ function handleDelegation(msg, processes) {
     cwd: WORKSPACE,
     env: getSpawnEnv(convoId),
     stdio: ['pipe', 'pipe', 'pipe']
-  });
+  }, (err) => handleChatSpawnError(err, convoId));
 
   const delegateEntry = {
     process: delegateProc, buffer: '', processId: delegateProcessId,
@@ -2324,6 +2325,7 @@ function handleDelegation(msg, processes) {
   });
 
   delegateProc.on('close', (code) => {
+    if (delegateEntry.spawnFailed) return; // error handler already surfaced
     delegateEntry.exited = true;
     const current = processes.get(convoId);
     if (current !== delegateEntry) return;
@@ -2448,7 +2450,7 @@ function handleDelegation(msg, processes) {
         cwd: WORKSPACE,
         env: getSpawnEnv(convoId),
         stdio: ['pipe', 'pipe', 'pipe']
-      });
+      }, (err) => handleChatSpawnError(err, convoId));
 
       const resumeEntry = {
         process: resumeProc, buffer: '', processId: resumeProcessId,
@@ -2539,6 +2541,7 @@ function handleDelegation(msg, processes) {
         }
       });
       resumeProc.on('close', (rCode) => {
+        if (resumeEntry.spawnFailed) return; // error handler already surfaced
         resumeEntry.exited = true;
         const cur = processes.get(convoId);
 
@@ -2723,7 +2726,7 @@ wss.on('connection', (ws) => {
               cwd: WORKSPACE,
               env: getSpawnEnv(convoId),
               stdio: ['pipe', 'pipe', 'pipe']
-            });
+            }, (err) => handleChatSpawnError(err, convoId));
 
             const entry = {
               process: proc, buffer: '', processId, agentId: msg.agent || 'default',
@@ -2769,6 +2772,7 @@ wss.on('connection', (ws) => {
             });
 
             proc.on('close', (code) => {
+              if (entry.spawnFailed) return; // error handler already surfaced
               entry.exited = true;
               const current = processes.get(convoId);
               if (current && current.processId !== processId) return;
@@ -2856,7 +2860,7 @@ wss.on('connection', (ws) => {
             cwd: WORKSPACE,
             env: getSpawnEnv(convoId),
             stdio: ['pipe', 'pipe', 'pipe']
-          });
+          }, (err) => handleChatSpawnError(err, convoId));
 
           const entry = { process: proc, buffer: '', processId, agentId: msg.agent || 'default', responseText: '', exited: false, resultSent: false, lastUserMessage: msg.content, toolCalls: [], turnStartTime: Date.now() };
           processes.set(convoId, entry);
@@ -2871,6 +2875,7 @@ wss.on('connection', (ws) => {
           });
 
           proc.on('close', (code) => {
+            if (entry.spawnFailed) return; // error handler already surfaced
             entry.exited = true;
             const current = processes.get(convoId);
             if (current && current.processId !== processId) return;
@@ -3876,14 +3881,80 @@ function cleanOrphanedProcesses() {
   savePidFile([]);
 }
 
+// Track recent spawn errors per conversation for dedupe within a 30-second window.
+// Without this, a fully broken install could spam system/info messages on every retry.
+const recentSpawnErrors = new Map(); // convoId -> { code, ts }
+
+// Surface a spawn-error to the chat with code-specific copy, dedupe consecutive
+// identical errors per conversation, and mark the corresponding chatProcesses
+// entry so the close handler can skip its user-facing emissions.
+function handleChatSpawnError(err, convoId) {
+  try {
+    const entry = chatProcesses.get(convoId);
+
+    // Mark spawn failure so the close handler (if it ever fires) can short-circuit.
+    if (entry) entry.spawnFailed = true;
+
+    // Skip user-facing surfacing on cancelled processes.
+    if (entry && entry.cancelled) return;
+
+    // Dedupe consecutive identical errors per conversation within 30 seconds.
+    const key = String(convoId || '');
+    const last = recentSpawnErrors.get(key);
+    const now = Date.now();
+    if (last && last.code === err.code && (now - last.ts) < 30000) {
+      console.error(`[SpawnError] convo=${convoId} code=${err.code} (deduped within 30s)`);
+      return;
+    }
+    recentSpawnErrors.set(key, { code: err.code, ts: now });
+
+    // Distinct copy per error code.
+    let userMessage;
+    if (err.code === 'ENOENT') {
+      userMessage = 'Claude Code not found on PATH. Run `claude --version` to check your install.';
+    } else if (err.code === 'EACCES') {
+      userMessage = "Couldn't start Claude Code: permission denied. Check your install.";
+    } else {
+      userMessage = `Couldn't start Claude Code: ${err.message}. Run \`claude --version\` to check your install.`;
+    }
+
+    safeSend(JSON.stringify({
+      type: 'system',
+      subtype: 'info',
+      content: userMessage,
+      _conversationId: convoId,
+    }));
+
+    if (convoId && entry) chatProcesses.delete(convoId);
+
+    console.error(`[SpawnError] convo=${convoId} code=${err.code || ''} msg=${err.message}`);
+  } catch (e) {
+    // A fault in this handler must not tear down the WebSocket.
+    console.error('[SpawnError] handler fault:', e);
+  }
+}
+
 // Spawn a Claude Code process with PID tracking for crash cleanup.
 // Drop-in replacement for spawn('claude', ...) that registers/unregisters PIDs.
-function spawnClaude(args, options) {
+function spawnClaude(args, options, onError) {
   const proc = spawn('claude', args, options);
   if (proc.pid) {
     registerChildPid(proc.pid);
     proc.on('close', () => unregisterChildPid(proc.pid));
   }
+  // Always attach a baseline 'error' listener so an unhandled error event
+  // cannot propagate out of the WebSocket message handler and tear down the
+  // connection. Caller-provided onError does the user-facing surfacing; this
+  // wrapper guarantees the listener exists and that the callback runs inside
+  // try/catch.
+  proc.on('error', (err) => {
+    try {
+      console.error(`[spawnClaude] spawn error code=${err.code || ''} msg=${err.message}`);
+      if (typeof onError === 'function') onError(err);
+    } catch (e) {
+      console.error('[spawnClaude] onError handler threw:', e);
+    }
+  });
   return proc;
 }
 
