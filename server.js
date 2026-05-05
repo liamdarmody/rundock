@@ -342,7 +342,7 @@ function discoverWorkspaces() {
             const agentFiles = fs.readdirSync(agentsDir).filter(f => f.endsWith('.md'));
             agentCount = agentFiles.length;
             for (const af of agentFiles) {
-              const content = fs.readFileSync(path.join(agentsDir, af), 'utf-8');
+              const content = readNormalisedFile(path.join(agentsDir, af));
               if (content.includes('type:') && content.includes('order:')) { hasRundockFrontmatter = true; break; }
             }
           } catch (e) {}
@@ -648,7 +648,7 @@ function discoverAgents() {
 
     for (const file of files) {
       try {
-        const content = fs.readFileSync(path.join(agentsDir, file), 'utf-8');
+        const content = readNormalisedFile(path.join(agentsDir, file));
         const fmText = extractFrontmatterText(content);
         const meta = parseAgentFrontmatter(content);
         const id = file.replace('.md', '');
@@ -662,7 +662,7 @@ function discoverAgents() {
 
         // If this is the default agent, merge instructions from CLAUDE.md
         if (isDefault && fs.existsSync(claudeMdPath)) {
-          instructions = fs.readFileSync(claudeMdPath, 'utf-8').substring(0, 2000);
+          instructions = readNormalisedFile(claudeMdPath).substring(0, 2000);
         }
 
         const caps = parseCapabilities(fmText);
@@ -713,7 +713,7 @@ function discoverAgents() {
   // If no default agent was found in agent files, create one from CLAUDE.md
   if (!agents.find(a => a.isDefault)) {
     if (fs.existsSync(claudeMdPath)) {
-      const content = fs.readFileSync(claudeMdPath, 'utf-8');
+      const content = readNormalisedFile(claudeMdPath);
       const nameMatch = content.match(/^#\s+(.+)/m);
       const defaultName = nameMatch ? nameMatch[1].split(/\s*[-]/)[0].trim() : 'Assistant';
       agents.unshift({
@@ -786,6 +786,17 @@ function discoverAgents() {
   _agentCache = agents;
   _agentCacheTime = Date.now();
   return agents;
+}
+
+/**
+ * Read a file as UTF-8 with line endings normalised to LF.
+ * Some platforms (notably Windows with default Git config) check files out
+ * with CRLF line endings. Several parsers in this codebase use \n-only
+ * regexes; normalising at the read boundary keeps those parsers correct
+ * without needing every regex to be CRLF-aware.
+ */
+function readNormalisedFile(filePath) {
+  return fs.readFileSync(filePath, 'utf-8').replace(/\r\n/g, '\n');
 }
 
 function extractFrontmatterText(content) {
@@ -1077,7 +1088,7 @@ function analyzeWorkspace(dir, existingAgents) {
         const defPath = path.join(src.dir, d.name, src.defFile);
         if (!fs.existsSync(defPath)) continue;
         try {
-          const content = fs.readFileSync(defPath, 'utf-8');
+          const content = readNormalisedFile(defPath);
           const parsed = parseSkillFile(content, d.name);
           allSkills.push({ id: d.name, name: parsed.displayName, description: parsed.description });
         } catch (e) {}
@@ -3290,7 +3301,7 @@ wss.on('connection', (ws) => {
       if (msg.type === 'read_file') {
         const fullPath = path.resolve(WORKSPACE, msg.path);
         if (fullPath.startsWith(path.resolve(WORKSPACE)) && fs.existsSync(fullPath)) {
-          ws.send(JSON.stringify({ type: 'file_content', path: msg.path, content: fs.readFileSync(fullPath, 'utf-8') }));
+          ws.send(JSON.stringify({ type: 'file_content', path: msg.path, content: readNormalisedFile(fullPath) }));
         }
       }
 
@@ -3675,7 +3686,7 @@ function discoverSkills(existingAgents) {
       if (!fs.existsSync(defPath)) continue;
 
       try {
-        const content = fs.readFileSync(defPath, 'utf-8');
+        const content = readNormalisedFile(defPath);
         const parsed = parseSkillFile(content, dir.name);
 
         // Match skill to agents via two methods:
