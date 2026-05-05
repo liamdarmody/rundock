@@ -1871,6 +1871,13 @@ function sendMessage() {
       statusEl.className = 'chat-convo-status active-convo';
     }
   }
+  // Bump lastActiveAt locally so the next renderConvoList sort reflects this
+  // activity immediately. Without this, the sidebar sort relies on a value
+  // that only refreshes when get_conversations re-fetches (workspace open or
+  // reload), so a freshly-active conversation stays at its old position in
+  // Pinned or in its tier within Active. The server still stamps its own
+  // value on save_conversation; the local bump just keeps the client in sync.
+  activeConversation.lastActiveAt = new Date().toISOString();
   const promptsEl=document.getElementById('chat-prompts'); if(promptsEl) promptsEl.remove();
   if(activeConversation.messages.filter(m=>m.role==='user').length===0 && !activeConversation.isSetup) { activeConversation.title=text.substring(0,50)+(text.length>50?'...':''); document.getElementById('chat-title-input').value=activeConversation.title; renderConvoList(); }
   input.value=''; input.style.height='44px'; document.getElementById('send-btn').classList.remove('active');
@@ -1936,9 +1943,15 @@ function finishProcessing(convoId) {
   renderConvoList();
   const isActive = activeConversation?.id === convoId;
   const convo = conversations.find(c=>c.id===convoId);
-  // Update lastActiveAt on agent finish so the conversation moves cleanly from
-  // Section B's working tier to its idle tier in the sidebar order.
-  if (convo) persistConversation(convo);
+  // Bump lastActiveAt locally + persist on agent finish so the conversation
+  // sorts to the top of its tier (or top of Pinned, if pinned) in the sidebar
+  // immediately. The server stamps its own value on save; the local update
+  // keeps the next render current without waiting for a get_conversations
+  // round-trip.
+  if (convo) {
+    convo.lastActiveAt = new Date().toISOString();
+    persistConversation(convo);
+  }
 
   if(isActive) {
     const tt=document.getElementById('thinking-indicator'); if(tt) tt.remove();

@@ -20,6 +20,8 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Fixed
 
+- **Sidebar sort updates immediately when a conversation becomes active.** Sending a message in a pinned conversation, or having an agent finish in any conversation, now floats that conversation to the top of its section right away. Previously the sort key (`lastActiveAt`) was only refreshed on workspace reload, so a pinned conversation that was being actively used stayed at whatever position it had when the workspace last loaded. The client now bumps the timestamp locally on user-message-send and on agent-finish; the server still stamps its own value on save, the local update just keeps the visible sidebar in sync without waiting for a round-trip.
+
 - **Spawn failures show up in chat instead of dropping the connection.** When Rundock can't start Claude Code for any reason (not installed, PATH issue, permissions), the chat now explains the cause and how to fix it, rather than disconnecting and reconnecting silently with no information.
 
 - **No duplicate Doc in the sidebar when the scaffold file is broken.** Doc appears once even if its agent file has malformed frontmatter, rather than showing twice with the same name and icon.
