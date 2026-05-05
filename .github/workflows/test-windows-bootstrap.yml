@@ -1,0 +1,103 @@
+name: Test Windows bootstrap
+
+# Smoke-tests the from-source Windows bootstrap on a real windows-latest
+# runner. Catches the failure modes that would block a beta-tester install:
+# PowerShell syntax errors, winget invocation, paths, git clone, npm install,
+# shortcut creation, re-run idempotency. Does not test the interactive
+# Claude Code consent prompt (no stdin in CI) or the launcher actually
+# starting the server.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'scripts/install-windows-source.ps1'
+      - '.github/workflows/test-windows-bootstrap.yml'
+
+jobs:
+  smoke-test:
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Stage a fake Claude Code binary so Find-Claude succeeds
+        shell: pwsh
+        run: |
+          # The bootstrap's Find-Claude function checks three priority paths
+          # before falling back to where.exe. Staging a fake binary at the
+          # highest-priority path lets the script proceed past [2/5] without
+          # the interactive consent prompt, which has no stdin in CI.
+          $fakeBin = Join-Path $env:USERPROFILE '.local\bin'
+          New-Item -ItemType Directory -Path $fakeBin -Force | Out-Null
+          $fakePath = Join-Path $fakeBin 'claude.exe'
+          Set-Content -Path $fakePath -Value 'fake' -Encoding ASCII
+          Write-Host "Staged: $fakePath"
+
+      - name: Run the bootstrap (first invocation)
+        shell: pwsh
+        run: |
+          & .\scripts\install-windows-source.ps1
+
+      - name: Verify expected files and shortcuts exist
+        shell: pwsh
+        run: |
+          $repo  = Join-Path $env:USERPROFILE 'Rundock'
+          $checks = [ordered]@{
+            'repo/package.json'           = Join-Path $repo 'package.json'
+            'repo/server.js'              = Join-Path $repo 'server.js'
+            'repo/node_modules'           = Join-Path $repo 'node_modules'
+            'repo/launch-rundock.ps1'     = Join-Path $repo 'launch-rundock.ps1'
+            'repo/.rundock-bootstrap.log' = Join-Path $repo '.rundock-bootstrap.log'
+            'Desktop shortcut'            = Join-Path $env:USERPROFILE 'Desktop\Rundock.lnk'
+            'Start Menu shortcut'         = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Rundock.lnk'
+            'Repo icon for shortcut'      = Join-Path $repo 'electron\build\icon.ico'
+          }
+          $failed = @()
+          foreach ($name in $checks.Keys) {
+            if (Test-Path $checks[$name]) {
+              Write-Host ("  OK    {0}" -f $name)
+            } else {
+              $failed += $name
+              Write-Host ("  FAIL  {0}  ({1})" -f $name, $checks[$name])
+            }
+          }
+          if ($failed.Count -gt 0) {
+            throw ("First-run verification failed: {0}" -f ($failed -join ', '))
+          }
+
+      - name: Verify shortcut targets PowerShell with the expected arguments
+        shell: pwsh
+        run: |
+          $lnk = Join-Path $env:USERPROFILE 'Desktop\Rundock.lnk'
+          $sh  = New-Object -ComObject WScript.Shell
+          $sc  = $sh.CreateShortcut($lnk)
+          if ($sc.TargetPath -notlike '*powershell.exe') {
+            throw "Shortcut target unexpected: $($sc.TargetPath)"
+          }
+          if ($sc.Arguments -notlike '*launch-rundock.ps1*') {
+            throw "Shortcut arguments unexpected: $($sc.Arguments)"
+          }
+          Write-Host "Shortcut wiring verified"
+
+      - name: Run the bootstrap again (idempotency check)
+        shell: pwsh
+        run: |
+          & .\scripts\install-windows-source.ps1
+
+      - name: Verify state stable after re-run
+        shell: pwsh
+        run: |
+          $repo = Join-Path $env:USERPROFILE 'Rundock'
+          $required = @(
+            Join-Path $repo 'package.json'
+            Join-Path $repo 'launch-rundock.ps1'
+            Join-Path $env:USERPROFILE 'Desktop\Rundock.lnk'
+            Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Rundock.lnk'
+          )
+          foreach ($p in $required) {
+            if (-not (Test-Path $p)) { throw "Missing after rerun: $p" }
+          }
+          Write-Host "Idempotency verified"
