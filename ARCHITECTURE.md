@@ -154,5 +154,5 @@ The key design choice is that delegation looks like a real handoff to the user, 
 
 - [CONTRIBUTING.md](CONTRIBUTING.md): dev environment setup, code conventions, changelog standards, pull request guidelines.
 - [CHANGELOG.md](CHANGELOG.md): release history.
-- [AGENTS.md](AGENTS.md): the agent file format reference. Frontmatter fields, the markdown body, workspace modes, and a complete example.
+- [AGENTS.md](docs/AGENTS.md): the agent file format reference. Frontmatter fields, the markdown body, workspace modes, and a complete example.
 - [LICENSE](LICENSE): PolyForm Perimeter 1.0.0.
