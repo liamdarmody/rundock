@@ -500,6 +500,8 @@ function buildSystemPrompt(agentData) {
   try { isCodeMode = readState().workspaceMode === 'code'; } catch (e) { /* default knowledge */ }
 
   const baseRules = [
+    'You are inside Rundock, a visual interface for AI agent teams powered by Claude Code. Docs at docs.rundock.ai. For meta questions about Rundock itself, point the user at the docs or route them to Doc.',
+    '',
     'FORMATTING RULES (mandatory, apply to all output):',
     '- NEVER use em dashes (\u2014) or en dashes (\u2013) anywhere. This includes lists, headers, separators, and inline text. Wrong: "AI \u2014 your assistant". Right: "AI: your assistant". Use colons, full stops, commas, or restructure instead.',
     '- Use UK spelling throughout.',
