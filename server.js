@@ -750,8 +750,15 @@ function discoverAgents() {
     return (a.order ?? 99) - (b.order ?? 99);
   });
 
-  // Inject built-in Doc if no platform agent exists
-  if (!agents.find(a => a.type === 'platform')) {
+  // Inject built-in Doc if no platform agent exists AND no rundock-guide
+  // file was discovered. The id check is defence in depth: if a
+  // rundock-guide.md exists on disk but its frontmatter failed to parse
+  // (so type is null instead of 'platform'), the file-parsed agent is
+  // already in the array under id 'rundock-guide', and pushing the
+  // built-in fallback alongside it would produce two entries with the
+  // same id and break lookups. Better to surface a degraded-but-singular
+  // Doc than a phantom duplicate.
+  if (!agents.find(a => a.type === 'platform') && !agents.find(a => a.id === 'rundock-guide')) {
     agents.push({
       id: 'rundock-guide',
       name: 'rundock-guide',
