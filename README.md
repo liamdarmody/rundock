@@ -7,6 +7,8 @@ A visual interface for AI agent teams. Built by someone running their own busine
 
 You run content, ops, sales, admin, and research. When you started, there was nobody else, so the work fell to you. A single chatbot is a single assistant. An agent platform built for developers assumes you can write code. Rundock gives you a team you can actually manage: an org chart of named specialists, conversations through the browser, and delegation that happens in front of you. One beta user described it as having a virtual team of highly paid experts, running in parallel. That is the experience.
 
+Built by [Liam Darmody](https://www.linkedin.com/in/liamdarmody/).
+
 ![Rundock app: an AI agent team org chart with the orchestrator at the top, six specialists, and a routines panel showing scheduled automations](docs/rundock-app-hero.png)
 
 ## Principles
@@ -25,7 +27,7 @@ These are the choices that shape every part of Rundock.
 
 **Open source, with one restriction.** Fork it, audit it, learn from it. Licensed under PolyForm Perimeter 1.0.0. The one thing you cannot do is use the source to build a product that competes with Rundock.
 
-**Built from real use.** I run my own business on this. The features in Rundock exist because I needed them. There is no roadmap of speculative work; there is the next thing my team needs. Most mornings, my briefing is on my desk before I open the app: a routine on the orchestrator that fires at 5am whether I am there or not.
+**Built from real use.** [I](https://liamdarmody.com) run my own business on this. The features in Rundock exist because I needed them. There is no roadmap of speculative work; there is the next thing my team needs. Most mornings, my briefing is on my desk before I open the app: a routine on the orchestrator that fires at 5am whether I am there or not.
 
 That's what Rundock is for.
 
