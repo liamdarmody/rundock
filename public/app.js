@@ -1412,8 +1412,10 @@ function setupChat(convo) {
   msgInput.style.height = 'auto';
   msgInput.style.height = '44px';
   const statusEl=document.getElementById('chat-convo-status');
-  statusEl.textContent=convo.status==='done'?'Done':'Active';
-  statusEl.className=`chat-convo-status ${convo.status==='done'?'done-convo':'active-convo'}`;
+  const isDoneSet = convo.status === 'done';
+  statusEl.querySelector('.state-label').textContent = isDoneSet ? 'Done' : 'Active';
+  statusEl.querySelector('.action-label').textContent = isDoneSet ? '↺ Mark Active' : '→ Mark Done';
+  statusEl.className = `chat-convo-status ${isDoneSet ? 'done-convo' : 'active-convo'}`;
   // Set input state based on this conversation's processing state
   msgInput.disabled = state.isProcessing;
   const sendBtn = document.getElementById('send-btn');
@@ -1468,10 +1470,12 @@ function togglePin(id, evt) {
 }
 function toggleConvoStatus() {
   if(!activeConversation) return;
-  activeConversation.status = activeConversation.status==='done'?'active':'done';
-  const statusEl=document.getElementById('chat-convo-status');
-  statusEl.textContent=activeConversation.status==='done'?'Done':'Active';
-  statusEl.className=`chat-convo-status ${activeConversation.status==='done'?'done-convo':'active-convo'}`;
+  activeConversation.status = activeConversation.status === 'done' ? 'active' : 'done';
+  const isDoneToggled = activeConversation.status === 'done';
+  const statusEl = document.getElementById('chat-convo-status');
+  statusEl.querySelector('.state-label').textContent = isDoneToggled ? 'Done' : 'Active';
+  statusEl.querySelector('.action-label').textContent = isDoneToggled ? '↺ Mark Active' : '→ Mark Done';
+  statusEl.className = `chat-convo-status ${isDoneToggled ? 'done-convo' : 'active-convo'}`;
   persistConversation(activeConversation);
   renderConvoList();
 }
@@ -1497,18 +1501,31 @@ function renderConvoList() {
   const sectionA = conversations
     .filter(c => c.pinned && c.status !== 'done')
     .sort(compareTimeDesc);
-  const sectionB = conversations
+  const sectionBAll = conversations
     .filter(c => !c.pinned && c.status !== 'done')
     .sort((a, b) => {
       const ka = tierKey(a), kb = tierKey(b);
       if (ka !== kb) return ka - kb;
       return compareTimeDesc(a, b);
     });
+  // Split Section B: working and unread tier items always render flat in Active.
+  // Idle items older than seven days fold under a collapsible "Older" section so
+  // the sidebar stays compact for users with many old conversations.
+  const OLDER_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000;
+  const nowMs = Date.now();
+  const isOlder = (c) => {
+    if (tierKey(c) !== 2) return false; // working / unread always flat
+    const lastActive = new Date(sortKeyTime(c)).getTime();
+    if (Number.isNaN(lastActive)) return false;
+    return (nowMs - lastActive) > OLDER_THRESHOLD_MS;
+  };
+  const sectionB = sectionBAll.filter(c => !isOlder(c));
+  const sectionBOlder = sectionBAll.filter(isOlder);
   const done = conversations
     .filter(c => c.status === 'done')
     .sort(compareTimeDesc);
   let h = '';
-  if (!sectionA.length && !sectionB.length && !done.length) {
+  if (!sectionA.length && !sectionB.length && !sectionBOlder.length && !done.length) {
     h = `<div style="padding:12px 16px">
       <div style="color:var(--text-2);font-size:var(--caption);line-height:1.6">No conversations yet</div>
     </div>`;
@@ -1516,32 +1533,40 @@ function renderConvoList() {
   // Section A (Pinned). Pinned items render with the active-session shape;
   // pinned-while-working gets a subtle border highlight via the pinned-working class.
   for (const c of sectionA) h += renderConvoItem(c, 'pinned');
-  // Section B (Active). Items keep their existing affordances based on c.persisted:
-  // active-session items show the pin button; persisted-from-disk items show the
-  // delete button (matching the previous "Previous" section). All sorted together
-  // by tier > lastActiveAt.
+  // Section B Recent (Active). Items keep their existing affordances based on
+  // c.persisted: active-session items show the pin button; persisted-from-disk
+  // items show the delete button. All sorted by tier > lastActiveAt.
   for (const c of sectionB) h += renderConvoItem(c, c.persisted ? 'previous' : 'current');
-  // Section C (Done). Collapsible third section, with an unread dot on the header
+  // Section B Older (collapsible). Idle items older than the threshold fold here
+  // so the sidebar stays compact. Working and unread tiers never reach this branch.
+  if (sectionBOlder.length) {
+    const olderEl = document.getElementById('older-convos');
+    const olderOpen = olderEl ? !olderEl.classList.contains('hidden') : false;
+    const olderHasUnread = sectionBOlder.some(c => unreadConvos.has(c.id));
+    const olderUnreadDot = olderHasUnread ? '<span class="sidebar-label-unread" title="Unread in Older"></span>' : '';
+    h += `<div class="sidebar-section-divider" style="cursor:pointer" onclick="document.getElementById('older-convos').classList.toggle('hidden')"><span class="sidebar-label">Older (${sectionBOlder.length})${olderUnreadDot} &#x25BE;</span></div>`;
+    h += `<div id="older-convos" class="${olderOpen ? '' : 'hidden'}">`;
+    for (const c of sectionBOlder) h += renderConvoItem(c, c.persisted ? 'previous' : 'current');
+    h += `</div>`;
+  }
+  // Section C (Done). Collapsible final section, with an unread dot on the header
   // when any done conversation has unread messages.
   if (done.length) {
     const doneEl = document.getElementById('done-convos');
     const doneOpen = doneEl ? !doneEl.classList.contains('hidden') : false;
     const doneHasUnread = done.some(c => unreadConvos.has(c.id));
     const unreadDot = doneHasUnread ? '<span class="sidebar-label-unread" title="Unread in Done"></span>' : '';
-    h += `<div style="padding:12px 8px 6px"><span class="sidebar-label" style="cursor:pointer" onclick="document.getElementById('done-convos').classList.toggle('hidden')">Done (${done.length})${unreadDot} &#x25BE;</span></div>`;
+    h += `<div class="sidebar-section-divider" style="cursor:pointer" onclick="document.getElementById('done-convos').classList.toggle('hidden')"><span class="sidebar-label">Done (${done.length})${unreadDot} &#x25BE;</span></div>`;
     h += `<div id="done-convos" class="${doneOpen ? '' : 'hidden'}">`;
     for (const c of done) h += renderConvoItem(c, 'done');
     h += `</div>`;
   }
-  // Apply with a view transition when supported, so tier shifts in Section B
-  // (working -> idle, etc.) animate over ~600ms rather than snapping. The
-  // ::view-transition-group(*) duration override in CSS controls the timing.
-  const target = document.getElementById('convo-list');
-  if (document.startViewTransition) {
-    document.startViewTransition(() => { target.innerHTML = h; });
-  } else {
-    target.innerHTML = h;
-  }
+  // Plain innerHTML swap. View transitions were tried in the initial sidebar
+  // refactor but produced visible snapshot ghosting on every render. The card
+  // spec flagged the animation timing as "usage-dependent calls worth checking
+  // at real usage before finalising"; real usage said no. Re-renders snap to
+  // the new order, matching the pattern in Slack, Linear, and similar lists.
+  document.getElementById('convo-list').innerHTML = h;
 }
 
 // Per-item render helper for the conversation sidebar. Variants:
@@ -1588,16 +1613,14 @@ function renderConvoItem(c, variant) {
   if (c.pinned) classes.push('pinned-convo');
   if (variant === 'pinned' && working) classes.push('pinned-working');
 
-  // view-transition-name must be a valid CSS ident; guard against unusual id chars.
-  const vtName = `convo-${String(c.id).replace(/[^a-zA-Z0-9_-]/g, '_')}`;
-  const inline = [`view-transition-name: ${vtName}`];
+  const inline = [];
   if (variant === 'previous') {
     const agentGone = !agents.find(a => a.id === c.agentId);
     inline.push(agentGone ? 'opacity: 0.5' : 'opacity: 0.8');
   } else if (variant === 'done') {
     inline.push('opacity: 0.7');
   }
-  const styleAttr = `style="${inline.join('; ')}"`;
+  const styleAttr = inline.length ? `style="${inline.join('; ')}"` : '';
 
   const agentGone = variant === 'previous' && !agents.find(a => a.id === c.agentId);
   const titleSuffix = agentGone ? ' (agent removed)' : '';
