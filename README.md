@@ -13,23 +13,9 @@ Built by [Liam Darmody](https://www.linkedin.com/in/liamdarmody/).
 
 ## Principles
 
-These are the choices that shape every part of Rundock.
+Five ideas shape every decision in Rundock: **local-first**, **markdown all the way down**, **the human leads**, **the team is the unit of value**, and **built from real use**.
 
-**Roles, not systems.** People think in terms of "I need someone to handle my content," not "I need a content generation pipeline." Rundock turns system-building into team-building. Same capability, completely different experience.
-
-**The team is the unit of value.** Individual agents are commodities. A configured team that works together, with delegation chains, shared knowledge, and an org chart you can read at a glance, is what nobody else sells. The team is the product.
-
-**The human leads. The AI delivers.** You provide taste, direction, and decisions. The AI team handles execution. Every feature reinforces your authority and judgement, never replaces it. That is the entire brand.
-
-**Local-first.** The whole stack runs on your machine. Your files, your agents, your conversations stay on disk in your workspace. Rundock makes zero outbound network calls.
-
-**Markdown all the way down.** Your agents and skills are plain markdown files in your workspace. Take them with you whenever you like. They work in Rundock, in Claude Code on the terminal, in Claude.ai, and in any tool that supports Anthropic's agent format.
-
-**Open source, with one restriction.** Fork it, audit it, learn from it. Licensed under PolyForm Perimeter 1.0.0. The one thing you cannot do is use the source to build a product that competes with Rundock.
-
-**Built from real use.** [I run my own business](https://liamdarmody.com) on this. The features in Rundock exist because I needed them. There is no roadmap of speculative work; there is the next thing my team needs. Most mornings, my briefing is on my desk before I open the app: a routine on the orchestrator that fires at 5am whether I am there or not.
-
-That's what Rundock is for.
+Read the full version at [docs.rundock.ai/principles](https://docs.rundock.ai/principles).
 
 ## Getting started
 
@@ -105,7 +91,7 @@ The entire stack runs on your machine. Rundock never sends your files, your agen
 
 ## Licence
 
-PolyForm Perimeter 1.0.0. See [LICENSE](LICENSE).
+PolyForm Perimeter 1.0.0. Fork it, audit it, learn from it. The one thing you cannot do is use the source to build a product that competes with Rundock. See [LICENSE](LICENSE) for the full terms.
 
 ## Feedback
 
