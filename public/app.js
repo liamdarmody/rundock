@@ -1413,10 +1413,10 @@ function setupChat(convo) {
   msgInput.style.height = 'auto';
   msgInput.style.height = '44px';
   const statusEl=document.getElementById('chat-convo-status');
-  const isDoneSet = convo.status === 'done';
-  statusEl.querySelector('.state-label').textContent = isDoneSet ? 'Done' : 'Active';
-  statusEl.querySelector('.action-label').textContent = isDoneSet ? '↺ Mark Active' : '→ Mark Done';
-  statusEl.className = `chat-convo-status ${isDoneSet ? 'done-convo' : 'active-convo'}`;
+  const isArchivedSet = convo.status === 'done';
+  statusEl.querySelector('.state-label').textContent = isArchivedSet ? 'Archived' : 'Active';
+  statusEl.querySelector('.action-label').textContent = isArchivedSet ? '↺ Unarchive' : '→ Archive';
+  statusEl.className = `chat-convo-status ${isArchivedSet ? 'archived-convo' : 'active-convo'}`;
   // Set input state based on this conversation's processing state
   msgInput.disabled = state.isProcessing;
   const sendBtn = document.getElementById('send-btn');
@@ -1460,11 +1460,14 @@ function deleteConversation(id, evt) {
   }
   renderConvoList();
 }
-// Mark a conversation as Done from the sidebar. The action is the primary
-// triage affordance for persisted (not-done, not-pinned) conversations: it
-// moves the row out of the main list into the Done section, where the soft-
-// delete affordance lives. Mirrors the lifecycle Active -> Done -> Delete.
-function markConversationDone(id, evt) {
+// Archive a conversation from the sidebar. The action is the primary triage
+// affordance for persisted (not-yet-archived, not-pinned) conversations: it
+// moves the row out of the main list into the Archived section, where the
+// soft-delete affordance lives. Mirrors the lifecycle Active -> Archived ->
+// Delete. The internal status string remains 'done' for backwards
+// compatibility with existing on-disk conversations; only user-facing labels
+// use Archive vocabulary.
+function archiveConversation(id, evt) {
   evt.stopPropagation(); // Don't open the conversation
   const convo = conversations.find(c => c.id === id);
   if (!convo || convo.status === 'done') return;
@@ -1486,11 +1489,11 @@ function togglePin(id, evt) {
 function toggleConvoStatus() {
   if(!activeConversation) return;
   activeConversation.status = activeConversation.status === 'done' ? 'active' : 'done';
-  const isDoneToggled = activeConversation.status === 'done';
+  const isArchivedToggled = activeConversation.status === 'done';
   const statusEl = document.getElementById('chat-convo-status');
-  statusEl.querySelector('.state-label').textContent = isDoneToggled ? 'Done' : 'Active';
-  statusEl.querySelector('.action-label').textContent = isDoneToggled ? '↺ Mark Active' : '→ Mark Done';
-  statusEl.className = `chat-convo-status ${isDoneToggled ? 'done-convo' : 'active-convo'}`;
+  statusEl.querySelector('.state-label').textContent = isArchivedToggled ? 'Archived' : 'Active';
+  statusEl.querySelector('.action-label').textContent = isArchivedToggled ? '↺ Unarchive' : '→ Archive';
+  statusEl.className = `chat-convo-status ${isArchivedToggled ? 'archived-convo' : 'active-convo'}`;
   persistConversation(activeConversation);
   renderConvoList();
 }
@@ -1570,12 +1573,12 @@ function renderConvoList() {
   if (activeSidebarPill === 'pinned') main = main.filter(c => c.pinned === true);
   main.sort(compareTimeDesc);
 
-  const done = conversations
+  const archived = conversations
     .filter(c => c.status === 'done')
     .sort(compareTimeDesc);
 
   let h = '';
-  if (conversationsLoaded && !main.length && !done.length) {
+  if (conversationsLoaded && !main.length && !archived.length) {
     h = `<div style="padding:12px 16px">
       <div style="color:var(--text-2);font-size:var(--caption);line-height:1.6">No conversations yet</div>
     </div>`;
@@ -1588,16 +1591,17 @@ function renderConvoList() {
     const variant = (c.persisted && !c.pinned) ? 'previous' : 'current';
     h += renderConvoItem(c, variant);
   }
-  // Done section preserved from 0.8.9: collapsible at the bottom, with an unread
-  // dot on the header when any done conversation has unread messages.
-  if (done.length) {
-    const doneEl = document.getElementById('done-convos');
-    const doneOpen = doneEl ? !doneEl.classList.contains('hidden') : false;
-    const doneHasUnread = done.some(c => unreadConvos.has(c.id));
-    const unreadDot = doneHasUnread ? '<span class="sidebar-label-unread" title="Unread in Done"></span>' : '';
-    h += `<div class="sidebar-section-divider" style="cursor:pointer" onclick="document.getElementById('done-convos').classList.toggle('hidden')"><span class="sidebar-label">Done (${done.length})${unreadDot} &#x25BE;</span></div>`;
-    h += `<div id="done-convos" class="${doneOpen ? '' : 'hidden'}">`;
-    for (const c of done) h += renderConvoItem(c, 'done');
+  // Archived section preserved from 0.8.9: collapsible at the bottom, with an
+  // unread dot on the header when any archived conversation has unread
+  // messages.
+  if (archived.length) {
+    const archivedEl = document.getElementById('archived-convos');
+    const archivedOpen = archivedEl ? !archivedEl.classList.contains('hidden') : false;
+    const archivedHasUnread = archived.some(c => unreadConvos.has(c.id));
+    const unreadDot = archivedHasUnread ? '<span class="sidebar-label-unread" title="Unread in Archive"></span>' : '';
+    h += `<div class="sidebar-section-divider" style="cursor:pointer" onclick="document.getElementById('archived-convos').classList.toggle('hidden')"><span class="sidebar-label">Archived (${archived.length})${unreadDot} &#x25BE;</span></div>`;
+    h += `<div id="archived-convos" class="${archivedOpen ? '' : 'hidden'}">`;
+    for (const c of archived) h += renderConvoItem(c, 'done');
     h += `</div>`;
   }
   document.getElementById('convo-list').innerHTML = h;
@@ -1676,19 +1680,21 @@ function renderConvoItem(c, variant) {
   // Action button per variant. Tooltips use data-tooltip (not title) so the
   // custom CSS tooltip layer can surface them on immediate hover; native title
   // tooltips were behind two compounding fade-in delays and easy to miss.
+  // Tooltip copy drops the "conversation" noun since the user is already in
+  // the Conversations sidebar.
   //   'current'  -> pin / unpin (live items, plus pinned-and-persisted)
-  //   'previous' -> mark done (persisted, not yet done; the triage action)
-  //   'done'     -> delete (persisted and already done; the soft delete)
+  //   'previous' -> archive (persisted, not yet archived; the triage action)
+  //   'done'     -> delete (persisted and already archived; the soft delete)
   let leftButton;
   if (liveStyle) {
     const pinIconSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="${c.pinned ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 11V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v7"/><path d="M5 17h14"/><path d="M7 11l-2 6h14l-2-6"/></svg>`;
-    leftButton = `<button class="convo-pin" onclick="togglePin('${c.id}', event)" data-tooltip="${c.pinned ? 'Unpin conversation' : 'Pin conversation'}">${pinIconSvg}</button>`;
+    leftButton = `<button class="convo-pin" onclick="togglePin('${c.id}', event)" data-tooltip="${c.pinned ? 'Unpin' : 'Pin'}">${pinIconSvg}</button>`;
   } else if (variant === 'previous') {
     const checkSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
-    leftButton = `<button class="convo-done-mark" onclick="markConversationDone('${c.id}', event)" data-tooltip="Mark conversation as Done">${checkSvg}</button>`;
+    leftButton = `<button class="convo-archive" onclick="archiveConversation('${c.id}', event)" data-tooltip="Archive">${checkSvg}</button>`;
   } else {
     const deleteSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
-    leftButton = `<button class="convo-delete" onclick="deleteConversation('${c.id}', event)" data-tooltip="Delete conversation">${deleteSvg}</button>`;
+    leftButton = `<button class="convo-delete" onclick="deleteConversation('${c.id}', event)" data-tooltip="Delete">${deleteSvg}</button>`;
   }
 
   return `<div class="${classes.join(' ')}" ${styleAttr} onclick="openConversation('${c.id}')">
@@ -1922,7 +1928,7 @@ function sendMessage() {
       const stateLabel = statusEl.querySelector('.state-label');
       const actionLabel = statusEl.querySelector('.action-label');
       if (stateLabel) stateLabel.textContent = 'Active';
-      if (actionLabel) actionLabel.textContent = '→ Mark Done';
+      if (actionLabel) actionLabel.textContent = '→ Archive';
       statusEl.className = 'chat-convo-status active-convo';
     }
   }
