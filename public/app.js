@@ -1677,8 +1677,8 @@ function renderConvoItem(c, variant) {
   // custom CSS tooltip layer can surface them on immediate hover; native title
   // tooltips were behind two compounding fade-in delays and easy to miss.
   //   'current'  -> pin / unpin (live items, plus pinned-and-persisted)
-  //   'previous' -> mark done (persisted, not yet done — the triage action)
-  //   'done'     -> delete (persisted and already done — soft delete)
+  //   'previous' -> mark done (persisted, not yet done; the triage action)
+  //   'done'     -> delete (persisted and already done; the soft delete)
   let leftButton;
   if (liveStyle) {
     const pinIconSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="${c.pinned ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 11V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v7"/><path d="M5 17h14"/><path d="M7 11l-2 6h14l-2-6"/></svg>`;
