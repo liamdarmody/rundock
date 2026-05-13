@@ -107,12 +107,12 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .pill:hover { border-color: var(--text-2); color: var(--text-1); }
 .pill.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
-/* Mark Done sidebar action (replaces delete on persisted, not-done items).
+/* Archive sidebar action (replaces delete on persisted, not-yet-archived items).
    Mirrors .convo-delete shape; hover uses a neutral bright text colour rather
-   than danger red because marking done is non-destructive. */
-.convo-done-mark { position: absolute; top: 8px; right: 6px; width: 24px; height: 24px; border: none; background: transparent; color: var(--text-3); cursor: pointer; border-radius: 4px; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.15s ease, color 0.15s ease; padding: 0; z-index: 1; }
-.convo-item:hover .convo-done-mark { opacity: 1; }
-.convo-done-mark:hover { color: var(--text-1); background: var(--surface); }
+   than danger red because archiving is non-destructive. */
+.convo-archive { position: absolute; top: 8px; right: 6px; width: 24px; height: 24px; border: none; background: transparent; color: var(--text-3); cursor: pointer; border-radius: 4px; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.15s ease, color 0.15s ease; padding: 0; z-index: 1; }
+.convo-item:hover .convo-archive { opacity: 1; }
+.convo-archive:hover { color: var(--text-1); background: var(--surface); }
 
 /* Custom tooltip layer for sidebar action buttons. Replaces the native HTML
    title tooltips: combined with the buttons' fade-in opacity, native tooltips
@@ -120,7 +120,7 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
    data-tooltip via attr() so the native tooltip is not also surfaced. */
 .convo-pin[data-tooltip]:hover::after,
 .convo-delete[data-tooltip]:hover::after,
-.convo-done-mark[data-tooltip]:hover::after {
+.convo-archive[data-tooltip]:hover::after {
   content: attr(data-tooltip);
   position: absolute;
   top: calc(100% + 4px);
@@ -237,8 +237,8 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .chat-convo-status { font-size: var(--caption); font-weight: 600; padding: 3px 10px; border-radius: 6px; cursor: pointer; transition: all 0.15s ease; flex-shrink: 0; }
 .chat-convo-status.active-convo { background: rgba(107,198,126,0.12); color: var(--success); }
 .chat-convo-status.active-convo:hover { background: rgba(107,198,126,0.22); }
-.chat-convo-status.done-convo { background: var(--card); color: var(--text-2); }
-.chat-convo-status.done-convo:hover { background: var(--elevated); color: var(--text-1); }
+.chat-convo-status.archived-convo { background: var(--card); color: var(--text-2); }
+.chat-convo-status.archived-convo:hover { background: var(--elevated); color: var(--text-1); }
 .chat-convo-status .action-label { display: none; }
 .chat-convo-status:hover .state-label { display: none; }
 .chat-convo-status:hover .action-label { display: inline; }
@@ -684,7 +684,7 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
             <span class="chat-status" id="chat-status"></span>
           </div>
         </div>
-        <span class="chat-convo-status" id="chat-convo-status" onclick="toggleConvoStatus()"><span class="state-label">Active</span><span class="action-label">→ Mark Done</span></span>
+        <span class="chat-convo-status" id="chat-convo-status" onclick="toggleConvoStatus()"><span class="state-label">Active</span><span class="action-label">→ Archive</span></span>
       </div>
       <div class="messages" id="messages"></div>
       <div class="chat-input">
