@@ -1191,7 +1191,7 @@ function handlePersistedConversations(persisted) {
       agent: agent || { id: entry.agentId, displayName: entry.agentId, colour: 'var(--text-3)', icon: '?', prompts: [] },
       title: entry.title || 'Untitled',
       messages: [],  // No message content persisted; resume via sessionId
-      status: entry.status || 'done',
+      status: entry.status || 'archived',
       sessionId: entry.sessionId || null,
       sessionIds: entry.sessionIds || [],
       pinned: entry.pinned || false,
@@ -1224,7 +1224,7 @@ function handlePersistedConversations(persisted) {
     openConversation(processing.id);
     switchNav('conversations');
   } else {
-    const pinned = conversations.filter(c => c.pinned && c.status !== 'done');
+    const pinned = conversations.filter(c => c.pinned && c.status !== 'archived');
     if (pinned.length) {
       openConversation(pinned[0].id);
       switchNav('conversations');
@@ -1413,7 +1413,7 @@ function setupChat(convo) {
   msgInput.style.height = 'auto';
   msgInput.style.height = '44px';
   const statusEl=document.getElementById('chat-convo-status');
-  const isArchivedSet = convo.status === 'done';
+  const isArchivedSet = convo.status === 'archived';
   statusEl.querySelector('.state-label').textContent = isArchivedSet ? 'Archived' : 'Active';
   statusEl.querySelector('.action-label').textContent = isArchivedSet ? '↺ Unarchive' : '→ Archive';
   statusEl.className = `chat-convo-status ${isArchivedSet ? 'archived-convo' : 'active-convo'}`;
@@ -1452,7 +1452,7 @@ function deleteConversation(id, evt) {
   updateUnreadBadge();
   if (activeConversation?.id === id) {
     activeConversation = null;
-    const pinned = conversations.filter(c => c.pinned && c.status !== 'done');
+    const pinned = conversations.filter(c => c.pinned && c.status !== 'archived');
     if (pinned.length) { openConversation(pinned[0].id); } else { newConversation(); }
   }
   if (ws && ws.readyState === WebSocket.OPEN) {
@@ -1464,14 +1464,12 @@ function deleteConversation(id, evt) {
 // affordance for persisted (not-yet-archived, not-pinned) conversations: it
 // moves the row out of the main list into the Archived section, where the
 // soft-delete affordance lives. Mirrors the lifecycle Active -> Archived ->
-// Delete. The internal status string remains 'done' for backwards
-// compatibility with existing on-disk conversations; only user-facing labels
-// use Archive vocabulary.
+// Delete.
 function archiveConversation(id, evt) {
   evt.stopPropagation(); // Don't open the conversation
   const convo = conversations.find(c => c.id === id);
-  if (!convo || convo.status === 'done') return;
-  convo.status = 'done';
+  if (!convo || convo.status === 'archived') return;
+  convo.status = 'archived';
   convo.lastActiveAt = new Date().toISOString();
   persistConversation(convo);
   renderConvoList();
@@ -1488,8 +1486,8 @@ function togglePin(id, evt) {
 }
 function toggleConvoStatus() {
   if(!activeConversation) return;
-  activeConversation.status = activeConversation.status === 'done' ? 'active' : 'done';
-  const isArchivedToggled = activeConversation.status === 'done';
+  activeConversation.status = activeConversation.status === 'archived' ? 'active' : 'archived';
+  const isArchivedToggled = activeConversation.status === 'archived';
   const statusEl = document.getElementById('chat-convo-status');
   statusEl.querySelector('.state-label').textContent = isArchivedToggled ? 'Archived' : 'Active';
   statusEl.querySelector('.action-label').textContent = isArchivedToggled ? '↺ Unarchive' : '→ Archive';
@@ -1561,20 +1559,20 @@ function renderConvoList() {
   // empty Unread filter is just a dead state for users. If the user is sitting
   // on Unread and the last unread clears, fall back to All so they are not
   // stranded looking at an empty list.
-  const hasUnread = conversations.some(c => unreadConvos.has(c.id) && c.status !== 'done');
+  const hasUnread = conversations.some(c => unreadConvos.has(c.id) && c.status !== 'archived');
   document.getElementById('pill-unread')?.classList.toggle('hidden', !hasUnread);
   if (!hasUnread && activeSidebarPill === 'unread') {
     activeSidebarPill = 'all';
     ['all','unread','pinned'].forEach(p => document.getElementById('pill-' + p)?.classList.toggle('active', p === 'all'));
   }
 
-  let main = conversations.filter(c => c.status !== 'done');
+  let main = conversations.filter(c => c.status !== 'archived');
   if (activeSidebarPill === 'unread') main = main.filter(c => unreadConvos.has(c.id));
   if (activeSidebarPill === 'pinned') main = main.filter(c => c.pinned === true);
   main.sort(compareTimeDesc);
 
   const archived = conversations
-    .filter(c => c.status === 'done')
+    .filter(c => c.status === 'archived')
     .sort(compareTimeDesc);
 
   let h = '';
@@ -1921,7 +1919,7 @@ function sendMessage() {
   // new message as an implicit reactivation: flip the status back to active so
   // the conversation moves out of the Done section, the badge updates in the
   // chat header, and persistConversation downstream writes the change to disk.
-  if (activeConversation.status === 'done') {
+  if (activeConversation.status === 'archived') {
     activeConversation.status = 'active';
     const statusEl = document.getElementById('chat-convo-status');
     if (statusEl) {
@@ -2552,7 +2550,7 @@ function switchNav(nav) {
   if(nav==='settings') { showView('settings'); showSettingsSection('workspace'); }
   else if(nav==='files') { editorReturnView = 'editor'; if(currentFilePath && document.querySelector('.file-item.active')) { showView('editor'); } else { currentFilePath = null; document.getElementById('editor-header').classList.add('hidden'); document.getElementById('editor-content').classList.add('hidden'); document.getElementById('editor-textarea').classList.add('hidden'); document.getElementById('editor-empty').classList.remove('hidden'); showView('editor'); } }
   else if(nav==='skills') { showView('skills'); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } else if(skills.length && !currentSkillId) { selectSkill(skills[0].id); } clearSkillSearch(); }
-  else if(nav==='conversations') { if(activeConversation) { showView('chat'); if(unreadConvos.delete(activeConversation.id)) { updateUnreadBadge(); renderConvoList(); } } else { const pinned = conversations.filter(c => c.pinned && c.status !== 'done'); if(pinned.length) { openConversation(pinned[0].id); } else { newConversation(); } } }
+  else if(nav==='conversations') { if(activeConversation) { showView('chat'); if(unreadConvos.delete(activeConversation.id)) { updateUnreadBadge(); renderConvoList(); } } else { const pinned = conversations.filter(c => c.pinned && c.status !== 'archived'); if(pinned.length) { openConversation(pinned[0].id); } else { newConversation(); } } }
   else if(nav==='team') { showView('home'); renderOrgChart(); }
 }
 function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }

@@ -106,7 +106,37 @@ function rundockDir() { return path.join(WORKSPACE, '.rundock'); }
 function readConversations() {
   try {
     const file = path.join(rundockDir(), 'conversations.json');
-    return JSON.parse(fs.readFileSync(file, 'utf-8'));
+    const list = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    // One-time migration: status: 'done' -> status: 'archived'. The UI renamed
+    // Done to Archive; the data model follows so the rest of the code can
+    // assume 'archived' without a backwards-compat fallback. Idempotent:
+    // already-migrated workspaces hit no writes and no log lines.
+    let migrated = 0;
+    for (const c of list) {
+      if (c.status === 'done') {
+        c.status = 'archived';
+        migrated++;
+      }
+    }
+    if (migrated > 0) {
+      try {
+        // Snapshot the pre-migration file once before the first write so a
+        // manual recovery path exists if anything later goes wrong. Skips on
+        // every subsequent migration attempt since the backup is preserved.
+        const backupPath = file + '.pre-archive-backup';
+        if (!fs.existsSync(backupPath)) {
+          fs.copyFileSync(file, backupPath);
+        }
+        writeConversations(list);
+        console.log(`[migrate] conversations.json: ${migrated} done -> archived`);
+      } catch (err) {
+        // Migration is safe to retry: the in-memory list is already migrated
+        // for this session, and the next workspace open will attempt the
+        // write again. Do not throw; the rest of read should still return.
+        console.error('[migrate] persist failed:', err && err.message ? err.message : err);
+      }
+    }
+    return list;
   } catch (e) { return []; }
 }
 
