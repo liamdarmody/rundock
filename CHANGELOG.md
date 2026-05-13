@@ -4,6 +4,36 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** Sidebar Polish & Archive
+
+### Added
+
+- **Filter pills for the conversation sidebar.** Three pills (All, Unread, Pinned) sit between the search box and the conversation list. The list is flat, recency-sorted, and the pills narrow it to what needs attention right now. The Unread pill auto-hides when there's nothing unread, so the row stays clean.
+
+- **Recency labels on every conversation row.** Each idle conversation shows when it was last active: `HH:MM` for today, "Yesterday", day name (Monday, Tuesday...) for 2 to 6 days ago, `DD/MM/YYYY` for older. Working conversations show the pulsing green dot instead; the indicator already communicates "right now."
+
+- **Archive from the sidebar.** Hover any non-archived conversation and a ✓ button appears in the top-right. One click archives the conversation without having to open it. The bin icon now only shows on conversations you've already archived, ready for permanent delete.
+
+### Changed
+
+- **Done is now called Archive.** "Done" implied completion; the state actually does what Gmail's archive does: sets a conversation aside, keeps it findable, and reactivates it when you send a new message. Renamed throughout: the chat-header badge reads "Archived" with "Unarchive" on hover, the sidebar section is "Archived", and the action everywhere is "Archive". Existing archived conversations on your disk migrate automatically on first open; a backup of the pre-migration state is preserved at `.rundock/conversations.json.pre-archive-backup` for manual recovery if needed.
+
+- **Conversations show their state via a coloured left border.** Green for a working agent or unread messages. Orange for a pinned conversation that's neither working nor unread. No border otherwise. Replaces the older 2px pinned-only border with a colour-coded system you can scan in a single look.
+
+- **Sidebar search narrows by your active pill.** Type into search on the Unread or Pinned pill and the results stay within that filter. On the All pill, search still spans every conversation including archived, so you can still find old threads by content.
+
+- **Sidebar action tooltips appear immediately and read cleaner.** Pin / Unpin / Archive / Delete tooltips show the moment you hover (no more 500ms native-tooltip delay), and the redundant "conversation" noun is dropped: you're already in the Conversations sidebar.
+
+### Fixed
+
+- **The sidebar search clear button is vertically centred.** It used to sit 5px below the input's centre on every search across conversations, skills, and files. Now it lands on the centre.
+
+- **Empty state no longer flashes when opening a workspace.** The "Start a conversation" placeholder used to appear briefly between selecting a workspace and the conversation list loading. The main panel now stays blank until conversations have arrived, then opens the right destination directly.
+
+- **Clicking an archived conversation no longer un-archives it.** Opening an archived conversation to read its past context used to silently flip it back to Active. Status now only changes on deliberate signals: clicking Unarchive in the chat header, or sending a new message.
+
 ## 0.8.9: Sidebar Polish & Windows Readiness (2026-05-05)
 
 ### Added
