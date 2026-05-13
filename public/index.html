@@ -69,11 +69,11 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .agent-status-state.working { color: var(--success); }
 
 /* Conversation search */
-.sidebar-search-wrap { position: relative; padding: 0 8px; margin: 4px 0 10px; border-bottom: 1px solid var(--border); }
+.sidebar-search-wrap { position: relative; padding: 0 8px 10px; margin: 4px 0 0; border-bottom: 1px solid var(--border); }
 .sidebar-search { width: 100%; box-sizing: border-box; padding: 7px 28px 7px 10px; font-size: var(--caption); font-family: inherit; color: var(--text-1); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; outline: none; transition: border-color 0.15s ease; }
 .sidebar-search:focus { border-color: var(--text-2); }
 .sidebar-search::placeholder { color: var(--text-2); opacity: 0.6; }
-.sidebar-search-clear { position: absolute; right: 16px; top: 50%; transform: translateY(-50%); font-size: 16px; color: var(--text-2); cursor: pointer; line-height: 1; }
+.sidebar-search-clear { position: absolute; right: 16px; top: calc(50% - 5px); transform: translateY(-50%); font-size: 16px; color: var(--text-2); cursor: pointer; line-height: 1; }
 .sidebar-search-clear:hover { color: var(--text-1); }
 .sidebar-search-clear.hidden { display: none; }
 
