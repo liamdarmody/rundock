@@ -1816,10 +1816,12 @@ function openConversation(id) {
       conversationId: c.id,
       limit: 50
     }));
-    // Clear persisted flag: this conversation is now active in current session
+    // Mark as no longer purely persisted: messages are now in memory for this
+    // session. Status is NOT touched here: opening an archived conversation to
+    // read past context should not silently un-archive it. Status flips back
+    // to active only on deliberate signals (sendMessage handles
+    // reactivate-on-send; toggleConvoStatus handles the badge click).
     c.persisted = false;
-    c.status = 'active';
-    persistConversation(c);
     renderConvoList();
   } else {
     const historyCount = c._historyCount || 0;
