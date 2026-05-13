@@ -27,7 +27,7 @@
 const sunIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`;
 const moonIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
 
-let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false, currentWorkspacePath=null, workspaceAnalysis=null, workspaceIsEmpty=false, workspaceMode='knowledge', setupComplete=true, conversationsLoaded=false;
+let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false, currentWorkspacePath=null, workspaceAnalysis=null, workspaceIsEmpty=false, workspaceMode='knowledge', setupComplete=true, conversationsLoaded=false, activeSidebarPill='all';
 const agentLastActivity = {}; // { agentId: { time: Date, label: string } }
 // Per-conversation state: { convoId: { isProcessing, currentStreamingMsg, latestText } }
 const convoState = {};
@@ -1480,78 +1480,91 @@ function toggleConvoStatus() {
   persistConversation(activeConversation);
   renderConvoList();
 }
+// WhatsApp-style recency label. Same calendar day → HH:MM (24h). Yesterday →
+// "Yesterday". 2-6 days ago → day name. 7+ days → DD/MM/YYYY. Returns "" for
+// missing/invalid timestamps so the caller renders an empty label without a
+// conditional.
+function formatRecency(iso) {
+  if (!iso) return '';
+  const ts = new Date(iso);
+  if (Number.isNaN(ts.getTime())) return '';
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const tsDay = new Date(ts.getFullYear(), ts.getMonth(), ts.getDate());
+  const diff = Math.round((today - tsDay) / 86400000);
+  if (diff === 0) {
+    const hh = String(ts.getHours()).padStart(2, '0');
+    const mm = String(ts.getMinutes()).padStart(2, '0');
+    return hh + ':' + mm;
+  }
+  if (diff === 1) return 'Yesterday';
+  if (diff < 7) {
+    const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    return days[ts.getDay()];
+  }
+  const d = String(ts.getDate()).padStart(2, '0');
+  const m = String(ts.getMonth() + 1).padStart(2, '0');
+  return d + '/' + m + '/' + ts.getFullYear();
+}
+
+// Left-border colour class for a convo row. Green takes priority over orange so
+// a pinned conversation that becomes unread shows green, not orange.
+function convoBorderClass(c) {
+  if (workingConvos.has(c.id) || unreadConvos.has(c.id)) return 'b-unread';
+  if (c.pinned) return 'b-pinned';
+  return '';
+}
+
+// Switch the active sidebar pill filter and re-render. Reset to 'all' on
+// workspace switch via onWorkspaceReady.
+function setSidebarPill(pill) {
+  activeSidebarPill = pill;
+  ['all','unread','pinned'].forEach(p => {
+    document.getElementById('pill-' + p)?.classList.toggle('active', p === pill);
+  });
+  renderConvoList();
+}
+
 function renderConvoList() {
   // When search is active, show flat filtered results
   if (convoSearchResults !== null) {
     renderSearchResults();
     return;
   }
-  // Three sections:
-  //   A (Pinned)   pinned, non-done. Sorted by lastActiveAt desc.
-  //   B (Active)   non-pinned, non-done. Three-tier compound sort:
-  //                working > unread > idle, each by lastActiveAt desc.
-  //   C (Done)     done. Existing collapsible third section. Header
-  //                shows an unread dot when any done convo is unread.
+  // Flat list filtered by the active pill (all | unread | pinned), sorted by
+  // lastActiveAt desc. Replaces the three-section model (Pinned / Active with
+  // working/unread/idle tiers / Done) and the Older fold from 0.8.9. The Done
+  // section is preserved at the bottom as its own collapsible group; the unread
+  // and pinned signals now live on each row via the left-border state system
+  // (b-unread green, b-pinned orange) rather than as section headers.
   const sortKeyTime = c => c.lastActiveAt || c.pinnedAt || c.createdAt || '';
   const compareTimeDesc = (a, b) => sortKeyTime(b).localeCompare(sortKeyTime(a));
-  const tierKey = c => {
-    if (workingConvos.has(c.id)) return 0;
-    if (unreadConvos.has(c.id)) return 1;
-    return 2;
-  };
-  const sectionA = conversations
-    .filter(c => c.pinned && c.status !== 'done')
-    .sort(compareTimeDesc);
-  const sectionBAll = conversations
-    .filter(c => !c.pinned && c.status !== 'done')
-    .sort((a, b) => {
-      const ka = tierKey(a), kb = tierKey(b);
-      if (ka !== kb) return ka - kb;
-      return compareTimeDesc(a, b);
-    });
-  // Split Section B: working and unread tier items always render flat in Active.
-  // Idle items older than seven days fold under a collapsible "Older" section so
-  // the sidebar stays compact for users with many old conversations.
-  const OLDER_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000;
-  const nowMs = Date.now();
-  const isOlder = (c) => {
-    if (tierKey(c) !== 2) return false; // working / unread always flat
-    const lastActive = new Date(sortKeyTime(c)).getTime();
-    if (Number.isNaN(lastActive)) return false;
-    return (nowMs - lastActive) > OLDER_THRESHOLD_MS;
-  };
-  const sectionB = sectionBAll.filter(c => !isOlder(c));
-  const sectionBOlder = sectionBAll.filter(isOlder);
+
+  let main = conversations.filter(c => c.status !== 'done');
+  if (activeSidebarPill === 'unread') main = main.filter(c => unreadConvos.has(c.id));
+  if (activeSidebarPill === 'pinned') main = main.filter(c => c.pinned === true);
+  main.sort(compareTimeDesc);
+
   const done = conversations
     .filter(c => c.status === 'done')
     .sort(compareTimeDesc);
+
   let h = '';
-  if (conversationsLoaded && !sectionA.length && !sectionB.length && !sectionBOlder.length && !done.length) {
+  if (conversationsLoaded && !main.length && !done.length) {
     h = `<div style="padding:12px 16px">
       <div style="color:var(--text-2);font-size:var(--caption);line-height:1.6">No conversations yet</div>
     </div>`;
   }
-  // Section A (Pinned). Pinned items render with the active-session shape;
-  // pinned-while-working gets a subtle border highlight via the pinned-working class.
-  for (const c of sectionA) h += renderConvoItem(c, 'pinned');
-  // Section B Recent (Active). Items keep their existing affordances based on
-  // c.persisted: active-session items show the pin button; persisted-from-disk
-  // items show the delete button. All sorted by tier > lastActiveAt.
-  for (const c of sectionB) h += renderConvoItem(c, c.persisted ? 'previous' : 'current');
-  // Section B Older (collapsible). Idle items older than the threshold fold here
-  // so the sidebar stays compact. Working and unread tiers never reach this branch.
-  if (sectionBOlder.length) {
-    const olderEl = document.getElementById('older-convos');
-    const olderOpen = olderEl ? !olderEl.classList.contains('hidden') : false;
-    const olderHasUnread = sectionBOlder.some(c => unreadConvos.has(c.id));
-    const olderUnreadDot = olderHasUnread ? '<span class="sidebar-label-unread" title="Unread in Older"></span>' : '';
-    h += `<div class="sidebar-section-divider" style="cursor:pointer" onclick="document.getElementById('older-convos').classList.toggle('hidden')"><span class="sidebar-label">Older (${sectionBOlder.length})${olderUnreadDot} &#x25BE;</span></div>`;
-    h += `<div id="older-convos" class="${olderOpen ? '' : 'hidden'}">`;
-    for (const c of sectionBOlder) h += renderConvoItem(c, c.persisted ? 'previous' : 'current');
-    h += `</div>`;
+  // Flat main list. Items show the pin button (current variant) when active-
+  // session or pinned, or the delete button (previous variant) when persisted-
+  // from-disk and not pinned. Pinned-and-persisted items keep the pin button
+  // so users can still unpin them.
+  for (const c of main) {
+    const variant = (c.persisted && !c.pinned) ? 'previous' : 'current';
+    h += renderConvoItem(c, variant);
   }
-  // Section C (Done). Collapsible final section, with an unread dot on the header
-  // when any done conversation has unread messages.
+  // Done section preserved from 0.8.9: collapsible at the bottom, with an unread
+  // dot on the header when any done conversation has unread messages.
   if (done.length) {
     const doneEl = document.getElementById('done-convos');
     const doneOpen = doneEl ? !doneEl.classList.contains('hidden') : false;
@@ -1562,29 +1575,25 @@ function renderConvoList() {
     for (const c of done) h += renderConvoItem(c, 'done');
     h += `</div>`;
   }
-  // Plain innerHTML swap. View transitions were tried in the initial sidebar
-  // refactor but produced visible snapshot ghosting on every render. The card
-  // spec flagged the animation timing as "usage-dependent calls worth checking
-  // at real usage before finalising"; real usage said no. Re-renders snap to
-  // the new order, matching the pattern in Slack, Linear, and similar lists.
   document.getElementById('convo-list').innerHTML = h;
 }
 
 // Per-item render helper for the conversation sidebar. Variants:
-//   'pinned'   -> Section A. Pin button, working-aware agent attribution,
-//                 pinned-convo border, pinned-working border highlight if busy.
-//   'current'  -> Section B, active-session item. Pin button, working-aware.
-//   'previous' -> Section B, persisted-from-disk item. Delete button, opacity
+//   'current'  -> Active-session item, plus any pinned item (live or persisted).
+//                 Pin button, working-aware agent attribution.
+//   'previous' -> Non-pinned persisted-from-disk item. Delete button, opacity
 //                 dimming if the agent has since been removed.
-//   'done'     -> Section C. Delete button, fixed 0.7 opacity.
+//   'done'     -> Done section. Delete button, fixed 0.7 opacity.
+//
+// Left-border colour state lives on the row via convoBorderClass(c):
+// green for working or unread, orange for pinned-and-idle, none otherwise.
 function renderConvoItem(c, variant) {
   const isActive = activeConversation?.id === c.id;
   const cState = convoState[c.id];
   const activeId = cState?.activeAgentId;
   const lastSpeaker = c.lastAgentId && agents.find(a => a.id === c.lastAgentId);
   const working = workingConvos.has(c.id);
-  const unread = !working && unreadConvos.has(c.id);
-  const liveStyle = (variant === 'pinned' || variant === 'current');
+  const liveStyle = (variant === 'current');
 
   // Display agent: live variants use the working-aware fallback chain; the
   // others use the persisted shape (last speaker, then active, then convo agent).
@@ -1607,12 +1616,19 @@ function renderConvoItem(c, variant) {
     preview = lastMsg ? stripMd(lastMsg.content).substring(0, 60) + '...' : (c.lastMessagePreview || 'No messages yet');
   }
 
-  const indicator = working ? '<span class="convo-working"></span>' : unread ? '<span class="convo-unread"></span>' : '';
+  // Only the working dot renders inline now. Unread state is conveyed by the
+  // green left border via convoBorderClass; a separate unread dot would
+  // duplicate that signal.
+  const indicator = working ? '<span class="convo-working"></span>' : '';
+  // Recency label, right-aligned in the meta row. Omitted while the agent is
+  // working: the pulsing dot already communicates "right now" and a time value
+  // would be ambiguous.
+  const timeStr = working ? '' : `<span class="convo-time">${formatRecency(c.lastActiveAt)}</span>`;
 
   const classes = ['convo-item'];
   if (isActive) classes.push('active');
-  if (c.pinned) classes.push('pinned-convo');
-  if (variant === 'pinned' && working) classes.push('pinned-working');
+  const bc = convoBorderClass(c);
+  if (bc) classes.push(bc);
 
   const inline = [];
   if (variant === 'previous') {
@@ -1645,7 +1661,7 @@ function renderConvoItem(c, variant) {
     ${leftButton}
     ${titleSection}
     ${preview ? `<span class="convo-preview">${esc(preview)}</span>` : ''}
-    <div class="convo-meta"><div class="avatar xs" style="background:${displayAgent.colour}">${displayAgent.icon}</div><span>${displayAgent.displayName}</span>${indicator}</div>
+    <div class="convo-meta"><div class="avatar xs" style="background:${displayAgent.colour}">${displayAgent.icon}</div><span>${displayAgent.displayName}</span>${timeStr}${indicator}</div>
   </div>`;
 }
 
@@ -3174,6 +3190,8 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   // Different workspace: reset everything
   conversations = [];
   conversationsLoaded = false;
+  activeSidebarPill = 'all';
+  ['all','unread','pinned'].forEach(p => document.getElementById('pill-' + p)?.classList.toggle('active', p === 'all'));
   activeConversation = null;
   // Clear per-conversation client state that keys by convoId. Leftover entries
   // from the previous workspace can leak into nav rail indicators (unread dot,
