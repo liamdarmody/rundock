@@ -1756,7 +1756,17 @@ function handleSearchResults(d) {
 function renderSearchResults() {
   const matchIds = new Set(convoSearchResults.map(r => r.id));
   const snippetMap = new Map(convoSearchResults.filter(r => r.snippet).map(r => [r.id, r.snippet]));
-  const matched = conversations.filter(c => matchIds.has(c.id));
+  // Narrow search results by the active pill so search operates within the
+  // user's current filter rather than blowing past it. The All pill applies
+  // no extra narrowing so search can still find archived conversations by
+  // content; Unread and Pinned narrow to the same non-archived subset the
+  // main list shows.
+  let matched = conversations.filter(c => matchIds.has(c.id));
+  if (activeSidebarPill === 'unread') {
+    matched = matched.filter(c => unreadConvos.has(c.id) && c.status !== 'archived');
+  } else if (activeSidebarPill === 'pinned') {
+    matched = matched.filter(c => c.pinned === true && c.status !== 'archived');
+  }
   let h = '';
   if (!matched.length) {
     h = `<div style="padding:12px 16px">
