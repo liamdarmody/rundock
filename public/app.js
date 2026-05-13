@@ -1460,6 +1460,20 @@ function deleteConversation(id, evt) {
   }
   renderConvoList();
 }
+// Mark a conversation as Done from the sidebar. The action is the primary
+// triage affordance for persisted (not-done, not-pinned) conversations: it
+// moves the row out of the main list into the Done section, where the soft-
+// delete affordance lives. Mirrors the lifecycle Active -> Done -> Delete.
+function markConversationDone(id, evt) {
+  evt.stopPropagation(); // Don't open the conversation
+  const convo = conversations.find(c => c.id === id);
+  if (!convo || convo.status === 'done') return;
+  convo.status = 'done';
+  convo.lastActiveAt = new Date().toISOString();
+  persistConversation(convo);
+  renderConvoList();
+}
+
 function togglePin(id, evt) {
   evt.stopPropagation();
   const convo = conversations.find(c => c.id === id);
@@ -1539,6 +1553,17 @@ function renderConvoList() {
   // (b-unread green, b-pinned orange) rather than as section headers.
   const sortKeyTime = c => c.lastActiveAt || c.pinnedAt || c.createdAt || '';
   const compareTimeDesc = (a, b) => sortKeyTime(b).localeCompare(sortKeyTime(a));
+
+  // Hide the Unread pill when there are no unread (non-done) conversations: an
+  // empty Unread filter is just a dead state for users. If the user is sitting
+  // on Unread and the last unread clears, fall back to All so they are not
+  // stranded looking at an empty list.
+  const hasUnread = conversations.some(c => unreadConvos.has(c.id) && c.status !== 'done');
+  document.getElementById('pill-unread')?.classList.toggle('hidden', !hasUnread);
+  if (!hasUnread && activeSidebarPill === 'unread') {
+    activeSidebarPill = 'all';
+    ['all','unread','pinned'].forEach(p => document.getElementById('pill-' + p)?.classList.toggle('active', p === 'all'));
+  }
 
   let main = conversations.filter(c => c.status !== 'done');
   if (activeSidebarPill === 'unread') main = main.filter(c => unreadConvos.has(c.id));
@@ -1648,13 +1673,22 @@ function renderConvoItem(c, variant) {
     ? `<div class="convo-title-row"><span class="convo-title">${esc(c.title)}</span>${pinIndicatorSvg}</div>`
     : `<span class="convo-title">${esc(c.title)}${titleSuffix}</span>`;
 
+  // Action button per variant. Tooltips use data-tooltip (not title) so the
+  // custom CSS tooltip layer can surface them on immediate hover; native title
+  // tooltips were behind two compounding fade-in delays and easy to miss.
+  //   'current'  -> pin / unpin (live items, plus pinned-and-persisted)
+  //   'previous' -> mark done (persisted, not yet done — the triage action)
+  //   'done'     -> delete (persisted and already done — soft delete)
   let leftButton;
   if (liveStyle) {
     const pinIconSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="${c.pinned ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 11V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v7"/><path d="M5 17h14"/><path d="M7 11l-2 6h14l-2-6"/></svg>`;
-    leftButton = `<button class="convo-pin" onclick="togglePin('${c.id}', event)" title="${c.pinned ? 'Unpin conversation' : 'Pin conversation'}">${pinIconSvg}</button>`;
+    leftButton = `<button class="convo-pin" onclick="togglePin('${c.id}', event)" data-tooltip="${c.pinned ? 'Unpin conversation' : 'Pin conversation'}">${pinIconSvg}</button>`;
+  } else if (variant === 'previous') {
+    const checkSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+    leftButton = `<button class="convo-done-mark" onclick="markConversationDone('${c.id}', event)" data-tooltip="Mark conversation as Done">${checkSvg}</button>`;
   } else {
     const deleteSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
-    leftButton = `<button class="convo-delete" onclick="deleteConversation('${c.id}', event)" title="Delete conversation">${deleteSvg}</button>`;
+    leftButton = `<button class="convo-delete" onclick="deleteConversation('${c.id}', event)" data-tooltip="Delete conversation">${deleteSvg}</button>`;
   }
 
   return `<div class="${classes.join(' ')}" ${styleAttr} onclick="openConversation('${c.id}')">

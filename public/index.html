@@ -94,13 +94,48 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .convo-item.b-unread { border-left-color: var(--success); }
 .convo-item.b-pinned { border-left-color: var(--accent); }
 
-/* Sidebar filter pills (conversations sidebar only). Replaces the search-wrap's
-   border-bottom for this sidebar; the pills row carries the separator instead. */
-#sidebar-conversations .sidebar-search-wrap { border-bottom: none; }
-.sidebar-pills { padding: 8px 8px 6px; border-bottom: 1px solid var(--border); display: flex; gap: 6px; flex-shrink: 0; }
+/* Sidebar filter pills (conversations sidebar only). The pills row carries the
+   border-bottom separator, replacing the search-wrap's. Search-wrap also loses
+   its bottom padding so the gap above the pills matches the gap below them. */
+#sidebar-conversations .sidebar-search-wrap { padding-bottom: 0; border-bottom: none; }
+/* Search-wrap is now symmetric in the conversations sidebar, so the clear
+   button lands on the input centre at the default top: 50%. Skills and files
+   sidebars keep the wrap's asymmetric padding-bottom and the calc(50% - 5px). */
+#sidebar-conversations .sidebar-search-clear { top: 50%; }
+.sidebar-pills { padding: 8px 8px; border-bottom: 1px solid var(--border); display: flex; gap: 6px; flex-shrink: 0; }
 .pill { font-size: var(--caption); font-weight: 500; padding: 4px 13px; border-radius: 999px; cursor: pointer; border: 1px solid var(--border); background: transparent; color: var(--text-2); transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease; line-height: 1.5; font-family: inherit; }
 .pill:hover { border-color: var(--text-2); color: var(--text-1); }
 .pill.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* Mark Done sidebar action (replaces delete on persisted, not-done items).
+   Mirrors .convo-delete shape; hover uses a neutral bright text colour rather
+   than danger red because marking done is non-destructive. */
+.convo-done-mark { position: absolute; top: 8px; right: 6px; width: 24px; height: 24px; border: none; background: transparent; color: var(--text-3); cursor: pointer; border-radius: 4px; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.15s ease, color 0.15s ease; padding: 0; z-index: 1; }
+.convo-item:hover .convo-done-mark { opacity: 1; }
+.convo-done-mark:hover { color: var(--text-1); background: var(--surface); }
+
+/* Custom tooltip layer for sidebar action buttons. Replaces the native HTML
+   title tooltips: combined with the buttons' fade-in opacity, native tooltips
+   were behind two compounding delays and easy to miss. Reads from
+   data-tooltip via attr() so the native tooltip is not also surfaced. */
+.convo-pin[data-tooltip]:hover::after,
+.convo-delete[data-tooltip]:hover::after,
+.convo-done-mark[data-tooltip]:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  padding: 4px 8px;
+  font-size: var(--label);
+  color: var(--text-1);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 100;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
 
 /* WhatsApp-style recency label, right-aligned in the meta row. */
 .convo-time { margin-left: auto; font-size: var(--label); color: var(--text-2); opacity: 0.7; }
