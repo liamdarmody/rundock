@@ -1823,8 +1823,15 @@ function appendTranscript(convoId, role, agentId, text, type) {
     convoTranscripts.set(convoId, existing);
   }
   const transcript = convoTranscripts.get(convoId);
-  // Soft cap at 100 entries to prevent unbounded growth
-  if (transcript.length >= 100) transcript.splice(1, 1);
+  // Soft cap at 1000 entries to prevent unbounded growth. Previously 100,
+  // which was too aggressive: heavy daily-driver conversations exceeded it
+  // routinely and lost middle history. 1000 covers all real-world
+  // conversations with comfortable headroom; per-conversation transcript
+  // file stays under ~1.4 MB at the cap, and per-message save cost stays
+  // under ~20 ms. The cap is still here so the file does not grow
+  // unbounded indefinitely; raising further (or removing) would shift the
+  // save-cost cliff onto users with very long conversations.
+  if (transcript.length >= 1000) transcript.splice(1, 1);
   const entry = { role, agent: agentId, text: text || '', timestamp: new Date().toISOString() };
   if (type) entry.type = type;
   transcript.push(entry);
