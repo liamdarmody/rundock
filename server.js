@@ -3980,10 +3980,40 @@ function handleChatSpawnError(err, convoId) {
   }
 }
 
+// Resolve the Claude binary path lazily and cache it. Independent of
+// Electron's findClaude so Path B users (running `node server.js` directly
+// without Electron) get correct .cmd resolution on Windows too. On lookup
+// failure, returns the literal 'claude' so spawn's 'error' event surfaces the
+// real ENOENT rather than masking it. The absolute path lets Node execute
+// .cmd files on Windows without `shell: true`, which would expose args
+// (containing user and system prompts) to command-injection risk.
+let _resolvedClaudeBin = null;
+function resolveClaudeBin() {
+  if (_resolvedClaudeBin) return _resolvedClaudeBin;
+  const isWindows = process.platform === 'win32';
+  try {
+    const { execSync } = require('child_process');
+    const lookupCmd = isWindows ? 'where.exe claude' : 'which claude';
+    const output = execSync(lookupCmd, { timeout: 5000, encoding: 'utf-8' }).trim();
+    if (!output) return (_resolvedClaudeBin = 'claude');
+    if (isWindows) {
+      const candidates = output.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      const exe = candidates.find(c => c.toLowerCase().endsWith('.exe'));
+      const cmd = candidates.find(c => c.toLowerCase().endsWith('.cmd'));
+      _resolvedClaudeBin = exe || cmd || candidates[0] || 'claude';
+    } else {
+      _resolvedClaudeBin = output;
+    }
+    return _resolvedClaudeBin;
+  } catch {
+    return (_resolvedClaudeBin = 'claude');
+  }
+}
+
 // Spawn a Claude Code process with PID tracking for crash cleanup.
 // Drop-in replacement for spawn('claude', ...) that registers/unregisters PIDs.
 function spawnClaude(args, options, onError) {
-  const proc = spawn('claude', args, options);
+  const proc = spawn(resolveClaudeBin(), args, options);
   if (proc.pid) {
     registerChildPid(proc.pid);
     proc.on('close', () => unregisterChildPid(proc.pid));
