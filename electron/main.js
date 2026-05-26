@@ -59,9 +59,28 @@ function ensurePath() {
 
 function findClaude() {
   ensurePath();
+  const isWindows = process.platform === 'win32';
   try {
-    const bin = execSync('which claude', { timeout: 5000, encoding: 'utf-8' }).trim();
-    execSync('claude --version', { timeout: 10000 });
+    // Windows: where.exe returns one absolute path per line, possibly multiple
+    // candidates when both .exe and .cmd shims are present. Prefer .exe so the
+    // recommended PowerShell-installer path wins over an npm .cmd shim.
+    // Unix: which returns a single absolute path.
+    const lookupCmd = isWindows ? 'where.exe claude' : 'which claude';
+    const output = execSync(lookupCmd, { timeout: 5000, encoding: 'utf-8' }).trim();
+    if (!output) return null;
+    let bin;
+    if (isWindows) {
+      const candidates = output.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      const exe = candidates.find(c => c.toLowerCase().endsWith('.exe'));
+      const cmd = candidates.find(c => c.toLowerCase().endsWith('.cmd'));
+      bin = exe || cmd || candidates[0];
+      if (!bin) return null;
+    } else {
+      bin = output;
+    }
+    // Sanity-check the resolved binary. Quote the path so a directory with
+    // spaces (common on Windows) does not split the command.
+    execSync(`"${bin}" --version`, { timeout: 10000 });
     return bin;
   } catch {
     return null;
