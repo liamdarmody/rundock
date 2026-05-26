@@ -3568,14 +3568,22 @@ wss.on('connection', (ws) => {
             const jsonlPool = [];
             for (const sessionMsgs of allSessions) {
               for (const m of sessionMsgs) {
+                // Skip whitespace-only content. Without this filter, an entry
+                // whose content is just a space character falsely matches any
+                // cleanPrefix that contains a space (i.e. virtually all of
+                // them), so real transcript text gets replaced by empty
+                // bubbles. Whitespace entries are artifacts of tool-heavy
+                // assistant turns where parseSessionHistory joined empty
+                // `text` blocks into a single whitespace string.
+                if (!m.content || !m.content.trim()) continue;
                 // Skip internal delegation messages
-                if (m.role === 'user' && m.content && (
+                if (m.role === 'user' && (
                   m.content.startsWith('CONVERSATION SO FAR:') ||
                   m.content.startsWith('[SYSTEM:') ||
                   m.content.startsWith('[DELEGATION BRIEF]')
                 )) continue;
                 // Skip ghost bubbles: empty resume artifacts from orchestrator
-                if (m.role === 'assistant' && m.content && m.content.trim() === 'No response requested.') continue;
+                if (m.role === 'assistant' && m.content.trim() === 'No response requested.') continue;
                 jsonlPool.push({ ...m, _used: false });
               }
             }
@@ -3614,7 +3622,7 @@ wss.on('connection', (ws) => {
                   const cleanPrefix = stripToolSummaries(tText).substring(0, 100);
                   if (!cleanPrefix) continue;
                   const match = jsonlPool.find(m => !m._used && m.role === 'assistant' &&
-                    m.content && (
+                    m.content && m.content.trim() && (
                       m.content.substring(0, 100).includes(cleanPrefix.substring(0, 60)) ||
                       cleanPrefix.includes(m.content.substring(0, 60))
                     ));
