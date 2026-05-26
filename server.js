@@ -248,10 +248,14 @@ async function parseSessionHistory(sessionId, limit = 20, offset = 0) {
         displayable.push({ role: 'user', content: obj.message.content, timestamp: obj.timestamp || null });
         continue;
       }
-      // Assistant messages with text content
+      // Assistant messages with text content. Filter out whitespace-only text
+      // blocks (per-block, so a mix of empty + real blocks keeps the real
+      // content and drops the rest). Whitespace-only joined output would
+      // otherwise pollute the jsonlPool and falsely match real transcript
+      // content in get_session_history.
       if (obj.message && obj.message.role === 'assistant' && Array.isArray(obj.message.content)) {
         const textParts = obj.message.content
-          .filter(b => b.type === 'text' && b.text)
+          .filter(b => b.type === 'text' && b.text && b.text.trim())
           .map(b => b.text);
         if (textParts.length > 0) {
           displayable.push({ role: 'assistant', content: textParts.join('\n\n'), timestamp: obj.timestamp || null });
