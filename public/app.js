@@ -1824,7 +1824,7 @@ function openConversation(id) {
       sessionId: c.sessionId,
       sessionIds: sessionIds,
       conversationId: c.id,
-      limit: 50
+      limit: 200
     }));
     // Mark as no longer purely persisted: messages are now in memory for this
     // session. Status is NOT touched here: opening an archived conversation to

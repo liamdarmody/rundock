@@ -3656,7 +3656,7 @@ wss.on('connection', (ws) => {
             }
 
             const total = merged.length;
-            const lim = limit || 50;
+            const lim = limit || 200;
             const off = offset || 0;
             const start = Math.max(0, total - lim - off);
             const end = Math.max(0, total - off);
