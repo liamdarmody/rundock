@@ -30,19 +30,30 @@ if (!gotLock) {
 // ===== CLAUDE CODE DETECTION =====
 
 // Electron packaged apps don't inherit the user's full shell PATH.
-// Ensure common install locations are on PATH so `which claude` works.
+// Ensure common Claude Code install locations are on PATH so the lookup works.
 function ensurePath() {
   const home = require('os').homedir();
-  const extraDirs = [
-    path.join(home, '.local', 'bin'),
-    path.join(home, '.claude', 'bin'),
-    '/usr/local/bin',
-    '/opt/homebrew/bin',
-  ];
+  const isWindows = process.platform === 'win32';
+  const extraDirs = isWindows
+    ? [
+        // Anthropic's PowerShell installer drops claude.exe here.
+        path.join(home, '.local', 'bin'),
+        // WinGet shim location.
+        process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Microsoft', 'WinGet', 'Links') : null,
+        // npm global bin (Claude installed via `npm install -g`).
+        process.env.APPDATA ? path.join(process.env.APPDATA, 'npm') : null,
+      ].filter(Boolean)
+    : [
+        path.join(home, '.local', 'bin'),
+        path.join(home, '.claude', 'bin'),
+        '/usr/local/bin',
+        '/opt/homebrew/bin',
+      ];
   const current = process.env.PATH || '';
-  const missing = extraDirs.filter(d => !current.split(':').includes(d));
+  const segments = current.split(path.delimiter);
+  const missing = extraDirs.filter(d => !segments.includes(d));
   if (missing.length) {
-    process.env.PATH = missing.join(':') + ':' + current;
+    process.env.PATH = missing.join(path.delimiter) + path.delimiter + current;
   }
 }
 
