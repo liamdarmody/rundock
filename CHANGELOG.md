@@ -4,6 +4,20 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** Windows Fixes & Conversation History
+
+### Fixed
+
+- **Claude Code is detected on Windows when installed via npm.** Windows users who installed Claude Code with `npm install -g @anthropic-ai/claude-code` previously hit a first-run wizard error saying Claude was not installed, even though it was. Rundock now recognises the `.cmd` shim that npm produces alongside the `.exe` from Anthropic's PowerShell installer, so both Windows install paths work end-to-end.
+
+- **Old agent messages no longer render as blank bubbles on reload.** A bug in how Rundock reassembled conversation history was pairing real agent responses with whitespace-only entries from the underlying session log, producing empty bubbles where the original messages should have appeared. The reassembly now skips whitespace entries so previous agent replies show in full when you reopen a conversation.
+
+- **Long conversations show more of their history on reopen.** Reopening a conversation used to load only the most recent 50 messages, hiding earlier turns even when they were still on disk. Rundock now loads up to 200 messages on open, so you see the full thread for any conversation that has been used across a multi-day arc.
+
+- **Conversations retain up to 1000 messages before older ones get trimmed.** The previous limit of 100 was too aggressive for daily-use conversations: long threads silently lost middle history as they grew past the cap. Rundock now keeps up to 1000 messages per conversation, which covers virtually all real-world conversations with comfortable headroom. The change is forward-protective: conversations that already exceeded the previous cap don't recover the lost middle history, but new conversations from this version onward will retain it.
+
 ## 0.8.10: Sidebar Polish & Archive (2026-05-13)
 
 ### Added
