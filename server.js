@@ -1649,7 +1649,7 @@ function scaffoldWorkspace(dir) {
 // ===== HTTP SERVER =====
 
 const server = http.createServer((req, res) => {
-  if (req.url === '/' || req.url === '/index.html') {
+  if (req.url === '/' || req.url === '/index.html' || req.url.startsWith('/?') || req.url.startsWith('/index.html?')) {
     res.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache, no-store, must-revalidate' });
     res.end(fs.readFileSync(path.join(__dirname, 'public', 'index.html')));
   } else if (req.url === '/favicon.svg') {
@@ -1732,6 +1732,21 @@ const server = http.createServer((req, res) => {
       }
     });
 
+  } else if (/^\/(editor|vendor)\/[\w./-]+\.m?js$/.test(req.url)) {
+    // Static JS/MJS files for the Tiptap editor module and its vendor bundle.
+    // Path is constrained to /editor/... and /vendor/... under public/, with
+    // only .js and .mjs extensions, and only word chars + dot/slash/hyphen in
+    // the path. The realpath check below blocks any directory traversal that
+    // somehow gets past the regex.
+    const publicRoot = path.resolve(__dirname, 'public');
+    const filePath = path.resolve(publicRoot, req.url.slice(1));
+    if (filePath.startsWith(publicRoot + path.sep) && fs.existsSync(filePath)) {
+      res.writeHead(200, { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-cache, no-store, must-revalidate' });
+      res.end(fs.readFileSync(filePath));
+    } else {
+      res.writeHead(404);
+      res.end('Not found');
+    }
   } else {
     res.writeHead(404);
     res.end('Not found');
@@ -3278,7 +3293,16 @@ wss.on('connection', (ws) => {
             }
           } catch (e) { /* preview enrichment is best-effort */ }
         }
-        ws.send(JSON.stringify({ type: 'conversations', conversations: cleaned }));
+        const lastActiveConversationId = readState().lastActiveConversationId || null;
+        ws.send(JSON.stringify({ type: 'conversations', conversations: cleaned, lastActiveConversationId }));
+      }
+
+      if (msg.type === 'set_last_active_conversation') {
+        if (!WORKSPACE) return;
+        const state = readState();
+        if (msg.id) state.lastActiveConversationId = msg.id;
+        else delete state.lastActiveConversationId;
+        writeState(state);
       }
 
       // Client requests buffered messages after it has loaded conversations and state.

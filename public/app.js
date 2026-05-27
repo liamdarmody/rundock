@@ -32,6 +32,116 @@ const agentLastActivity = {}; // { agentId: { time: Date, label: string } }
 // Per-conversation state: { convoId: { isProcessing, currentStreamingMsg, latestText } }
 const convoState = {};
 let pendingActiveProcesses = null; // Deferred until conversations are loaded
+// Tiptap editor for markdown files. Non-markdown files (.json, .yaml, .png,
+// etc.) fall through to the legacy preview/edit pane unchanged.
+let activeTiptapEditor = null;
+let _tiptapEditorModule = null;
+let _tiptapSaveTimer = null;
+function loadTiptapEditorModule() {
+  if (!_tiptapEditorModule) _tiptapEditorModule = import('./editor/index.js');
+  return _tiptapEditorModule;
+}
+function isMarkdownPath(path) {
+  return typeof path === 'string' && /\.(md|mdx)$/i.test(path);
+}
+async function initTiptapEditor(path, content) {
+  // Tear down any previous instance so a rapid file-switch leaves a clean
+  // ProseMirror state and detached event listeners.
+  const mod = await loadTiptapEditorModule();
+  if (activeTiptapEditor) {
+    try { mod.destroyEditor(activeTiptapEditor); } catch {}
+    activeTiptapEditor = null;
+  }
+  const editorEl = document.getElementById('tiptap-editor');
+  if (!editorEl) return;
+  editorEl.innerHTML = '';
+  const { editor } = mod.createEditor({
+    element: editorEl,
+    rawMarkdown: content || '',
+    propertiesElement: document.getElementById('tiptap-properties'),
+    toolbarElement: document.getElementById('tiptap-toolbar'),
+    toolbarHostElement: document.getElementById('tiptap-editor-pane'),
+    onUpdate: () => onTiptapEditorUpdate(),
+    onWikilinkClick: (target) => openWikilink(target),
+  });
+  activeTiptapEditor = editor;
+}
+function onTiptapEditorUpdate() {
+  if (!currentFilePath || !activeTiptapEditor) return;
+  const statusEl = document.getElementById('editor-status');
+  if (statusEl) {
+    statusEl.textContent = 'Unsaved';
+    statusEl.style.color = 'var(--attention)';
+  }
+  clearTimeout(_tiptapSaveTimer);
+  _tiptapSaveTimer = setTimeout(() => saveTiptapFile(), 1500);
+}
+function saveTiptapFile() {
+  if (!currentFilePath || !activeTiptapEditor || !_tiptapEditorModule) return;
+  _tiptapEditorModule.then(mod => {
+    const content = mod.getMarkdown(activeTiptapEditor);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'save_file', path: currentFilePath, content }));
+    }
+    const statusEl = document.getElementById('editor-status');
+    if (statusEl) {
+      statusEl.style.color = 'var(--success)';
+      statusEl.textContent = 'Saved';
+    }
+  });
+}
+function destroyTiptapEditorIfActive() {
+  // Capture the current instance and clear the global ref synchronously so a
+  // subsequent initTiptapEditor sees a clean slate even if the module's
+  // destroy promise has not yet resolved.
+  const editor = activeTiptapEditor;
+  activeTiptapEditor = null;
+  if (editor && _tiptapEditorModule) {
+    _tiptapEditorModule.then(mod => {
+      try { mod.destroyEditor(editor); } catch {}
+    });
+  }
+}
+// Session continuity: the conversation that was last opened in this workspace.
+// Seeded from the server-persisted value on workspace load, updated on every
+// openConversation call. Used by pickDefaultConversation to land the user back
+// where they were when they reopen Rundock or switch workspaces.
+let lastActiveConversationId = null;
+let _persistLastActiveTimer = null;
+function persistLastActiveConversation(id) {
+  lastActiveConversationId = id;
+  // Debounce the server write so rapid switches between conversations collapse
+  // into a single .rundock/state.json write.
+  clearTimeout(_persistLastActiveTimer);
+  _persistLastActiveTimer = setTimeout(() => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'set_last_active_conversation', id }));
+    }
+  }, 500);
+}
+// Returns the conversation that should be loaded by default, or null when
+// nothing is suitable and the caller should fall through to workspace routing
+// (new conversation, team view, setup, etc.). Priority order:
+//   1. Any processing (currently working) conversation
+//   2. The last-opened conversation if it still exists and is not archived
+//   3. The most recently active non-archived conversation (top of "All")
+// Replaces the pre-0.8.10 "first pinned" default which became inconsistent with
+// the recency-sorted sidebar after the pill-filter rework.
+function pickDefaultConversation() {
+  const processing = conversations.find(c => getConvoState(c.id).isProcessing);
+  if (processing) return processing;
+  if (lastActiveConversationId) {
+    const last = conversations.find(c => c.id === lastActiveConversationId && c.status !== 'archived');
+    if (last) return last;
+  }
+  const active = conversations.filter(c => c.status !== 'archived');
+  if (!active.length) return null;
+  return active.reduce((best, c) => {
+    const bt = new Date(best.lastActiveAt || best.createdAt || 0).getTime();
+    const ct = new Date(c.lastActiveAt || c.createdAt || 0).getTime();
+    return ct > bt ? c : best;
+  });
+}
 let orgZoomOffset = 0; // User zoom adjustment: +/- steps of 0.1 on top of auto-fit scale
 const unreadConvos = new Set(); // convoIds with unread agent messages
 const workingConvos = new Set(); // convoIds with agents actively processing
@@ -140,7 +250,7 @@ function handle(d) {
     case 'needs_workspace': showView('workspace'); break;
     case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesSidebar(); renderConvoList(); break;
     case 'skills': skills=d.skills; skillsLoaded=true; renderSkills(); break;
-    case 'conversations': handlePersistedConversations(d.conversations); break;
+    case 'conversations': handlePersistedConversations(d.conversations, d.lastActiveConversationId); break;
     case 'system':
       // Track active process per conversation to ignore stale events
       if(d.subtype==='process_started' && convoId && d._processId) {
@@ -1177,9 +1287,12 @@ function persistConversation(convo) {
 }
 
 // Merge persisted conversations with in-memory list on workspace load
-function handlePersistedConversations(persisted) {
+function handlePersistedConversations(persisted, persistedLastActiveId) {
   if (!persisted || !Array.isArray(persisted)) return;
   conversationsLoaded = true;
+  // Seed the in-memory cache before we run the priority chain so the
+  // last-opened lookup in pickDefaultConversation has a value to find.
+  if (persistedLastActiveId !== undefined) lastActiveConversationId = persistedLastActiveId;
   for (const entry of persisted) {
     // Skip if already in memory (from current session)
     if (conversations.find(c => c.id === entry.id)) continue;
@@ -1218,34 +1331,28 @@ function handlePersistedConversations(persisted) {
   handleActiveProcesses(pendingActiveProcesses || []);
   pendingActiveProcesses = null;
 
-  // Auto-navigate: processing > pinned > path detection > new conversation
-  const processing = conversations.find(c => getConvoState(c.id).isProcessing);
-  if (processing) {
-    openConversation(processing.id);
+  // Auto-navigate: processing > last-opened > most-recently-active > workspace routing
+  const target = pickDefaultConversation();
+  if (target) {
+    openConversation(target.id);
     switchNav('conversations');
-  } else {
-    const pinned = conversations.filter(c => c.pinned && c.status !== 'archived');
-    if (pinned.length) {
-      openConversation(pinned[0].id);
-      switchNav('conversations');
-    } else if (!activeConversation) {
-      // Workspace routing: setup incomplete → has agents → has context → fallback
-      const teamAgents = getTeamAgents();
-      const a = workspaceAnalysis;
-      const hasContext = a && (a.identity.sources.length > 0 || a.skills.total > 0);
+  } else if (!activeConversation) {
+    // Workspace routing: setup incomplete → has agents → has context → fallback
+    const teamAgents = getTeamAgents();
+    const a = workspaceAnalysis;
+    const hasContext = a && (a.identity.sources.length > 0 || a.skills.total > 0);
 
-      if (teamAgents.length > 0) {
-        // Path A: configured workspace with agents, go straight to conversations
-        newConversation();
-      } else if (hasContext) {
-        // Path B: existing workspace with files/agents/skills but not yet Rundock-configured
-        switchNav('team');
-      } else if (!setupComplete) {
-        // Path C: empty/new workspace, start Doc conversation directly
-        startSetupConversation();
-      } else {
-        newConversation();
-      }
+    if (teamAgents.length > 0) {
+      // Path A: configured workspace with agents, go straight to conversations
+      newConversation();
+    } else if (hasContext) {
+      // Path B: existing workspace with files/agents/skills but not yet Rundock-configured
+      switchNav('team');
+    } else if (!setupComplete) {
+      // Path C: empty/new workspace, start Doc conversation directly
+      startSetupConversation();
+    } else {
+      newConversation();
     }
   }
 
@@ -1452,8 +1559,8 @@ function deleteConversation(id, evt) {
   updateUnreadBadge();
   if (activeConversation?.id === id) {
     activeConversation = null;
-    const pinned = conversations.filter(c => c.pinned && c.status !== 'archived');
-    if (pinned.length) { openConversation(pinned[0].id); } else { newConversation(); }
+    const target = pickDefaultConversation();
+    if (target) { openConversation(target.id); } else { newConversation(); }
   }
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'delete_conversation', id }));
@@ -1805,6 +1912,7 @@ function openConversation(id) {
   if (activeConversation && activeConversation.id !== id) discardIfEmpty();
   const c=conversations.find(x=>x.id===id); if(!c) return;
   activeConversation=c;
+  persistLastActiveConversation(id);
   unreadConvos.delete(id);
   updateUnreadBadge();
   // Done status is the user's explicit "I'm finished with this thread" state;
@@ -2560,9 +2668,9 @@ function switchNav(nav) {
   if(nav !== 'files') clearFileSearch();
   if(nav !== 'skills') clearSkillSearch();
   if(nav==='settings') { showView('settings'); showSettingsSection('workspace'); }
-  else if(nav==='files') { editorReturnView = 'editor'; if(currentFilePath && document.querySelector('.file-item.active')) { showView('editor'); } else { currentFilePath = null; document.getElementById('editor-header').classList.add('hidden'); document.getElementById('editor-content').classList.add('hidden'); document.getElementById('editor-textarea').classList.add('hidden'); document.getElementById('editor-empty').classList.remove('hidden'); showView('editor'); } }
+  else if(nav==='files') { editorReturnView = 'editor'; if(currentFilePath && document.querySelector('.file-item.active')) { showView('editor'); } else { currentFilePath = null; destroyTiptapEditorIfActive(); document.getElementById('editor-header').classList.add('hidden'); document.getElementById('editor-content').classList.add('hidden'); document.getElementById('editor-textarea').classList.add('hidden'); document.getElementById('tiptap-editor-pane').classList.add('hidden'); document.getElementById('editor-empty').classList.remove('hidden'); showView('editor'); } }
   else if(nav==='skills') { showView('skills'); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } else if(skills.length && !currentSkillId) { selectSkill(skills[0].id); } clearSkillSearch(); }
-  else if(nav==='conversations') { if(activeConversation) { showView('chat'); if(unreadConvos.delete(activeConversation.id)) { updateUnreadBadge(); renderConvoList(); } } else { const pinned = conversations.filter(c => c.pinned && c.status !== 'archived'); if(pinned.length) { openConversation(pinned[0].id); } else { newConversation(); } } }
+  else if(nav==='conversations') { if(activeConversation) { showView('chat'); if(unreadConvos.delete(activeConversation.id)) { updateUnreadBadge(); renderConvoList(); } } else { const target = pickDefaultConversation(); if(target) { openConversation(target.id); } else { newConversation(); } } }
   else if(nav==='team') { showView('home'); renderOrgChart(); }
 }
 function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }
@@ -2665,6 +2773,26 @@ function loadFileContent(path, content) {
   document.getElementById('editor-status').textContent = '';
   document.getElementById('editor-header').classList.remove('hidden');
   document.getElementById('editor-empty').classList.add('hidden');
+
+  // Markdown files open in the Tiptap surface; the legacy DOM and
+  // Preview/Edit toggle are hidden and the Tiptap pane is shown and seeded.
+  if (isMarkdownPath(path)) {
+    document.getElementById('editor-content').classList.add('hidden');
+    document.getElementById('editor-textarea').classList.add('hidden');
+    document.getElementById('toggle-preview').classList.add('hidden');
+    document.getElementById('toggle-edit').classList.add('hidden');
+    document.getElementById('tiptap-editor-pane').classList.remove('hidden');
+    fileFrontmatter = '';
+    fileBody = content;
+    initTiptapEditor(path, content);
+    return;
+  }
+
+  // Legacy preview/edit path (non-markdown files, or Tiptap flag off).
+  destroyTiptapEditorIfActive();
+  document.getElementById('tiptap-editor-pane').classList.add('hidden');
+  document.getElementById('toggle-preview').classList.remove('hidden');
+  document.getElementById('toggle-edit').classList.remove('hidden');
   document.getElementById('editor-content').classList.remove('hidden');
 
   // Split frontmatter from body
@@ -2811,9 +2939,11 @@ function editorGoBack() {
   }
   // Otherwise stay in files view: clear file content, show empty state
   currentFilePath = null;
+  destroyTiptapEditorIfActive();
   document.getElementById('editor-header').classList.add('hidden');
   document.getElementById('editor-content').classList.add('hidden');
   document.getElementById('editor-textarea').classList.add('hidden');
+  document.getElementById('tiptap-editor-pane').classList.add('hidden');
   document.getElementById('editor-empty').classList.remove('hidden');
   document.querySelectorAll('.file-item').forEach(x => x.classList.remove('active'));
 }
@@ -3296,6 +3426,16 @@ msgInput.addEventListener('input',()=>{
 document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && currentView === 'workspace' && document.activeElement?.id === 'create-workspace-name') {
     createWorkspace();
+  }
+});
+
+// Cmd+S / Ctrl+S force-saves the active Tiptap editor, bypassing the
+// debounce. Only fires when the Tiptap editor is the active surface.
+document.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 's' && activeTiptapEditor) {
+    e.preventDefault();
+    clearTimeout(_tiptapSaveTimer);
+    saveTiptapFile();
   }
 });
 

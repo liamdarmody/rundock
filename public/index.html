@@ -81,7 +81,8 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .convo-list { flex: 1; overflow-y: auto; padding: 8px; }
 .convo-item { display: flex; flex-direction: column; gap: 3px; padding: 12px 8px 12px 5px; border-radius: 8px; cursor: pointer; transition: background 0.15s ease, border-left-color 0.12s ease; position: relative; border-left: 3px solid transparent; }
 .convo-item:hover { background: var(--elevated); }
-.convo-item.active { background: var(--elevated); }
+.convo-item.active { background: var(--accent-glow); }
+.convo-item.active:hover { background: rgba(232,122,90,0.18); }
 .convo-delete { position: absolute; top: 8px; right: 6px; width: 24px; height: 24px; border: none; background: transparent; color: var(--text-3); cursor: pointer; border-radius: 4px; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.15s ease, color 0.15s ease; font-size: 14px; padding: 0; z-index: 1; }
 .convo-item:hover .convo-delete { opacity: 1; }
 .convo-item:hover > .convo-title { padding-right: 24px; }
@@ -383,6 +384,69 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .callout-todo .callout-title { color: var(--working); }
 .editor-content.formatted a { color: var(--accent); cursor: pointer; }
 .editor-content.formatted img { max-width: 100%; border-radius: 8px; }
+
+/* Tiptap editor styles. Scoped under .tiptap-editor-pane and .tiptap-editor
+   so the legacy non-markdown preview/edit pane and non-editor views stay
+   untouched. Properties panel, ProseMirror surface, custom node styling
+   (.wikilink, .callout), and the floating toolbar all live here. */
+.tiptap-editor-pane { flex: 1; overflow-y: auto; padding: 24px 32px; position: relative; }
+.tiptap-editor-pane.hidden { display: none; }
+.tiptap-editor-pane .properties { display: none; background: var(--card); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 16px; overflow: hidden; }
+.tiptap-editor-pane .properties.visible { display: block; }
+.tiptap-editor-pane .properties-header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.tiptap-editor-pane .properties-header .label { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); }
+.tiptap-editor-pane .properties-header .meta { font-size: 12px; color: var(--text-2); font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; margin-left: auto; }
+.tiptap-editor-pane .properties-body { padding: 4px 0 8px; }
+.tiptap-editor-pane .prop-row { display: grid; grid-template-columns: 32px 160px 1fr; align-items: center; gap: 8px; padding: 6px 12px; min-height: 32px; }
+.tiptap-editor-pane .prop-row:hover { background: rgba(232,122,90,0.04); border-radius: 6px; }
+.tiptap-editor-pane .prop-icon { width: 16px; color: var(--text-2); justify-self: center; font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 12px; text-align: center; }
+.tiptap-editor-pane .prop-key { font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 12px; color: var(--text-2); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tiptap-editor-pane .prop-value { font-size: var(--body); color: var(--text-1); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
+.tiptap-editor-pane .prop-value.empty { color: var(--text-2); font-style: italic; }
+.tiptap-editor-pane .prop-value .bool { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 100px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; }
+.tiptap-editor-pane .prop-value .bool.t { background: rgba(107,198,126,0.15); color: var(--success); }
+.tiptap-editor-pane .prop-value .bool.f { background: rgba(122,117,110,0.15); color: var(--idle); }
+.tiptap-editor-pane .prop-value .bool .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.tiptap-editor-pane .prop-chip { display: inline-flex; align-items: center; padding: 2px 10px; background: transparent; border: 1px solid var(--accent); border-radius: 100px; font-size: 12px; color: var(--accent); transition: background 0.15s ease; }
+.tiptap-editor-pane .prop-chip:hover { background: var(--accent-glow); }
+.tiptap-editor { font-size: var(--body); line-height: 1.7; outline: none; }
+.tiptap-editor .ProseMirror { outline: none; min-height: 200px; }
+.tiptap-editor .ProseMirror p { margin: 0 0 12px 0; line-height: 1.7; }
+.tiptap-editor .ProseMirror h1 { font-size: 24px; font-weight: 700; line-height: 1.3; margin: 24px 0 12px; }
+.tiptap-editor .ProseMirror h1:first-child { margin-top: 0; }
+.tiptap-editor .ProseMirror h2 { font-size: 18px; font-weight: 700; line-height: 1.3; margin: 20px 0 10px; }
+.tiptap-editor .ProseMirror h3 { font-size: 16px; font-weight: 600; line-height: 1.3; margin: 16px 0 8px; }
+.tiptap-editor .ProseMirror ul, .tiptap-editor .ProseMirror ol { padding-left: 24px; margin: 0 0 12px 0; }
+.tiptap-editor .ProseMirror li { margin: 4px 0; }
+.tiptap-editor .ProseMirror li > p { margin: 0; }
+.tiptap-editor .ProseMirror blockquote { border-left: 2px solid var(--border); padding-left: 16px; margin: 0 0 12px 0; color: var(--text-2); }
+.tiptap-editor .ProseMirror code { font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 13px; background: var(--card); padding: 2px 6px; border-radius: 4px; color: var(--text-1); }
+.tiptap-editor .ProseMirror pre { background: var(--card); border-radius: 8px; padding: 12px 16px; margin: 0 0 12px 0; overflow-x: auto; }
+.tiptap-editor .ProseMirror pre code { background: transparent; padding: 0; font-size: 13px; line-height: 1.5; }
+.tiptap-editor .ProseMirror a { color: var(--accent); text-decoration: underline; cursor: pointer; }
+.tiptap-editor .ProseMirror a.wikilink { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; padding: 0 2px; border-radius: 3px; transition: background 0.15s ease, color 0.15s ease; }
+.tiptap-editor .ProseMirror a.wikilink:hover { color: var(--accent-hover); background: var(--accent-glow); }
+.tiptap-editor .ProseMirror a.wikilink.ProseMirror-selectednode { background: var(--accent-glow); outline: 1px solid var(--accent); outline-offset: 1px; }
+.tiptap-editor .ProseMirror .callout { background: rgba(122,162,232,0.08); border: 1px solid rgba(122,162,232,0.20); border-radius: 8px; padding: 12px 16px; margin: 12px 0; --callout-color: var(--working); }
+.tiptap-editor .ProseMirror .callout-note, .tiptap-editor .ProseMirror .callout-info, .tiptap-editor .ProseMirror .callout-abstract { --callout-color: var(--working); background: rgba(122,162,232,0.08); border-color: rgba(122,162,232,0.20); }
+.tiptap-editor .ProseMirror .callout-tip, .tiptap-editor .ProseMirror .callout-success, .tiptap-editor .ProseMirror .callout-todo { --callout-color: var(--success); background: rgba(107,198,126,0.08); border-color: rgba(107,198,126,0.20); }
+.tiptap-editor .ProseMirror .callout-warning, .tiptap-editor .ProseMirror .callout-question, .tiptap-editor .ProseMirror .callout-example { --callout-color: var(--attention); background: rgba(232,168,76,0.08); border-color: rgba(232,168,76,0.20); }
+.tiptap-editor .ProseMirror .callout-danger, .tiptap-editor .ProseMirror .callout-failure, .tiptap-editor .ProseMirror .callout-bug { --callout-color: #E85A5A; background: rgba(232,90,90,0.08); border-color: rgba(232,90,90,0.20); }
+.tiptap-editor .ProseMirror .callout-quote { --callout-color: #A07AE8; background: rgba(160,122,232,0.08); border-color: rgba(160,122,232,0.20); }
+.tiptap-editor .ProseMirror .callout-header { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.tiptap-editor .ProseMirror .callout-tag { display: inline-block; padding: 2px 10px; background: var(--callout-color); color: #fff; border-radius: 100px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+.tiptap-editor .ProseMirror .callout-title { font-size: var(--body); font-weight: 600; color: var(--text-1); }
+.tiptap-editor .ProseMirror .callout-body { font-size: var(--body); color: var(--text-1); line-height: 1.55; }
+.tiptap-editor .ProseMirror .callout-line { min-height: 1.55em; }
+.tiptap-editor .ProseMirror .callout-line.empty { color: transparent; }
+.floating-toolbar { position: absolute; display: none; gap: 2px; padding: 4px; background: var(--card); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.25); z-index: 50; left: 0; top: 0; }
+.floating-toolbar.visible { display: inline-flex; }
+.floating-toolbar .tb-btn { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 28px; padding: 0 8px; background: transparent; color: var(--text-2); border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 600; font-family: inherit; }
+.floating-toolbar .tb-btn[data-style="b"] { font-weight: 700; }
+.floating-toolbar .tb-btn[data-style="i"] { font-style: italic; }
+.floating-toolbar .tb-btn:hover { background: var(--accent-glow); color: var(--accent); }
+.floating-toolbar .tb-btn.active { background: var(--accent); color: #fff; }
+.floating-toolbar .tb-btn svg { display: block; }
 
 /* Thinking */
 .thinking-bubble { min-height: 24px; display: flex; align-items: center; gap: 12px; }
@@ -709,6 +773,15 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
       <div id="editor-empty" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px"></div>
       <div class="editor-content formatted hidden" id="editor-content"></div>
       <textarea class="editor-content source hidden" id="editor-textarea"></textarea>
+      <!-- Tiptap editor pane: holds properties panel, editor mount, floating
+           toolbar. Hidden by default; app.js shows it for markdown files and
+           hides it (showing the legacy preview/edit pane instead) for
+           non-markdown files. -->
+      <div id="tiptap-editor-pane" class="tiptap-editor-pane hidden">
+        <div id="tiptap-properties" class="properties"></div>
+        <div id="tiptap-editor" class="tiptap-editor"></div>
+        <div id="tiptap-toolbar" class="floating-toolbar"></div>
+      </div>
     </div>
     <!-- Settings -->
     <div id="view-settings" class="hidden view-panel view-scroll">

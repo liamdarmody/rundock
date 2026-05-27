@@ -1,0 +1,19 @@
+{
+  "name": "rundock-editor-vendor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pre-bundled Tiptap + tiptap-markdown + js-yaml for Rundock's file editor. Runs out of band of Rundock's main package.json so vendor deps stay isolated.",
+  "scripts": {
+    "build": "esbuild ./build-entry.js --bundle --format=esm --target=es2022 --outfile=tiptap-bundle.mjs --footer:js=\"// See tiptap-bundle.licenses.txt for third-party notices\" && node ./collect-licenses.js > tiptap-bundle.licenses.txt"
+  },
+  "dependencies": {
+    "@tiptap/core": "3.22.5",
+    "@tiptap/extension-hard-break": "3.22.5",
+    "@tiptap/starter-kit": "3.22.5",
+    "js-yaml": "4.1.0",
+    "tiptap-markdown": "0.9.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
+}
