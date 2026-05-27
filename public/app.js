@@ -36,6 +36,7 @@ let pendingActiveProcesses = null; // Deferred until conversations are loaded
 // etc.) fall through to the legacy preview/edit pane unchanged.
 let activeTiptapEditor = null;
 let _tiptapEditorModule = null;
+let _tiptapEditorModuleResolved = null;
 let _tiptapSaveTimer = null;
 function loadTiptapEditorModule() {
   if (!_tiptapEditorModule) _tiptapEditorModule = import('./editor/index.js');
@@ -48,6 +49,7 @@ async function initTiptapEditor(path, content) {
   // Tear down any previous instance so a rapid file-switch leaves a clean
   // ProseMirror state and detached event listeners.
   const mod = await loadTiptapEditorModule();
+  _tiptapEditorModuleResolved = mod;
   if (activeTiptapEditor) {
     try { mod.destroyEditor(activeTiptapEditor); } catch {}
     activeTiptapEditor = null;
@@ -65,6 +67,11 @@ async function initTiptapEditor(path, content) {
     onWikilinkClick: (target) => openWikilink(target),
   });
   activeTiptapEditor = editor;
+  // Re-sync the find-bar count from plugin state whenever the document
+  // changes. The plugin's apply() already recomputes matches on docChanged,
+  // but app.js's mirror of the count is independent and otherwise stays
+  // pinned to whatever the last manual search produced.
+  editor.on('update', () => syncTiptapFindStateFromPlugin());
 }
 function onTiptapEditorUpdate() {
   if (!currentFilePath || !activeTiptapEditor) return;
@@ -1909,6 +1916,8 @@ function discardIfEmpty() {
 }
 
 function openConversation(id) {
+  // Close any active find before swapping the DOM out from under it.
+  if (activeConversation && activeConversation.id !== id) closeFindBar();
   if (activeConversation && activeConversation.id !== id) discardIfEmpty();
   const c=conversations.find(x=>x.id===id); if(!c) return;
   activeConversation=c;
@@ -2659,6 +2668,10 @@ document.addEventListener('DOMContentLoaded', () => {
 // ===== 10. VIEWS & NAVIGATION =====
 
 function switchNav(nav) {
+  // Find bar is a per-view affordance: close on any nav change so highlights
+  // and search state don't survive into a context where they no longer make
+  // sense or reference DOM that's about to be replaced.
+  closeFindBar();
   document.querySelectorAll('.nav-item[data-nav]').forEach(n=>n.classList.remove('active'));
   document.querySelector(`[data-nav="${nav}"]`)?.classList.add('active');
   ['team','conversations','skills','files','settings'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
@@ -2767,6 +2780,8 @@ function clearFileSearch() {
 let editorMode='preview', rawFileContent='', fileFrontmatter='', fileBody='';
 
 function loadFileContent(path, content) {
+  // Close any active find before swapping the editor content.
+  if (currentFilePath !== path) closeFindBar();
   currentFilePath = path;
   rawFileContent = content;
   document.getElementById('editor-filename').textContent = path;
@@ -3438,5 +3453,317 @@ document.addEventListener('keydown', e => {
     saveTiptapFile();
   }
 });
+
+// ===== 17. IN-VIEW FIND BAR (Cmd+F / Ctrl+F) =====
+//
+// Single find-bar UI dispatched to one of three backends based on the active
+// view:
+//   - 'conversation'    : text-node walk + Range surroundContents on .msg-bubble
+//   - 'tiptap'          : ProseMirror decoration plugin (Step 5, separate file)
+//   - 'legacy-preview'  : same text-node walk as conversation, different root
+//
+// Find bar is mounted once in index.html (#find-bar) and shown/hidden via the
+// .hidden class. State lives in findState below; backends share the
+// navigation/scroll/clear interface and only differ in how matches are
+// discovered and visually marked.
+
+const findState = {
+  open: false,
+  query: '',
+  matches: [],          // <mark> elements for DOM backends
+  currentIndex: 0,
+  backend: null,        // 'conversation' | 'tiptap' | 'legacy-preview' | null
+  inputTimer: null,
+};
+
+function isFindHotkey(e) {
+  return (e.metaKey || e.ctrlKey) && !e.altKey && (e.key === 'f' || e.key === 'F');
+}
+
+function detectFindBackend() {
+  // Return the active view's search backend, or null if find shouldn't
+  // activate (e.g. workspace picker, settings, no file open).
+  if (currentView === 'chat' && activeConversation) return 'conversation';
+  if (currentView === 'editor' && activeTiptapEditor) return 'tiptap';
+  if (currentView === 'editor' && currentFilePath) return 'legacy-preview';
+  return null;
+}
+
+function openFindBar() {
+  const bar = document.getElementById('find-bar');
+  const input = document.getElementById('find-input');
+  if (!bar || !input) return;
+  if (findState.open) {
+    // Already open: re-focus and select so a second Cmd+F lets the user
+    // refine their query (matches Chrome's behaviour).
+    input.focus();
+    input.select();
+    return;
+  }
+  const backend = detectFindBackend();
+  if (!backend) return;
+  findState.open = true;
+  findState.backend = backend;
+  findState.matches = [];
+  findState.currentIndex = 0;
+  findState.query = '';
+  bar.classList.remove('hidden');
+  input.value = '';
+  input.focus();
+  updateFindCount();
+  updateFindButtons();
+}
+
+function closeFindBar() {
+  if (!findState.open) return;
+  clearFindMatches();
+  findState.open = false;
+  findState.backend = null;
+  findState.query = '';
+  findState.matches = [];
+  findState.currentIndex = 0;
+  const bar = document.getElementById('find-bar');
+  const count = document.getElementById('find-count');
+  if (bar) bar.classList.add('hidden');
+  if (count) {
+    count.textContent = '';
+    count.classList.remove('no-results');
+  }
+}
+
+function clearFindMatches() {
+  if (findState.backend === 'conversation' || findState.backend === 'legacy-preview') {
+    // DOM backends: unwrap every <mark.find-match>, restoring original text
+    // nodes. Coalesce adjacent text nodes via normalize() so subsequent
+    // searches see a clean tree.
+    const marks = document.querySelectorAll('mark.find-match');
+    const parents = new Set();
+    marks.forEach(mark => {
+      const parent = mark.parentNode;
+      if (!parent) return;
+      while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+      parent.removeChild(mark);
+      parents.add(parent);
+    });
+    parents.forEach(p => p.normalize());
+  } else if (findState.backend === 'tiptap') {
+    // Tiptap backend: clear the find plugin's state, which empties the
+    // decoration set. Document content is never touched.
+    if (_tiptapEditorModuleResolved && activeTiptapEditor) {
+      _tiptapEditorModuleResolved.clearFind(activeTiptapEditor);
+    }
+  }
+  findState.matches = [];
+  findState.currentIndex = 0;
+}
+
+function runFindSearch(query) {
+  clearFindMatches();
+  findState.query = query || '';
+  if (!findState.query) {
+    updateFindCount();
+    updateFindButtons();
+    return;
+  }
+  if (findState.backend === 'conversation') {
+    searchDomSubtree(document.getElementById('messages'), query, parent => {
+      const bubble = parent.closest && parent.closest('.msg-bubble');
+      if (!bubble) return false;
+      // Bubbles inside system, tool, and delegation rows should not match.
+      return !!bubble.closest('.msg-user, .msg-agent');
+    });
+  } else if (findState.backend === 'legacy-preview') {
+    const root = document.getElementById('editor-content');
+    if (root && !root.classList.contains('hidden')) {
+      searchDomSubtree(root, query, () => true);
+    }
+  } else if (findState.backend === 'tiptap') {
+    if (_tiptapEditorModuleResolved && activeTiptapEditor) {
+      _tiptapEditorModuleResolved.setFindQuery(activeTiptapEditor, query);
+      const tipState = _tiptapEditorModuleResolved.getFindState(activeTiptapEditor);
+      // Populate findState.matches with placeholders so the count UI and the
+      // navigation arithmetic both work without reaching back into the
+      // plugin every time. The real match positions live in the plugin.
+      findState.matches = tipState.matches.map(() => ({ tiptap: true }));
+      findState.currentIndex = tipState.currentIndex;
+    }
+  }
+  if (findState.matches.length) {
+    setCurrentFindMatch(0);
+  }
+  updateFindCount();
+  updateFindButtons();
+}
+
+// Walks all text nodes under root, applies the predicate to each text node's
+// parent element to decide whether to search it, and wraps every match in a
+// <mark class="find-match"> via the Range API. Matches accumulate into
+// findState.matches in DOM order.
+function searchDomSubtree(root, query, predicate) {
+  if (!root || !query) return;
+  const lowerQuery = query.toLowerCase();
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) => {
+      if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+      const parent = node.parentElement;
+      if (!parent) return NodeFilter.FILTER_REJECT;
+      // Don't re-wrap inside an existing match (defensive).
+      if (parent.closest('mark.find-match')) return NodeFilter.FILTER_REJECT;
+      return predicate(parent) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+    },
+  });
+  const textNodes = [];
+  let n;
+  while ((n = walker.nextNode())) textNodes.push(n);
+
+  for (const textNode of textNodes) {
+    const text = textNode.nodeValue;
+    const lower = text.toLowerCase();
+    const positions = [];
+    let pos = 0;
+    while (true) {
+      const idx = lower.indexOf(lowerQuery, pos);
+      if (idx === -1) break;
+      positions.push({ start: idx, end: idx + lowerQuery.length });
+      // Advance by query length; do not advance by 0 even on empty (guarded above).
+      pos = idx + lowerQuery.length;
+    }
+    if (!positions.length) continue;
+    // Wrap from right to left so earlier offsets stay valid against the
+    // shrinking text node. Collect in left-to-right order for findState.matches.
+    const nodeMarks = new Array(positions.length);
+    for (let i = positions.length - 1; i >= 0; i--) {
+      const { start, end } = positions[i];
+      try {
+        const range = document.createRange();
+        range.setStart(textNode, start);
+        range.setEnd(textNode, end);
+        const mark = document.createElement('mark');
+        mark.className = 'find-match';
+        range.surroundContents(mark);
+        nodeMarks[i] = mark;
+      } catch (err) {
+        // Range / surroundContents can fail if the node was mutated mid-walk.
+        // Skip this position silently.
+        nodeMarks[i] = null;
+      }
+    }
+    for (const m of nodeMarks) if (m) findState.matches.push(m);
+  }
+}
+
+function setCurrentFindMatch(idx) {
+  findState.currentIndex = idx;
+  if (findState.backend === 'tiptap') {
+    if (_tiptapEditorModuleResolved && activeTiptapEditor) {
+      // Plugin dispatches the index change, recomputes decorations, scrolls.
+      _tiptapEditorModuleResolved.setFindIndex(activeTiptapEditor, idx);
+    }
+  } else {
+    for (let i = 0; i < findState.matches.length; i++) {
+      const m = findState.matches[i];
+      if (m && m.classList) m.classList.toggle('current', i === idx);
+    }
+    const target = findState.matches[idx];
+    if (target && target.scrollIntoView) {
+      target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }
+  updateFindCount();
+}
+
+function gotoNextFindMatch() {
+  if (!findState.matches.length) return;
+  setCurrentFindMatch((findState.currentIndex + 1) % findState.matches.length);
+}
+
+function gotoPrevFindMatch() {
+  if (!findState.matches.length) return;
+  setCurrentFindMatch((findState.currentIndex - 1 + findState.matches.length) % findState.matches.length);
+}
+
+function updateFindCount() {
+  const countEl = document.getElementById('find-count');
+  if (!countEl) return;
+  if (!findState.query) {
+    countEl.textContent = '';
+    countEl.classList.remove('no-results');
+    return;
+  }
+  if (!findState.matches.length) {
+    countEl.textContent = 'No matches';
+    countEl.classList.add('no-results');
+    return;
+  }
+  countEl.textContent = `${findState.currentIndex + 1} of ${findState.matches.length}`;
+  countEl.classList.remove('no-results');
+}
+
+function updateFindButtons() {
+  const has = findState.matches.length > 0;
+  const prev = document.getElementById('find-prev');
+  const next = document.getElementById('find-next');
+  if (prev) prev.disabled = !has;
+  if (next) next.disabled = !has;
+}
+
+// Called from the Tiptap editor's `update` event so the count display stays
+// honest when the user types in the editor while the find bar is open. The
+// plugin handles matches and decorations itself; this just mirrors the new
+// count + current index into app-side state for the UI.
+function syncTiptapFindStateFromPlugin() {
+  if (findState.backend !== 'tiptap' || !findState.open) return;
+  if (!_tiptapEditorModuleResolved || !activeTiptapEditor) return;
+  const tipState = _tiptapEditorModuleResolved.getFindState(activeTiptapEditor);
+  findState.matches = tipState.matches.map(() => ({ tiptap: true }));
+  findState.currentIndex = tipState.currentIndex;
+  updateFindCount();
+  updateFindButtons();
+}
+
+function initFindBar() {
+  // Global Cmd+F / Ctrl+F: only intercept if find has a backend in the
+  // current view. In other views (workspace picker, settings, etc.) the
+  // browser's native find runs as usual.
+  document.addEventListener('keydown', (e) => {
+    if (isFindHotkey(e)) {
+      const backend = detectFindBackend();
+      if (!backend) return;
+      e.preventDefault();
+      openFindBar();
+      return;
+    }
+    if (e.key === 'Escape' && findState.open) {
+      e.preventDefault();
+      closeFindBar();
+    }
+  });
+  const input = document.getElementById('find-input');
+  if (input) {
+    input.addEventListener('input', (e) => {
+      clearTimeout(findState.inputTimer);
+      const q = e.target.value;
+      findState.inputTimer = setTimeout(() => runFindSearch(q), 100);
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (e.shiftKey) gotoPrevFindMatch();
+        else gotoNextFindMatch();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        closeFindBar();
+      }
+    });
+  }
+  const prev = document.getElementById('find-prev');
+  const next = document.getElementById('find-next');
+  const close = document.getElementById('find-close');
+  if (prev) prev.addEventListener('click', () => { gotoPrevFindMatch(); document.getElementById('find-input')?.focus(); });
+  if (next) next.addEventListener('click', () => { gotoNextFindMatch(); document.getElementById('find-input')?.focus(); });
+  if (close) close.addEventListener('click', closeFindBar);
+}
+
+initFindBar();
 
 connect();

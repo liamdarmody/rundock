@@ -12,6 +12,8 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 - **A rich markdown editor for files.** Markdown files (`.md`, `.mdx`) now open into an editor that formats text as you type, replacing the previous Preview/Edit toggle. Wikilinks render as styled links you can click to navigate. Callouts like `> [!note] body` render as coloured blocks. Frontmatter appears in a properties panel above the editor (read-only for now). Selecting text brings up a floating toolbar with bold, italic, code, link, and heading buttons. Cmd+S (Ctrl+S on Windows and Linux) forces an immediate save. Non-markdown files (`.json`, `.yaml`, `.png`, etc.) keep using the existing preview/edit pane unchanged.
 
+- **Find in view (Cmd+F / Ctrl+F).** Press Cmd+F (Ctrl+F on Windows and Linux) to search the active panel: the current conversation, an open markdown file, or a non-markdown file preview. The find bar appears in the top-right, highlights every match inline with stronger emphasis on the current one, and shows position as you go (e.g. *3 of 12*). Enter and Shift+Enter walk through matches with wrap-around at the ends. The count updates live as you type, including while you type new content in the editor. Esc closes and clears all highlights.
+
 ### Changed
 
 - **Reopening Rundock lands on the conversation you were last in.** Previously, reopening Rundock or refreshing the page loaded the top pinned conversation, even when you'd been working in a different one further down the recency-sorted sidebar. Rundock now remembers the last-opened conversation per workspace and reopens to it. If that conversation has since been deleted or archived, it falls back to the most-recently-active non-archived conversation.
