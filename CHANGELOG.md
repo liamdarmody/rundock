@@ -6,7 +6,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ## Unreleased
 
-**Name:** Windows Fixes & Conversation History
+**Name:** Rich Markdown Editor & Find
 
 ### Added
 
