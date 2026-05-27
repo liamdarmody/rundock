@@ -8,6 +8,16 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 **Name:** Windows Fixes & Conversation History
 
+### Added
+
+- **A rich markdown editor for files.** Markdown files (`.md`, `.mdx`) now open into an editor that formats text as you type, replacing the previous Preview/Edit toggle. Wikilinks render as styled links you can click to navigate. Callouts like `> [!note] body` render as coloured blocks. Frontmatter appears in a properties panel above the editor (read-only for now). Selecting text brings up a floating toolbar with bold, italic, code, link, and heading buttons. Cmd+S (Ctrl+S on Windows and Linux) forces an immediate save. Non-markdown files (`.json`, `.yaml`, `.png`, etc.) keep using the existing preview/edit pane unchanged.
+
+### Changed
+
+- **Reopening Rundock lands on the conversation you were last in.** Previously, reopening Rundock or refreshing the page loaded the top pinned conversation, even when you'd been working in a different one further down the recency-sorted sidebar. Rundock now remembers the last-opened conversation per workspace and reopens to it. If that conversation has since been deleted or archived, it falls back to the most-recently-active non-archived conversation.
+
+- **The selected conversation in the sidebar is easier to spot.** Selection used the same neutral background as hover, which made the selected row hard to distinguish when scanning the list. Selection now uses a subtle terracotta tint; hovering the already-selected row deepens the tint slightly so the active conversation stays identifiable at any moment.
+
 ### Fixed
 
 - **Claude Code is detected on Windows when installed via npm.** Windows users who installed Claude Code with `npm install -g @anthropic-ai/claude-code` previously hit a first-run wizard error saying Claude was not installed, even though it was. Rundock now recognises the `.cmd` shim that npm produces alongside the `.exe` from Anthropic's PowerShell installer, so both Windows install paths work end-to-end.
