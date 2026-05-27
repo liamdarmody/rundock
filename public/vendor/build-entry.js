@@ -14,6 +14,8 @@ export { Editor, Node, Mark, Extension, mergeAttributes, InputRule } from '@tipt
 export { default as StarterKit } from '@tiptap/starter-kit';
 export { default as HardBreak } from '@tiptap/extension-hard-break';
 export { Markdown } from 'tiptap-markdown';
+export { Plugin, PluginKey } from '@tiptap/pm/state';
+export { Decoration, DecorationSet } from '@tiptap/pm/view';
 
 import * as yaml from 'js-yaml';
 export { yaml };

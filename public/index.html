@@ -448,6 +448,26 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .floating-toolbar .tb-btn.active { background: var(--accent); color: #fff; }
 .floating-toolbar .tb-btn svg { display: block; }
 
+/* In-view find bar (Cmd+F / Ctrl+F). Positioned absolutely against the main
+   panel area so it floats over whichever view is active. Match highlights
+   below apply to both <mark class="find-match"> (conversation, legacy file
+   preview) and .find-match decoration spans inside the markdown editor. */
+.find-bar { position: absolute; top: 12px; right: 16px; z-index: 100; display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.25); }
+.find-bar.hidden { display: none; }
+.find-bar input { background: transparent; border: none; outline: none; color: var(--text-1); font-size: var(--body); min-width: 180px; padding: 4px 6px; font-family: inherit; }
+.find-bar input::placeholder { color: var(--text-3); }
+.find-count { font-size: var(--caption); color: var(--text-2); font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; min-width: 56px; text-align: right; padding: 0 4px; }
+.find-count.no-results { color: #E85A5A; }
+.find-count:empty { display: none; }
+.find-btn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; background: transparent; color: var(--text-2); border: none; border-radius: 4px; cursor: pointer; transition: background 0.15s ease, color 0.15s ease; }
+.find-btn:hover { background: var(--accent-glow); color: var(--accent); }
+.find-btn:disabled { opacity: 0.35; cursor: default; pointer-events: none; }
+.find-btn svg { display: block; }
+mark.find-match,
+.tiptap-editor .ProseMirror .find-match { background: rgba(232, 168, 76, 0.4); color: inherit; padding: 1px 0; border-radius: 2px; }
+mark.find-match.current,
+.tiptap-editor .ProseMirror .find-match.current { background: var(--attention); color: #1a1a1a; }
+
 /* Thinking */
 .thinking-bubble { min-height: 24px; display: flex; align-items: center; gap: 12px; }
 .thinking-pulse { width: 24px; height: 24px; border-radius: 50%; animation: agentPulse 1.8s ease-in-out infinite; flex-shrink: 0; }
@@ -703,6 +723,22 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 
   <main class="main">
     <div class="connection-bar connecting" id="connection-bar">Connecting...</div>
+    <!-- In-view find bar. Cmd+F (Ctrl+F) opens it for whichever view is
+         active: conversation, markdown editor, or legacy file preview.
+         Positioned absolutely in the top-right of the main panel area. -->
+    <div id="find-bar" class="find-bar hidden" role="search" aria-label="Find in view">
+      <input id="find-input" type="text" placeholder="Find" autocomplete="off" spellcheck="false" />
+      <span id="find-count" class="find-count"></span>
+      <button id="find-prev" class="find-btn" title="Previous match (Shift+Enter)" aria-label="Previous match">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>
+      </button>
+      <button id="find-next" class="find-btn" title="Next match (Enter)" aria-label="Next match">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+      <button id="find-close" class="find-btn" title="Close (Esc)" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
     <!-- Workspace picker -->
     <div id="view-workspace" class="hidden view-panel view-scroll" style="align-items:center;padding:32px">
       <div style="max-width:480px;width:100%;text-align:center;margin:auto 0">

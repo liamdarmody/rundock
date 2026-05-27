@@ -37089,6 +37089,8 @@ var jsYaml = {
 };
 var js_yaml_default = jsYaml;
 export {
+  Decoration,
+  DecorationSet,
   Editor,
   Extension,
   index_default as HardBreak,
@@ -37096,6 +37098,8 @@ export {
   Mark2 as Mark,
   Markdown,
   Node3 as Node,
+  Plugin,
+  PluginKey,
   index_default2 as StarterKit,
   mergeAttributes,
   js_yaml_exports as yaml

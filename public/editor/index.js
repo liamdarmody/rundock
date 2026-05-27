@@ -14,6 +14,9 @@ import { createEditorInstance } from './factory.js';
 import { parseFile, serialiseFile } from './markdown/pipeline.js';
 import { attachFloatingToolbar } from './panels/floating-toolbar.js';
 import { renderProperties } from './panels/properties.js';
+import { setFindQuery, findNext, findPrev, setFindIndex, clearFind, getFindState } from './plugins/find.js';
+
+export { setFindQuery, findNext, findPrev, setFindIndex, clearFind, getFindState };
 
 const _editorHandles = new WeakMap();
 

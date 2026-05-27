@@ -15,6 +15,7 @@ import { Editor, StarterKit, Markdown } from '../vendor/tiptap-bundle.mjs';
 import { Wikilink } from './nodes/wikilink.js';
 import { Callout } from './nodes/callout.js';
 import { SoftHardBreak } from './nodes/soft-hard-break.js';
+import { FindExtension } from './plugins/find.js';
 
 export function createEditorInstance({ element, initialBody, onUpdate, onSelectionChange }) {
   if (!element) throw new Error('createEditorInstance: element is required');
@@ -43,6 +44,7 @@ export function createEditorInstance({ element, initialBody, onUpdate, onSelecti
       SoftHardBreak,
       Wikilink,
       Callout,
+      FindExtension,
       Markdown.configure({
         // html:false closes the XSS surface that the prototype's regex
         // pre-processors required. Wikilink and Callout source-side parsing
