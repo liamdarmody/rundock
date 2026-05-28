@@ -4,9 +4,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## Unreleased
-
-**Name:** Rich Markdown Editor & Find
+## 0.8.11: Rich Markdown Editor & Find (2026-05-28)
 
 ### Added
 
