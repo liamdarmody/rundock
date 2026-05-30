@@ -1,7 +1,7 @@
 {
   "name": "rundock",
   "version": "0.8.11",
-  "description": "A browser-based OS for AI agent teams. Built for knowledge work, powered by Claude Code.",
+  "description": "A visual interface for AI agent teams. Built for people running their own businesses, powered by Claude Code.",
   "main": "electron/main.js",
   "scripts": {
     "start": "node server.js",
