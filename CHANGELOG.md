@@ -4,6 +4,12 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+### Fixed
+
+- **Agent profile capabilities card renders all capability fields consistently:** The Writes To section was displaying comma-separated paths as a single line of text while Reads From displayed each path as a separate line item. Both sections now split on commas and render each path individually. The "What [agent] does" label also now correctly escapes and trims the display name before rendering.
+
 ## 0.8.11: Rich Markdown Editor & Find (2026-05-28)
 
 ### Added
