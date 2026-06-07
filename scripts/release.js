@@ -13,6 +13,9 @@
  *   6. Bump the download buttons in the Rundock Site repo to the new DMG
  *      and push (skipped if the site repo is dirty or not on main)
  *
+ * On Windows (no Apple credentials in .env), steps 2–4 and 6 are skipped.
+ * The build produces an NSIS .exe + latest.yml instead of DMG + ZIP.
+ *
  * Usage:
  *   node scripts/release.js <version>
  *   npm run release -- <version>
@@ -52,6 +55,17 @@ function hasAppleCreds() {
   return !!(process.env.CSC_LINK && process.env.APPLE_API_KEY);
 }
 
+function hasAnyAppleCred() {
+  return !!(
+    process.env.CSC_LINK ||
+    process.env.CSC_KEY_PASSWORD ||
+    process.env.APPLE_API_KEY ||
+    process.env.APPLE_API_KEY_ID ||
+    process.env.APPLE_API_ISSUER ||
+    process.env.APPLE_TEAM_ID
+  );
+}
+
 function loadEnv() {
   const envPath = path.join(ROOT, '.env');
   if (fs.existsSync(envPath)) {
@@ -61,7 +75,7 @@ function loadEnv() {
     log('env', 'No .env file found, proceeding without signing credentials.');
   }
 
-  if (hasAppleCreds()) {
+  if (hasAnyAppleCred()) {
     const required = [
       'APPLE_API_KEY',
       'APPLE_API_KEY_ID',
@@ -128,7 +142,7 @@ function submitNotarisation() {
   log('notarise', 'Submitting for Apple notarisation...');
 
   // Zip the .app for submission
-  const zipPath = '/tmp/rundock-dist/Rundock-notarize.zip';
+  const zipPath = path.join(DIST_DIR, 'Rundock-notarize.zip');
   try {
     execSync(
       `ditto -c -k --keepParent "${APP_PATH}" "${zipPath}"`,
@@ -544,7 +558,9 @@ if (hasAppleCreds()) {
   updateSiteDownloadUrls(version);
 }
 
-const dmgPath = path.join(DIST_DIR, `Rundock-${version}-arm64.dmg`);
+const artifactPath = hasAppleCreds()
+  ? path.join(DIST_DIR, `Rundock-${version}-arm64.dmg`)
+  : path.join(DIST_DIR, `Rundock-${version}-Setup.exe`);
 
 console.log('');
-log('done', `Release complete: ${dmgPath}`);
+log('done', `Release complete: ${artifactPath}`);
