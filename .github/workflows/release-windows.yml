@@ -1,0 +1,33 @@
+name: Release Windows
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+
+      - name: Build Windows installer
+        run: node scripts/build.js --win
+
+      - name: Upload artifacts to release
+        shell: bash
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            dist-output/*.exe \
+            dist-output/*.blockmap \
+            dist-output/latest.yml \
+            --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
