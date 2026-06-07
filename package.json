@@ -25,7 +25,7 @@
     "appId": "ai.rundock.app",
     "productName": "Rundock",
     "directories": {
-      "output": "/tmp/rundock-dist"
+      "output": "dist-output"
     },
     "files": [
       "server.js",
@@ -74,6 +74,17 @@
           "path": "/Applications"
         }
       ]
+    },
+    "win": {
+      "icon": "electron/build/icon.ico",
+      "target": [{ "target": "nsis", "arch": ["x64"] }]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "artifactName": "Rundock-${version}-Setup.exe",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
     },
     "publish": {
       "provider": "github",

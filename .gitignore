@@ -8,3 +8,5 @@ node_modules/
 *.swp
 *.swo
 dist/
+.claude/settings.local.json
+dist-output/
