@@ -31,8 +31,8 @@ const path = require('path');
 const fs = require('fs');
 
 const ROOT = path.join(__dirname, '..');
-const APP_PATH = '/tmp/rundock-dist/mac-arm64/Rundock.app';
-const DIST_DIR = '/tmp/rundock-dist';
+const DIST_DIR = path.join(ROOT, 'dist-output');
+const APP_PATH = path.join(DIST_DIR, 'mac-arm64', 'Rundock.app');
 const POLL_INTERVAL_MS = 30_000;
 
 // ---------------------------------------------------------------------------
@@ -48,26 +48,32 @@ function fail(step, msg) {
   process.exit(1);
 }
 
+function hasAppleCreds() {
+  return !!(process.env.CSC_LINK && process.env.APPLE_API_KEY);
+}
+
 function loadEnv() {
   const envPath = path.join(ROOT, '.env');
   if (fs.existsSync(envPath)) {
     require('dotenv').config({ path: envPath });
     log('env', 'Loaded .env');
   } else {
-    fail('env', 'No .env file found. Cannot sign or notarise without credentials.');
+    log('env', 'No .env file found, proceeding without signing credentials.');
   }
 
-  const required = [
-    'APPLE_API_KEY',
-    'APPLE_API_KEY_ID',
-    'APPLE_API_ISSUER',
-    'CSC_LINK',
-    'CSC_KEY_PASSWORD',
-    'APPLE_TEAM_ID',
-  ];
-  const missing = required.filter((k) => !process.env[k]);
-  if (missing.length) {
-    fail('env', `Missing required env vars: ${missing.join(', ')}`);
+  if (hasAppleCreds()) {
+    const required = [
+      'APPLE_API_KEY',
+      'APPLE_API_KEY_ID',
+      'APPLE_API_ISSUER',
+      'CSC_LINK',
+      'CSC_KEY_PASSWORD',
+      'APPLE_TEAM_ID',
+    ];
+    const missing = required.filter((k) => !process.env[k]);
+    if (missing.length) {
+      fail('env', `Missing required env vars: ${missing.join(', ')}`);
+    }
   }
 }
 
@@ -96,21 +102,26 @@ function setVersion() {
 }
 
 function build() {
-  log('build', 'Running electron-builder --mac');
+  const platform = hasAppleCreds() ? '--mac' : '--win';
+  log('build', `Running electron-builder ${platform}`);
   try {
     execFileSync(
       path.join(ROOT, 'node_modules', '.bin', 'electron-builder'),
-      ['--mac', '--publish', 'never'],
+      [platform, '--publish', 'never'],
       { stdio: 'inherit', cwd: ROOT }
     );
   } catch (err) {
     fail('build', `electron-builder exited with code ${err.status || 1}`);
   }
 
-  if (!fs.existsSync(APP_PATH)) {
-    fail('build', `Expected .app not found at ${APP_PATH}`);
+  if (hasAppleCreds()) {
+    if (!fs.existsSync(APP_PATH)) {
+      fail('build', `Expected .app not found at ${APP_PATH}`);
+    }
+    log('build', `Built ${APP_PATH}`);
+  } else {
+    log('build', `Built Windows artifacts in ${DIST_DIR}`);
   }
-  log('build', `Built ${APP_PATH}`);
 }
 
 function submitNotarisation() {
@@ -371,12 +382,17 @@ function commitAndPush(version) {
 
 function publishRelease(version) {
   const tag = `v${version}`;
-  const dmg = path.join(DIST_DIR, `Rundock-${version}-arm64.dmg`);
-  const dmgBlockmap = `${dmg}.blockmap`;
-  const zip = path.join(DIST_DIR, `Rundock-${version}-arm64-mac.zip`);
-  const zipBlockmap = `${zip}.blockmap`;
-  const feed = path.join(DIST_DIR, 'latest-mac.yml');
-  const assets = [dmg, dmgBlockmap, zip, zipBlockmap, feed];
+  let assets;
+  if (hasAppleCreds()) {
+    const dmg = path.join(DIST_DIR, `Rundock-${version}-arm64.dmg`);
+    const zip = path.join(DIST_DIR, `Rundock-${version}-arm64-mac.zip`);
+    const feed = path.join(DIST_DIR, 'latest-mac.yml');
+    assets = [dmg, `${dmg}.blockmap`, zip, `${zip}.blockmap`, feed];
+  } else {
+    const setup = path.join(DIST_DIR, `Rundock-${version}-Setup.exe`);
+    const feed = path.join(DIST_DIR, 'latest.yml');
+    assets = [setup, `${setup}.blockmap`, feed];
+  }
 
   for (const a of assets) {
     if (!fs.existsSync(a)) fail('publish', `Missing release artifact: ${a}`);
@@ -514,13 +530,19 @@ loadEnv();
 promoteUnreleasedChangelog(process.argv[2]);
 commitAndPush(process.argv[2]);
 build();
-const submissionId = submitNotarisation();
-pollNotarisation(submissionId);
-staple();
+
+if (hasAppleCreds()) {
+  const submissionId = submitNotarisation();
+  pollNotarisation(submissionId);
+  staple();
+}
 
 const version = process.argv[2];
 publishRelease(version);
-updateSiteDownloadUrls(version);
+
+if (hasAppleCreds()) {
+  updateSiteDownloadUrls(version);
+}
 
 const dmgPath = path.join(DIST_DIR, `Rundock-${version}-arm64.dmg`);
 
