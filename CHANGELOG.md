@@ -4,6 +4,16 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## 0.8.12: Windows Support (2026-06-07)
+
+### Added
+
+- **Windows installer distribution.** Rundock now ships as a Windows NSIS installer (`.exe`) for x64. The installer creates desktop and Start Menu shortcuts, and updates are delivered via the same electron-builder auto-update mechanism as macOS. Windows releases are built automatically via GitHub Actions when a release is published.
+
+- **Platform-aware build pipeline.** Build scripts now detect whether Apple signing credentials are present and default to the appropriate platform: Windows when credentials are absent, macOS when credentials are available. You can override this with explicit flags: `node scripts/build.js --win` or `--mac`.
+
+- **Platform-aware UI.** The title bar and app menu now adapt to the operating system. macOS retains the hiddenInset title bar style and the classic Rundock/Edit/View menu layout. Windows uses the default title bar style and a File/Edit/View/Help menu structure with About and Check for Updates under Help.
+
 ## 0.8.11: Rich Markdown Editor & Find (2026-05-28)
 
 ### Added
