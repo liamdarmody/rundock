@@ -25,8 +25,15 @@ if (fs.existsSync(envPath)) {
   console.warn('[build] No .env file found. Signing and notarisation will be skipped.');
 }
 
-// Forward all CLI args to electron-builder
-const args = ['--mac', ...process.argv.slice(2)];
+function hasAppleCreds() {
+  return !!(process.env.CSC_LINK && process.env.APPLE_API_KEY);
+}
+
+const explicitMac = process.argv.includes('--mac');
+const explicitWin = process.argv.includes('--win');
+const platform = explicitMac ? '--mac' : explicitWin ? '--win' : hasAppleCreds() ? '--mac' : '--win';
+const extraArgs = process.argv.slice(2).filter(a => a !== '--mac' && a !== '--win');
+const args = [platform, ...extraArgs];
 
 console.log(`[build] Running: electron-builder ${args.join(' ')}`);
 
