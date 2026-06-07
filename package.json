@@ -18,6 +18,7 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "dotenv": "^16.0.0",
     "electron": "^35.0.0",
     "electron-builder": "^26.0.0"
   },

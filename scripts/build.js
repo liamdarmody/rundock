@@ -41,7 +41,7 @@ try {
   execFileSync(
     path.join(__dirname, '..', 'node_modules', '.bin', 'electron-builder'),
     args,
-    { stdio: 'inherit', cwd: path.join(__dirname, '..') }
+    { stdio: 'inherit', cwd: path.join(__dirname, '..'), shell: true }
   );
 } catch (err) {
   process.exit(err.status || 1);
