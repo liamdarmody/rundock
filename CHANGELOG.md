@@ -4,6 +4,16 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** Chat Code Copy
+
+Code blocks in the chat view now have a one-click copy button. Hovering over any fenced code block reveals a clipboard icon in the header bar above the code; clicking it copies the block's text to the clipboard and briefly shows a checkmark before resetting.
+
+### Added
+
+- **Copy button on chat code blocks:** Fenced code blocks rendered in the chat view now display a header bar containing the language label and a clipboard icon button. Previously there was no way to copy code from a response without selecting the text manually. Clicking the icon copies the block's full text content to the clipboard via the native Clipboard API and swaps it to a checkmark for two seconds to confirm the action. No new dependencies were added; icons are inlined SVG.
+
 ## 0.8.11: Rich Markdown Editor & Find (2026-05-28)
 
 ### Added
