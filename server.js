@@ -23,8 +23,42 @@ let WORKSPACE = process.env.WORKSPACE || null;
 const DISALLOWED_TOOLS_KNOWLEDGE = 'Write(*.js),Write(*.jsx),Write(*.ts),Write(*.tsx),Write(*.py),Write(*.sh),Write(*.bash),Write(*.rb),Write(*.pl),Write(*.exe),Write(*.dll),Write(*.so),Edit(*.js),Edit(*.jsx),Edit(*.ts),Edit(*.tsx),Edit(*.py),Edit(*.sh),Edit(*.bash),Edit(*.rb),Edit(*.pl),Edit(*.exe)';
 // Backward compat: DISALLOWED_TOOLS used by existing code paths
 const DISALLOWED_TOOLS = DISALLOWED_TOOLS_KNOWLEDGE;
-const ALLOWED_TOOLS_INTERACTIVE = 'Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,ToolSearch,Agent,Skill,mcp__*';
-const ALLOWED_TOOLS_LEGACY = 'Bash,WebFetch,WebSearch,mcp__*';
+
+/**
+ * Dynamically resolves registered MCP server scopes to satisfy 
+ * Claude Code v2.1.166+ strict wildcard validation patterns.
+ */
+function getMcpAllowedToolsString() {
+  try {
+    // Locate the standard Claude MCP setup manifest in the active working directory
+    const mcpConfigPath = path.join(process.cwd(), '.claude', 'mcp.json');
+
+    if (fs.existsSync(mcpConfigPath)) {
+      const configRaw = fs.readFileSync(mcpConfigPath, 'utf8');
+      const config = JSON.parse(configRaw);
+
+      if (config && config.mcpServers) {
+        const serverNames = Object.keys(config.mcpServers);
+        if (serverNames.length > 0) {
+          // Transforms ['gmail', 'gcal'] into ',mcp__gmail__*,mcp__gcal__*'
+          return ',' + serverNames.map(name => `mcp__${name}__*`).join(',');
+        }
+      }
+    }
+  } catch (error) {
+    // Fail silently to prevent throwing initialization noise during boot routines
+    console.warn('[Rundock] Note: Skipping dynamic MCP tool expansion:', error.message);
+  }
+  return '';
+}
+
+// Construct the base capabilities arrays dynamically
+const ALLOWED_TOOLS_INTERACTIVE = `Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,ToolSearch,Agent,Skill${getMcpAllowedToolsString()}`;
+const ALLOWED_TOOLS_LEGACY = `Bash,WebFetch,WebSearch${getMcpAllowedToolsString()}`;
+
+// const ALLOWED_TOOLS_INTERACTIVE = 'Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,ToolSearch,Agent,Skill,mcp__*';
+// const ALLOWED_TOOLS_LEGACY = 'Bash,WebFetch,WebSearch,mcp__*';
+
 
 // Returns the disallowed-tools string based on workspace mode.
 // Code mode: no file type restrictions (empty string).
