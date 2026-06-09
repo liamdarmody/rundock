@@ -1,0 +1,56 @@
+name: Release Windows
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+
+      - name: Build Windows installer
+        run: node scripts/build.js --win
+
+      - name: Verify build artifacts
+        shell: bash
+        run: |
+          shopt -s nullglob
+          artifacts=(dist-output/*.exe dist-output/*.blockmap dist-output/latest.yml)
+          if [ ${#artifacts[@]} -eq 0 ]; then
+            echo "::error::No build artifacts found in dist-output/"
+            ls -la dist-output/ || true
+            exit 1
+          fi
+          echo "Found ${#artifacts[@]} artifacts:"
+          printf '  %s\n' "${artifacts[@]}"
+
+      - name: Upload artifacts to release
+        shell: bash
+        run: |
+          shopt -s nullglob
+          files=()
+          for f in dist-output/*.exe dist-output/*.blockmap dist-output/latest.yml; do
+            [ -f "$f" ] && files+=("$f")
+          done
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No files to upload"
+            exit 1
+          fi
+          gh release upload "${{ github.event.release.tag_name }}" \
+            "${files[@]}" \
+            --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

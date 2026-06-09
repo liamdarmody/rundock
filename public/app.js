@@ -1207,9 +1207,9 @@ function showProfile(agentId) {
   if(a.capabilities) {
     const c = a.capabilities;
     h+=`<div class="profile-card">`;
-    if(c.does) h+=`<div class="profile-card-section"><div class="profile-section-label">What ${a.displayName} does</div><div class="profile-card-text">${esc(c.does)}</div></div>`;
-    if(c.reads) h+=`<div class="profile-card-section"><div class="profile-section-label">Reads from</div>${c.reads.split(',').map(r=>`<div class="profile-card-item">${r.trim()}</div>`).join('')}</div>`;
-    if(c.writes) h+=`<div class="profile-card-section"><div class="profile-section-label">Writes to</div><div class="profile-card-text">${esc(c.writes)}</div></div>`;
+    if(c.does) h+=`<div class="profile-card-section"><div class="profile-section-label">What ${esc(a.displayName.trim())} does</div><div class="profile-card-text">${esc(c.does)}</div></div>`;
+    if(c.reads) h+=`<div class="profile-card-section"><div class="profile-section-label">Reads from</div>${c.reads.split(',').map(r=>`<div class="profile-card-text">${esc(r.trim())}</div>`).join('')}</div>`;
+    if(c.writes) h+=`<div class="profile-card-section"><div class="profile-section-label">Writes to</div>${c.writes.split(',').map(w=>`<div class="profile-card-text">${esc(w.trim())}</div>`).join('')}</div>`;
     h+=`</div>`;
   }
   // Skills card
@@ -2690,9 +2690,27 @@ function showView(v) { currentView=v; ['workspace','home','profile','chat','conv
 function goHome() { discardIfEmpty(); activeConversation=null; switchNav('conversations'); }
 
 // Theme
-function toggleTheme() { document.body.classList.toggle('light'); const isLight=document.body.classList.contains('light'); document.getElementById('theme-toggle').innerHTML=isLight?moonIcon:sunIcon; try{localStorage.setItem('rundock-theme',isLight?'light':'dark');}catch(e){} }
+function applyHljsTheme(isLight) {
+  const dark = document.getElementById('hljs-dark');
+  const light = document.getElementById('hljs-light');
+  if (dark) dark.disabled = isLight;
+  if (light) light.disabled = !isLight;
+}
+function toggleTheme() {
+  document.body.classList.toggle('light');
+  const isLight = document.body.classList.contains('light');
+  document.getElementById('theme-toggle').innerHTML = isLight ? moonIcon : sunIcon;
+  applyHljsTheme(isLight);
+  try { localStorage.setItem('rundock-theme', isLight ? 'light' : 'dark'); } catch(e) {}
+}
 // Restore saved theme on load
-try{if(localStorage.getItem('rundock-theme')==='light'){document.body.classList.add('light');document.getElementById('theme-toggle').innerHTML=moonIcon;}}catch(e){}
+try {
+  if (localStorage.getItem('rundock-theme') === 'light') {
+    document.body.classList.add('light');
+    document.getElementById('theme-toggle').innerHTML = moonIcon;
+    applyHljsTheme(true);
+  }
+} catch(e) {}
 
 // ===== 11. FILE TREE & EDITOR =====
 
@@ -2967,6 +2985,61 @@ function editorGoBack() {
 
 // Configure marked
 marked.setOptions({ gfm: true, breaks: true });
+
+marked.use({
+  renderer: {
+    code({ text, lang }) {
+      let highlighted;
+      let displayLang = '';
+
+      if (lang && hljs.getLanguage(lang)) {
+        // Known language: highlight and use the full display name (e.g. 'JavaScript' not 'js')
+        highlighted = hljs.highlight(text, { language: lang }).value;
+        displayLang = hljs.getLanguage(lang).name;
+      } else if (lang) {
+        // Language specified but not in the hljs common bundle: escape and show as-is
+        highlighted = text
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+        displayLang = lang;
+      } else {
+        // No language specified: auto-detect
+        const result = hljs.highlightAuto(text);
+        highlighted = result.value;
+        displayLang = result.language
+          ? (hljs.getLanguage(result.language)?.name || result.language)
+          : '';
+      }
+
+      const langLabel = displayLang
+        ? `<span class="code-lang">${displayLang}</span>`
+        : '<span></span>';
+
+      return (
+        `<div class="code-block-wrapper">` +
+        `<div class="code-block-header">${langLabel}` +
+        `<button class="copy-code-btn" onclick="copyCode(this)" title="Copy code"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>` +
+        `</div><pre><code class="hljs">${highlighted}</code></pre></div>`
+      );
+    }
+  }
+});
+
+const COPY_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+const CHECK_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+
+function copyCode(btn) {
+  const code = btn.closest('.code-block-wrapper').querySelector('code');
+  navigator.clipboard.writeText(code.textContent).then(() => {
+    btn.innerHTML = CHECK_ICON;
+    btn.classList.add('copied');
+    setTimeout(() => {
+      btn.innerHTML = COPY_ICON;
+      btn.classList.remove('copied');
+    }, 2000);
+  });
+}
 
 function renderMarkdown(text, options = {}) {
   let src = text;

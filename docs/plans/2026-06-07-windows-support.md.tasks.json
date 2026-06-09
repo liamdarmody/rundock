@@ -1,0 +1,33 @@
+{
+  "planPath": "docs/plans/2026-06-07-windows-support.md",
+  "tasks": [
+    {
+      "id": 3,
+      "subject": "Task 1: package.json — add win/nsis build config and fix output path",
+      "status": "completed"
+    },
+    {
+      "id": 4,
+      "subject": "Task 2: scripts/build.js — add hasAppleCreds(), default to --win",
+      "status": "pending",
+      "blockedBy": [3]
+    },
+    {
+      "id": 5,
+      "subject": "Task 3: scripts/release.js — platform detection, fix DIST_DIR, conditional artifacts",
+      "status": "completed",
+      "blockedBy": [3]
+    },
+    {
+      "id": 6,
+      "subject": "Task 4: electron/main.js — Windows UI conditionals",
+      "status": "completed"
+    },
+    {
+      "id": 7,
+      "subject": "Task 5: .github/workflows/release-windows.yml — CI workflow",
+      "status": "completed"
+    }
+  ],
+  "lastUpdated": "2026-06-07T00:00:00Z"
+}

@@ -4,6 +4,30 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+### Added
+
+- **Copy button on chat code blocks:** Fenced code blocks rendered in the chat view now display a header bar containing the language label and a clipboard icon button. Previously there was no way to copy code from a response without selecting the text manually. Clicking the icon copies the block's full text content to the clipboard via the native Clipboard API and swaps it to a checkmark for two seconds to confirm the action. No new dependencies were added; icons are inlined SVG.
+
+- **Syntax highlighting for chat code blocks:** Fenced code blocks in the chat view now render with token-level syntax highlighting. Keywords, strings, comments, and identifiers are coloured using highlight.js with the Atom One theme — dark in dark mode, light in light mode. The language label in the code block header now shows the full language name (e.g. "JavaScript" rather than "js"). Blocks with an unrecognised language label fall back to uncoloured output; blocks with no language label use auto-detection. No new npm dependencies; highlight.js is loaded from CDN, the same pattern as d3-hierarchy.
+
+### Fixed
+
+- **Agent profile capabilities card renders all capability fields consistently:** The Writes To section was displaying comma-separated paths as a single line of text while Reads From displayed each path as a separate line item. Both sections now split on commas and render each path individually. The "What [agent] does" label also now correctly escapes and trims the display name before rendering.
+
+- **MCP tools are allowed without errors on Claude Code v2.1.166 and later.** Rundock previously passed `mcp__*` as a blanket allow rule for MCP tools. Claude Code v2.1.166 tightened wildcard validation: allow rules must name the specific server scope (e.g. `mcp__gmail__*`) rather than a global `mcp__*` wildcard. Rundock now reads `.claude/mcp.json` at startup and expands registered server names into per-server wildcard entries (e.g. `mcp__gmail__*,mcp__gcal__*`). Workspaces without an MCP config are unaffected.
+
+## 0.8.12: Windows Support (2026-06-07)
+
+### Added
+
+- **Windows installer distribution.** Rundock now ships as a Windows NSIS installer (`.exe`) for x64. The installer creates desktop and Start Menu shortcuts, and updates are delivered via the same electron-builder auto-update mechanism as macOS. Windows releases are built automatically via GitHub Actions when a release is published.
+
+- **Platform-aware build pipeline.** Build scripts now detect whether Apple signing credentials are present and default to the appropriate platform: Windows when credentials are absent, macOS when credentials are available. You can override this with explicit flags: `node scripts/build.js --win` or `--mac`.
+
+- **Platform-aware UI.** The title bar and app menu now adapt to the operating system. macOS retains the hiddenInset title bar style and the classic Rundock/Edit/View menu layout. Windows uses the default title bar style and a File/Edit/View/Help menu structure with About and Check for Updates under Help.
+
 ## 0.8.11: Rich Markdown Editor & Find (2026-05-28)
 
 ### Added

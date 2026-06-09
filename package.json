@@ -1,6 +1,6 @@
 {
   "name": "rundock",
-  "version": "0.8.11",
+  "version": "0.8.12",
   "description": "A visual interface for AI agent teams. Built for people running their own businesses, powered by Claude Code.",
   "main": "electron/main.js",
   "scripts": {
@@ -18,6 +18,7 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "dotenv": "^16.0.0",
     "electron": "^35.0.0",
     "electron-builder": "^26.0.0"
   },
@@ -25,7 +26,7 @@
     "appId": "ai.rundock.app",
     "productName": "Rundock",
     "directories": {
-      "output": "/tmp/rundock-dist"
+      "output": "dist-output"
     },
     "files": [
       "server.js",
@@ -74,6 +75,24 @@
           "path": "/Applications"
         }
       ]
+    },
+    "win": {
+      "icon": "electron/build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "artifactName": "Rundock-${version}-Setup.exe",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
     },
     "publish": {
       "provider": "github",
