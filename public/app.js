@@ -1207,9 +1207,9 @@ function showProfile(agentId) {
   if(a.capabilities) {
     const c = a.capabilities;
     h+=`<div class="profile-card">`;
-    if(c.does) h+=`<div class="profile-card-section"><div class="profile-section-label">What ${a.displayName} does</div><div class="profile-card-text">${esc(c.does)}</div></div>`;
-    if(c.reads) h+=`<div class="profile-card-section"><div class="profile-section-label">Reads from</div>${c.reads.split(',').map(r=>`<div class="profile-card-item">${r.trim()}</div>`).join('')}</div>`;
-    if(c.writes) h+=`<div class="profile-card-section"><div class="profile-section-label">Writes to</div><div class="profile-card-text">${esc(c.writes)}</div></div>`;
+    if(c.does) h+=`<div class="profile-card-section"><div class="profile-section-label">What ${esc(a.displayName.trim())} does</div><div class="profile-card-text">${esc(c.does)}</div></div>`;
+    if(c.reads) h+=`<div class="profile-card-section"><div class="profile-section-label">Reads from</div>${c.reads.split(',').map(r=>`<div class="profile-card-text">${esc(r.trim())}</div>`).join('')}</div>`;
+    if(c.writes) h+=`<div class="profile-card-section"><div class="profile-section-label">Writes to</div>${c.writes.split(',').map(w=>`<div class="profile-card-text">${esc(w.trim())}</div>`).join('')}</div>`;
     h+=`</div>`;
   }
   // Skills card
