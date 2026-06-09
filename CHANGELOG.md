@@ -6,6 +6,10 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ## Unreleased
 
+### Added
+
+- **Copy button on chat code blocks:** Fenced code blocks rendered in the chat view now display a header bar containing the language label and a clipboard icon button. Previously there was no way to copy code from a response without selecting the text manually. Clicking the icon copies the block's full text content to the clipboard via the native Clipboard API and swaps it to a checkmark for two seconds to confirm the action. No new dependencies were added; icons are inlined SVG.
+
 ### Fixed
 
 - **Agent profile capabilities card renders all capability fields consistently:** The Writes To section was displaying comma-separated paths as a single line of text while Reads From displayed each path as a separate line item. Both sections now split on commas and render each path individually. The "What [agent] does" label also now correctly escapes and trims the display name before rendering.
