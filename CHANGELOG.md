@@ -14,6 +14,8 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 - **Agent profile capabilities card renders all capability fields consistently:** The Writes To section was displaying comma-separated paths as a single line of text while Reads From displayed each path as a separate line item. Both sections now split on commas and render each path individually. The "What [agent] does" label also now correctly escapes and trims the display name before rendering.
 
+- **MCP tools are allowed without errors on Claude Code v2.1.166 and later.** Rundock previously passed `mcp__*` as a blanket allow rule for MCP tools. Claude Code v2.1.166 tightened wildcard validation: allow rules must name the specific server scope (e.g. `mcp__gmail__*`) rather than a global `mcp__*` wildcard. Rundock now reads `.claude/mcp.json` at startup and expands registered server names into per-server wildcard entries (e.g. `mcp__gmail__*,mcp__gcal__*`). Workspaces without an MCP config are unaffected.
+
 ## 0.8.12: Windows Support (2026-06-07)
 
 ### Added
