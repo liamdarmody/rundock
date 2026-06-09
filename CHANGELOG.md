@@ -10,6 +10,8 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 - **Copy button on chat code blocks:** Fenced code blocks rendered in the chat view now display a header bar containing the language label and a clipboard icon button. Previously there was no way to copy code from a response without selecting the text manually. Clicking the icon copies the block's full text content to the clipboard via the native Clipboard API and swaps it to a checkmark for two seconds to confirm the action. No new dependencies were added; icons are inlined SVG.
 
+- **Syntax highlighting for chat code blocks:** Fenced code blocks in the chat view now render with token-level syntax highlighting. Keywords, strings, comments, and identifiers are coloured using highlight.js with the Atom One theme — dark in dark mode, light in light mode. The language label in the code block header now shows the full language name (e.g. "JavaScript" rather than "js"). Blocks with an unrecognised language label fall back to uncoloured output; blocks with no language label use auto-detection. No new npm dependencies; highlight.js is loaded from CDN, the same pattern as d3-hierarchy.
+
 ### Fixed
 
 - **Agent profile capabilities card renders all capability fields consistently:** The Writes To section was displaying comma-separated paths as a single line of text while Reads From displayed each path as a separate line item. Both sections now split on commas and render each path individually. The "What [agent] does" label also now correctly escapes and trims the display name before rendering.

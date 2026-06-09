@@ -2690,9 +2690,27 @@ function showView(v) { currentView=v; ['workspace','home','profile','chat','conv
 function goHome() { discardIfEmpty(); activeConversation=null; switchNav('conversations'); }
 
 // Theme
-function toggleTheme() { document.body.classList.toggle('light'); const isLight=document.body.classList.contains('light'); document.getElementById('theme-toggle').innerHTML=isLight?moonIcon:sunIcon; try{localStorage.setItem('rundock-theme',isLight?'light':'dark');}catch(e){} }
+function applyHljsTheme(isLight) {
+  const dark = document.getElementById('hljs-dark');
+  const light = document.getElementById('hljs-light');
+  if (dark) dark.disabled = isLight;
+  if (light) light.disabled = !isLight;
+}
+function toggleTheme() {
+  document.body.classList.toggle('light');
+  const isLight = document.body.classList.contains('light');
+  document.getElementById('theme-toggle').innerHTML = isLight ? moonIcon : sunIcon;
+  applyHljsTheme(isLight);
+  try { localStorage.setItem('rundock-theme', isLight ? 'light' : 'dark'); } catch(e) {}
+}
 // Restore saved theme on load
-try{if(localStorage.getItem('rundock-theme')==='light'){document.body.classList.add('light');document.getElementById('theme-toggle').innerHTML=moonIcon;}}catch(e){}
+try {
+  if (localStorage.getItem('rundock-theme') === 'light') {
+    document.body.classList.add('light');
+    document.getElementById('theme-toggle').innerHTML = moonIcon;
+    applyHljsTheme(true);
+  }
+} catch(e) {}
 
 // ===== 11. FILE TREE & EDITOR =====
 
@@ -2971,18 +2989,38 @@ marked.setOptions({ gfm: true, breaks: true });
 marked.use({
   renderer: {
     code({ text, lang }) {
-      const escaped = text
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-      const langLabel = lang
-        ? `<span class="code-lang">${lang}</span>`
+      let highlighted;
+      let displayLang = '';
+
+      if (lang && hljs.getLanguage(lang)) {
+        // Known language: highlight and use the full display name (e.g. 'JavaScript' not 'js')
+        highlighted = hljs.highlight(text, { language: lang }).value;
+        displayLang = hljs.getLanguage(lang).name;
+      } else if (lang) {
+        // Language specified but not in the hljs common bundle: escape and show as-is
+        highlighted = text
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+        displayLang = lang;
+      } else {
+        // No language specified: auto-detect
+        const result = hljs.highlightAuto(text);
+        highlighted = result.value;
+        displayLang = result.language
+          ? (hljs.getLanguage(result.language)?.name || result.language)
+          : '';
+      }
+
+      const langLabel = displayLang
+        ? `<span class="code-lang">${displayLang}</span>`
         : '<span></span>';
+
       return (
         `<div class="code-block-wrapper">` +
         `<div class="code-block-header">${langLabel}` +
         `<button class="copy-code-btn" onclick="copyCode(this)" title="Copy code"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>` +
-        `</div><pre><code>${escaped}</code></pre></div>`
+        `</div><pre><code class="hljs">${highlighted}</code></pre></div>`
       );
     }
   }
