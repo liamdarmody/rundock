@@ -56,10 +56,6 @@ function getMcpAllowedToolsString() {
 const ALLOWED_TOOLS_INTERACTIVE = `Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,ToolSearch,Agent,Skill${getMcpAllowedToolsString()}`;
 const ALLOWED_TOOLS_LEGACY = `Bash,WebFetch,WebSearch${getMcpAllowedToolsString()}`;
 
-// const ALLOWED_TOOLS_INTERACTIVE = 'Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,ToolSearch,Agent,Skill,mcp__*';
-// const ALLOWED_TOOLS_LEGACY = 'Bash,WebFetch,WebSearch,mcp__*';
-
-
 // Returns the disallowed-tools string based on workspace mode.
 // Code mode: no file type restrictions (empty string).
 // Knowledge mode: block executable file writes.

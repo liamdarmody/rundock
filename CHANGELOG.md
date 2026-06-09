@@ -4,6 +4,14 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** MCP Wildcard Fix
+
+### Fixed
+
+- **MCP tools are allowed without errors on Claude Code v2.1.166 and later.** Rundock previously passed `mcp__*` as a blanket allow rule for MCP tools. Claude Code v2.1.166 tightened wildcard validation: allow rules must name the specific server scope (e.g. `mcp__gmail__*`) rather than a global `mcp__*` wildcard. Rundock now reads `.claude/mcp.json` at startup and expands registered server names into per-server wildcard entries (e.g. `mcp__gmail__*,mcp__gcal__*`). Workspaces without an MCP config are unaffected.
+
 ## 0.8.11: Rich Markdown Editor & Find (2026-05-28)
 
 ### Added
