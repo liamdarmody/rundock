@@ -1207,9 +1207,12 @@ function showProfile(agentId) {
   if(a.capabilities) {
     const c = a.capabilities;
     h+=`<div class="profile-card">`;
-    if(c.does) h+=`<div class="profile-card-section"><div class="profile-section-label">What ${esc(a.displayName.trim())} does</div><div class="profile-card-text">${esc(c.does)}</div></div>`;
-    if(c.reads) h+=`<div class="profile-card-section"><div class="profile-section-label">Reads from</div>${c.reads.split(',').map(r=>`<div class="profile-card-text">${esc(r.trim())}</div>`).join('')}</div>`;
-    if(c.writes) h+=`<div class="profile-card-section"><div class="profile-section-label">Writes to</div>${c.writes.split(',').map(w=>`<div class="profile-card-text">${esc(w.trim())}</div>`).join('')}</div>`;
+    // Split on commas that are NOT inside parentheses, so phrase/parenthetical
+    // entries (e.g. "Reddit (r/ClaudeAI, r/LocalLLaMA)") stay on one line.
+    const splitCaps = s => s.split(/,(?![^(]*\))/).map(x => x.trim()).filter(Boolean);
+    if(c.does) h+=`<div class="profile-card-section"><div class="profile-section-label">What ${esc((a.displayName||'').trim())} does</div><div class="profile-card-text">${esc(c.does)}</div></div>`;
+    if(c.reads) h+=`<div class="profile-card-section"><div class="profile-section-label">Reads from</div>${splitCaps(c.reads).map(r=>`<div class="profile-card-item">${esc(r)}</div>`).join('')}</div>`;
+    if(c.writes) h+=`<div class="profile-card-section"><div class="profile-section-label">Writes to</div>${splitCaps(c.writes).map(w=>`<div class="profile-card-item">${esc(w)}</div>`).join('')}</div>`;
     h+=`</div>`;
   }
   // Skills card
