@@ -23,8 +23,53 @@ let WORKSPACE = process.env.WORKSPACE || null;
 const DISALLOWED_TOOLS_KNOWLEDGE = 'Write(*.js),Write(*.jsx),Write(*.ts),Write(*.tsx),Write(*.py),Write(*.sh),Write(*.bash),Write(*.rb),Write(*.pl),Write(*.exe),Write(*.dll),Write(*.so),Edit(*.js),Edit(*.jsx),Edit(*.ts),Edit(*.tsx),Edit(*.py),Edit(*.sh),Edit(*.bash),Edit(*.rb),Edit(*.pl),Edit(*.exe)';
 // Backward compat: DISALLOWED_TOOLS used by existing code paths
 const DISALLOWED_TOOLS = DISALLOWED_TOOLS_KNOWLEDGE;
-const ALLOWED_TOOLS_INTERACTIVE = 'Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,ToolSearch,Agent,Skill,mcp__*';
-const ALLOWED_TOOLS_LEGACY = 'Bash,WebFetch,WebSearch,mcp__*';
+// Base allow-lists. MCP server scopes are appended per spawn via
+// getAllowedToolsInteractive() / getAllowedToolsLegacy(), because Claude Code
+// v2.1.166+ rejects a blanket `mcp__*` allow rule: each server scope must be
+// named explicitly (e.g. mcp__todoist__*).
+const ALLOWED_TOOLS_INTERACTIVE_BASE = 'Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,ToolSearch,Agent,Skill';
+const ALLOWED_TOOLS_LEGACY_BASE = 'Bash,WebFetch,WebSearch';
+
+// A valid MCP server name. Names are interpolated into the comma-separated
+// --allowed-tools string, so anything outside this set is rejected to prevent a
+// crafted name (e.g. one containing a comma) from injecting extra allow entries.
+const MCP_SERVER_NAME_RE = /^[A-Za-z0-9_-]+$/;
+
+// Reads MCP server names from a workspace's .mcp.json. Returns [] on any problem
+// (no dir, missing file, parse error, no mcpServers block). Shared by workspace
+// analysis and the allow-list builder so both agree on the file location and shape.
+function readMcpServerNames(dir) {
+  if (!dir) return [];
+  try {
+    const mcpJsonPath = path.join(dir, '.mcp.json');
+    if (!fs.existsSync(mcpJsonPath)) return [];
+    const mcpConfig = JSON.parse(fs.readFileSync(mcpJsonPath, 'utf-8'));
+    if (mcpConfig && mcpConfig.mcpServers) return Object.keys(mcpConfig.mcpServers);
+  } catch (e) { /* fall through to [] */ }
+  return [];
+}
+
+// Builds the MCP portion of the --allowed-tools string for the active workspace,
+// e.g. ',mcp__notion__*,mcp__todoist__*'. Returns '' when there are no servers.
+// Resolved per spawn (not at module load) because WORKSPACE is null at boot and
+// changes when the user switches workspace.
+function getMcpAllowedToolsString() {
+  const names = readMcpServerNames(WORKSPACE).filter(name => {
+    if (MCP_SERVER_NAME_RE.test(name)) return true;
+    console.warn(`[Rundock] Skipping MCP server with unsupported name in allow list: ${JSON.stringify(name)}`);
+    return false;
+  });
+  if (names.length === 0) return '';
+  return ',' + names.map(name => `mcp__${name}__*`).join(',');
+}
+
+// Per-spawn allow-list builders: base tools plus the active workspace's MCP scopes.
+function getAllowedToolsInteractive() {
+  return ALLOWED_TOOLS_INTERACTIVE_BASE + getMcpAllowedToolsString();
+}
+function getAllowedToolsLegacy() {
+  return ALLOWED_TOOLS_LEGACY_BASE + getMcpAllowedToolsString();
+}
 
 // Returns the disallowed-tools string based on workspace mode.
 // Code mode: no file type restrictions (empty string).
@@ -1200,16 +1245,7 @@ function analyzeWorkspace(dir, existingAgents) {
     }
   } catch (e) {}
 
-  let configuredServers = [];
-  try {
-    const mcpJsonPath = path.join(dir, '.mcp.json');
-    if (fs.existsSync(mcpJsonPath)) {
-      const mcpConfig = JSON.parse(fs.readFileSync(mcpJsonPath, 'utf-8'));
-      if (mcpConfig.mcpServers) {
-        configuredServers = Object.keys(mcpConfig.mcpServers);
-      }
-    }
-  } catch (e) {}
+  const configuredServers = readMcpServerNames(dir);
   analysis.integrations = { mcpReferences, configuredServers, mentionedTools };
 
   // --- Signal 4: Folder Structure with Pattern Detection ---
@@ -2093,7 +2129,7 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
   const permMode = getPermissionMode();
   const args = [...getBareArgs(), '--output-format', 'stream-json', '--input-format', 'stream-json',
     '--verbose', '--include-partial-messages', '--permission-mode', permMode,
-    '--allowed-tools', ALLOWED_TOOLS_INTERACTIVE,
+    '--allowed-tools', getAllowedToolsInteractive(),
     ...(disallowed ? ['--disallowed-tools', disallowed] : []),
     '--append-system-prompt', systemPrompt,
     '--agent', orchestrator.name];
@@ -2271,7 +2307,7 @@ function handleDelegation(msg, processes) {
   const delegatePermMode = getPermissionMode();
   const delegateArgs = [...getBareArgs(), '--output-format', 'stream-json', '--input-format', 'stream-json',
     '--verbose', '--include-partial-messages', '--permission-mode', delegatePermMode,
-    '--allowed-tools', ALLOWED_TOOLS_INTERACTIVE,
+    '--allowed-tools', getAllowedToolsInteractive(),
     ...(delegateDisallowed ? ['--disallowed-tools', delegateDisallowed] : []),
     '--append-system-prompt', fullPrompt,
     ...(priorSessionId ? ['--resume', priorSessionId] : []),
@@ -2495,7 +2531,7 @@ function handleDelegation(msg, processes) {
       const resumePermMode = getPermissionMode();
       const resumeArgs = [...getBareArgs(), '--output-format', 'stream-json', '--input-format', 'stream-json',
         '--verbose', '--include-partial-messages', '--permission-mode', resumePermMode,
-        '--allowed-tools', ALLOWED_TOOLS_INTERACTIVE,
+        '--allowed-tools', getAllowedToolsInteractive(),
         ...(resumeDisallowed ? ['--disallowed-tools', resumeDisallowed] : [])];
       if (parentSystemPrompt) resumeArgs.push('--append-system-prompt', parentSystemPrompt);
       if (parentAgentData?.name) resumeArgs.push('--agent', parentAgentData.name);
@@ -2762,7 +2798,7 @@ wss.on('connection', (ws) => {
 
             const args = [...getBareArgs(), '--output-format', 'stream-json', '--input-format', 'stream-json',
               '--verbose', '--include-partial-messages', '--permission-mode', chatPermMode,
-              '--allowed-tools', ALLOWED_TOOLS_INTERACTIVE,
+              '--allowed-tools', getAllowedToolsInteractive(),
               ...(chatDisallowed ? ['--disallowed-tools', chatDisallowed] : []),
               '--append-system-prompt', systemPrompt];
 
@@ -2892,7 +2928,7 @@ wss.on('connection', (ws) => {
           const legacyPermMode = getPermissionMode();
           const args = [...getBareArgs(), '--print', '--output-format', 'stream-json', '--input-format', 'stream-json',
             '--verbose', '--include-partial-messages', '--permission-mode', legacyPermMode,
-            '--allowed-tools', ALLOWED_TOOLS_LEGACY,
+            '--allowed-tools', getAllowedToolsLegacy(),
             ...(legacyDisallowed ? ['--disallowed-tools', legacyDisallowed] : []),
             '--append-system-prompt', 'FORMATTING RULES (mandatory, apply to all output):\n- NEVER use em dashes (—) or en dashes (–) anywhere. This includes lists, headers, separators, and inline text. Wrong: "AI — your assistant". Right: "AI: your assistant". Use colons, full stops, commas, or restructure instead.\n- Use UK spelling throughout.\n\nPLATFORM RULES:\nRundock is a knowledge management platform. You can create and edit markdown, YAML, JSON, and text files. Executable code files (.js, .ts, .py, .sh, etc.) are outside the supported file types. Destructive commands (rm, sudo, chmod) are not supported. If a user asks you to do something outside these capabilities, explain that Rundock is designed for knowledge work and suggest an alternative approach using supported file types.'];
 
