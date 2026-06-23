@@ -1938,6 +1938,26 @@ setInterval(() => {
   }
 }, HEARTBEAT_INTERVAL);
 
+// Detects the Claude Code auth-session-expired error. When a user's `claude`
+// login expires, the spawned process returns a 401 authentication error.
+// Rundock can't keep that session alive, but it can recognise the signature and
+// guide the user to reconnect instead of surfacing a raw 401 blob.
+const AUTH_ERROR_RE = /authentication_error|invalid authentication credentials|failed to authenticate|oauth token (?:has )?expired|please run [`'"]?(?:\/|claude )?login/i;
+function isAuthError(text) {
+  return typeof text === 'string' && AUTH_ERROR_RE.test(text);
+}
+
+// Emits the structured auth-error message the client renders as a recovery card.
+// Fires at most once per process so chunked stderr can't spam the chat.
+function sendAuthError(entry, convoId) {
+  if (entry.authErrorSent) return;
+  entry.authErrorSent = true;
+  safeSend(JSON.stringify({
+    type: 'system', subtype: 'auth_error',
+    _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId
+  }));
+}
+
 /**
  * Shared stdout/stderr handler for all Claude Code processes.
  * Consolidates JSONL parsing, metadata enrichment, session capture,
@@ -2072,6 +2092,10 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
         // Result handling
         if (parsed.type === 'result') {
           entry.resultSent = true;
+          // Surface a recovery card when the turn failed on an expired auth session.
+          if (parsed.is_error && isAuthError(JSON.stringify(parsed))) {
+            sendAuthError(entry, convoId);
+          }
           // Attach server-tracked tool calls for activity summary
           parsed._toolCalls = entry.toolCalls || [];
           parsed._turnStartTime = entry.turnStartTime || null;
@@ -2092,6 +2116,8 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
     const text = chunk.toString();
     stderrBuf.value += text;
     if (text.includes('no stdin data') || text.includes('proceeding without')) return;
+    // Expired Claude Code session: show the recovery card, not the raw 401 blob.
+    if (isAuthError(stderrBuf.value)) { sendAuthError(entry, convoId); return; }
     safeSend(JSON.stringify({ type: 'error', content: text, _conversationId: convoId, _processId: entry.processId }));
   });
 

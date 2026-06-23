@@ -257,6 +257,15 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .history-msg { opacity: 0.6; }
 .history-msg:hover { opacity: 0.85; }
 .msg-system { align-self: center; font-size: var(--caption); color: var(--text-2); padding: 4px 12px; background: var(--card); border-radius: 20px; }
+.auth-error-card { align-self: stretch; max-width: 560px; margin: 8px auto; padding: 14px 16px; background: rgba(232,168,76,0.08); border: 1px solid var(--attention); border-radius: 10px; animation: fadeIn 0.2s ease; }
+.auth-error-title { font-weight: 600; font-size: var(--body); color: var(--attention); margin-bottom: 6px; }
+.auth-error-body { font-size: var(--body); line-height: 1.6; color: var(--text-1); }
+.auth-error-steps { margin: 8px 0 4px; padding-left: 20px; font-size: var(--body); line-height: 1.7; color: var(--text-1); }
+.auth-error-steps code { background: var(--elevated); padding: 1px 6px; border-radius: 4px; font-family: 'SF Mono','Fira Code','Consolas',monospace; font-size: 13px; }
+.auth-error-copy { margin-left: 6px; background: none; border: 1px solid var(--border); color: var(--text-2); cursor: pointer; padding: 1px 8px; border-radius: 4px; font-size: 11px; }
+.auth-error-copy:hover { color: var(--text-1); border-color: var(--text-2); }
+.auth-error-foot { margin-top: 8px; font-size: var(--caption); color: var(--text-2); }
+.auth-error-foot a { color: var(--working); }
 .msg-tool { align-self: flex-start; max-width: 85%; padding: 8px 12px; background: var(--card); border-left: 3px solid var(--working); border-radius: 0 8px 8px 0; font-size: var(--caption); color: var(--text-2); display: flex; align-items: center; gap: 8px; animation: fadeIn 0.2s ease; }
 .msg-tool.done { border-left-color: var(--success); }
 /* Activity summary */
