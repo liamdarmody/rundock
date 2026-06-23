@@ -410,6 +410,9 @@ function handle(d) {
       if(d.subtype==='delegation_error' && convoId) {
         addSystemMsgToConvo(d.content || 'Delegation failed', convoId, true);
       }
+      if(d.subtype==='auth_error' && convoId) {
+        renderAuthErrorCard(convoId);
+      }
       break;
     case 'stream_event':
       if(convoId && !isStaleProcess(d, convoId)) handleStreamEvent(d, convoId);
@@ -2261,6 +2264,31 @@ function addAgentMsg(text,agentId,anim=true,timestamp=null) {
 }
 function addUserMsg(text,anim=true) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg msg-user'; if(!anim)d.style.animation='none'; d.innerHTML=`<div class="msg-bubble">${esc(text)}</div>`; m.appendChild(d); scrollBottom(true); }
 function addSystemMsg(text) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg-system'; d.textContent=text; m.appendChild(d); scrollBottom(); }
+
+// Recovery card shown when the Claude Code sign-in expires (401). Replaces the
+// raw error blob with a clear explanation and the steps to reconnect.
+function renderAuthErrorCard(convoId) {
+  if (convoId && activeConversation?.id !== convoId) return;
+  const m = document.getElementById('messages');
+  if (!m) return;
+  const d = document.createElement('div');
+  d.className = 'auth-error-card';
+  d.innerHTML =
+    `<div class="auth-error-title">Claude Code sign-in expired</div>` +
+    `<div class="auth-error-body">Rundock lost its connection to Claude Code because your sign-in expired. This is a Claude Code session, not a Rundock fault, and your conversations are safe. To reconnect:</div>` +
+    `<ol class="auth-error-steps">` +
+      `<li>Open a terminal.</li>` +
+      `<li>Run <code>claude</code> <button class="auth-error-copy" onclick="copyAuthCmd(this)" title="Copy command">copy</button></li>` +
+      `<li>If it shows you are already logged in, log out and log back in.</li>` +
+    `</ol>` +
+    `<div class="auth-error-foot">Then resend your message. <a href="https://docs.rundock.ai/troubleshooting/authentication" target="_blank" rel="noopener">Full steps and details &#x2192;</a></div>`;
+  m.appendChild(d);
+  scrollBottom();
+}
+function copyAuthCmd(btn) {
+  const done = () => { const t = btn.textContent; btn.textContent = 'copied'; setTimeout(() => { btn.textContent = t; }, 2000); };
+  if (navigator.clipboard?.writeText) { navigator.clipboard.writeText('claude').then(done).catch(() => {}); }
+}
 function addToolMsg(name) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg-tool'; d.innerHTML=`<span style="color:var(--working)">&#x2192;</span> Using ${esc(name)}`; m.appendChild(d); scrollBottom(); return d; }
 // ===== SESSION HISTORY =====
 

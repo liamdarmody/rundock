@@ -4,6 +4,14 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** Auth Recovery Guidance
+
+### Added
+
+- **Clear recovery guidance when your Claude Code sign-in expires.** When a Claude Code session expires, requests fail with a 401 authentication error. Rundock used to surface the raw error, which looked like a crash. It now detects this specific case and shows a short recovery card explaining that the sign-in expired (not a Rundock fault, conversations are safe), with the exact steps to reconnect (`claude` in a terminal, then sign out and back in) and a link to the troubleshooting docs.
+
 ## 0.8.12: MCP & Profile Card Fixes (2026-06-22)
 
 ### Fixed
