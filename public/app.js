@@ -2470,6 +2470,14 @@ function classifyRisk(toolName, input) {
     if (lowRisk) return 'low';
     return 'medium';
   }
+  if (toolName.startsWith('mcp__')) {
+    // MCP reads auto-approve in the permission hook, so by the time a request
+    // reaches the card it's a write or destructive action. Flag destructive ones
+    // as high (no "Always allow"); other writes are medium.
+    const action = toolName.split('__').slice(2).join('_').toLowerCase();
+    if (/(^|[_\-])(delete|remove|destroy|drop|cancel|abort|archive|trash|purge|clear|uninstall)([_\-]|$)/.test(action)) return 'high';
+    return 'medium';
+  }
   return 'medium';
 }
 
@@ -2500,8 +2508,10 @@ function describeToolRequest(toolName, input) {
     detail = input.file_path || '';
   } else if (toolName.startsWith('mcp__')) {
     const parts = toolName.split('__');
-    summary = `Use ${parts[1] || 'connector'}`;
-    detail = parts[2] || '';
+    const server = (parts[1] || 'connector').replace(/^claude_ai_/, '').replace(/_/g, ' ').trim();
+    const action = parts.slice(2).join('_').replace(/^api[_\-\s]+/i, '').replace(/[_\-]+/g, ' ').trim();
+    summary = action ? `${server}: ${action}` : `Use ${server}`;
+    detail = toolName;
   } else {
     summary = `Use ${toolName}`;
     detail = JSON.stringify(input).substring(0, 200);
