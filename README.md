@@ -4,7 +4,7 @@
 [![Latest release](https://img.shields.io/github/v/release/liamdarmody/rundock)](https://github.com/liamdarmody/rundock/releases)
 [![GitHub stars](https://img.shields.io/github/stars/liamdarmody/rundock?style=social)](https://github.com/liamdarmody/rundock/stargazers)
 
-A visual interface for AI agent teams. Built by someone running their own business, for people running their own.
+A visual workspace for your AI agent team. Built by someone running their own business, for people running their own.
 
 You run content, ops, sales, admin, and research. When you started, there was nobody else, so the work fell to you. A single chatbot is a single assistant. An agent platform built for developers assumes you can write code. Rundock gives you a team you can actually manage: an org chart of named specialists, parallel conversations you can watch side by side, and delegation that happens in front of you. One beta user described it as having a virtual team of highly paid experts, running in parallel. That is the experience.
 
