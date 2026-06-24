@@ -1751,16 +1751,17 @@ const server = http.createServer((req, res) => {
       }
     });
 
-  } else if (/^\/(editor|vendor)\/[\w./-]+\.m?js$/.test(req.url)) {
-    // Static JS/MJS files for the Tiptap editor module and its vendor bundle.
-    // Path is constrained to /editor/... and /vendor/... under public/, with
-    // only .js and .mjs extensions, and only word chars + dot/slash/hyphen in
-    // the path. The realpath check below blocks any directory traversal that
-    // somehow gets past the regex.
+  } else if (/^\/(editor|vendor)\/[\w./-]+\.(m?js|css)$/.test(req.url)) {
+    // Static JS/MJS/CSS files for the Tiptap editor module, its vendor bundle,
+    // and vendored assets (e.g. highlight.js). Path is constrained to /editor/...
+    // and /vendor/... under public/, with only .js/.mjs/.css extensions and only
+    // word chars + dot/slash/hyphen in the path. The realpath check below blocks
+    // any directory traversal that somehow gets past the regex.
     const publicRoot = path.resolve(__dirname, 'public');
     const filePath = path.resolve(publicRoot, req.url.slice(1));
     if (filePath.startsWith(publicRoot + path.sep) && fs.existsSync(filePath)) {
-      res.writeHead(200, { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-cache, no-store, must-revalidate' });
+      const contentType = filePath.endsWith('.css') ? 'text/css' : 'application/javascript';
+      res.writeHead(200, { 'Content-Type': contentType, 'Cache-Control': 'no-cache, no-store, must-revalidate' });
       res.end(fs.readFileSync(filePath));
     } else {
       res.writeHead(404);

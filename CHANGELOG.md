@@ -6,11 +6,12 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ## Unreleased
 
-**Name:** Auth Recovery & MCP Permissions
+**Name:** Auth Recovery, MCP Permissions & Code Blocks
 
 ### Added
 
 - **Clear recovery guidance when your Claude Code sign-in expires.** When a Claude Code session expires, requests fail with a 401 authentication error. Rundock used to surface the raw error, which looked like a crash. It now detects this specific case and shows a short recovery card explaining that the sign-in expired (not a Rundock fault, conversations are safe), with the exact steps to reconnect (`claude` in a terminal, then sign out and back in) and a link to the troubleshooting docs.
+- **Syntax highlighting and a copy button on chat code blocks.** Fenced code blocks in chat now render with token-level syntax highlighting (highlight.js, with an Atom One theme that follows the app's light/dark setting) and a header bar showing the language and a one-click copy button. Highlight.js is bundled with Rundock, so this works offline. Originating contributions from @dougseven (#6/#7 copy button, #10/#11 highlighting).
 
 ### Changed
 

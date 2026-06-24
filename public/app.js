@@ -2731,7 +2731,7 @@ function showView(v) { currentView=v; ['workspace','home','profile','chat','conv
 function goHome() { discardIfEmpty(); activeConversation=null; switchNav('conversations'); }
 
 // Theme
-function toggleTheme() { document.body.classList.toggle('light'); const isLight=document.body.classList.contains('light'); document.getElementById('theme-toggle').innerHTML=isLight?moonIcon:sunIcon; try{localStorage.setItem('rundock-theme',isLight?'light':'dark');}catch(e){} }
+function toggleTheme() { document.body.classList.toggle('light'); const isLight=document.body.classList.contains('light'); document.getElementById('theme-toggle').innerHTML=isLight?moonIcon:sunIcon; if(typeof applyHljsTheme==='function')applyHljsTheme(isLight); try{localStorage.setItem('rundock-theme',isLight?'light':'dark');}catch(e){} }
 // Restore saved theme on load
 try{if(localStorage.getItem('rundock-theme')==='light'){document.body.classList.add('light');document.getElementById('theme-toggle').innerHTML=moonIcon;}}catch(e){}
 
@@ -3008,6 +3008,79 @@ function editorGoBack() {
 
 // Configure marked
 marked.setOptions({ gfm: true, breaks: true });
+
+// Syntax-highlight fenced code blocks (highlight.js, vendored locally) and wrap
+// them with a header bar showing the language label and a copy button.
+// Originating contributions: copy button (#6/#7) and syntax highlighting (#10/#11)
+// by @dougseven; isolated and hardened here (escaped language label, clipboard
+// fallback, auto-detect size cap).
+const HLJS_AUTODETECT_MAX = 20000; // skip highlightAuto on very large blocks (perf)
+marked.use({
+  renderer: {
+    code({ text, lang }) {
+      let highlighted = '';
+      let displayLang = '';
+      const escapeHtml = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      try {
+        if (lang && window.hljs && hljs.getLanguage(lang)) {
+          highlighted = hljs.highlight(text, { language: lang }).value;
+          displayLang = hljs.getLanguage(lang).name || lang;
+        } else if (!lang && window.hljs && text.length <= HLJS_AUTODETECT_MAX) {
+          const result = hljs.highlightAuto(text);
+          highlighted = result.value;
+          displayLang = result.language ? (hljs.getLanguage(result.language)?.name || result.language) : '';
+        } else {
+          highlighted = escapeHtml(text);
+          displayLang = lang || '';
+        }
+      } catch (e) {
+        highlighted = escapeHtml(text);
+        displayLang = lang || '';
+      }
+      const langLabel = displayLang ? `<span class="code-lang">${esc(displayLang)}</span>` : '<span></span>';
+      return (
+        `<div class="code-block-wrapper">` +
+        `<div class="code-block-header">${langLabel}` +
+        `<button class="copy-code-btn" onclick="copyCode(this)" title="Copy code">${COPY_ICON}</button>` +
+        `</div><pre><code class="hljs">${highlighted}</code></pre></div>`
+      );
+    }
+  }
+});
+
+const COPY_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+const CHECK_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+
+function copyCode(btn) {
+  const codeEl = btn.closest('.code-block-wrapper')?.querySelector('code');
+  if (!codeEl) return;
+  const text = codeEl.textContent;
+  const done = () => {
+    btn.innerHTML = CHECK_ICON;
+    btn.classList.add('copied');
+    setTimeout(() => { btn.innerHTML = COPY_ICON; btn.classList.remove('copied'); }, 2000);
+  };
+  // navigator.clipboard is unavailable in non-secure contexts (e.g. VPS over http).
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => {});
+  } else {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+      done();
+    } catch (e) { /* copy unavailable: no-op */ }
+  }
+}
+
+// Swap the highlight.js theme stylesheet to match the app theme.
+function applyHljsTheme(isLight) {
+  const dark = document.getElementById('hljs-dark');
+  const light = document.getElementById('hljs-light');
+  if (dark) dark.disabled = !!isLight;
+  if (light) light.disabled = !isLight;
+}
+applyHljsTheme(document.body.classList.contains('light'));
 
 function renderMarkdown(text, options = {}) {
   let src = text;
