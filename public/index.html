@@ -7,6 +7,10 @@
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script src="/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/d3-hierarchy@3.1.2/dist/d3-hierarchy.min.js"></script>
+<!-- highlight.js: vendored locally (public/vendor/highlight/) so code-block highlighting works offline. Light theme starts disabled; toggled with the app theme. -->
+<link id="hljs-dark" rel="stylesheet" href="/vendor/highlight/atom-one-dark.min.css">
+<link id="hljs-light" rel="stylesheet" href="/vendor/highlight/atom-one-light.min.css" disabled>
+<script src="/vendor/highlight/highlight.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -499,7 +503,16 @@ mark.find-match.current,
 .msg-bubble p + ul,.msg-bubble p + ol { margin-top: -4px; }
 .msg-bubble code { background: var(--elevated); padding: 2px 6px; border-radius: 4px; font-size: 13px; font-family: 'SF Mono','Fira Code','Consolas',monospace; }
 .msg-bubble pre { background: var(--elevated); padding: 12px 16px; border-radius: 8px; overflow-x: auto; margin: 8px 0; }
-.msg-bubble pre code { background: none; padding: 0; display: block; line-height: 1.5; }
+.msg-bubble pre code:not(.hljs) { background: none; padding: 0; display: block; line-height: 1.5; }
+/* Code block with header (language label + copy button) and syntax highlighting */
+.code-block-wrapper { margin: 8px 0; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
+.code-block-header { display: flex; justify-content: space-between; align-items: center; background: var(--card); padding: 4px 12px 4px 16px; min-height: 32px; }
+.code-lang { font-size: 12px; color: var(--text-2); font-family: 'SF Mono','Fira Code','Consolas',monospace; }
+.copy-code-btn { background: none; border: none; color: var(--text-2); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; justify-content: center; line-height: 0; transition: color 0.15s; }
+.copy-code-btn:hover { color: var(--text-1); }
+.copy-code-btn.copied { color: var(--success); }
+.code-block-wrapper pre { margin: 0; padding: 0; background: transparent; border-radius: 0; overflow: visible; }
+.code-block-wrapper pre code.hljs { display: block; padding: 12px 16px; overflow-x: auto; font-size: 13px; line-height: 1.5; font-family: 'SF Mono','Fira Code','Consolas',monospace; }
 .msg-bubble strong { font-weight: 600; }
 .msg-bubble em { font-style: italic; }
 .msg-bubble del { text-decoration: line-through; color: var(--text-2); }

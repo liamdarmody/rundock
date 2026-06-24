@@ -18,6 +18,7 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@highlightjs/cdn-assets": "^11.11.1",
     "electron": "^35.0.0",
     "electron-builder": "^26.0.0"
   },
