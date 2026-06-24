@@ -16,6 +16,26 @@
 
 const http = require('http');
 
+// MCP read/write classification. Read-style MCP tools auto-approve; writes,
+// destructive actions, and anything unrecognised get a permission card.
+// Destructive verbs are checked first, so a name like `delete-after-search` can
+// never auto-approve; read verbs are checked before defaulting to card, so a name
+// like `API-post-search` (a search) is correctly treated as a read.
+const MCP_DESTRUCTIVE_VERBS = new Set(['delete','remove','destroy','drop','cancel','abort','archive','trash','purge','clear','uninstall']);
+const MCP_READ_VERBS = new Set(['get','list','search','find','read','fetch','retrieve','query','export','view','describe','show','info','overview','status','count','available','daily','review','recent','collaborators','comments','activity']);
+function isMcpReadTool(toolName) {
+  const action = String(toolName).split('__').slice(2).join('_');
+  if (!action) return false;
+  const tokens = action
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2') // split camelCase
+    .split(/[_\-\s]+/)
+    .map(t => t.toLowerCase())
+    .filter(Boolean);
+  if (tokens.some(t => MCP_DESTRUCTIVE_VERBS.has(t))) return false;
+  if (tokens.some(t => MCP_READ_VERBS.has(t))) return true;
+  return false;
+}
+
 let input = '';
 process.stdin.on('data', chunk => { input += chunk; });
 process.stdin.on('end', () => {
@@ -43,6 +63,21 @@ process.stdin.on('end', () => {
   } catch (e) {
     // Bad input: pass through
     process.stdout.write(JSON.stringify({}));
+    process.exit(0);
+  }
+
+  // MCP tools are routed through the hook (not pre-approved via --allowed-tools).
+  // Read-style MCP calls auto-approve here, server-side, so they work even when no
+  // browser tab is actively connected and never block on the card timeout.
+  // Write/destructive/unrecognised MCP calls fall through to the permission card.
+  if (typeof data.tool_name === 'string' && data.tool_name.startsWith('mcp__') && isMcpReadTool(data.tool_name)) {
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'allow',
+        permissionDecisionReason: 'Auto-approved: MCP read'
+      }
+    }));
     process.exit(0);
   }
 

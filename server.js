@@ -23,21 +23,17 @@ let WORKSPACE = process.env.WORKSPACE || null;
 const DISALLOWED_TOOLS_KNOWLEDGE = 'Write(*.js),Write(*.jsx),Write(*.ts),Write(*.tsx),Write(*.py),Write(*.sh),Write(*.bash),Write(*.rb),Write(*.pl),Write(*.exe),Write(*.dll),Write(*.so),Edit(*.js),Edit(*.jsx),Edit(*.ts),Edit(*.tsx),Edit(*.py),Edit(*.sh),Edit(*.bash),Edit(*.rb),Edit(*.pl),Edit(*.exe)';
 // Backward compat: DISALLOWED_TOOLS used by existing code paths
 const DISALLOWED_TOOLS = DISALLOWED_TOOLS_KNOWLEDGE;
-// Base allow-lists. MCP server scopes are appended per spawn via
-// getAllowedToolsInteractive() / getAllowedToolsLegacy(), because Claude Code
-// v2.1.166+ rejects a blanket `mcp__*` allow rule: each server scope must be
-// named explicitly (e.g. mcp__todoist__*).
+// Base allow-lists. MCP tools are intentionally NOT pre-approved here. All MCP
+// tools (workspace .mcp.json, user-global, and Claude.ai connectors) are routed
+// through the permission hook instead, which auto-approves MCP reads and cards
+// MCP writes in knowledge mode (code mode auto-approves everything). Keeping MCP
+// out of --allowed-tools also avoids the Claude Code v2.1.166 `mcp__*` wildcard
+// rejection entirely, since there is no MCP allow rule for it to reject.
 const ALLOWED_TOOLS_INTERACTIVE_BASE = 'Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,ToolSearch,Agent,Skill';
 const ALLOWED_TOOLS_LEGACY_BASE = 'Bash,WebFetch,WebSearch';
 
-// A valid MCP server name. Names are interpolated into the comma-separated
-// --allowed-tools string, so anything outside this set is rejected to prevent a
-// crafted name (e.g. one containing a comma) from injecting extra allow entries.
-const MCP_SERVER_NAME_RE = /^[A-Za-z0-9_-]+$/;
-
 // Reads MCP server names from a workspace's .mcp.json. Returns [] on any problem
-// (no dir, missing file, parse error, no mcpServers block). Shared by workspace
-// analysis and the allow-list builder so both agree on the file location and shape.
+// (no dir, missing file, parse error, no mcpServers block). Used by workspace analysis.
 function readMcpServerNames(dir) {
   if (!dir) return [];
   try {
@@ -49,26 +45,13 @@ function readMcpServerNames(dir) {
   return [];
 }
 
-// Builds the MCP portion of the --allowed-tools string for the active workspace,
-// e.g. ',mcp__notion__*,mcp__todoist__*'. Returns '' when there are no servers.
-// Resolved per spawn (not at module load) because WORKSPACE is null at boot and
-// changes when the user switches workspace.
-function getMcpAllowedToolsString() {
-  const names = readMcpServerNames(WORKSPACE).filter(name => {
-    if (MCP_SERVER_NAME_RE.test(name)) return true;
-    console.warn(`[Rundock] Skipping MCP server with unsupported name in allow list: ${JSON.stringify(name)}`);
-    return false;
-  });
-  if (names.length === 0) return '';
-  return ',' + names.map(name => `mcp__${name}__*`).join(',');
-}
-
-// Per-spawn allow-list builders: base tools plus the active workspace's MCP scopes.
+// Per-spawn allow-list builders. MCP scopes are deliberately excluded (see above);
+// MCP approval is handled by the permission hook.
 function getAllowedToolsInteractive() {
-  return ALLOWED_TOOLS_INTERACTIVE_BASE + getMcpAllowedToolsString();
+  return ALLOWED_TOOLS_INTERACTIVE_BASE;
 }
 function getAllowedToolsLegacy() {
-  return ALLOWED_TOOLS_LEGACY_BASE + getMcpAllowedToolsString();
+  return ALLOWED_TOOLS_LEGACY_BASE;
 }
 
 // Returns the disallowed-tools string based on workspace mode.

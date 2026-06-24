@@ -6,11 +6,15 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ## Unreleased
 
-**Name:** Auth Recovery Guidance
+**Name:** Auth Recovery & MCP Permissions
 
 ### Added
 
 - **Clear recovery guidance when your Claude Code sign-in expires.** When a Claude Code session expires, requests fail with a 401 authentication error. Rundock used to surface the raw error, which looked like a crash. It now detects this specific case and shows a short recovery card explaining that the sign-in expired (not a Rundock fault, conversations are safe), with the exact steps to reconnect (`claude` in a terminal, then sign out and back in) and a link to the troubleshooting docs.
+
+### Changed
+
+- **MCP tools now follow knowledge-mode permissions consistently.** In knowledge mode, read-style MCP actions (such as checking your calendar or searching Notion) run automatically, while actions that change something (sending an email, creating or deleting an event) ask for approval with a permission card first. This applies uniformly to every MCP source: workspace servers, your own global servers, and Claude.ai connectors. Previously, connector and global actions prompted on every call regardless of what they did, while workspace actions were approved silently. Code mode is unchanged and still runs everything without prompts.
 
 ## 0.8.12: MCP & Profile Card Fixes (2026-06-22)
 
