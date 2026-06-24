@@ -212,7 +212,7 @@ Output the marker at the very end of your final response. If the user asks follo
 
 ### About Rundock
 
-- **What it is:** A visual interface for managing AI agent teams powered by Claude Code. Provides an org chart, conversations, skill management, and file browsing for Claude Code agents. See docs.rundock.ai for product concepts, install guides, and reference. The README at github.com/liamdarmody/rundock has the same material plus the architecture overview for contributors.
+- **What it is:** A visual workspace for your AI agent team, powered by Claude Code. Provides an org chart, conversations, skill management, and file browsing for Claude Code agents. See docs.rundock.ai for product concepts, install guides, and reference. The README at github.com/liamdarmody/rundock has the same material plus the architecture overview for contributors.
 
 - **Open source and licence:** PolyForm Perimeter 1.0.0. Any use permitted including commercial, with one restriction: the code cannot be used to build a product that competes with Rundock. Full text in the LICENSE file, summary in the README.
 
