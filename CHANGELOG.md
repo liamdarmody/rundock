@@ -4,6 +4,14 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** Intel Mac Build
+
+### Added
+
+- **Native Intel (x64) Mac build.** Rundock now ships a native build for Intel Macs alongside the Apple Silicon (arm64) build. Intel Mac users can download and run Rundock directly instead of building from source (an Apple Silicon build cannot run on Intel). Pick the download that matches your Mac on the download page.
+
 ## 0.8.13: Auth Recovery, MCP Permissions & Code Blocks (2026-06-25)
 
 ### Added

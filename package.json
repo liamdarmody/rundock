@@ -26,7 +26,7 @@
     "appId": "ai.rundock.app",
     "productName": "Rundock",
     "directories": {
-      "output": "/tmp/rundock-dist"
+      "output": "dist"
     },
     "files": [
       "server.js",
