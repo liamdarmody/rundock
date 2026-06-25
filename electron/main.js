@@ -87,6 +87,32 @@ function findClaude() {
   }
 }
 
+// Anthropic's Windows installer drops claude.exe in ~/.local/bin but does NOT
+// add that directory to the user's PATH, so `claude` is unrecognised in the
+// terminal even though it's installed. Rundock detects claude regardless (see
+// ensurePath), but the user still needs `claude` on PATH to run the one-time
+// sign-in. Since we know where claude lives, persist its directory onto the
+// user's PATH so a freshly opened terminal recognises `claude`. Idempotent,
+// Windows-only, best-effort (never throws). Takes effect in new terminals.
+function ensureClaudeOnUserPath(binDir) {
+  if (process.platform !== 'win32' || !binDir) return;
+  const d = binDir.replace(/'/g, "''"); // escape for PowerShell single-quoted string
+  const psCmd = [
+    `$d='${d}';`,
+    `$p=[Environment]::GetEnvironmentVariable('Path','User'); if(-not $p){$p=''};`,
+    `if(($p -split ';') -notcontains $d){`,
+    `  if($p){$p=$p.TrimEnd(';')+';'+$d}else{$p=$d};`,
+    `  [Environment]::SetEnvironmentVariable('Path',$p,'User')`,
+    `}`,
+  ].join(' ');
+  try {
+    execSync(`powershell -NoProfile -ExecutionPolicy Bypass -Command "${psCmd}"`, { timeout: 8000 });
+  } catch {
+    // Best-effort: if PATH can't be written, the user can still sign in via the
+    // full path; we never block first-run on this.
+  }
+}
+
 function isClaudeAuthenticated() {
   try {
     execSync('claude --print "test" --output-format text', { timeout: 15000 });
@@ -102,10 +128,14 @@ function showWizard() {
   return new Promise((resolve) => {
     const wizard = new BrowserWindow({
       width: 520,
-      height: 440,
+      height: 520,
+      useContentSize: true,
       resizable: false,
       minimizable: false,
       maximizable: false,
+      // The first-run wizard has no menu; hide the bar so it can't add chrome
+      // (on Windows the default menu bar also ate vertical space, forcing a scroll).
+      autoHideMenuBar: true,
       // hiddenInset is macOS-only; on Windows it produces a broken title bar.
       titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
       webPreferences: {
@@ -115,12 +145,19 @@ function showWizard() {
       },
     });
 
+    // Remove the app menu (File/Edit/View/...) from the wizard window entirely.
+    // No-op on macOS (which uses a global app menu), clean on Windows/Linux.
+    wizard.removeMenu();
+
     wizard.loadFile(path.join(__dirname, 'wizard.html'));
 
     // Wizard polls for Claude Code via IPC
     ipcMain.handle('wizard-check-claude', () => {
       const bin = findClaude();
       if (!bin) return { status: 'not-installed' };
+      // Claude is installed: make sure its directory is on the user's PATH so
+      // they can simply type `claude` in a new terminal to sign in.
+      ensureClaudeOnUserPath(path.dirname(bin));
       if (!isClaudeAuthenticated()) return { status: 'not-authenticated' };
       return { status: 'ready' };
     });

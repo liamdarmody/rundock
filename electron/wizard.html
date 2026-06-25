@@ -144,7 +144,7 @@
       <div class="step-icon pending" id="icon-auth">2</div>
       <div class="step-text">
         <div>Sign in to Claude</div>
-        <div class="hint">Run <code style="background:#333;padding:2px 5px;border-radius:3px;font-size:12px">claude</code> in your terminal and follow the prompts</div>
+        <div class="hint" id="auth-hint">Run <code style="background:#333;padding:2px 5px;border-radius:3px;font-size:12px">claude</code> in your terminal and follow the prompts</div>
       </div>
     </div>
   </div>
@@ -160,13 +160,20 @@
     (function () {
       const plat = (window.electronAPI && window.electronAPI.platform) || '';
       if (plat !== 'win32') return;
-      const hint = document.getElementById('install-hint');
-      if (!hint) return;
       const code = 'background:#333;padding:2px 5px;border-radius:3px;font-size:12px';
-      hint.innerHTML =
-        'In PowerShell: <code style="' + code + '">irm https://claude.ai/install.ps1 | iex</code>'
-        + '<br>Or WinGet: <code style="' + code + '">winget install Anthropic.ClaudeCode</code>'
-        + '<br><a href="https://docs.anthropic.com/en/docs/claude-code/overview" target="_blank">Installation guide</a>';
+      const hint = document.getElementById('install-hint');
+      if (hint) {
+        hint.innerHTML =
+          'In PowerShell: <code style="' + code + '">irm https://claude.ai/install.ps1 | iex</code>'
+          + '<br>Or WinGet: <code style="' + code + '">winget install Anthropic.ClaudeCode</code>'
+          + '<br><a href="https://docs.anthropic.com/en/docs/claude-code/overview" target="_blank">Installation guide</a>';
+      }
+      // After install, Rundock adds Claude to PATH, so a NEW terminal recognises it.
+      const authHint = document.getElementById('auth-hint');
+      if (authHint) {
+        authHint.innerHTML =
+          'Open a <strong>new</strong> terminal, run <code style="' + code + '">claude</code>, and follow the prompts to sign in.';
+      }
     })();
 
     function updateStep(id, state) {
