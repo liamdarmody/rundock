@@ -76,6 +76,24 @@
         }
       ]
     },
+    "win": {
+      "icon": "electron/build/icon.ico",
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "artifactName": "Rundock-Setup-${version}.exe"
+    },
+    "portable": {
+      "artifactName": "Rundock-${version}.exe"
+    },
     "publish": {
       "provider": "github",
       "owner": "liamdarmody",

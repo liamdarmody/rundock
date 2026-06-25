@@ -137,7 +137,7 @@
       <div class="step-icon pending" id="icon-install">1</div>
       <div class="step-text">
         <div>Install Claude Code</div>
-        <div class="hint"><a href="https://docs.anthropic.com/en/docs/claude-code/overview" target="_blank">Installation guide</a></div>
+        <div class="hint" id="install-hint"><a href="https://docs.anthropic.com/en/docs/claude-code/overview" target="_blank">Installation guide</a></div>
       </div>
     </div>
     <div class="step" id="step-auth">
@@ -154,6 +154,20 @@
 
   <script>
     let polling = null;
+
+    // On Windows, show the recommended native-installer command (PowerShell) with
+    // WinGet as a secondary option. Mac/Linux keep the installation-guide link.
+    (function () {
+      const plat = (window.electronAPI && window.electronAPI.platform) || '';
+      if (plat !== 'win32') return;
+      const hint = document.getElementById('install-hint');
+      if (!hint) return;
+      const code = 'background:#333;padding:2px 5px;border-radius:3px;font-size:12px';
+      hint.innerHTML =
+        'In PowerShell: <code style="' + code + '">irm https://claude.ai/install.ps1 | iex</code>'
+        + '<br>Or WinGet: <code style="' + code + '">winget install Anthropic.ClaudeCode</code>'
+        + '<br><a href="https://docs.anthropic.com/en/docs/claude-code/overview" target="_blank">Installation guide</a>';
+    })();
 
     function updateStep(id, state) {
       const step = document.getElementById('step-' + id);
