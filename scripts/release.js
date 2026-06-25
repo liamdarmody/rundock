@@ -1,39 +1,34 @@
 #!/usr/bin/env node
 
 /**
- * Release script for Rundock.
+ * Release script for Rundock (tag-and-let-CI-build model).
  *
- * Chains the full release pipeline:
- *   1. Build the .app, .dmg, and .zip via electron-builder
- *   2. Submit for Apple notarisation via xcrun notarytool
- *   3. Poll for notarisation completion (every 30s)
- *   4. Staple the notarisation ticket
- *   5. Publish all feed artifacts to a GitHub Release so electron-updater
- *      can auto-update existing installs
- *   6. Bump the download buttons in the Rundock Site repo to the new DMG
- *      and push (skipped if the site repo is dirty or not on main)
+ * Bumps the version, promotes the CHANGELOG `## Unreleased` block to a versioned
+ * heading, commits, pushes main, and pushes a `v<version>` tag. The GitHub Actions
+ * release workflow (.github/workflows/release.yml) then builds, signs, notarises,
+ * and publishes a DRAFT GitHub release for that tag. Building no longer happens on
+ * your laptop.
+ *
+ * After this script: watch the Actions run, then review and publish the draft
+ * release. Update the Rundock Site download links once the release is published.
  *
  * Usage:
- *   node scripts/release.js <version>
- *   npm run release -- <version>
+ *   npm run release -- <version>     (e.g. npm run release -- 0.8.14)
  *
- * Example:
- *   npm run release -- 0.8.1
+ * Recovery: if the CI build fails (e.g. an expired Apple agreement), fix the cause
+ * and re-run the workflow on the same tag (gh run rerun, or the Actions UI). There
+ * is no need to revert main: the bump + tag stay, and CI publishes once it passes.
  *
- * Requires .env with: APPLE_API_KEY, APPLE_API_KEY_ID, APPLE_API_ISSUER,
- * CSC_LINK, CSC_KEY_PASSWORD, APPLE_TEAM_ID.
- *
- * Requires gh CLI authenticated against the target repo.
+ * No Apple/signing credentials are needed locally any more; those live in GitHub
+ * Secrets (see 02_Areas/Rundock/CI-Release-Setup.md in the vault).
  */
 
-const { execFileSync, execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
 const ROOT = path.join(__dirname, '..');
-const APP_PATH = '/tmp/rundock-dist/mac-arm64/Rundock.app';
-const DIST_DIR = '/tmp/rundock-dist';
-const POLL_INTERVAL_MS = 30_000;
+const REPO = 'liamdarmody/rundock';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -48,180 +43,73 @@ function fail(step, msg) {
   process.exit(1);
 }
 
-function loadEnv() {
-  const envPath = path.join(ROOT, '.env');
-  if (fs.existsSync(envPath)) {
-    require('dotenv').config({ path: envPath });
-    log('env', 'Loaded .env');
-  } else {
-    fail('env', 'No .env file found. Cannot sign or notarise without credentials.');
-  }
-
-  const required = [
-    'APPLE_API_KEY',
-    'APPLE_API_KEY_ID',
-    'APPLE_API_ISSUER',
-    'CSC_LINK',
-    'CSC_KEY_PASSWORD',
-    'APPLE_TEAM_ID',
-  ];
-  const missing = required.filter((k) => !process.env[k]);
-  if (missing.length) {
-    fail('env', `Missing required env vars: ${missing.join(', ')}`);
-  }
+function git(args, opts = {}) {
+  return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', ...opts });
 }
 
 // ---------------------------------------------------------------------------
 // Steps
 // ---------------------------------------------------------------------------
 
-function setVersion() {
+function getVersion() {
   const version = process.argv[2];
-
   if (!version) {
-    fail('version', 'Usage: npm run release -- <version> (e.g. npm run release -- 0.8.1)');
+    fail('version', 'Usage: npm run release -- <version> (e.g. npm run release -- 0.8.14)');
+  }
+  if (!/^\d+\.\d+\.\d+$/.test(version)) {
+    fail('version', `Invalid version "${version}". Expected semver MAJOR.MINOR.PATCH (e.g. 0.8.14).`);
+  }
+  return version;
+}
+
+// Must be on main, fully clean tree, in sync with origin, and the tag must not
+// already exist. Runs BEFORE any file is modified so a failed pre-flight leaves
+// the working tree untouched.
+function preflight(version) {
+  let branch;
+  try {
+    branch = git(['symbolic-ref', '--short', 'HEAD']).trim();
+  } catch (err) {
+    fail('preflight', `Could not determine current branch: ${err.message}`);
+  }
+  if (branch !== 'main') {
+    fail('preflight', `Must be on main to release (currently on "${branch}").`);
   }
 
-  const semverRe = /^\d+\.\d+\.\d+$/;
-  if (!semverRe.test(version)) {
-    fail('version', `Invalid version "${version}". Expected semver format: MAJOR.MINOR.PATCH (e.g. 0.8.1)`);
+  const status = git(['status', '--porcelain']).trim();
+  if (status) {
+    fail('preflight', `Working tree is not clean. Commit or stash changes before releasing:\n${status}`);
   }
 
+  try {
+    git(['fetch', 'origin', 'main'], { stdio: 'pipe' });
+  } catch (err) {
+    fail('preflight', `git fetch origin main failed: ${err.message}`);
+  }
+  const behind = git(['rev-list', '--count', 'HEAD..origin/main']).trim();
+  if (parseInt(behind, 10) > 0) {
+    fail('preflight', `Local main is ${behind} commit(s) behind origin/main. Pull before releasing.`);
+  }
+
+  const tag = `v${version}`;
+  if (git(['tag', '-l', tag]).trim()) {
+    fail('preflight', `Tag ${tag} already exists locally. Choose a new version or delete the tag.`);
+  }
+}
+
+function setVersion(version) {
   const pkgPath = path.join(ROOT, 'package.json');
   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
   pkg.version = version;
   fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
-
-  log('version', `Releasing version ${version}`);
-}
-
-function build() {
-  log('build', 'Running electron-builder --mac');
-  try {
-    execFileSync(
-      path.join(ROOT, 'node_modules', '.bin', 'electron-builder'),
-      ['--mac', '--publish', 'never'],
-      { stdio: 'inherit', cwd: ROOT }
-    );
-  } catch (err) {
-    fail('build', `electron-builder exited with code ${err.status || 1}`);
-  }
-
-  if (!fs.existsSync(APP_PATH)) {
-    fail('build', `Expected .app not found at ${APP_PATH}`);
-  }
-  log('build', `Built ${APP_PATH}`);
-}
-
-function submitNotarisation() {
-  log('notarise', 'Submitting for Apple notarisation...');
-
-  // Zip the .app for submission
-  const zipPath = '/tmp/rundock-dist/Rundock-notarize.zip';
-  try {
-    execSync(
-      `ditto -c -k --keepParent "${APP_PATH}" "${zipPath}"`,
-      { stdio: 'inherit' }
-    );
-  } catch (err) {
-    fail('notarise', 'Failed to zip .app for notarisation');
-  }
-
-  let output;
-  try {
-    output = execFileSync('xcrun', [
-      'notarytool', 'submit', zipPath,
-      '--key', process.env.APPLE_API_KEY,
-      '--key-id', process.env.APPLE_API_KEY_ID,
-      '--issuer', process.env.APPLE_API_ISSUER,
-      '--output-format', 'json',
-    ], { cwd: ROOT, encoding: 'utf8' });
-  } catch (err) {
-    fail('notarise', `notarytool submit failed: ${err.stderr || err.message}`);
-  }
-
-  let result;
-  try {
-    result = JSON.parse(output);
-  } catch (err) {
-    fail('notarise', `Could not parse notarytool output: ${output}`);
-  }
-
-  const submissionId = result.id;
-  if (!submissionId) {
-    fail('notarise', `No submission ID in response: ${output}`);
-  }
-
-  log('notarise', `Submission ID: ${submissionId}`);
-
-  // Clean up the zip
-  try { fs.unlinkSync(zipPath); } catch (_) {}
-
-  return submissionId;
-}
-
-function pollNotarisation(submissionId) {
-  log('notarise', 'Polling for notarisation result...');
-
-  while (true) {
-    let output;
-    try {
-      output = execFileSync('xcrun', [
-        'notarytool', 'info', submissionId,
-        '--key', process.env.APPLE_API_KEY,
-        '--key-id', process.env.APPLE_API_KEY_ID,
-        '--issuer', process.env.APPLE_API_ISSUER,
-        '--output-format', 'json',
-      ], { cwd: ROOT, encoding: 'utf8' });
-    } catch (err) {
-      fail('notarise', `notarytool info failed: ${err.stderr || err.message}`);
-    }
-
-    let result;
-    try {
-      result = JSON.parse(output);
-    } catch (err) {
-      fail('notarise', `Could not parse notarytool info output: ${output}`);
-    }
-
-    const status = result.status;
-    log('notarise', `Status: ${status}`);
-
-    if (status === 'Accepted') {
-      log('notarise', 'Notarisation accepted');
-      return;
-    }
-
-    if (status === 'Invalid' || status === 'Rejected') {
-      fail('notarise', `Notarisation ${status}. Check Apple's log for details.`);
-    }
-
-    // Still in progress, wait and retry
-    log('notarise', `Waiting ${POLL_INTERVAL_MS / 1000}s before next check...`);
-    execFileSync('sleep', [String(POLL_INTERVAL_MS / 1000)]);
-  }
-}
-
-function staple() {
-  log('staple', `Stapling notarisation ticket to ${APP_PATH}`);
-  try {
-    execSync(`xcrun stapler staple "${APP_PATH}"`, { stdio: 'inherit' });
-  } catch (err) {
-    fail('staple', 'xcrun stapler staple failed');
-  }
-  log('staple', 'Stapled successfully');
+  log('version', `Set version to ${version}`);
 }
 
 // Extract the title line and body of a specific version from CHANGELOG.md.
-// Returns { title, body } or null if not found. `title` is the heading text
-// without the leading "## ". `body` is everything between this heading and
-// the next "## " (or end of file), with trailing "---" separators stripped.
 function extractChangelogEntry(version) {
   const changelogPath = path.join(ROOT, 'CHANGELOG.md');
   if (!fs.existsSync(changelogPath)) return null;
   const lines = fs.readFileSync(changelogPath, 'utf8').split('\n');
-  // Accept either a versioned heading ("## 1.2.3:") or the literal
-  // "## Unreleased" heading used in-flight before a release is cut.
   const matchesHeading = (line) => {
     if (version === 'Unreleased') return /^## Unreleased\s*$/.test(line);
     return line.startsWith(`## ${version}:`);
@@ -242,13 +130,9 @@ function extractChangelogEntry(version) {
   return { title, body };
 }
 
-// Promote the `## Unreleased` changelog heading to the versioned heading
-// for the current release. If `## ${version}:` already exists, no-op. If
-// neither exists, abort: we must not publish a release without notes.
-//
-// The release name is read from a `**Name:** <name>` line at the top of
-// the Unreleased body (see CONTRIBUTING.md). If missing, logs a warning
-// and falls back to "Release" so the release still ships.
+// Promote the `## Unreleased` heading to the versioned heading for this release.
+// If `## ${version}:` already exists, no-op. If neither exists, abort: we must
+// not release without notes. The release name is read from a `**Name:**` line.
 function promoteUnreleasedChangelog(version) {
   const changelogPath = path.join(ROOT, 'CHANGELOG.md');
   if (!fs.existsSync(changelogPath)) {
@@ -256,17 +140,12 @@ function promoteUnreleasedChangelog(version) {
   }
   const original = fs.readFileSync(changelogPath, 'utf8');
 
-  // If a versioned heading for this release already exists, nothing to do.
-  const versionHeadingRe = new RegExp(
-    `^## ${version.replace(/\./g, '\\.')}:`,
-    'm'
-  );
+  const versionHeadingRe = new RegExp(`^## ${version.replace(/\./g, '\\.')}:`, 'm');
   if (versionHeadingRe.test(original)) {
     log('changelog', `Versioned heading for ${version} already present, skipping promotion`);
     return;
   }
 
-  // Otherwise we need an Unreleased heading to promote.
   const unreleasedRe = /^## Unreleased[ \t]*$/m;
   if (!unreleasedRe.test(original)) {
     fail(
@@ -276,7 +155,6 @@ function promoteUnreleasedChangelog(version) {
     );
   }
 
-  // Read the Unreleased body to extract the release name.
   const entry = extractChangelogEntry('Unreleased');
   const nameMatch = entry && entry.body.match(/^\s*\*\*Name:\*\*\s*(.+?)\s*$/m);
   let name;
@@ -289,240 +167,41 @@ function promoteUnreleasedChangelog(version) {
 
   const today = new Date().toISOString().slice(0, 10);
   const newHeading = `## ${version}: ${name} (${today})`;
-  // Also strip the **Name:** line from the body now that it's been
-  // lifted into the heading, so it doesn't show up twice in release notes.
   let updated = original.replace(unreleasedRe, newHeading);
   updated = updated.replace(/^[ \t]*\*\*Name:\*\*[ \t]*.+?[ \t]*$\n?/m, '');
-  // Collapsing 3+ consecutive newlines to 2 prevents a double blank line
-  // where the Name line used to sit (between heading and body).
   updated = updated.replace(/\n{3,}/g, '\n\n');
 
   fs.writeFileSync(changelogPath, updated, 'utf8');
   log('changelog', `Promoted "## Unreleased" to "${newHeading}"`);
 }
 
-function commitAndPush(version) {
-  // Pre-flight: must be on main
-  let branch;
-  try {
-    branch = execFileSync('git', ['symbolic-ref', '--short', 'HEAD'],
-      { cwd: ROOT, encoding: 'utf8' }).trim();
-  } catch (err) {
-    fail('commit', `Could not determine current branch: ${err.message}`);
-  }
-  if (branch !== 'main') {
-    fail('commit', `Must be on main to release (currently on "${branch}")`);
-  }
-
-  // Pre-flight: working tree clean aside from expected files
-  let status;
-  try {
-    status = execFileSync('git', ['status', '--porcelain'],
-      { cwd: ROOT, encoding: 'utf8' });
-  } catch (err) {
-    fail('commit', `git status failed: ${err.message}`);
-  }
-  const unexpected = status.split('\n').filter(line => {
-    if (!line.trim()) return false;
-    // Allow modifications to package.json and CHANGELOG.md
-    return !/ (package\.json|CHANGELOG\.md)$/.test(line);
-  });
-  if (unexpected.length) {
-    fail('commit', `Working tree has unexpected changes:\n${unexpected.join('\n')}\nCommit or stash them before releasing.`);
-  }
-
-  // Pre-flight: fetch and check sync with origin/main
-  try {
-    execFileSync('git', ['fetch', 'origin', 'main'], { cwd: ROOT, stdio: 'pipe' });
-  } catch (err) {
-    fail('commit', `git fetch origin main failed: ${err.message}`);
-  }
-  let localHead, remoteHead;
-  try {
-    localHead = execFileSync('git', ['rev-parse', 'HEAD'],
-      { cwd: ROOT, encoding: 'utf8' }).trim();
-    remoteHead = execFileSync('git', ['rev-parse', 'origin/main'],
-      { cwd: ROOT, encoding: 'utf8' }).trim();
-  } catch (err) {
-    fail('commit', `Could not compare HEAD with origin/main: ${err.message}`);
-  }
-
-  // Local must be at or ahead of origin/main (not behind)
-  try {
-    const behind = execFileSync('git', ['rev-list', '--count', 'HEAD..origin/main'],
-      { cwd: ROOT, encoding: 'utf8' }).trim();
-    if (parseInt(behind, 10) > 0) {
-      fail('commit', `Local main is ${behind} commit(s) behind origin/main. Pull before releasing.`);
-    }
-  } catch (err) {
-    fail('commit', `Could not check if behind origin/main: ${err.message}`);
-  }
-
-  // Stage, commit, push
-  try {
-    execFileSync('git', ['add', 'package.json', 'CHANGELOG.md'], { cwd: ROOT, stdio: 'inherit' });
-    execFileSync('git', ['commit', '-m', `chore: bump version to ${version}`], { cwd: ROOT, stdio: 'inherit' });
-    execFileSync('git', ['push', 'origin', 'main'], { cwd: ROOT, stdio: 'inherit' });
-  } catch (err) {
-    fail('commit', `Git commit/push failed: ${err.message}`);
-  }
-  log('commit', `Committed and pushed version bump to ${version}`);
-}
-
-function publishRelease(version) {
+function commitTagPush(version) {
   const tag = `v${version}`;
-  const dmg = path.join(DIST_DIR, `Rundock-${version}-arm64.dmg`);
-  const dmgBlockmap = `${dmg}.blockmap`;
-  const zip = path.join(DIST_DIR, `Rundock-${version}-arm64-mac.zip`);
-  const zipBlockmap = `${zip}.blockmap`;
-  const feed = path.join(DIST_DIR, 'latest-mac.yml');
-  const assets = [dmg, dmgBlockmap, zip, zipBlockmap, feed];
-
-  for (const a of assets) {
-    if (!fs.existsSync(a)) fail('publish', `Missing release artifact: ${a}`);
-  }
-
-  // Determine whether the release already exists.
-  let exists = false;
   try {
-    execFileSync('gh', ['release', 'view', tag], { stdio: 'pipe' });
-    exists = true;
-  } catch (_) {
-    exists = false;
-  }
-
-  if (exists) {
-    log('publish', `Release ${tag} already exists, uploading assets (clobbering)`);
-    try {
-      execFileSync('gh', ['release', 'upload', tag, ...assets, '--clobber'], {
-        stdio: 'inherit',
-      });
-    } catch (err) {
-      fail('publish', `gh release upload failed: ${err.message}`);
-    }
-    log('publish', `Assets uploaded to ${tag}`);
-    return;
-  }
-
-  // Pre-flight: verify local HEAD matches origin/main so the tag lands on
-  // the correct commit. After commitAndPush they should be identical, but
-  // this guards against manual intervention between steps.
-  let localHead, remoteHead;
-  try {
-    localHead = execFileSync('git', ['rev-parse', 'HEAD'],
-      { cwd: ROOT, encoding: 'utf8' }).trim();
-    remoteHead = execFileSync('git', ['rev-parse', 'origin/main'],
-      { cwd: ROOT, encoding: 'utf8' }).trim();
+    git(['add', 'package.json', 'CHANGELOG.md'], { stdio: 'inherit' });
+    git(['commit', '-m', `chore: release ${version}`], { stdio: 'inherit' });
+    git(['push', 'origin', 'main'], { stdio: 'inherit' });
+    git(['tag', tag], { stdio: 'inherit' });
+    git(['push', 'origin', tag], { stdio: 'inherit' });
   } catch (err) {
-    fail('publish', `Could not compare HEAD with origin/main: ${err.message}`);
+    fail('push', `git commit/tag/push failed: ${err.message}`);
   }
-  if (localHead !== remoteHead) {
-    fail('publish', `Local HEAD (${localHead.slice(0, 8)}) does not match origin/main (${remoteHead.slice(0, 8)}). Push before creating the release.`);
-  }
-
-  log('publish', `Creating GitHub release ${tag} at ${localHead.slice(0, 8)}`);
-  const entry = extractChangelogEntry(version);
-  const title = entry ? entry.title : `Rundock ${version}`;
-  const notes = entry && entry.body
-    ? entry.body
-    : `Rundock ${version}. See CHANGELOG.md for details.`;
-
-  try {
-    execFileSync(
-      'gh',
-      ['release', 'create', tag, '--target', localHead, ...assets, '--title', title, '--notes', notes],
-      { stdio: 'inherit' }
-    );
-  } catch (err) {
-    fail('publish', `gh release create failed: ${err.message}`);
-  }
-  log('publish', `Release ${tag} created with ${assets.length} assets`);
-}
-
-// Update the Rundock Site repo's download buttons to point at the new DMG,
-// then commit and push. Skips (with a warning) if the site repo is not on
-// main, has uncommitted changes, or is missing entirely — a failure here
-// should never block a release that has already been published.
-function updateSiteDownloadUrls(version) {
-  const sitePath = process.env.RUNDOCK_SITE_PATH
-    || path.resolve(ROOT, '..', 'Rundock Site');
-
-  if (!fs.existsSync(sitePath)) {
-    log('site', `Site repo not found at ${sitePath}; skipping`);
-    return;
-  }
-
-  const indexPath = path.join(sitePath, 'index.html');
-  if (!fs.existsSync(indexPath)) {
-    log('site', `index.html not found in ${sitePath}; skipping`);
-    return;
-  }
-
-  let branch, status;
-  try {
-    branch = execFileSync('git', ['-C', sitePath, 'symbolic-ref', '--short', 'HEAD'],
-      { encoding: 'utf8' }).trim();
-    status = execFileSync('git', ['-C', sitePath, 'status', '--porcelain'],
-      { encoding: 'utf8' });
-  } catch (err) {
-    log('site', `Failed to read site repo git state: ${err.message}; skipping`);
-    return;
-  }
-
-  if (branch !== 'main') {
-    log('site', `Site repo is on branch "${branch}", not main; skipping`);
-    return;
-  }
-  if (status.trim()) {
-    log('site', 'Site repo has uncommitted changes; skipping to avoid clobbering');
-    return;
-  }
-
-  const content = fs.readFileSync(indexPath, 'utf8');
-  const pattern = /releases\/download\/v\d+\.\d+\.\d+\/Rundock-\d+\.\d+\.\d+-arm64\.dmg/g;
-  const replacement = `releases/download/v${version}/Rundock-${version}-arm64.dmg`;
-  const updated = content.replace(pattern, replacement);
-
-  if (updated === content) {
-    log('site', 'No download URL changes needed');
-    return;
-  }
-
-  fs.writeFileSync(indexPath, updated, 'utf8');
-  log('site', `Updated download URLs in index.html to v${version}`);
-
-  const commitMessage = `chore: bump download buttons to v${version}\n\n` +
-    `Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n`;
-
-  try {
-    execFileSync('git', ['-C', sitePath, 'add', 'index.html'], { stdio: 'inherit' });
-    execFileSync('git', ['-C', sitePath, 'commit', '-m', commitMessage], { stdio: 'inherit' });
-    execFileSync('git', ['-C', sitePath, 'push', 'origin', 'main'], { stdio: 'inherit' });
-    log('site', `Pushed site update for v${version}`);
-  } catch (err) {
-    log('site', `Git operation failed: ${err.message}`);
-    log('site', 'Site repo changes left in working tree; review and push manually');
-  }
+  log('push', `Committed, pushed main, and pushed tag ${tag}`);
 }
 
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
-setVersion();
-loadEnv();
-promoteUnreleasedChangelog(process.argv[2]);
-commitAndPush(process.argv[2]);
-build();
-const submissionId = submitNotarisation();
-pollNotarisation(submissionId);
-staple();
-
-const version = process.argv[2];
-publishRelease(version);
-updateSiteDownloadUrls(version);
-
-const dmgPath = path.join(DIST_DIR, `Rundock-${version}-arm64.dmg`);
+const version = getVersion();
+preflight(version);
+setVersion(version);
+promoteUnreleasedChangelog(version);
+commitTagPush(version);
 
 console.log('');
-log('done', `Release complete: ${dmgPath}`);
+log('done', `Tagged v${version}. GitHub Actions is now building, signing, notarising, and publishing a DRAFT release.`);
+log('done', `Watch the build:   https://github.com/${REPO}/actions`);
+log('done', `Review + publish:  https://github.com/${REPO}/releases`);
+log('done', `Then bump the Rundock Site download links to v${version}.`);
+log('done', `If CI fails (e.g. expired Apple agreement): fix it and re-run the workflow on tag v${version} — no need to revert main.`);
