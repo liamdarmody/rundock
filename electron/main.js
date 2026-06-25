@@ -1,5 +1,6 @@
 const { app, BrowserWindow, Menu, nativeImage, dialog, ipcMain, shell } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { execSync } = require('child_process');
 
 let autoUpdater;
@@ -403,19 +404,34 @@ app.whenReady().then(async () => {
     } catch {}
   }
 
-  // Check for Claude Code (installed only; auth check happens in wizard if needed)
+  // Show the first-run wizard when Claude is either not installed OR not signed
+  // in. Previously we only checked installation, so a user who had Claude
+  // installed but had never authenticated skipped the wizard entirely and then
+  // hit a confusing 401 the first time an agent ran. The auth check makes a
+  // small API call, so we run it only until setup has been verified once
+  // (cached via a marker in userData); after that we trust it and let the
+  // in-app 401 recovery card handle any later token expiry.
   console.log('[Electron] Checking for Claude Code...');
   const claudeBin = findClaude();
   console.log('[Electron] Claude binary:', claudeBin || 'not found');
 
-  if (!claudeBin) {
-    console.log('[Electron] Showing wizard (Claude not installed)');
+  const setupMarker = path.join(app.getPath('userData'), '.claude-setup-verified');
+  const setupVerified = fs.existsSync(setupMarker);
+  const needsWizard = !claudeBin || (!setupVerified && !isClaudeAuthenticated());
+
+  if (needsWizard) {
+    console.log('[Electron] Showing first-run wizard (Claude missing or not signed in)');
     await showWizard();
-    if (!findClaude()) {
+    // Only proceed if setup is genuinely complete: installed AND authenticated.
+    if (!findClaude() || !isClaudeAuthenticated()) {
       app.quit();
       return;
     }
   }
+
+  // Setup confirmed (installed + signed in): remember it so future launches
+  // skip the auth API call. The 401 recovery card covers later expiry.
+  try { fs.writeFileSync(setupMarker, new Date().toISOString()); } catch { /* non-fatal */ }
 
   // Start the embedded server on an OS-assigned port
   console.log('[Electron] Starting server...');
