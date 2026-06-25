@@ -1,6 +1,9 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  // OS platform, so the first-run wizard can show the right install command.
+  platform: process.platform,
+
   // Native folder picker for workspace selection
   selectDirectory: () => ipcRenderer.invoke('select-directory'),
 

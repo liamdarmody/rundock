@@ -106,7 +106,8 @@ function showWizard() {
       resizable: false,
       minimizable: false,
       maximizable: false,
-      titleBarStyle: 'hiddenInset',
+      // hiddenInset is macOS-only; on Windows it produces a broken title bar.
+      titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
       webPreferences: {
         preload: path.join(__dirname, 'preload.js'),
         nodeIntegration: false,
@@ -155,51 +156,85 @@ ipcMain.handle('get-app-version', () => app.getVersion());
 // ===== APP MENU =====
 
 function setupMenu() {
-  const template = [
-    {
-      label: 'Rundock',
-      submenu: [
-        { label: 'About Rundock', role: 'about' },
-        { label: 'Check for Updates', click: () => {
-          if (!autoUpdater) {
-            dialog.showMessageBox(mainWindow, {
-              type: 'info',
-              message: 'Auto-update is not available in this build.',
-              buttons: ['OK'],
-            });
-            return;
-          }
-          isCheckingManually = true;
-          autoUpdater.checkForUpdates().catch((err) => {
-            isCheckingManually = false;
-            dialog.showMessageBox(mainWindow, {
-              type: 'error',
-              message: 'Could not check for updates',
-              detail: err && err.message ? err.message : String(err),
-              buttons: ['OK'],
-            });
-          });
-        } },
-        { type: 'separator' },
-        { label: 'Quit', accelerator: 'CmdOrCtrl+Q', click: () => { app.quit(); } },
-      ],
-    },
-    {
-      label: 'Edit',
-      submenu: [
-        { role: 'undo' }, { role: 'redo' }, { type: 'separator' },
-        { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' },
-      ],
-    },
-    {
-      label: 'View',
-      submenu: [
-        { role: 'reload' }, { role: 'toggleDevTools' },
-        { type: 'separator' },
-        { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'resetZoom' },
-      ],
-    },
-  ];
+  const isMac = process.platform === 'darwin';
+
+  const checkForUpdatesItem = { label: 'Check for Updates', click: () => {
+    if (!autoUpdater) {
+      dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        message: 'Auto-update is not available in this build.',
+        buttons: ['OK'],
+      });
+      return;
+    }
+    isCheckingManually = true;
+    autoUpdater.checkForUpdates().catch((err) => {
+      isCheckingManually = false;
+      dialog.showMessageBox(mainWindow, {
+        type: 'error',
+        message: 'Could not check for updates',
+        detail: err && err.message ? err.message : String(err),
+        buttons: ['OK'],
+      });
+    });
+  } };
+
+  const aboutWindows = { label: 'About Rundock', click: () => {
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: 'About Rundock',
+      message: 'Rundock',
+      detail: `Version ${app.getVersion()}\nA visual workspace for your AI agent team.`,
+      buttons: ['OK'],
+    });
+  } };
+
+  const editMenu = {
+    label: 'Edit',
+    submenu: [
+      { role: 'undo' }, { role: 'redo' }, { type: 'separator' },
+      { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' },
+    ],
+  };
+  const viewMenu = {
+    label: 'View',
+    submenu: [
+      { role: 'reload' }, { role: 'toggleDevTools' },
+      { type: 'separator' },
+      { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'resetZoom' },
+    ],
+  };
+
+  // macOS: app-name menu (About / Check for Updates / Quit) + Edit + View.
+  // Windows/Linux: File / Edit / View / Help, the platform convention.
+  const template = isMac
+    ? [
+        {
+          label: 'Rundock',
+          submenu: [
+            { label: 'About Rundock', role: 'about' },
+            checkForUpdatesItem,
+            { type: 'separator' },
+            { label: 'Quit', accelerator: 'CmdOrCtrl+Q', click: () => { app.quit(); } },
+          ],
+        },
+        editMenu,
+        viewMenu,
+      ]
+    : [
+        {
+          label: 'File',
+          submenu: [
+            checkForUpdatesItem,
+            { type: 'separator' },
+            { label: 'Quit', accelerator: 'Ctrl+Q', click: () => { app.quit(); } },
+          ],
+        },
+        editMenu,
+        viewMenu,
+        { label: 'Help', submenu: [ aboutWindows ] },
+      ];
+
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 

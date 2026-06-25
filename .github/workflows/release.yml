@@ -67,22 +67,33 @@ jobs:
           # APPLE_API_KEY (path to the decoded .p8) is exported via GITHUB_ENV above.
 
   # ---------------------------------------------------------------------------
-  # SCAFFOLDED, INACTIVE. Activated by "Ship a Windows installer" (Windows card).
-  # The Windows build is unsigned for v1 (no Apple/code-signing secrets needed).
+  # Windows build. Unsigned for v1 (no code-signing secrets); users click through
+  # the one-time SmartScreen prompt. Builds an NSIS installer + portable .exe.
   # ---------------------------------------------------------------------------
-  # windows:
-  #   name: Build Windows (x64)
-  #   runs-on: windows-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/setup-node@v4
-  #       with:
-  #         node-version-file: '.nvmrc'
-  #     - run: npm ci
-  #     - name: Build and publish
-  #       run: npx electron-builder --win --publish always
-  #       env:
-  #         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  windows:
+    name: Build Windows (x64)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and publish
+        # Use bash (available on Windows runners) so version extraction matches macOS.
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Building Windows version $VERSION from tag $GITHUB_REF_NAME"
+          npx electron-builder --win -c.extraMetadata.version="$VERSION" --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ---------------------------------------------------------------------------
   # SCAFFOLDED, INACTIVE. Deferred until a Linux user surfaces (future Linux card).
