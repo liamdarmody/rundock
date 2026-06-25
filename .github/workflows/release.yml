@@ -53,7 +53,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           echo "Building version $VERSION from tag $GITHUB_REF_NAME"
-          npx electron-builder --mac --arm64 --x64 \
+          npx electron-builder --mac --universal \
             -c.mac.notarize=true \
             -c.extraMetadata.version="$VERSION" \
             --publish always
