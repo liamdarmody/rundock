@@ -2470,6 +2470,19 @@ function classifyRisk(toolName, input) {
     if (lowRisk) return 'low';
     return 'medium';
   }
+  if (toolName === 'PowerShell') {
+    // Windows shell tool. Same input shape as Bash (a `command` field).
+    // Destructive checks run first so a read that also deletes can't be low.
+    const cmd = (input.command || '').trim();
+    const highRisk = /(^|[;&|]\s*)(Remove-Item|ri|rm|del|erase|rmdir|rd|Stop-Process|spps|kill|Stop-Service|Format-Volume|Clear-Content|Clear-Item|Set-ExecutionPolicy|Uninstall-[A-Za-z]+)\b/i.test(cmd)
+      || /-Force\b/i.test(cmd)
+      || /\b(iex|Invoke-Expression)\b/i.test(cmd)
+      || /\b(irm|Invoke-RestMethod|iwr|Invoke-WebRequest|curl|wget)\b[\s\S]*\|\s*(iex|Invoke-Expression)/i.test(cmd);
+    if (highRisk) return 'high';
+    const lowRisk = /^(Get-[A-Za-z]+|ls|dir|gci|gc|cat|type|pwd|gl|echo|Write-Output|Write-Host|Select-Object|Where-Object|Measure-Object|Test-Path|Resolve-Path|Split-Path|Format-Table|Format-List|Sort-Object)\b/i.test(cmd);
+    if (lowRisk) return 'low';
+    return 'medium';
+  }
   if (toolName.startsWith('mcp__')) {
     // MCP reads auto-approve in the permission hook, so by the time a request
     // reaches the card it's a write or destructive action. Flag destructive ones
@@ -2497,6 +2510,13 @@ function describeToolRequest(toolName, input) {
     else if (/git\s+push/.test(cmd)) context = 'This will push changes to a remote repository';
     else if (/git\s+reset\s+--hard/.test(cmd)) context = 'This will discard uncommitted changes';
     else if (bin === 'npm' && /install/.test(cmd)) context = 'This will install packages and modify node_modules';
+  } else if (toolName === 'PowerShell') {
+    const cmd = (input.command || '').trim();
+    detail = cmd;
+    summary = input.description || 'Run PowerShell command';
+    if (/(^|[;&|]\s*)(Remove-Item|ri|rm|del|erase|rmdir|rd)\b/i.test(cmd)) context = 'This will delete files';
+    else if (/-Force\b/i.test(cmd)) context = 'This uses -Force and may overwrite or delete without confirmation';
+    else if (/\b(iex|Invoke-Expression)\b/i.test(cmd)) context = 'This executes a downloaded or dynamic script';
   } else if (toolName === 'Write') {
     summary = 'Create a file';
     detail = input.file_path || '';
@@ -2523,6 +2543,10 @@ function describeToolRequest(toolName, input) {
 function toolAllowKey(toolName, input) {
   if (toolName === 'Bash') {
     return 'Bash:' + bashBin((input.command || '').trim());
+  }
+  if (toolName === 'PowerShell') {
+    const verb = ((input.command || '').trim().match(/^[A-Za-z][\w-]*/) || ['PowerShell'])[0];
+    return 'PowerShell:' + verb;
   }
   return toolName;
 }
