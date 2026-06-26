@@ -15,6 +15,22 @@
  */
 
 const http = require('http');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+// Temporary diagnostics: prove whether this hook actually executes (as Node) and
+// what env it inherits. Writes to a temp file; never touches stdout (which is the
+// hook protocol channel). Best-effort, removed once the Windows issue is fixed.
+const DEBUG_LOG = path.join(os.tmpdir(), 'rundock-hook-debug.log');
+function dbg(msg) {
+  try { fs.appendFileSync(DEBUG_LOG, new Date().toISOString() + ' ' + msg + '\n'); } catch (e) { /* ignore */ }
+}
+dbg('START (running as Node) RUNDOCK=' + (process.env.RUNDOCK || '-') +
+    ' PORT=' + (process.env.RUNDOCK_PORT || '-') +
+    ' CONVO=' + (process.env.RUNDOCK_CONVO_ID || '-') +
+    ' CODE_MODE=' + (process.env.RUNDOCK_CODE_MODE || '-') +
+    ' RUN_AS_NODE=' + (process.env.ELECTRON_RUN_AS_NODE || '-'));
 
 // MCP read/write classification. Read-style MCP tools auto-approve; writes,
 // destructive actions, and anything unrecognised get a permission card.
@@ -62,9 +78,11 @@ process.stdin.on('end', () => {
     data = JSON.parse(input);
   } catch (e) {
     // Bad input: pass through
+    dbg('bad input, passthrough');
     process.stdout.write(JSON.stringify({}));
     process.exit(0);
   }
+  dbg('parsed tool=' + (data && data.tool_name));
 
   // MCP tools are routed through the hook (not pre-approved via --allowed-tools).
   // Read-style MCP calls auto-approve here, server-side, so they work even when no
@@ -134,7 +152,8 @@ process.stdin.on('end', () => {
     });
   });
 
-  req.on('error', () => {
+  req.on('error', (err) => {
+    dbg('POST error: ' + (err && err.message ? err.message : err));
     // Server unreachable: allow to avoid blocking the user
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: {
@@ -158,6 +177,7 @@ process.stdin.on('end', () => {
     process.exit(0);
   });
 
+  dbg('POSTing tool=' + data.tool_name + ' to 127.0.0.1:' + port);
   req.write(payload);
   req.end();
 });
