@@ -187,19 +187,23 @@
       const result = await window.electronAPI.checkClaude();
 
       const signinBtn = document.getElementById('btn-signin');
+      const checkBtn = document.getElementById('btn-check');
 
       if (result.status === 'not-installed') {
         updateStep('install', 'active');
         updateStep('auth', 'pending');
+        // Install step: Check again is the primary action.
         signinBtn.style.display = 'none';
+        checkBtn.style.display = 'inline-block';
         return false;
       }
 
       if (result.status === 'not-authenticated') {
         updateStep('install', 'done');
         updateStep('auth', 'active');
-        // Claude is installed but not signed in: offer the one-click sign-in.
+        // Sign-in step: the Sign in button replaces Check again (single action).
         signinBtn.style.display = 'inline-block';
+        checkBtn.style.display = 'none';
         return false;
       }
 
@@ -207,8 +211,9 @@
         updateStep('install', 'done');
         updateStep('auth', 'done');
         signinBtn.style.display = 'none';
-        document.getElementById('btn-check').textContent = 'Continue';
-        document.getElementById('btn-check').onclick = () => window.electronAPI.wizardDone();
+        checkBtn.style.display = 'inline-block';
+        checkBtn.textContent = 'Continue';
+        checkBtn.onclick = () => window.electronAPI.wizardDone();
         document.getElementById('btn-skip').style.display = 'none';
         if (polling) { clearInterval(polling); polling = null; }
         return true;
