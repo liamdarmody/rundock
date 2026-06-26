@@ -16,6 +16,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 - **Setup no longer skips the sign-in step.** Previously, if Claude Code was installed but you had never signed in, Rundock skipped the setup wizard and you hit an authentication error the first time an agent ran. Setup now also checks that you're signed in, and only continues once Claude Code is both installed and authenticated.
 - **Windows: `claude` is recognised in the terminal after setup.** Anthropic's Windows installer doesn't add Claude Code to your PATH, so `claude` wasn't found in a terminal. Rundock now adds it during setup, so `claude` works in a new terminal.
 - **Windows: native window and menus.** The first-run window no longer shows a broken title bar or an unnecessary menu bar, and the app menu uses the standard Windows File / Edit / View / Help layout.
+- **Permission cards work on machines without Node installed.** The tool-permission system relied on a system `node` to run its hook, which packaged Windows (and non-developer Mac) users don't have. As a result permission cards never appeared and tool calls ran unchecked. Rundock now runs the hook with its own bundled runtime, so the permission system works everywhere with nothing extra to install.
 
 ## 0.8.14: Universal Mac Build (2026-06-25)
 

@@ -97,6 +97,12 @@ function getBareArgs() {
 function getSpawnEnv(convoId) {
   const env = { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(ACTUAL_PORT) };
   if (convoId) env.RUNDOCK_CONVO_ID = convoId;
+  // In the packaged app there is no system `node`, so the PreToolUse permission
+  // hook is run with Rundock's bundled runtime (process.execPath) behaving as
+  // Node via ELECTRON_RUN_AS_NODE. The hook is a child of the spawned claude
+  // process and inherits this env. Without it, on a machine with no Node the
+  // hook can't run at all and the permission system silently does nothing.
+  if (process.env.RUNDOCK_ELECTRON) env.ELECTRON_RUN_AS_NODE = '1';
   try {
     const state = readState();
     if (state.workspaceMode === 'code') env.RUNDOCK_CODE_MODE = '1';
@@ -1606,7 +1612,13 @@ function scaffoldWorkspace(dir) {
     const hookScript = process.env.RUNDOCK_ELECTRON
       ? path.join(__dirname.replace(/app\.asar(?!\.unpacked)/, 'app.asar.unpacked'), 'scripts', 'permission-hook.js')
       : path.join(__dirname, 'scripts', 'permission-hook.js');
-    const expectedHookCommand = `node "${hookScript}"`;
+    // Run the hook with Rundock's own runtime (process.execPath), not a system
+    // `node`: packaged Windows/Mac users have no `node` on PATH. In the packaged
+    // app process.execPath is the Electron binary, which runs this script as Node
+    // because getSpawnEnv sets ELECTRON_RUN_AS_NODE=1. From source it is the node
+    // binary, which runs it directly. Stale `node "..."` entries from older
+    // versions are detected and rewritten below.
+    const expectedHookCommand = `"${process.execPath}" "${hookScript}"`;
     const settingsLocalPath = path.join(dir, '.claude', 'settings.local.json');
     let settingsLocal = {};
     if (fs.existsSync(settingsLocalPath)) {
