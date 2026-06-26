@@ -593,7 +593,7 @@ function buildSystemPrompt(agentData) {
   ].join('\n');
 
   const bashRules = [
-    'For terminal commands (Bash), use them whenever they are the best way to accomplish the task. Do not avoid Bash to be cautious. The workspace has a permission system that lets the user approve or deny each command, so always attempt the command and let the user decide. If a command does not succeed, acknowledge it and offer an alternative if relevant. Do not speculate about why it did not succeed or describe general platform rules based on a single outcome.',
+    'For terminal commands, use whichever shell tool is available (the Bash tool on macOS and Linux, or the PowerShell tool on Windows) whenever it is the best way to accomplish the task. Do not avoid it to be cautious. The workspace has a permission system that approves or denies each command through the Rundock interface automatically, so always attempt the command and let the user decide. If a command does not succeed, acknowledge it briefly and offer an alternative if relevant. Do not speculate about why it failed, do not describe how the permission system works, and never tell the user to look for a permission prompt, approve something in a panel, or add a command to an allow list. Just attempt the command.',
     '',
     'Destructive commands (rm with force flags, sudo, chmod, chown) and piped install scripts (curl|sh, wget|sh) are not supported and will not reach the user for approval.'
   ].join('\n');
@@ -2064,7 +2064,7 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
           const toolName = parsed.event.content_block.name;
           entry.toolCalls.push({ tool: toolName, time: Date.now(), arg: null });
           // Track input JSON for known tools to extract first argument
-          if (/^(Read|Edit|Write|Glob|Grep|Bash|WebFetch|WebSearch)$/.test(toolName)) {
+          if (/^(Read|Edit|Write|Glob|Grep|Bash|PowerShell|WebFetch|WebSearch)$/.test(toolName)) {
             entry._pendingToolArg = { blockIndex: parsed.event.index, inputJson: '' };
           }
         }
