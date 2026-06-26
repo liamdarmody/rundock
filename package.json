@@ -1,6 +1,6 @@
 {
   "name": "rundock",
-  "version": "0.8.14",
+  "version": "0.9.0",
   "description": "A visual interface for AI agent teams. Built for people running their own businesses, powered by Claude Code.",
   "main": "electron/main.js",
   "scripts": {
@@ -79,8 +79,18 @@
     "win": {
       "icon": "electron/build/icon.ico",
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "portable", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "nsis": {
