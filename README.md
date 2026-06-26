@@ -22,46 +22,23 @@ Read the full version at [docs.rundock.ai/principles](https://docs.rundock.ai/pr
 
 ## Getting started
 
-You do not need to write code. You need Claude Code and a folder to call your workspace.
+You do not need to write code. You need a Claude Pro or Max subscription and a folder to call your workspace. Rundock's first-run wizard helps you install Claude Code and sign in, so there is no terminal setup to do by hand.
 
-1. Install [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview) and sign in. Requires a Claude Pro or Max subscription.
-2. Download the latest [Rundock release](https://github.com/liamdarmody/rundock/releases) or from [rundock.ai/download](https://rundock.ai/download): a universal `.dmg` for any Mac (Apple Silicon or Intel), or the `.exe` installer for Windows. For Linux, see Local setup below.
-3. Open Rundock and follow Doc, the built-in guide, through first-run setup. Doc walks you through choosing a workspace and creating your first agents.
+1. Get a [Claude Pro or Max subscription](https://claude.com/product/claude-code). Claude Code runs the agents; Rundock's wizard installs and signs you in.
+2. Download Rundock for your platform, from [rundock.ai/download](https://rundock.ai/download) or the [releases page](https://github.com/liamdarmody/rundock/releases):
 
-## Run on Windows
+   | Platform | Download |
+   |---|---|
+   | macOS (Apple Silicon or Intel) | Universal `.dmg` |
+   | Windows 10 / 11 (64-bit) | `.exe` installer |
+   | Linux | [Build from source](#build-from-source) |
 
-The recommended path is the native Windows installer from the [latest release](https://github.com/liamdarmody/rundock/releases) or [rundock.ai/download](https://rundock.ai/download). It is unsigned for now, so Windows SmartScreen shows a one-time prompt on first launch: click **More info**, then **Run anyway**.
+   On Windows the installer is unsigned for now, so SmartScreen shows a one-time prompt: click **More info**, then **Run anyway**.
+3. Open Rundock. The first-run wizard installs and signs you into Claude Code, then Doc, the built-in guide, walks you through choosing a workspace and creating your first agents.
 
-If you would rather run from source, the PowerShell bootstrap below still works.
+## Build from source
 
-Open PowerShell and run:
-
-```powershell
-irm https://raw.githubusercontent.com/liamdarmody/rundock/main/scripts/install-windows-source.ps1 | iex
-```
-
-The bootstrap takes care of five things end to end: it checks for Node.js 20+ and Git (and installs them via `winget` if missing), checks for Claude Code (and prompts to run Anthropic's installer if missing), clones Rundock to `%USERPROFILE%\Rundock`, runs `npm install`, and creates a Desktop and Start Menu shortcut. After it finishes, double-click the Rundock shortcut to launch.
-
-If `winget` itself is missing on an older Windows 10 machine, install **App Installer** from the Microsoft Store:
-
-```
-ms-windows-store://pdp/?productid=9NBLGGH4NNS1
-```
-
-If you would prefer to install Claude Code yourself first, run Anthropic's installer in PowerShell, then run the Rundock bootstrap:
-
-```powershell
-irm https://claude.ai/install.ps1 | iex
-irm https://raw.githubusercontent.com/liamdarmody/rundock/main/scripts/install-windows-source.ps1 | iex
-```
-
-Re-running the bootstrap one-liner is safe at any time. It updates the existing checkout in place.
-
-This from-source path is an alternative for developers; most users should use the installer above.
-
-## Local setup (for contributors and other platforms)
-
-For Intel Macs, Windows, Linux, or anyone wanting to build from source.
+For Linux, or anyone who wants to run Rundock from source. This is also the contributor path.
 
 **Requirements:** Node.js 20+ and Claude Code authenticated (`claude --version` should work in your terminal).
 
