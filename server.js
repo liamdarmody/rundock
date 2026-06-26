@@ -1612,13 +1612,37 @@ function scaffoldWorkspace(dir) {
     const hookScript = process.env.RUNDOCK_ELECTRON
       ? path.join(__dirname.replace(/app\.asar(?!\.unpacked)/, 'app.asar.unpacked'), 'scripts', 'permission-hook.js')
       : path.join(__dirname, 'scripts', 'permission-hook.js');
-    // Run the hook with Rundock's own runtime (process.execPath), not a system
-    // `node`: packaged Windows/Mac users have no `node` on PATH. In the packaged
-    // app process.execPath is the Electron binary, which runs this script as Node
-    // because getSpawnEnv sets ELECTRON_RUN_AS_NODE=1. From source it is the node
-    // binary, which runs it directly. Stale `node "..."` entries from older
-    // versions are detected and rewritten below.
-    const expectedHookCommand = `"${process.execPath}" "${hookScript}"`;
+    // Claude Code launches the PreToolUse hook as a child process. Packaged
+    // users have no system `node`, so the hook must run via Rundock's own runtime
+    // (process.execPath: the Electron binary, run as Node via ELECTRON_RUN_AS_NODE;
+    // or plain node when run from source). Relying on ELECTRON_RUN_AS_NODE being
+    // INHERITED through Claude's hook spawn proved unreliable on Windows (the flag
+    // didn't reach the hook, so Rundock.exe launched the app instead of running as
+    // Node, and the hook never executed). So we write a tiny launcher that sets the
+    // flag explicitly, then execs the runtime against the hook script. The launcher
+    // lives in the gitignored .rundock/ dir (always writable, unlike the read-only
+    // app bundle on macOS). Named permission-hook.* so the stale-entry cleanup
+    // below still recognises it.
+    const rundockDir = path.join(dir, '.rundock');
+    let expectedHookCommand;
+    try {
+      fs.mkdirSync(rundockDir, { recursive: true });
+      if (process.platform === 'win32') {
+        const launcher = path.join(rundockDir, 'permission-hook.cmd');
+        fs.writeFileSync(launcher,
+          `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${process.execPath}" "${hookScript}" %*\r\n`);
+        expectedHookCommand = `"${launcher}"`;
+      } else {
+        const launcher = path.join(rundockDir, 'permission-hook.sh');
+        fs.writeFileSync(launcher,
+          `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "${process.execPath}" "${hookScript}" "$@"\n`);
+        fs.chmodSync(launcher, 0o755);
+        expectedHookCommand = `sh "${launcher}"`;
+      }
+    } catch (e) {
+      // Fallback: direct invocation (relies on inherited ELECTRON_RUN_AS_NODE).
+      expectedHookCommand = `"${process.execPath}" "${hookScript}"`;
+    }
     const settingsLocalPath = path.join(dir, '.claude', 'settings.local.json');
     let settingsLocal = {};
     if (fs.existsSync(settingsLocalPath)) {
