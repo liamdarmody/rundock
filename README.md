@@ -25,12 +25,14 @@ Read the full version at [docs.rundock.ai/principles](https://docs.rundock.ai/pr
 You do not need to write code. You need Claude Code and a folder to call your workspace.
 
 1. Install [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview) and sign in. Requires a Claude Pro or Max subscription.
-2. Download the latest [Rundock release](https://github.com/liamdarmody/rundock/releases) (`.dmg` for Apple Silicon Macs, M1 or later). For Intel Mac, Windows, or Linux, see Local setup below.
+2. Download the latest [Rundock release](https://github.com/liamdarmody/rundock/releases) or from [rundock.ai/download](https://rundock.ai/download): a universal `.dmg` for any Mac (Apple Silicon or Intel), or the `.exe` installer for Windows. For Linux, see Local setup below.
 3. Open Rundock and follow Doc, the built-in guide, through first-run setup. Doc walks you through choosing a workspace and creating your first agents.
 
-## Run on Windows (interim)
+## Run on Windows
 
-A proper Windows installer is on the way. Until it ships, the recommended path for non-developer Windows users is the from-source bootstrap below.
+The recommended path is the native Windows installer from the [latest release](https://github.com/liamdarmody/rundock/releases) or [rundock.ai/download](https://rundock.ai/download). It is unsigned for now, so Windows SmartScreen shows a one-time prompt on first launch: click **More info**, then **Run anyway**.
+
+If you would rather run from source, the PowerShell bootstrap below still works.
 
 Open PowerShell and run:
 
@@ -55,7 +57,7 @@ irm https://raw.githubusercontent.com/liamdarmody/rundock/main/scripts/install-w
 
 Re-running the bootstrap one-liner is safe at any time. It updates the existing checkout in place.
 
-This path is interim and will be retired when the proper Windows installer ships.
+This from-source path is an alternative for developers; most users should use the installer above.
 
 ## Local setup (for contributors and other platforms)
 
