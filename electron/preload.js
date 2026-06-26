@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Wizard-specific (only used during first-run)
   checkClaude: () => ipcRenderer.invoke('wizard-check-claude'),
+  signInClaude: () => ipcRenderer.invoke('wizard-signin-claude'),
   wizardDone: () => ipcRenderer.invoke('wizard-done'),
 
   // Listen for update notifications from main process

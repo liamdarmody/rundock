@@ -123,6 +123,34 @@ function isClaudeAuthenticated() {
   }
 }
 
+// Launch Claude Code's interactive sign-in in a visible terminal, so the user
+// can complete the browser OAuth without opening a terminal or knowing any
+// commands themselves. The wizard keeps polling and advances automatically once
+// authentication succeeds. Cross-platform; best-effort (never throws).
+function launchClaudeSignIn() {
+  const bin = findClaude();
+  if (!bin) return { ok: false, error: 'Claude Code was not found.' };
+  const { spawn } = require('child_process');
+  try {
+    if (process.platform === 'win32') {
+      // Open a new console window running claude and keep it open (/k). The
+      // doubled quotes around the path tolerate spaces in the user profile path.
+      spawn(`start "Sign in to Claude" cmd /k ""${bin}""`, {
+        shell: true, detached: true, stdio: 'ignore',
+      }).unref();
+    } else if (process.platform === 'darwin') {
+      // Open Terminal.app and run claude in it.
+      spawn('open', ['-a', 'Terminal', bin], { detached: true, stdio: 'ignore' }).unref();
+    } else {
+      // Linux: use the distribution's default terminal emulator.
+      spawn('x-terminal-emulator', ['-e', bin], { detached: true, stdio: 'ignore' }).unref();
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+}
+
 // ===== FIRST-RUN WIZARD =====
 
 function showWizard() {
@@ -163,8 +191,12 @@ function showWizard() {
       return { status: 'ready' };
     });
 
+    // Launch Claude's browser sign-in for the user (no terminal needed).
+    ipcMain.handle('wizard-signin-claude', () => launchClaudeSignIn());
+
     ipcMain.handle('wizard-done', () => {
       ipcMain.removeHandler('wizard-check-claude');
+      ipcMain.removeHandler('wizard-signin-claude');
       ipcMain.removeHandler('wizard-done');
       wizard.close();
       resolve();
@@ -172,6 +204,7 @@ function showWizard() {
 
     wizard.on('closed', () => {
       ipcMain.removeHandler('wizard-check-claude');
+      ipcMain.removeHandler('wizard-signin-claude');
       ipcMain.removeHandler('wizard-done');
       resolve();
     });
