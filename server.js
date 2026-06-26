@@ -1631,7 +1631,10 @@ function scaffoldWorkspace(dir) {
         const launcher = path.join(rundockDir, 'permission-hook.cmd');
         fs.writeFileSync(launcher,
           `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${process.execPath}" "${hookScript}" %*\r\n`);
-        expectedHookCommand = `"${launcher}"`;
+        // Claude runs hooks via PowerShell on Windows (no Git Bash). PowerShell
+        // treats a bare quoted path as a string literal and does NOT execute it;
+        // the call operator "&" is required to actually run it.
+        expectedHookCommand = `& "${launcher}"`;
       } else {
         const launcher = path.join(rundockDir, 'permission-hook.sh');
         fs.writeFileSync(launcher,
