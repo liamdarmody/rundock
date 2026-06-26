@@ -144,7 +144,7 @@
       <div class="step-icon pending" id="icon-auth">2</div>
       <div class="step-text">
         <div>Sign in to Claude</div>
-        <div class="hint" id="auth-hint">Click <strong>Sign in to Claude</strong> below. Your browser opens to finish signing in.</div>
+        <div class="hint" id="auth-hint">Click <strong>Sign in to Claude</strong> below. A terminal opens to complete the sign-in.</div>
       </div>
     </div>
   </div>
@@ -227,6 +227,11 @@
       const res = await window.electronAPI.signInClaude();
       if (res && res.ok) {
         btn.textContent = 'Waiting for sign-in...';
+        const hint = document.getElementById('auth-hint');
+        if (hint) hint.innerHTML =
+          "A terminal opened with Claude's sign-in. Follow its prompts: press Enter when asked, "
+          + "and if your browser doesn't open, copy the link it shows and open it. "
+          + "This screen continues automatically once you finish.";
         // Make sure we're polling so the wizard advances the moment auth lands.
         if (!polling) polling = setInterval(checkStatus, 3000);
       } else {
