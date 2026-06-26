@@ -4,6 +4,21 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** Windows Support
+
+### Added
+
+- **Rundock runs on Windows.** A native Windows build is now available: a standard installer that creates Desktop and Start Menu shortcuts, plus a portable executable. First-run setup matches the Mac app, including detecting Claude Code and walking you through sign-in.
+- **One-click sign-in to Claude in first-run setup.** Setup now has a "Sign in to Claude" button that opens Claude Code's sign-in for you, so you no longer need to run any terminal commands to get started. It guides you through the steps and continues automatically once you're done. Applies on both Windows and Mac.
+
+### Fixed
+
+- **Setup no longer skips the sign-in step.** Previously, if Claude Code was installed but you had never signed in, Rundock skipped the setup wizard and you hit an authentication error the first time an agent ran. Setup now also checks that you're signed in, and only continues once Claude Code is both installed and authenticated.
+- **Windows: `claude` is recognised in the terminal after setup.** Anthropic's Windows installer doesn't add Claude Code to your PATH, so `claude` wasn't found in a terminal. Rundock now adds it during setup, so `claude` works in a new terminal.
+- **Windows: native window and menus.** The first-run window no longer shows a broken title bar or an unnecessary menu bar, and the app menu uses the standard Windows File / Edit / View / Help layout.
+
 ## 0.8.14: Universal Mac Build (2026-06-25)
 
 ### Added
