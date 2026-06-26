@@ -1658,6 +1658,13 @@ function scaffoldWorkspace(dir) {
       settingsLocal.hooks.PreToolUse.push(hookEntry('Bash'));
       dirty = true;
     }
+    // On Windows (and wherever CLAUDE_CODE_USE_POWERSHELL_TOOL is on) Claude Code
+    // runs shell commands through the PowerShell tool, not Bash. Without this
+    // matcher those commands bypass the permission system entirely.
+    if (!hasMatcher('PowerShell')) {
+      settingsLocal.hooks.PreToolUse.push(hookEntry('PowerShell'));
+      dirty = true;
+    }
     if (!hasMatcher('mcp__.*')) {
       settingsLocal.hooks.PreToolUse.push(hookEntry('mcp__.*'));
       dirty = true;

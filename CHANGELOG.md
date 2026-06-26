@@ -17,6 +17,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 - **Windows: `claude` is recognised in the terminal after setup.** Anthropic's Windows installer doesn't add Claude Code to your PATH, so `claude` wasn't found in a terminal. Rundock now adds it during setup, so `claude` works in a new terminal.
 - **Windows: native window and menus.** The first-run window no longer shows a broken title bar or an unnecessary menu bar, and the app menu uses the standard Windows File / Edit / View / Help layout.
 - **Permission cards work on machines without Node installed.** The tool-permission system relied on a system `node` to run its hook, which packaged Windows (and non-developer Mac) users don't have. As a result permission cards never appeared and tool calls ran unchecked. Rundock now runs the hook with its own bundled runtime, so the permission system works everywhere with nothing extra to install.
+- **Windows: shell commands go through the permission system.** On Windows, Claude Code runs shell commands through its PowerShell tool, which Rundock's permission hook didn't intercept, so those commands skipped permission cards entirely. The hook now covers the PowerShell tool too: read-only commands auto-approve, and writes or destructive commands show a permission card and are risk-classified, exactly as Bash is on Mac.
 
 ## 0.8.14: Universal Mac Build (2026-06-25)
 
