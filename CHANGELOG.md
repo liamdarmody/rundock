@@ -4,6 +4,14 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** Predictable Model Selection
+
+### Fixed
+
+- **Agents now run on the model they declare.** Each agent's model (Opus, Sonnet, or Haiku, the one shown in its profile) is now passed to Claude Code on every turn, so the choice is honoured instead of being left to whatever model the environment happens to resolve. Agents that don't specify a model default to Sonnet, and a model is now always shown in the profile. This also resolves an error some setups hit where an invalid model name was used.
+
 ## 0.9.0: Windows Support (2026-06-26)
 
 ### Added
