@@ -267,7 +267,7 @@ Agent instructions go here...
 |---|---|---|
 | `name` | Yes | Slug identifier, matches filename |
 | `description` | Yes | What the agent does |
-| `model` | No | `opus`, `sonnet`, or `haiku` |
+| `model` | Recommended | `opus` (complex reasoning), `sonnet` (balanced, default), or `haiku` (fast/simple). Defaults to `sonnet` if omitted |
 | `displayName` | No | Human-friendly name for UI (falls back to title-cased name) |
 | `role` | No | Short title on org chart (2-4 words) |
 | `type` | No | `orchestrator` (team lead), `specialist` (team member), `platform` (system agent) |
