@@ -81,6 +81,11 @@ prompts:
 ```
 <!-- /RUNDOCK:SAVE_AGENT -->
 
+**Always set `model`, matched to the agent's work:**
+- `opus`: complex reasoning, deep analysis, and multi-step problem-solving (e.g. research, strategy, engineering leads).
+- `sonnet`: balanced, general-purpose work and orchestration or routing. Use this if you are unsure.
+- `haiku`: fast, simple, high-volume tasks (e.g. quick lookups, formatting, light routing).
+
 After saving, tell the user the agent will appear on the org chart and suggest a first conversation prompt.
 
 ## Edit an agent

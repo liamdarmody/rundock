@@ -32,6 +32,18 @@ const DISALLOWED_TOOLS = DISALLOWED_TOOLS_KNOWLEDGE;
 const ALLOWED_TOOLS_INTERACTIVE_BASE = 'Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,ToolSearch,Agent,Skill';
 const ALLOWED_TOOLS_LEGACY_BASE = 'Bash,WebFetch,WebSearch';
 
+// Default model for any agent that does not declare one in its frontmatter, and
+// for the synthesised orchestrator and Doc. Sonnet is the balanced choice and is
+// available on every paid plan; complex agents opt up to Opus via `model: opus`
+// in their frontmatter, quick agents opt down to `model: haiku`. Always passing
+// an explicit --model (see modelArgs + spawnClaude) keeps model selection
+// predictable instead of inheriting whatever Claude Code resolves from the user's
+// environment (e.g. a Pro subscription resolving the invalid model name "pro").
+const DEFAULT_MODEL = 'sonnet';
+function modelArgs(agent) {
+  return ['--model', (agent && agent.model) || DEFAULT_MODEL];
+}
+
 // Reads MCP server names from a workspace's .mcp.json. Returns [] on any problem
 // (no dir, missing file, parse error, no mcpServers block). Used by workspace analysis.
 function readMcpServerNames(dir) {
@@ -762,7 +774,7 @@ function discoverAgents() {
           routines: routines,
           prompts: prompts.length > 0 ? prompts : null,
           skills: skills.length > 0 ? skills : null,
-          model: meta.model || null,
+          model: meta.model || DEFAULT_MODEL,
           order: orderNum,
           reportsTo: meta.reportsTo || null,
           instructions: instructions.substring(0, 2000),
@@ -793,7 +805,7 @@ function discoverAgents() {
         capabilities: null,
         routines: [],
         prompts: null,
-        model: null,
+        model: DEFAULT_MODEL,
         order: 0,
         instructions: content.substring(0, 2000),
         isDefault: true,
@@ -838,7 +850,7 @@ function discoverAgents() {
       capabilities: null,
       routines: [],
       prompts: ['Help me set up this workspace', 'Create an agent for my team', 'What makes a workspace Rundock-ready?'],
-      model: null,
+      model: DEFAULT_MODEL,
       order: 99,
       instructions: '',
       isDefault: false,
@@ -1049,7 +1061,7 @@ function executeRoutine(agent, routine, key) {
   broadcastRoutineUpdate();
 
   // Routines run unattended (no user to approve), so bypass permissions.
-  const args = [...getBareArgs(), '--print', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
+  const args = [...getBareArgs(), ...modelArgs(agent), '--print', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
   if (agent.id !== 'default') args.push('--agent', agent.id);
   args.push(routine.prompt);
 
@@ -1977,6 +1989,14 @@ function isAuthError(text) {
   return typeof text === 'string' && AUTH_ERROR_RE.test(text);
 }
 
+// Detects an invalid or unknown model error (e.g. a typo in an agent's `model`
+// field). Rare now that Rundock always passes an explicit valid --model, but it
+// surfaces a clear message instead of a cryptic one if it ever happens.
+const MODEL_ERROR_RE = /issue with the selected model|invalid model|unknown model|model[^a-z]*(?:not found|not available|not recognised|not recognized|is not valid|does not exist)/i;
+function isModelError(text) {
+  return typeof text === 'string' && MODEL_ERROR_RE.test(text);
+}
+
 // Emits the structured auth-error message the client renders as a recovery card.
 // Fires at most once per process so chunked stderr can't spam the chat.
 function sendAuthError(entry, convoId) {
@@ -1984,6 +2004,17 @@ function sendAuthError(entry, convoId) {
   entry.authErrorSent = true;
   safeSend(JSON.stringify({
     type: 'system', subtype: 'auth_error',
+    _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId
+  }));
+}
+
+// Surfaces a clear, one-time message when the selected model is invalid.
+function sendModelError(entry, convoId) {
+  if (entry.modelErrorSent) return;
+  entry.modelErrorSent = true;
+  safeSend(JSON.stringify({
+    type: 'error',
+    content: "The model set for this agent isn't valid. Open the agent's profile and set its model to opus, sonnet, or haiku. Rundock uses sonnet by default when no model is set.",
     _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId
   }));
 }
@@ -2125,6 +2156,8 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
           // Surface a recovery card when the turn failed on an expired auth session.
           if (parsed.is_error && isAuthError(JSON.stringify(parsed))) {
             sendAuthError(entry, convoId);
+          } else if (parsed.is_error && isModelError(JSON.stringify(parsed))) {
+            sendModelError(entry, convoId);
           }
           // Attach server-tracked tool calls for activity summary
           parsed._toolCalls = entry.toolCalls || [];
@@ -2148,6 +2181,7 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
     if (text.includes('no stdin data') || text.includes('proceeding without')) return;
     // Expired Claude Code session: show the recovery card, not the raw 401 blob.
     if (isAuthError(stderrBuf.value)) { sendAuthError(entry, convoId); return; }
+    if (isModelError(stderrBuf.value)) { sendModelError(entry, convoId); return; }
     safeSend(JSON.stringify({ type: 'error', content: text, _conversationId: convoId, _processId: entry.processId }));
   });
 
@@ -2183,7 +2217,7 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
 
   const disallowed = getDisallowedTools();
   const permMode = getPermissionMode();
-  const args = [...getBareArgs(), '--output-format', 'stream-json', '--input-format', 'stream-json',
+  const args = [...getBareArgs(), ...modelArgs(orchestrator), '--output-format', 'stream-json', '--input-format', 'stream-json',
     '--verbose', '--include-partial-messages', '--permission-mode', permMode,
     '--allowed-tools', getAllowedToolsInteractive(),
     ...(disallowed ? ['--disallowed-tools', disallowed] : []),
@@ -2361,7 +2395,7 @@ function handleDelegation(msg, processes) {
 
   const delegateDisallowed = getDisallowedTools();
   const delegatePermMode = getPermissionMode();
-  const delegateArgs = [...getBareArgs(), '--output-format', 'stream-json', '--input-format', 'stream-json',
+  const delegateArgs = [...getBareArgs(), ...modelArgs(targetAgent), '--output-format', 'stream-json', '--input-format', 'stream-json',
     '--verbose', '--include-partial-messages', '--permission-mode', delegatePermMode,
     '--allowed-tools', getAllowedToolsInteractive(),
     ...(delegateDisallowed ? ['--disallowed-tools', delegateDisallowed] : []),
@@ -2585,7 +2619,7 @@ function handleDelegation(msg, processes) {
 
       const resumeDisallowed = getDisallowedTools();
       const resumePermMode = getPermissionMode();
-      const resumeArgs = [...getBareArgs(), '--output-format', 'stream-json', '--input-format', 'stream-json',
+      const resumeArgs = [...getBareArgs(), ...modelArgs(parentAgentData), '--output-format', 'stream-json', '--input-format', 'stream-json',
         '--verbose', '--include-partial-messages', '--permission-mode', resumePermMode,
         '--allowed-tools', getAllowedToolsInteractive(),
         ...(resumeDisallowed ? ['--disallowed-tools', resumeDisallowed] : [])];
@@ -2852,7 +2886,7 @@ wss.on('connection', (ws) => {
             const chatDisallowed = getDisallowedTools();
             const chatPermMode = getPermissionMode();
 
-            const args = [...getBareArgs(), '--output-format', 'stream-json', '--input-format', 'stream-json',
+            const args = [...getBareArgs(), ...modelArgs(agentData), '--output-format', 'stream-json', '--input-format', 'stream-json',
               '--verbose', '--include-partial-messages', '--permission-mode', chatPermMode,
               '--allowed-tools', getAllowedToolsInteractive(),
               ...(chatDisallowed ? ['--disallowed-tools', chatDisallowed] : []),
@@ -2982,7 +3016,7 @@ wss.on('connection', (ws) => {
 
           const legacyDisallowed = getDisallowedTools();
           const legacyPermMode = getPermissionMode();
-          const args = [...getBareArgs(), '--print', '--output-format', 'stream-json', '--input-format', 'stream-json',
+          const args = [...getBareArgs(), ...modelArgs(agentData), '--print', '--output-format', 'stream-json', '--input-format', 'stream-json',
             '--verbose', '--include-partial-messages', '--permission-mode', legacyPermMode,
             '--allowed-tools', getAllowedToolsLegacy(),
             ...(legacyDisallowed ? ['--disallowed-tools', legacyDisallowed] : []),
@@ -4148,6 +4182,10 @@ function resolveClaudeBin() {
 // Spawn a Claude Code process with PID tracking for crash cleanup.
 // Drop-in replacement for spawn('claude', ...) that registers/unregisters PIDs.
 function spawnClaude(args, options, onError) {
+  // Safety net: never spawn Claude Code without an explicit --model. Call sites
+  // pass the agent's model (see modelArgs); this guards any path that doesn't,
+  // so the model can never silently fall back to the user's environment.
+  if (!args.includes('--model')) args = ['--model', DEFAULT_MODEL, ...args];
   const proc = spawn(resolveClaudeBin(), args, options);
   if (proc.pid) {
     registerChildPid(proc.pid);
