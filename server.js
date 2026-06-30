@@ -2902,7 +2902,7 @@ wss.on('connection', (ws) => {
               args.push('--agent', agentData.name);
             }
 
-            console.log(`[Chat] convo=${convoId} proc=${processId} agent=${msg.agent} sessionId=${msg.sessionId||'new'} mode=interactive args=${args.filter(a=>a.startsWith('--')).join(' ')}`);
+            console.log(`[Chat] convo=${convoId} proc=${processId} agent=${msg.agent} sessionId=${msg.sessionId||'new'} mode=interactive model=${args[args.indexOf('--model')+1]||'(default)'} args=${args.filter(a=>a.startsWith('--')).join(' ')}`);
 
             const proc = spawnClaude(args, {
               cwd: WORKSPACE,
@@ -3036,7 +3036,7 @@ wss.on('connection', (ws) => {
             }
           }
 
-          console.log(`[Chat] convo=${convoId} proc=${processId} agent=${msg.agent} sessionId=${msg.sessionId||'new'} mode=legacy args=${args.filter(a=>a.startsWith('--')).join(' ')}`);
+          console.log(`[Chat] convo=${convoId} proc=${processId} agent=${msg.agent} sessionId=${msg.sessionId||'new'} mode=legacy model=${args[args.indexOf('--model')+1]||'(default)'} args=${args.filter(a=>a.startsWith('--')).join(' ')}`);
 
           const proc = spawnClaude(args, {
             cwd: WORKSPACE,
