@@ -1,6 +1,6 @@
 {
   "name": "rundock",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "description": "A visual interface for AI agent teams. Built for people running their own businesses, powered by Claude Code.",
   "main": "electron/main.js",
   "scripts": {
