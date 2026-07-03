@@ -8,7 +8,7 @@ name: Release
 # Phase A scope: macOS (arm64 + x64) only. The windows and linux jobs below are
 # scaffolded but inactive, activated later by their platform cards.
 #
-# Required repo secrets (see 02_Areas/Rundock/CI-Release-Setup.md in the vault):
+# Required repo secrets (documented in the maintainer's release-setup notes):
 #   CSC_LINK            base64 of the Developer ID Application .p12
 #   CSC_KEY_PASSWORD    password for that .p12
 #   APPLE_API_KEY_P8    base64 of the App Store Connect .p8 key
@@ -25,8 +25,27 @@ permissions:
   contents: write
 
 jobs:
+  # Gate the whole release on the test suite: a tag must never ship a red build.
+  # Mirrors the CI workflow but pinned to the shipping Node (.nvmrc).
+  test:
+    name: Test suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+      - name: Install runtime dependencies
+        run: npm ci --omit=dev
+      - name: Run tests
+        run: npm test
+
   macos:
     name: Build macOS (arm64 + x64)
+    needs: test
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -72,6 +91,7 @@ jobs:
   # ---------------------------------------------------------------------------
   windows:
     name: Build Windows (x64)
+    needs: test
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -96,7 +116,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ---------------------------------------------------------------------------
-  # SCAFFOLDED, INACTIVE. Deferred until a Linux user surfaces (future Linux card).
+  # SCAFFOLDED, INACTIVE. Reserved for future Linux support.
   # ---------------------------------------------------------------------------
   # linux:
   #   name: Build Linux (x64)

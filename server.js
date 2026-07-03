@@ -19,6 +19,17 @@ const PORT = process.env.PORT || 3000;
 let ACTUAL_PORT = PORT; // Updated after server.listen() with the real listening port
 let WORKSPACE = process.env.WORKSPACE || null;
 
+// Workspace boundary check. A bare `startsWith(resolve(WORKSPACE))`
+// lets a SIBLING directory sharing the name prefix pass (e.g. `<ws>-backup`
+// starts with `<ws>`), leaking reads and writes outside the workspace. Compare
+// against the root plus a trailing path separator; allow the root itself.
+function isInsideWorkspace(targetPath) {
+  if (!WORKSPACE || targetPath == null) return false;
+  const root = path.resolve(WORKSPACE);
+  const resolved = path.resolve(targetPath);
+  return resolved === root || resolved.startsWith(root + path.sep);
+}
+
 // Shared constants to avoid repetition across process spawn sites
 const DISALLOWED_TOOLS_KNOWLEDGE = 'Write(*.js),Write(*.jsx),Write(*.ts),Write(*.tsx),Write(*.py),Write(*.sh),Write(*.bash),Write(*.rb),Write(*.pl),Write(*.exe),Write(*.dll),Write(*.so),Edit(*.js),Edit(*.jsx),Edit(*.ts),Edit(*.tsx),Edit(*.py),Edit(*.sh),Edit(*.bash),Edit(*.rb),Edit(*.pl),Edit(*.exe)';
 // Backward compat: DISALLOWED_TOOLS used by existing code paths
@@ -34,7 +45,7 @@ const ALLOWED_TOOLS_LEGACY_BASE = 'Bash,WebFetch,WebSearch';
 
 // Default model for any agent that does not declare one in its frontmatter, and
 // for the synthesised orchestrator and Doc. Sonnet is the balanced choice and is
-// available on every paid plan; complex agents opt up to Opus via `model: opus`
+// available on every paid plan; complex agents opt up to a stronger model via `model: opus`
 // in their frontmatter, quick agents opt down to `model: haiku`. Always passing
 // an explicit --model (see modelArgs + spawnClaude) keeps model selection
 // predictable instead of inheriting whatever Claude Code resolves from the user's
@@ -125,6 +136,11 @@ function getSpawnEnv(convoId) {
 // Pending permission requests from PreToolUse hooks (keyed by requestId).
 // Each entry holds the HTTP response object so we can resolve it when the user decides.
 const pendingPermissionRequests = new Map();
+
+// Permission request timeout before auto-deny. 120s in production; the env
+// override exists solely so the test suite can exercise the timeout path
+// deterministically without waiting two minutes. Default is unchanged.
+const PERMISSION_TIMEOUT_MS = parseInt(process.env.RUNDOCK_PERMISSION_TIMEOUT_MS, 10) || 120000;
 
 // Recent workspaces (persisted to disk)
 // In Electron, __dirname is inside the read-only asar. Use home directory instead.
@@ -551,12 +567,26 @@ function findDirectReportMatch(agentId, toolInput) {
   );
   if (directReports.length === 0) return null;
 
-  // Check subagent_type field (most reliable)
+  // Check subagent_type field (most reliable). When it is set, the caller has
+  // named an explicit target: return the match if it is a direct report, else
+  // return null. Do NOT fall through to the prompt word-scan, which would
+  // hijack an explicit non-teammate target (e.g. general-purpose) to a teammate
+  // merely named in the prompt.
   if (toolInput.subagent_type) {
+    // Match name, id, AND displayName, case-insensitively. The roster
+    // renders teammates as "Penn (content-lead)", so a caller may address a
+    // teammate by displayName ("Penn") or with the wrong case ("Content-Lead");
+    // both are real delegations. Return null only on a genuine miss, preserving
+    // the intent of not hijacking an explicit non-teammate (general-purpose).
+    // Consistent with handleDelegation's own case-insensitive displayName lookup.
+    // KNOWN LIMITATION: displayName match can false-intercept when a direct report's titleCased displayName collides with an intended non-teammate/built-in subagent_type. Accepted trade-off: keeps displayName delegation ("Penn") working, which is the common case.
+    const wanted = String(toolInput.subagent_type).toLowerCase();
     const match = directReports.find(dr =>
-      dr.name === toolInput.subagent_type || dr.id === toolInput.subagent_type
+      dr.name.toLowerCase() === wanted ||
+      (dr.id && String(dr.id).toLowerCase() === wanted) ||
+      (dr.displayName && dr.displayName.toLowerCase() === wanted)
     );
-    if (match) return match;
+    return match || null;
   }
 
   // Check prompt text for agent name/displayName references (word-boundary match to avoid false positives)
@@ -713,6 +743,10 @@ const AGENT_CACHE_TTL = 2000; // 2 seconds
 function invalidateAgentCache() { _agentCache = null; _agentCacheTime = 0; }
 
 function discoverAgents() {
+  // No workspace selected yet: nothing to discover. Guards path.join(null,…),
+  // which otherwise throws and crashes GET /api/agents before a workspace is
+  // picked (latent crash otherwise).
+  if (!WORKSPACE) return [];
   const now = Date.now();
   if (_agentCache && (now - _agentCacheTime) < AGENT_CACHE_TTL) return _agentCache;
   const agents = [];
@@ -1007,7 +1041,7 @@ function startScheduler() {
         }
       }
     }
-  }, checkInterval);
+  }, checkInterval).unref(); // see heartbeat unref note: listener keeps process alive in production
 }
 
 function getNextRun(schedule, lastRunISO) {
@@ -1426,7 +1460,7 @@ function muteHooks(dir) {
   }
 }
 
-// ===== EMPTY WORKSPACE DETECTION (C1) =====
+// ===== EMPTY WORKSPACE DETECTION =====
 
 // Returns true if the workspace has no user-created content: no agents (besides
 // Rundock-managed ones), no CLAUDE.md, no skills. The .claude/ directory and
@@ -1459,7 +1493,7 @@ function isEmptyWorkspace(dir, agentList) {
   return true;
 }
 
-// ===== CODE SIGNAL AUTO-DETECTION (C2) =====
+// ===== CODE SIGNAL AUTO-DETECTION =====
 
 // File extensions and config files that indicate a code project.
 const CODE_SIGNALS = [
@@ -1508,7 +1542,7 @@ function detectWorkspaceMode(dir) {
   return 'knowledge';
 }
 
-// ===== DEFAULT WORKSPACE SCAFFOLDING (C3) =====
+// ===== DEFAULT WORKSPACE SCAFFOLDING =====
 
 // Creates default folders, CLAUDE.md, and orchestrator agent for new/empty workspaces.
 // Returns { success: true } or { success: false, error: string }.
@@ -1747,7 +1781,7 @@ const server = http.createServer((req, res) => {
   } else if (req.url.startsWith('/api/file?path=')) {
     const filePath = decodeURIComponent(req.url.split('path=')[1]);
     const fullPath = path.resolve(WORKSPACE, filePath);
-    if (fullPath.startsWith(path.resolve(WORKSPACE)) && fs.existsSync(fullPath)) {
+    if (isInsideWorkspace(fullPath) && fs.existsSync(fullPath)) {
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       res.end(fs.readFileSync(fullPath, 'utf-8'));
     } else {
@@ -1787,7 +1821,7 @@ const server = http.createServer((req, res) => {
               res.writeHead(200, { 'Content-Type': 'application/json' });
               res.end(JSON.stringify({ allow: false, reason: 'timeout' }));
             }
-          }, 120000)
+          }, PERMISSION_TIMEOUT_MS)
         });
 
         // Forward to browser as a control_request (existing permission card UI handles this)
@@ -1872,17 +1906,72 @@ const disconnectBuffer = []; // Messages queued while no clients are connected
 // Conversation transcript helpers
 function transcriptDir() { return path.join(rundockDir(), 'transcripts'); }
 
+// Best-effort recovery of a corrupt (e.g. truncated) transcript JSON array.
+// A transcript file is normally overwritten wholesale on the next append, so a
+// mid-write truncation that JSON.parse rejects must NOT be masked as an empty
+// array: doing so lets the next append clobber the file and silently wipe all
+// prior history. This salvages as much history as possible instead.
+// Attempt 1 balances any string/brackets left open by the truncation; attempt
+// 2 keeps only the complete leading objects. Returns [] only if nothing at all
+// can be recovered.
+function recoverTranscriptData(raw) {
+  if (typeof raw !== 'string' || raw.trim() === '') return [];
+  const stack = [];
+  let inString = false, escaped = false, lastCompleteObjEnd = -1;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{' || ch === '[') stack.push(ch);
+    else if (ch === '}' || ch === ']') {
+      stack.pop();
+      // A complete top-level object just closed (only the outer array remains).
+      if (ch === '}' && stack.length === 1 && stack[0] === '[') lastCompleteObjEnd = i;
+    }
+  }
+  let patched = raw;
+  if (inString) patched += '"';
+  for (let i = stack.length - 1; i >= 0; i--) patched += stack[i] === '{' ? '}' : ']';
+  try {
+    const data = JSON.parse(patched);
+    if (Array.isArray(data)) return data;
+  } catch { /* fall through to complete-object salvage */ }
+  if (lastCompleteObjEnd >= 0) {
+    try {
+      const data = JSON.parse(raw.slice(0, lastCompleteObjEnd + 1) + ']');
+      if (Array.isArray(data)) return data;
+    } catch { /* nothing recoverable */ }
+  }
+  return [];
+}
+
 function loadTranscript(convoId) {
   if (convoTranscripts.has(convoId)) return convoTranscripts.get(convoId);
+  const file = path.join(transcriptDir(), `${convoId}.json`);
+  let raw;
   try {
-    const file = path.join(transcriptDir(), `${convoId}.json`);
-    const data = JSON.parse(fs.readFileSync(file, 'utf-8'));
-    convoTranscripts.set(convoId, data);
-    return data;
+    raw = fs.readFileSync(file, 'utf-8');
   } catch (e) {
+    // File absent (or otherwise unreadable): legitimately empty history.
     const empty = [];
     convoTranscripts.set(convoId, empty);
     return empty;
+  }
+  try {
+    const data = JSON.parse(raw);
+    convoTranscripts.set(convoId, data);
+    return data;
+  } catch (e) {
+    // File exists but is corrupt. Salvage rather than mask as empty, so the
+    // next append does not overwrite recoverable history.
+    const recovered = recoverTranscriptData(raw);
+    convoTranscripts.set(convoId, recovered);
+    return recovered;
   }
 }
 
@@ -1961,24 +2050,32 @@ function safeSend(data) {
     }
   }
   if (!sent) {
-    // No live clients: buffer for delivery on next connect
-    if (disconnectBuffer.length < 500) disconnectBuffer.push(payload);
+    // No live clients: buffer for delivery on next connect. Ring buffer that
+    // keeps the NEWEST 500: dropping the oldest on overflow preserves terminal
+    // done/result signals, which are the first casualties of a keep-oldest cap
+    // when >500 messages buffer during a disconnect.
+    disconnectBuffer.push(payload);
+    if (disconnectBuffer.length > 500) disconnectBuffer.shift();
   }
 }
 
 // Heartbeat: detect silently dead connections every 15s
+// unref(): the interval must not hold the event loop open on its own. In
+// production the listening server keeps the process alive and the interval
+// still fires; when server.js is required as a module (Electron, tests)
+// the loop can drain naturally. Behaviour is otherwise unchanged.
 const HEARTBEAT_INTERVAL = 15000;
 setInterval(() => {
   for (const client of connectedClients) {
     if (client._alive === false) {
       console.log('[WS] Heartbeat timeout, terminating stale connection');
       client.terminate();
-      return;
+      continue; // reap this dead client but keep servicing the rest
     }
     client._alive = false;
     client.ping();
   }
-}, HEARTBEAT_INTERVAL);
+}, HEARTBEAT_INTERVAL).unref();
 
 // Detects the Claude Code auth-session-expired error. When a user's `claude`
 // login expires, the spawned process returns a 401 authentication error.
@@ -2041,6 +2138,7 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
     const lines = entry.buffer.split('\n');
     entry.buffer = lines.pop();
     for (const line of lines) {
+      if (entry.exited) break; // per-line guard: stop once a mid-chunk kill sets exited
       if (!line.trim()) continue;
       try {
         const parsed = JSON.parse(line);
@@ -2141,12 +2239,23 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
           entry._pendingToolArg = null;
         }
 
-        // Accumulate response text
+        // Accumulate response text. The partial-message delta stream is the
+        // authoritative source for the turn's text (a marker streamed in
+        // an earlier block must survive, so we never overwrite). The consolidated
+        // `assistant` message is only a fallback for a turn that produced NO
+        // deltas. Appending its blocks when deltas already ran double-counts a
+        // multi-text-block message: the delta stream concatenates the blocks
+        // ("AB") while the assistant message keeps them separate, and the old
+        // per-block endsWith check then appended A then B -> "ABAB". Reset
+        // per turn in the result handler below.
         if (parsed.type === 'stream_event' && parsed.event?.type === 'content_block_delta' && parsed.event?.delta?.type === 'text_delta' && parsed.event.delta.text) {
           entry.responseText += parsed.event.delta.text;
-        } else if (parsed.type === 'assistant' && parsed.message?.content) {
+          entry.sawTextDelta = true;
+        } else if (parsed.type === 'assistant' && parsed.message?.content && !entry.sawTextDelta) {
           for (const block of parsed.message.content) {
-            if (block.type === 'text' && block.text) entry.responseText = block.text;
+            if (block.type === 'text' && block.text) {
+              entry.responseText += block.text;
+            }
           }
         }
 
@@ -2165,6 +2274,7 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
           safeSend(JSON.stringify(parsed));
           safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: 0, _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId }));
           if (onResult) onResult(entry, parsed);
+          entry.sawTextDelta = false; // turn boundary: next turn re-decides delta vs assistant
         } else {
           safeSend(JSON.stringify(parsed));
         }
@@ -2180,8 +2290,12 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
     stderrBuf.value += text;
     if (text.includes('no stdin data') || text.includes('proceeding without')) return;
     // Expired Claude Code session: show the recovery card, not the raw 401 blob.
-    if (isAuthError(stderrBuf.value)) { sendAuthError(entry, convoId); return; }
-    if (isModelError(stderrBuf.value)) { sendModelError(entry, convoId); return; }
+    // Reset the buffer after a match so the accumulated signature does not
+    // short-circuit every later, unrelated stderr chunk. The card stays
+    // single via the authErrorSent/modelErrorSent guards.
+    // KNOWN LIMITATION: later stderr chunks after the recovery card can still forward. Cosmetic.
+    if (isAuthError(stderrBuf.value)) { sendAuthError(entry, convoId); stderrBuf.value = ''; return; }
+    if (isModelError(stderrBuf.value)) { sendModelError(entry, convoId); stderrBuf.value = ''; return; }
     safeSend(JSON.stringify({ type: 'error', content: text, _conversationId: convoId, _processId: entry.processId }));
   });
 
@@ -2311,6 +2425,73 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
     _processId: specialistEntry.processId }));
 }
 
+// Respawn an orchestrator/parent with --resume as an idle, live process wired
+// with the standard scope-return handlers. Used to keep a live process around
+// after the loop guard blocks an immediate re-delegation: interception
+// already SIGKILLed the orchestrator, so without this the turn is dropped and
+// no process remains for the user to continue. The process idles waiting for
+// the user's next stdin message (no prompt is written here).
+function spawnResumedProcess(convoId, agentId, sessionId, processes, opts = {}) {
+  const agentList = discoverAgents();
+  const agentData = agentList.find(a => a.id === agentId || a.name === agentId);
+  const systemPrompt = agentData ? buildSystemPrompt(agentData) : '';
+  const disallowed = getDisallowedTools();
+  const permMode = getPermissionMode();
+  const args = [...getBareArgs(), ...modelArgs(agentData), '--output-format', 'stream-json', '--input-format', 'stream-json',
+    '--verbose', '--include-partial-messages', '--permission-mode', permMode,
+    '--allowed-tools', getAllowedToolsInteractive(),
+    ...(disallowed ? ['--disallowed-tools', disallowed] : [])];
+  if (systemPrompt) args.push('--append-system-prompt', systemPrompt);
+  if (agentData?.name) args.push('--agent', agentData.name);
+  if (sessionId) args.push('--resume', sessionId);
+
+  const processId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const proc = spawnClaude(args, { cwd: WORKSPACE, env: getSpawnEnv(convoId), stdio: ['pipe', 'pipe', 'pipe'] }, (err) => handleChatSpawnError(err, convoId));
+  const entry = {
+    process: proc, buffer: '', processId, agentId,
+    responseText: '', exited: false, resultSent: false,
+    pendingAgentTool: null, toolCalls: [], turnStartTime: Date.now(),
+    idle: true, scopeReturnSource: opts.scopeReturnSource || null,
+  };
+  processes.set(convoId, entry);
+
+  wireProcessHandlers(entry, convoId, null, {
+    enableInterception: true,
+    onResult: (e) => {
+      const hasOutOfScope = /<!-- RUNDOCK:RETURN -->/.test(e.responseText);
+      const hasComplete = /<!-- RUNDOCK:COMPLETE -->/.test(e.responseText);
+      // KNOWN LIMITATION: a respawned orchestrator that emits its own RETURN/COMPLETE marker here is self-treated as a scope-return. Low/narrow.
+      if ((hasOutOfScope || hasComplete) && !e.delegation) {
+        e.scopeReturn = true;
+        e.scopeReturnMode = hasComplete ? 'complete' : 'return';
+        e.pendingKill = true;
+        // No-op if a user follow-up cleared pendingKill inside the window.
+        setTimeout(() => { if (!e.exited && e.pendingKill) { try { e.process.kill(); } catch (err) {} } }, 500);
+      }
+      if (e.responseText && !isSilentParkResponse(e.responseText)) {
+        const toolSummary = buildToolSummary(e.toolCalls);
+        const textWithTools = toolSummary ? toolSummary + '\n' + e.responseText : e.responseText;
+        appendTranscript(convoId, 'agent', e.agentId, textWithTools);
+      }
+      e.finalResponseText = e.responseText;
+      e.responseText = '';
+      e.idle = true;
+    }
+  });
+  proc.on('close', (rCode) => {
+    if (entry.spawnFailed) return;
+    entry.exited = true;
+    const cur = processes.get(convoId);
+    if (entry.scopeReturn && cur === entry) {
+      handleScopeReturn(entry, convoId, entry.scopeReturnMode === 'complete');
+      return;
+    }
+    if (cur === entry) processes.delete(convoId);
+    safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: rCode, _agent: entry.agentId, _conversationId: convoId, _processId: processId }));
+  });
+  return entry;
+}
+
 // ── DELEGATION HANDLER (standalone, no WebSocket dependency) ──
 function handleDelegation(msg, processes) {
   const convoId = msg.conversationId;
@@ -2342,12 +2523,22 @@ function handleDelegation(msg, processes) {
   // Prevent immediate re-delegation to the specialist that just scope-returned
   if (existing && existing.scopeReturnSource === targetAgent.id) {
     console.log(`[ScopeReturn] convo=${convoId} preventing loop: ${targetAgent.id} just scope-returned`);
-    existing.scopeReturnSource = null;
     const displayName = targetAgent.displayName || targetAgent.name;
+    const orchestratorAgentId = isIntercepted ? (msg._parentAgentId || existing.agentId) : existing.agentId;
+    // On an intercepted re-target the orchestrator was already SIGKILLed,
+    // so blocking here would drop the turn and leave no live process. Respawn
+    // the orchestrator idle (via --resume) so the user can continue; otherwise
+    // just clear the flag on the still-live process.
+    if (existing.exited && isIntercepted && msg._parentSessionId) {
+      spawnResumedProcess(convoId, orchestratorAgentId, msg._parentSessionId, processes, { scopeReturnSource: null });
+    } else {
+      // KNOWN LIMITATION: when _parentSessionId is missing on an intercepted, already-killed orchestrator, it is not respawned (degrades to clearing the flag on a dead process). Narrow.
+      existing.scopeReturnSource = null;
+    }
     safeSend(JSON.stringify({
       type: 'assistant',
       message: { role: 'assistant', content: `${displayName} has already completed this task. Send your next message to continue.` },
-      _agent: existing.agentId, _conversationId: convoId
+      _agent: orchestratorAgentId, _conversationId: convoId
     }));
     return;
   }
@@ -2488,8 +2679,9 @@ function handleDelegation(msg, processes) {
 
       if (shouldAutoReturn) {
         console.log(`[Delegate] Server-side auto-return convo=${convoId} (outOfScope=${hasOutOfScope}, complete=${hasComplete}, crud=${hasCrudMarker})`);
+        e.pendingKill = true; // a user follow-up in this window cancels the auto-return
         setTimeout(() => {
-          if (!e.exited) {
+          if (!e.exited && e.pendingKill) { // no-op if the follow-up cleared pendingKill
             try { e.process.kill(); } catch (err) {}
           }
         }, 500);
@@ -2706,8 +2898,9 @@ function handleDelegation(msg, processes) {
             // COMPLETE takes priority when both markers are present
             e.scopeReturnMode = hasComplete ? 'complete' : 'return';
             console.log(`[ScopeReturn] convo=${convoId} agent=${e.agentId} ${e.scopeReturnMode} marker on resumed parent`);
+            e.pendingKill = true; // a user follow-up in this window cancels the auto-return
             setTimeout(() => {
-              if (!e.exited) {
+              if (!e.exited && e.pendingKill) { // no-op if the follow-up cleared pendingKill
                 try { e.process.kill(); } catch (err) {}
               }
             }, 500);
@@ -2718,6 +2911,10 @@ function handleDelegation(msg, processes) {
             const textWithTools = toolSummary ? toolSummary + '\n' + e.responseText : e.responseText;
             appendTranscript(convoId, 'agent', e.agentId, textWithTools);
           }
+          // Mirror the delegate (~2673) and direct-start (~3134) paths:
+          // preserve the final text so a later handleScopeReturn injects the real
+          // specialist output into the orchestrator prompt, not an empty block.
+          e.finalResponseText = e.responseText;
           e.responseText = '';
           e.idle = true;
         }
@@ -2827,8 +3024,13 @@ wss.on('connection', (ws) => {
         const convoId = msg.conversationId || 'default';
         const useLegacy = process.env.RUNDOCK_LEGACY_SPAWN === '1';
 
-        // Track user messages in conversation transcript
-        appendTranscript(convoId, 'user', 'user', msg.content);
+        // Track user messages in conversation transcript. Skip on a resume-
+        // failure retry (_resumeRetry): the message was already appended on the
+        // first pass, and the retry re-emits the same message into this handler
+        // (which would otherwise double-append).
+        if (!msg._resumeRetry) {
+          appendTranscript(convoId, 'user', 'user', msg.content);
+        }
 
         // ── INTERACTIVE MODE (Deliverable A) ──────────────────────────
         // Process stays alive between messages. Follow-ups push to stdin.
@@ -2847,9 +3049,34 @@ wss.on('connection', (ws) => {
             existing = null; // Force fall-through to spawn path
           }
 
+          // KNOWN LIMITATION: kill-already-fired race. A follow-up arriving in the SIGTERM-to-close gap passes this gate (no !existing.process.killed check) and writes to a dying process; on non-delegate paths the handback is dropped and the message lost. Clean fix is a state-machine change (queue the follow-up until close/handback completes, then re-route), not a point-fix.
           if (existing && !existing.exited && existing.process.stdin && existing.process.stdin.writable) {
             const processId = existing.processId;
             console.log(`[Chat] convo=${convoId} proc=${processId} FOLLOW-UP (interactive stdin)`);
+            // A user follow-up that lands inside a pending 500ms auto-return kill
+            // window CANCELS the auto-return and is served by the still-live
+            // process. Clearing pendingKill makes the scheduled kill timer
+            // a no-op; clearing the scope-return/marker flags stops the eventual
+            // close handler from acting on a handoff the user has superseded.
+            // Previously the write path excluded a pendingKill process, so the
+            // follow-up fell through to spawn-fresh, which killed the live process
+            // and deleted the map entry BEFORE its close handler ran, dropping the
+            // handback and leaking the parked parent.
+            existing.pendingKill = false;
+            existing.scopeReturn = false;
+            existing.scopeReturnMode = null;
+            existing.returnMarkerSeen = null;
+            // Clear the superseded turn's captured output too. onResult
+            // stashes the marker-bearing text in finalResponseText and resets
+            // responseText. If the live process later dies abnormally BEFORE its
+            // next result, the delegate close handler's fallback marker-scan reads
+            // finalResponseText (it wins the `|| responseText` because responseText
+            // was reset) and fires a SPURIOUS handback for a follow-up the user
+            // expected the live process to answer. Nothing depends on the old value
+            // surviving a cancel: the handback is cancelled (no output to inject),
+            // and the next turn's onResult sets it fresh.
+            existing.finalResponseText = '';
+            existing.sawTextDelta = false; // reset per-turn text-source flag (defensive)
             safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId, _agent: existing.agentId }));
             existing.responseText = '';
             existing.idle = false;
@@ -2935,14 +3162,22 @@ wss.on('connection', (ws) => {
                 const hasComplete = /<!-- RUNDOCK:COMPLETE -->/.test(e.responseText);
                 if ((hasOutOfScope || hasComplete) && !e.delegation) {
                   e.scopeReturn = true;
-                  e.scopeReturnMode = hasOutOfScope ? 'return' : 'complete';
+                  // COMPLETE takes priority when both markers are present, matching
+                  // every other path (delegate/resumed-parent). Previously inverted
+                  // to 'return' on both-markers here.
+                  e.scopeReturnMode = hasComplete ? 'complete' : 'return';
                   console.log(`[ScopeReturn] convo=${convoId} agent=${e.agentId} ${e.scopeReturnMode} marker on non-delegated process`);
+                  e.pendingKill = true; // a user follow-up in this window cancels the auto-return
                   setTimeout(() => {
-                    if (!e.exited) {
+                    if (!e.exited && e.pendingKill) { // no-op if the follow-up cleared pendingKill
                       try { e.process.kill(); } catch (err) {}
                     }
                   }, 500);
                 }
+                // Preserve the specialist output for handleScopeReturn:
+                // mirror the delegate path so a direct RETURN injects the real
+                // output into the orchestrator prompt, not an empty block.
+                e.finalResponseText = e.responseText;
                 if (e.responseText) {
             const toolSummary = buildToolSummary(e.toolCalls);
             const textWithTools = toolSummary ? toolSummary + '\n' + e.responseText : e.responseText;
@@ -2969,8 +3204,11 @@ wss.on('connection', (ws) => {
                 return;
               }
 
-              // Detect stale session and retry fresh
-              const isResumeFailure = msg.sessionId && !msg._resumeRetry && code !== 0 &&
+              // Detect stale session and retry fresh. Exclude cancelled turns:
+              // cancel sends SIGTERM (code===null !== 0) and a cancelled resumed
+              // conversation whose stderr mentions session/resume/not found would
+              // otherwise replay the original prompt.
+              const isResumeFailure = msg.sessionId && !msg._resumeRetry && !entry.cancelled && code !== 0 &&
                 (stderrRef.value.includes('session') || stderrRef.value.includes('resume') || stderrRef.value.includes('not found'));
               if (isResumeFailure) {
                 console.log(`[Chat] Resume failed for session ${msg.sessionId}, retrying fresh`);
@@ -3014,6 +3252,15 @@ wss.on('connection', (ws) => {
             processes.delete(convoId);
           }
 
+          // Look up agent data first so modelArgs/--agent resolve. Previously
+          // referenced below before it was block-scoped, throwing a
+          // ReferenceError on every legacy message (gated behind
+          // RUNDOCK_LEGACY_SPAWN=1).
+          const legacyAgentList = discoverAgents();
+          const legacyRequestedAgent = msg.agent || 'default';
+          const agentData = legacyAgentList.find(a => a.id === legacyRequestedAgent)
+            || legacyAgentList.find(a => a.fileName && a.fileName.replace('.md', '') === legacyRequestedAgent);
+
           const legacyDisallowed = getDisallowedTools();
           const legacyPermMode = getPermissionMode();
           const args = [...getBareArgs(), ...modelArgs(agentData), '--print', '--output-format', 'stream-json', '--input-format', 'stream-json',
@@ -3027,10 +3274,6 @@ wss.on('connection', (ws) => {
           }
 
           if (!msg.sessionId) {
-            const agentList = discoverAgents();
-            const requestedAgent = msg.agent || 'default';
-            const agentData = agentList.find(a => a.id === requestedAgent)
-              || agentList.find(a => a.fileName && a.fileName.replace('.md', '') === requestedAgent);
             if (agentData && agentData.fileName) {
               args.push('--agent', agentData.name);
             }
@@ -3062,7 +3305,7 @@ wss.on('connection', (ws) => {
             const current = processes.get(convoId);
             if (current && current.processId !== processId) return;
 
-            const isResumeFailure = msg.sessionId && !msg._resumeRetry && code !== 0 &&
+            const isResumeFailure = msg.sessionId && !msg._resumeRetry && !entry.cancelled && code !== 0 &&
               (legacyStderrRef.value.includes('session') || legacyStderrRef.value.includes('resume') || legacyStderrRef.value.includes('not found'));
             if (isResumeFailure) {
               console.log(`[Chat] Resume failed for session ${msg.sessionId}, retrying fresh`);
@@ -3149,24 +3392,32 @@ wss.on('connection', (ws) => {
             try { entry.process.kill('SIGKILL'); } catch (e) {}
           }, 2000);
 
-          // If this is a delegate, also kill the parked parent(s)
+          // If this is a delegate, also kill every parked ANCESTOR. Walk the
+          // full parent chain rather than only orchestratorEntry, which is null
+          // for non-intercepted nested WS-delegate chains and would otherwise
+          // leak the grandparent orchestrator as a live process.
           if (entry.delegation) {
-            const orig = entry.delegation.originalEntry;
-            if (orig && !orig.exited) {
-              orig.exited = true;
-              orig.cancelled = true;
-              try { orig.process.kill('SIGTERM'); } catch (e) {}
-              setTimeout(() => { try { orig.process.kill('SIGKILL'); } catch (e) {} }, 2000);
-              console.log(`[Cancel] convo=${convoId} also killed parked parent agent=${orig.agentId}`);
-            }
-            // Also kill the orchestrator if it was a multi-level delegation
-            const orch = entry.delegation.orchestratorEntry;
-            if (orch && orch !== orig && !orch.exited) {
-              orch.exited = true;
-              orch.cancelled = true;
-              try { orch.process.kill('SIGTERM'); } catch (e) {}
-              setTimeout(() => { try { orch.process.kill('SIGKILL'); } catch (e) {} }, 2000);
-              console.log(`[Cancel] convo=${convoId} also killed parked orchestrator`);
+            const killParked = (e) => {
+              if (!e || e.exited) return;
+              e.exited = true;
+              e.cancelled = true;
+              try { e.process.kill('SIGTERM'); } catch (err) {}
+              setTimeout(() => { try { e.process.kill('SIGKILL'); } catch (err) {} }, 2000);
+              console.log(`[Cancel] convo=${convoId} also killed parked ancestor agent=${e.agentId}`);
+            };
+            const seen = new Set([entry]);
+            let d = entry.delegation;
+            let depth = 0;
+            while (d && depth++ < 50) {
+              if (d.orchestratorEntry && !seen.has(d.orchestratorEntry)) {
+                seen.add(d.orchestratorEntry);
+                killParked(d.orchestratorEntry);
+              }
+              const parent = d.originalEntry;
+              if (!parent || seen.has(parent)) break;
+              seen.add(parent);
+              killParked(parent);
+              d = parent.delegation;
             }
           }
 
@@ -3256,23 +3507,30 @@ wss.on('connection', (ws) => {
       }
 
       if (msg.type === 'pick_folder') {
-        try {
-          const { execSync } = require('child_process');
-          const result = execSync(
-            `osascript -e 'POSIX path of (choose folder with prompt "Choose a workspace folder")'`,
-            { encoding: 'utf-8', timeout: 60000 }
-          ).trim();
-          if (result) {
-            // Remove trailing slash if present
-            const dir = result.endsWith('/') ? result.slice(0, -1) : result;
-            ws.send(JSON.stringify({ type: 'folder_picked', path: dir }));
-          } else {
-            ws.send(JSON.stringify({ type: 'folder_picked', path: null }));
-          }
-        } catch (e) {
-          // User cancelled or osascript failed
-          ws.send(JSON.stringify({ type: 'folder_picked', path: null }));
-        }
+        // Async execFile (not the blocking sync variant) so the native folder
+        // dialog does not stall the event loop for up to 60s, freezing all
+        // streams, heartbeats and permission long-polls. The args array
+        // also avoids shell parsing.
+        const { execFile } = require('child_process');
+        // KNOWN LIMITATION: concurrent pick_folder requests spawn overlapping osascript dialogs (not serialized). Cosmetic.
+        execFile('osascript',
+          ['-e', 'POSIX path of (choose folder with prompt "Choose a workspace folder")'],
+          { encoding: 'utf-8', timeout: 60000 },
+          (err, stdout) => {
+            if (err) {
+              // User cancelled or osascript failed
+              ws.send(JSON.stringify({ type: 'folder_picked', path: null }));
+              return;
+            }
+            const result = (stdout || '').trim();
+            if (result) {
+              // Remove trailing slash if present
+              const dir = result.endsWith('/') ? result.slice(0, -1) : result;
+              ws.send(JSON.stringify({ type: 'folder_picked', path: dir }));
+            } else {
+              ws.send(JSON.stringify({ type: 'folder_picked', path: null }));
+            }
+          });
       }
 
       if (msg.type === 'create_workspace') {
@@ -3359,19 +3617,21 @@ wss.on('connection', (ws) => {
         const convos = readConversations();
         const fiveMinAgo = Date.now() - 5 * 60 * 1000;
         const cleaned = convos.filter(c => c.sessionId || new Date(c.lastActiveAt || c.createdAt).getTime() > fiveMinAgo);
-        if (cleaned.length < convos.length) writeConversations(cleaned);
-        // Reconcile activeAgentId on load. When loading from disk there is no active
-        // process, so any pointer to a delegatee is stale (the orchestrator always
-        // resumes after a delegate returns or the conversation goes idle). Pre-0.8.3
-        // delegations that never emitted COMPLETE markers left this stuck; this pass
-        // normalizes it. The orchestrator's agentId is the canonical fallback.
+        let convosChanged = cleaned.length < convos.length;
+        // Reconcile activeAgentId on load. A pointer to a delegatee is stale
+        // ONLY when there is no live process: the orchestrator resumes after a
+        // delegate returns or the conversation goes idle. Skip any conversation
+        // with a live process, whose activeAgentId (a live delegate) is
+        // legitimate and must not be clobbered mid-delegation.
         for (const c of cleaned) {
-          if (c.activeAgentId && c.activeAgentId !== c.agentId) {
+          if (c.activeAgentId && c.activeAgentId !== c.agentId && !chatProcesses.has(c.id)) {
             c.activeAgentId = c.agentId;
+            convosChanged = true;
           }
         }
-        // Persist corrected pointers so reconciliation doesn't re-run every load
-        writeConversations(cleaned);
+        // Persist at most once per load, and only when something changed
+        // (previously wrote unconditionally, up to twice per load).
+        if (convosChanged) writeConversations(cleaned);
         // Strip markdown formatting for plain-text previews (mirrors frontend stripMd)
         function stripMdServer(t) {
           return t
@@ -3482,6 +3742,7 @@ wss.on('connection', (ws) => {
         const current = processes.get(convoId);
         if (current && current.delegation && !current.exited) {
           console.log(`[Delegate] convo=${convoId} ending delegation, killing delegate`);
+          // KNOWN LIMITATION: follow-up racing explicit end_delegation. This kills immediately and uncancellably while setting scopeReturn; a follow-up landing in the kill-to-close gap clears scopeReturn (follow-up clear block) and drops the committed handback. Needs the same queue-and-re-route state machine as the kill-already-fired race above.
           try { current.process.kill(); } catch (e) {}
           // The close handler will restore the original process
         } else if (current && !current.delegation && !current.exited && !current.scopeReturn) {
@@ -3503,7 +3764,7 @@ wss.on('connection', (ws) => {
 
       if (msg.type === 'read_file') {
         const fullPath = path.resolve(WORKSPACE, msg.path);
-        if (fullPath.startsWith(path.resolve(WORKSPACE)) && fs.existsSync(fullPath)) {
+        if (isInsideWorkspace(fullPath) && fs.existsSync(fullPath)) {
           ws.send(JSON.stringify({ type: 'file_content', path: msg.path, content: readNormalisedFile(fullPath) }));
         }
       }
@@ -3548,7 +3809,7 @@ wss.on('connection', (ws) => {
           const agentsDir = path.join(WORKSPACE, '.claude', 'agents');
           if (!fs.existsSync(agentsDir)) fs.mkdirSync(agentsDir, { recursive: true });
           const filePath = path.join(agentsDir, name + '.md');
-          if (!filePath.startsWith(path.resolve(WORKSPACE))) {
+          if (!isInsideWorkspace(filePath)) {
             ws.send(JSON.stringify({ type: 'agent_error', message: 'Invalid path.' }));
           } else {
             const existed = fs.existsSync(filePath);
@@ -3562,11 +3823,17 @@ wss.on('connection', (ws) => {
                 const currentAgents = discoverAgents();
                 const maxOrder = Math.max(0, ...currentAgents.filter(a => a.order !== null).map(a => a.order));
                 if (!hasType && !hasOrder) {
-                  // No type or order: add both after description (or before closing ---)
+                  // No type or order: add both after description, else as the
+                  // first keys inside the frontmatter block. The previous
+                  // `^(---\s*$)/m` matched the OPENING fence and prepended the
+                  // keys BEFORE it, corrupting the frontmatter so the declared
+                  // name/role parsed as body. Anchor to the opening fence
+                  // line and insert AFTER it instead.
                   if (saved.match(/^description:\s/m)) {
                     saved = saved.replace(/^(description:\s.*)/m, `$1\ntype: specialist\norder: ${maxOrder + 1}`);
                   } else {
-                    saved = saved.replace(/^(---\s*$)/m, `type: specialist\norder: ${maxOrder + 1}\n$1`);
+                    // KNOWN LIMITATION: this anchor skips if a BOM or leading whitespace precedes the opening fence. Low bite.
+                    saved = saved.replace(/^(---[ \t]*\r?\n)/, `$1type: specialist\norder: ${maxOrder + 1}\n`);
                   }
                 } else if (hasType && !hasOrder) {
                   // Has type but no order: add order after type
@@ -3577,10 +3844,14 @@ wss.on('connection', (ws) => {
             }
             console.log(`[Agent] ${existed ? 'Updated' : 'Created'}: ${name}`);
             ws.send(JSON.stringify({ type: 'agent_saved', agentId: name, updated: existed }));
+            // Invalidate BEFORE discovering so the broadcast reflects the new
+            // file. A warm (<2s) cache otherwise omits the just-saved agent
+            // from this first roster broadcast.
+            invalidateAgentCache();
             const updatedAgents = discoverAgents();
             ws.send(JSON.stringify({ type: 'agents', agents: updatedAgents }));
             ws.send(JSON.stringify({ type: 'skills', skills: discoverSkills(updatedAgents) }));
-            flagRosterRefresh(); invalidateAgentCache();
+            flagRosterRefresh();
             if (!existed) {
               const state = readState();
               if (!state.setupComplete && updatedAgents.some(a => a.status === 'onTeam' && a.type !== 'platform')) {
@@ -3601,14 +3872,15 @@ wss.on('connection', (ws) => {
           ws.send(JSON.stringify({ type: 'agent_error', message: 'Cannot delete platform agents.' }));
         } else {
           const filePath = path.join(WORKSPACE, '.claude', 'agents', target.fileName);
-          if (filePath.startsWith(path.resolve(WORKSPACE))) {
+          if (isInsideWorkspace(filePath)) {
             fs.unlinkSync(filePath);
             console.log(`[Agent] Deleted: ${msg.agentId}`);
             ws.send(JSON.stringify({ type: 'agent_deleted', agentId: msg.agentId }));
+            invalidateAgentCache(); // before discovery so the broadcast omits the deleted agent
             const updatedAgents = discoverAgents();
             ws.send(JSON.stringify({ type: 'agents', agents: updatedAgents }));
             ws.send(JSON.stringify({ type: 'skills', skills: discoverSkills(updatedAgents) }));
-            flagRosterRefresh(); invalidateAgentCache();
+            flagRosterRefresh();
           }
         }
       }
@@ -3620,7 +3892,7 @@ wss.on('connection', (ws) => {
           ws.send(JSON.stringify({ type: 'skill_error', message: 'Invalid skill name. Use lowercase letters, numbers, and hyphens only.' }));
         } else {
           const skillDir = path.join(WORKSPACE, '.claude', 'skills', name);
-          if (!skillDir.startsWith(path.resolve(WORKSPACE))) {
+          if (!isInsideWorkspace(skillDir)) {
             ws.send(JSON.stringify({ type: 'skill_error', message: 'Invalid path.' }));
           } else {
             if (!fs.existsSync(skillDir)) fs.mkdirSync(skillDir, { recursive: true });
@@ -3629,9 +3901,10 @@ wss.on('connection', (ws) => {
             fs.writeFileSync(filePath, msg.content, 'utf-8');
             console.log(`[Skill] ${existed ? 'Updated' : 'Created'}: ${name}`);
             ws.send(JSON.stringify({ type: 'skill_saved', skillId: name, updated: existed }));
+            invalidateAgentCache(); // before discovery so the skills broadcast is fresh
             const updatedAgents = discoverAgents();
             ws.send(JSON.stringify({ type: 'skills', skills: discoverSkills(updatedAgents) }));
-            flagRosterRefresh(); invalidateAgentCache();
+            flagRosterRefresh();
           }
         }
       }
@@ -3642,15 +3915,16 @@ wss.on('connection', (ws) => {
           ws.send(JSON.stringify({ type: 'skill_error', message: 'Invalid skill name.' }));
         } else {
           const skillDir = path.join(WORKSPACE, '.claude', 'skills', name);
-          if (!skillDir.startsWith(path.resolve(WORKSPACE)) || !fs.existsSync(skillDir)) {
+          if (!isInsideWorkspace(skillDir) || !fs.existsSync(skillDir)) {
             ws.send(JSON.stringify({ type: 'skill_error', message: `Skill "${name}" not found.` }));
           } else {
             fs.rmSync(skillDir, { recursive: true });
             console.log(`[Skill] Deleted: ${name}`);
             ws.send(JSON.stringify({ type: 'skill_deleted', skillId: name }));
+            invalidateAgentCache(); // before discovery so the skills broadcast is fresh
             const updatedAgents = discoverAgents();
             ws.send(JSON.stringify({ type: 'skills', skills: discoverSkills(updatedAgents) }));
-            flagRosterRefresh(); invalidateAgentCache();
+            flagRosterRefresh();
           }
         }
       }
@@ -3847,7 +4121,7 @@ wss.on('connection', (ws) => {
 
       if (msg.type === 'save_file') {
         const fullPath = path.resolve(WORKSPACE, msg.path);
-        if (fullPath.startsWith(path.resolve(WORKSPACE))) {
+        if (isInsideWorkspace(fullPath)) {
           fs.writeFileSync(fullPath, msg.content, 'utf-8');
           ws.send(JSON.stringify({ type: 'file_saved', path: msg.path }));
         }
@@ -4140,6 +4414,25 @@ function handleChatSpawnError(err, convoId) {
       _agent: entry ? entry.agentId : undefined,
     }));
 
+    // If a DELEGATE failed to spawn, restore its parked parent instead of
+    // leaking it. The parent process is still alive but was swapped out
+    // of the map when the delegate took over; the delegate close handler bails
+    // on spawnFailed, so without this the parent is orphaned and delegation is
+    // permanently broken for the conversation. Put the parent back (idle).
+    if (entry && entry.delegation && entry.delegation.originalEntry
+        && !entry.delegation.originalEntry.exited) {
+      const parent = entry.delegation.originalEntry;
+      parent.idle = true;
+      parent.delegation = null;
+      chatProcesses.set(convoId, parent);
+      safeSend(JSON.stringify({
+        type: 'system', subtype: 'agent_switch', _conversationId: convoId,
+        fromAgent: entry.agentId, toAgent: parent.agentId,
+      }));
+      console.log(`[SpawnError] convo=${convoId} delegate spawn failed, restored parked parent ${parent.agentId}`);
+      return;
+    }
+
     if (convoId && entry) chatProcesses.delete(convoId);
 
     console.error(`[SpawnError] convo=${convoId} code=${err.code || ''} msg=${err.message}`);
@@ -4267,3 +4560,50 @@ if (require.main === module) {
 }
 
 module.exports = { startServer };
+
+// ── TEST-ONLY EXPORTS ──
+// Mechanical re-exports of existing internals so the test suite (test/) can
+// exercise them directly. No logic lives here; nothing in the production code
+// paths reads module.exports._internal. setWorkspace/getWorkspace exist so
+// tests can point the module-level WORKSPACE at a temp fixture directory.
+module.exports._internal = {
+  // workspace pointer (test fixture wiring only)
+  setWorkspace(dir) { WORKSPACE = dir; invalidateAgentCache(); },
+  getWorkspace() { return WORKSPACE; },
+  // scheduler
+  getNextRun, executeRoutine, routineState,
+  // agent + skill discovery / parsing
+  discoverAgents, invalidateAgentCache, discoverSkills, parseSkillFile,
+  parseAgentFrontmatter, extractFrontmatterText, parseCapabilities,
+  parseRoutines, parsePrompts, parseSkills, readNormalisedFile, titleCase,
+  // markers + text helpers
+  stripRundockMarkers, isSilentParkResponse, sanitizeSpecialistOutput,
+  extractSnippet, buildToolSummary, isAuthError, isModelError,
+  // rosters + prompts
+  findDirectReportMatch, buildTeamRoster, buildPeerRoster,
+  extractSelfDescription, buildSystemPrompt,
+  // workspace analysis / scaffolding
+  detectWorkspaceMode, isEmptyWorkspace, analyzeWorkspace,
+  scaffoldDefaults, scaffoldWorkspace, muteHooks, discoverWorkspaces,
+  readMcpServerNames, getFileTree, validateAgentSlug, isInsideWorkspace,
+  // persistence
+  readConversations, writeConversations, readState, writeState,
+  loadTranscript, saveTranscript, appendTranscript, formatTranscript,
+  transcriptDir, countSessionMessagesSync, countConversationMessages,
+  parseSessionHistory, getSessionJsonlPath,
+  // spawn plumbing
+  wireProcessHandlers, handleDelegation, handleScopeReturn,
+  handleChatSpawnError, resolveClaudeBin, spawnClaude,
+  getBareArgs, getSpawnEnv, getDisallowedTools, getPermissionMode,
+  getAllowedToolsInteractive, getAllowedToolsLegacy, modelArgs,
+  killAllChildren, cleanOrphanedProcesses, loadPidFile,
+  // live state maps
+  chatProcesses, convoTranscripts, pendingPermissionRequests,
+  agentAutoResumeCount, disconnectBuffer, connectedClients,
+  incrementAutoResume, resetAutoResume,
+  // server objects (integration test lifecycle)
+  server, wss,
+  // constants
+  MAX_CONSECUTIVE_AGENT_RESUMES, DEFAULT_MODEL, PERMISSION_TIMEOUT_MS,
+  DISALLOWED_TOOLS_KNOWLEDGE, SPECIALIST_OUTPUT_MAX_CHARS,
+};
