@@ -1,0 +1,185 @@
+#!/usr/bin/env node
+'use strict';
+// Stub `claude` binary for the Rundock test suite.
+//
+// Honors the exact invocation shape server.js uses:
+//   claude --model X [--agent name] [--resume sid] [--print]
+//          --output-format stream-json --input-format stream-json ...
+// and speaks scripted stream-json envelopes over stdout, reading stream-json
+// user messages from stdin. No network, no API, no real Claude binary.
+//
+// Injection: the test harness prepends this directory to PATH, so server.js's
+// existing resolveClaudeBin() (`which claude`) finds this stub with zero
+// production changes.
+//
+// Scripting: the stub reads `stub-scenario.json` from its cwd (server.js
+// spawns claude with cwd = WORKSPACE, so scenarios live in the test
+// workspace). Scenario format:
+//   { "rules": [ { "match": { "agent": "chief-of-staff",
+//                             "promptIncludes": "hooks" | ["a","b"],
+//                             "promptExcludes": "x" },
+//                  "delayMs": 0,
+//                  "singleChunk": false,
+//                  "isError": false,
+//                  "crash": 1,   // exit with this code WITHOUT emitting a result
+//                                // envelope: simulates an abnormal mid-turn death
+//                                // (CLI crash / OOM / auth expiry). No `turn` runs.
+//                  "turn": [ { "text": "..." },
+//                            { "agentTool": { "subagent_type": "penn", "prompt": "..." } },
+//                            { "tool": { "name": "Read", "input": {...} } },
+//                            { "raw": { ...literal envelope... } } ] } ] }
+// First matching rule wins; rules are re-read from disk on every message so
+// tests can rewrite the script mid-scenario. The stub also appends every
+// invocation to `stub-invocations.jsonl` (cwd) for spawn-arg assertions.
+//
+// Envelope shapes come from test/fixtures/stream-json.js: the SAME fixtures
+// the unit tests pin against wireProcessHandlers.
+
+const fs = require('fs');
+const path = require('path');
+const readline = require('readline');
+const fx = require(path.join(__dirname, '..', '..', 'fixtures', 'stream-json.js'));
+
+const argv = process.argv.slice(2);
+function argValue(flag) {
+  const i = argv.indexOf(flag);
+  return i >= 0 ? argv[i + 1] : null;
+}
+const AGENT = argValue('--agent');
+const MODEL = argValue('--model');
+const RESUME = argValue('--resume');
+const PRINT = argv.includes('--print');
+const SCENARIO_FILE = path.join(process.cwd(), 'stub-scenario.json');
+const LOG_FILE = path.join(process.cwd(), 'stub-invocations.jsonl');
+
+// Record the invocation for spawn-arg assertions.
+try {
+  fs.appendFileSync(LOG_FILE, JSON.stringify({
+    pid: process.pid, ts: Date.now(), agent: AGENT, model: MODEL,
+    resume: RESUME, print: PRINT, argv,
+    env: {
+      RUNDOCK: process.env.RUNDOCK || null,
+      RUNDOCK_CONVO_ID: process.env.RUNDOCK_CONVO_ID || null,
+      RUNDOCK_CODE_MODE: process.env.RUNDOCK_CODE_MODE || null,
+      RUNDOCK_PORT: process.env.RUNDOCK_PORT || null,
+    },
+  }) + '\n');
+} catch (e) { /* logging is best-effort */ }
+
+// The server SIGKILLs stubs mid-stream by design (interception, auto-return).
+// Never crash on a broken pipe.
+process.stdout.on('error', () => {});
+function writeOut(s) {
+  try { process.stdout.write(s); } catch (e) { /* killed mid-write */ }
+}
+
+const SESSION_ID = RESUME || `stub-${AGENT || 'default'}-${process.pid}`;
+let initSent = false;
+
+function loadRules() {
+  try {
+    return JSON.parse(fs.readFileSync(SCENARIO_FILE, 'utf-8')).rules || [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function matches(rule, prompt) {
+  const m = rule.match || {};
+  if (m.agent !== undefined && m.agent !== AGENT) return false;
+  const includes = m.promptIncludes == null ? [] : [].concat(m.promptIncludes);
+  for (const s of includes) if (!prompt.includes(s)) return false;
+  const excludes = m.promptExcludes == null ? [] : [].concat(m.promptExcludes);
+  for (const s of excludes) if (prompt.includes(s)) return false;
+  return true;
+}
+
+function buildEnvelopes(rule) {
+  const events = [];
+  if (!initSent) { events.push(fx.init(SESSION_ID)); initSent = true; }
+  let fullText = '';
+  let toolIndex = 1;
+  for (const block of rule.turn || []) {
+    if (block.text != null) {
+      events.push(fx.contentBlockStartText());
+      const text = block.text;
+      const mid = Math.max(1, Math.floor(text.length / 2));
+      events.push(fx.textDelta(text.slice(0, mid)));
+      if (text.length > 1) events.push(fx.textDelta(text.slice(mid)));
+      events.push(fx.contentBlockStop());
+      fullText += (fullText ? '\n' : '') + text;
+    } else if (block.agentTool) {
+      events.push(...fx.toolUseFlow('Agent', block.agentTool, toolIndex++));
+    } else if (block.tool) {
+      events.push(...fx.toolUseFlow(block.tool.name, block.tool.input || {}, toolIndex++));
+    } else if (block.raw) {
+      events.push(block.raw);
+    }
+  }
+  events.push(fx.assistantMessage(fullText));
+  events.push(fx.result({ text: fullText, isError: !!rule.isError, sessionId: SESSION_ID }));
+  return events;
+}
+
+function emitTurn(rule) {
+  const events = buildEnvelopes(rule);
+  if (rule.singleChunk) {
+    // One write -> one 'data' chunk on the server side (small payloads do not
+    // get split by the pipe). Used to pin per-chunk guard behavior.
+    writeOut(fx.toLines(events));
+  } else {
+    for (const e of events) writeOut(JSON.stringify(e) + '\n');
+  }
+  if (PRINT) process.exit(0);
+}
+
+function handleUserMessage(content) {
+  const rules = loadRules();
+  const rule = rules.find(r => matches(r, content)) || {
+    turn: [{ text: `STUB-NO-RULE agent=${AGENT} prompt=${String(content).slice(0, 120)}` }],
+  };
+  if (rule.crash != null) {
+    // Abnormal death: exit non-zero without emitting a result envelope, so the
+    // server's close handler runs with no result for this turn.
+    const code = typeof rule.crash === 'number' ? rule.crash : 1;
+    if (rule.delayMs) setTimeout(() => process.exit(code), rule.delayMs);
+    else process.exit(code);
+    return;
+  }
+  const delay = rule.delayMs || 0;
+  if (delay > 0) setTimeout(() => emitTurn(rule), delay);
+  else emitTurn(rule);
+}
+
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+rl.on('line', (line) => {
+  if (!line.trim()) return;
+  let msg;
+  try { msg = JSON.parse(line); } catch (e) { return; }
+  if (msg.type === 'user' && msg.message) {
+    const content = typeof msg.message.content === 'string'
+      ? msg.message.content
+      : JSON.stringify(msg.message.content);
+    handleUserMessage(content);
+  }
+});
+
+// Routine spawns use stdio: ['ignore', ...] and pass the prompt as the last
+// positional argument with --print. Handle that shape too.
+if (PRINT) {
+  const positional = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a.startsWith('--')) {
+      // flags with values (skip the value); boolean flags have no value
+      if (['--model', '--agent', '--resume', '--output-format', '--input-format',
+        '--permission-mode', '--allowed-tools', '--disallowed-tools',
+        '--append-system-prompt', '--settings', '--mcp-config', '--add-dir'].includes(a)) i++;
+    } else {
+      positional.push(a);
+    }
+  }
+  if (positional.length > 0) {
+    handleUserMessage(positional[positional.length - 1]);
+  }
+}
