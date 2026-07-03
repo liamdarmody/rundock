@@ -4,6 +4,20 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## 0.9.2: Delegation Reliability & Hardening (2026-07-03)
+
+### Fixed
+
+- **Specialist hand-offs are more reliable.** Several edge cases in how agents hand work back and forth are fixed: a specialist returning control is no longer occasionally missed (which could leave the conversation stuck with the wrong agent), a message you send just as an agent is finishing is no longer lost, and the orchestrator is correctly restored if a specialist fails to start. A hand-off marker that appears earlier in a longer reply is now always recognised.
+- **Your conversation history is safer.** If a transcript file is ever left partially written, Rundock now salvages the readable history instead of clearing it, and a message is no longer duplicated when a conversation is resumed after its session has expired.
+- **New agents show up immediately.** After you create an agent it now appears in your team straight away rather than only after a reload, and creating an agent whose file has no description no longer scrambles its name and role.
+- **Tighter workspace file boundaries.** The safeguard that keeps file reads and writes inside your workspace is hardened so a path can't slip out to a sibling folder that happens to share the workspace's name.
+- **Smaller reliability fixes.** Choosing a workspace folder no longer briefly freezes the app, every dropped connection is now cleaned up promptly, and after a sign-in or model error later unrelated messages surface correctly instead of being suppressed.
+
+### Changed
+
+- **Automated tests and continuous integration.** Rundock now has an automated test suite covering the agent delegation engine and core server behaviour, run on every change and required to pass before a release is built. This doesn't change the app itself; it makes future changes safer to ship.
+
 ## 0.9.1: Predictable Model Selection (2026-06-30)
 
 ### Fixed
