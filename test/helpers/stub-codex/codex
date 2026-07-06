@@ -1,0 +1,116 @@
+#!/usr/bin/env node
+'use strict';
+// Stub `codex` binary for the Rundock test suite.
+//
+// Mimics `codex exec --json`: reads the prompt from stdin (the trailing `-`
+// argument), emits scripted JSONL events on stdout, exits when the turn ends.
+// One process per turn, exactly like the real CLI's exec mode. No network.
+//
+// Injection: the test harness prepends this directory to PATH, so the
+// server's codex binary resolution (`which codex`) finds this stub with zero
+// production changes.
+//
+// Scripting: reads `stub-codex-scenario.json` from cwd (the server spawns
+// codex with cwd = workspace, so scenarios live in the test workspace).
+// Scenario format:
+//   { "rules": [ {
+//       "match": { "promptIncludes": "a" | ["a","b"] },
+//       "threadId": "cthr_fixed",       // default: resume id, else generated
+//       "text": "final agent message",
+//       "usage": { "input": 100, "cached": 0, "output": 50 },
+//       "failMessage": "...",           // emit turn.failed instead of a message
+//       "noise": true,                  // emit unknown + malformed lines first
+//       "crash": 1,                     // exit with this code, no events at all
+//       "delayMs": 0
+//   } ] }
+// First matching rule wins. Every invocation is appended to
+// `stub-invocations.jsonl` (cwd) including the full stdin prompt, for
+// spawn-argument and prompt-content assertions.
+//
+// Event shapes come from test/fixtures/codex-jsonl.js: the SAME fixtures the
+// parser unit tests pin, so stub and parser can never drift apart.
+
+const fs = require('fs');
+const path = require('path');
+const fx = require(path.join(__dirname, '..', '..', 'fixtures', 'codex-jsonl.js'));
+
+const argv = process.argv.slice(2);
+function argValue(flag) {
+  const i = argv.indexOf(flag);
+  return i >= 0 ? argv[i + 1] : null;
+}
+const MODEL = argValue('--model');
+const resumeIdx = argv.indexOf('resume');
+const RESUME = resumeIdx >= 0 ? argv[resumeIdx + 1] : null;
+
+const SCENARIO_FILE = path.join(process.cwd(), 'stub-codex-scenario.json');
+const LOG_FILE = path.join(process.cwd(), 'stub-invocations.jsonl');
+
+process.stdout.on('error', () => {});
+function writeOut(s) {
+  try { process.stdout.write(s); } catch (e) { /* killed mid-write */ }
+}
+
+function loadRules() {
+  try {
+    return JSON.parse(fs.readFileSync(SCENARIO_FILE, 'utf-8')).rules || [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function matches(rule, prompt) {
+  const m = rule.match || {};
+  const includes = m.promptIncludes == null ? [] : [].concat(m.promptIncludes);
+  for (const s of includes) if (!prompt.includes(s)) return false;
+  return true;
+}
+
+// Read the entire prompt from stdin, then play the matching rule.
+let prompt = '';
+process.stdin.setEncoding('utf-8');
+process.stdin.on('data', (c) => { prompt += c; });
+process.stdin.on('end', () => {
+  // Record the invocation for spawn-arg and prompt-content assertions.
+  try {
+    fs.appendFileSync(LOG_FILE, JSON.stringify({
+      bin: 'codex', pid: process.pid, ts: Date.now(),
+      model: MODEL, resume: RESUME, argv, prompt,
+      env: {
+        RUNDOCK: process.env.RUNDOCK || null,
+        RUNDOCK_CONVO_ID: process.env.RUNDOCK_CONVO_ID || null,
+        RUNDOCK_PORT: process.env.RUNDOCK_PORT || null,
+      },
+    }) + '\n');
+  } catch (e) { /* logging is best-effort */ }
+
+  const rule = loadRules().find(r => matches(r, prompt)) || {
+    text: `STUB-CODEX-NO-RULE prompt=${prompt.slice(0, 120)}`,
+  };
+
+  const run = () => {
+    if (rule.crash != null) {
+      process.exit(typeof rule.crash === 'number' ? rule.crash : 1);
+      return;
+    }
+    const threadId = RESUME || rule.threadId || `cthr_${process.pid}`;
+    const events = [fx.threadStarted(threadId)];
+    if (rule.noise) {
+      // Format-drift resilience: unknown event types and malformed JSON must
+      // be skipped by the consumer without breaking the turn.
+      writeOut(JSON.stringify({ type: 'turn.started' }) + '\n');
+      writeOut('{not json at all\n');
+    }
+    if (rule.failMessage) {
+      events.push(fx.turnFailed(rule.failMessage));
+    } else {
+      events.push(fx.agentMessage(rule.text || ''));
+      events.push(fx.turnCompleted(rule.usage || {}));
+    }
+    for (const e of events) writeOut(JSON.stringify(e) + '\n');
+    process.exit(rule.failMessage ? 1 : 0);
+  };
+
+  if (rule.delayMs > 0) setTimeout(run, rule.delayMs);
+  else run();
+});

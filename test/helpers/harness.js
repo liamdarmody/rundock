@@ -10,6 +10,7 @@ const assert = require('node:assert');
 const { makeWorkspace, makeTempDir, standardTeam } = require('./workspace.js');
 
 const STUB_DIR = path.join(__dirname, 'stub-claude');
+const CODEX_STUB_DIR = path.join(__dirname, 'stub-codex');
 
 let srv = null;
 let internal = null;
@@ -28,7 +29,7 @@ async function boot(opts = {}) {
   assert.strictEqual(srv, null, 'boot() must only be called once per test file');
 
   // Environment isolation. Must happen before server.js is required.
-  process.env.PATH = STUB_DIR + path.delimiter + process.env.PATH;
+  process.env.PATH = STUB_DIR + path.delimiter + CODEX_STUB_DIR + path.delimiter + process.env.PATH;
   const tempHome = makeTempDir('rundock-test-home-');
   process.env.HOME = tempHome;
   // RUNDOCK_ELECTRON routes the recent-workspaces file into $HOME (now a temp
@@ -42,10 +43,14 @@ async function boot(opts = {}) {
   internal = srv._internal;
   internal.setWorkspace(workspaceDir);
 
-  // Hard safety gate: never run integration scenarios against a real claude.
+  // Hard safety gate: never run integration scenarios against a real claude
+  // or a real codex.
   const resolved = internal.resolveClaudeBin();
   assert.strictEqual(resolved, path.join(STUB_DIR, 'claude'),
     `stub claude not resolved (got: ${resolved}). Refusing to run against a real binary.`);
+  const codexResolved = require('../../codex.js').resolveCodexBin();
+  assert.strictEqual(codexResolved, path.join(CODEX_STUB_DIR, 'codex'),
+    `stub codex not resolved (got: ${codexResolved}). Refusing to run against a real binary.`);
 
   port = await srv.startServer({ port: 0 });
   return { internal, port, workspaceDir };
@@ -53,6 +58,10 @@ async function boot(opts = {}) {
 
 function writeScenario(rules) {
   fs.writeFileSync(path.join(workspaceDir, 'stub-scenario.json'), JSON.stringify({ rules }, null, 2));
+}
+
+function writeCodexScenario(rules) {
+  fs.writeFileSync(path.join(workspaceDir, 'stub-codex-scenario.json'), JSON.stringify({ rules }, null, 2));
 }
 
 function readInvocations() {
@@ -172,10 +181,10 @@ function freshConvoId(prefix = 'it') {
 }
 
 module.exports = {
-  boot, shutdown, connect, writeScenario, readInvocations, clearInvocations,
+  boot, shutdown, connect, writeScenario, writeCodexScenario, readInvocations, clearInvocations,
   delay, freshConvoId, reapConvo,
   get internal() { return internal; },
   get port() { return port; },
   get workspaceDir() { return workspaceDir; },
-  STUB_DIR,
+  STUB_DIR, CODEX_STUB_DIR,
 };
