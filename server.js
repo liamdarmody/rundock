@@ -1179,10 +1179,12 @@ function executeRoutine(agent, routine, key) {
     // instructions, and Codex's own sandbox applies (no bypass flags exist
     // on this path). The agent's plan choice is honoured even for
     // unattended work.
+    // stdout/stderr are ignored: nothing consumes them on the routine path,
+    // and a chatty run would otherwise fill the pipe buffer and deadlock.
     proc = spawnCodex(codexRuntime.buildCodexArgs({ model: agent.model || undefined }), {
       cwd: WORKSPACE,
       env: getSpawnEnv(null),
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['pipe', 'ignore', 'ignore']
     });
     proc.stdin.on('error', () => { /* EPIPE on early exit */ });
     proc.stdin.write([readAgentInstructions(agent), buildSystemPrompt(agent), routine.prompt].filter(Boolean).join('\n\n'));
@@ -2578,6 +2580,7 @@ function spawnResumedProcess(convoId, agentId, sessionId, processes, opts = {}) 
     responseText: '', exited: false, resultSent: false,
     pendingAgentTool: null, toolCalls: [], turnStartTime: Date.now(),
     idle: true, scopeReturnSource: opts.scopeReturnSource || null,
+    handbackAt: Date.now(), // stale end_delegation guard
   };
   processes.set(convoId, entry);
 
@@ -2733,8 +2736,11 @@ function handleDelegation(msg, processes) {
 
   console.log(`[Delegate] convo=${convoId} from=${originalAgentId} to=${targetAgent.id} proc=${delegateProcessId} runtime=${targetAgent.runtime}${priorSessionId ? ` resume=${priorSessionId}` : ''}`);
 
+  // Normalised for the codex path: argv and prompt must agree on whether
+  // this is a resume (see startCodexTurn for the identity-loss hazard).
+  const codexResumeId = isCodexDelegate && codexRuntime.isValidThreadId(priorSessionId) ? priorSessionId : null;
   const delegateProc = isCodexDelegate
-    ? spawnCodex(codexRuntime.buildCodexArgs({ resumeThreadId: priorSessionId, model: targetAgent.model || undefined }), {
+    ? spawnCodex(codexRuntime.buildCodexArgs({ resumeThreadId: codexResumeId, model: targetAgent.model || undefined }), {
         cwd: WORKSPACE,
         env: getSpawnEnv(convoId),
         stdio: ['pipe', 'pipe', 'pipe']
@@ -2789,7 +2795,7 @@ function handleDelegation(msg, processes) {
     // delegation contract on a cold spawn (Codex has no --agent or
     // --append-system-prompt equivalent); contract + brief on a resumed
     // thread (instructions are already in the thread).
-    const codexPrompt = priorSessionId
+    const codexPrompt = codexResumeId
       ? `${delegationContext}\n\n${contextWithHistory}`
       : [readAgentInstructions(targetAgent), fullPrompt, contextWithHistory].filter(Boolean).join('\n\n');
     startCodexKeepalive(delegateEntry, convoId);
@@ -2907,6 +2913,7 @@ function handleDelegation(msg, processes) {
 
         orchestratorEntry.idle = true;
         orchestratorEntry.delegation = null;
+        orchestratorEntry.handbackAt = Date.now(); // stale end_delegation guard
         processes.set(convoId, orchestratorEntry);
 
         safeSend(JSON.stringify({
@@ -2990,7 +2997,8 @@ function handleDelegation(msg, processes) {
         // Tag with returning specialist so handleDelegation's scopeReturnSource
         // guard blocks immediate re-delegation to the same agent. Only set for
         // out-of-scope returns; pipeline-complete should allow re-delegation.
-        scopeReturnSource: isOutOfScope ? delegateEntry.agentId : null
+        scopeReturnSource: isOutOfScope ? delegateEntry.agentId : null,
+        handbackAt: Date.now() // stale end_delegation guard
       };
       processes.set(convoId, resumeEntry);
 
@@ -3098,6 +3106,7 @@ function handleDelegation(msg, processes) {
     } else if (orig && !orig.exited) {
       orig.idle = true;
       orig.delegation = null;
+      orig.handbackAt = Date.now(); // stale end_delegation guard
       processes.set(convoId, orig);
       console.log(`[Delegate] convo=${convoId} delegate exited, restored ${delegateEntry.delegation.originalAgentId}`);
       safeSend(JSON.stringify({
@@ -3930,15 +3939,20 @@ wss.on('connection', (ws) => {
         } else if (current && !current.delegation && !current.exited && !current.scopeReturn) {
           // Specialist started directly (no delegation) emitted RETURN
           // Server-side onResult should have caught this, but handle as fallback.
-          // Stale-message guard: an orchestrator or platform agent never emits
-          // RETURN, so end_delegation landing on one means the handback already
-          // completed server-side (a fast-exiting delegate, e.g. Codex, can be
-          // restored before the client's marker scan round-trips). Killing the
-          // restored parent here would drop its session. Ignore instead.
+          // Stale-message guard, two signals:
+          // 1. An entry restored/respawned by a delegate close handler within
+          //    the last 15s (handbackAt): a fast-exiting delegate (e.g. Codex)
+          //    can be handed back server-side before the client's marker scan
+          //    round-trips, so the late end_delegation refers to a handback
+          //    that already happened, for ANY parent type. Killing the
+          //    restored parent would drop its session.
+          // 2. An orchestrator or platform agent never emits RETURN, so the
+          //    fallback can never be legitimate for one.
+          const recentlyHandedBack = current.handbackAt && (Date.now() - current.handbackAt) < 15000;
           const agentList = discoverAgents();
           const currentAgent = agentList.find(a => a.id === current.agentId || a.name === current.agentId);
-          if (currentAgent && (currentAgent.type === 'orchestrator' || currentAgent.type === 'platform')) {
-            console.log(`[ScopeReturn] convo=${convoId} ignoring stale end_delegation: current agent ${current.agentId} is ${currentAgent.type}`);
+          if (recentlyHandedBack || (currentAgent && (currentAgent.type === 'orchestrator' || currentAgent.type === 'platform'))) {
+            console.log(`[ScopeReturn] convo=${convoId} ignoring stale end_delegation for ${current.agentId} (${recentlyHandedBack ? 'recent handback' : currentAgent.type})`);
           } else {
             console.log(`[ScopeReturn] convo=${convoId} end_delegation fallback for non-delegated specialist`);
             current.scopeReturn = true;
@@ -4754,8 +4768,10 @@ function getRuntimeStatus() {
   // The install/version probe shells out (claude --version can take seconds)
   // and this runs on the WebSocket handler path, so cache it. 60s keeps a
   // fresh install visible quickly without blocking every settings open.
+  // A cached "not installed" is never trusted: the user may have just
+  // installed, and that is exactly when they will open settings to check.
   let claudeInstalled, claudeVersion;
-  if (_claudeProbeCache && (Date.now() - _claudeProbeTime) < 60000) {
+  if (_claudeProbeCache && _claudeProbeCache.installed && (Date.now() - _claudeProbeTime) < 60000) {
     ({ installed: claudeInstalled, version: claudeVersion } = _claudeProbeCache);
   } else {
     claudeInstalled = true;
@@ -4836,6 +4852,22 @@ function sendCodexError(entry, convoId, message) {
 function handleCodexSpawnError(err, convoId) {
   const entry = chatProcesses.get(convoId);
   if (entry) entry.spawnFailed = true;
+  // Same 30s per-conversation dedupe as the Claude spawn-error handler, so
+  // retries against a missing binary do not stack pills. Keys are prefixed
+  // to keep the two runtimes' dedupe windows independent.
+  const dedupeKey = `codex:${convoId || ''}`;
+  const last = recentSpawnErrors.get(dedupeKey);
+  const now = Date.now();
+  if (last && last.code === err.code && (now - last.ts) < 30000) {
+    console.error(`[SpawnError] convo=${convoId} codex code=${err.code} (deduped within 30s)`);
+    safeSend(JSON.stringify({
+      type: 'system', subtype: 'done', code: -1,
+      _agent: entry ? entry.agentId : undefined, _conversationId: convoId,
+      _processId: entry ? entry.processId : undefined,
+    }));
+    return;
+  }
+  recentSpawnErrors.set(dedupeKey, { code: err.code, ts: now });
   let userMessage;
   if (err.code === 'ENOENT') {
     userMessage = 'The Codex CLI was not found on this machine. Install the official Codex CLI, then sign in: npm install -g @openai/codex then codex login';
@@ -4861,7 +4893,7 @@ function handleCodexSpawnError(err, convoId) {
 const CODEX_KEEPALIVE_MS = parseInt(process.env.RUNDOCK_CODEX_KEEPALIVE_MS || '', 10) || 25000;
 function startCodexKeepalive(entry, convoId) {
   const timer = setInterval(() => {
-    if (entry.exited || entry.resultSent) { clearInterval(timer); return; }
+    if (entry.exited || entry.resultSent || entry.spawnFailed) { clearInterval(timer); return; }
     safeSend(JSON.stringify({
       type: 'system', subtype: 'keepalive',
       _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
@@ -4998,6 +5030,7 @@ function wireCodexDelegate(entry, convoId, prompt) {
   let stderrBuf = '';
   proc.stderr.on('data', (chunk) => { stderrBuf += chunk.toString(); });
   proc.on('close', () => {
+    if (entry.spawnFailed) return; // spawn-error handler already surfaced
     if (stdoutBuf.trim()) handleLine(stdoutBuf); // unterminated last line
     if (!entry.resultSent && !entry.errorSent && !entry.cancelled) {
       sendCodexError(entry, convoId, stderrBuf.trim() || 'Codex exited unexpectedly');
@@ -5019,7 +5052,11 @@ function startCodexTurn(convoId, msg, agentData) {
     chatProcesses.delete(convoId);
   }
 
-  const resumeThreadId = msg.sessionId || null;
+  // Normalise once: an invalid session id (hostile client, corrupted
+  // persistence) must produce a FULL fresh turn, instructions included. If
+  // only argv dropped the id, the prompt would still be built resume-shaped
+  // and the agent would run without its identity.
+  const resumeThreadId = codexRuntime.isValidThreadId(msg.sessionId) ? msg.sessionId : null;
   const args = codexRuntime.buildCodexArgs({ resumeThreadId, model: agentData.model || undefined });
   const processId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 

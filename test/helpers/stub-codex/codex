@@ -96,19 +96,28 @@ process.stdin.on('end', () => {
     text: `STUB-CODEX-NO-RULE prompt=${prompt.slice(0, 120)}`,
   };
 
-  const run = () => {
-    if (rule.crash != null) {
-      process.exit(typeof rule.crash === 'number' ? rule.crash : 1);
-      return;
-    }
-    const threadId = RESUME || rule.threadId || `cthr_${process.pid}`;
-    const events = [fx.threadStarted(threadId)];
+  if (rule.crash != null) {
+    // Abnormal death before any output, optionally delayed.
+    const code = typeof rule.crash === 'number' ? rule.crash : 1;
+    if (rule.delayMs > 0) setTimeout(() => process.exit(code), rule.delayMs);
+    else process.exit(code);
+    return;
+  }
+
+  // Like the real CLI: the thread is announced as soon as the turn starts;
+  // delayMs simulates a LONG-RUNNING turn (work happening), not a slow start.
+  // Tests that supersede or heartbeat a mid-flight turn depend on this shape.
+  const threadId = RESUME || rule.threadId || `cthr_${process.pid}`;
+  writeOut(JSON.stringify(fx.threadStarted(threadId)) + '\n');
+
+  const finish = () => {
     if (rule.noise) {
       // Format-drift resilience: unknown event types and malformed JSON must
       // be skipped by the consumer without breaking the turn.
       writeOut(JSON.stringify({ type: 'turn.started' }) + '\n');
       writeOut('{not json at all\n');
     }
+    const events = [];
     if (rule.failMessage) {
       events.push(fx.turnFailed(rule.failMessage));
     } else {
@@ -119,6 +128,6 @@ process.stdin.on('end', () => {
     process.exit(rule.failMessage ? 1 : 0);
   };
 
-  if (rule.delayMs > 0) setTimeout(run, rule.delayMs);
-  else run();
+  if (rule.delayMs > 0) setTimeout(finish, rule.delayMs);
+  else finish();
 });
