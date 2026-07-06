@@ -734,11 +734,48 @@ function buildSystemPrompt(agentData) {
     ].join('\n');
   }
 
+  // Runtime awareness for platform agents (Doc): only when Codex is actually
+  // available. Doc creates agents on the default runtime without ceremony,
+  // offers the alternative once per plan, and never recommends a runtime that
+  // is not present on this machine. When Codex is absent this section is
+  // omitted entirely, so Doc never mentions it.
+  let runtimeSection = '';
+  if (agentData && agentData.type === 'platform') {
+    const cx = detectCodexCached();
+    if (cx.installed && cx.authenticated) {
+      runtimeSection = [
+        'RUNTIMES:',
+        'Two runtimes are available on this machine: Claude Code (the workspace default) and Codex (the user\'s ChatGPT plan, via the official Codex CLI).',
+        'When proposing or creating agents: create on Claude Code, the default, without asking. Mention once per plan that any agent can run on the user\'s ChatGPT plan instead, and let the user opt in; if they do, add `runtime: codex` to that agent\'s frontmatter.',
+        'For agents on Codex, omit the model field unless the user names a specific Codex model; Codex applies its own default. Never recommend a runtime or model that is not listed here.',
+        'Codex agents use Codex\'s built-in sandbox rather than Rundock\'s permission prompts, and the workspace orchestrator always runs on Claude Code.',
+      ].join('\n');
+    }
+  }
+
   const sections = [baseRules];
   if (delegationSection) sections.push(delegationSection);
   if (scopeSection) sections.push(scopeSection);
+  if (runtimeSection) sections.push(runtimeSection);
   sections.push(bashRules);
   return sections.join('\n\n');
+}
+
+// Codex detection with a short cache: buildSystemPrompt runs on every spawn
+// and detection shells out (which + --version). 30 seconds is fresh enough
+// for install/login state.
+let _codexDetectCache = null;
+let _codexDetectTime = 0;
+function detectCodexCached() {
+  const now = Date.now();
+  if (_codexDetectCache && (now - _codexDetectTime) < 30000) return _codexDetectCache;
+  try {
+    _codexDetectCache = codexRuntime.detectCodex();
+  } catch (e) {
+    _codexDetectCache = { installed: false, authenticated: false, version: null };
+  }
+  _codexDetectTime = now;
+  return _codexDetectCache;
 }
 
 // ===== AGENT DISCOVERY =====
@@ -2167,6 +2204,7 @@ function isModelError(text) {
 function sendAuthError(entry, convoId) {
   if (entry.authErrorSent) return;
   entry.authErrorSent = true;
+  _claudeAuthEvidence = false; // runtime status: sign-in is demonstrably broken
   safeSend(JSON.stringify({
     type: 'system', subtype: 'auth_error',
     _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId
@@ -2335,6 +2373,9 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
             sendAuthError(entry, convoId);
           } else if (parsed.is_error && isModelError(JSON.stringify(parsed))) {
             sendModelError(entry, convoId);
+          } else if (!parsed.is_error) {
+            // A successful turn is proof of a working sign-in (runtime status).
+            _claudeAuthEvidence = true;
           }
           // Attach server-tracked tool calls for activity summary
           parsed._toolCalls = entry.toolCalls || [];
@@ -3694,6 +3735,9 @@ wss.on('connection', (ws) => {
         try { agentList = discoverAgents(); } catch (e) { console.warn('  Agent discovery failed:', e.message); }
         ws.send(JSON.stringify({ type: 'agents', agents: agentList }));
       }
+      if (msg.type === 'get_runtime_status') {
+        ws.send(JSON.stringify({ type: 'runtime_status', ...getRuntimeStatus() }));
+      }
       if (msg.type === 'get_files') {
         if (!WORKSPACE) return;
         try { ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) })); } catch (e) { console.warn('  File tree failed:', e.message); }
@@ -3963,7 +4007,10 @@ wss.on('connection', (ws) => {
               }
             }
             console.log(`[Agent] ${existed ? 'Updated' : 'Created'}: ${name}`);
-            ws.send(JSON.stringify({ type: 'agent_saved', agentId: name, updated: existed }));
+            // Tag the confirmation with the agent's runtime so the client can
+            // suffix the created pill for non-default runtimes.
+            const savedRuntime = parseAgentFrontmatter(msg.content).runtime === 'codex' ? 'codex' : 'claude';
+            ws.send(JSON.stringify({ type: 'agent_saved', agentId: name, updated: existed, runtime: savedRuntime }));
             // Invalidate BEFORE discovering so the broadcast reflects the new
             // file. A warm (<2s) cache otherwise omits the just-saved agent
             // from this first roster broadcast.
@@ -4652,6 +4699,46 @@ let _resolvedCodexBin = null;
 function resolveCodexBinCached() {
   if (!_resolvedCodexBin) _resolvedCodexBin = codexRuntime.resolveCodexBin();
   return _resolvedCodexBin;
+}
+
+// Claude sign-in state, from evidence the server already has rather than a
+// live probe (a probe costs a real model call and 15 seconds; a settings
+// render must never do that). null = no evidence yet, and the UI claims
+// nothing. Set true by any successful turn, false by the auth-error
+// classifier. Self-correcting in both directions.
+let _claudeAuthEvidence = null;
+
+// Runtime status for the settings surface: which runtimes exist on this
+// machine, whether they are signed in, and which one is the workspace
+// default. The default is Claude in this version: Doc and delegation run on
+// it, so a workspace cannot exist without it.
+function getRuntimeStatus() {
+  const { execSync } = require('child_process');
+  const isWindows = process.platform === 'win32';
+  let claudeInstalled = true;
+  try {
+    execSync(isWindows ? 'where.exe claude' : 'which claude', { timeout: 5000, encoding: 'utf-8' });
+  } catch (e) { claudeInstalled = false; }
+  let claudeVersion = null;
+  if (claudeInstalled) {
+    try {
+      const out = execSync(`"${resolveClaudeBin()}" --version`, { timeout: 5000, encoding: 'utf-8' });
+      const m = String(out).match(/(\d+\.\d+(?:\.\d+)?(?:-[A-Za-z0-9.]+)?)/);
+      claudeVersion = m ? m[1] : null;
+    } catch (e) { /* installed but --version failed */ }
+  }
+  // Fresh Codex detection (the user may have just installed or signed in),
+  // and refresh the prompt-side cache while we have the answer.
+  let codexStatus;
+  try { codexStatus = codexRuntime.detectCodex(); }
+  catch (e) { codexStatus = { installed: false, authenticated: false, version: null }; }
+  _codexDetectCache = codexStatus;
+  _codexDetectTime = Date.now();
+  return {
+    defaultRuntime: 'claude',
+    claude: { installed: claudeInstalled, authenticated: claudeInstalled ? _claudeAuthEvidence : false, version: claudeVersion },
+    codex: codexStatus,
+  };
 }
 
 // Spawn a Codex process with the same PID tracking and error guarantees as
