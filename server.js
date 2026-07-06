@@ -2619,13 +2619,19 @@ function handleDelegation(msg, processes) {
   // Spawn delegate process
   const delegateProcessId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const isPlatformDelegate = targetAgent.type === 'platform';
+  // Codex delegates are transactional: exec mode runs one process per turn,
+  // so a delegated task is briefed, completed in one response, and control
+  // returns to the parent with the output injected (the shared close handler
+  // below). Direct conversations with Codex agents remain conversational via
+  // thread resume; only the delegated flow is single-shot.
+  const isCodexDelegate = targetAgent.runtime === 'codex';
 
   // Platform delegates (Doc): transactional, auto-return after task completion
   // Specialists with direct reports: multi-step pipeline, return when the pipeline is complete
   // Plain specialists: conversational, user controls when to return
   const targetHasDirectReports = !!buildTeamRoster(targetAgent.id, true);
   let delegationContext;
-  if (isPlatformDelegate) {
+  if (isPlatformDelegate || isCodexDelegate) {
     delegationContext = 'DELEGATION CONTEXT:\nYou have been delegated a task by another agent. Complete the task in a single response if possible. When the task is done (agent created, skill saved, file written, question answered, etc.), output <!-- RUNDOCK:COMPLETE --> at the very end of that same response. Do not wait for follow-up questions. Do not ask if there is anything else. Just complete the task, confirm what you did, and return immediately. If you genuinely need clarification before you can proceed, ask, but prefer using sensible defaults over asking.\n\nException: if you have proposed a plan and are waiting for the user to confirm before you execute (e.g. you asked them to say "go ahead"), do NOT emit COMPLETE. Stay in the conversation and wait for their response. Only emit COMPLETE once the task is genuinely finished: you executed the work, or you answered the question fully with no pending user decision.\n\nOnly use <!-- RUNDOCK:RETURN --> if the request is genuinely outside your scope and you cannot help. This is rare.';
   } else if (targetHasDirectReports) {
     delegationContext = 'DELEGATION CONTEXT:\nYou have been brought into this conversation by the orchestrator to run a task in your domain. You lead a support team and may delegate parts of the work to them. Do the real work, write the deliverables, and report the outcome.\n\nYou MUST hand control back using one of two markers, on its own line, as the very last thing in your response (after any final summary):\n\n- <!-- RUNDOCK:RETURN --> when the user asks for something outside your domain of expertise. Tell them briefly that this falls outside what you handle and you are handing them back so the right person can pick it up. Do NOT name other specialists or suggest who should handle it. Then emit the marker.\n\n- <!-- RUNDOCK:COMPLETE --> when the orchestrator\'s original delegated pipeline is finished end-to-end. All deliverables are written to their final locations and the workflow has reached its final status (for example content moved to Ready for Review, spec written and linked, final audit posted). Post your final summary first, then emit the marker.\n\nDo NOT emit either marker when you are pausing at a decision point to let the user choose between options, presenting drafts, hooks, options, or recommendations for user review, asking the user to confirm something before continuing, or waiting at a human gate midway through a multi-phase pipeline. Those are pauses, not completions. Stay in the conversation as the active agent and wait for the user\'s next message. You will pick up where you left off when they respond.\n\nReturning on completion is how control flows back up the chain. If you silently stop, the user\'s next message will be routed to the wrong agent.';
@@ -2662,16 +2668,22 @@ function handleDelegation(msg, processes) {
     ...(priorSessionId ? ['--resume', priorSessionId] : []),
     '--agent', targetAgent.name];
 
-  console.log(`[Delegate] convo=${convoId} from=${originalAgentId} to=${targetAgent.id} proc=${delegateProcessId}${priorSessionId ? ` resume=${priorSessionId}` : ''}`);
+  console.log(`[Delegate] convo=${convoId} from=${originalAgentId} to=${targetAgent.id} proc=${delegateProcessId} runtime=${targetAgent.runtime}${priorSessionId ? ` resume=${priorSessionId}` : ''}`);
 
-  const delegateProc = spawnClaude(delegateArgs, {
-    cwd: WORKSPACE,
-    env: getSpawnEnv(convoId),
-    stdio: ['pipe', 'pipe', 'pipe']
-  }, (err) => handleChatSpawnError(err, convoId));
+  const delegateProc = isCodexDelegate
+    ? spawnCodex(codexRuntime.buildCodexArgs({ resumeThreadId: priorSessionId, model: targetAgent.model || undefined }), {
+        cwd: WORKSPACE,
+        env: getSpawnEnv(convoId),
+        stdio: ['pipe', 'pipe', 'pipe']
+      }, (err) => handleChatSpawnError(err, convoId))
+    : spawnClaude(delegateArgs, {
+        cwd: WORKSPACE,
+        env: getSpawnEnv(convoId),
+        stdio: ['pipe', 'pipe', 'pipe']
+      }, (err) => handleChatSpawnError(err, convoId));
 
   const delegateEntry = {
-    process: delegateProc, buffer: '', processId: delegateProcessId,
+    process: delegateProc, runtime: targetAgent.runtime, buffer: '', processId: delegateProcessId,
     agentId: targetAgent.id, responseText: '', exited: false, resultSent: false, idle: false,
     isPlatformDelegate, lastUserMessage: msg.context, receivedFollowUp: false,
     isIntercepted,
@@ -2708,6 +2720,17 @@ function handleDelegation(msg, processes) {
   const contextWithHistory = transcript
     ? `CONVERSATION SO FAR:\n${transcript}\n\nYOUR TASK:\n${msg.context}`
     : `[DELEGATION BRIEF]\n${msg.context}`;
+
+  if (isCodexDelegate) {
+    // Codex takes the whole prompt over stdin: identity + platform rules +
+    // delegation contract on a cold spawn (Codex has no --agent or
+    // --append-system-prompt equivalent); contract + brief on a resumed
+    // thread (instructions are already in the thread).
+    const codexPrompt = priorSessionId
+      ? `${delegationContext}\n\n${contextWithHistory}`
+      : [readAgentInstructions(targetAgent), fullPrompt, contextWithHistory].filter(Boolean).join('\n\n');
+    wireCodexDelegate(delegateEntry, convoId, codexPrompt);
+  } else {
   delegateProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: contextWithHistory } }) + '\n');
 
   wireProcessHandlers(delegateEntry, convoId, null, {
@@ -2765,6 +2788,7 @@ function handleDelegation(msg, processes) {
       e.idle = true;
     }
   });
+  }
 
   delegateProc.on('close', (code) => {
     if (delegateEntry.spawnFailed) return; // error handler already surfaced
@@ -4727,6 +4751,76 @@ function readAgentInstructions(agentData) {
     }
   } catch (e) { /* fall through to snapshot */ }
   return agentData.instructions || '';
+}
+
+// Wire a Codex delegate process. The prompt goes in whole over stdin; output
+// events deliver the specialist's result and record any handoff marker on the
+// SAME entry fields Claude delegates use (returnMarkerSeen,
+// finalResponseText), so the shared delegate close handler in
+// handleDelegation performs restoration identically for both runtimes.
+// This function sends the result message; the close handler owns
+// agent_switch/done and parent restoration.
+function wireCodexDelegate(entry, convoId, prompt) {
+  const proc = entry.process;
+  proc.stdin.on('error', () => { /* EPIPE on early exit: close handler reports */ });
+  proc.stdin.write(prompt);
+  proc.stdin.end();
+
+  let stdoutBuf = '';
+  const handleLine = (line) => {
+    const ev = codexRuntime.parseCodexLine(line);
+    if (!ev) {
+      if (line.trim()) console.log(`[Codex] convo=${convoId} delegate skipped line: ${line.slice(0, 200)}`);
+      return;
+    }
+    if (ev.type === 'session') {
+      entry.sessionId = ev.threadId;
+      safeSend(JSON.stringify({
+        type: 'system', subtype: 'init', _sessionId: ev.threadId,
+        _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
+      }));
+    } else if (ev.type === 'text') {
+      entry.responseText = entry.responseText ? entry.responseText + '\n' + ev.text : ev.text;
+    } else if (ev.type === 'done') {
+      // Marker scan, COMPLETE priority: same contract as the Claude
+      // delegate onResult handler.
+      const hasComplete = /<!-- RUNDOCK:COMPLETE -->/.test(entry.responseText);
+      const hasReturn = /<!-- RUNDOCK:RETURN -->/.test(entry.responseText);
+      if (hasComplete) entry.returnMarkerSeen = 'complete';
+      else if (hasReturn) entry.returnMarkerSeen = 'return';
+      if (entry.responseText) appendTranscript(convoId, 'agent', entry.agentId, entry.responseText);
+      safeSend(JSON.stringify({
+        type: 'result', result: entry.responseText, is_error: false, usage: ev.usage,
+        _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
+        _turnStartTime: entry.turnStartTime,
+      }));
+      entry.resultSent = true;
+      entry.finalResponseText = entry.responseText;
+      entry.responseText = '';
+      entry.idle = true;
+    } else if (ev.type === 'error') {
+      sendCodexError(entry, convoId, ev.message);
+    }
+  };
+
+  proc.stdout.on('data', (chunk) => {
+    stdoutBuf += chunk.toString();
+    let nl;
+    while ((nl = stdoutBuf.indexOf('\n')) >= 0) {
+      const line = stdoutBuf.slice(0, nl);
+      stdoutBuf = stdoutBuf.slice(nl + 1);
+      handleLine(line);
+    }
+  });
+
+  let stderrBuf = '';
+  proc.stderr.on('data', (chunk) => { stderrBuf += chunk.toString(); });
+  proc.on('close', () => {
+    if (stdoutBuf.trim()) handleLine(stdoutBuf); // unterminated last line
+    if (!entry.resultSent && !entry.errorSent && !entry.cancelled) {
+      sendCodexError(entry, convoId, stderrBuf.trim() || 'Codex exited unexpectedly');
+    }
+  });
 }
 
 // Run one Codex conversation turn. Each turn is its own process: fresh turns
