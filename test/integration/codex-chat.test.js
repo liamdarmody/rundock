@@ -184,6 +184,20 @@ describe('codex agent conversation', () => {
     await client.waitForEvent('system', 'done', convoId);
   });
 
+  test('an invalid session id produces a full fresh turn: no resume in argv AND instructions in the prompt', async () => {
+    const convoId = h.freshConvoId('cdx');
+    h.clearInvocations();
+    h.writeCodexScenario([{ match: { promptIncludes: 'suspicious resume' }, text: 'Fresh anyway.' }]);
+
+    // A flag-shaped session id must neither reach argv nor leave the prompt resume-shaped.
+    client.send({ type: 'chat', conversationId: convoId, agent: 'researcher', content: 'suspicious resume question', sessionId: '--dangerously-bypass-approvals-and-sandbox' });
+    await client.waitForEvent('system', 'done', convoId);
+
+    const inv = h.readInvocations();
+    assert.deepStrictEqual(inv[0].argv, ['exec', '--json', '--sandbox', 'workspace-write', '--skip-git-repo-check', '-'], 'no resume, no smuggled flags');
+    assert.ok(inv[0].prompt.includes('You are Ida'), 'fresh turn carries the agent identity');
+  });
+
   test('routines on a codex agent run on Codex, sandboxed, never on the Claude plan', async () => {
     h.clearInvocations();
     h.writeCodexScenario([{ match: { promptIncludes: 'routine work now' }, text: 'routine done.' }]);
@@ -230,8 +244,11 @@ describe('codex agent conversation', () => {
   test('a new user message while a codex turn is running supersedes it (old process killed, thread resumed)', async () => {
     const convoId = h.freshConvoId('cdx');
     h.clearInvocations();
+    // The slow turn's delay is a race margin, not a duration under test: it
+    // only needs to outlast the supersede round-trip, including when the
+    // whole suite runs in parallel on a loaded machine.
     h.writeCodexScenario([
-      { match: { promptIncludes: 'slow question' }, threadId: 'cthr_slow', text: 'Too late.', delayMs: 4000 },
+      { match: { promptIncludes: 'slow question' }, threadId: 'cthr_slow', text: 'Too late.', delayMs: 15000 },
       { match: { promptIncludes: 'impatient follow-up' }, text: 'Quick answer.' },
     ]);
 
@@ -240,7 +257,7 @@ describe('codex agent conversation', () => {
 
     const since = client.messages.length;
     client.send({ type: 'chat', conversationId: convoId, agent: 'researcher', content: 'impatient follow-up', sessionId: 'cthr_slow' });
-    const { msg: result } = await client.waitFor(m => m.type === 'result' && m._conversationId === convoId, { since, label: 'superseding result' });
+    const { msg: result } = await client.waitFor(m => m.type === 'result' && m._conversationId === convoId, { since, timeout: 12000, label: 'superseding result' });
     assert.strictEqual(result.result, 'Quick answer.');
 
     const inv = h.readInvocations();

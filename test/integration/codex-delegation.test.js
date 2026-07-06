@@ -29,6 +29,13 @@ function team() {
       reportsTo: 'chief-of-staff', runtime: 'codex',
       body: 'You are Ida, the researcher.\n\nYou research suppliers.',
     }),
+    // A codex sub-agent under a lead, for the specialist-parent handback case.
+    'summary-bot': agentFile({
+      name: 'summary-bot', displayName: 'Sumo', role: 'Summariser',
+      description: 'Summarises for the content lead', type: 'specialist', order: 2.1,
+      reportsTo: 'content-lead', runtime: 'codex',
+      body: 'You are Sumo, the summariser.',
+    }),
   };
 }
 
@@ -137,6 +144,41 @@ describe('delegation to a codex specialist', () => {
     assert.strictEqual(entryAfter.agentId, 'chief-of-staff');
     assert.strictEqual(entryAfter.exited, false, 'orchestrator process not killed');
     assert.strictEqual(entryAfter.scopeReturn || false, false, 'no scope return forced on the orchestrator');
+    h.reapConvo(convoId);
+  });
+
+  test('stale end_delegation also spares a restored SPECIALIST parent (lead), not just orchestrators', async () => {
+    // Same race as above, but the delegating parent is a lead (type
+    // specialist). The guard must key on the recent handback, not on the
+    // parent's type.
+    const convoId = h.freshConvoId('cdel');
+    h.clearInvocations();
+    h.writeScenario([
+      {
+        match: { agent: 'content-lead', promptIncludes: 'lead-race please' },
+        turn: [{ agentTool: { subagent_type: 'summary-bot', prompt: 'lead-race brief' } }],
+      },
+      {
+        match: { agent: 'content-lead', promptIncludes: ['[SYSTEM: pipeline-complete]', 'LEAD-RACE-OUT'] },
+        turn: [{ text: '<silent>' }],
+      },
+    ]);
+    h.writeCodexScenario([
+      { match: { promptIncludes: 'lead-race brief' }, text: 'LEAD-RACE-OUT done. <!-- RUNDOCK:COMPLETE -->' },
+    ]);
+
+    client.send({ type: 'chat', conversationId: convoId, agent: 'content-lead', content: 'lead-race please' });
+    const { index: startedIdx } = await client.waitFor(m => m.type === 'system' && m.subtype === 'process_started' && m._conversationId === convoId && m._agent === 'content-lead' && m.autoContinue, { label: 'lead restart' });
+    await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'content-lead', { since: startedIdx + 1, label: 'resumed lead result' });
+
+    client.send({ type: 'end_delegation', conversationId: convoId });
+    await h.delay(400);
+
+    const entryAfter = h.internal.chatProcesses.get(convoId);
+    assert.ok(entryAfter, 'lead entry survives the stale message');
+    assert.strictEqual(entryAfter.agentId, 'content-lead');
+    assert.strictEqual(entryAfter.exited, false, 'lead process not killed');
+    assert.strictEqual(entryAfter.scopeReturn || false, false, 'no scope return forced on the lead');
     h.reapConvo(convoId);
   });
 
