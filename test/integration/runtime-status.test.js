@@ -38,6 +38,11 @@ describe('runtime status', () => {
     assert.strictEqual(msg.codex.installed, true);
     assert.strictEqual(msg.codex.version, '0.0.0-stub');
     assert.strictEqual(msg.codex.authenticated, false, 'no auth.json yet');
+
+    // Invisibility: while Codex is not signed in, platform agents get no
+    // runtime section, so Doc never mentions Codex unprompted.
+    const docPrompt = h.internal.buildSystemPrompt({ id: 'doc', type: 'platform', displayName: 'Doc' });
+    assert.ok(!docPrompt.includes('RUNTIMES:'), 'no runtime section before Codex is available');
   });
 
   test('codex reports signed in once auth.json exists (presence only)', async () => {
