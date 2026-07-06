@@ -13,6 +13,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { WebSocketServer } = require('ws');
 const readline = require('readline');
+const codexRuntime = require('./codex.js');
 const PKG_VERSION = require('./package.json').version;
 const searchLib = require('./search.js');
 
@@ -840,7 +841,13 @@ function discoverAgents() {
           routines: routines,
           prompts: prompts.length > 0 ? prompts : null,
           skills: skills.length > 0 ? skills : null,
-          model: meta.model || DEFAULT_MODEL,
+          // Runtime is a strict two-value field: unknown values fall back to
+          // claude so a frontmatter typo can never strand an agent. Codex
+          // agents get no default model injected: the Codex CLI applies its
+          // own default, and Rundock only passes --model when the agent file
+          // sets one explicitly.
+          runtime: meta.runtime === 'codex' ? 'codex' : 'claude',
+          model: meta.runtime === 'codex' ? (meta.model || null) : (meta.model || DEFAULT_MODEL),
           order: orderNum,
           reportsTo: meta.reportsTo || null,
           instructions: instructions.substring(0, 2000),
@@ -871,6 +878,7 @@ function discoverAgents() {
         capabilities: null,
         routines: [],
         prompts: null,
+        runtime: 'claude',
         model: DEFAULT_MODEL,
         order: 0,
         instructions: content.substring(0, 2000),
@@ -916,6 +924,7 @@ function discoverAgents() {
       capabilities: null,
       routines: [],
       prompts: ['Help me set up this workspace', 'Create an agent for my team', 'What makes a workspace Rundock-ready?'],
+      runtime: 'claude',
       model: DEFAULT_MODEL,
       order: 99,
       instructions: '',
@@ -3091,6 +3100,21 @@ wss.on('connection', (ws) => {
           appendTranscript(convoId, 'user', 'user', msg.content);
         }
 
+        // ── RUNTIME ROUTING ────────────────────────────────────────────
+        // Codex agents run one process per turn (exec mode) instead of a
+        // long-lived stdin conversation. Route them before the interactive
+        // path; agents without runtime: codex are entirely unaffected.
+        {
+          const requestedAgent = msg.agent || 'default';
+          const agentList = discoverAgents();
+          const routedAgent = agentList.find(a => a.id === requestedAgent)
+            || agentList.find(a => a.fileName && a.fileName.replace('.md', '') === requestedAgent);
+          if (routedAgent && routedAgent.runtime === 'codex') {
+            startCodexTurn(convoId, msg, routedAgent);
+            return;
+          }
+        }
+
         // ── INTERACTIVE MODE (Deliverable A) ──────────────────────────
         // Process stays alive between messages. Follow-ups push to stdin.
         // --print is NOT used; Claude Code runs in interactive stream-json mode.
@@ -4589,6 +4613,203 @@ function spawnClaude(args, options, onError) {
     }
   });
   return proc;
+}
+
+// ===== CODEX RUNTIME =====
+// Agents with `runtime: codex` in their frontmatter run on the OpenAI Codex
+// CLI (the user's ChatGPT plan) instead of Claude Code. Codex conversations
+// run one sandboxed `codex exec --json` process per turn and resume the
+// thread on follow-ups; the thread id rides the same client rails as Claude
+// session ids, so the rest of the product treats both runtimes identically.
+// All Codex-specific parsing/argv/detection logic lives in codex.js.
+
+// Resolve the codex binary lazily and cache it, mirroring resolveClaudeBin.
+let _resolvedCodexBin = null;
+function resolveCodexBinCached() {
+  if (!_resolvedCodexBin) _resolvedCodexBin = codexRuntime.resolveCodexBin();
+  return _resolvedCodexBin;
+}
+
+// Spawn a Codex process with the same PID tracking and error guarantees as
+// spawnClaude. Note: no default model is injected; Codex applies its own
+// default unless the agent's frontmatter set one (already in args).
+function spawnCodex(args, options, onError) {
+  const proc = spawn(resolveCodexBinCached(), args, options);
+  if (proc.pid) {
+    registerChildPid(proc.pid);
+    proc.on('close', () => unregisterChildPid(proc.pid));
+  }
+  proc.on('error', (err) => {
+    try {
+      console.error(`[spawnCodex] spawn error code=${err.code || ''} msg=${err.message}`);
+      if (typeof onError === 'function') onError(err);
+    } catch (e) {
+      console.error('[spawnCodex] onError handler threw:', e);
+    }
+  });
+  return proc;
+}
+
+// Surface a Codex failure once per process, classified: plan-limit exhaustion
+// becomes a structured quota message (the client renders a recovery card, the
+// same pattern as the Claude auth-error card); everything else becomes a
+// structured error message with the CLI's verbatim text attached.
+function sendCodexError(entry, convoId, message) {
+  if (entry.errorSent) return;
+  entry.errorSent = true;
+  const subtype = codexRuntime.isCodexQuotaError(message) ? 'codex_quota' : 'codex_error';
+  safeSend(JSON.stringify({
+    type: 'system', subtype, detail: message,
+    _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
+  }));
+}
+
+// Deliver the completed Codex turn: persist the transcript, send the result
+// (with normalised token usage: subscription usage, never dollar costs) and
+// the done signal.
+function finishCodexTurn(entry, convoId) {
+  if (entry.resultSent) return;
+  entry.resultSent = true;
+  const text = entry.responseText || '';
+  if (text) appendTranscript(convoId, 'agent', entry.agentId, text);
+  safeSend(JSON.stringify({
+    type: 'result', result: text, is_error: false, usage: entry.usage,
+    _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
+    _turnStartTime: entry.turnStartTime,
+  }));
+  entry.doneSent = true;
+  safeSend(JSON.stringify({
+    type: 'system', subtype: 'done', code: 0,
+    _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
+  }));
+}
+
+// Handle one parsed line of Codex output for a running turn.
+function handleCodexEvent(entry, convoId, line) {
+  const ev = codexRuntime.parseCodexLine(line);
+  if (!ev) {
+    if (line.trim()) console.log(`[Codex] convo=${convoId} skipped line: ${line.slice(0, 200)}`);
+    return;
+  }
+  switch (ev.type) {
+    case 'session':
+      entry.sessionId = ev.threadId;
+      // Same message shape the Claude init envelope produces: the client
+      // stores the id and sends it back as msg.sessionId on the next turn.
+      safeSend(JSON.stringify({
+        type: 'system', subtype: 'init', _sessionId: ev.threadId,
+        _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
+      }));
+      break;
+    case 'text':
+      entry.responseText = entry.responseText ? entry.responseText + '\n' + ev.text : ev.text;
+      break;
+    case 'done':
+      entry.usage = ev.usage;
+      finishCodexTurn(entry, convoId);
+      break;
+    case 'error':
+      sendCodexError(entry, convoId, ev.message);
+      break;
+  }
+}
+
+// Read an agent's full instruction body from its file. Claude Code loads
+// agent files natively via --agent, but Codex has no equivalent, so the
+// instructions must travel inside the first-turn prompt. Falls back to the
+// (truncated) discovery snapshot if the file cannot be read.
+function readAgentInstructions(agentData) {
+  try {
+    if (agentData.fileName && WORKSPACE) {
+      const content = readNormalisedFile(path.join(WORKSPACE, '.claude', 'agents', agentData.fileName));
+      const bodyMatch = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?([\s\S]*)/);
+      if (bodyMatch && bodyMatch[1].trim()) return bodyMatch[1].trim();
+    }
+  } catch (e) { /* fall through to snapshot */ }
+  return agentData.instructions || '';
+}
+
+// Run one Codex conversation turn. Each turn is its own process: fresh turns
+// carry the agent's instructions and the platform rules followed by the user
+// message; resumed turns send only the new message (instructions are never
+// re-injected, keeping resumed turns cheap).
+function startCodexTurn(convoId, msg, agentData) {
+  // A new user message supersedes a still-running turn: kill it and continue
+  // on the same thread. Mirrors the Claude path's stale-entry handling.
+  const existing = chatProcesses.get(convoId);
+  if (existing && !existing.exited) {
+    existing.superseded = true;
+    try { existing.process.kill(); } catch (e) { /* already dead */ }
+    chatProcesses.delete(convoId);
+  }
+
+  const resumeThreadId = msg.sessionId || null;
+  const args = codexRuntime.buildCodexArgs({ resumeThreadId, model: agentData.model || undefined });
+  const processId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+  console.log(`[Codex] convo=${convoId} proc=${processId} agent=${agentData.id} ${resumeThreadId ? `resume=${resumeThreadId}` : 'new thread'} model=${agentData.model || '(codex default)'}`);
+
+  const proc = spawnCodex(args, {
+    cwd: WORKSPACE,
+    env: getSpawnEnv(convoId),
+    stdio: ['pipe', 'pipe', 'pipe'],
+  }, (err) => handleChatSpawnError(err, convoId));
+
+  const entry = {
+    process: proc, runtime: 'codex', processId, agentId: agentData.id,
+    responseText: '', exited: false, resultSent: false, errorSent: false,
+    doneSent: false, superseded: false, usage: null,
+    sessionId: resumeThreadId, lastUserMessage: msg.content,
+    toolCalls: [], turnStartTime: Date.now(),
+  };
+  chatProcesses.set(convoId, entry);
+
+  safeSend(JSON.stringify({
+    type: 'system', subtype: 'process_started',
+    _agent: agentData.id, _conversationId: convoId, _processId: processId,
+  }));
+
+  // Prompt over stdin, never argv. First turns carry identity (the agent
+  // file body) plus the platform rules; Claude gets these via --agent and
+  // --append-system-prompt, which Codex does not support.
+  const prompt = resumeThreadId
+    ? msg.content
+    : [readAgentInstructions(agentData), buildSystemPrompt(agentData), msg.content].filter(Boolean).join('\n\n');
+  proc.stdin.on('error', () => { /* EPIPE on early exit: close handler reports */ });
+  proc.stdin.write(prompt);
+  proc.stdin.end();
+
+  let stdoutBuf = '';
+  proc.stdout.on('data', (chunk) => {
+    stdoutBuf += chunk.toString();
+    let nl;
+    while ((nl = stdoutBuf.indexOf('\n')) >= 0) {
+      const line = stdoutBuf.slice(0, nl);
+      stdoutBuf = stdoutBuf.slice(nl + 1);
+      handleCodexEvent(entry, convoId, line);
+    }
+  });
+
+  let stderrBuf = '';
+  proc.stderr.on('data', (chunk) => { stderrBuf += chunk.toString(); });
+
+  proc.on('close', (code) => {
+    entry.exited = true;
+    const current = chatProcesses.get(convoId);
+    if (current === entry) chatProcesses.delete(convoId);
+    if (entry.superseded) return; // a newer turn took over; stay silent
+    if (stdoutBuf.trim()) handleCodexEvent(entry, convoId, stdoutBuf); // unterminated last line
+    if (!entry.resultSent && !entry.errorSent) {
+      sendCodexError(entry, convoId, stderrBuf.trim() || `Codex exited unexpectedly (code ${code})`);
+    }
+    if (!entry.doneSent) {
+      entry.doneSent = true;
+      safeSend(JSON.stringify({
+        type: 'system', subtype: 'done', code,
+        _agent: entry.agentId, _conversationId: convoId, _processId: processId,
+      }));
+    }
+  });
 }
 
 // Graceful shutdown: kill children on exit signals.

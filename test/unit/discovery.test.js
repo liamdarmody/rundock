@@ -419,3 +419,46 @@ describe('findDirectReportMatch', () => {
     assert.strictEqual(srv.findDirectReportMatch('chief-of-staff', { subagent_type: 'no-such-agent', prompt: 'ask Penn' }), null);
   });
 });
+
+describe('agent runtime field', () => {
+  test('runtime: codex is parsed onto the agent; model stays unset unless frontmatter sets one', () => {
+    useWorkspace({ agents: {
+      'researcher': agentFile({ name: 'researcher', type: 'specialist', order: 2, runtime: 'codex' }),
+    } });
+    srv.invalidateAgentCache();
+    const a = srv.discoverAgents().find(x => x.id === 'researcher');
+    assert.strictEqual(a.runtime, 'codex');
+    // Codex applies its own default model; the Claude default must not leak in.
+    assert.strictEqual(a.model, null);
+  });
+
+  test('runtime: codex with an explicit model keeps that model', () => {
+    useWorkspace({ agents: {
+      'researcher': agentFile({ name: 'researcher', type: 'specialist', order: 2, runtime: 'codex', model: 'gpt-5.3-codex' }),
+    } });
+    srv.invalidateAgentCache();
+    const a = srv.discoverAgents().find(x => x.id === 'researcher');
+    assert.strictEqual(a.runtime, 'codex');
+    assert.strictEqual(a.model, 'gpt-5.3-codex');
+  });
+
+  test('absent runtime means claude: existing agent files see no behaviour change', () => {
+    useWorkspace({ agents: {
+      'writer': agentFile({ name: 'writer', type: 'specialist', order: 2 }),
+    } });
+    srv.invalidateAgentCache();
+    const a = srv.discoverAgents().find(x => x.id === 'writer');
+    assert.strictEqual(a.runtime, 'claude');
+    assert.strictEqual(a.model, 'sonnet');
+  });
+
+  test('unknown runtime values fall back to claude (a typo never strands an agent)', () => {
+    useWorkspace({ agents: {
+      'writer': agentFile({ name: 'writer', type: 'specialist', order: 2, runtime: 'gemini' }),
+    } });
+    srv.invalidateAgentCache();
+    const a = srv.discoverAgents().find(x => x.id === 'writer');
+    assert.strictEqual(a.runtime, 'claude');
+    assert.strictEqual(a.model, 'sonnet');
+  });
+});
