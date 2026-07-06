@@ -114,6 +114,16 @@ describe('buildCodexArgs', () => {
       }
     }
   });
+
+  test('malformed thread ids are rejected: no flag smuggling through the resume positional', () => {
+    // A hostile client-supplied session id must never reach argv.
+    const hostile = codex.buildCodexArgs({ resumeThreadId: '--dangerously-bypass-approvals-and-sandbox' });
+    assert.deepStrictEqual(hostile, ['exec', '--json', '--sandbox', 'workspace-write', '--skip-git-repo-check', '-']);
+    const spacey = codex.buildCodexArgs({ resumeThreadId: 'thr abc' });
+    assert.ok(!spacey.includes('resume'), 'ids with spaces rejected');
+    // Legitimate ids still resume.
+    assert.ok(codex.buildCodexArgs({ resumeThreadId: 'cthr_01HXYZ.9-a' }).includes('resume'));
+  });
 });
 
 describe('detectCodex', () => {
