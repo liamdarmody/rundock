@@ -146,7 +146,7 @@ function detectCodex(deps = {}) {
   let version = null;
   try {
     const out = exec(`"${bin}" --version`, { timeout: 5000, encoding: 'utf-8' });
-    const m = String(out).match(/(\d+\.\d+(?:\.\d+)?)/);
+    const m = String(out).match(/(\d+\.\d+(?:\.\d+)?(?:-[A-Za-z0-9.]+)?)/);
     version = m ? m[1] : null;
   } catch (e) { /* installed but --version failed: keep version null */ }
 

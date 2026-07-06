@@ -28,6 +28,7 @@ const sunIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stro
 const moonIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
 
 let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false, currentWorkspacePath=null, workspaceAnalysis=null, workspaceIsEmpty=false, workspaceMode='knowledge', setupComplete=true, conversationsLoaded=false, activeSidebarPill='all';
+let runtimeStatus = null; // { defaultRuntime, claude: {installed, authenticated, version}, codex: {...} }
 const agentLastActivity = {}; // { agentId: { time: Date, label: string } }
 // Per-conversation state: { convoId: { isProcessing, currentStreamingMsg, latestText } }
 const convoState = {};
@@ -428,6 +429,14 @@ function handle(d) {
       if(d.subtype==='auth_error' && convoId) {
         renderAuthErrorCard(convoId);
       }
+      if(d.subtype==='codex_quota' && convoId) {
+        renderCodexQuotaCard(convoId, d);
+        finishProcessing(convoId);
+      }
+      if(d.subtype==='codex_error' && convoId) {
+        renderCodexErrorPill(convoId, d);
+        finishProcessing(convoId);
+      }
       break;
     case 'stream_event':
       if(convoId && !isStaleProcess(d, convoId)) handleStreamEvent(d, convoId);
@@ -443,7 +452,12 @@ function handle(d) {
     case 'file_saved': document.getElementById('editor-status').textContent='Saved'; break;
     case 'agent_saved':
       if (!d.updated) setupComplete = true;
-      addSystemMsg('Agent "' + (d.agentId || '') + '" ' + (d.updated ? 'updated' : 'created'));
+      // Non-default runtimes are worth calling out on the confirmation pill.
+      addSystemMsg('Agent "' + (d.agentId || '') + '" ' + (d.updated ? 'updated' : 'created') + (d.runtime === 'codex' ? ' · runs on Codex' : ''));
+      break;
+    case 'runtime_status':
+      runtimeStatus = d;
+      renderRuntimesCard();
       break;
     case 'agent_error':
       addSystemMsg(d.message || 'Agent operation failed');
@@ -1262,10 +1276,11 @@ function showProfile(agentId) {
     }
     h+=`</div></div>`;
   }
-  // Routines + Configuration card
+  // Routines + Configuration card. Always rendered: the Runtime row appears
+  // for every agent, so the card always has content.
   const hasRoutines = a.routines && a.routines.length;
   const hasConnectors = a.capabilities?.connectors;
-  if(hasRoutines || hasConnectors || a.model) {
+  {
     h+=`<div class="profile-card">`;
     if(hasRoutines) {
       h+=`<div class="profile-card-section"><div class="profile-section-label">Routines</div>`;
@@ -1284,6 +1299,10 @@ function showProfile(agentId) {
     }
     const modelLabels = {opus:'Opus (most capable)',sonnet:'Sonnet (fast, efficient)',haiku:'Haiku (lightweight)'};
     if(a.model) h+=`<div class="profile-card-section"><div class="profile-section-label">Model</div><div class="profile-card-item">${modelLabels[a.model]||a.model}</div></div>`;
+    // Runtime is stated for every agent, not just Codex ones, so it reads as
+    // a fact about the agent rather than a special mark.
+    h+=`<div class="profile-card-section"><div class="profile-section-label">Runtime</div><div class="profile-card-item">${a.runtime === 'codex' ? 'Codex' : 'Claude Code'}</div></div>`;
+    if(a.runtime === 'codex') h+=`<div class="profile-card-section"><div class="profile-section-label">Permissions</div><div class="profile-card-text">${esc(a.displayName)} runs on Codex and uses Codex's built-in sandbox. Claude agents use Rundock's permission prompts.</div></div>`;
     h+=`</div>`;
   }
   // Instructions card (collapsible)
@@ -1421,6 +1440,28 @@ function createConversation(agentId, title) {
   return convo;
 }
 
+// One-time disclosure when the user starts their first conversation with a
+// Codex agent: the permission model differs from Claude agents and that is
+// stated plainly at the moment it matters. Shown once per agent, ever
+// (persisted on render, not on dismiss, so ignoring it doesn't nag later).
+function maybeShowCodexFirstRun(agent) {
+  if (!agent || agent.runtime !== 'codex') return;
+  const key = 'rundock:codexFirstRun:' + agent.id;
+  try {
+    if (localStorage.getItem(key)) return;
+    localStorage.setItem(key, '1');
+  } catch (e) { return; }
+  const m = document.getElementById('messages');
+  if (!m) return;
+  const el = document.createElement('div');
+  el.className = 'codex-firstrun-card';
+  el.innerHTML =
+    `<div class="codex-firstrun-title">Running on Codex</div>` +
+    `<div>${esc(agent.displayName)} runs on Codex and uses Codex's built-in sandbox, so you will not see Rundock's permission prompts in this conversation. Files outside this workspace stay protected by the sandbox.</div>` +
+    `<button class="codex-firstrun-dismiss" onclick="this.closest('.codex-firstrun-card').remove()">Got it</button>`;
+  m.appendChild(el);
+}
+
 function startConversation(agentId) {
   // Same principle as openConversation: starting a conversation navigates
   // to the Conversations section regardless of origin (agent profile, org
@@ -1441,6 +1482,9 @@ function startConversation(agentId) {
     h+=`</div></div>`;
     document.getElementById('messages').innerHTML=h;
   }
+
+  // After any placeholder content: the one-time Codex disclosure card.
+  maybeShowCodexFirstRun(agent);
 }
 
 // Start a Doc conversation with workspace analysis pre-loaded
@@ -2237,6 +2281,38 @@ function renderAuthErrorCard(convoId) {
 function copyAuthCmd(btn) {
   const done = () => { const t = btn.textContent; btn.textContent = 'copied'; setTimeout(() => { btn.textContent = t; }, 2000); };
   if (navigator.clipboard?.writeText) { navigator.clipboard.writeText('claude').then(done).catch(() => {}); }
+}
+
+function agentDisplayName(agentId) {
+  const a = agents.find(x => x.id === agentId);
+  return (a && a.displayName) || agentId || 'This agent';
+}
+
+// Plan-limit card for Codex agents. Same visual pattern as the Claude
+// auth-error card: a limit is expected and self-resolving, so it gets a calm
+// explanation with the CLI's own words attached, never a raw error.
+function renderCodexQuotaCard(convoId, d) {
+  if (convoId && activeConversation?.id !== convoId) return;
+  const m = document.getElementById('messages');
+  if (!m) return;
+  const name = esc(agentDisplayName(d._agent));
+  const el = document.createElement('div');
+  el.className = 'auth-error-card';
+  el.innerHTML =
+    `<div class="auth-error-title">ChatGPT plan limit reached</div>` +
+    `<div class="auth-error-body">${name} has used this plan's Codex allowance for now. This is a plan limit, not a fault, and your conversation is safe. ${name} can pick this up once the limit resets; your Claude agents are unaffected.</div>` +
+    (d.detail ? `<div class="codex-error-detail">Codex: ${esc(d.detail)}</div>` : '') +
+    `<div class="auth-error-foot">Then resend your message. <a href="https://docs.rundock.ai/concepts/runtimes" target="_blank" rel="noopener">About runtimes and limits &#x2192;</a></div>`;
+  m.appendChild(el);
+  scrollBottom();
+}
+
+// Classified Codex failure: a friendly pill with the CLI's verbatim text.
+// No "Error:" prefix; the sentence explains what happened in plain words.
+function renderCodexErrorPill(convoId, d) {
+  if (convoId && activeConversation?.id !== convoId) return;
+  const name = agentDisplayName(d._agent);
+  addSystemMsg(`${name}'s runtime hit a problem and this turn stopped.` + (d.detail ? ` Codex: ${d.detail}` : ''));
 }
 function addToolMsg(name) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg-tool'; d.innerHTML=`<span style="color:var(--working)">&#x2192;</span> Using ${esc(name)}`; m.appendChild(d); scrollBottom(); return d; }
 // ===== SESSION HISTORY =====
@@ -3299,7 +3375,11 @@ function renderSettingsSection(section) {
           <div class="mode-description" id="mode-description">${modeDesc}</div>
         </div>
       </div>
+      <div class="settings-card" id="runtimes-card">${runtimesCardHtml()}</div>
       <button class="settings-btn" onclick="changeWorkspace()">Change workspace</button>`;
+    // Refresh runtime state whenever the card becomes visible (the user may
+    // have just installed or signed in to a CLI).
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'get_runtime_status' }));
   } else if (section === 'appearance') {
     const isLight = document.body.classList.contains('light');
     el.innerHTML = `<div class="settings-section-title">Appearance</div>
@@ -3327,6 +3407,42 @@ function renderSettingsSection(section) {
 function setWorkspaceMode(mode) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   ws.send(JSON.stringify({ type: 'set_workspace_mode', mode }));
+}
+
+// ── Runtimes card (settings › workspace) ──
+// One row per runtime with a unified status vocabulary. Status chips never
+// claim which plan backs the credentials (detection is presence-only); plan
+// language lives in the guidance copy. When Codex is absent, the guidance IS
+// the hint, and it appears nowhere else in the product.
+function runtimeRowHtml(label, st, isDefault) {
+  let dot, text;
+  if (!st || !st.installed) { dot = 'var(--idle)'; text = 'Not installed'; }
+  else if (st.authenticated === false) { dot = 'var(--attention)'; text = 'Not signed in'; }
+  else if (st.authenticated === true) { dot = 'var(--success)'; text = 'Signed in' + (st.version ? ' · v' + esc(st.version) : ''); }
+  else { dot = 'var(--idle)'; text = 'Installed' + (st.version ? ' · v' + esc(st.version) : ''); } // auth unknown: claim nothing
+  return `<div class="settings-row"><span class="settings-label">${label}</span>` +
+    `<span class="runtime-chip">${isDefault ? '<span class="runtime-default">Default</span>' : ''}` +
+    `<span class="runtime-dot" style="background:${dot}"></span>${text}</span></div>`;
+}
+
+function runtimesCardHtml() {
+  if (!runtimeStatus) {
+    return `<div class="settings-row"><span class="settings-label">Runtimes</span><span class="settings-value" style="font-family:inherit">Checking...</span></div>`;
+  }
+  let h = runtimeRowHtml('Claude Code', runtimeStatus.claude, runtimeStatus.defaultRuntime === 'claude');
+  h += runtimeRowHtml('Codex', runtimeStatus.codex, runtimeStatus.defaultRuntime === 'codex');
+  const cx = runtimeStatus.codex || {};
+  if (cx.installed && cx.authenticated === false) {
+    h += `<div class="runtime-guidance">Run <code>codex login</code> once. Your ChatGPT plan covers your agents via the official Codex CLI (July 2026).</div>`;
+  } else if (!cx.installed) {
+    h += `<div class="runtime-guidance">Want agents on your ChatGPT plan? Install the official Codex CLI, then sign in: <code>npm install -g @openai/codex</code> then <code>codex login</code></div>`;
+  }
+  return h;
+}
+
+function renderRuntimesCard() {
+  const el = document.getElementById('runtimes-card');
+  if (el) el.innerHTML = runtimesCardHtml();
 }
 
 function changeWorkspace() {
@@ -3460,6 +3576,7 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   ws.send(JSON.stringify({ type: 'get_files' }));
   ws.send(JSON.stringify({ type: 'get_skills' }));
   ws.send(JSON.stringify({ type: 'get_conversations' }));
+  ws.send(JSON.stringify({ type: 'get_runtime_status' }));
   skillsLoaded = false;
   currentSkillId = null;
 
