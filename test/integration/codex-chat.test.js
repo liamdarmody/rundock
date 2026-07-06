@@ -37,7 +37,8 @@ function teamWithCodexAgents() {
 }
 
 before(async () => {
-  await h.boot({ agents: teamWithCodexAgents() });
+  // Fast keepalive so the heartbeat is observable within test timeouts.
+  await h.boot({ agents: teamWithCodexAgents(), env: { RUNDOCK_CODEX_KEEPALIVE_MS: '500' } });
   client = await h.connect();
 });
 after(async () => h.shutdown());
@@ -181,6 +182,49 @@ describe('codex agent conversation', () => {
     const { msg: err } = await client.waitForEvent('system', 'codex_error', convoId);
     assert.strictEqual(err._agent, 'researcher');
     await client.waitForEvent('system', 'done', convoId);
+  });
+
+  test('routines on a codex agent run on Codex, sandboxed, never on the Claude plan', async () => {
+    h.clearInvocations();
+    h.writeCodexScenario([{ match: { promptIncludes: 'routine work now' }, text: 'routine done.' }]);
+    const agent = h.internal.discoverAgents().find(a => a.id === 'researcher');
+    h.internal.executeRoutine(agent, { name: 'nightly-check', schedule: 'daily 09:00', prompt: 'routine work now' }, 'codex-routine-key');
+
+    let inv = [];
+    for (let i = 0; i < 40 && inv.length === 0; i++) { await h.delay(100); inv = h.readInvocations(); }
+    assert.strictEqual(inv.length, 1, 'one routine spawn');
+    assert.strictEqual(inv[0].bin, 'codex', 'routine ran on codex, not claude');
+    assert.deepStrictEqual(inv[0].argv, ['exec', '--json', '--sandbox', 'workspace-write', '--skip-git-repo-check', '-']);
+    assert.ok(inv[0].prompt.includes('routine work now'), 'routine prompt delivered');
+    assert.ok(inv[0].prompt.includes('You are Ida'), 'agent identity delivered');
+  });
+
+  test('long turns heartbeat: keepalives flow while the process runs, so the client watchdog stays quiet', async () => {
+    const convoId = h.freshConvoId('cdx');
+    h.clearInvocations();
+    h.writeCodexScenario([{ match: { promptIncludes: 'slow heartbeat' }, text: 'Done at last.', delayMs: 1400 }]);
+
+    client.send({ type: 'chat', conversationId: convoId, agent: 'researcher', content: 'slow heartbeat question' });
+    await client.waitForEvent('system', 'keepalive', convoId, { label: 'first keepalive' });
+    await client.waitFor(m => m.type === 'result' && m._conversationId === convoId, { label: 'slow result' });
+    await client.waitForEvent('system', 'done', convoId);
+
+    const beats = client.messages.filter(m => m.type === 'system' && m.subtype === 'keepalive' && m._conversationId === convoId);
+    assert.ok(beats.length >= 1, 'at least one heartbeat during the slow turn');
+  });
+
+  test('a failed turn is persisted to the transcript so an unwatched conversation still learns of it', async () => {
+    const convoId = h.freshConvoId('cdx');
+    h.writeCodexScenario([{ match: { promptIncludes: 'persist failure' }, failMessage: fx.QUOTA_MESSAGE }]);
+
+    client.send({ type: 'chat', conversationId: convoId, agent: 'researcher', content: 'persist failure please' });
+    await client.waitForEvent('system', 'codex_quota', convoId);
+    await client.waitForEvent('system', 'done', convoId);
+
+    const t = transcript(convoId);
+    const failureRow = t.find(e => e.agent === 'researcher' && e.text.includes('plan limit'));
+    assert.ok(failureRow, 'failure persisted');
+    assert.ok(failureRow.text.includes(fx.QUOTA_MESSAGE), 'verbatim CLI text persisted');
   });
 
   test('a new user message while a codex turn is running supersedes it (old process killed, thread resumed)', async () => {
