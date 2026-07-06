@@ -101,6 +101,45 @@ describe('delegation to a codex specialist', () => {
     h.reapConvo(convoId);
   });
 
+  test('stale end_delegation after a codex handback never kills the restored orchestrator', async () => {
+    // A codex delegate exits immediately after its result, so the server can
+    // restore the parent BEFORE the browser's marker scan sends
+    // end_delegation. That late message must be ignored, not treated as an
+    // out-of-scope return from the orchestrator itself.
+    const convoId = h.freshConvoId('cdel');
+    h.clearInvocations();
+    h.writeScenario([
+      {
+        match: { agent: 'chief-of-staff', promptIncludes: 'stale-race please' },
+        turn: [{ agentTool: { subagent_type: 'researcher', prompt: 'stale-race brief' } }],
+      },
+      {
+        match: { agent: 'chief-of-staff', promptIncludes: ['[SYSTEM: pipeline-complete]', 'STALE-RACE-OUT'] },
+        turn: [{ text: '<silent>' }],
+      },
+    ]);
+    h.writeCodexScenario([
+      { match: { promptIncludes: 'stale-race brief' }, text: 'STALE-RACE-OUT done. <!-- RUNDOCK:COMPLETE -->' },
+    ]);
+
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'stale-race please' });
+    const { index: startedIdx } = await client.waitFor(m => m.type === 'system' && m.subtype === 'process_started' && m._conversationId === convoId && m._agent === 'chief-of-staff' && m.autoContinue, { label: 'parent restart' });
+    await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'chief-of-staff', { since: startedIdx + 1, label: 'resumed parent result' });
+
+    // The browser would now send end_delegation from its RETURN/COMPLETE scan.
+    const entryBefore = h.internal.chatProcesses.get(convoId);
+    assert.strictEqual(entryBefore.agentId, 'chief-of-staff');
+    client.send({ type: 'end_delegation', conversationId: convoId });
+    await h.delay(400);
+
+    const entryAfter = h.internal.chatProcesses.get(convoId);
+    assert.ok(entryAfter, 'orchestrator entry survives the stale message');
+    assert.strictEqual(entryAfter.agentId, 'chief-of-staff');
+    assert.strictEqual(entryAfter.exited, false, 'orchestrator process not killed');
+    assert.strictEqual(entryAfter.scopeReturn || false, false, 'no scope return forced on the orchestrator');
+    h.reapConvo(convoId);
+  });
+
   test('RETURN handback: out-of-scope delegate routes the pending request back through the parent', async () => {
     const convoId = h.freshConvoId('cdel');
     h.clearInvocations();

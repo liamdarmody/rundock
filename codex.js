@@ -38,10 +38,20 @@ const { execSync } = require('node:child_process');
 // knowledge workspaces are frequently not git repositories and the CLI
 // refuses to run in one otherwise. The model flag is passed only when the
 // agent's frontmatter sets one; Codex's own default applies otherwise.
+// Thread ids appear in argv as a positional after the `resume` subcommand,
+// where the CLI still parses flags. A client-supplied id starting with a
+// hyphen could therefore smuggle flags (including the forbidden bypass
+// flags) into the invocation. Ids must start with an alphanumeric and stay
+// within a safe charset; anything else starts a fresh thread instead.
+const THREAD_ID_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
+function isValidThreadId(id) {
+  return typeof id === 'string' && THREAD_ID_RE.test(id);
+}
+
 function buildCodexArgs({ resumeThreadId, model } = {}) {
   const args = ['exec', '--json', '--sandbox', 'workspace-write', '--skip-git-repo-check'];
   if (model) args.push('--model', model);
-  if (resumeThreadId) args.push('resume', resumeThreadId);
+  if (resumeThreadId && isValidThreadId(resumeThreadId)) args.push('resume', resumeThreadId);
   args.push('-');
   return args;
 }
@@ -170,4 +180,5 @@ function isCodexQuotaError(text) {
 
 module.exports = {
   buildCodexArgs, parseCodexLine, resolveCodexBin, detectCodex, isCodexQuotaError,
+  isValidThreadId,
 };

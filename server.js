@@ -1172,16 +1172,33 @@ function executeRoutine(agent, routine, key) {
   // Notify connected clients
   broadcastRoutineUpdate();
 
+  let proc;
+  if (agent.runtime === 'codex') {
+    // Codex agents run their routines on Codex: exec mode is naturally
+    // one-shot, the routine prompt travels over stdin with the agent's
+    // instructions, and Codex's own sandbox applies (no bypass flags exist
+    // on this path). The agent's plan choice is honoured even for
+    // unattended work.
+    proc = spawnCodex(codexRuntime.buildCodexArgs({ model: agent.model || undefined }), {
+      cwd: WORKSPACE,
+      env: getSpawnEnv(null),
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    proc.stdin.on('error', () => { /* EPIPE on early exit */ });
+    proc.stdin.write([readAgentInstructions(agent), buildSystemPrompt(agent), routine.prompt].filter(Boolean).join('\n\n'));
+    proc.stdin.end();
+  } else {
   // Routines run unattended (no user to approve), so bypass permissions.
   const args = [...getBareArgs(), ...modelArgs(agent), '--print', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
   if (agent.id !== 'default') args.push('--agent', agent.id);
   args.push(routine.prompt);
 
-  const proc = spawnClaude(args, {
+  proc = spawnClaude(args, {
     cwd: WORKSPACE,
     env: getSpawnEnv(null),
     stdio: ['ignore', 'pipe', 'pipe']
   });
+  }
 
   proc.on('close', (code) => {
     const duration = Math.round((Date.now() - startTime) / 1000);
@@ -2672,7 +2689,12 @@ function handleDelegation(msg, processes) {
   // Plain specialists: conversational, user controls when to return
   const targetHasDirectReports = !!buildTeamRoster(targetAgent.id, true);
   let delegationContext;
-  if (isPlatformDelegate || isCodexDelegate) {
+  if (isCodexDelegate) {
+    // Transactional, and honest about the runtime's shape: a Codex exec
+    // process cannot stay in the conversation to wait for a user reply, so
+    // it must never promise to. Clarifications go through the handback.
+    delegationContext = 'DELEGATION CONTEXT:\nYou have been delegated a task by another agent. Complete the task fully in this single response; you cannot wait for follow-up messages in this session. Prefer sensible defaults over asking questions. When the task is done, post your final summary and output <!-- RUNDOCK:COMPLETE --> at the very end of the response. If you genuinely cannot proceed without an answer from the user, state the question clearly in your response and still output <!-- RUNDOCK:COMPLETE -->; the reply will reach you when the task is re-delegated. Only use <!-- RUNDOCK:RETURN --> if the request is genuinely outside your scope and you cannot help.';
+  } else if (isPlatformDelegate) {
     delegationContext = 'DELEGATION CONTEXT:\nYou have been delegated a task by another agent. Complete the task in a single response if possible. When the task is done (agent created, skill saved, file written, question answered, etc.), output <!-- RUNDOCK:COMPLETE --> at the very end of that same response. Do not wait for follow-up questions. Do not ask if there is anything else. Just complete the task, confirm what you did, and return immediately. If you genuinely need clarification before you can proceed, ask, but prefer using sensible defaults over asking.\n\nException: if you have proposed a plan and are waiting for the user to confirm before you execute (e.g. you asked them to say "go ahead"), do NOT emit COMPLETE. Stay in the conversation and wait for their response. Only emit COMPLETE once the task is genuinely finished: you executed the work, or you answered the question fully with no pending user decision.\n\nOnly use <!-- RUNDOCK:RETURN --> if the request is genuinely outside your scope and you cannot help. This is rare.';
   } else if (targetHasDirectReports) {
     delegationContext = 'DELEGATION CONTEXT:\nYou have been brought into this conversation by the orchestrator to run a task in your domain. You lead a support team and may delegate parts of the work to them. Do the real work, write the deliverables, and report the outcome.\n\nYou MUST hand control back using one of two markers, on its own line, as the very last thing in your response (after any final summary):\n\n- <!-- RUNDOCK:RETURN --> when the user asks for something outside your domain of expertise. Tell them briefly that this falls outside what you handle and you are handing them back so the right person can pick it up. Do NOT name other specialists or suggest who should handle it. Then emit the marker.\n\n- <!-- RUNDOCK:COMPLETE --> when the orchestrator\'s original delegated pipeline is finished end-to-end. All deliverables are written to their final locations and the workflow has reached its final status (for example content moved to Ready for Review, spec written and linked, final audit posted). Post your final summary first, then emit the marker.\n\nDo NOT emit either marker when you are pausing at a decision point to let the user choose between options, presenting drafts, hooks, options, or recommendations for user review, asking the user to confirm something before continuing, or waiting at a human gate midway through a multi-phase pipeline. Those are pauses, not completions. Stay in the conversation as the active agent and wait for the user\'s next message. You will pick up where you left off when they respond.\n\nReturning on completion is how control flows back up the chain. If you silently stop, the user\'s next message will be routed to the wrong agent.';
@@ -2716,7 +2738,7 @@ function handleDelegation(msg, processes) {
         cwd: WORKSPACE,
         env: getSpawnEnv(convoId),
         stdio: ['pipe', 'pipe', 'pipe']
-      }, (err) => handleChatSpawnError(err, convoId))
+      }, (err) => handleCodexSpawnError(err, convoId))
     : spawnClaude(delegateArgs, {
         cwd: WORKSPACE,
         env: getSpawnEnv(convoId),
@@ -2770,6 +2792,7 @@ function handleDelegation(msg, processes) {
     const codexPrompt = priorSessionId
       ? `${delegationContext}\n\n${contextWithHistory}`
       : [readAgentInstructions(targetAgent), fullPrompt, contextWithHistory].filter(Boolean).join('\n\n');
+    startCodexKeepalive(delegateEntry, convoId);
     wireCodexDelegate(delegateEntry, convoId, codexPrompt);
   } else {
   delegateProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: contextWithHistory } }) + '\n');
@@ -3906,11 +3929,22 @@ wss.on('connection', (ws) => {
           // The close handler will restore the original process
         } else if (current && !current.delegation && !current.exited && !current.scopeReturn) {
           // Specialist started directly (no delegation) emitted RETURN
-          // Server-side onResult should have caught this, but handle as fallback
-          console.log(`[ScopeReturn] convo=${convoId} end_delegation fallback for non-delegated specialist`);
-          current.scopeReturn = true;
-          try { current.process.kill(); } catch (e) {}
-          // The close handler will call handleScopeReturn
+          // Server-side onResult should have caught this, but handle as fallback.
+          // Stale-message guard: an orchestrator or platform agent never emits
+          // RETURN, so end_delegation landing on one means the handback already
+          // completed server-side (a fast-exiting delegate, e.g. Codex, can be
+          // restored before the client's marker scan round-trips). Killing the
+          // restored parent here would drop its session. Ignore instead.
+          const agentList = discoverAgents();
+          const currentAgent = agentList.find(a => a.id === current.agentId || a.name === current.agentId);
+          if (currentAgent && (currentAgent.type === 'orchestrator' || currentAgent.type === 'platform')) {
+            console.log(`[ScopeReturn] convo=${convoId} ignoring stale end_delegation: current agent ${current.agentId} is ${currentAgent.type}`);
+          } else {
+            console.log(`[ScopeReturn] convo=${convoId} end_delegation fallback for non-delegated specialist`);
+            current.scopeReturn = true;
+            try { current.process.kill(); } catch (e) {}
+            // The close handler will call handleScopeReturn
+          }
         }
       }
 
@@ -4712,20 +4746,32 @@ let _claudeAuthEvidence = null;
 // machine, whether they are signed in, and which one is the workspace
 // default. The default is Claude in this version: Doc and delegation run on
 // it, so a workspace cannot exist without it.
+let _claudeProbeCache = null;
+let _claudeProbeTime = 0;
 function getRuntimeStatus() {
   const { execSync } = require('child_process');
   const isWindows = process.platform === 'win32';
-  let claudeInstalled = true;
-  try {
-    execSync(isWindows ? 'where.exe claude' : 'which claude', { timeout: 5000, encoding: 'utf-8' });
-  } catch (e) { claudeInstalled = false; }
-  let claudeVersion = null;
-  if (claudeInstalled) {
+  // The install/version probe shells out (claude --version can take seconds)
+  // and this runs on the WebSocket handler path, so cache it. 60s keeps a
+  // fresh install visible quickly without blocking every settings open.
+  let claudeInstalled, claudeVersion;
+  if (_claudeProbeCache && (Date.now() - _claudeProbeTime) < 60000) {
+    ({ installed: claudeInstalled, version: claudeVersion } = _claudeProbeCache);
+  } else {
+    claudeInstalled = true;
     try {
-      const out = execSync(`"${resolveClaudeBin()}" --version`, { timeout: 5000, encoding: 'utf-8' });
-      const m = String(out).match(/(\d+\.\d+(?:\.\d+)?(?:-[A-Za-z0-9.]+)?)/);
-      claudeVersion = m ? m[1] : null;
-    } catch (e) { /* installed but --version failed */ }
+      execSync(isWindows ? 'where.exe claude' : 'which claude', { timeout: 5000, encoding: 'utf-8' });
+    } catch (e) { claudeInstalled = false; }
+    claudeVersion = null;
+    if (claudeInstalled) {
+      try {
+        const out = execSync(`"${resolveClaudeBin()}" --version`, { timeout: 5000, encoding: 'utf-8' });
+        const m = String(out).match(/(\d+\.\d+(?:\.\d+)?(?:-[A-Za-z0-9.]+)?)/);
+        claudeVersion = m ? m[1] : null;
+      } catch (e) { /* installed but --version failed */ }
+    }
+    _claudeProbeCache = { installed: claudeInstalled, version: claudeVersion };
+    _claudeProbeTime = Date.now();
   }
   // Fresh Codex detection (the user may have just installed or signed in),
   // and refresh the prompt-side cache while we have the answer.
@@ -4764,15 +4810,64 @@ function spawnCodex(args, options, onError) {
 // Surface a Codex failure once per process, classified: plan-limit exhaustion
 // becomes a structured quota message (the client renders a recovery card, the
 // same pattern as the Claude auth-error card); everything else becomes a
-// structured error message with the CLI's verbatim text attached.
+// structured error message with the CLI's verbatim text attached. The failure
+// is also persisted to the transcript, so a user who wasn't looking at the
+// conversation still finds out what happened when they open it.
 function sendCodexError(entry, convoId, message) {
   if (entry.errorSent) return;
   entry.errorSent = true;
-  const subtype = codexRuntime.isCodexQuotaError(message) ? 'codex_quota' : 'codex_error';
+  const isQuota = codexRuntime.isCodexQuotaError(message);
+  const subtype = isQuota ? 'codex_quota' : 'codex_error';
+  try {
+    const friendly = isQuota
+      ? 'This turn stopped: the ChatGPT plan limit was reached. It can be retried once the limit resets.'
+      : 'This turn stopped: the runtime hit a problem.';
+    appendTranscript(convoId, 'agent', entry.agentId, `${friendly}\nCodex: ${message}`);
+  } catch (e) { /* transcript persistence is best-effort */ }
   safeSend(JSON.stringify({
     type: 'system', subtype, detail: message,
     _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
   }));
+}
+
+// Spawn-failure copy for Codex processes. The generic Claude spawn-error
+// handler tells users to check their Claude Code install, which is the wrong
+// guidance for a Codex agent. Marks the entry so close handlers stay silent.
+function handleCodexSpawnError(err, convoId) {
+  const entry = chatProcesses.get(convoId);
+  if (entry) entry.spawnFailed = true;
+  let userMessage;
+  if (err.code === 'ENOENT') {
+    userMessage = 'The Codex CLI was not found on this machine. Install the official Codex CLI, then sign in: npm install -g @openai/codex then codex login';
+  } else if (err.code === 'EACCES') {
+    userMessage = "Couldn't start Codex: permission denied. Check your Codex CLI install.";
+  } else {
+    userMessage = `Couldn't start Codex: ${err.message}. Run codex --version to check your install.`;
+  }
+  safeSend(JSON.stringify({
+    type: 'system', subtype: 'info', content: userMessage, _conversationId: convoId,
+  }));
+  safeSend(JSON.stringify({
+    type: 'system', subtype: 'done', code: -1,
+    _agent: entry ? entry.agentId : undefined, _conversationId: convoId,
+    _processId: entry ? entry.processId : undefined,
+  }));
+}
+
+// Codex emits nothing between accepting the prompt and the final message, so
+// the client's stream-inactivity watchdog (90s) would otherwise conclude the
+// turn is dead mid-task. A periodic keepalive keeps the working state honest
+// while the process lives. Interval is overridable for tests.
+const CODEX_KEEPALIVE_MS = parseInt(process.env.RUNDOCK_CODEX_KEEPALIVE_MS || '', 10) || 25000;
+function startCodexKeepalive(entry, convoId) {
+  const timer = setInterval(() => {
+    if (entry.exited || entry.resultSent) { clearInterval(timer); return; }
+    safeSend(JSON.stringify({
+      type: 'system', subtype: 'keepalive',
+      _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
+    }));
+  }, CODEX_KEEPALIVE_MS);
+  entry.process.on('close', () => clearInterval(timer));
 }
 
 // Deliver the completed Codex turn: persist the transcript, send the result
@@ -4934,7 +5029,7 @@ function startCodexTurn(convoId, msg, agentData) {
     cwd: WORKSPACE,
     env: getSpawnEnv(convoId),
     stdio: ['pipe', 'pipe', 'pipe'],
-  }, (err) => handleChatSpawnError(err, convoId));
+  }, (err) => handleCodexSpawnError(err, convoId));
 
   const entry = {
     process: proc, runtime: 'codex', processId, agentId: agentData.id,
@@ -4944,6 +5039,7 @@ function startCodexTurn(convoId, msg, agentData) {
     toolCalls: [], turnStartTime: Date.now(),
   };
   chatProcesses.set(convoId, entry);
+  startCodexKeepalive(entry, convoId);
 
   safeSend(JSON.stringify({
     type: 'system', subtype: 'process_started',
@@ -4978,7 +5074,9 @@ function startCodexTurn(convoId, msg, agentData) {
     entry.exited = true;
     const current = chatProcesses.get(convoId);
     if (current === entry) chatProcesses.delete(convoId);
-    if (entry.superseded) return; // a newer turn took over; stay silent
+    if (entry.superseded) return;   // a newer turn took over; stay silent
+    if (entry.spawnFailed) return;  // spawn-error handler already surfaced + done
+    if (entry.cancelled) return;    // user stopped the agent; stop handler already surfaced + done
     if (stdoutBuf.trim()) handleCodexEvent(entry, convoId, stdoutBuf); // unterminated last line
     if (!entry.resultSent && !entry.errorSent) {
       sendCodexError(entry, convoId, stderrBuf.trim() || `Codex exited unexpectedly (code ${code})`);
