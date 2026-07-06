@@ -35,6 +35,14 @@ const path = require('path');
 const fx = require(path.join(__dirname, '..', '..', 'fixtures', 'codex-jsonl.js'));
 
 const argv = process.argv.slice(2);
+
+// Version probe: answer immediately without touching stdin or the scenario,
+// so runtime detection never hangs on the stub.
+if (argv.includes('--version')) {
+  process.stdout.write('codex-cli 0.0.0-stub\n');
+  process.exit(0);
+}
+
 function argValue(flag) {
   const i = argv.indexOf(flag);
   return i >= 0 ? argv[i + 1] : null;
