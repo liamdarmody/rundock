@@ -1189,6 +1189,10 @@ window.addEventListener('resize', () => {
 
 function showProfile(agentId) {
   const a=agents.find(x=>x.id===agentId); if(!a) return;
+  // Agent profiles belong to the Team section (the profile's back link goes
+  // there); sync the rail and sidebar for callers arriving from elsewhere,
+  // e.g. the search palette or a skill page's agent chips.
+  setNavState('team');
   const existing=conversations.filter(c=>c.agentId===agentId||(c.sessionIds||[]).some(s=>s.agentId===agentId));
   let h=`<a class="profile-back" onclick="switchNav('team')">&#8592; Back</a>
     <div class="profile-header">
@@ -1390,6 +1394,10 @@ function createConversation(agentId, title) {
 }
 
 function startConversation(agentId) {
+  // Same principle as openConversation: starting a conversation navigates
+  // to the Conversations section regardless of origin (agent profile, org
+  // chart, empty states).
+  setNavState('conversations');
   const convo = createConversation(agentId);
   const agent = convo.agent;
 
@@ -1826,6 +1834,10 @@ function discardIfEmpty() {
 }
 
 function openConversation(id, withAnchor) {
+  // Opening a conversation IS a navigation to the Conversations section,
+  // wherever it started (sidebar click, search palette, an agent profile's
+  // conversation list); the rail and sidebar must follow.
+  setNavState('conversations');
   // A stale search anchor must never fire on a later manual open (it would
   // scroll to and flash an old hit days later).
   if (!withAnchor) pendingMessageAnchor = null;
@@ -2645,15 +2657,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ===== 10. VIEWS & NAVIGATION =====
 
+// Sync the nav rail's active icon and the visible sidebar panel to a section.
+// This is deliberately separate from switchNav: destination functions
+// (openConversation, showProfile) call it so they stay consistent no matter
+// where navigation started (nav rail click, search palette, profile links,
+// workspace routing). Before this existed, callers had to remember to pair
+// switchNav with their navigation and several forgot, leaving the rail
+// highlighting one section while the main pane showed another.
+function setNavState(nav) {
+  document.querySelectorAll('.nav-item[data-nav]').forEach(n=>n.classList.remove('active'));
+  document.querySelector(`[data-nav="${nav}"]`)?.classList.add('active');
+  ['team','conversations','skills','files','settings'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
+  document.getElementById(`sidebar-${nav}`).classList.remove('hidden');
+}
+
 function switchNav(nav) {
   // Find bar is a per-view affordance: close on any nav change so highlights
   // and search state don't survive into a context where they no longer make
   // sense or reference DOM that's about to be replaced.
   closeFindBar();
-  document.querySelectorAll('.nav-item[data-nav]').forEach(n=>n.classList.remove('active'));
-  document.querySelector(`[data-nav="${nav}"]`)?.classList.add('active');
-  ['team','conversations','skills','files','settings'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
-  document.getElementById(`sidebar-${nav}`).classList.remove('hidden');
+  setNavState(nav);
   if(nav==='settings') { showView('settings'); showSettingsSection('workspace'); }
   else if(nav==='files') { editorReturnView = 'editor'; if(currentFilePath && document.querySelector('.file-item.active')) { showView('editor'); } else { currentFilePath = null; destroyTiptapEditorIfActive(); document.getElementById('editor-header').classList.add('hidden'); document.getElementById('editor-content').classList.add('hidden'); document.getElementById('editor-textarea').classList.add('hidden'); document.getElementById('tiptap-editor-pane').classList.add('hidden'); document.getElementById('editor-empty').classList.remove('hidden'); showView('editor'); } }
   else if(nav==='skills') { showView('skills'); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } else if(skills.length && !currentSkillId) { selectSkill(skills[0].id); } }
