@@ -256,7 +256,7 @@ function handle(d) {
       break;
     case 'needs_workspace': showView('workspace'); break;
     case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesSidebar(); renderConvoList(); break;
-    case 'skills': skills=d.skills; skillsLoaded=true; renderSkills(); break;
+    case 'skills': skills=d.skills; skillsLoaded=true; renderSkills(); if(palettePendingSkill){const s=palettePendingSkill;palettePendingSkill=null;selectSkill(s);} break;
     case 'conversations': handlePersistedConversations(d.conversations, d.lastActiveConversationId); break;
     case 'system':
       // Track active process per conversation to ignore stale events
@@ -469,6 +469,9 @@ function handle(d) {
     }
     case 'session_history':
       renderSessionHistory(d);
+      break;
+    case 'search_universal_results':
+      handlePaletteResults(d);
       break;
     case 'search_results':
       handleSearchResults(d);
@@ -1921,7 +1924,7 @@ function discardIfEmpty() {
   }
 }
 
-function openConversation(id) {
+function openConversation(id, withAnchor) {
   // Close any active find before swapping the DOM out from under it.
   if (activeConversation && activeConversation.id !== id) closeFindBar();
   if (activeConversation && activeConversation.id !== id) discardIfEmpty();
@@ -1947,7 +1950,9 @@ function openConversation(id) {
       sessionId: c.sessionId,
       sessionIds: sessionIds,
       conversationId: c.id,
-      limit: 200
+      // Anchored opens (search-result clicks) load the full history so the
+      // matched message is present even when it's deep in the conversation.
+      limit: withAnchor ? 999 : 200
     }));
     // Mark as no longer purely persisted: messages are now in memory for this
     // session. Status is NOT touched here: opening an archived conversation to
@@ -2436,6 +2441,10 @@ function renderSessionHistory(d) {
     }
     renderConvoList();
   }
+
+  // Universal search: if this history load was triggered by a search-result
+  // click, scroll to (and flash) the matched message now that it's rendered.
+  tryMessageAnchor(d.conversationId);
 }
 
 // ===== PERMISSION UI =====
@@ -3903,5 +3912,339 @@ function initFindBar() {
 }
 
 initFindBar();
+
+// ===== 18. UNIVERSAL SEARCH PALETTE (Cmd+K / Ctrl+K) =====
+//
+// One keyboard-first surface over four corpora: files, conversations, agents,
+// skills. The server answers `search_universal` with grouped results (title
+// fuzzy layer + FTS content, or grep fallback). Navigation REUSES the
+// existing routes: read_file + showView('editor') for files (same as the
+// file tree), openConversation for conversations (extended with the message
+// anchor), showProfile for agents, selectSkill for skills. The one new
+// mechanic is the message anchor: opening a conversation scrolled to the
+// matched message.
+
+let paletteOpen = false;
+let paletteScope = 'all';
+let paletteFuzzy = true;
+let paletteQuery = '';
+let paletteTimer = null;
+let paletteReply = null;      // last server reply {groups, recent}
+let paletteFlat = [];         // flat selectable items in display order
+let paletteSel = 0;
+let paletteLoading = false;
+let palettePendingSkill = null;
+let pendingMessageAnchor = null; // {convoId, text, fragment}
+
+const PALETTE_GROUP_ORDER = ['files', 'conversations', 'agents', 'skills'];
+const PALETTE_GROUP_LABELS = { files: 'Files', conversations: 'Conversations', agents: 'Agents', skills: 'Skills' };
+
+function openPalette() {
+  if (currentView === 'workspace' || !currentWorkspacePath) return; // no workspace yet
+  const overlay = document.getElementById('palette-overlay');
+  if (!overlay) return;
+  paletteOpen = true;
+  overlay.classList.remove('hidden');
+  const input = document.getElementById('palette-input');
+  input.value = paletteQuery = '';
+  populatePaletteAgentFilter();
+  schedulePaletteSearch(0); // empty query -> recent items
+  input.focus();
+}
+
+function closePalette() {
+  paletteOpen = false;
+  clearTimeout(paletteTimer);
+  document.getElementById('palette-overlay')?.classList.add('hidden');
+}
+
+function togglePalette() { paletteOpen ? closePalette() : openPalette(); }
+
+function setPaletteScope(scope) {
+  paletteScope = scope;
+  document.querySelectorAll('.palette-scope').forEach(b => b.classList.toggle('active', b.dataset.scope === scope));
+  renderPalette();
+  document.getElementById('palette-input')?.focus();
+}
+
+function togglePaletteFuzzy() {
+  paletteFuzzy = !paletteFuzzy;
+  document.getElementById('palette-fuzzy-toggle')?.classList.toggle('on', paletteFuzzy);
+  schedulePaletteSearch(0);
+  document.getElementById('palette-input')?.focus();
+}
+
+function togglePaletteFilters() {
+  const row = document.getElementById('palette-filter-row');
+  const open = row.classList.toggle('open');
+  document.getElementById('palette-filters-toggle')?.classList.toggle('on', open);
+  if (!open) {
+    // Clearing hidden filters keeps the query honest with what's on screen.
+    ['palette-filter-from', 'palette-filter-to', 'palette-filter-tags'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    const sel = document.getElementById('palette-filter-agent'); if (sel) sel.value = '';
+    schedulePaletteSearch(0);
+  }
+}
+
+function populatePaletteAgentFilter() {
+  const sel = document.getElementById('palette-filter-agent');
+  if (!sel) return;
+  const current = sel.value;
+  sel.innerHTML = '<option value="">Any</option>' +
+    agents.map(a => `<option value="${esc(a.id)}">${esc(a.displayName)}</option>`).join('');
+  sel.value = current;
+}
+
+function paletteFilterParams() {
+  const params = {};
+  const agentSel = document.getElementById('palette-filter-agent');
+  if (agentSel && agentSel.value) params.agentId = agentSel.value;
+  const from = document.getElementById('palette-filter-from')?.value;
+  const to = document.getElementById('palette-filter-to')?.value;
+  if (from) { const ms = Date.parse(from); if (!isNaN(ms)) params.updatedFromMs = ms; }
+  if (to) { const ms = Date.parse(to); if (!isNaN(ms)) params.updatedToMs = ms + 86399999; } // inclusive day end
+  const tags = (document.getElementById('palette-filter-tags')?.value || '')
+    .split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+  if (tags.length) params.tags = tags;
+  return params;
+}
+
+function schedulePaletteSearch(delay = 220) {
+  if (!paletteOpen) return;
+  clearTimeout(paletteTimer);
+  paletteTimer = setTimeout(runPaletteSearch, delay);
+}
+
+function runPaletteSearch() {
+  if (!paletteOpen || !ws || ws.readyState !== 1) return;
+  paletteQuery = document.getElementById('palette-input')?.value || '';
+  paletteLoading = true;
+  renderPaletteStatus();
+  ws.send(JSON.stringify({
+    type: 'search_universal',
+    query: paletteQuery,
+    fuzzy: paletteFuzzy,
+    prefix: true, // type-ahead: last token matches as a prefix
+    limit: 8,
+    ...paletteFilterParams(),
+  }));
+}
+
+function handlePaletteResults(d) {
+  if (!paletteOpen) return;
+  // Stale replies (user kept typing) are dropped.
+  if ((d.query || '') !== paletteQuery.trim()) return;
+  paletteLoading = false;
+  paletteReply = d;
+  paletteSel = 0;
+  renderPalette();
+}
+
+// Escape then swap the server's control-char highlight markers for <mark>.
+// Order matters: HTML is escaped FIRST, so the only markup in the string is
+// the <mark> pair we introduce ourselves.
+function paletteHl(s) {
+  return esc(s || '').replace(/\u0001/g, '<mark>').replace(/\u0002/g, '</mark>');
+}
+
+function paletteSnippetPlain(s) {
+  return (s || '').replace(/[\u0001\u0002]/g, '');
+}
+
+const PALETTE_ICONS = {
+  file: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+  skill: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
+};
+
+function renderPalette() {
+  const container = document.getElementById('palette-results');
+  if (!container || !paletteReply) return;
+  const groups = paletteReply.groups || {};
+  paletteFlat = [];
+  let h = '';
+  for (const key of PALETTE_GROUP_ORDER) {
+    if (paletteScope !== 'all' && paletteScope !== key) continue;
+    const items = groups[key] || [];
+    if (!items.length) continue;
+    const label = paletteReply.recent ? `Recent ${PALETTE_GROUP_LABELS[key].toLowerCase()}` : PALETTE_GROUP_LABELS[key];
+    h += `<div class="palette-group-label">${label}<span class="palette-group-count">${items.length}</span></div>`;
+    for (const item of items) {
+      const idx = paletteFlat.length;
+      paletteFlat.push(item);
+      h += paletteItemHtml(item, idx);
+    }
+  }
+  if (!paletteFlat.length) {
+    const q = paletteQuery.trim();
+    h = q
+      ? `<div class="palette-empty">No matches for &ldquo;${esc(q)}&rdquo;<div class="palette-empty-sub">Search covers file contents and names, conversation messages and titles, and agent and skill names.</div></div>`
+      : `<div class="palette-empty">Start typing to search your workspace<div class="palette-empty-sub">Files, conversations, agents, and skills.</div></div>`;
+  }
+  container.innerHTML = h;
+  updatePaletteSelection();
+  renderPaletteStatus();
+}
+
+function paletteItemHtml(item, idx) {
+  let icon = '', title = '', meta = '';
+  if (item.type === 'file') {
+    icon = `<div class="palette-item-icon">${PALETTE_ICONS.file}</div>`;
+    title = esc(item.title || item.path);
+    const dir = item.path && item.path.includes('/') ? item.path.substring(0, item.path.lastIndexOf('/')) + '/' : '';
+    const tagStr = (item.tags && item.tags.length) ? ` &middot; #${item.tags.map(esc).join(' #')}` : '';
+    meta = item.snippet ? paletteHl(item.snippet) : esc(dir) + tagStr;
+  } else if (item.type === 'conversation') {
+    const a = agents.find(x => x.id === item.agentId);
+    icon = `<div class="avatar sm" style="background:${a?.colour || 'var(--card)'};width:26px;height:26px;font-size:12px">${a?.icon || '?'}</div>`;
+    title = esc(item.title || 'Untitled conversation');
+    meta = item.snippet ? paletteHl(item.snippet) : (a ? esc(a.displayName) : '');
+    if (item.matchCount > 1) meta += ` <span style="opacity:0.7">&middot; ${item.matchCount} matches</span>`;
+  } else if (item.type === 'agent') {
+    icon = `<div class="avatar sm" style="background:${item.colour || 'var(--card)'};width:26px;height:26px;font-size:12px">${item.icon || '?'}</div>`;
+    title = esc(item.name);
+    meta = esc(item.role || '');
+  } else if (item.type === 'skill') {
+    icon = `<div class="palette-item-icon">${PALETTE_ICONS.skill}</div>`;
+    title = esc(item.name);
+    meta = esc((item.description || '').slice(0, 90));
+  }
+  return `<div class="palette-item" data-idx="${idx}" onclick="openPaletteResult(${idx})" onmousemove="hoverPaletteItem(${idx})">
+    ${icon}
+    <div class="palette-item-body">
+      <div class="palette-item-title">${title}</div>
+      ${meta ? `<div class="palette-item-meta">${meta}</div>` : ''}
+    </div>
+    <span class="palette-item-kbd">&#9166;</span>
+  </div>`;
+}
+
+function renderPaletteStatus() {
+  const el = document.getElementById('palette-status');
+  if (!el) return;
+  el.innerHTML = paletteLoading
+    ? '<span><span class="spin">&#9696;</span> searching&hellip;</span>'
+    : '<span>&#8593;&#8595; navigate</span><span>&#9166; open</span><span>esc close</span>';
+}
+
+function hoverPaletteItem(idx) {
+  if (paletteSel === idx) return;
+  paletteSel = idx;
+  updatePaletteSelection(false);
+}
+
+function updatePaletteSelection(scroll = true) {
+  document.querySelectorAll('.palette-item').forEach(el => {
+    const selected = parseInt(el.dataset.idx) === paletteSel;
+    el.classList.toggle('selected', selected);
+    if (selected && scroll) el.scrollIntoView({ block: 'nearest' });
+  });
+}
+
+function movePaletteSelection(delta) {
+  if (!paletteFlat.length) return;
+  paletteSel = (paletteSel + delta + paletteFlat.length) % paletteFlat.length;
+  updatePaletteSelection();
+}
+
+function openPaletteResult(idx) {
+  const item = paletteFlat[idx];
+  if (!item) return;
+  closePalette();
+  if (item.type === 'file') {
+    paletteOpenFile(item.path);
+  } else if (item.type === 'conversation') {
+    paletteOpenConversation(item);
+  } else if (item.type === 'agent') {
+    showProfile(item.id);
+  } else if (item.type === 'skill') {
+    paletteOpenSkill(item.id);
+  }
+}
+
+// File route: same mechanics as a file-tree click (read_file + editor view),
+// plus nav state so the sidebar matches where the user landed.
+function paletteOpenFile(filePath) {
+  switchNav('files');
+  document.querySelectorAll('.file-item').forEach(x => x.classList.toggle('active', x.dataset.path === filePath));
+  editorReturnView = 'editor';
+  fileHistory = [];
+  ws.send(JSON.stringify({ type: 'read_file', path: filePath }));
+  showView('editor');
+}
+
+// Conversation route: the existing openConversation, extended with the
+// message anchor (the one genuinely new deep-link mechanic in SR1).
+function paletteOpenConversation(item) {
+  if (item.snippet) {
+    pendingMessageAnchor = {
+      convoId: item.id,
+      text: paletteSnippetPlain(item.snippet).replace(/…/g, ' ').trim(),
+      fragment: (item.snippet.match(/\u0001([^\u0002]+)\u0002/) || [])[1] || '',
+    };
+  } else {
+    pendingMessageAnchor = null;
+  }
+  openConversation(item.id, !!pendingMessageAnchor);
+  // Already-loaded conversations render synchronously: anchor now. History
+  // loads anchor from renderSessionHistory when the fetch lands.
+  if (!document.getElementById('history-loading')) tryMessageAnchor(item.id);
+}
+
+function paletteOpenSkill(skillId) {
+  if (!skillsLoaded) palettePendingSkill = skillId;
+  switchNav('skills');
+  if (skillsLoaded) selectSkill(skillId);
+}
+
+// ── Message anchor ──────────────────────────────────────────────────────────
+// Find the rendered message whose text contains the search snippet and
+// scroll to it. Text-content matching (normalised) survives the markdown
+// rendering that separates the jsonl source from the DOM.
+
+function normAnchorText(t) {
+  return (t || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+function tryMessageAnchor(convoId) {
+  if (!pendingMessageAnchor || pendingMessageAnchor.convoId !== convoId) return;
+  const anchor = pendingMessageAnchor;
+  pendingMessageAnchor = null;
+  // Let the DOM paint before measuring.
+  setTimeout(() => {
+    const bubbles = document.querySelectorAll('#messages .msg .msg-bubble');
+    const needles = [normAnchorText(anchor.text), normAnchorText(anchor.fragment)].filter(n => n.length >= 3);
+    let target = null;
+    for (const needle of needles) {
+      for (const b of bubbles) {
+        if (normAnchorText(b.textContent).includes(needle)) { target = b.closest('.msg'); break; }
+      }
+      if (target) break;
+    }
+    if (!target) return; // message outside the loaded window: land at the conversation as usual
+    target.scrollIntoView({ block: 'center', behavior: 'auto' });
+    target.classList.remove('anchor-flash');
+    void target.offsetWidth; // restart the animation if re-triggered
+    target.classList.add('anchor-flash');
+  }, 60);
+}
+
+// ── Keyboard wiring ─────────────────────────────────────────────────────────
+
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+    e.preventDefault();
+    togglePalette();
+    return;
+  }
+  if (!paletteOpen) return;
+  if (e.key === 'Escape') { e.preventDefault(); closePalette(); }
+});
+
+document.getElementById('palette-input')?.addEventListener('input', () => schedulePaletteSearch());
+document.getElementById('palette-input')?.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown') { e.preventDefault(); movePaletteSelection(1); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); movePaletteSelection(-1); }
+  else if (e.key === 'Enter') { e.preventDefault(); openPaletteResult(paletteSel); }
+});
 
 connect();
