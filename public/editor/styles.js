@@ -6,7 +6,7 @@
 const STYLE_ID = 'rundock-editor-module-styles';
 
 const CSS = `
-/* --- Tables (FV1) ------------------------------------------------------ */
+/* --- Tables ------------------------------------------------------------ */
 .tiptap-editor .ProseMirror table {
   border-collapse: collapse;
   table-layout: auto;

@@ -3,7 +3,7 @@
 // Five constructs (Roughdraft wire format, see review/criticmarkup.js):
 //   {>>comment<<}{#c1}  {++insert++}{#s1}  {--delete--}  {~~old~>new~~}  {==highlight==}
 //
-// Design decisions (FV1, recorded in Review-And-Feedback-Loop-Spec):
+// Design decisions:
 //
 //  - ATOMS, not marks. Construct content is held verbatim in node attrs and
 //    re-emitted byte-for-byte by the serializer. Marks would route content

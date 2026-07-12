@@ -1,8 +1,8 @@
-// YAML endmatter contract (FV1 Build 2a).
+// YAML endmatter contract.
 //
 // Review metadata lives in a final YAML block introduced by a `---` line at
 // the end of the file (Roughdraft wire format): comments/suggestions keyed by
-// anchor id with by/at (+ re for replies), plus FV1's review block (status +
+// anchor id with by/at (+ re for replies), plus the review block (status +
 // verdict summary). The block is opaque to the markdown editor: stripped
 // before parse, re-emitted verbatim on save unless review data changed.
 
