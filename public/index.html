@@ -652,6 +652,60 @@ mark.find-match.current,
 .delegation-line { flex: 1; height: 1px; background: var(--border); }
 .delegation-badge { display: flex; align-items: center; gap: 6px; font-size: var(--caption); font-weight: 600; white-space: nowrap; }
 .section-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); margin-bottom: 8px; text-align: left; }
+
+/* Hallmark · component: command-palette · genre: modern-minimal (inherits app) · theme: Rundock tokens
+ * states: default · hover · focus · active/selected · disabled(n/a) · loading · error · empty/recent
+ * tokens: consumes existing :root vars only — no new palette, no inline colour values
+ */
+/* ===== Universal search palette (Cmd+K) ===== */
+.palette-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.42); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); z-index: 200; display: flex; align-items: flex-start; justify-content: center; padding: 11vh 16px 16px; }
+.palette { width: min(680px, 94vw); max-height: min(66vh, 620px); display: flex; flex-direction: column; background: var(--elevated); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 18px 50px rgba(0,0,0,0.4), 0 2px 8px rgba(0,0,0,0.2); overflow: hidden; animation: palette-in 140ms cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes palette-in { from { opacity: 0; transform: translateY(-8px) scale(0.985); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .palette { animation: none; } }
+.palette-input-row { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.palette-input-row svg.palette-glass { width: 17px; height: 17px; color: var(--text-2); flex-shrink: 0; }
+.palette-input { flex: 1; font-size: 15px; color: var(--text-1); background: none; border: none; outline: none; min-width: 0; }
+.palette-input::placeholder { color: var(--text-2); opacity: 0.7; }
+.palette-hint { font-size: var(--label); color: var(--text-2); border: 1px solid var(--border); border-radius: 5px; padding: 2px 6px; flex-shrink: 0; user-select: none; }
+.palette-scope-row { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+.palette-scope { font-size: var(--caption); font-weight: 500; color: var(--text-2); padding: 4px 10px; border-radius: 999px; border: 1px solid transparent; cursor: pointer; white-space: nowrap; transition: color 0.15s ease, background 0.15s ease; }
+.palette-scope:hover { color: var(--text-1); background: var(--card); }
+.palette-scope:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.palette-scope.active { color: var(--accent); background: var(--accent-glow); border-color: transparent; }
+.palette-scope-spacer { flex: 1; }
+.palette-toggle { display: flex; align-items: center; gap: 5px; font-size: var(--label); color: var(--text-2); cursor: pointer; padding: 4px 8px; border-radius: 6px; white-space: nowrap; transition: color 0.15s ease; }
+.palette-toggle:hover { color: var(--text-1); }
+.palette-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.palette-toggle .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--idle); transition: background 0.15s ease; }
+.palette-toggle.on { color: var(--text-1); }
+.palette-toggle.on .dot { background: var(--success); }
+.palette-filter-row { display: none; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.palette-filter-row.open { display: flex; }
+.palette-filter-row select, .palette-filter-row input { font-size: var(--caption); color: var(--text-1); background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; outline: none; }
+.palette-filter-row select:focus-visible, .palette-filter-row input:focus-visible { border-color: var(--accent); }
+.palette-filter-row label { font-size: var(--label); color: var(--text-2); }
+.palette-results { flex: 1; overflow-y: auto; padding: 6px 6px 10px; scroll-padding: 40px; }
+.palette-group-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); padding: 12px 12px 5px; display: flex; align-items: center; gap: 6px; }
+.palette-group-count { font-weight: 500; letter-spacing: 0; text-transform: none; opacity: 0.75; }
+.palette-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; cursor: pointer; border-left: 2px solid transparent; }
+.palette-item:hover { background: var(--card); }
+.palette-item.selected { background: var(--card); border-left-color: var(--accent); }
+.palette-item-icon { width: 26px; height: 26px; border-radius: 7px; background: var(--card); color: var(--text-2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 13px; }
+.palette-item.selected .palette-item-icon { color: var(--text-1); }
+.palette-item-body { flex: 1; min-width: 0; }
+.palette-item-title { font-size: var(--body); font-weight: 500; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.palette-item-meta { font-size: var(--caption); color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+.palette-item-meta mark, .palette-item-title mark { background: var(--accent-glow); color: var(--accent); border-radius: 2px; padding: 0 1px; }
+.palette-item-kbd { font-size: var(--label); color: var(--text-2); opacity: 0; flex-shrink: 0; }
+.palette-item.selected .palette-item-kbd { opacity: 1; }
+.palette-empty { padding: 28px 20px; text-align: center; color: var(--text-2); font-size: var(--body); line-height: 1.6; }
+.palette-empty .palette-empty-sub { font-size: var(--caption); opacity: 0.8; margin-top: 4px; }
+.palette-status { padding: 5px 14px; font-size: var(--label); color: var(--text-2); border-top: 1px solid var(--border); display: flex; gap: 14px; user-select: none; }
+.palette-status .spin { display: inline-block; animation: palette-spin 0.8s linear infinite; }
+@keyframes palette-spin { to { transform: rotate(360deg); } }
+.msg.anchor-flash > .msg-bubble { animation: anchor-flash 1.6s ease; }
+@keyframes anchor-flash { 0%, 45% { box-shadow: 0 0 0 2px var(--accent); background: var(--accent-glow); } 100% { box-shadow: none; } }
+@media (prefers-reduced-motion: reduce) { .msg.anchor-flash > .msg-bubble { animation: none; box-shadow: 0 0 0 2px var(--accent); } }
 </style>
 </head>
 <body>
@@ -846,6 +900,39 @@ mark.find-match.current,
       <div class="settings-content" id="settings-content"></div>
     </div>
   </main>
+</div>
+
+<!-- Universal search palette (Cmd+K / Ctrl+K) -->
+<div id="palette-overlay" class="palette-overlay hidden" onmousedown="if(event.target===this)closePalette()">
+  <div class="palette" role="dialog" aria-modal="true" aria-label="Search workspace">
+    <div class="palette-input-row">
+      <svg class="palette-glass" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input id="palette-input" class="palette-input" placeholder="Search files, conversations, agents, skills..." autocomplete="off" spellcheck="false" />
+      <span class="palette-hint">esc</span>
+    </div>
+    <div class="palette-scope-row" id="palette-scope-row">
+      <button class="palette-scope active" data-scope="all" onclick="setPaletteScope('all')">All</button>
+      <button class="palette-scope" data-scope="files" onclick="setPaletteScope('files')">Files</button>
+      <button class="palette-scope" data-scope="conversations" onclick="setPaletteScope('conversations')">Conversations</button>
+      <button class="palette-scope" data-scope="agents" onclick="setPaletteScope('agents')">Agents</button>
+      <button class="palette-scope" data-scope="skills" onclick="setPaletteScope('skills')">Skills</button>
+      <span class="palette-scope-spacer"></span>
+      <button class="palette-toggle on" id="palette-fuzzy-toggle" onclick="togglePaletteFuzzy()" title="Fuzzy matching on names and titles"><span class="dot"></span>Fuzzy</button>
+      <button class="palette-toggle" id="palette-filters-toggle" onclick="togglePaletteFilters()"><span class="dot"></span>Filters</button>
+    </div>
+    <div class="palette-filter-row" id="palette-filter-row">
+      <label>Agent</label>
+      <select id="palette-filter-agent" onchange="schedulePaletteSearch(0)"><option value="">Any</option></select>
+      <label>Updated</label>
+      <input type="date" id="palette-filter-from" onchange="schedulePaletteSearch(0)" />
+      <span style="color:var(--text-2);font-size:var(--caption)">to</span>
+      <input type="date" id="palette-filter-to" onchange="schedulePaletteSearch(0)" />
+      <label>Tags</label>
+      <input type="text" id="palette-filter-tags" placeholder="tag, tag" style="width:110px" oninput="schedulePaletteSearch(300)" />
+    </div>
+    <div class="palette-results" id="palette-results"></div>
+    <div class="palette-status" id="palette-status"><span>&#8593;&#8595; navigate</span><span>&#9166; open</span><span>esc close</span></div>
+  </div>
 </div>
 
 <script src="/app.js"></script>

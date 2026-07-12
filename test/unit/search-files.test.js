@@ -207,6 +207,18 @@ describe('files corpus', () => {
     }
   });
 
+  test('frontmatter is not indexed as content (snippets stay clean)', () => {
+    idx = freshIndex();
+    write('fm.md', '---\nauthor: quibblefish\ntags: [pricing]\n---\nThe body discusses margins.\n');
+    idx.reconcileFiles(workspace);
+    // Frontmatter-only words are not content matches...
+    assert.strictEqual(idx.searchFiles('quibblefish').length, 0);
+    // ...but tags still match (via the tags column) and body content matches
+    assert.strictEqual(idx.searchFiles('pricing').length, 1);
+    const hit = idx.searchFiles('margins')[0];
+    assert.ok(!hit.snippet.includes('author:'), 'snippet must not leak frontmatter');
+  });
+
   test('recentFiles lists most recently modified first', () => {
     idx = freshIndex();
     write('old.md', 'older note', 1_600_000_000);

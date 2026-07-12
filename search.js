@@ -448,6 +448,11 @@ class SearchIndex {
     try { content = fs.readFileSync(path.join(rootDir, rel), 'utf-8'); } catch (e) { return; }
     const title = path.basename(rel, path.extname(rel));
     const tags = parseFrontmatterTags(content);
+    // Strip the frontmatter block from indexed content: tags live in their
+    // own column, and raw YAML in snippets reads as noise in results.
+    if (content.startsWith('---')) {
+      content = content.replace(/^---\r?\n[\s\S]*?\r?\n---(\r?\n|$)/, '');
+    }
     // birthtime is unreliable (0 or =ctime) on some filesystems; store null
     // rather than a wrong date so created-at filters only apply where real.
     const created = st.birthtimeMs && st.birthtimeMs > 0 ? st.birthtimeMs : null;
