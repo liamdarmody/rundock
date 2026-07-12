@@ -17,6 +17,7 @@ import { Callout } from './nodes/callout.js';
 import { SoftHardBreak } from './nodes/soft-hard-break.js';
 import { SoftOrderedList } from './nodes/soft-ordered-list.js';
 import { tableExtensions, tableDirtyKey } from './nodes/table.js';
+import { criticExtensions } from './nodes/critic-marks.js';
 import { FindExtension } from './plugins/find.js';
 
 export function createEditorInstance({ element, initialBody, onUpdate, onSelectionChange }) {
@@ -51,6 +52,7 @@ export function createEditorInstance({ element, initialBody, onUpdate, onSelecti
       Wikilink,
       Callout,
       ...tableExtensions,
+      ...criticExtensions,
       FindExtension,
       Markdown.configure({
         // html:false closes the XSS surface that the prototype's regex
