@@ -220,10 +220,12 @@ export function createReviewController({ editor, endmatter, author = 'liam', now
     return plain;
   }
 
-  function addComment(text) {
+  // range is optional: the review composer captures the selection when it
+  // opens (typing in the sidebar blurs the editor), then passes it back.
+  function addComment(text, range = null) {
     if (!text) return false;
     const id = nextId('c');
-    const { from, to } = editor.state.selection;
+    const { from, to } = range || editor.state.selection;
     editor.chain().command(({ tr, state }) => {
       const comment = state.schema.nodes.criticComment.create({ content: text, id });
       if (selectionIsPlainText(from, to)) {
@@ -240,8 +242,8 @@ export function createReviewController({ editor, endmatter, author = 'liam', now
     return id;
   }
 
-  function suggestReplace(replacement) {
-    const { from, to } = editor.state.selection;
+  function suggestReplace(replacement, range = null) {
+    const { from, to } = range || editor.state.selection;
     if (from === to) return false;
     const id = nextId('s');
     editor.chain().command(({ tr, state }) => {
