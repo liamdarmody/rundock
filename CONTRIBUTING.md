@@ -23,13 +23,14 @@ This starts the server at `http://localhost:3000`. There is no build step. Chang
 
 ## Code structure
 
-Rundock is intentionally simple. Three source files, two dependencies, no bundler.
+Rundock is intentionally simple. Four source files, two dependencies, no bundler.
 
 | File | Purpose |
 |---|---|
-| `server.js` | Node.js HTTP + WebSocket server. Agent/skill discovery, Claude Code process management, delegation, transcripts, permissions. |
-| `public/app.js` | Single-page client application. Streaming, delegation UI, permission cards, conversation management. |
-| `public/index.html` | Layout, styles, and markup. Nav rail, sidebar, main panel. |
+| `server.js` | Node.js HTTP + WebSocket server. Agent/skill discovery, Claude Code process management, delegation, transcripts, permissions, universal search wiring. |
+| `search.js` | Universal search engine: SQLite FTS5 index (via Node's built-in `node:sqlite`) over workspace files and conversation transcripts. Pure module, fully unit-testable. See ARCHITECTURE.md, Universal search. |
+| `public/app.js` | Single-page client application. Streaming, delegation UI, permission cards, conversation management, search palette. |
+| `public/index.html` | Layout, styles, and markup. Nav rail, sidebar, main panel, search palette. |
 
 **Dependencies:** `ws` (WebSocket library) and `marked` (markdown renderer). That's it.
 

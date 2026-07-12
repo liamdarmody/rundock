@@ -1,6 +1,6 @@
 # Rundock architecture
 
-Rundock is a local Node.js server that exposes a vanilla-JS browser client over WebSocket and orchestrates Claude Code subprocesses to do the actual AI work. There is no cloud component, no database, and no build step. The whole stack runs on your machine and reaches Anthropic only through Claude Code, which you authenticate yourself.
+Rundock is a local Node.js server that exposes a vanilla-JS browser client over WebSocket and orchestrates Claude Code subprocesses to do the actual AI work. There is no cloud component, no server-side database, and no build step. The whole stack runs on your machine and reaches Anthropic only through Claude Code, which you authenticate yourself.
 
 This document describes the process model, the workspace directory layout, and the codebase, in enough detail that a contributor can navigate the source after reading once. Implementation detail is left to the code; this document covers shape, boundaries, and where to look.
 
@@ -82,6 +82,7 @@ Contents:
 | `conversations.json` | Index of every Rundock conversation: ID, title, owning agent, last Claude Code session ID, timestamps. |
 | `transcripts/<convoId>.json` | Lightweight conversation transcript for fast UI replay (role, agent, text). Capped to keep file size reasonable. |
 | `child-pids.json` | Running Claude Code subprocess PIDs, used to clean up zombie processes on server restart. |
+| `search-index.db` | SQLite FTS5 index behind universal search (plus its `-wal`/`-shm` journal files). A **derived artifact**: delete it and the next workspace open rebuilds it from the files and transcripts it indexes. Never a source of truth. See Universal search, below. |
 
 What does **not** live in `.rundock/`:
 
@@ -109,13 +110,14 @@ A workspace can also contain any other user files at the root or in subfolders. 
 
 ## The codebase at a glance
 
-Three source files, two production dependencies, no bundler.
+Four source files, two production dependencies, no bundler.
 
 | File | Approximate size | What it owns |
 |---|---|---|
-| `server.js` | ~3,800 lines | HTTP and WebSocket server. Agent and skill discovery. Frontmatter parsing. Subprocess spawn and stdin/stdout bridging. Delegation interception. Conversation persistence. Routine scheduler. Permission mediation. |
-| `public/app.js` | ~3,100 lines | Single-page client. WebSocket client. Conversation rendering. Streaming token display. Org chart. Sidebar. File browser. Settings drawer. Permission card UI. Markdown editor (Tiptap-based) for inline editing. |
-| `public/index.html` | ~660 lines | Layout, CSS, and markup. Nav rail, sidebar, main panel. No external stylesheet. |
+| `server.js` | ~5,100 lines | HTTP and WebSocket server. Agent and skill discovery. Frontmatter parsing. Subprocess spawn and stdin/stdout bridging. Delegation interception. Conversation persistence. Routine scheduler. Permission mediation. Universal search wiring (engine lifecycle, reconcile triggers, the `search_universal` and `search_conversations` handlers, grep fallback). |
+| `search.js` | ~750 lines | The universal search engine: SQLite FTS5 index over workspace files and conversation transcripts, query sanitisation, fuzzy title scoring. Pure module: no WebSocket, no globals, fully unit-testable. See Universal search, below. |
+| `public/app.js` | ~4,100 lines | Single-page client. WebSocket client. Conversation rendering. Streaming token display. Org chart. Sidebar. File browser. Settings drawer. Permission card UI. Markdown editor (Tiptap-based) for inline editing. Search palette (Cmd+K). |
+| `public/index.html` | ~900 lines | Layout, CSS, and markup. Nav rail, sidebar, main panel, search palette. No external stylesheet. |
 
 **Production dependencies:** `ws` for WebSocket, `marked` for markdown rendering in conversation messages. Nothing else.
 
@@ -129,6 +131,7 @@ Three source files, two production dependencies, no bundler.
 - Subprocess spawn: `spawn` calls in `server.js` configured with `getBareArgs()` for workspace context flags and `getSpawnEnv()` for environment variables (workspace mode, conversation ID).
 - Delegation interception: search `server.js` for `agent_switch` and `delegateProcess`. The interception happens inside the stream-json line handler.
 - Markdown editor in the client: search `public/app.js` for the Tiptap initialisation. Used for inline editing of agent files, skill files, and other markdown.
+- Search engine: `search.js` (the whole file; its header comment records the design decisions). Server wiring: `ensureSearchEngine`, `reconcileSearchBeforeQuery`, `runUniversalSearch` in `server.js`. Client palette: search `public/app.js` for `openPalette`.
 
 ## Delegation interception, briefly
 
@@ -142,10 +145,25 @@ Mechanically, the orchestrator-to-specialist handoff is a kill-and-respawn:
 
 The key design choice is that delegation looks like a real handoff to the user, not like a function call. The specialist runs in its own subprocess with its own system prompt and its own slice of context. The orchestrator does not stay alive while the specialist is working.
 
+## Universal search, briefly
+
+Universal search (the Cmd+K palette) queries four corpora: workspace files, conversations, agents, and skills. Files and conversations are indexed in SQLite FTS5 (`search.js`, using Node's built-in `node:sqlite`: no native dependency); agents and skills are tiny corpora filtered in memory at query time, so they can never go stale.
+
+The things worth knowing that no single file states:
+
+- **The index is a derived artifact.** `.rundock/search-index.db` rebuilds from workspace files and Claude Code's JSONL transcripts. There are no schema migrations: a `SCHEMA_VERSION` bump or a corrupt file deletes the database and rebuilds. Deleting it by hand is always safe.
+- **Four reconcile triggers** keep it fresh: workspace open (`ensureSearchEngine`, synchronous full pass), every search (`reconcileSearchBeforeQuery`: conversations always, files behind a 2-second TTL), the `save_file` handler (immediate single-file index), and the end of every agent turn (`appendTranscript` → `noteSearchConversationActivity`).
+- **Claude Code's JSONL stays the source of truth for conversations.** The indexer reads deltas past a per-session byte offset (append-only files make this safe); each session's delta lands in one transaction so a crash can never leave duplicate rows.
+- **Session ownership is mark-authoritative.** A session's `session_marks` row decides which conversation owns it; `conversations.json` order is not trusted (new entries are unshifted to the head, so order-derived ownership would flip).
+- **The grep fallback.** On runtimes without `node:sqlite` (Node 20/21), a capability probe routes every query to a bounded grep path instead. Search degrades; it never hard-fails. `RUNDOCK_SEARCH_DISABLE_SQLITE=1` forces this path for testing.
+- **Trust boundary:** user queries never reach FTS5 as syntax (the sanitiser emits only quoted terms), and snippets carry control-character highlight markers that the client swaps for `<mark>` only after HTML-escaping.
+
+The engine is exercised by `test/unit/search-*.test.js` (including a 10k-message performance suite) and `test/integration/search*.test.js`.
+
 ## What Rundock does NOT do
 
 - **No backend service.** Rundock runs entirely on your machine. There is nothing to deploy and no account to create.
-- **No database.** Persistence is JSON files in `.rundock/` and Claude Code's own JSONL transcripts. No SQLite, no Postgres, no key-value store.
+- **No database as a source of truth.** Persistence is JSON files in `.rundock/` and Claude Code's own JSONL transcripts. The one SQLite file (`search-index.db`, behind universal search) is a derived, disposable index rebuilt from those sources: nothing to migrate, nothing to back up, nothing lost if it is deleted. It uses Node's built-in `node:sqlite`, so it adds no dependency.
 - **No telemetry.** Rundock does not phone home, does not log usage to a remote service, does not collect crash reports. The two-dependency footprint makes this easy to verify.
 - **No outbound network calls from Rundock itself.** The only external connection is from Claude Code (a separate tool you installed and authenticated yourself) to Anthropic's API. Rundock does not make HTTP requests to Anthropic, does not handle API keys, and does not see your Claude credentials.
 - **No agent-format reinvention.** Agent files use Claude Code's standard format with optional Rundock extension fields. An agent file written for Rundock works in plain Claude Code; an agent file written for Claude Code works in Rundock with reduced UI affordances. See AGENTS.md.

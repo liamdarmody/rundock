@@ -69,7 +69,7 @@ To pull updates later, run `npm run update` in the install directory.
 
 ## Security
 
-The entire stack runs on your machine. Rundock never sends your files, your agents, or your conversations anywhere. The only external connection is from Claude Code to Anthropic's API, which is how Claude processes your messages. Only the active conversation is sent to Anthropic for processing. Rundock itself makes zero outbound network calls. There is no cloud service, no account to create, no database, no telemetry. Your API key is managed by Claude Code, not Rundock.
+The entire stack runs on your machine. Rundock never sends your files, your agents, or your conversations anywhere. The only external connection is from Claude Code to Anthropic's API, which is how Claude processes your messages. Only the active conversation is sent to Anthropic for processing. Rundock itself makes zero outbound network calls. There is no cloud service, no account to create, no server-side database, no telemetry. Your API key is managed by Claude Code, not Rundock.
 
 ## Licence
 

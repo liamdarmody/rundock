@@ -73,13 +73,8 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .agent-status-state.working { color: var(--success); }
 
 /* Conversation search */
-.sidebar-search-wrap { position: relative; padding: 0 8px 10px; margin: 4px 0 0; border-bottom: 1px solid var(--border); }
-.sidebar-search { width: 100%; box-sizing: border-box; padding: 7px 28px 7px 10px; font-size: var(--caption); font-family: inherit; color: var(--text-1); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; outline: none; transition: border-color 0.15s ease; }
-.sidebar-search:focus { border-color: var(--text-2); }
-.sidebar-search::placeholder { color: var(--text-2); opacity: 0.6; }
-.sidebar-search-clear { position: absolute; right: 16px; top: calc(50% - 5px); transform: translateY(-50%); font-size: 16px; color: var(--text-2); cursor: pointer; line-height: 1; }
-.sidebar-search-clear:hover { color: var(--text-1); }
-.sidebar-search-clear.hidden { display: none; }
+/* Per-view sidebar search fields removed in favour of the universal search
+   palette (nav rail icon / Cmd+K): one engine, one search surface. */
 
 /* Conversation list */
 .convo-list { flex: 1; overflow-y: auto; padding: 8px; }
@@ -97,19 +92,15 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .convo-item:hover .convo-title-row { padding-right: 24px; }
 .convo-pin:hover { color: var(--accent); background: var(--surface); }
 .convo-item.b-unread { border-left-color: var(--success); }
-.convo-item.b-pinned { border-left-color: var(--accent); }
+/* b-pinned removed: pinned-ness is position + the title-row pin glyph; the
+   left border is reserved for the unread/working signal. */
 
-/* Sidebar filter pills (conversations sidebar only). The pills row carries the
-   border-bottom separator, replacing the search-wrap's. Search-wrap also loses
-   its bottom padding so the gap above the pills matches the gap below them. */
-#sidebar-conversations .sidebar-search-wrap { padding-bottom: 0; border-bottom: none; }
-/* Search-wrap is now symmetric in the conversations sidebar, so the clear
-   button lands on the input centre at the default top: 50%. Skills and files
-   sidebars keep the wrap's asymmetric padding-bottom and the calc(50% - 5px). */
-#sidebar-conversations .sidebar-search-clear { top: 50%; }
-.sidebar-pills { padding: 8px 8px; border-bottom: 1px solid var(--border); display: flex; gap: 6px; flex-shrink: 0; }
+/* Sidebar filter pills (conversations sidebar only). No divider: the bordered
+   pills anchor the top of the list on their own (WhatsApp-style). */
+.sidebar-pills { padding: 8px 8px 10px; display: flex; gap: 6px; flex-shrink: 0; }
 .pill { font-size: var(--caption); font-weight: 500; padding: 4px 13px; border-radius: 999px; cursor: pointer; border: 1px solid var(--border); background: transparent; color: var(--text-2); transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease; line-height: 1.5; font-family: inherit; }
 .pill:hover { border-color: var(--text-2); color: var(--text-1); }
+.pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .pill.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 /* Archive sidebar action (replaces delete on persisted, not-yet-archived items).
@@ -652,6 +643,51 @@ mark.find-match.current,
 .delegation-line { flex: 1; height: 1px; background: var(--border); }
 .delegation-badge { display: flex; align-items: center; gap: 6px; font-size: var(--caption); font-weight: 600; white-space: nowrap; }
 .section-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); margin-bottom: 8px; text-align: left; }
+
+/* Hallmark · component: command-palette · genre: modern-minimal (inherits app) · theme: Rundock tokens
+ * states: default · hover · focus · active/selected · disabled(n/a) · loading · error · empty/recent
+ * tokens: consumes existing :root vars only — no new palette colours; the
+ * overlay scrim and shadows use rgba per the codebase's existing convention
+ */
+/* ===== Universal search palette (Cmd+K) ===== */
+.palette-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.42); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); z-index: 200; display: flex; align-items: flex-start; justify-content: center; padding: 11vh 16px 16px; }
+.palette { width: min(680px, 94vw); max-height: min(66vh, 620px); display: flex; flex-direction: column; background: var(--elevated); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 18px 50px rgba(0,0,0,0.4), 0 2px 8px rgba(0,0,0,0.2); overflow: hidden; animation: palette-in 140ms cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes palette-in { from { opacity: 0; transform: translateY(-8px) scale(0.985); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .palette { animation: none; } }
+.palette-input-row { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.palette-input-row svg.palette-glass { width: 17px; height: 17px; color: var(--text-2); flex-shrink: 0; }
+.palette-input { flex: 1; font-size: 15px; color: var(--text-1); background: none; border: none; outline: none; min-width: 0; }
+.palette-input::placeholder { color: var(--text-2); opacity: 0.7; }
+.palette-scope-row { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+.palette-scope { font-size: var(--caption); font-weight: 500; color: var(--text-2); padding: 4px 10px; border-radius: 999px; border: 1px solid transparent; cursor: pointer; white-space: nowrap; transition: color 0.15s ease, background 0.15s ease; }
+.palette-scope:hover { color: var(--text-1); background: var(--card); }
+.palette-scope:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.palette-scope.active { color: var(--accent); background: var(--accent-glow); border-color: transparent; }
+.palette-results { flex: 1; overflow-y: auto; padding: 6px 6px 10px; scroll-padding: 40px; }
+.palette-group-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); padding: 12px 12px 5px; display: flex; align-items: center; gap: 6px; }
+.palette-group-count { font-weight: 500; letter-spacing: 0; text-transform: none; opacity: 0.75; }
+.palette-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; cursor: pointer; border-left: 2px solid transparent; }
+.palette-item:hover { background: var(--card); }
+.palette-item.selected { background: var(--card); border-left-color: var(--accent); }
+.palette-item-icon { width: 26px; height: 26px; border-radius: 7px; background: var(--card); color: var(--text-2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 13px; }
+.palette-item.selected .palette-item-icon { color: var(--text-1); }
+.palette-item-body { flex: 1; min-width: 0; }
+.palette-item-title { font-size: var(--body); font-weight: 500; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.palette-item-meta { font-size: var(--caption); color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+.palette-item-meta mark, .palette-item-title mark { background: var(--accent-glow); color: var(--accent); border-radius: 2px; padding: 0 1px; }
+.palette-item-kbd { font-size: var(--label); color: var(--text-2); opacity: 0; flex-shrink: 0; }
+.palette-item.selected .palette-item-kbd { opacity: 1; }
+.palette-empty { padding: 28px 20px; text-align: center; color: var(--text-2); font-size: var(--body); line-height: 1.6; }
+.palette-empty .palette-empty-sub { font-size: var(--caption); opacity: 0.8; margin-top: 4px; }
+.palette-status { padding: 5px 14px; font-size: var(--label); color: var(--text-2); border-top: 1px solid var(--border); display: flex; gap: 14px; user-select: none; }
+.palette-status .spin { display: inline-block; animation: palette-spin 0.8s linear infinite; }
+@keyframes palette-spin { to { transform: rotate(360deg); } }
+/* Applies in the chat view: search-result clicks flash the matched message.
+   Lives with the palette CSS because the palette is the only thing that
+   triggers it. The class is removed by app.js once the flash completes. */
+.msg.anchor-flash > .msg-bubble { animation: anchor-flash 1.6s ease; }
+@keyframes anchor-flash { 0%, 45% { box-shadow: 0 0 0 2px var(--accent); background: var(--accent-glow); } 100% { box-shadow: none; } }
+@media (prefers-reduced-motion: reduce) { .msg.anchor-flash > .msg-bubble { animation: none; box-shadow: 0 0 0 2px var(--accent); } }
 </style>
 </head>
 <body>
@@ -674,6 +710,13 @@ mark.find-match.current,
         <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
         <svg class="icon-filled" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
       </button>
+      <!-- Universal search: opens the palette overlay rather than switching
+           views, so it carries no data-nav and never takes the active state.
+           The tooltip doubles as the shortcut teacher; app.js fills it in
+           with the platform's modifier (Cmd on macOS, Ctrl elsewhere). -->
+      <button class="nav-item" id="nav-search-btn" onclick="openPalette()" aria-label="Search workspace">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      </button>
     </div>
     <div class="nav-bottom">
       <button class="nav-item" onclick="toggleTheme()" data-tooltip="Theme" id="theme-toggle">
@@ -694,14 +737,9 @@ mark.find-match.current,
     </div>
     <div id="sidebar-conversations">
       <div class="sidebar-header"><span class="sidebar-label">Conversations</span></div>
-      <div class="sidebar-search-wrap">
-        <input type="text" id="convo-search" class="sidebar-search" placeholder="Search conversations..." oninput="filterConversations(this.value)" onkeydown="if(event.key==='Escape'){clearConvoSearch();this.blur();}" />
-        <span class="sidebar-search-clear hidden" id="convo-search-clear" onclick="clearConvoSearch()"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="2" y1="2" x2="10" y2="10"/><line x1="10" y1="2" x2="2" y2="10"/></svg></span>
-      </div>
       <div class="sidebar-pills" id="sidebar-pills">
         <button class="pill active" id="pill-all" onclick="setSidebarPill('all')">All</button>
         <button class="pill" id="pill-unread" onclick="setSidebarPill('unread')">Unread</button>
-        <button class="pill" id="pill-pinned" onclick="setSidebarPill('pinned')">Pinned</button>
       </div>
       <div class="convo-list" id="convo-list"></div>
       <div class="convo-footer">
@@ -710,18 +748,10 @@ mark.find-match.current,
     </div>
     <div id="sidebar-skills" class="hidden">
       <div class="sidebar-header"><span class="sidebar-label">Skills</span></div>
-      <div class="sidebar-search-wrap">
-        <input type="text" id="skill-search" class="sidebar-search" placeholder="Search skills..." oninput="filterSkills(this.value)" onkeydown="if(event.key==='Escape'){clearSkillSearch();this.blur();}" />
-        <span class="sidebar-search-clear hidden" id="skill-search-clear" onclick="clearSkillSearch()"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="2" y1="2" x2="10" y2="10"/><line x1="10" y1="2" x2="2" y2="10"/></svg></span>
-      </div>
       <div class="skills-sidebar-list" id="skills-sidebar-list"></div>
     </div>
     <div id="sidebar-files" class="hidden">
       <div class="sidebar-header"><span class="sidebar-label">Files</span></div>
-      <div class="sidebar-search-wrap">
-        <input type="text" id="file-search" class="sidebar-search" placeholder="Search files..." oninput="filterFiles(this.value)" onkeydown="if(event.key==='Escape'){clearFileSearch();this.blur();}" />
-        <span class="sidebar-search-clear hidden" id="file-search-clear" onclick="clearFileSearch()"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="2" y1="2" x2="10" y2="10"/><line x1="10" y1="2" x2="2" y2="10"/></svg></span>
-      </div>
       <div class="file-tree" id="file-tree"></div>
     </div>
     <div id="sidebar-settings" class="hidden">
@@ -846,6 +876,25 @@ mark.find-match.current,
       <div class="settings-content" id="settings-content"></div>
     </div>
   </main>
+</div>
+
+<!-- Universal search palette (Cmd+K / Ctrl+K) -->
+<div id="palette-overlay" class="palette-overlay hidden" onmousedown="if(event.target===this)closePalette()">
+  <div class="palette" role="dialog" aria-modal="true" aria-label="Search workspace">
+    <div class="palette-input-row">
+      <svg class="palette-glass" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input id="palette-input" class="palette-input" placeholder="Search files, conversations, agents, skills..." autocomplete="off" spellcheck="false" role="combobox" aria-label="Search workspace" aria-expanded="true" aria-controls="palette-results" aria-autocomplete="list" />
+    </div>
+    <div class="palette-scope-row" id="palette-scope-row" role="tablist" aria-label="Result type">
+      <button class="palette-scope active" data-scope="all" onclick="setPaletteScope('all')">All</button>
+      <button class="palette-scope" data-scope="files" onclick="setPaletteScope('files')">Files</button>
+      <button class="palette-scope" data-scope="conversations" onclick="setPaletteScope('conversations')">Conversations</button>
+      <button class="palette-scope" data-scope="agents" onclick="setPaletteScope('agents')">Agents</button>
+      <button class="palette-scope" data-scope="skills" onclick="setPaletteScope('skills')">Skills</button>
+    </div>
+    <div class="palette-results" id="palette-results" role="listbox" aria-label="Search results"></div>
+    <div class="palette-status" id="palette-status"><span>&#8593;&#8595; navigate</span><span>&#9166; open</span><span>esc close</span></div>
+  </div>
 </div>
 
 <script src="/app.js"></script>
