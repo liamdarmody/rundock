@@ -207,6 +207,16 @@ describe('files corpus', () => {
     }
   });
 
+  test('recentFiles lists most recently modified first', () => {
+    idx = freshIndex();
+    write('old.md', 'older note', 1_600_000_000);
+    write('new.md', 'newer note', 1_700_000_000);
+    idx.reconcileFiles(workspace);
+    const recent = idx.recentFiles(5);
+    assert.deepStrictEqual(recent.map(r => r.path), ['new.md', 'old.md']);
+    assert.strictEqual(recent[0].matchType, 'recent');
+  });
+
   test('unicode content is searchable', () => {
     idx = freshIndex();
     write('intl.md', 'Discussion about café strategy and 日本語 notes.');
