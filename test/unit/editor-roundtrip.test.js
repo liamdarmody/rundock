@@ -20,4 +20,13 @@ describe('editor round-trip: existing constructs (harness smoke)', () => {
     const src = '---\ntitle: "Test"\n---\n**Date:** [[2026-07-10]]\n**Project:** [[some-project|Alias]]\n\n- item one\n- item two';
     assert.equal(await roundTrip(src), src);
   });
+
+  test('blank line between frontmatter and body survives the round-trip', async () => {
+    // Regression: extractFrontmatter used to leave the separator blank line
+    // in the body, where markdown parsing swallowed it, so every save of a
+    // conventionally formatted file (frontmatter, blank line, body) dropped
+    // that line. The blank run now travels with the raw frontmatter block.
+    const src = '---\ntitle: "Test"\n---\n\n# Heading\n\nBody text.';
+    assert.equal(await roundTrip(src), src);
+  });
 });
