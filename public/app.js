@@ -3960,7 +3960,7 @@ function paletteItemHtml(item, idx) {
     title = esc(item.name);
     meta = esc((item.description || '').slice(0, 90));
   }
-  return `<div class="palette-item" id="palette-item-${idx}" role="option" aria-selected="false" data-idx="${idx}" onclick="openPaletteResult(${idx})" onmousemove="hoverPaletteItem(${idx})">
+  return `<div class="palette-item" id="palette-item-${idx}" role="option" aria-selected="false" data-idx="${idx}" data-type="${item.type}" onclick="openPaletteResult(${idx})" onmousemove="hoverPaletteItem(${idx})">
     ${icon}
     <div class="palette-item-body">
       <div class="palette-item-title">${title}</div>
