@@ -302,6 +302,36 @@ describe('review round 1 regressions (server-side)', () => {
     assert.ok(internal.ensureSearchEngine(), 'engine retries after workspace switch');
   });
 
+  test('universal conversation hits ship the declared contract, nothing more (R3 P2-2)', async () => {
+    // Guard against payload drift: the V1 client renders id/title/agentId/
+    // snippet/matchCount; sessionId+seq are the declared future-anchor
+    // contract. Engine-internal fields (neighbour, message role/agent, ts)
+    // must not leak onto the wire.
+    const reply = await search({ query: 'discount structure' });
+    const hit = reply.groups.conversations.find(c => c.id === 'c1' && c.matchType === 'content');
+    assert.ok(hit, 'content hit present');
+    for (const forbidden of ['neighbour', 'messageAgentId', 'messageRole', 'tsMs']) {
+      assert.ok(!(forbidden in hit), `${forbidden} must not be shipped to the client`);
+    }
+  });
+
+  test('a mid-query FTS failure falls back to grep in search_conversations (R3 P2-3)', async () => {
+    const engine = h.internal.getSearchEngine();
+    assert.ok(engine, 'engine active');
+    const orig = engine.searchMessages;
+    engine.searchMessages = () => { throw new Error('simulated FTS failure'); };
+    try {
+      const since = client.messages.length;
+      client.send({ type: 'search_conversations', query: 'discount structure' });
+      const { msg: reply } = await client.waitFor(m => m.type === 'search_results', { since, label: 'search_results' });
+      const hit = reply.results.find(r => r.id === 'c1' && r.matchType === 'content');
+      assert.ok(hit, 'grep fallback served the query despite the FTS throw');
+      assert.ok(hit.snippet, 'fallback snippet present');
+    } finally {
+      engine.searchMessages = orig;
+    }
+  });
+
   test('archived conversations stay out of the empty-query recents', async () => {
     // (Review R1 P3-9)
     const rundockDir = path.join(h.workspaceDir, '.rundock');
