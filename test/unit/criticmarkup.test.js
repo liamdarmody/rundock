@@ -1,4 +1,4 @@
-// CriticMarkup parser/serializer contract (FV1 Build 2a).
+// CriticMarkup parser/serializer contract.
 //
 // Wire format (Roughdraft-flavoured, live-proven): five constructs
 //   {>>comment<<}  {++insert++}  {--delete--}  {~~old~>new~~}  {==highlight==}

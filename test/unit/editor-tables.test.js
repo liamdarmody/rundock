@@ -1,6 +1,6 @@
 // Table rendering + strict byte-for-byte round-trip in the Tiptap editor.
 //
-// Policy (FV1, Liam 2026-07-12): table serialization is source-preserving.
+// Policy: table serialization is source-preserving.
 // - An unedited table re-emits its source bytes verbatim: padding, alignment
 //   markers, and column spacing are never normalised.
 // - Editing a cell changes ONLY that cell's content bytes; every other line
@@ -15,8 +15,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { bootEditorEnv, roundTrip } from '../helpers/editor-harness.js';
 
-const tysonPath = fileURLToPath(new URL('../fixtures/tyson-hooks.md', import.meta.url));
-const tysonSrc = readFileSync(tysonPath, 'utf8');
+const fixturePath = fileURLToPath(new URL('../fixtures/scoring-table.md', import.meta.url));
+const fixtureSrc = readFileSync(fixturePath, 'utf8');
 
 async function withEditor(rawMarkdown, fn) {
   const env = await bootEditorEnv();
@@ -53,8 +53,8 @@ describe('tables: rendering', () => {
     });
   });
 
-  test('the Tyson hooks scoring table renders with full structure', async () => {
-    await withEditor(tysonSrc, (editor) => {
+  test('the fixture scoring table renders with full structure', async () => {
+    await withEditor(fixtureSrc, (editor) => {
       let tables = 0, rows = 0, headerCells = 0;
       editor.state.doc.descendants((node) => {
         if (node.type.name === 'table') tables++;
@@ -63,15 +63,15 @@ describe('tables: rendering', () => {
         return true;
       });
       assert.equal(tables, 1, 'expected the scoring table to be present');
-      assert.equal(headerCells, 7, 'expected 7 header cells: #, Hook, Tension, Specificity/ICP, Curiosity gap, Non-cliché, Score');
+      assert.equal(headerCells, 7, 'expected 7 header cells: #, Option, Effort, Risk, Payoff, Fit, Score');
       assert.ok(rows >= 10, `expected >= 10 rows, got ${rows}`);
     });
   });
 });
 
 describe('tables: strict byte-for-byte round-trip (unedited)', () => {
-  test('Tyson hooks file round-trips byte-for-byte', async () => {
-    assert.equal(await roundTrip(tysonSrc), tysonSrc);
+  test('the scoring-table fixture round-trips byte-for-byte', async () => {
+    assert.equal(await roundTrip(fixtureSrc), fixtureSrc);
   });
 
   test('non-uniform padding is preserved exactly', async () => {
