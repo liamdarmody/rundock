@@ -262,6 +262,46 @@ describe('review round 1 regressions (server-side)', () => {
     assert.ok(reply.groups.files.find(f => f.path === 'cachecheck-note.md' && f.matchType === 'title'), 'fresh file found by title despite file list cache');
   });
 
+  test('the live-turn hook busts a stale negative session memo (R2 P2-1)', () => {
+    // Opening the palette can seed a negative memo entry for a brand-new
+    // conversation before Claude Code has created its jsonl; the turn-end
+    // hook is the authoritative "the jsonl exists now" signal and must not
+    // be blinded by that entry for 30s.
+    const internal = h.internal;
+    const rundockDir = path.join(h.workspaceDir, '.rundock');
+    const original = fs.readFileSync(path.join(rundockDir, 'conversations.json'), 'utf-8');
+    const convos = JSON.parse(original);
+    convos.push({ id: 'live-c', agentId: 'chief-of-staff', sessionId: 'sess-live', sessionIds: [], title: 'Live convo', status: 'active', createdAt: '2026-07-12T00:00:00.000Z', lastActiveAt: '2026-07-12T00:00:00.000Z' });
+    fs.writeFileSync(path.join(rundockDir, 'conversations.json'), JSON.stringify(convos));
+    try {
+      internal._sessionPathMemo.clear();
+      internal.conversationSessionsForSearch(); // palette-open reconcile seeds the negative
+      assert.strictEqual(internal._sessionPathMemo.get('sess-live').path, null, 'negative memo seeded');
+      // Claude Code writes the first turn.
+      fs.writeFileSync(path.join(sessionDir, 'sess-live.jsonl'), jsonlUser('brand new gecko content', '2026-07-12T00:00:05.000Z'));
+      internal.noteSearchConversationActivity('live-c');
+      const engine = internal.getSearchEngine();
+      assert.ok(engine, 'engine active in this suite');
+      assert.strictEqual(engine.searchMessages('gecko', { collapse: false }).length, 1, 'live content findable immediately');
+    } finally {
+      fs.writeFileSync(path.join(rundockDir, 'conversations.json'), original);
+      fs.rmSync(path.join(sessionDir, 'sess-live.jsonl'), { force: true });
+      internal._sessionPathMemo.clear();
+    }
+  });
+
+  test('a workspace switch retries a failed engine open (R2 P2-2)', async () => {
+    const internal = h.internal;
+    assert.ok(internal.ensureSearchEngine(), 'engine healthy to start');
+    internal._searchTestHooks.simulateOpenFailure();
+    assert.strictEqual(internal.ensureSearchEngine(), null, 'backoff active after failure');
+    // Re-selecting the workspace (same path) is the documented retry trigger.
+    const since = client.messages.length;
+    client.send({ type: 'set_workspace', path: h.workspaceDir });
+    await client.waitFor(m => m.type === 'workspace_set', { since, label: 'workspace_set' });
+    assert.ok(internal.ensureSearchEngine(), 'engine retries after workspace switch');
+  });
+
   test('archived conversations stay out of the empty-query recents', async () => {
     // (Review R1 P3-9)
     const rundockDir = path.join(h.workspaceDir, '.rundock');

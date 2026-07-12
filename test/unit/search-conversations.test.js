@@ -271,6 +271,82 @@ describe('conversations corpus', () => {
     assert.strictEqual(r.indexed, 1);
   });
 
+  test('a failed transaction on the shrink path restores the wiped rows (R2 P3-1)', () => {
+    // The shrink-branch DELETE must live inside the per-session transaction:
+    // if the reindex then fails, rollback restores the old rows instead of
+    // leaving the index empty with a stale mark.
+    const p = writeSession('s1',
+      jsonlUser('shrink dodo one padded for length', '2026-07-01T10:00:00.000Z') +
+      jsonlAssistant('shrink dodo two also padded for length', '2026-07-01T10:00:10.000Z')
+    );
+    const c = convo('c1', 'cos', [{ sessionId: 's1', agentId: 'cos', filePath: p }]);
+    idx.reconcileConversations([c]);
+    assert.strictEqual(idx.searchMessages('dodo', { collapse: false }).length, 2);
+    // Replace with a shorter file (shrink), then sabotage the reindex.
+    fs.writeFileSync(p, jsonlUser('fresh emu content', '2026-07-01T11:00:00.000Z'));
+    const origPrepare = idx.db.prepare.bind(idx.db);
+    idx.db.prepare = (sql) => {
+      const stmt = origPrepare(sql);
+      if (/INSERT INTO messages/.test(sql)) {
+        stmt.run = () => { throw new Error('simulated failure'); };
+      }
+      return stmt;
+    };
+    assert.doesNotThrow(() => idx.reconcileConversations([c]));
+    idx.db.prepare = origPrepare;
+    assert.strictEqual(idx.searchMessages('dodo', { collapse: false }).length, 2, 'rollback must restore the wiped rows');
+    // Clean pass: replacement indexed once, old rows gone.
+    idx.reconcileConversations([c]);
+    assert.strictEqual(idx.searchMessages('dodo', { collapse: false }).length, 0);
+    assert.strictEqual(idx.searchMessages('emu', { collapse: false }).length, 1);
+  });
+
+  test('an existing mark keeps session ownership regardless of batch order (R2 P3-2)', () => {
+    const p = writeSession('s1', jsonlUser('owned tapir content', '2026-07-01T10:00:00.000Z'));
+    idx.reconcileConversations([convo('cA', 'cos', [{ sessionId: 's1', agentId: 'cos', filePath: p }])],
+      { validConversationIds: ['cA'] });
+    assert.strictEqual(idx.searchMessages('tapir', { collapse: false })[0].conversationId, 'cA');
+    // A new conversation entry (unshifted to the head of conversations.json)
+    // presents the same session; the mark's owner is still alive, so the
+    // delta stays attributed to cA — no flip, no split.
+    fs.appendFileSync(p, jsonlAssistant('more tapir detail', '2026-07-01T10:01:00.000Z'));
+    idx.reconcileConversations([convo('cB', 'cos', [{ sessionId: 's1', agentId: 'cos', filePath: p }])],
+      { validConversationIds: ['cA', 'cB'] });
+    const hits = idx.searchMessages('tapir', { collapse: false });
+    assert.strictEqual(hits.length, 2);
+    assert.deepStrictEqual([...new Set(hits.map(h => h.conversationId))], ['cA'], 'mark owner keeps the session');
+  });
+
+  test('a dead owner hands the session over cleanly, without duplicates (R2 P3-2)', () => {
+    const p = writeSession('s1',
+      jsonlUser('handover bilby one', '2026-07-01T10:00:00.000Z') +
+      jsonlAssistant('handover bilby two', '2026-07-01T10:00:10.000Z')
+    );
+    idx.reconcileConversations([convo('cA', 'cos', [{ sessionId: 's1', agentId: 'cos', filePath: p }])],
+      { validConversationIds: ['cA'] });
+    // cA is deleted; its rows AND its sessions' rows go with it.
+    idx.removeConversation('cA');
+    assert.strictEqual(idx.searchMessages('bilby', { collapse: false }).length, 0);
+    // cB (the resumed conversation) inherits the session from zero.
+    idx.reconcileConversations([convo('cB', 'cos', [{ sessionId: 's1', agentId: 'cos', filePath: p }])],
+      { validConversationIds: ['cB'] });
+    const hits = idx.searchMessages('bilby', { collapse: false });
+    assert.strictEqual(hits.length, 2, 'exactly once — no duplicate rows through the ownership seam');
+    assert.deepStrictEqual([...new Set(hits.map(h => h.conversationId))], ['cB']);
+  });
+
+  test('an owner missing from the valid set (external edit) hands over without duplicates (R2 P3-2)', () => {
+    const p = writeSession('s1', jsonlUser('external kakapo content', '2026-07-01T10:00:00.000Z'));
+    idx.reconcileConversations([convo('cA', 'cos', [{ sessionId: 's1', agentId: 'cos', filePath: p }])],
+      { validConversationIds: ['cA'] });
+    // conversations.json edited externally: cA vanished without a delete event.
+    idx.reconcileConversations([convo('cB', 'cos', [{ sessionId: 's1', agentId: 'cos', filePath: p }])],
+      { validConversationIds: ['cB'] });
+    const hits = idx.searchMessages('kakapo', { collapse: false });
+    assert.strictEqual(hits.length, 1, 'no duplicates when ownership transfers');
+    assert.strictEqual(hits[0].conversationId, 'cB');
+  });
+
   test('a missing session file is tolerated (no throw, no rows)', () => {
     const c = convo('c1', 'cos', [{ sessionId: 'ghost', agentId: 'cos', filePath: path.join(tmpRoot, 'nope.jsonl') }]);
     assert.doesNotThrow(() => idx.reconcileConversations([c]));
