@@ -13922,6 +13922,20 @@ function getChangedRanges(transform) {
   });
   return simplifyChangedRanges(changes);
 }
+var getNodeAtPosition = (state, typeOrName, pos, maxDepth = 20) => {
+  const $pos = state.doc.resolve(pos);
+  let currentDepth = maxDepth;
+  let node = null;
+  while (currentDepth > 0 && node === null) {
+    const currentNode = $pos.node(currentDepth);
+    if ((currentNode == null ? void 0 : currentNode.type.name) === typeOrName) {
+      node = currentNode;
+    } else {
+      currentDepth -= 1;
+    }
+  }
+  return [node, currentDepth];
+};
 function getSchemaTypeByName(name, schema3) {
   return schema3.nodes[name] || schema3.marks[name] || null;
 }
@@ -14020,6 +14034,31 @@ function isActive(state, name, attributes = {}) {
   }
   return false;
 }
+var isAtEndOfNode = (state, nodeType) => {
+  const { $from, $to, $anchor } = state.selection;
+  if (nodeType) {
+    const parentNode2 = findParentNode((node) => node.type.name === nodeType)(state.selection);
+    if (!parentNode2) {
+      return false;
+    }
+    const $parentPos = state.doc.resolve(parentNode2.pos + 1);
+    if ($anchor.pos + 1 === $parentPos.end()) {
+      return true;
+    }
+    return false;
+  }
+  if ($to.parentOffset < $to.parent.nodeSize - 2 || $from.pos !== $to.pos) {
+    return false;
+  }
+  return true;
+};
+var isAtStartOfNode = (state) => {
+  const { $from, $to } = state.selection;
+  if ($from.parentOffset > 0 || $from.pos !== $to.pos) {
+    return false;
+  }
+  return true;
+};
 function isExtensionRulesEnabled(extension, enabled) {
   if (Array.isArray(enabled)) {
     return enabled.some((enabledExtension) => {
@@ -15826,7 +15865,7 @@ var FocusEvents = Extension.create({
 var Keymap = Extension.create({
   name: "keymap",
   addKeyboardShortcuts() {
-    const handleBackspace2 = () => this.editor.commands.first(({ commands }) => [
+    const handleBackspace3 = () => this.editor.commands.first(({ commands }) => [
       () => commands.undoInputRule(),
       // maybe convert first text block node to default node
       () => commands.command(({ tr: tr2 }) => {
@@ -15846,7 +15885,7 @@ var Keymap = Extension.create({
       () => commands.joinBackward(),
       () => commands.selectNodeBackward()
     ]);
-    const handleDelete2 = () => this.editor.commands.first(({ commands }) => [
+    const handleDelete3 = () => this.editor.commands.first(({ commands }) => [
       () => commands.deleteSelection(),
       () => commands.deleteCurrentNode(),
       () => commands.joinForward(),
@@ -15861,11 +15900,11 @@ var Keymap = Extension.create({
     const baseKeymap = {
       Enter: handleEnter,
       "Mod-Enter": () => this.editor.commands.exitCode(),
-      Backspace: handleBackspace2,
-      "Mod-Backspace": handleBackspace2,
-      "Shift-Backspace": handleBackspace2,
-      Delete: handleDelete2,
-      "Mod-Delete": handleDelete2,
+      Backspace: handleBackspace3,
+      "Mod-Backspace": handleBackspace3,
+      "Shift-Backspace": handleBackspace3,
+      Delete: handleDelete3,
+      "Mod-Delete": handleDelete3,
       "Mod-a": () => this.editor.commands.selectAll()
     };
     const pcKeymap = {
@@ -15873,12 +15912,12 @@ var Keymap = Extension.create({
     };
     const macKeymap = {
       ...baseKeymap,
-      "Ctrl-h": handleBackspace2,
-      "Alt-Backspace": handleBackspace2,
-      "Ctrl-d": handleDelete2,
-      "Ctrl-Alt-Backspace": handleDelete2,
-      "Alt-Delete": handleDelete2,
-      "Alt-d": handleDelete2,
+      "Ctrl-h": handleBackspace3,
+      "Alt-Backspace": handleBackspace3,
+      "Ctrl-d": handleDelete3,
+      "Ctrl-Alt-Backspace": handleDelete3,
+      "Alt-Delete": handleDelete3,
+      "Alt-d": handleDelete3,
       "Ctrl-a": () => this.editor.commands.selectTextblockStart(),
       "Ctrl-e": () => this.editor.commands.selectTextblockEnd()
     };
@@ -16848,6 +16887,40 @@ var Editor = class extends EventEmitter {
     return this.$pos(0);
   }
 };
+function wrappingInputRule(config2) {
+  return new InputRule({
+    find: config2.find,
+    handler: ({ state, range, match: match2, chain }) => {
+      const attributes = callOrReturn(config2.getAttributes, void 0, match2) || {};
+      const tr2 = state.tr.delete(range.from, range.to);
+      const $start = tr2.doc.resolve(range.from);
+      const blockRange = $start.blockRange();
+      const wrapping = blockRange && findWrapping(blockRange, config2.type, attributes);
+      if (!wrapping) {
+        return null;
+      }
+      tr2.wrap(blockRange, wrapping);
+      if (config2.keepMarks && config2.editor) {
+        const { selection, storedMarks } = state;
+        const { splittableMarks } = config2.editor.extensionManager;
+        const marks = storedMarks || selection.$to.parentOffset && selection.$from.marks();
+        if (marks) {
+          const filteredMarks = marks.filter((mark) => splittableMarks.includes(mark.type.name));
+          tr2.ensureMarks(filteredMarks);
+        }
+      }
+      if (config2.keepAttributes) {
+        const nodeType = config2.type.name === "bulletList" || config2.type.name === "orderedList" ? "listItem" : "taskList";
+        chain().updateAttributes(nodeType, attributes).run();
+      }
+      const before = tr2.doc.resolve(range.from - 1).nodeBefore;
+      if (before && before.type === config2.type && canJoin(tr2.doc, range.from - 1) && (!config2.joinPredicate || config2.joinPredicate(match2, before))) {
+        tr2.join(range.from - 1);
+      }
+    },
+    undoable: config2.undoable
+  });
+}
 var markdown_exports = {};
 __export2(markdown_exports, {
   createAtomBlockMarkdownSpec: () => createAtomBlockMarkdownSpec,
@@ -19076,7 +19149,7 @@ function getMarksBetween(from2, to, doc3) {
   }
   return marks;
 }
-var getNodeAtPosition = (state, typeOrName, pos, maxDepth = 20) => {
+var getNodeAtPosition2 = (state, typeOrName, pos, maxDepth = 20) => {
   const $pos = state.doc.resolve(pos);
   let currentDepth = maxDepth;
   let node = null;
@@ -19175,7 +19248,7 @@ function isMarkActive2(state, typeOrName, attributes = {}) {
   const range = matchedRange > 0 ? matchedRange + excludedRange : matchedRange;
   return range >= selectionRange;
 }
-var isAtEndOfNode = (state, nodeType) => {
+var isAtEndOfNode2 = (state, nodeType) => {
   const { $from, $to, $anchor } = state.selection;
   if (nodeType) {
     const parentNode2 = findParentNode2((node) => node.type.name === nodeType)(state.selection);
@@ -19193,7 +19266,7 @@ var isAtEndOfNode = (state, nodeType) => {
   }
   return true;
 };
-var isAtStartOfNode = (state) => {
+var isAtStartOfNode2 = (state) => {
   const { $from, $to } = state.selection;
   if ($from.parentOffset > 0 || $from.pos !== $to.pos) {
     return false;
@@ -20977,7 +21050,7 @@ var FocusEvents2 = Extension2.create({
 var Keymap2 = Extension2.create({
   name: "keymap",
   addKeyboardShortcuts() {
-    const handleBackspace2 = () => this.editor.commands.first(({ commands }) => [
+    const handleBackspace3 = () => this.editor.commands.first(({ commands }) => [
       () => commands.undoInputRule(),
       // maybe convert first text block node to default node
       () => commands.command(({ tr: tr2 }) => {
@@ -20997,7 +21070,7 @@ var Keymap2 = Extension2.create({
       () => commands.joinBackward(),
       () => commands.selectNodeBackward()
     ]);
-    const handleDelete2 = () => this.editor.commands.first(({ commands }) => [
+    const handleDelete3 = () => this.editor.commands.first(({ commands }) => [
       () => commands.deleteSelection(),
       () => commands.deleteCurrentNode(),
       () => commands.joinForward(),
@@ -21012,11 +21085,11 @@ var Keymap2 = Extension2.create({
     const baseKeymap = {
       Enter: handleEnter,
       "Mod-Enter": () => this.editor.commands.exitCode(),
-      Backspace: handleBackspace2,
-      "Mod-Backspace": handleBackspace2,
-      "Shift-Backspace": handleBackspace2,
-      Delete: handleDelete2,
-      "Mod-Delete": handleDelete2,
+      Backspace: handleBackspace3,
+      "Mod-Backspace": handleBackspace3,
+      "Shift-Backspace": handleBackspace3,
+      Delete: handleDelete3,
+      "Mod-Delete": handleDelete3,
       "Mod-a": () => this.editor.commands.selectAll()
     };
     const pcKeymap = {
@@ -21024,12 +21097,12 @@ var Keymap2 = Extension2.create({
     };
     const macKeymap = {
       ...baseKeymap,
-      "Ctrl-h": handleBackspace2,
-      "Alt-Backspace": handleBackspace2,
-      "Ctrl-d": handleDelete2,
-      "Ctrl-Alt-Backspace": handleDelete2,
-      "Alt-Delete": handleDelete2,
-      "Alt-d": handleDelete2,
+      "Ctrl-h": handleBackspace3,
+      "Alt-Backspace": handleBackspace3,
+      "Ctrl-d": handleDelete3,
+      "Ctrl-Alt-Backspace": handleDelete3,
+      "Alt-Delete": handleDelete3,
+      "Alt-d": handleDelete3,
       "Ctrl-a": () => this.editor.commands.selectTextblockStart(),
       "Ctrl-e": () => this.editor.commands.selectTextblockEnd()
     };
@@ -21265,7 +21338,7 @@ function textblockTypeInputRule(config2) {
     undoable: config2.undoable
   });
 }
-function wrappingInputRule(config2) {
+function wrappingInputRule2(config2) {
   return new InputRule2({
     find: config2.find,
     handler: ({ state, range, match: match2, chain }) => {
@@ -21975,7 +22048,7 @@ ${prefix}
   },
   addInputRules() {
     return [
-      wrappingInputRule({
+      wrappingInputRule2({
         find: inputRegex,
         type: this.type
       })
@@ -24404,12 +24477,12 @@ var BulletList = Node32.create({
     };
   },
   addInputRules() {
-    let inputRule = wrappingInputRule({
+    let inputRule = wrappingInputRule2({
       find: bulletListInputRegex,
       type: this.type
     });
     if (this.options.keepMarks || this.options.keepAttributes) {
-      inputRule = wrappingInputRule({
+      inputRule = wrappingInputRule2({
         find: bulletListInputRegex,
         type: this.type,
         keepMarks: this.options.keepMarks,
@@ -24584,7 +24657,7 @@ var getNextListDepth = (typeOrName, state) => {
   if (!listItemPos) {
     return false;
   }
-  const [, depth] = getNodeAtPosition(state, typeOrName, listItemPos.$pos.pos + 4);
+  const [, depth] = getNodeAtPosition2(state, typeOrName, listItemPos.$pos.pos + 4);
   return depth;
 };
 var hasListBefore = (editorState, name, parentListTypes) => {
@@ -24647,7 +24720,7 @@ var handleBackspace = (editor, name, parentListTypes) => {
   if (!isNodeActive2(editor.state, name)) {
     return false;
   }
-  if (!isAtStartOfNode(editor.state)) {
+  if (!isAtStartOfNode2(editor.state)) {
     return false;
   }
   const listItemPos = findListItemPos(name, editor.state);
@@ -24688,7 +24761,7 @@ var handleDelete = (editor, name) => {
   if (!isNodeActive2(editor.state, name)) {
     return false;
   }
-  if (!isAtEndOfNode(editor.state, name)) {
+  if (!isAtEndOfNode2(editor.state, name)) {
     return false;
   }
   const { selection } = editor.state;
@@ -25064,14 +25137,14 @@ var OrderedList = Node32.create({
     };
   },
   addInputRules() {
-    let inputRule = wrappingInputRule({
+    let inputRule = wrappingInputRule2({
       find: orderedListInputRegex,
       type: this.type,
       getAttributes: (match2) => ({ start: +match2[1] }),
       joinPredicate: (match2, node) => node.childCount + node.attrs.start === +match2[1]
     });
     if (this.options.keepMarks || this.options.keepAttributes) {
-      inputRule = wrappingInputRule({
+      inputRule = wrappingInputRule2({
         find: orderedListInputRegex,
         type: this.type,
         keepMarks: this.options.keepMarks,
@@ -25270,7 +25343,7 @@ var TaskItem = Node32.create({
   },
   addInputRules() {
     return [
-      wrappingInputRule({
+      wrappingInputRule2({
         find: inputRegex3,
         type: this.type,
         getAttributes: (match2) => ({
@@ -27152,6 +27225,1069 @@ var StarterKit = Extension2.create({
   }
 });
 var index_default2 = StarterKit;
+
+// node_modules/@tiptap/extension-list/dist/index.js
+var __defProp5 = Object.defineProperty;
+var __export5 = (target, all) => {
+  for (var name in all)
+    __defProp5(target, name, { get: all[name], enumerable: true });
+};
+var ListItemName3 = "listItem";
+var TextStyleName3 = "textStyle";
+var bulletListInputRegex2 = /^\s*([-+*])\s$/;
+var BulletList2 = Node3.create({
+  name: "bulletList",
+  addOptions() {
+    return {
+      itemTypeName: "listItem",
+      HTMLAttributes: {},
+      keepMarks: false,
+      keepAttributes: false
+    };
+  },
+  group: "block list",
+  content() {
+    return `${this.options.itemTypeName}+`;
+  },
+  parseHTML() {
+    return [{ tag: "ul" }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ["ul", mergeAttributes(this.options.HTMLAttributes, HTMLAttributes), 0];
+  },
+  markdownTokenName: "list",
+  parseMarkdown: (token, helpers) => {
+    if (token.type !== "list" || token.ordered) {
+      return [];
+    }
+    return {
+      type: "bulletList",
+      content: token.items ? helpers.parseChildren(token.items) : []
+    };
+  },
+  renderMarkdown: (node, h2) => {
+    if (!node.content) {
+      return "";
+    }
+    return h2.renderChildren(node.content, "\n");
+  },
+  markdownOptions: {
+    indentsContent: true
+  },
+  addCommands() {
+    return {
+      toggleBulletList: () => ({ commands, chain }) => {
+        if (this.options.keepAttributes) {
+          return chain().toggleList(this.name, this.options.itemTypeName, this.options.keepMarks).updateAttributes(ListItemName3, this.editor.getAttributes(TextStyleName3)).run();
+        }
+        return commands.toggleList(this.name, this.options.itemTypeName, this.options.keepMarks);
+      }
+    };
+  },
+  addKeyboardShortcuts() {
+    return {
+      "Mod-Shift-8": () => this.editor.commands.toggleBulletList()
+    };
+  },
+  addInputRules() {
+    let inputRule = wrappingInputRule({
+      find: bulletListInputRegex2,
+      type: this.type
+    });
+    if (this.options.keepMarks || this.options.keepAttributes) {
+      inputRule = wrappingInputRule({
+        find: bulletListInputRegex2,
+        type: this.type,
+        keepMarks: this.options.keepMarks,
+        keepAttributes: this.options.keepAttributes,
+        getAttributes: () => {
+          return this.editor.getAttributes(TextStyleName3);
+        },
+        editor: this.editor
+      });
+    }
+    return [inputRule];
+  }
+});
+var ListItem2 = Node3.create({
+  name: "listItem",
+  addOptions() {
+    return {
+      HTMLAttributes: {},
+      bulletListTypeName: "bulletList",
+      orderedListTypeName: "orderedList"
+    };
+  },
+  content: "paragraph block*",
+  defining: true,
+  parseHTML() {
+    return [
+      {
+        tag: "li"
+      }
+    ];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ["li", mergeAttributes(this.options.HTMLAttributes, HTMLAttributes), 0];
+  },
+  markdownTokenName: "list_item",
+  parseMarkdown: (token, helpers) => {
+    var _a2;
+    if (token.type !== "list_item") {
+      return [];
+    }
+    const parseBlockChildren = (_a2 = helpers.parseBlockChildren) != null ? _a2 : helpers.parseChildren;
+    let content = [];
+    if (token.tokens && token.tokens.length > 0) {
+      const hasParagraphTokens = token.tokens.some((t) => t.type === "paragraph");
+      if (hasParagraphTokens) {
+        content = parseBlockChildren(token.tokens);
+      } else {
+        const firstToken = token.tokens[0];
+        if (firstToken && firstToken.type === "text" && firstToken.tokens && firstToken.tokens.length > 0) {
+          const inlineContent = helpers.parseInline(firstToken.tokens);
+          content = [
+            {
+              type: "paragraph",
+              content: inlineContent
+            }
+          ];
+          if (token.tokens.length > 1) {
+            const remainingTokens = token.tokens.slice(1);
+            const additionalContent = parseBlockChildren(remainingTokens);
+            content.push(...additionalContent);
+          }
+        } else {
+          content = parseBlockChildren(token.tokens);
+        }
+      }
+    }
+    if (content.length === 0) {
+      content = [
+        {
+          type: "paragraph",
+          content: []
+        }
+      ];
+    }
+    return {
+      type: "listItem",
+      content
+    };
+  },
+  renderMarkdown: (node, h2, ctx) => {
+    return renderNestedMarkdownContent(
+      node,
+      h2,
+      (context) => {
+        var _a2, _b;
+        if (context.parentType === "bulletList") {
+          return "- ";
+        }
+        if (context.parentType === "orderedList") {
+          const start = ((_b = (_a2 = context.meta) == null ? void 0 : _a2.parentAttrs) == null ? void 0 : _b.start) || 1;
+          return `${start + context.index}. `;
+        }
+        return "- ";
+      },
+      ctx
+    );
+  },
+  addKeyboardShortcuts() {
+    return {
+      Enter: () => this.editor.commands.splitListItem(this.name),
+      Tab: () => this.editor.commands.sinkListItem(this.name),
+      "Shift-Tab": () => this.editor.commands.liftListItem(this.name)
+    };
+  }
+});
+var listHelpers_exports2 = {};
+__export5(listHelpers_exports2, {
+  findListItemPos: () => findListItemPos2,
+  getNextListDepth: () => getNextListDepth2,
+  handleBackspace: () => handleBackspace2,
+  handleDelete: () => handleDelete2,
+  hasListBefore: () => hasListBefore2,
+  hasListItemAfter: () => hasListItemAfter2,
+  hasListItemBefore: () => hasListItemBefore2,
+  listItemHasSubList: () => listItemHasSubList2,
+  nextListIsDeeper: () => nextListIsDeeper2,
+  nextListIsHigher: () => nextListIsHigher2
+});
+var findListItemPos2 = (typeOrName, state) => {
+  const { $from } = state.selection;
+  const nodeType = getNodeType(typeOrName, state.schema);
+  let currentNode = null;
+  let currentDepth = $from.depth;
+  let currentPos = $from.pos;
+  let targetDepth = null;
+  while (currentDepth > 0 && targetDepth === null) {
+    currentNode = $from.node(currentDepth);
+    if (currentNode.type === nodeType) {
+      targetDepth = currentDepth;
+    } else {
+      currentDepth -= 1;
+      currentPos -= 1;
+    }
+  }
+  if (targetDepth === null) {
+    return null;
+  }
+  return { $pos: state.doc.resolve(currentPos), depth: targetDepth };
+};
+var getNextListDepth2 = (typeOrName, state) => {
+  const listItemPos = findListItemPos2(typeOrName, state);
+  if (!listItemPos) {
+    return false;
+  }
+  const [, depth] = getNodeAtPosition(state, typeOrName, listItemPos.$pos.pos + 4);
+  return depth;
+};
+var hasListBefore2 = (editorState, name, parentListTypes) => {
+  const { $anchor } = editorState.selection;
+  const previousNodePos = Math.max(0, $anchor.pos - 2);
+  const previousNode = editorState.doc.resolve(previousNodePos).node();
+  if (!previousNode || !parentListTypes.includes(previousNode.type.name)) {
+    return false;
+  }
+  return true;
+};
+var hasListItemBefore2 = (typeOrName, state) => {
+  var _a2;
+  const { $anchor } = state.selection;
+  const $targetPos = state.doc.resolve($anchor.pos - 2);
+  if ($targetPos.index() === 0) {
+    return false;
+  }
+  if (((_a2 = $targetPos.nodeBefore) == null ? void 0 : _a2.type.name) !== typeOrName) {
+    return false;
+  }
+  return true;
+};
+var listItemHasSubList2 = (typeOrName, state, node) => {
+  if (!node) {
+    return false;
+  }
+  const nodeType = getNodeType(typeOrName, state.schema);
+  let hasSubList = false;
+  node.descendants((child) => {
+    if (child.type === nodeType) {
+      hasSubList = true;
+    }
+  });
+  return hasSubList;
+};
+var handleBackspace2 = (editor, name, parentListTypes) => {
+  if (editor.commands.undoInputRule()) {
+    return true;
+  }
+  if (editor.state.selection.from !== editor.state.selection.to) {
+    return false;
+  }
+  if (!isNodeActive(editor.state, name) && hasListBefore2(editor.state, name, parentListTypes)) {
+    const { $anchor } = editor.state.selection;
+    const $listPos = editor.state.doc.resolve($anchor.before() - 1);
+    const listDescendants = [];
+    $listPos.node().descendants((node, pos) => {
+      if (node.type.name === name) {
+        listDescendants.push({ node, pos });
+      }
+    });
+    const lastItem = listDescendants.at(-1);
+    if (!lastItem) {
+      return false;
+    }
+    const $lastItemPos = editor.state.doc.resolve($listPos.start() + lastItem.pos + 1);
+    return editor.chain().cut({ from: $anchor.start() - 1, to: $anchor.end() + 1 }, $lastItemPos.end()).joinForward().run();
+  }
+  if (!isNodeActive(editor.state, name)) {
+    return false;
+  }
+  if (!isAtStartOfNode(editor.state)) {
+    return false;
+  }
+  const listItemPos = findListItemPos2(name, editor.state);
+  if (!listItemPos) {
+    return false;
+  }
+  const $prev = editor.state.doc.resolve(listItemPos.$pos.pos - 2);
+  const prevNode = $prev.node(listItemPos.depth);
+  const previousListItemHasSubList = listItemHasSubList2(name, editor.state, prevNode);
+  if (hasListItemBefore2(name, editor.state) && !previousListItemHasSubList) {
+    return editor.commands.joinItemBackward();
+  }
+  return editor.chain().liftListItem(name).run();
+};
+var nextListIsDeeper2 = (typeOrName, state) => {
+  const listDepth = getNextListDepth2(typeOrName, state);
+  const listItemPos = findListItemPos2(typeOrName, state);
+  if (!listItemPos || !listDepth) {
+    return false;
+  }
+  if (listDepth > listItemPos.depth) {
+    return true;
+  }
+  return false;
+};
+var nextListIsHigher2 = (typeOrName, state) => {
+  const listDepth = getNextListDepth2(typeOrName, state);
+  const listItemPos = findListItemPos2(typeOrName, state);
+  if (!listItemPos || !listDepth) {
+    return false;
+  }
+  if (listDepth < listItemPos.depth) {
+    return true;
+  }
+  return false;
+};
+var handleDelete2 = (editor, name) => {
+  if (!isNodeActive(editor.state, name)) {
+    return false;
+  }
+  if (!isAtEndOfNode(editor.state, name)) {
+    return false;
+  }
+  const { selection } = editor.state;
+  const { $from, $to } = selection;
+  if (!selection.empty && $from.sameParent($to)) {
+    return false;
+  }
+  if (nextListIsDeeper2(name, editor.state)) {
+    return editor.chain().focus(editor.state.selection.from + 4).lift(name).joinBackward().run();
+  }
+  if (nextListIsHigher2(name, editor.state)) {
+    return editor.chain().joinForward().joinBackward().run();
+  }
+  return editor.commands.joinItemForward();
+};
+var hasListItemAfter2 = (typeOrName, state) => {
+  var _a2;
+  const { $anchor } = state.selection;
+  const $targetPos = state.doc.resolve($anchor.pos - $anchor.parentOffset - 2);
+  if ($targetPos.index() === $targetPos.parent.childCount - 1) {
+    return false;
+  }
+  if (((_a2 = $targetPos.nodeAfter) == null ? void 0 : _a2.type.name) !== typeOrName) {
+    return false;
+  }
+  return true;
+};
+var ListKeymap2 = Extension.create({
+  name: "listKeymap",
+  addOptions() {
+    return {
+      listTypes: [
+        {
+          itemName: "listItem",
+          wrapperNames: ["bulletList", "orderedList"]
+        },
+        {
+          itemName: "taskItem",
+          wrapperNames: ["taskList"]
+        }
+      ]
+    };
+  },
+  addKeyboardShortcuts() {
+    return {
+      Delete: ({ editor }) => {
+        let handled = false;
+        this.options.listTypes.forEach(({ itemName }) => {
+          if (editor.state.schema.nodes[itemName] === void 0) {
+            return;
+          }
+          if (handleDelete2(editor, itemName)) {
+            handled = true;
+          }
+        });
+        return handled;
+      },
+      "Mod-Delete": ({ editor }) => {
+        let handled = false;
+        this.options.listTypes.forEach(({ itemName }) => {
+          if (editor.state.schema.nodes[itemName] === void 0) {
+            return;
+          }
+          if (handleDelete2(editor, itemName)) {
+            handled = true;
+          }
+        });
+        return handled;
+      },
+      Backspace: ({ editor }) => {
+        let handled = false;
+        this.options.listTypes.forEach(({ itemName, wrapperNames }) => {
+          if (editor.state.schema.nodes[itemName] === void 0) {
+            return;
+          }
+          if (handleBackspace2(editor, itemName, wrapperNames)) {
+            handled = true;
+          }
+        });
+        return handled;
+      },
+      "Mod-Backspace": ({ editor }) => {
+        let handled = false;
+        this.options.listTypes.forEach(({ itemName, wrapperNames }) => {
+          if (editor.state.schema.nodes[itemName] === void 0) {
+            return;
+          }
+          if (handleBackspace2(editor, itemName, wrapperNames)) {
+            handled = true;
+          }
+        });
+        return handled;
+      }
+    };
+  }
+});
+var ORDERED_LIST_ITEM_REGEX2 = /^(\s*)(\d+)\.\s+(.*)$/;
+var INDENTED_LINE_REGEX2 = /^\s/;
+function isBlockContentLine2(line) {
+  const trimmedLine = line.trimStart();
+  return /^[-+*]\s+/.test(trimmedLine) || /^\d+\.\s+/.test(trimmedLine) || /^>\s?/.test(trimmedLine) || /^```/.test(trimmedLine) || /^~~~/.test(trimmedLine);
+}
+function splitItemContent2(contentLines) {
+  const paragraphLines = [];
+  const blockLines = [];
+  let reachedBlockBoundary = false;
+  contentLines.forEach((line) => {
+    if (reachedBlockBoundary) {
+      blockLines.push(line);
+      return;
+    }
+    if (line.trim() === "") {
+      reachedBlockBoundary = true;
+      blockLines.push(line);
+      return;
+    }
+    if (paragraphLines.length > 0 && isBlockContentLine2(line)) {
+      reachedBlockBoundary = true;
+      blockLines.push(line);
+      return;
+    }
+    paragraphLines.push(line);
+  });
+  return {
+    paragraphLines,
+    blockLines
+  };
+}
+function collectOrderedListItems2(lines) {
+  const listItems = [];
+  let currentLineIndex = 0;
+  let consumed = 0;
+  while (currentLineIndex < lines.length) {
+    const line = lines[currentLineIndex];
+    const match2 = line.match(ORDERED_LIST_ITEM_REGEX2);
+    if (!match2) {
+      break;
+    }
+    const [, indent, number, content] = match2;
+    const indentLevel = indent.length;
+    const itemContentLines = [content];
+    let nextLineIndex = currentLineIndex + 1;
+    const itemLines = [line];
+    let sawBlankLine = false;
+    while (nextLineIndex < lines.length) {
+      const nextLine = lines[nextLineIndex];
+      const nextMatch = nextLine.match(ORDERED_LIST_ITEM_REGEX2);
+      if (nextMatch) {
+        break;
+      }
+      if (nextLine.trim() === "") {
+        itemLines.push(nextLine);
+        itemContentLines.push("");
+        sawBlankLine = true;
+        nextLineIndex += 1;
+      } else if (nextLine.match(INDENTED_LINE_REGEX2)) {
+        itemLines.push(nextLine);
+        itemContentLines.push(nextLine.slice(indentLevel + 2));
+        nextLineIndex += 1;
+      } else {
+        if (sawBlankLine) {
+          break;
+        }
+        itemLines.push(nextLine);
+        itemContentLines.push(nextLine);
+        nextLineIndex += 1;
+      }
+    }
+    listItems.push({
+      indent: indentLevel,
+      number: parseInt(number, 10),
+      content: itemContentLines.join("\n").trim(),
+      contentLines: itemContentLines,
+      raw: itemLines.join("\n")
+    });
+    consumed = nextLineIndex;
+    currentLineIndex = nextLineIndex;
+  }
+  return [listItems, consumed];
+}
+function buildNestedStructure2(items, baseIndent, lexer) {
+  const result = [];
+  let currentIndex = 0;
+  while (currentIndex < items.length) {
+    const item = items[currentIndex];
+    if (item.indent === baseIndent) {
+      const { paragraphLines, blockLines } = splitItemContent2(item.contentLines);
+      const mainText = paragraphLines.join("\n").trim();
+      const tokens = [];
+      if (mainText) {
+        tokens.push({
+          type: "paragraph",
+          raw: mainText,
+          tokens: lexer.inlineTokens(mainText)
+        });
+      }
+      const additionalContent = blockLines.join("\n").trim();
+      if (additionalContent) {
+        const blockTokens = lexer.blockTokens(additionalContent);
+        tokens.push(...blockTokens);
+      }
+      let lookAheadIndex = currentIndex + 1;
+      const nestedItems = [];
+      while (lookAheadIndex < items.length && items[lookAheadIndex].indent > baseIndent) {
+        nestedItems.push(items[lookAheadIndex]);
+        lookAheadIndex += 1;
+      }
+      if (nestedItems.length > 0) {
+        const nextIndent = Math.min(...nestedItems.map((nestedItem) => nestedItem.indent));
+        const nestedListItems = buildNestedStructure2(nestedItems, nextIndent, lexer);
+        tokens.push({
+          type: "list",
+          ordered: true,
+          start: nestedItems[0].number,
+          items: nestedListItems,
+          raw: nestedItems.map((nestedItem) => nestedItem.raw).join("\n")
+        });
+      }
+      result.push({
+        type: "list_item",
+        raw: item.raw,
+        tokens
+      });
+      currentIndex = lookAheadIndex;
+    } else {
+      currentIndex += 1;
+    }
+  }
+  return result;
+}
+function parseListItems2(items, helpers) {
+  return items.map((item) => {
+    if (item.type !== "list_item") {
+      return helpers.parseChildren([item])[0];
+    }
+    const content = [];
+    if (item.tokens && item.tokens.length > 0) {
+      item.tokens.forEach((itemToken) => {
+        if (itemToken.type === "paragraph" || itemToken.type === "list" || itemToken.type === "blockquote" || itemToken.type === "code") {
+          content.push(...helpers.parseChildren([itemToken]));
+        } else if (itemToken.type === "text" && itemToken.tokens) {
+          const inlineContent = helpers.parseChildren([itemToken]);
+          content.push({
+            type: "paragraph",
+            content: inlineContent
+          });
+        } else {
+          const parsed = helpers.parseChildren([itemToken]);
+          if (parsed.length > 0) {
+            content.push(...parsed);
+          }
+        }
+      });
+    }
+    return {
+      type: "listItem",
+      content
+    };
+  });
+}
+var ListItemName22 = "listItem";
+var TextStyleName22 = "textStyle";
+var orderedListInputRegex2 = /^(\d+)\.\s$/;
+var OrderedList2 = Node3.create({
+  name: "orderedList",
+  addOptions() {
+    return {
+      itemTypeName: "listItem",
+      HTMLAttributes: {},
+      keepMarks: false,
+      keepAttributes: false
+    };
+  },
+  group: "block list",
+  content() {
+    return `${this.options.itemTypeName}+`;
+  },
+  addAttributes() {
+    return {
+      start: {
+        default: 1,
+        parseHTML: (element) => {
+          return element.hasAttribute("start") ? parseInt(element.getAttribute("start") || "", 10) : 1;
+        }
+      },
+      type: {
+        default: null,
+        parseHTML: (element) => element.getAttribute("type")
+      }
+    };
+  },
+  parseHTML() {
+    return [
+      {
+        tag: "ol"
+      }
+    ];
+  },
+  renderHTML({ HTMLAttributes }) {
+    const { start, ...attributesWithoutStart } = HTMLAttributes;
+    return start === 1 ? ["ol", mergeAttributes(this.options.HTMLAttributes, attributesWithoutStart), 0] : ["ol", mergeAttributes(this.options.HTMLAttributes, HTMLAttributes), 0];
+  },
+  markdownTokenName: "list",
+  parseMarkdown: (token, helpers) => {
+    if (token.type !== "list" || !token.ordered) {
+      return [];
+    }
+    const startValue = token.start || 1;
+    const content = token.items ? parseListItems2(token.items, helpers) : [];
+    if (startValue !== 1) {
+      return {
+        type: "orderedList",
+        attrs: { start: startValue },
+        content
+      };
+    }
+    return {
+      type: "orderedList",
+      content
+    };
+  },
+  renderMarkdown: (node, h2) => {
+    if (!node.content) {
+      return "";
+    }
+    return h2.renderChildren(node.content, "\n");
+  },
+  markdownTokenizer: {
+    name: "orderedList",
+    level: "block",
+    start: (src) => {
+      const match2 = src.match(/^(\s*)(\d+)\.\s+/);
+      const index = match2 == null ? void 0 : match2.index;
+      return index !== void 0 ? index : -1;
+    },
+    tokenize: (src, _tokens, lexer) => {
+      var _a2;
+      const lines = src.split("\n");
+      const [listItems, consumed] = collectOrderedListItems2(lines);
+      if (listItems.length === 0) {
+        return void 0;
+      }
+      const items = buildNestedStructure2(listItems, 0, lexer);
+      if (items.length === 0) {
+        return void 0;
+      }
+      const startValue = ((_a2 = listItems[0]) == null ? void 0 : _a2.number) || 1;
+      return {
+        type: "list",
+        ordered: true,
+        start: startValue,
+        items,
+        raw: lines.slice(0, consumed).join("\n")
+      };
+    }
+  },
+  markdownOptions: {
+    indentsContent: true
+  },
+  addCommands() {
+    return {
+      toggleOrderedList: () => ({ commands, chain }) => {
+        if (this.options.keepAttributes) {
+          return chain().toggleList(this.name, this.options.itemTypeName, this.options.keepMarks).updateAttributes(ListItemName22, this.editor.getAttributes(TextStyleName22)).run();
+        }
+        return commands.toggleList(this.name, this.options.itemTypeName, this.options.keepMarks);
+      }
+    };
+  },
+  addKeyboardShortcuts() {
+    return {
+      "Mod-Shift-7": () => this.editor.commands.toggleOrderedList()
+    };
+  },
+  addInputRules() {
+    let inputRule = wrappingInputRule({
+      find: orderedListInputRegex2,
+      type: this.type,
+      getAttributes: (match2) => ({ start: +match2[1] }),
+      joinPredicate: (match2, node) => node.childCount + node.attrs.start === +match2[1]
+    });
+    if (this.options.keepMarks || this.options.keepAttributes) {
+      inputRule = wrappingInputRule({
+        find: orderedListInputRegex2,
+        type: this.type,
+        keepMarks: this.options.keepMarks,
+        keepAttributes: this.options.keepAttributes,
+        getAttributes: (match2) => ({ start: +match2[1], ...this.editor.getAttributes(TextStyleName22) }),
+        joinPredicate: (match2, node) => node.childCount + node.attrs.start === +match2[1],
+        editor: this.editor
+      });
+    }
+    return [inputRule];
+  }
+});
+var inputRegex5 = /^\s*(\[([( |x])?\])\s$/;
+var TaskItem2 = Node3.create({
+  name: "taskItem",
+  addOptions() {
+    return {
+      nested: false,
+      HTMLAttributes: {},
+      taskListTypeName: "taskList",
+      a11y: void 0
+    };
+  },
+  content() {
+    return this.options.nested ? "paragraph block*" : "paragraph+";
+  },
+  defining: true,
+  addAttributes() {
+    return {
+      checked: {
+        default: false,
+        keepOnSplit: false,
+        parseHTML: (element) => {
+          const dataChecked = element.getAttribute("data-checked");
+          return dataChecked === "" || dataChecked === "true";
+        },
+        renderHTML: (attributes) => ({
+          "data-checked": attributes.checked
+        })
+      }
+    };
+  },
+  parseHTML() {
+    return [
+      {
+        tag: `li[data-type="${this.name}"]`,
+        priority: 51
+      }
+    ];
+  },
+  renderHTML({ node, HTMLAttributes }) {
+    return [
+      "li",
+      mergeAttributes(this.options.HTMLAttributes, HTMLAttributes, {
+        "data-type": this.name
+      }),
+      [
+        "label",
+        [
+          "input",
+          {
+            type: "checkbox",
+            checked: node.attrs.checked ? "checked" : null
+          }
+        ],
+        ["span"]
+      ],
+      ["div", 0]
+    ];
+  },
+  parseMarkdown: (token, h2) => {
+    const content = [];
+    if (token.tokens && token.tokens.length > 0) {
+      content.push(h2.createNode("paragraph", {}, h2.parseInline(token.tokens)));
+    } else if (token.text) {
+      content.push(h2.createNode("paragraph", {}, [h2.createNode("text", { text: token.text })]));
+    } else {
+      content.push(h2.createNode("paragraph", {}, []));
+    }
+    if (token.nestedTokens && token.nestedTokens.length > 0) {
+      const nestedContent = h2.parseChildren(token.nestedTokens);
+      content.push(...nestedContent);
+    }
+    return h2.createNode("taskItem", { checked: token.checked || false }, content);
+  },
+  renderMarkdown: (node, h2) => {
+    var _a2;
+    const checkedChar = ((_a2 = node.attrs) == null ? void 0 : _a2.checked) ? "x" : " ";
+    const prefix = `- [${checkedChar}] `;
+    return renderNestedMarkdownContent(node, h2, prefix);
+  },
+  addKeyboardShortcuts() {
+    const shortcuts = {
+      Enter: () => this.editor.commands.splitListItem(this.name),
+      "Shift-Tab": () => this.editor.commands.liftListItem(this.name)
+    };
+    if (!this.options.nested) {
+      return shortcuts;
+    }
+    return {
+      ...shortcuts,
+      Tab: () => this.editor.commands.sinkListItem(this.name)
+    };
+  },
+  addNodeView() {
+    return ({ node, HTMLAttributes, getPos, editor }) => {
+      const listItem = document.createElement("li");
+      const checkboxWrapper = document.createElement("label");
+      const checkboxStyler = document.createElement("span");
+      const checkbox = document.createElement("input");
+      const content = document.createElement("div");
+      const updateA11Y = (currentNode) => {
+        var _a2, _b;
+        checkbox.ariaLabel = ((_b = (_a2 = this.options.a11y) == null ? void 0 : _a2.checkboxLabel) == null ? void 0 : _b.call(_a2, currentNode, checkbox.checked)) || `Task item checkbox for ${currentNode.textContent || "empty task item"}`;
+      };
+      updateA11Y(node);
+      checkboxWrapper.contentEditable = "false";
+      checkbox.type = "checkbox";
+      checkbox.addEventListener("mousedown", (event) => event.preventDefault());
+      checkbox.addEventListener("change", (event) => {
+        if (!editor.isEditable && !this.options.onReadOnlyChecked) {
+          checkbox.checked = !checkbox.checked;
+          return;
+        }
+        const { checked } = event.target;
+        if (editor.isEditable && typeof getPos === "function") {
+          editor.chain().focus(void 0, { scrollIntoView: false }).command(({ tr: tr2 }) => {
+            const position = getPos();
+            if (typeof position !== "number") {
+              return false;
+            }
+            const currentNode = tr2.doc.nodeAt(position);
+            tr2.setNodeMarkup(position, void 0, {
+              ...currentNode == null ? void 0 : currentNode.attrs,
+              checked
+            });
+            return true;
+          }).run();
+        }
+        if (!editor.isEditable && this.options.onReadOnlyChecked) {
+          if (!this.options.onReadOnlyChecked(node, checked)) {
+            checkbox.checked = !checkbox.checked;
+          }
+        }
+      });
+      Object.entries(this.options.HTMLAttributes).forEach(([key, value]) => {
+        listItem.setAttribute(key, value);
+      });
+      listItem.dataset.checked = node.attrs.checked;
+      checkbox.checked = node.attrs.checked;
+      checkboxWrapper.append(checkbox, checkboxStyler);
+      listItem.append(checkboxWrapper, content);
+      Object.entries(HTMLAttributes).forEach(([key, value]) => {
+        listItem.setAttribute(key, value);
+      });
+      let prevRenderedAttributeKeys = new Set(Object.keys(HTMLAttributes));
+      return {
+        dom: listItem,
+        contentDOM: content,
+        update: (updatedNode) => {
+          if (updatedNode.type !== this.type) {
+            return false;
+          }
+          listItem.dataset.checked = updatedNode.attrs.checked;
+          checkbox.checked = updatedNode.attrs.checked;
+          updateA11Y(updatedNode);
+          const extensionAttributes = editor.extensionManager.attributes;
+          const newHTMLAttributes = getRenderedAttributes(updatedNode, extensionAttributes);
+          const newKeys = new Set(Object.keys(newHTMLAttributes));
+          const staticAttrs = this.options.HTMLAttributes;
+          prevRenderedAttributeKeys.forEach((key) => {
+            if (!newKeys.has(key)) {
+              if (key in staticAttrs) {
+                listItem.setAttribute(key, staticAttrs[key]);
+              } else {
+                listItem.removeAttribute(key);
+              }
+            }
+          });
+          Object.entries(newHTMLAttributes).forEach(([key, value]) => {
+            if (value === null || value === void 0) {
+              if (key in staticAttrs) {
+                listItem.setAttribute(key, staticAttrs[key]);
+              } else {
+                listItem.removeAttribute(key);
+              }
+            } else {
+              listItem.setAttribute(key, value);
+            }
+          });
+          prevRenderedAttributeKeys = newKeys;
+          return true;
+        }
+      };
+    };
+  },
+  addInputRules() {
+    return [
+      wrappingInputRule({
+        find: inputRegex5,
+        type: this.type,
+        getAttributes: (match2) => ({
+          checked: match2[match2.length - 1] === "x"
+        })
+      })
+    ];
+  }
+});
+var TaskList2 = Node3.create({
+  name: "taskList",
+  addOptions() {
+    return {
+      itemTypeName: "taskItem",
+      HTMLAttributes: {}
+    };
+  },
+  group: "block list",
+  content() {
+    return `${this.options.itemTypeName}+`;
+  },
+  parseHTML() {
+    return [
+      {
+        tag: `ul[data-type="${this.name}"]`,
+        priority: 51
+      }
+    ];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ["ul", mergeAttributes(this.options.HTMLAttributes, HTMLAttributes, { "data-type": this.name }), 0];
+  },
+  parseMarkdown: (token, h2) => {
+    return h2.createNode("taskList", {}, h2.parseChildren(token.items || []));
+  },
+  renderMarkdown: (node, h2) => {
+    if (!node.content) {
+      return "";
+    }
+    return h2.renderChildren(node.content, "\n");
+  },
+  markdownTokenizer: {
+    name: "taskList",
+    level: "block",
+    start(src) {
+      var _a2;
+      const index = (_a2 = src.match(/^\s*[-+*]\s+\[([ xX])\]\s+/)) == null ? void 0 : _a2.index;
+      return index !== void 0 ? index : -1;
+    },
+    tokenize(src, tokens, lexer) {
+      const parseTaskListContent = (content) => {
+        const nestedResult = parseIndentedBlocks(
+          content,
+          {
+            itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
+            extractItemData: (match2) => ({
+              indentLevel: match2[1].length,
+              mainContent: match2[4],
+              checked: match2[3].toLowerCase() === "x"
+            }),
+            createToken: (data, nestedTokens) => ({
+              type: "taskItem",
+              raw: "",
+              mainContent: data.mainContent,
+              indentLevel: data.indentLevel,
+              checked: data.checked,
+              text: data.mainContent,
+              tokens: lexer.inlineTokens(data.mainContent),
+              nestedTokens
+            }),
+            // Allow recursive nesting
+            customNestedParser: parseTaskListContent
+          },
+          lexer
+        );
+        if (nestedResult) {
+          return [
+            {
+              type: "taskList",
+              raw: nestedResult.raw,
+              items: nestedResult.items
+            }
+          ];
+        }
+        return lexer.blockTokens(content);
+      };
+      const result = parseIndentedBlocks(
+        src,
+        {
+          itemPattern: /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/,
+          extractItemData: (match2) => ({
+            indentLevel: match2[1].length,
+            mainContent: match2[4],
+            checked: match2[3].toLowerCase() === "x"
+          }),
+          createToken: (data, nestedTokens) => ({
+            type: "taskItem",
+            raw: "",
+            mainContent: data.mainContent,
+            indentLevel: data.indentLevel,
+            checked: data.checked,
+            text: data.mainContent,
+            tokens: lexer.inlineTokens(data.mainContent),
+            nestedTokens
+          }),
+          // Use the recursive parser for nested content
+          customNestedParser: parseTaskListContent
+        },
+        lexer
+      );
+      if (!result) {
+        return void 0;
+      }
+      return {
+        type: "taskList",
+        raw: result.raw,
+        items: result.items
+      };
+    }
+  },
+  markdownOptions: {
+    indentsContent: true
+  },
+  addCommands() {
+    return {
+      toggleTaskList: () => ({ commands }) => {
+        return commands.toggleList(this.name, this.options.itemTypeName);
+      }
+    };
+  },
+  addKeyboardShortcuts() {
+    return {
+      "Mod-Shift-9": () => this.editor.commands.toggleTaskList()
+    };
+  }
+});
+var ListKit2 = Extension.create({
+  name: "listKit",
+  addExtensions() {
+    const extensions = [];
+    if (this.options.bulletList !== false) {
+      extensions.push(BulletList2.configure(this.options.bulletList));
+    }
+    if (this.options.listItem !== false) {
+      extensions.push(ListItem2.configure(this.options.listItem));
+    }
+    if (this.options.listKeymap !== false) {
+      extensions.push(ListKeymap2.configure(this.options.listKeymap));
+    }
+    if (this.options.orderedList !== false) {
+      extensions.push(OrderedList2.configure(this.options.orderedList));
+    }
+    if (this.options.taskItem !== false) {
+      extensions.push(TaskItem2.configure(this.options.taskItem));
+    }
+    if (this.options.taskList !== false) {
+      extensions.push(TaskList2.configure(this.options.taskList));
+    }
+    return extensions;
+  }
+});
 
 // node_modules/prosemirror-tables/dist/index.js
 var readFromCache;
@@ -35780,8 +36916,8 @@ var MarkdownSerializerState = class {
 
 // node_modules/tiptap-markdown/dist/tiptap-markdown.es.js
 var import_markdown_it_task_lists = __toESM(require_markdown_it_task_lists(), 1);
-var __defProp5 = Object.defineProperty;
-var __defNormalProp = (obj, key, value) => key in obj ? __defProp5(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __defProp6 = Object.defineProperty;
+var __defNormalProp = (obj, key, value) => key in obj ? __defProp6(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField = (obj, key, value) => {
   __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
   return value;
@@ -36065,10 +37201,10 @@ var Blockquote$1 = Blockquote2.extend({
     };
   }
 });
-var BulletList2 = Node3.create({
+var BulletList3 = Node3.create({
   name: "bulletList"
 });
-var BulletList$1 = BulletList2.extend({
+var BulletList$1 = BulletList3.extend({
   /**
    * @return {{markdown: MarkdownNodeSpec}}
    */
@@ -36195,10 +37331,10 @@ var Image$1 = Image.extend({
     };
   }
 });
-var ListItem2 = Node3.create({
+var ListItem3 = Node3.create({
   name: "listItem"
 });
-var ListItem$1 = ListItem2.extend({
+var ListItem$1 = ListItem3.extend({
   /**
    * @return {{markdown: MarkdownNodeSpec}}
    */
@@ -36213,7 +37349,7 @@ var ListItem$1 = ListItem2.extend({
     };
   }
 });
-var OrderedList2 = Node3.create({
+var OrderedList3 = Node3.create({
   name: "orderedList"
 });
 function findIndexOfAdjacentNode(node, parent, index) {
@@ -36225,7 +37361,7 @@ function findIndexOfAdjacentNode(node, parent, index) {
   }
   return i;
 }
-var OrderedList$1 = OrderedList2.extend({
+var OrderedList$1 = OrderedList3.extend({
   /**
    * @return {{markdown: MarkdownNodeSpec}}
    */
@@ -36334,10 +37470,10 @@ function isMarkdownSerializable(node) {
   }
   return true;
 }
-var TaskItem2 = Node3.create({
+var TaskItem3 = Node3.create({
   name: "taskItem"
 });
-var TaskItem$1 = TaskItem2.extend({
+var TaskItem$1 = TaskItem3.extend({
   /**
    * @return {{markdown: MarkdownNodeSpec}}
    */
@@ -36365,10 +37501,10 @@ var TaskItem$1 = TaskItem2.extend({
     };
   }
 });
-var TaskList2 = Node3.create({
+var TaskList3 = Node3.create({
   name: "taskList"
 });
-var TaskList$1 = TaskList2.extend({
+var TaskList$1 = TaskList3.extend({
   /**
    * @return {{markdown: MarkdownNodeSpec}}
    */
@@ -39431,6 +40567,7 @@ export {
   Mark2 as Mark,
   Markdown,
   Node3 as Node,
+  OrderedList2 as OrderedList,
   Plugin,
   PluginKey,
   index_default2 as StarterKit,
