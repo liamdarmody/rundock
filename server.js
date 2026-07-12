@@ -741,7 +741,31 @@ let _agentCache = null;
 let _agentCacheTime = 0;
 const AGENT_CACHE_TTL = 2000; // 2 seconds
 
-function invalidateAgentCache() { _agentCache = null; _agentCacheTime = 0; }
+function invalidateAgentCache() { _agentCache = null; _agentCacheTime = 0; _skillCache = null; _skillCacheTime = 0; _fileListCache = null; _fileListCacheTime = 0; }
+
+// Skill + file-list caches for the search hot path (SR1). discoverSkills
+// re-reads every SKILL.md and agent body per call, and the palette queries
+// per debounced keystroke; both caches share the agent cache's TTL scale and
+// are cleared by invalidateAgentCache (already called on every agent/skill
+// mutation and workspace switch) plus save_file for the file list.
+let _skillCache = null, _skillCacheTime = 0;
+let _fileListCache = null, _fileListCacheTime = 0;
+
+function discoverSkillsCached(agents) {
+  const now = Date.now();
+  if (_skillCache && (now - _skillCacheTime) < AGENT_CACHE_TTL) return _skillCache;
+  _skillCache = discoverSkills(agents);
+  _skillCacheTime = now;
+  return _skillCache;
+}
+
+function flatFileListCached() {
+  const now = Date.now();
+  if (_fileListCache && (now - _fileListCacheTime) < AGENT_CACHE_TTL) return _fileListCache;
+  _fileListCache = flattenFileTree(getFileTree(WORKSPACE));
+  _fileListCacheTime = now;
+  return _fileListCache;
+}
 
 function discoverAgents() {
   // No workspace selected yet: nothing to discover. Guards path.join(null,…),
@@ -3965,7 +3989,9 @@ wss.on('connection', (ws) => {
             try {
               reconcileSearchBeforeQuery();
               const byId = new Map(convos.map(c => [c.id, c]));
-              contentResults = searchEngine.searchMessages(msg.query, { limit: 50 })
+              // prefix keeps mid-word typing states matching, on par with
+              // the old substring grep ("discoun" must find "discount").
+              contentResults = searchEngine.searchMessages(msg.query, { limit: 50, prefix: true })
                 .filter(h => byId.has(h.conversationId))
                 .map(h => ({
                   ...byId.get(h.conversationId), matchType: 'content', snippet: h.snippet,
@@ -3992,11 +4018,11 @@ wss.on('connection', (ws) => {
         // Cmd+K universal palette (SR1): one query across files,
         // conversations, agents, and skills, grouped by type.
         runUniversalSearch(msg).then(({ groups, recent }) => {
-          ws.send(JSON.stringify({ type: 'search_universal_results', query: (msg.query || '').trim(), groups, recent }));
+          ws.send(JSON.stringify({ type: 'search_universal_results', query: (msg.query || '').trim(), reqId: msg.reqId, groups, recent }));
         }).catch(err => {
           console.warn('[Search] universal error:', err && err.message ? err.message : err);
           ws.send(JSON.stringify({
-            type: 'search_universal_results', query: (msg.query || '').trim(),
+            type: 'search_universal_results', query: (msg.query || '').trim(), reqId: msg.reqId,
             groups: { files: [], conversations: [], agents: [], skills: [] }, recent: false,
           }));
         });
@@ -4141,8 +4167,10 @@ wss.on('connection', (ws) => {
         const fullPath = path.resolve(WORKSPACE, msg.path);
         if (isInsideWorkspace(fullPath)) {
           fs.writeFileSync(fullPath, msg.content, 'utf-8');
-          // Keep the search index fresh on the save hot path; guarded so an
-          // index failure can never affect the save itself.
+          // Keep the search index and the title-layer file list fresh on the
+          // save hot path; guarded so an index failure can never affect the
+          // save itself.
+          _fileListCache = null; _fileListCacheTime = 0;
           if (ensureSearchEngine()) {
             try { searchEngine.noteFileSaved(WORKSPACE, msg.path); } catch (e) { /* reconcile catches up */ }
           }
@@ -4552,9 +4580,16 @@ process.on('exit', () => {
 
 let searchEngine = null;            // SearchIndex instance or null (fallback active)
 let searchEngineWorkspace = null;   // workspace the engine was opened for
+let searchEngineFailedWorkspace = null; // workspace whose engine open failed (backoff)
 let searchProbe = null;             // cached capability probe
 let searchFilesReconciledAt = 0;    // TTL gate for the files walk (not per-keystroke)
 const SEARCH_FILES_RECONCILE_TTL_MS = 2000;
+// Session-id -> {path|null, ts} memo. Missing session files (Claude Code
+// prunes transcripts) would otherwise trigger a full ~/.claude/projects
+// directory scan per session per keystroke. Negative entries expire so a
+// session whose jsonl appears moments later becomes visible.
+const _sessionPathMemo = new Map();
+const SESSION_PATH_NEGATIVE_TTL_MS = 30000;
 
 function ensureSearchEngine() {
   if (!WORKSPACE) {
@@ -4564,8 +4599,13 @@ function ensureSearchEngine() {
     return null;
   }
   if (searchEngine && searchEngineWorkspace === WORKSPACE) return searchEngine;
+  // Persistent open failures (unwritable .rundock, full disk) must not
+  // re-attempt the open + full reconcile on every keystroke; retry only
+  // after a workspace switch.
+  if (searchEngineFailedWorkspace === WORKSPACE) return null;
   if (searchEngine) { try { searchEngine.close(); } catch (e) {} searchEngine = null; }
   searchEngineWorkspace = WORKSPACE;
+  _sessionPathMemo.clear();
   if (!searchProbe) {
     searchProbe = searchLib.probeSqlite();
     if (!searchProbe.available) {
@@ -4583,13 +4623,18 @@ function ensureSearchEngine() {
     // progress line. Deleting the db and reopening the workspace is the
     // supported rebuild path and lands here too.
     const f = searchEngine.reconcileFiles(WORKSPACE);
-    const m = searchEngine.reconcileConversations(conversationSessionsForSearch());
+    const convoSessions = conversationSessionsForSearch();
+    const m = searchEngine.reconcileConversations(convoSessions);
+    // Sweep rows for conversations deleted while the engine was closed or
+    // unavailable (they would otherwise burn over-fetch slots forever).
+    try { searchEngine.removeOrphanedConversations(readConversations().map(c => c.id)); } catch (e) {}
     searchFilesReconciledAt = Date.now();
     console.log(`[Search] index ready: ${f.scanned} files scanned (${f.updated} indexed), ${m.indexed} new messages`);
   } catch (e) {
     console.warn('[Search] engine init failed; grep fallback active:', e && e.message ? e.message : e);
     try { if (searchEngine) searchEngine.close(); } catch (e2) {}
     searchEngine = null;
+    searchEngineFailedWorkspace = WORKSPACE;
   }
   return searchEngine;
 }
@@ -4597,16 +4642,36 @@ function ensureSearchEngine() {
 // Session-file map for the indexer: [{conversationId, sessions:[{sessionId,
 // agentId, filePath}]}]. Paths resolve into ~/.claude/projects (outside the
 // workspace); the index itself stays inside .rundock/.
+function resolveSessionPathCached(sessionId) {
+  const now = Date.now();
+  const memo = _sessionPathMemo.get(sessionId);
+  if (memo) {
+    if (memo.path) {
+      // Cheap single stat validates a positive hit (files can be pruned).
+      if (fs.existsSync(memo.path)) return memo.path;
+    } else if (now - memo.ts < SESSION_PATH_NEGATIVE_TTL_MS) {
+      return null;
+    }
+  }
+  const resolved = getSessionJsonlPath(sessionId);
+  _sessionPathMemo.set(sessionId, { path: resolved || null, ts: now });
+  return resolved;
+}
+
 function conversationSessionsForSearch(onlyConvoId) {
   const out = [];
+  // A session id belongs to exactly ONE conversation (the first that lists
+  // it, in conversations.json order). Without this, two conversations
+  // sharing a session flap the high-water mark's conversation_id and split
+  // one session's messages across two conversation ids.
+  const globallySeen = new Set();
   for (const c of readConversations()) {
-    if (onlyConvoId && c.id !== onlyConvoId) continue;
     const sessions = [];
-    const seen = new Set();
     const add = (sessionId, agentId) => {
-      if (!sessionId || seen.has(sessionId)) return;
-      seen.add(sessionId);
-      const filePath = getSessionJsonlPath(sessionId);
+      if (!sessionId || globallySeen.has(sessionId)) return;
+      globallySeen.add(sessionId);
+      if (onlyConvoId && c.id !== onlyConvoId) return; // still claim the id for ownership
+      const filePath = resolveSessionPathCached(sessionId);
       if (filePath) sessions.push({ sessionId, agentId: agentId || c.agentId || null, filePath });
     };
     add(c.sessionId, c.agentId);
@@ -4757,7 +4822,7 @@ async function runUniversalSearch(msg) {
 
   // Empty query: recent items, not nothing (Reflect-style empty state).
   if (!rawQuery) {
-    const recentConvos = convos.slice()
+    const recentConvos = convos.filter(c => c.status !== 'archived')
       .sort((a, b) => new Date(b.lastActiveAt || b.createdAt || 0) - new Date(a.lastActiveAt || a.createdAt || 0))
       .slice(0, limit)
       .map(c => ({ type: 'conversation', id: c.id, title: c.title, agentId: c.agentId, matchType: 'recent', lastActiveAt: c.lastActiveAt }));
@@ -4766,14 +4831,14 @@ async function runUniversalSearch(msg) {
       reconcileSearchBeforeQuery();
       try { recentFiles = searchEngine.recentFiles(limit); } catch (e) { recentFiles = []; }
     } else {
-      recentFiles = flattenFileTree(getFileTree(WORKSPACE)).slice(0, limit)
+      recentFiles = flatFileListCached().slice(0, limit)
         .map(f => ({ type: 'file', path: f.path, title: path.basename(f.name, path.extname(f.name)), matchType: 'recent', tags: [] }));
     }
     return { groups: { ...groups, conversations: recentConvos, files: recentFiles }, recent: true };
   }
 
   // ── Files: fuzzy title layer + FTS content (or bounded grep) ──
-  const allFiles = flattenFileTree(getFileTree(WORKSPACE));
+  const allFiles = flatFileListCached();
   const fileTitleHits = titleLayerMatches(rawQuery, allFiles, f => f.name, { fuzzy })
     .slice(0, limit)
     .map(({ item, score }) => ({
@@ -4879,7 +4944,7 @@ async function runUniversalSearch(msg) {
     }));
 
     let skills = [];
-    try { skills = discoverSkills(agents); } catch (e) {}
+    try { skills = discoverSkillsCached(agents); } catch (e) {}
     const q = rawQuery.toLowerCase();
     const skillHits = titleLayerMatches(rawQuery, skills, s => s.name, { fuzzy });
     const seenSkills = new Set(skillHits.map(h => h.item.id));
@@ -4986,6 +5051,7 @@ module.exports._internal = {
   // universal search (SR1)
   ensureSearchEngine, runUniversalSearch, conversationSessionsForSearch,
   titleLayerMatches, flattenFileTree, grepSearchFiles, grepSearchTranscripts,
+  resolveSessionPathCached, _sessionPathMemo,
   getSearchEngine() { return searchEngine; },
   // server objects (integration test lifecycle)
   server, wss,

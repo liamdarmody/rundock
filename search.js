@@ -407,7 +407,12 @@ class SearchIndex {
       const prev = known.get(rel);
       known.delete(rel);
       if (prev && prev.mtime_ms === st.mtimeMs && prev.size === st.size) continue;
-      if (st.size > MAX_FILE_BYTES) continue;
+      if (st.size > MAX_FILE_BYTES) {
+        // A file that grew past the cap must not keep its stale row
+        // searchable forever; drop it (no-op when it was never indexed).
+        if (prev) { this.db.prepare('DELETE FROM files WHERE path = ?').run(rel); removed++; }
+        continue;
+      }
       this._indexFile(rootDir, rel, st);
       updated++;
     }
@@ -548,26 +553,42 @@ Object.assign(SearchIndex.prototype, {
         }
         const read = this._readSessionDelta(s.filePath, offset, st.size);
         sessionsRead++;
-        const insert = this.db.prepare(`
-          INSERT INTO messages (conversation_id, session_id, agent_id, role, ts_ms, seq, text)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `);
-        for (const line of read.lines) {
-          let obj;
-          try { obj = JSON.parse(line); } catch (e) { continue; }
-          const m = extractIndexableMessage(obj);
-          if (!m) continue;
-          insert.run(c.conversationId, s.sessionId, s.agentId || null, m.role, m.tsMs, seq, m.text);
-          seq++;
-          indexed++;
+        // One transaction per session delta: the message inserts and the mark
+        // upsert land together or not at all. Without this, a crash between
+        // them leaves the mark behind the rows, and the next reconcile
+        // re-reads from the old offset and duplicates every message — with
+        // nothing ever cleaning it up (the schema version hasn't changed, so
+        // no rebuild fires). A failed session rolls back and is skipped; the
+        // next reconcile retries it from the same mark.
+        let sessionIndexed = 0;
+        this.db.exec('BEGIN');
+        try {
+          const insert = this.db.prepare(`
+            INSERT INTO messages (conversation_id, session_id, agent_id, role, ts_ms, seq, text)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+          `);
+          for (const line of read.lines) {
+            let obj;
+            try { obj = JSON.parse(line); } catch (e) { continue; }
+            const m = extractIndexableMessage(obj);
+            if (!m) continue;
+            insert.run(c.conversationId, s.sessionId, s.agentId || null, m.role, m.tsMs, seq, m.text);
+            seq++;
+            sessionIndexed++;
+          }
+          this.db.prepare(`
+            INSERT INTO session_marks (session_id, conversation_id, byte_offset, seq_next, mtime_ms, size)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+              conversation_id = excluded.conversation_id, byte_offset = excluded.byte_offset,
+              seq_next = excluded.seq_next, mtime_ms = excluded.mtime_ms, size = excluded.size
+          `).run(s.sessionId, c.conversationId, read.nextOffset, seq, st.mtimeMs, st.size);
+          this.db.exec('COMMIT');
+          indexed += sessionIndexed;
+        } catch (e) {
+          try { this.db.exec('ROLLBACK'); } catch (e2) {}
+          console.warn(`[Search] session ${s.sessionId} index failed (rolled back, will retry): ${e && e.message ? e.message : e}`);
         }
-        this.db.prepare(`
-          INSERT INTO session_marks (session_id, conversation_id, byte_offset, seq_next, mtime_ms, size)
-          VALUES (?, ?, ?, ?, ?, ?)
-          ON CONFLICT(session_id) DO UPDATE SET
-            conversation_id = excluded.conversation_id, byte_offset = excluded.byte_offset,
-            seq_next = excluded.seq_next, mtime_ms = excluded.mtime_ms, size = excluded.size
-        `).run(s.sessionId, c.conversationId, read.nextOffset, seq, st.mtimeMs, st.size);
       }
     }
     return { indexed, sessionsRead };
@@ -601,6 +622,18 @@ Object.assign(SearchIndex.prototype, {
   removeConversation(convoId) {
     this.db.prepare('DELETE FROM messages WHERE conversation_id = ?').run(convoId);
     this.db.prepare('DELETE FROM session_marks WHERE conversation_id = ?').run(convoId);
+  },
+
+  /**
+   * Sweep rows whose conversation is no longer known (deleted while the
+   * engine was unavailable, conversations.json edited externally, capped
+   * out of the 100-entry list). Cheap; run on the full-reconcile path.
+   */
+  removeOrphanedConversations(validIds) {
+    const ids = (validIds || []).slice(0, 500);
+    const placeholders = ids.map(() => '?').join(',') || "''";
+    this.db.prepare(`DELETE FROM messages WHERE conversation_id NOT IN (${placeholders})`).run(...ids);
+    this.db.prepare(`DELETE FROM session_marks WHERE conversation_id NOT IN (${placeholders})`).run(...ids);
   },
 
   /**

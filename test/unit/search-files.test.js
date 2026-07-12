@@ -207,6 +207,19 @@ describe('files corpus', () => {
     }
   });
 
+  test('a file that grows past the size cap drops out of the index', () => {
+    // (Review R1 P3-1) Previously the oversized branch skipped the row but
+    // left the stale content searchable forever.
+    idx = freshIndex();
+    const full = write('grows.md', 'small quoll content', 1_700_000_000);
+    idx.reconcileFiles(workspace);
+    assert.strictEqual(idx.searchFiles('quoll').length, 1);
+    fs.writeFileSync(full, 'quoll '.padEnd(2 * 1024 * 1024 + 10, 'x'));
+    fs.utimesSync(full, 1_700_000_100, 1_700_000_100);
+    idx.reconcileFiles(workspace);
+    assert.strictEqual(idx.searchFiles('quoll').length, 0, 'stale row for oversized file must be removed');
+  });
+
   test('frontmatter is not indexed as content (snippets stay clean)', () => {
     idx = freshIndex();
     write('fm.md', '---\nauthor: quibblefish\ntags: [pricing]\n---\nThe body discusses margins.\n');

@@ -1898,7 +1898,10 @@ function renderSearchResults() {
   }
   for (const c of matched) {
     const snippet = snippetMap.get(c.id);
-    const preview = snippet ? esc(snippet) : (c.messages?.length ? esc(stripMd(c.messages.filter(m => m.role === 'agent').pop()?.content || '').substring(0, 60)) : '');
+    // FTS snippets carry control-char highlight markers; escape first, then
+    // swap them for <mark> (same treatment as the palette). Grep-fallback
+    // snippets carry no markers, so the swap is a no-op there.
+    const preview = snippet ? paletteHl(snippet) : (c.messages?.length ? esc(stripMd(c.messages.filter(m => m.role === 'agent').pop()?.content || '').substring(0, 60)) : '');
     const displayAgent = c.agent || { colour: 'var(--text-2)', icon: '?', displayName: 'Unknown' };
     const opacity = c.persisted ? 'opacity:0.8;' : '';
     const sWorking = workingConvos.has(c.id);
@@ -1925,6 +1928,9 @@ function discardIfEmpty() {
 }
 
 function openConversation(id, withAnchor) {
+  // A stale search anchor must never fire on a later manual open (it would
+  // scroll to and flash an old hit days later).
+  if (!withAnchor) pendingMessageAnchor = null;
   // Close any active find before swapping the DOM out from under it.
   if (activeConversation && activeConversation.id !== id) closeFindBar();
   if (activeConversation && activeConversation.id !== id) discardIfEmpty();
@@ -3934,7 +3940,8 @@ let paletteFlat = [];         // flat selectable items in display order
 let paletteSel = 0;
 let paletteLoading = false;
 let palettePendingSkill = null;
-let pendingMessageAnchor = null; // {convoId, text, fragment}
+let paletteReqId = 0;         // stale-reply guard (query text alone can't distinguish filter/fuzzy toggles)
+var pendingMessageAnchor = null; // {convoId, text, fragment} — var: openConversation clears it and runs before this section during load-order-sensitive paths
 
 const PALETTE_GROUP_ORDER = ['files', 'conversations', 'agents', 'skills'];
 const PALETTE_GROUP_LABELS = { files: 'Files', conversations: 'Conversations', agents: 'Agents', skills: 'Skills' };
@@ -3962,6 +3969,7 @@ function togglePalette() { paletteOpen ? closePalette() : openPalette(); }
 
 function setPaletteScope(scope) {
   paletteScope = scope;
+  paletteSel = 0; // the flat list is about to change shape
   document.querySelectorAll('.palette-scope').forEach(b => b.classList.toggle('active', b.dataset.scope === scope));
   renderPalette();
   document.getElementById('palette-input')?.focus();
@@ -4023,6 +4031,7 @@ function runPaletteSearch() {
   ws.send(JSON.stringify({
     type: 'search_universal',
     query: paletteQuery,
+    reqId: ++paletteReqId,
     fuzzy: paletteFuzzy,
     prefix: true, // type-ahead: last token matches as a prefix
     limit: 8,
@@ -4032,8 +4041,9 @@ function runPaletteSearch() {
 
 function handlePaletteResults(d) {
   if (!paletteOpen) return;
-  // Stale replies (user kept typing) are dropped.
-  if ((d.query || '') !== paletteQuery.trim()) return;
+  // Stale replies are dropped by request id (query text alone can't
+  // distinguish a fuzzy/filter toggle on the same query).
+  if (d.reqId !== paletteReqId) return;
   paletteLoading = false;
   paletteReply = d;
   paletteSel = 0;
@@ -4095,12 +4105,12 @@ function paletteItemHtml(item, idx) {
     meta = item.snippet ? paletteHl(item.snippet) : esc(dir) + tagStr;
   } else if (item.type === 'conversation') {
     const a = agents.find(x => x.id === item.agentId);
-    icon = `<div class="avatar sm" style="background:${a?.colour || 'var(--card)'};width:26px;height:26px;font-size:12px">${a?.icon || '?'}</div>`;
+    icon = `<div class="avatar sm" style="background:${esc(a?.colour || 'var(--card)')};width:26px;height:26px;font-size:12px">${esc(a?.icon || '?')}</div>`;
     title = esc(item.title || 'Untitled conversation');
     meta = item.snippet ? paletteHl(item.snippet) : (a ? esc(a.displayName) : '');
-    if (item.matchCount > 1) meta += ` <span style="opacity:0.7">&middot; ${item.matchCount} matches</span>`;
+    if (item.matchCount > 1) meta += ` <span style="opacity:0.7">&middot; ${parseInt(item.matchCount, 10) || 0} matches</span>`;
   } else if (item.type === 'agent') {
-    icon = `<div class="avatar sm" style="background:${item.colour || 'var(--card)'};width:26px;height:26px;font-size:12px">${item.icon || '?'}</div>`;
+    icon = `<div class="avatar sm" style="background:${esc(item.colour || 'var(--card)')};width:26px;height:26px;font-size:12px">${esc(item.icon || '?')}</div>`;
     title = esc(item.name);
     meta = esc(item.role || '');
   } else if (item.type === 'skill') {
