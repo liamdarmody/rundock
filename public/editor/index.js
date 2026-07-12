@@ -51,7 +51,8 @@ export function createEditor({
 
   injectEditorStyles();
 
-  const { raw, parsed, body, trailing } = parseFile(rawMarkdown || '');
+  const parts = parseFile(rawMarkdown || '');
+  const { raw, parsed, body } = parts;
 
   const editor = createEditorInstance({
     element,
@@ -78,9 +79,8 @@ export function createEditor({
   const detachWikilinks = wireWikilinkClicks(element, onWikilinkClick);
 
   _editorHandles.set(editor, {
-    rawFrontmatter: raw,
+    parts,
     parsedFrontmatter: parsed,
-    trailingNewlines: trailing,
     propertiesCount,
     detachToolbar,
     detachWikilinks,
@@ -103,7 +103,10 @@ export function destroyEditor(editor) {
 export function getMarkdown(editor) {
   if (!editor) return '';
   const handle = _editorHandles.get(editor);
-  const raw = handle ? handle.rawFrontmatter : null;
-  const trailing = handle ? handle.trailingNewlines : '';
-  return serialiseFile(editor, raw, trailing);
+  if (!handle) return serialiseFile(editor, {});
+  const parts = { ...handle.parts };
+  // The review controller owns the live endmatter: when review data changed
+  // it supplies a rebuilt block, otherwise the original bytes pass through.
+  if (handle.review) parts.endmatterRaw = handle.review.getEndmatterRaw();
+  return serialiseFile(editor, parts);
 }
