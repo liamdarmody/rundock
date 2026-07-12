@@ -15,7 +15,7 @@
  * 10. VIEWS & NAVIGATION ............ switchNav, showView, goHome, toggleTheme
  * 11. FILE TREE & EDITOR ............ renderFileTree, buildTree, loadFileContent
  * 12. MARKDOWN RENDERING ............ renderMarkdown, processCalloutsSrc
- * 13. SKILLS ........................ renderSkills, selectSkill, filterSkills
+ * 13. SKILLS ........................ renderSkills, selectSkill
  * 14. SETTINGS ...................... showSettingsSection, renderSettingsSection
  * 15. WORKSPACE PICKER .............. handleWorkspaces, showWorkspacePicker
  * 16. EVENT LISTENERS & INIT ........ keydown, resize, connect()
@@ -472,9 +472,6 @@ function handle(d) {
       break;
     case 'search_universal_results':
       handlePaletteResults(d);
-      break;
-    case 'search_results':
-      handleSearchResults(d);
       break;
     case 'error': if(!d.content?.includes('no stdin')) addSystemMsgToConvo(d.content, convoId); break;
   }
@@ -1664,11 +1661,6 @@ function setSidebarPill(pill) {
 }
 
 function renderConvoList() {
-  // When search is active, show flat filtered results
-  if (convoSearchResults !== null) {
-    renderSearchResults();
-    return;
-  }
   // Flat list filtered by the active pill (all | unread | pinned), sorted by
   // lastActiveAt desc. Replaces the three-section model (Pinned / Active with
   // working/unread/idle tiers / Done) and the Older fold from 0.8.9. The Done
@@ -1824,96 +1816,6 @@ function renderConvoItem(c, variant) {
     ${preview ? `<span class="convo-preview">${esc(preview)}</span>` : ''}
     <div class="convo-meta"><div class="avatar xs" style="background:${displayAgent.colour}">${displayAgent.icon}</div><span>${displayAgent.displayName}</span>${timeStr}${indicator}</div>
   </div>`;
-}
-
-// ===== CONVERSATION SEARCH =====
-let convoSearchQuery = '';
-let convoSearchResults = null; // null = no search active, [] = search with no results
-let convoSearchTimer = null;
-
-function filterConversations(query) {
-  const q = query.trim();
-  const clearBtn = document.getElementById('convo-search-clear');
-  if (clearBtn) clearBtn.classList.toggle('hidden', !q);
-
-  if (!q) {
-    convoSearchQuery = '';
-    convoSearchResults = null;
-    renderConvoList();
-    return;
-  }
-
-  convoSearchQuery = q;
-
-  // Phase 1: instant title filter (client-side)
-  const lower = q.toLowerCase();
-  const titleMatches = conversations.filter(c => (c.title || '').toLowerCase().includes(lower));
-  convoSearchResults = titleMatches.map(c => ({ id: c.id, matchType: 'title' }));
-  renderConvoList();
-
-  // Phase 2: debounced content search (server-side, 300ms)
-  clearTimeout(convoSearchTimer);
-  if (q.length >= 3) {
-    convoSearchTimer = setTimeout(() => {
-      ws.send(JSON.stringify({ type: 'search_conversations', query: q }));
-    }, 300);
-  }
-}
-
-function clearConvoSearch() {
-  const input = document.getElementById('convo-search');
-  if (input) input.value = '';
-  filterConversations('');
-}
-
-function handleSearchResults(d) {
-  // Only apply if the query still matches what we searched for
-  if (d.query?.toLowerCase().trim() !== convoSearchQuery.toLowerCase().trim()) return;
-  // Merge server results with existing title matches
-  const existingIds = new Set((convoSearchResults || []).map(r => r.id));
-  const newResults = (d.results || []).filter(r => !existingIds.has(r.id));
-  convoSearchResults = [...(convoSearchResults || []), ...newResults.map(r => ({ id: r.id, matchType: r.matchType, snippet: r.snippet }))];
-  renderConvoList();
-}
-
-function renderSearchResults() {
-  const matchIds = new Set(convoSearchResults.map(r => r.id));
-  const snippetMap = new Map(convoSearchResults.filter(r => r.snippet).map(r => [r.id, r.snippet]));
-  // Narrow search results by the active pill so search operates within the
-  // user's current filter rather than blowing past it. The All pill applies
-  // no extra narrowing so search can still find archived conversations by
-  // content; Unread and Pinned narrow to the same non-archived subset the
-  // main list shows.
-  let matched = conversations.filter(c => matchIds.has(c.id));
-  if (activeSidebarPill === 'unread') {
-    matched = matched.filter(c => unreadConvos.has(c.id) && c.status !== 'archived');
-  } else if (activeSidebarPill === 'pinned') {
-    matched = matched.filter(c => c.pinned === true && c.status !== 'archived');
-  }
-  let h = '';
-  if (!matched.length) {
-    h = `<div style="padding:12px 16px">
-      <div style="color:var(--text-2);font-size:var(--caption);line-height:1.6">No matches</div>
-    </div>`;
-  }
-  for (const c of matched) {
-    const snippet = snippetMap.get(c.id);
-    // FTS snippets carry control-char highlight markers; escape first, then
-    // swap them for <mark> (same treatment as the palette). Grep-fallback
-    // snippets carry no markers, so the swap is a no-op there.
-    const preview = snippet ? paletteHl(snippet) : (c.messages?.length ? esc(stripMd(c.messages.filter(m => m.role === 'agent').pop()?.content || '').substring(0, 60)) : '');
-    const displayAgent = c.agent || { colour: 'var(--text-2)', icon: '?', displayName: 'Unknown' };
-    const opacity = c.persisted ? 'opacity:0.8;' : '';
-    const sWorking = workingConvos.has(c.id);
-    const sUnread = !sWorking && unreadConvos.has(c.id);
-    const sIndicator = sWorking ? '<span class="convo-working"></span>' : sUnread ? '<span class="convo-unread"></span>' : '';
-    h += `<div class="convo-item ${activeConversation?.id === c.id ? 'active' : ''}" onclick="openConversation('${c.id}')" style="${opacity}">
-      <span class="convo-title">${esc(c.title)}</span>
-      ${preview ? `<span class="convo-preview">${preview}</span>` : ''}
-      <div class="convo-meta"><div class="avatar xs" style="background:${displayAgent.colour}">${displayAgent.icon}</div><span>${displayAgent.displayName}</span>${sIndicator}</div>
-    </div>`;
-  }
-  document.getElementById('convo-list').innerHTML = h;
 }
 
 // Discard current conversation if no real messages were sent (lazy creation cleanup)
@@ -2756,13 +2658,9 @@ function switchNav(nav) {
   document.querySelector(`[data-nav="${nav}"]`)?.classList.add('active');
   ['team','conversations','skills','files','settings'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
   document.getElementById(`sidebar-${nav}`).classList.remove('hidden');
-  // Clear search when navigating away
-  if(nav !== 'conversations') clearConvoSearch();
-  if(nav !== 'files') clearFileSearch();
-  if(nav !== 'skills') clearSkillSearch();
   if(nav==='settings') { showView('settings'); showSettingsSection('workspace'); }
   else if(nav==='files') { editorReturnView = 'editor'; if(currentFilePath && document.querySelector('.file-item.active')) { showView('editor'); } else { currentFilePath = null; destroyTiptapEditorIfActive(); document.getElementById('editor-header').classList.add('hidden'); document.getElementById('editor-content').classList.add('hidden'); document.getElementById('editor-textarea').classList.add('hidden'); document.getElementById('tiptap-editor-pane').classList.add('hidden'); document.getElementById('editor-empty').classList.remove('hidden'); showView('editor'); } }
-  else if(nav==='skills') { showView('skills'); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } else if(skills.length && !currentSkillId) { selectSkill(skills[0].id); } clearSkillSearch(); }
+  else if(nav==='skills') { showView('skills'); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } else if(skills.length && !currentSkillId) { selectSkill(skills[0].id); } }
   else if(nav==='conversations') { if(activeConversation) { showView('chat'); if(unreadConvos.delete(activeConversation.id)) { updateUnreadBadge(); renderConvoList(); } } else { const target = pickDefaultConversation(); if(target) { openConversation(target.id); } else { newConversation(); } } }
   else if(nav==='team') { showView('home'); renderOrgChart(); }
 }
@@ -2811,49 +2709,6 @@ function buildTree(items,container) {
       container.appendChild(fi);
     }
   }
-}
-
-// ===== FILE SEARCH =====
-let fileSearchQuery = '';
-
-function filterFiles(query) {
-  const q = query.trim();
-  const clearBtn = document.getElementById('file-search-clear');
-  if (clearBtn) clearBtn.classList.toggle('hidden', !q);
-  fileSearchQuery = q;
-  if (!cachedFileTree) return;
-  if (!q) { renderFileTree(cachedFileTree); return; }
-  const lower = q.toLowerCase();
-  const matches = flattenTree(cachedFileTree).filter(f => f.name.toLowerCase().includes(lower));
-  const container = document.getElementById('file-tree');
-  container.innerHTML = '';
-  if (!matches.length) {
-    container.innerHTML = '<div style="padding:12px 16px;color:var(--text-2);font-size:var(--caption)">No matches</div>';
-    return;
-  }
-  for (const item of matches) {
-    const fi = document.createElement('div'); fi.className = 'file-item';
-    const dir = item.path.includes('/') ? item.path.substring(0, item.path.lastIndexOf('/')) + '/' : '';
-    fi.innerHTML = `<svg class="file-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><div><div>${esc(item.name)}</div>${dir ? `<div style="font-size:11px;color:var(--text-2);margin-top:1px">${esc(dir)}</div>` : ''}</div>`;
-    fi.dataset.path = item.path;
-    fi.onclick = () => { document.querySelectorAll('.file-item').forEach(x => x.classList.remove('active')); fi.classList.add('active'); editorReturnView = 'editor'; fileHistory = []; ws.send(JSON.stringify({ type: 'read_file', path: item.path })); showView('editor'); };
-    container.appendChild(fi);
-  }
-}
-
-function flattenTree(items, result) {
-  result = result || [];
-  for (const item of items) {
-    if (item.type === 'folder') { flattenTree(item.children || [], result); }
-    else { result.push(item); }
-  }
-  return result;
-}
-
-function clearFileSearch() {
-  const input = document.getElementById('file-search');
-  if (input) input.value = '';
-  filterFiles('');
 }
 
 // Editor
@@ -3233,22 +3088,6 @@ function renderSkillsSidebar(list) {
       <span class="skill-sidebar-name">${esc(s.name)}</span>
     </div>
   `).join('');
-}
-
-function filterSkills(query) {
-  const clearBtn = document.getElementById('skill-search-clear');
-  const filtered = query
-    ? skills.filter(s => s.name.toLowerCase().includes(query.toLowerCase()))
-    : skills;
-  clearBtn.classList.toggle('hidden', !query);
-  renderSkillsSidebar(filtered);
-}
-
-function clearSkillSearch() {
-  const input = document.getElementById('skill-search');
-  if (!input) return;
-  input.value = '';
-  filterSkills('');
 }
 
 function selectSkill(id) {
@@ -3932,7 +3771,6 @@ initFindBar();
 
 let paletteOpen = false;
 let paletteScope = 'all';
-let paletteFuzzy = true;
 let paletteQuery = '';
 let paletteTimer = null;
 let paletteReply = null;      // last server reply {groups, recent}
@@ -3954,7 +3792,6 @@ function openPalette() {
   overlay.classList.remove('hidden');
   const input = document.getElementById('palette-input');
   input.value = paletteQuery = '';
-  populatePaletteAgentFilter();
   schedulePaletteSearch(0); // empty query -> recent items
   input.focus();
 }
@@ -3975,48 +3812,6 @@ function setPaletteScope(scope) {
   document.getElementById('palette-input')?.focus();
 }
 
-function togglePaletteFuzzy() {
-  paletteFuzzy = !paletteFuzzy;
-  document.getElementById('palette-fuzzy-toggle')?.classList.toggle('on', paletteFuzzy);
-  schedulePaletteSearch(0);
-  document.getElementById('palette-input')?.focus();
-}
-
-function togglePaletteFilters() {
-  const row = document.getElementById('palette-filter-row');
-  const open = row.classList.toggle('open');
-  document.getElementById('palette-filters-toggle')?.classList.toggle('on', open);
-  if (!open) {
-    // Clearing hidden filters keeps the query honest with what's on screen.
-    ['palette-filter-from', 'palette-filter-to', 'palette-filter-tags'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
-    const sel = document.getElementById('palette-filter-agent'); if (sel) sel.value = '';
-    schedulePaletteSearch(0);
-  }
-}
-
-function populatePaletteAgentFilter() {
-  const sel = document.getElementById('palette-filter-agent');
-  if (!sel) return;
-  const current = sel.value;
-  sel.innerHTML = '<option value="">Any</option>' +
-    agents.map(a => `<option value="${esc(a.id)}">${esc(a.displayName)}</option>`).join('');
-  sel.value = current;
-}
-
-function paletteFilterParams() {
-  const params = {};
-  const agentSel = document.getElementById('palette-filter-agent');
-  if (agentSel && agentSel.value) params.agentId = agentSel.value;
-  const from = document.getElementById('palette-filter-from')?.value;
-  const to = document.getElementById('palette-filter-to')?.value;
-  if (from) { const ms = Date.parse(from); if (!isNaN(ms)) params.updatedFromMs = ms; }
-  if (to) { const ms = Date.parse(to); if (!isNaN(ms)) params.updatedToMs = ms + 86399999; } // inclusive day end
-  const tags = (document.getElementById('palette-filter-tags')?.value || '')
-    .split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
-  if (tags.length) params.tags = tags;
-  return params;
-}
-
 function schedulePaletteSearch(delay = 220) {
   if (!paletteOpen) return;
   clearTimeout(paletteTimer);
@@ -4028,14 +3823,14 @@ function runPaletteSearch() {
   paletteQuery = document.getElementById('palette-input')?.value || '';
   paletteLoading = true;
   renderPaletteStatus();
+  // Fuzzy matching is always on for the title/name layer (no toggle in V1);
+  // content matching stays lexical FTS with type-ahead prefixing.
   ws.send(JSON.stringify({
     type: 'search_universal',
     query: paletteQuery,
     reqId: ++paletteReqId,
-    fuzzy: paletteFuzzy,
     prefix: true, // type-ahead: last token matches as a prefix
     limit: 8,
-    ...paletteFilterParams(),
   }));
 }
 
