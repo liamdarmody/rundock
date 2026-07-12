@@ -220,6 +220,57 @@ describe('conversations corpus', () => {
     }
   });
 
+  test('a failing insert mid-delta is atomic: no partial rows, no mark, clean re-run', () => {
+    // Simulates a crash mid-reconcile (Review R1 P2-2). Without a per-session
+    // transaction, the first insert survives while the mark is never written,
+    // so the next reconcile re-reads from offset 0 and duplicates messages.
+    const p = writeSession('s1',
+      jsonlUser('atomic ibis one', '2026-07-01T10:00:00.000Z') +
+      jsonlAssistant('atomic ibis two', '2026-07-01T10:00:10.000Z')
+    );
+    const c = convo('c1', 'cos', [{ sessionId: 's1', agentId: 'cos', filePath: p }]);
+    // Sabotage the second messages insert.
+    const origPrepare = idx.db.prepare.bind(idx.db);
+    let insertRuns = 0;
+    idx.db.prepare = (sql) => {
+      const stmt = origPrepare(sql);
+      if (/INSERT INTO messages/.test(sql)) {
+        const origRun = stmt.run.bind(stmt);
+        stmt.run = (...args) => {
+          insertRuns++;
+          if (insertRuns === 2) throw new Error('simulated crash');
+          return origRun(...args);
+        };
+      }
+      return stmt;
+    };
+    assert.doesNotThrow(() => idx.reconcileConversations([c]), 'a session failure must not abort the reconcile');
+    idx.db.prepare = origPrepare;
+    assert.strictEqual(idx.searchMessages('ibis', { collapse: false }).length, 0, 'partial session rows rolled back');
+    // Clean re-run indexes everything exactly once.
+    const r = idx.reconcileConversations([c]);
+    assert.strictEqual(r.indexed, 2);
+    assert.strictEqual(idx.searchMessages('ibis', { collapse: false }).length, 2, 'no duplicates after recovery');
+  });
+
+  test('removeOrphanedConversations sweeps rows for conversations no longer known', () => {
+    // (Review R1 P3-5)
+    const p1 = writeSession('s1', jsonlUser('kept numbat content', '2026-07-01T10:00:00.000Z'));
+    const p2 = writeSession('s2', jsonlUser('orphan numbat content', '2026-07-01T10:00:00.000Z'));
+    idx.reconcileConversations([
+      convo('keep', 'cos', [{ sessionId: 's1', agentId: 'cos', filePath: p1 }]),
+      convo('gone', 'cos', [{ sessionId: 's2', agentId: 'cos', filePath: p2 }]),
+    ]);
+    assert.strictEqual(idx.searchMessages('numbat', { collapse: false }).length, 2);
+    idx.removeOrphanedConversations(['keep']);
+    const hits = idx.searchMessages('numbat', { collapse: false });
+    assert.strictEqual(hits.length, 1);
+    assert.strictEqual(hits[0].conversationId, 'keep');
+    // The orphan's marks are gone too: re-adding it reindexes from zero.
+    const r = idx.reconcileConversations([convo('gone', 'cos', [{ sessionId: 's2', agentId: 'cos', filePath: p2 }])]);
+    assert.strictEqual(r.indexed, 1);
+  });
+
   test('a missing session file is tolerated (no throw, no rows)', () => {
     const c = convo('c1', 'cos', [{ sessionId: 'ghost', agentId: 'cos', filePath: path.join(tmpRoot, 'nope.jsonl') }]);
     assert.doesNotThrow(() => idx.reconcileConversations([c]));

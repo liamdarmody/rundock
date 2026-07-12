@@ -182,4 +182,98 @@ describe('search_conversations (sidebar, upgraded internals)', () => {
     assert.strictEqual(hit.matchType, 'content');
     assert.ok(hit.snippet, 'snippet present');
   });
+
+  test('partial-word queries still match content (parity with the old grep)', async () => {
+    // The sidebar fires at >=3 chars mid-word; the pre-index grep matched
+    // substrings, so "structur" must keep finding "structure" in message
+    // content (query chosen to miss every title so the content phase is
+    // what's exercised). (Review R1 P1-1)
+    const since = client.messages.length;
+    client.send({ type: 'search_conversations', query: 'structur' });
+    const { msg: reply } = await client.waitFor(m => m.type === 'search_results', { since, label: 'search_results' });
+    const hit = reply.results.find(r => r.id === 'c1' && r.matchType === 'content');
+    assert.ok(hit, 'mid-word typing state must return content matches');
+  });
+});
+
+describe('review round 1 regressions (server-side)', () => {
+  test('missing session files are not re-resolved on every call (negative memo)', () => {
+    // A pruned session jsonl must not trigger a ~/.claude/projects directory
+    // scan per keystroke. (Review R1 P2-1)
+    const internal = h.internal;
+    internal._sessionPathMemo.clear();
+    const rundockDir = path.join(h.workspaceDir, '.rundock');
+    const convos = JSON.parse(fs.readFileSync(path.join(rundockDir, 'conversations.json'), 'utf-8'));
+    convos.push({ id: 'ghost-c', agentId: 'chief-of-staff', sessionId: 'sess-ghost', sessionIds: [], title: 'Ghost', status: 'active', createdAt: '2026-07-01T00:00:00.000Z', lastActiveAt: '2026-07-01T00:00:00.000Z' });
+    fs.writeFileSync(path.join(rundockDir, 'conversations.json'), JSON.stringify(convos));
+    try {
+      let list = internal.conversationSessionsForSearch('ghost-c');
+      assert.strictEqual(list.length, 0, 'ghost session resolves to nothing');
+      const memo = internal._sessionPathMemo.get('sess-ghost');
+      assert.ok(memo && memo.path === null, 'negative lookup memoised');
+      // Even if the file appears now, the memo suppresses re-scanning until TTL...
+      fs.writeFileSync(path.join(sessionDir, 'sess-ghost.jsonl'), jsonlUser('ghost content', '2026-07-01T00:00:01.000Z'));
+      list = internal.conversationSessionsForSearch('ghost-c');
+      assert.strictEqual(list.length, 0, 'within TTL the negative memo holds');
+      // ...and a expired memo entry re-resolves and finds it.
+      memo.ts = 0;
+      list = internal.conversationSessionsForSearch('ghost-c');
+      assert.strictEqual(list.length, 1, 'expired negative memo re-resolves');
+    } finally {
+      fs.writeFileSync(path.join(rundockDir, 'conversations.json'), JSON.stringify(convos.filter(c => c.id !== 'ghost-c')));
+      fs.rmSync(path.join(sessionDir, 'sess-ghost.jsonl'), { force: true });
+      internal._sessionPathMemo.clear();
+    }
+  });
+
+  test('conversations sharing a session id do not fight over the marks (first wins)', () => {
+    // (Review R1 P2-4)
+    const internal = h.internal;
+    const rundockDir = path.join(h.workspaceDir, '.rundock');
+    const original = fs.readFileSync(path.join(rundockDir, 'conversations.json'), 'utf-8');
+    const convos = JSON.parse(original);
+    convos.push({ id: 'dupe-a', agentId: 'chief-of-staff', sessionId: 'sess-1', sessionIds: [], title: 'Dupe A', status: 'active', createdAt: '2026-07-01T00:00:00.000Z', lastActiveAt: '2026-07-01T00:00:00.000Z' });
+    fs.writeFileSync(path.join(rundockDir, 'conversations.json'), JSON.stringify(convos));
+    try {
+      const list = internal.conversationSessionsForSearch();
+      const holders = list.filter(c => c.sessions.some(s => s.sessionId === 'sess-1'));
+      assert.strictEqual(holders.length, 1, 'a session id belongs to exactly one conversation');
+      assert.strictEqual(holders[0].conversationId, 'c1', 'first conversation in the list owns the session');
+    } finally {
+      fs.writeFileSync(path.join(rundockDir, 'conversations.json'), original);
+    }
+  });
+
+  test('a newly saved skill is searchable immediately (cache invalidation)', async () => {
+    // discoverSkills gains a TTL cache (Review R1 P2-3); saving a skill must
+    // still surface it in the palette without waiting out the TTL.
+    const since = client.messages.length;
+    client.send({ type: 'save_skill', name: 'flash-skill', content: '---\nname: Flash Skill\ndescription: Instant cache invalidation check.\n---\nBody.' });
+    await client.waitFor(m => m.type === 'skill_saved', { since, label: 'skill_saved' });
+    const reply = await search({ query: 'flash skill' });
+    assert.ok(reply.groups.skills.find(s => s.id === 'flash-skill'), 'fresh skill found despite skills cache');
+  });
+
+  test('a newly saved file is title-searchable immediately (file list cache invalidation)', async () => {
+    const since = client.messages.length;
+    client.send({ type: 'save_file', path: 'cachecheck-note.md', content: 'Body content here.' });
+    await client.waitFor(m => m.type === 'file_saved', { since, label: 'file_saved' });
+    const reply = await search({ query: 'cachecheck' });
+    assert.ok(reply.groups.files.find(f => f.path === 'cachecheck-note.md' && f.matchType === 'title'), 'fresh file found by title despite file list cache');
+  });
+
+  test('archived conversations stay out of the empty-query recents', async () => {
+    // (Review R1 P3-9)
+    const rundockDir = path.join(h.workspaceDir, '.rundock');
+    const original = fs.readFileSync(path.join(rundockDir, 'conversations.json'), 'utf-8');
+    const convos = JSON.parse(original);
+    convos.unshift({ id: 'arch-c', agentId: 'chief-of-staff', sessionId: null, sessionIds: [], title: 'Archived thing', status: 'archived', createdAt: '2026-07-11T00:00:00.000Z', lastActiveAt: '2026-07-11T00:00:00.000Z' });
+    fs.writeFileSync(path.join(rundockDir, 'conversations.json'), JSON.stringify(convos));
+    try {
+      const reply = await search({ query: '' });
+      assert.ok(!reply.groups.conversations.find(c => c.id === 'arch-c'), 'archived conversation excluded from recents');
+    } finally {
+      fs.writeFileSync(path.join(rundockDir, 'conversations.json'), original);
+    }
+  });
 });
