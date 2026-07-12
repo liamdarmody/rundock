@@ -741,7 +741,7 @@ let _agentCache = null;
 let _agentCacheTime = 0;
 const AGENT_CACHE_TTL = 2000; // 2 seconds
 
-function invalidateAgentCache() { _agentCache = null; _agentCacheTime = 0; _skillCache = null; _skillCacheTime = 0; _fileListCache = null; _fileListCacheTime = 0; }
+function invalidateAgentCache() { _agentCache = null; _agentCacheTime = 0; _skillCache = null; _skillCacheTime = 0; invalidateFileListCache(); }
 
 // Skill + file-list caches for the search hot path (SR1). discoverSkills
 // re-reads every SKILL.md and agent body per call, and the palette queries
@@ -750,6 +750,8 @@ function invalidateAgentCache() { _agentCache = null; _agentCacheTime = 0; _skil
 // mutation and workspace switch) plus save_file for the file list.
 let _skillCache = null, _skillCacheTime = 0;
 let _fileListCache = null, _fileListCacheTime = 0;
+
+function invalidateFileListCache() { _fileListCache = null; _fileListCacheTime = 0; }
 
 function discoverSkillsCached(agents) {
   const now = Date.now();
@@ -2039,6 +2041,9 @@ function appendTranscript(convoId, role, agentId, text, type) {
   // unbounded indefinitely; raising further (or removing) would shift the
   // save-cost cliff onto users with very long conversations.
   if (transcript.length >= 1000) transcript.splice(1, 1);
+  // A "plain" agent message is a real chat turn; typed entries (e.g.
+  // 'routing') are bookkeeping rows that carry no new session content.
+  const isPlainAgentMessage = role === 'agent' && !type;
   const entry = { role, agent: agentId, text: text || '', timestamp: new Date().toISOString() };
   if (type) entry.type = type;
   transcript.push(entry);
@@ -2048,7 +2053,7 @@ function appendTranscript(convoId, role, agentId, text, type) {
   // Claude Code session jsonl has the turn's content, so the delta read makes
   // the new messages findable immediately. Fire-and-forget; failures are
   // caught inside and reconcile-on-search covers any gap.
-  if (role === 'agent' && type === undefined) noteSearchConversationActivity(convoId);
+  if (isPlainAgentMessage) noteSearchConversationActivity(convoId);
 }
 
 function formatTranscript(convoId, { excludeAgent } = {}) {
@@ -3974,11 +3979,13 @@ wss.on('connection', (ws) => {
 
       // ── CONVERSATION SEARCH: search titles and transcript content ──
       if (msg.type === 'search_conversations') {
-        // Sidebar conversation search. Internals upgraded to the FTS index
-        // (SR1); reply shape unchanged (results carry the conversation entry
-        // plus matchType/snippet), extended with sessionId/seq anchors on
-        // content hits. Grep fallback preserves the pre-index behaviour on
-        // runtimes without node:sqlite.
+        // Conversation-only search. No in-repo client sends this as of SR1
+        // (the palette's search_universal replaced the sidebar search field);
+        // retained deliberately as a stable WS surface for stale cached
+        // clients and a possible sidebar-search reinstatement, and kept
+        // honest by the integration suite. Results carry the conversation
+        // entry plus matchType/snippet, extended with sessionId/seq anchors
+        // on content hits. Grep fallback covers runtimes without node:sqlite.
         (async () => {
           const query = (msg.query || '').toLowerCase().trim();
           if (!WORKSPACE || !query) {
@@ -4025,10 +4032,14 @@ wss.on('connection', (ws) => {
         runUniversalSearch(msg).then(({ groups, recent }) => {
           ws.send(JSON.stringify({ type: 'search_universal_results', query: (msg.query || '').trim(), reqId: msg.reqId, groups, recent }));
         }).catch(err => {
+          // Defensive backstop: each corpus inside runUniversalSearch catches
+          // its own failures (degrading to partial results), so a rejection
+          // here is unexpected. `error: true` lets the client distinguish a
+          // genuine failure from a query with no hits.
           console.warn('[Search] universal error:', err && err.message ? err.message : err);
           ws.send(JSON.stringify({
             type: 'search_universal_results', query: (msg.query || '').trim(), reqId: msg.reqId,
-            groups: { files: [], conversations: [], agents: [], skills: [] }, recent: false,
+            groups: { files: [], conversations: [], agents: [], skills: [] }, recent: false, error: true,
           }));
         });
       }
@@ -4175,7 +4186,7 @@ wss.on('connection', (ws) => {
           // Keep the search index and the title-layer file list fresh on the
           // save hot path; guarded so an index failure can never affect the
           // save itself.
-          _fileListCache = null; _fileListCacheTime = 0;
+          invalidateFileListCache();
           if (ensureSearchEngine()) {
             try { searchEngine.noteFileSaved(WORKSPACE, msg.path); } catch (e) { /* reconcile catches up */ }
           }
@@ -4830,10 +4841,35 @@ async function grepSearchTranscripts(query, convos) {
 
 // ── Universal query assembly ─────────────────────────────────────────────────
 
+// Merge a group's title-layer hits with its content hits: title hits lead,
+// content hits fill the remainder, and a content hit for an item already
+// present as a title hit enriches it (snippet etc.) instead of duplicating.
+// Shared by the files and conversations groups, which differ only in key
+// and enrichment fields.
+function mergeHits(titleHits, contentHits, keyOf, enrich, limit) {
+  const byKey = new Map();
+  const merged = [];
+  for (const h of titleHits) { byKey.set(keyOf(h), h); merged.push(h); }
+  for (const h of contentHits) {
+    const existing = byKey.get(keyOf(h));
+    if (existing) { if (!existing.snippet) enrich(existing, h); continue; }
+    merged.push(h);
+  }
+  return merged.slice(0, limit);
+}
+
 async function runUniversalSearch(msg) {
+  // Params with no V1 client sender (fuzzy, tags, agentId, and the date
+  // ranges) are deliberate: server capability landed first, the palette
+  // filter UI is deferred until demand shows (the V2 chip design lives in
+  // the vault mock). The integration suite keeps them honest meanwhile.
   const rawQuery = (msg.query || '').trim();
   const fuzzy = msg.fuzzy !== false;
   const limit = Math.min(msg.limit || 8, 25);
+  // Tag/date-filtered searches suppress the unfiltered title layers: filters
+  // only exist on indexed metadata, and mixing unfiltered title hits back in
+  // would un-filter the groups.
+  const filtersActive = !!((msg.tags && msg.tags.length) || msg.updatedFromMs || msg.updatedToMs || msg.createdFromMs || msg.createdToMs);
   const groups = { files: [], conversations: [], agents: [], skills: [] };
   if (!WORKSPACE) return { groups, recent: false };
 
@@ -4858,8 +4894,7 @@ async function runUniversalSearch(msg) {
   }
 
   // ── Files: fuzzy title layer + FTS content (or bounded grep) ──
-  const allFiles = flatFileListCached();
-  const fileTitleHits = titleLayerMatches(rawQuery, allFiles, f => f.name, { fuzzy })
+  const fileTitleHits = filtersActive ? [] : titleLayerMatches(rawQuery, flatFileListCached(), f => f.name, { fuzzy })
     .slice(0, limit)
     .map(({ item, score }) => ({
       type: 'file', path: item.path,
@@ -4881,25 +4916,8 @@ async function runUniversalSearch(msg) {
   } else {
     fileContentHits = grepSearchFiles(rawQuery, limit);
   }
-  // Tag/date-filtered searches suppress the unfiltered title layer: filters
-  // only exist on indexed metadata, and mixing unfiltered title hits back in
-  // would un-filter the group.
-  const filtersActive = !!((msg.tags && msg.tags.length) || msg.updatedFromMs || msg.updatedToMs || msg.createdFromMs || msg.createdToMs);
-  {
-    const seen = new Set();
-    const merged = [];
-    const titleList = filtersActive ? [] : fileTitleHits;
-    for (const h of titleList) { seen.add(h.path); merged.push(h); }
-    for (const h of fileContentHits) {
-      if (seen.has(h.path)) {
-        const t = merged.find(m => m.path === h.path);
-        if (t && !t.snippet) { t.snippet = h.snippet; t.tags = h.tags; }
-        continue;
-      }
-      merged.push(h);
-    }
-    groups.files = merged.slice(0, limit);
-  }
+  groups.files = mergeHits(fileTitleHits, fileContentHits, h => h.path,
+    (t, h) => { t.snippet = h.snippet; t.tags = h.tags; }, limit);
 
   // ── Conversations: fuzzy title layer + FTS content (or legacy grep) ──
   const convoPool = msg.agentId
@@ -4915,6 +4933,11 @@ async function runUniversalSearch(msg) {
   if (searchEngine) {
     try {
       const byId = new Map(convos.map(c => [c.id, c]));
+      // Hit shape contract: the V1 client renders id/title/agentId/snippet/
+      // matchCount and anchors by snippet text. sessionId + seq are shipped
+      // as the exact-addressing contract for a future seq-based anchor; the
+      // engine's other per-hit fields (neighbour, message role/agent, ts)
+      // stay server-side until a UI renders them.
       convoContentHits = searchEngine.searchMessages(rawQuery, {
         limit, prefix: !!msg.prefix, agentId: msg.agentId,
         fromMs: msg.fromMs || msg.updatedFromMs, toMs: msg.toMs || msg.updatedToMs,
@@ -4923,9 +4946,8 @@ async function runUniversalSearch(msg) {
         return {
           type: 'conversation', id: c.id, title: c.title, agentId: c.agentId,
           matchType: 'content', snippet: h.snippet, sessionId: h.sessionId,
-          seq: h.seq, tsMs: h.tsMs, matchCount: h.matchCount, score: h.score,
-          messageAgentId: h.agentId, messageRole: h.role,
-          neighbour: h.neighbour, lastActiveAt: c.lastActiveAt,
+          seq: h.seq, matchCount: h.matchCount, score: h.score,
+          lastActiveAt: c.lastActiveAt,
         };
       });
     } catch (e) {
@@ -4937,20 +4959,8 @@ async function runUniversalSearch(msg) {
       matchType: 'content', snippet: c.snippet, lastActiveAt: c.lastActiveAt, score: 0,
     })).slice(0, limit);
   }
-  {
-    const seen = new Set();
-    const merged = [];
-    for (const h of convoTitleHits) { seen.add(h.id); merged.push(h); }
-    for (const h of convoContentHits) {
-      if (seen.has(h.id)) {
-        const t = merged.find(m => m.id === h.id);
-        if (t && !t.snippet) { t.snippet = h.snippet; t.sessionId = h.sessionId; t.seq = h.seq; }
-        continue;
-      }
-      merged.push(h);
-    }
-    groups.conversations = merged.slice(0, limit);
-  }
+  groups.conversations = mergeHits(convoTitleHits, convoContentHits, h => h.id,
+    (t, h) => { t.snippet = h.snippet; t.sessionId = h.sessionId; t.seq = h.seq; }, limit);
 
   // ── Agents + skills: tiny corpora, in-memory only, name > description ──
   // (scope addendum: do NOT index these; a query-time filter is always fresh)

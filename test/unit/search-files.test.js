@@ -232,6 +232,44 @@ describe('files corpus', () => {
     assert.ok(!hit.snippet.includes('author:'), 'snippet must not leak frontmatter');
   });
 
+  test('created-date range filters apply only where birthtime is real', () => {
+    // birthtime is not settable via utimes, so the stat object is synthesised
+    // and fed straight to the indexer (the same shape statSync produces).
+    idx = freshIndex();
+    const paths = [
+      ['early.md', 1_600_000_000_000],
+      ['late.md', 1_700_000_000_000],
+      ['nobirth.md', 0], // filesystems without birthtime report 0
+    ];
+    for (const [rel, birthtimeMs] of paths) {
+      write(rel, `shared token ibex in ${rel}`);
+      idx._indexFile(workspace, rel, { mtimeMs: 1_700_000_000_000, size: 40, birthtimeMs });
+    }
+    assert.strictEqual(idx.searchFiles('ibex').length, 3);
+    const recent = idx.searchFiles('ibex', { createdFrom: 1_650_000_000_000 });
+    assert.deepStrictEqual(recent.map(h => h.path), ['late.md'], 'createdFrom filters, and null birthtime is excluded');
+    const older = idx.searchFiles('ibex', { createdTo: 1_650_000_000_000 });
+    assert.deepStrictEqual(older.map(h => h.path), ['early.md']);
+  });
+
+  test('frontmatter tags: bare comma list (no brackets) parses too', () => {
+    idx = freshIndex();
+    write('bare.md', '---\ntags: strategy, hiring\n---\nBody here.\n');
+    idx.reconcileFiles(workspace);
+    const hit = idx.searchFiles('body', { tags: ['hiring'] });
+    assert.deepStrictEqual(hit.map(h => h.path), ['bare.md']);
+    assert.deepStrictEqual(hit[0].tags.sort(), ['hiring', 'strategy']);
+  });
+
+  test('noteFileSaved skips non-indexed extensions and oversized files', () => {
+    idx = freshIndex();
+    write('data.json', '{"k": "quagga"}');
+    assert.strictEqual(idx.noteFileSaved(workspace, 'data.json'), false, 'json is not content-indexed');
+    const big = write('big.md', 'quagga '.padEnd(2 * 1024 * 1024 + 10, 'x'));
+    assert.strictEqual(idx.noteFileSaved(workspace, 'big.md'), false, 'oversized files are skipped');
+    assert.strictEqual(idx.searchFiles('quagga').length, 0);
+  });
+
   test('recentFiles lists most recently modified first', () => {
     idx = freshIndex();
     write('old.md', 'older note', 1_600_000_000);
