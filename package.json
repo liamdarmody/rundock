@@ -12,7 +12,8 @@
     "electron": "electron .",
     "build:mac": "electron-builder --mac",
     "dist": "node scripts/build.js",
-    "release": "node scripts/release.js"
+    "release": "node scripts/release.js",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "electron-updater": "^6.6.0",
@@ -21,8 +22,10 @@
   },
   "devDependencies": {
     "@highlightjs/cdn-assets": "^11.11.1",
+    "@playwright/test": "^1.61.1",
     "electron": "^35.0.0",
-    "electron-builder": "^26.0.0"
+    "electron-builder": "^26.0.0",
+    "v8-to-istanbul": "^9.3.0"
   },
   "build": {
     "appId": "ai.rundock.app",
