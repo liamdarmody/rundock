@@ -1645,8 +1645,10 @@ function formatRecency(iso) {
 // Left-border colour class for a convo row. Green takes priority over orange so
 // a pinned conversation that becomes unread shows green, not orange.
 function convoBorderClass(c) {
+  // Left border carries the unread/working signal only. Pinned-ness is
+  // conveyed by list position + the title-row pin glyph (WhatsApp model), so
+  // a pinned+unread conversation no longer has to pick one colour.
   if (workingConvos.has(c.id) || unreadConvos.has(c.id)) return 'b-unread';
-  if (c.pinned) return 'b-pinned';
   return '';
 }
 
@@ -1654,44 +1656,38 @@ function convoBorderClass(c) {
 // workspace switch via onWorkspaceReady.
 function setSidebarPill(pill) {
   activeSidebarPill = pill;
-  ['all','unread','pinned'].forEach(p => {
+  ['all','unread'].forEach(p => {
     document.getElementById('pill-' + p)?.classList.toggle('active', p === pill);
   });
   renderConvoList();
 }
 
 function renderConvoList() {
-  // Flat list filtered by the active pill (all | unread | pinned), sorted by
-  // lastActiveAt desc. Replaces the three-section model (Pinned / Active with
-  // working/unread/idle tiers / Done) and the Older fold from 0.8.9. The Done
-  // section is preserved at the bottom as its own collapsible group; the unread
-  // and pinned signals now live on each row via the left-border state system
-  // (b-unread green, b-pinned orange) rather than as section headers.
+  // WhatsApp-model list (SR1 UI alignment): pinned conversations always group
+  // at the top, then everything else; BOTH groups sort by lastActiveAt desc.
+  // Pinned-ness is conveyed by position plus the title-row pin glyph; the
+  // left-border channel is reserved for the unread/working signal (green).
+  // Pills are All | Unread only: pinning is a layout concern, not a filter,
+  // so the old Pinned pill is gone.
   const sortKeyTime = c => c.lastActiveAt || c.pinnedAt || c.createdAt || '';
   const compareTimeDesc = (a, b) => sortKeyTime(b).localeCompare(sortKeyTime(a));
-
-  // Hide the Unread pill when there are no unread (non-done) conversations: an
-  // empty Unread filter is just a dead state for users. If the user is sitting
-  // on Unread and the last unread clears, fall back to All so they are not
-  // stranded looking at an empty list.
-  const hasUnread = conversations.some(c => unreadConvos.has(c.id) && c.status !== 'archived');
-  document.getElementById('pill-unread')?.classList.toggle('hidden', !hasUnread);
-  if (!hasUnread && activeSidebarPill === 'unread') {
-    activeSidebarPill = 'all';
-    ['all','unread','pinned'].forEach(p => document.getElementById('pill-' + p)?.classList.toggle('active', p === 'all'));
-  }
+  const pinnedFirst = (a, b) => ((b.pinned === true) - (a.pinned === true)) || compareTimeDesc(a, b);
 
   let main = conversations.filter(c => c.status !== 'archived');
   if (activeSidebarPill === 'unread') main = main.filter(c => unreadConvos.has(c.id));
-  if (activeSidebarPill === 'pinned') main = main.filter(c => c.pinned === true);
-  main.sort(compareTimeDesc);
+  main.sort(pinnedFirst);
 
   const archived = conversations
     .filter(c => c.status === 'archived')
     .sort(compareTimeDesc);
 
   let h = '';
-  if (conversationsLoaded && !main.length && !archived.length) {
+  if (conversationsLoaded && !main.length && activeSidebarPill === 'unread') {
+    // The Unread pill is always visible (no pop-in layout jump, no
+    // stranded-filter fallback); an empty filter shows a calm caught-up
+    // state instead of hiding the pill.
+    h = `<div style="padding:24px 16px;text-align:center;color:var(--text-2);font-size:var(--caption);line-height:1.6">You're all caught up<br><span style="opacity:0.7">No unread conversations.</span></div>`;
+  } else if (conversationsLoaded && !main.length && !archived.length) {
     h = `<div style="padding:12px 16px">
       <div style="color:var(--text-2);font-size:var(--caption);line-height:1.6">No conversations yet</div>
     </div>`;
@@ -3378,7 +3374,7 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   conversations = [];
   conversationsLoaded = false;
   activeSidebarPill = 'all';
-  ['all','unread','pinned'].forEach(p => document.getElementById('pill-' + p)?.classList.toggle('active', p === 'all'));
+  ['all','unread'].forEach(p => document.getElementById('pill-' + p)?.classList.toggle('active', p === 'all'));
   activeConversation = null;
   // Clear per-conversation client state that keys by convoId. Leftover entries
   // from the previous workspace can leak into nav rail indicators (unread dot,

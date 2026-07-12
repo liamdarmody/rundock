@@ -92,7 +92,8 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .convo-item:hover .convo-title-row { padding-right: 24px; }
 .convo-pin:hover { color: var(--accent); background: var(--surface); }
 .convo-item.b-unread { border-left-color: var(--success); }
-.convo-item.b-pinned { border-left-color: var(--accent); }
+/* b-pinned removed: pinned-ness is position + the title-row pin glyph; the
+   left border is reserved for the unread/working signal. */
 
 /* Sidebar filter pills (conversations sidebar only). No divider: the bordered
    pills anchor the top of the list on their own (WhatsApp-style). */
@@ -733,7 +734,6 @@ mark.find-match.current,
       <div class="sidebar-pills" id="sidebar-pills">
         <button class="pill active" id="pill-all" onclick="setSidebarPill('all')">All</button>
         <button class="pill" id="pill-unread" onclick="setSidebarPill('unread')">Unread</button>
-        <button class="pill" id="pill-pinned" onclick="setSidebarPill('pinned')">Pinned</button>
       </div>
       <div class="convo-list" id="convo-list"></div>
       <div class="convo-footer">
