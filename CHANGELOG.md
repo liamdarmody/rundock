@@ -4,6 +4,25 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** Universal Search
+
+Search your whole workspace from one place. Press Cmd+K (Ctrl+K on Windows and Linux) or click the new search icon in the nav rail, and one palette searches your files, conversations, agents, and skills together, with results grouped by type as you type.
+
+### Added
+
+- **Universal search across the workspace.** One keyboard-first palette finds file contents and names, conversation messages and titles, and agent and skill names. Results are ranked, grouped by type, and show highlighted excerpts of the match. Forgiving matching is built in: partial words match while you type, and abbreviations find titles ("rdmp" finds "Roadmap-2026").
+- **Search results open at the right place.** A conversation result opens the conversation scrolled to the matched message and briefly highlights it, even in long conversations. File results open in the file viewer, agents open their profile, skills open their page.
+- **An empty search shows your recent files and conversations,** so the palette is useful before you type anything.
+- **Search works on every setup.** The index is a small local file inside the workspace's `.rundock/` folder, rebuilt automatically whenever needed, and adds no new dependencies. On systems where the index engine isn't available, search falls back to a simpler scan rather than failing.
+
+### Changed
+
+- **Pinned conversations now stay at the top of the sidebar.** Previously a pin only tinted the conversation's edge and old pinned conversations sank down the list; pinned conversations now always group first (marked with a pin), with both groups ordered by recent activity. The sidebar filter is now All and Unread; Unread is always visible and shows "You're all caught up" when there's nothing unread, and the separate Pinned filter is gone since pins are always in view.
+- **The per-view search boxes (conversations, files, skills) are replaced by universal search,** which covers everything they did from one place. The sidebars are cleaner as a result.
+- **Internal: browser-driven test suite and client coverage measurement.** The user interface now has automated end-to-end tests (including named regression tests for two bugs caught during development) alongside the existing server test suite, and interface code coverage is now measured and tracked.
+
 ## 0.9.2: Delegation Reliability & Hardening (2026-07-03)
 
 ### Fixed
