@@ -9,3 +9,7 @@ node_modules/
 *.swo
 dist/
 coverage.lcov
+
+# Playwright E2E artefacts
+test-results/
+playwright-report/

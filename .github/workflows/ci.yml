@@ -42,3 +42,42 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+  # E2E smoke suite (browser-driven, Playwright). Protects the client layer
+  # the Node suite cannot observe: named regression tests for the two SR1
+  # escaped bugs (anchor re-flash, nav-state desync) plus palette golden
+  # paths, and it measures public/app.js line coverage via V8.
+  #
+  # SOAK PERIOD: continue-on-error until 2026-07-27 (two weeks from landing,
+  # per Client-Test-Coverage-Spec). If the job has been flake-free by then,
+  # remove continue-on-error so it gates alongside the Node suite.
+  e2e:
+    name: E2E smoke (soaking, non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies (incl. dev, for Playwright)
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E suite
+        run: npm run test:e2e
+
+      - name: Report client coverage
+        if: always()
+        run: |
+          if [ -f test-results/coverage-client.lcov ]; then
+            echo "client lcov written: test-results/coverage-client.lcov"
+            grep -E "^(LF|LH):" test-results/coverage-client.lcov
+          fi
