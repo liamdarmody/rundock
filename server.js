@@ -3495,6 +3495,11 @@ wss.on('connection', (ws) => {
           // Kill all running processes when switching workspace
           killAllChildren();
           WORKSPACE = dir;
+          // A workspace switch (including re-selecting the same one) is the
+          // retry trigger for a failed search-engine open, and must not
+          // serve the previous workspace's cached file/skill lists.
+          searchEngineFailedWorkspace = null;
+          invalidateAgentCache();
           saveRecentWorkspace(dir);
           // Clean up orphaned processes from previous sessions in this workspace
           cleanOrphanedProcesses();
@@ -4623,11 +4628,11 @@ function ensureSearchEngine() {
     // progress line. Deleting the db and reopening the workspace is the
     // supported rebuild path and lands here too.
     const f = searchEngine.reconcileFiles(WORKSPACE);
-    const convoSessions = conversationSessionsForSearch();
-    const m = searchEngine.reconcileConversations(convoSessions);
+    const validIds = readConversations().map(c => c.id);
+    const m = searchEngine.reconcileConversations(conversationSessionsForSearch(), { validConversationIds: validIds });
     // Sweep rows for conversations deleted while the engine was closed or
     // unavailable (they would otherwise burn over-fetch slots forever).
-    try { searchEngine.removeOrphanedConversations(readConversations().map(c => c.id)); } catch (e) {}
+    try { searchEngine.removeOrphanedConversations(validIds); } catch (e) {}
     searchFilesReconciledAt = Date.now();
     console.log(`[Search] index ready: ${f.scanned} files scanned (${f.updated} indexed), ${m.indexed} new messages`);
   } catch (e) {
@@ -4688,7 +4693,10 @@ function conversationSessionsForSearch(onlyConvoId) {
 function reconcileSearchBeforeQuery() {
   if (!searchEngine) return;
   try {
-    searchEngine.reconcileConversations(conversationSessionsForSearch());
+    const all = readConversations();
+    searchEngine.reconcileConversations(conversationSessionsForSearch(), {
+      validConversationIds: all.map(c => c.id),
+    });
     const now = Date.now();
     if (now - searchFilesReconciledAt >= SEARCH_FILES_RECONCILE_TTL_MS) {
       searchFilesReconciledAt = now;
@@ -4706,7 +4714,19 @@ function reconcileSearchBeforeQuery() {
 function noteSearchConversationActivity(convoId) {
   if (!searchEngine || searchEngineWorkspace !== WORKSPACE) return;
   try {
-    searchEngine.reconcileConversations(conversationSessionsForSearch(convoId));
+    const all = readConversations();
+    // This hook is the authoritative "the session jsonl exists now" signal:
+    // a negative path memo seeded before Claude Code created the file (e.g.
+    // by opening the palette during the first turn) must not blind the live
+    // index until its TTL expires.
+    const convo = all.find(c => c.id === convoId);
+    if (convo) {
+      if (convo.sessionId) _sessionPathMemo.delete(convo.sessionId);
+      for (const s of convo.sessionIds || []) { if (s && s.sessionId) _sessionPathMemo.delete(s.sessionId); }
+    }
+    searchEngine.reconcileConversations(conversationSessionsForSearch(convoId), {
+      validConversationIds: all.map(c => c.id),
+    });
   } catch (e) {
     console.warn('[Search] live reconcile failed (will catch up on next search):', e && e.message ? e.message : e);
   }
@@ -5051,8 +5071,16 @@ module.exports._internal = {
   // universal search (SR1)
   ensureSearchEngine, runUniversalSearch, conversationSessionsForSearch,
   titleLayerMatches, flattenFileTree, grepSearchFiles, grepSearchTranscripts,
-  resolveSessionPathCached, _sessionPathMemo,
+  resolveSessionPathCached, _sessionPathMemo, noteSearchConversationActivity,
   getSearchEngine() { return searchEngine; },
+  _searchTestHooks: {
+    // Simulate a persistent engine-open failure for backoff tests.
+    simulateOpenFailure() {
+      if (searchEngine) { try { searchEngine.close(); } catch (e) {} }
+      searchEngine = null;
+      searchEngineFailedWorkspace = WORKSPACE;
+    },
+  },
   // server objects (integration test lifecycle)
   server, wss,
   // constants

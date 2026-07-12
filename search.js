@@ -532,37 +532,59 @@ Object.assign(SearchIndex.prototype, {
    * mid-write partial line is picked up by a later reconcile, never
    * half-indexed.
    */
-  reconcileConversations(convos) {
+  reconcileConversations(convos, opts = {}) {
     let indexed = 0, sessionsRead = 0;
-    const getMark = this.db.prepare('SELECT byte_offset, seq_next, mtime_ms, size FROM session_marks WHERE session_id = ?');
+    // Ownership authority: an existing mark keeps its session, as long as
+    // its conversation is still in the valid set. conversations.json order
+    // is unstable (new entries unshift to the head), so order-derived
+    // ownership would flip a session between conversation ids and split its
+    // messages. When the mark's owner is gone (deleted, external edit), the
+    // presenting conversation inherits from zero.
+    const validSet = new Set(
+      opts.validConversationIds || (convos || []).map(c => c && c.conversationId).filter(Boolean)
+    );
+    const getMark = this.db.prepare('SELECT conversation_id, byte_offset, seq_next, mtime_ms, size FROM session_marks WHERE session_id = ?');
     for (const c of convos || []) {
       if (!c || !c.conversationId || !Array.isArray(c.sessions)) continue;
       for (const s of c.sessions) {
         if (!s || !s.sessionId || !s.filePath) continue;
         let st;
         try { st = fs.statSync(s.filePath); } catch (e) { continue; }
-        const mark = getMark.get(s.sessionId) || { byte_offset: 0, seq_next: 0, mtime_ms: 0, size: 0 };
-        if (st.mtimeMs === mark.mtime_ms && st.size === mark.size) continue;
+        let mark = getMark.get(s.sessionId);
+        let owner = c.conversationId;
+        let inherit = false;
+        if (mark && mark.conversation_id && mark.conversation_id !== c.conversationId) {
+          if (validSet.has(mark.conversation_id)) {
+            owner = mark.conversation_id; // delta stays attributed to the mark owner
+          } else {
+            inherit = true; // owner is gone: take over from zero
+          }
+        }
+        if (!mark) mark = { byte_offset: 0, seq_next: 0, mtime_ms: 0, size: 0 };
+        if (!inherit && st.mtimeMs === mark.mtime_ms && st.size === mark.size) continue;
         let offset = mark.byte_offset;
         let seq = mark.seq_next;
-        if (st.size < mark.byte_offset || st.size < mark.size) {
-          // Shrunk or replaced: this is no longer the file we indexed.
-          this.db.prepare('DELETE FROM messages WHERE session_id = ?').run(s.sessionId);
-          offset = 0;
-          seq = 0;
-        }
+        const wipe = inherit || st.size < mark.byte_offset || st.size < mark.size;
+        if (wipe) { offset = 0; seq = 0; }
         const read = this._readSessionDelta(s.filePath, offset, st.size);
         sessionsRead++;
-        // One transaction per session delta: the message inserts and the mark
-        // upsert land together or not at all. Without this, a crash between
-        // them leaves the mark behind the rows, and the next reconcile
-        // re-reads from the old offset and duplicates every message — with
-        // nothing ever cleaning it up (the schema version hasn't changed, so
-        // no rebuild fires). A failed session rolls back and is skipped; the
-        // next reconcile retries it from the same mark.
+        // One transaction per session delta: the wipe (shrink/replace or
+        // ownership handover), the message inserts, and the mark upsert land
+        // together or not at all. Without this, a crash between them leaves
+        // the mark behind the rows, and the next reconcile re-reads from the
+        // old offset and duplicates every message — with nothing ever
+        // cleaning it up (the schema version hasn't changed, so no rebuild
+        // fires). A failed session rolls back and is skipped; the next
+        // reconcile retries it from the same mark. BEGIN sits inside the try
+        // so a leaked-transaction error can never escape the loop.
         let sessionIndexed = 0;
-        this.db.exec('BEGIN');
         try {
+          this.db.exec('BEGIN');
+          if (wipe) {
+            // Inside the transaction: a failed reindex must restore these
+            // rows on rollback, not leave a silent gap behind a stale mark.
+            this.db.prepare('DELETE FROM messages WHERE session_id = ?').run(s.sessionId);
+          }
           const insert = this.db.prepare(`
             INSERT INTO messages (conversation_id, session_id, agent_id, role, ts_ms, seq, text)
             VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -572,7 +594,7 @@ Object.assign(SearchIndex.prototype, {
             try { obj = JSON.parse(line); } catch (e) { continue; }
             const m = extractIndexableMessage(obj);
             if (!m) continue;
-            insert.run(c.conversationId, s.sessionId, s.agentId || null, m.role, m.tsMs, seq, m.text);
+            insert.run(owner, s.sessionId, s.agentId || null, m.role, m.tsMs, seq, m.text);
             seq++;
             sessionIndexed++;
           }
@@ -582,7 +604,7 @@ Object.assign(SearchIndex.prototype, {
             ON CONFLICT(session_id) DO UPDATE SET
               conversation_id = excluded.conversation_id, byte_offset = excluded.byte_offset,
               seq_next = excluded.seq_next, mtime_ms = excluded.mtime_ms, size = excluded.size
-          `).run(s.sessionId, c.conversationId, read.nextOffset, seq, st.mtimeMs, st.size);
+          `).run(s.sessionId, owner, read.nextOffset, seq, st.mtimeMs, st.size);
           this.db.exec('COMMIT');
           indexed += sessionIndexed;
         } catch (e) {
@@ -620,6 +642,13 @@ Object.assign(SearchIndex.prototype, {
   },
 
   removeConversation(convoId) {
+    // Sessions this conversation owns (per the marks) may carry rows
+    // attributed to an earlier owner from before an ownership handover;
+    // wipe by session as well as by conversation so a later reconcile can
+    // never re-index a prefix that still exists and duplicate it.
+    const owned = this.db.prepare('SELECT session_id FROM session_marks WHERE conversation_id = ?').all(convoId);
+    const delBySession = this.db.prepare('DELETE FROM messages WHERE session_id = ?');
+    for (const row of owned) delBySession.run(row.session_id);
     this.db.prepare('DELETE FROM messages WHERE conversation_id = ?').run(convoId);
     this.db.prepare('DELETE FROM session_marks WHERE conversation_id = ?').run(convoId);
   },
