@@ -15,7 +15,7 @@
  * 10. VIEWS & NAVIGATION ............ switchNav, showView, goHome, toggleTheme
  * 11. FILE TREE & EDITOR ............ renderFileTree, buildTree, loadFileContent
  * 12. MARKDOWN RENDERING ............ renderMarkdown, processCalloutsSrc
- * 13. SKILLS ........................ renderSkills, selectSkill, filterSkills
+ * 13. SKILLS ........................ renderSkills, selectSkill
  * 14. SETTINGS ...................... showSettingsSection, renderSettingsSection
  * 15. WORKSPACE PICKER .............. handleWorkspaces, showWorkspacePicker
  * 16. EVENT LISTENERS & INIT ........ keydown, resize, connect()
@@ -256,7 +256,7 @@ function handle(d) {
       break;
     case 'needs_workspace': showView('workspace'); break;
     case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesSidebar(); renderConvoList(); break;
-    case 'skills': skills=d.skills; skillsLoaded=true; renderSkills(); break;
+    case 'skills': skills=d.skills; skillsLoaded=true; renderSkills(); if(palettePendingSkill){const s=palettePendingSkill;palettePendingSkill=null;selectSkill(s);} break;
     case 'conversations': handlePersistedConversations(d.conversations, d.lastActiveConversationId); break;
     case 'system':
       // Track active process per conversation to ignore stale events
@@ -470,8 +470,8 @@ function handle(d) {
     case 'session_history':
       renderSessionHistory(d);
       break;
-    case 'search_results':
-      handleSearchResults(d);
+    case 'search_universal_results':
+      handlePaletteResults(d);
       break;
     case 'error': if(!d.content?.includes('no stdin')) addSystemMsgToConvo(d.content, convoId); break;
   }
@@ -1189,6 +1189,10 @@ window.addEventListener('resize', () => {
 
 function showProfile(agentId) {
   const a=agents.find(x=>x.id===agentId); if(!a) return;
+  // Agent profiles belong to the Team section (the profile's back link goes
+  // there); sync the rail and sidebar for callers arriving from elsewhere,
+  // e.g. the search palette or a skill page's agent chips.
+  setNavState('team');
   const existing=conversations.filter(c=>c.agentId===agentId||(c.sessionIds||[]).some(s=>s.agentId===agentId));
   let h=`<a class="profile-back" onclick="switchNav('team')">&#8592; Back</a>
     <div class="profile-header">
@@ -1390,6 +1394,10 @@ function createConversation(agentId, title) {
 }
 
 function startConversation(agentId) {
+  // Same principle as openConversation: starting a conversation navigates
+  // to the Conversations section regardless of origin (agent profile, org
+  // chart, empty states).
+  setNavState('conversations');
   const convo = createConversation(agentId);
   const agent = convo.agent;
 
@@ -1642,11 +1650,12 @@ function formatRecency(iso) {
   return d + '/' + m + '/' + ts.getFullYear();
 }
 
-// Left-border colour class for a convo row. Green takes priority over orange so
-// a pinned conversation that becomes unread shows green, not orange.
+// Left-border colour class for a convo row.
 function convoBorderClass(c) {
+  // Left border carries the unread/working signal only. Pinned-ness is
+  // conveyed by list position + the title-row pin glyph (WhatsApp model), so
+  // a pinned+unread conversation no longer has to pick one colour.
   if (workingConvos.has(c.id) || unreadConvos.has(c.id)) return 'b-unread';
-  if (c.pinned) return 'b-pinned';
   return '';
 }
 
@@ -1654,49 +1663,38 @@ function convoBorderClass(c) {
 // workspace switch via onWorkspaceReady.
 function setSidebarPill(pill) {
   activeSidebarPill = pill;
-  ['all','unread','pinned'].forEach(p => {
+  ['all','unread'].forEach(p => {
     document.getElementById('pill-' + p)?.classList.toggle('active', p === pill);
   });
   renderConvoList();
 }
 
 function renderConvoList() {
-  // When search is active, show flat filtered results
-  if (convoSearchResults !== null) {
-    renderSearchResults();
-    return;
-  }
-  // Flat list filtered by the active pill (all | unread | pinned), sorted by
-  // lastActiveAt desc. Replaces the three-section model (Pinned / Active with
-  // working/unread/idle tiers / Done) and the Older fold from 0.8.9. The Done
-  // section is preserved at the bottom as its own collapsible group; the unread
-  // and pinned signals now live on each row via the left-border state system
-  // (b-unread green, b-pinned orange) rather than as section headers.
+  // WhatsApp-model list (SR1 UI alignment): pinned conversations always group
+  // at the top, then everything else; BOTH groups sort by lastActiveAt desc.
+  // Pinned-ness is conveyed by position plus the title-row pin glyph; the
+  // left-border channel is reserved for the unread/working signal (green).
+  // Pills are All | Unread only: pinning is a layout concern, not a filter,
+  // so the old Pinned pill is gone.
   const sortKeyTime = c => c.lastActiveAt || c.pinnedAt || c.createdAt || '';
   const compareTimeDesc = (a, b) => sortKeyTime(b).localeCompare(sortKeyTime(a));
-
-  // Hide the Unread pill when there are no unread (non-done) conversations: an
-  // empty Unread filter is just a dead state for users. If the user is sitting
-  // on Unread and the last unread clears, fall back to All so they are not
-  // stranded looking at an empty list.
-  const hasUnread = conversations.some(c => unreadConvos.has(c.id) && c.status !== 'archived');
-  document.getElementById('pill-unread')?.classList.toggle('hidden', !hasUnread);
-  if (!hasUnread && activeSidebarPill === 'unread') {
-    activeSidebarPill = 'all';
-    ['all','unread','pinned'].forEach(p => document.getElementById('pill-' + p)?.classList.toggle('active', p === 'all'));
-  }
+  const pinnedFirst = (a, b) => ((b.pinned === true) - (a.pinned === true)) || compareTimeDesc(a, b);
 
   let main = conversations.filter(c => c.status !== 'archived');
   if (activeSidebarPill === 'unread') main = main.filter(c => unreadConvos.has(c.id));
-  if (activeSidebarPill === 'pinned') main = main.filter(c => c.pinned === true);
-  main.sort(compareTimeDesc);
+  main.sort(pinnedFirst);
 
   const archived = conversations
     .filter(c => c.status === 'archived')
     .sort(compareTimeDesc);
 
   let h = '';
-  if (conversationsLoaded && !main.length && !archived.length) {
+  if (conversationsLoaded && !main.length && activeSidebarPill === 'unread') {
+    // The Unread pill is always visible (no pop-in layout jump, no
+    // stranded-filter fallback); an empty filter shows a calm caught-up
+    // state instead of hiding the pill.
+    h = `<div style="padding:24px 16px;text-align:center;color:var(--text-2);font-size:var(--caption);line-height:1.6">You're all caught up<br><span style="opacity:0.7">No unread conversations.</span></div>`;
+  } else if (conversationsLoaded && !main.length && !archived.length) {
     h = `<div style="padding:12px 16px">
       <div style="color:var(--text-2);font-size:var(--caption);line-height:1.6">No conversations yet</div>
     </div>`;
@@ -1732,8 +1730,9 @@ function renderConvoList() {
 //                 dimming if the agent has since been removed.
 //   'done'     -> Done section. Delete button, fixed 0.7 opacity.
 //
-// Left-border colour state lives on the row via convoBorderClass(c):
-// green for working or unread, orange for pinned-and-idle, none otherwise.
+// Left-border colour state lives on the row via convoBorderClass(c): green
+// for working or unread, none otherwise. Pinned-ness is conveyed by list
+// position and the title-row pin glyph, not the border.
 function renderConvoItem(c, variant) {
   const isActive = activeConversation?.id === c.id;
   const cState = convoState[c.id];
@@ -1823,93 +1822,6 @@ function renderConvoItem(c, variant) {
   </div>`;
 }
 
-// ===== CONVERSATION SEARCH =====
-let convoSearchQuery = '';
-let convoSearchResults = null; // null = no search active, [] = search with no results
-let convoSearchTimer = null;
-
-function filterConversations(query) {
-  const q = query.trim();
-  const clearBtn = document.getElementById('convo-search-clear');
-  if (clearBtn) clearBtn.classList.toggle('hidden', !q);
-
-  if (!q) {
-    convoSearchQuery = '';
-    convoSearchResults = null;
-    renderConvoList();
-    return;
-  }
-
-  convoSearchQuery = q;
-
-  // Phase 1: instant title filter (client-side)
-  const lower = q.toLowerCase();
-  const titleMatches = conversations.filter(c => (c.title || '').toLowerCase().includes(lower));
-  convoSearchResults = titleMatches.map(c => ({ id: c.id, matchType: 'title' }));
-  renderConvoList();
-
-  // Phase 2: debounced content search (server-side, 300ms)
-  clearTimeout(convoSearchTimer);
-  if (q.length >= 3) {
-    convoSearchTimer = setTimeout(() => {
-      ws.send(JSON.stringify({ type: 'search_conversations', query: q }));
-    }, 300);
-  }
-}
-
-function clearConvoSearch() {
-  const input = document.getElementById('convo-search');
-  if (input) input.value = '';
-  filterConversations('');
-}
-
-function handleSearchResults(d) {
-  // Only apply if the query still matches what we searched for
-  if (d.query?.toLowerCase().trim() !== convoSearchQuery.toLowerCase().trim()) return;
-  // Merge server results with existing title matches
-  const existingIds = new Set((convoSearchResults || []).map(r => r.id));
-  const newResults = (d.results || []).filter(r => !existingIds.has(r.id));
-  convoSearchResults = [...(convoSearchResults || []), ...newResults.map(r => ({ id: r.id, matchType: r.matchType, snippet: r.snippet }))];
-  renderConvoList();
-}
-
-function renderSearchResults() {
-  const matchIds = new Set(convoSearchResults.map(r => r.id));
-  const snippetMap = new Map(convoSearchResults.filter(r => r.snippet).map(r => [r.id, r.snippet]));
-  // Narrow search results by the active pill so search operates within the
-  // user's current filter rather than blowing past it. The All pill applies
-  // no extra narrowing so search can still find archived conversations by
-  // content; Unread and Pinned narrow to the same non-archived subset the
-  // main list shows.
-  let matched = conversations.filter(c => matchIds.has(c.id));
-  if (activeSidebarPill === 'unread') {
-    matched = matched.filter(c => unreadConvos.has(c.id) && c.status !== 'archived');
-  } else if (activeSidebarPill === 'pinned') {
-    matched = matched.filter(c => c.pinned === true && c.status !== 'archived');
-  }
-  let h = '';
-  if (!matched.length) {
-    h = `<div style="padding:12px 16px">
-      <div style="color:var(--text-2);font-size:var(--caption);line-height:1.6">No matches</div>
-    </div>`;
-  }
-  for (const c of matched) {
-    const snippet = snippetMap.get(c.id);
-    const preview = snippet ? esc(snippet) : (c.messages?.length ? esc(stripMd(c.messages.filter(m => m.role === 'agent').pop()?.content || '').substring(0, 60)) : '');
-    const displayAgent = c.agent || { colour: 'var(--text-2)', icon: '?', displayName: 'Unknown' };
-    const opacity = c.persisted ? 'opacity:0.8;' : '';
-    const sWorking = workingConvos.has(c.id);
-    const sUnread = !sWorking && unreadConvos.has(c.id);
-    const sIndicator = sWorking ? '<span class="convo-working"></span>' : sUnread ? '<span class="convo-unread"></span>' : '';
-    h += `<div class="convo-item ${activeConversation?.id === c.id ? 'active' : ''}" onclick="openConversation('${c.id}')" style="${opacity}">
-      <span class="convo-title">${esc(c.title)}</span>
-      ${preview ? `<span class="convo-preview">${preview}</span>` : ''}
-      <div class="convo-meta"><div class="avatar xs" style="background:${displayAgent.colour}">${displayAgent.icon}</div><span>${displayAgent.displayName}</span>${sIndicator}</div>
-    </div>`;
-  }
-  document.getElementById('convo-list').innerHTML = h;
-}
-
 // Discard current conversation if no real messages were sent (lazy creation cleanup)
 function discardIfEmpty() {
   if (!activeConversation) return;
@@ -1921,7 +1833,14 @@ function discardIfEmpty() {
   }
 }
 
-function openConversation(id) {
+function openConversation(id, withAnchor) {
+  // Opening a conversation IS a navigation to the Conversations section,
+  // wherever it started (sidebar click, search palette, an agent profile's
+  // conversation list); the rail and sidebar must follow.
+  setNavState('conversations');
+  // A stale search anchor must never fire on a later manual open (it would
+  // scroll to and flash an old hit days later).
+  if (!withAnchor) pendingMessageAnchor = null;
   // Close any active find before swapping the DOM out from under it.
   if (activeConversation && activeConversation.id !== id) closeFindBar();
   if (activeConversation && activeConversation.id !== id) discardIfEmpty();
@@ -1947,7 +1866,9 @@ function openConversation(id) {
       sessionId: c.sessionId,
       sessionIds: sessionIds,
       conversationId: c.id,
-      limit: 200
+      // Anchored opens (search-result clicks) load the full history so the
+      // matched message is present even when it's deep in the conversation.
+      limit: withAnchor ? 999 : 200
     }));
     // Mark as no longer purely persisted: messages are now in memory for this
     // session. Status is NOT touched here: opening an archived conversation to
@@ -2436,6 +2357,10 @@ function renderSessionHistory(d) {
     }
     renderConvoList();
   }
+
+  // Universal search: if this history load was triggered by a search-result
+  // click, scroll to (and flash) the matched message now that it's rendered.
+  tryMessageAnchor(d.conversationId);
 }
 
 // ===== PERMISSION UI =====
@@ -2732,22 +2657,29 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ===== 10. VIEWS & NAVIGATION =====
 
+// Sync the nav rail's active icon and the visible sidebar panel to a section.
+// This is deliberately separate from switchNav: destination functions
+// (openConversation, showProfile) call it so they stay consistent no matter
+// where navigation started (nav rail click, search palette, profile links,
+// workspace routing). Before this existed, callers had to remember to pair
+// switchNav with their navigation and several forgot, leaving the rail
+// highlighting one section while the main pane showed another.
+function setNavState(nav) {
+  document.querySelectorAll('.nav-item[data-nav]').forEach(n=>n.classList.remove('active'));
+  document.querySelector(`[data-nav="${nav}"]`)?.classList.add('active');
+  ['team','conversations','skills','files','settings'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
+  document.getElementById(`sidebar-${nav}`).classList.remove('hidden');
+}
+
 function switchNav(nav) {
   // Find bar is a per-view affordance: close on any nav change so highlights
   // and search state don't survive into a context where they no longer make
   // sense or reference DOM that's about to be replaced.
   closeFindBar();
-  document.querySelectorAll('.nav-item[data-nav]').forEach(n=>n.classList.remove('active'));
-  document.querySelector(`[data-nav="${nav}"]`)?.classList.add('active');
-  ['team','conversations','skills','files','settings'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
-  document.getElementById(`sidebar-${nav}`).classList.remove('hidden');
-  // Clear search when navigating away
-  if(nav !== 'conversations') clearConvoSearch();
-  if(nav !== 'files') clearFileSearch();
-  if(nav !== 'skills') clearSkillSearch();
+  setNavState(nav);
   if(nav==='settings') { showView('settings'); showSettingsSection('workspace'); }
   else if(nav==='files') { editorReturnView = 'editor'; if(currentFilePath && document.querySelector('.file-item.active')) { showView('editor'); } else { currentFilePath = null; destroyTiptapEditorIfActive(); document.getElementById('editor-header').classList.add('hidden'); document.getElementById('editor-content').classList.add('hidden'); document.getElementById('editor-textarea').classList.add('hidden'); document.getElementById('tiptap-editor-pane').classList.add('hidden'); document.getElementById('editor-empty').classList.remove('hidden'); showView('editor'); } }
-  else if(nav==='skills') { showView('skills'); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } else if(skills.length && !currentSkillId) { selectSkill(skills[0].id); } clearSkillSearch(); }
+  else if(nav==='skills') { showView('skills'); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } else if(skills.length && !currentSkillId) { selectSkill(skills[0].id); } }
   else if(nav==='conversations') { if(activeConversation) { showView('chat'); if(unreadConvos.delete(activeConversation.id)) { updateUnreadBadge(); renderConvoList(); } } else { const target = pickDefaultConversation(); if(target) { openConversation(target.id); } else { newConversation(); } } }
   else if(nav==='team') { showView('home'); renderOrgChart(); }
 }
@@ -2796,49 +2728,6 @@ function buildTree(items,container) {
       container.appendChild(fi);
     }
   }
-}
-
-// ===== FILE SEARCH =====
-let fileSearchQuery = '';
-
-function filterFiles(query) {
-  const q = query.trim();
-  const clearBtn = document.getElementById('file-search-clear');
-  if (clearBtn) clearBtn.classList.toggle('hidden', !q);
-  fileSearchQuery = q;
-  if (!cachedFileTree) return;
-  if (!q) { renderFileTree(cachedFileTree); return; }
-  const lower = q.toLowerCase();
-  const matches = flattenTree(cachedFileTree).filter(f => f.name.toLowerCase().includes(lower));
-  const container = document.getElementById('file-tree');
-  container.innerHTML = '';
-  if (!matches.length) {
-    container.innerHTML = '<div style="padding:12px 16px;color:var(--text-2);font-size:var(--caption)">No matches</div>';
-    return;
-  }
-  for (const item of matches) {
-    const fi = document.createElement('div'); fi.className = 'file-item';
-    const dir = item.path.includes('/') ? item.path.substring(0, item.path.lastIndexOf('/')) + '/' : '';
-    fi.innerHTML = `<svg class="file-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><div><div>${esc(item.name)}</div>${dir ? `<div style="font-size:11px;color:var(--text-2);margin-top:1px">${esc(dir)}</div>` : ''}</div>`;
-    fi.dataset.path = item.path;
-    fi.onclick = () => { document.querySelectorAll('.file-item').forEach(x => x.classList.remove('active')); fi.classList.add('active'); editorReturnView = 'editor'; fileHistory = []; ws.send(JSON.stringify({ type: 'read_file', path: item.path })); showView('editor'); };
-    container.appendChild(fi);
-  }
-}
-
-function flattenTree(items, result) {
-  result = result || [];
-  for (const item of items) {
-    if (item.type === 'folder') { flattenTree(item.children || [], result); }
-    else { result.push(item); }
-  }
-  return result;
-}
-
-function clearFileSearch() {
-  const input = document.getElementById('file-search');
-  if (input) input.value = '';
-  filterFiles('');
 }
 
 // Editor
@@ -3220,22 +3109,6 @@ function renderSkillsSidebar(list) {
   `).join('');
 }
 
-function filterSkills(query) {
-  const clearBtn = document.getElementById('skill-search-clear');
-  const filtered = query
-    ? skills.filter(s => s.name.toLowerCase().includes(query.toLowerCase()))
-    : skills;
-  clearBtn.classList.toggle('hidden', !query);
-  renderSkillsSidebar(filtered);
-}
-
-function clearSkillSearch() {
-  const input = document.getElementById('skill-search');
-  if (!input) return;
-  input.value = '';
-  filterSkills('');
-}
-
 function selectSkill(id) {
   const s = skills.find(x => x.id === id);
   if (!s) return;
@@ -3524,7 +3397,7 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   conversations = [];
   conversationsLoaded = false;
   activeSidebarPill = 'all';
-  ['all','unread','pinned'].forEach(p => document.getElementById('pill-' + p)?.classList.toggle('active', p === 'all'));
+  ['all','unread'].forEach(p => document.getElementById('pill-' + p)?.classList.toggle('active', p === 'all'));
   activeConversation = null;
   // Clear per-conversation client state that keys by convoId. Leftover entries
   // from the previous workspace can leak into nav rail indicators (unread dot,
@@ -3872,6 +3745,9 @@ function initFindBar() {
       return;
     }
     if (e.key === 'Escape' && findState.open) {
+      // The palette overlays the find bar; when both are open, Escape
+      // closes the topmost surface only (the palette's own handler).
+      if (typeof paletteOpen !== 'undefined' && paletteOpen) return;
       e.preventDefault();
       closeFindBar();
     }
@@ -3903,5 +3779,352 @@ function initFindBar() {
 }
 
 initFindBar();
+
+// ===== 18. UNIVERSAL SEARCH PALETTE (Cmd+K / Ctrl+K) =====
+//
+// One keyboard-first surface over four corpora: files, conversations, agents,
+// skills. The server answers `search_universal` with grouped results (title
+// fuzzy layer + FTS content, or grep fallback). Navigation REUSES the
+// existing routes: read_file + showView('editor') for files (same as the
+// file tree), openConversation for conversations (extended with the message
+// anchor), showProfile for agents, selectSkill for skills. The one new
+// mechanic is the message anchor: opening a conversation scrolled to the
+// matched message.
+
+let paletteOpen = false;
+let paletteScope = 'all';
+let paletteQuery = '';
+let paletteTimer = null;
+let paletteReply = null;      // last server reply {groups, recent}
+let paletteFlat = [];         // flat selectable items in display order
+let paletteSel = 0;
+let paletteLoading = false;
+let palettePendingSkill = null;
+let paletteReqId = 0;         // stale-reply guard (query text alone can't distinguish filter/fuzzy toggles)
+var pendingMessageAnchor = null; // {convoId, text, fragment} — var: openConversation clears it and runs before this section during load-order-sensitive paths
+
+const PALETTE_GROUP_ORDER = ['files', 'conversations', 'agents', 'skills'];
+const PALETTE_GROUP_LABELS = { files: 'Files', conversations: 'Conversations', agents: 'Agents', skills: 'Skills' };
+// Per-group result cap. Must match the `limit` sent in runPaletteSearch: the
+// group-count labels use it to show "8+" instead of implying a full group is
+// the exact total.
+const PALETTE_GROUP_LIMIT = 8;
+const IS_MAC = /Mac/i.test(navigator.platform);
+let paletteReturnFocus = null; // element to restore focus to on close
+
+// The nav rail tooltip teaches the shortcut with the right modifier per
+// platform (the Windows and Linux builds have no Cmd key).
+document.getElementById('nav-search-btn')?.setAttribute('data-tooltip', IS_MAC ? 'Search ⌘K' : 'Search Ctrl+K');
+
+function openPalette() {
+  if (currentView === 'workspace' || !currentWorkspacePath) return; // no workspace yet
+  const overlay = document.getElementById('palette-overlay');
+  if (!overlay) return;
+  paletteOpen = true;
+  paletteReturnFocus = document.activeElement;
+  overlay.classList.remove('hidden');
+  const input = document.getElementById('palette-input');
+  input.value = paletteQuery = '';
+  schedulePaletteSearch(0); // empty query -> recent items
+  input.focus();
+}
+
+function closePalette() {
+  paletteOpen = false;
+  clearTimeout(paletteTimer);
+  document.getElementById('palette-overlay')?.classList.add('hidden');
+  // Return focus to where the user was (keyboard flow continuity); fall
+  // back silently when the element is gone or was never focusable.
+  if (paletteReturnFocus && document.contains(paletteReturnFocus)) {
+    try { paletteReturnFocus.focus(); } catch (e) {}
+  }
+  paletteReturnFocus = null;
+}
+
+function togglePalette() { paletteOpen ? closePalette() : openPalette(); }
+
+function setPaletteScope(scope) {
+  paletteScope = scope;
+  paletteSel = 0; // the flat list is about to change shape
+  document.querySelectorAll('.palette-scope').forEach(b => b.classList.toggle('active', b.dataset.scope === scope));
+  renderPalette();
+  document.getElementById('palette-input')?.focus();
+}
+
+function schedulePaletteSearch(delay = 220) {
+  if (!paletteOpen) return;
+  clearTimeout(paletteTimer);
+  paletteTimer = setTimeout(runPaletteSearch, delay);
+}
+
+function runPaletteSearch() {
+  if (!paletteOpen || !ws || ws.readyState !== 1) return;
+  paletteQuery = document.getElementById('palette-input')?.value || '';
+  paletteLoading = true;
+  renderPaletteStatus();
+  // Fuzzy matching is always on for the title/name layer (no toggle in V1);
+  // content matching stays lexical FTS with type-ahead prefixing.
+  ws.send(JSON.stringify({
+    type: 'search_universal',
+    query: paletteQuery,
+    reqId: ++paletteReqId,
+    prefix: true, // type-ahead: last token matches as a prefix
+    limit: PALETTE_GROUP_LIMIT,
+  }));
+}
+
+function handlePaletteResults(d) {
+  if (!paletteOpen) return;
+  // Stale replies are dropped by request id (query text alone can't
+  // distinguish a fuzzy/filter toggle on the same query).
+  if (d.reqId !== paletteReqId) return;
+  paletteLoading = false;
+  paletteReply = d;
+  paletteSel = 0;
+  renderPalette();
+}
+
+// Escape then swap the server's control-char highlight markers for <mark>.
+// Order matters: HTML is escaped FIRST, so the only markup in the string is
+// the <mark> pair we introduce ourselves.
+function paletteHl(s) {
+  return esc(s || '').replace(/\u0001/g, '<mark>').replace(/\u0002/g, '</mark>');
+}
+
+function paletteSnippetPlain(s) {
+  return (s || '').replace(/[\u0001\u0002]/g, '');
+}
+
+const PALETTE_ICONS = {
+  file: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+  skill: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
+};
+
+function renderPalette() {
+  const container = document.getElementById('palette-results');
+  if (!container || !paletteReply) return;
+  const groups = paletteReply.groups || {};
+  paletteFlat = [];
+  let h = '';
+  for (const key of PALETTE_GROUP_ORDER) {
+    if (paletteScope !== 'all' && paletteScope !== key) continue;
+    const items = groups[key] || [];
+    if (!items.length) continue;
+    const label = paletteReply.recent ? `Recent ${PALETTE_GROUP_LABELS[key].toLowerCase()}` : PALETTE_GROUP_LABELS[key];
+    // A full group means the server hit its per-group cap: the real total may
+    // be higher, so the count is shown as a floor rather than an exact figure.
+    const countLabel = items.length >= PALETTE_GROUP_LIMIT ? `${PALETTE_GROUP_LIMIT}+` : items.length;
+    h += `<div class="palette-group-label" role="presentation">${label}<span class="palette-group-count">${countLabel}</span></div>`;
+    for (const item of items) {
+      const idx = paletteFlat.length;
+      paletteFlat.push(item);
+      h += paletteItemHtml(item, idx);
+    }
+  }
+  if (!paletteFlat.length) {
+    const q = paletteQuery.trim();
+    if (paletteReply.error) {
+      // A genuine server failure must not masquerade as "no matches".
+      h = `<div class="palette-empty">Search hit a problem<div class="palette-empty-sub">Try again; if it persists, check the server log.</div></div>`;
+    } else {
+      h = q
+        ? `<div class="palette-empty">No matches for &ldquo;${esc(q)}&rdquo;<div class="palette-empty-sub">Search covers file contents and names, conversation messages and titles, and agent and skill names.</div></div>`
+        : `<div class="palette-empty">Start typing to search your workspace<div class="palette-empty-sub">Files, conversations, agents, and skills.</div></div>`;
+    }
+  }
+  container.innerHTML = h;
+  updatePaletteSelection();
+  renderPaletteStatus();
+}
+
+function paletteItemHtml(item, idx) {
+  let icon = '', title = '', meta = '';
+  if (item.type === 'file') {
+    icon = `<div class="palette-item-icon">${PALETTE_ICONS.file}</div>`;
+    title = esc(item.title || item.path);
+    const dir = item.path && item.path.includes('/') ? item.path.substring(0, item.path.lastIndexOf('/')) + '/' : '';
+    const tagStr = (item.tags && item.tags.length) ? ` &middot; #${item.tags.map(esc).join(' #')}` : '';
+    meta = item.snippet ? paletteHl(item.snippet) : esc(dir) + tagStr;
+  } else if (item.type === 'conversation') {
+    const a = agents.find(x => x.id === item.agentId);
+    icon = `<div class="avatar sm" style="background:${esc(a?.colour || 'var(--card)')};width:26px;height:26px;font-size:12px">${esc(a?.icon || '?')}</div>`;
+    title = esc(item.title || 'Untitled conversation');
+    meta = item.snippet ? paletteHl(item.snippet) : (a ? esc(a.displayName) : '');
+    if (item.matchCount > 1) meta += ` <span style="opacity:0.7">&middot; ${parseInt(item.matchCount, 10) || 0} matches</span>`;
+  } else if (item.type === 'agent') {
+    icon = `<div class="avatar sm" style="background:${esc(item.colour || 'var(--card)')};width:26px;height:26px;font-size:12px">${esc(item.icon || '?')}</div>`;
+    title = esc(item.name);
+    meta = esc(item.role || '');
+  } else if (item.type === 'skill') {
+    icon = `<div class="palette-item-icon">${PALETTE_ICONS.skill}</div>`;
+    title = esc(item.name);
+    meta = esc((item.description || '').slice(0, 90));
+  }
+  return `<div class="palette-item" id="palette-item-${idx}" role="option" aria-selected="false" data-idx="${idx}" onclick="openPaletteResult(${idx})" onmousemove="hoverPaletteItem(${idx})">
+    ${icon}
+    <div class="palette-item-body">
+      <div class="palette-item-title">${title}</div>
+      ${meta ? `<div class="palette-item-meta">${meta}</div>` : ''}
+    </div>
+    <span class="palette-item-kbd">&#9166;</span>
+  </div>`;
+}
+
+function renderPaletteStatus() {
+  const el = document.getElementById('palette-status');
+  if (!el) return;
+  el.innerHTML = paletteLoading
+    ? '<span><span class="spin">&#9696;</span> searching&hellip;</span>'
+    : '<span>&#8593;&#8595; navigate</span><span>&#9166; open</span><span>esc close</span>';
+}
+
+function hoverPaletteItem(idx) {
+  if (paletteSel === idx) return;
+  paletteSel = idx;
+  updatePaletteSelection(false);
+}
+
+function updatePaletteSelection(scroll = true) {
+  document.querySelectorAll('.palette-item').forEach(el => {
+    const selected = parseInt(el.dataset.idx) === paletteSel;
+    el.classList.toggle('selected', selected);
+    el.setAttribute('aria-selected', selected ? 'true' : 'false');
+    if (selected && scroll) el.scrollIntoView({ block: 'nearest' });
+  });
+  // Screen readers track the arrow-key selection through the combobox input.
+  const input = document.getElementById('palette-input');
+  if (input) {
+    if (paletteFlat.length) input.setAttribute('aria-activedescendant', `palette-item-${paletteSel}`);
+    else input.removeAttribute('aria-activedescendant');
+  }
+}
+
+function movePaletteSelection(delta) {
+  if (!paletteFlat.length) return;
+  paletteSel = (paletteSel + delta + paletteFlat.length) % paletteFlat.length;
+  updatePaletteSelection();
+}
+
+function openPaletteResult(idx) {
+  const item = paletteFlat[idx];
+  if (!item) return;
+  closePalette();
+  if (item.type === 'file') {
+    paletteOpenFile(item.path);
+  } else if (item.type === 'conversation') {
+    paletteOpenConversation(item);
+  } else if (item.type === 'agent') {
+    showProfile(item.id);
+  } else if (item.type === 'skill') {
+    paletteOpenSkill(item.id);
+  }
+}
+
+// File route: same mechanics as a file-tree click (read_file + editor view),
+// plus nav state so the sidebar matches where the user landed.
+function paletteOpenFile(filePath) {
+  switchNav('files');
+  document.querySelectorAll('.file-item').forEach(x => x.classList.toggle('active', x.dataset.path === filePath));
+  editorReturnView = 'editor';
+  fileHistory = [];
+  ws.send(JSON.stringify({ type: 'read_file', path: filePath }));
+  showView('editor');
+}
+
+// Conversation route: the existing openConversation, extended with the
+// message anchor (the one genuinely new deep-link mechanic in SR1).
+function paletteOpenConversation(item) {
+  if (item.snippet) {
+    pendingMessageAnchor = {
+      convoId: item.id,
+      text: paletteSnippetPlain(item.snippet).replace(/…/g, ' ').trim(),
+      fragment: (item.snippet.match(/\u0001([^\u0002]+)\u0002/) || [])[1] || '',
+    };
+  } else {
+    pendingMessageAnchor = null;
+  }
+  openConversation(item.id, !!pendingMessageAnchor);
+  // Already-loaded conversations render synchronously: anchor now. History
+  // loads anchor from renderSessionHistory when the fetch lands.
+  if (!document.getElementById('history-loading')) tryMessageAnchor(item.id);
+}
+
+function paletteOpenSkill(skillId) {
+  if (!skillsLoaded) palettePendingSkill = skillId;
+  switchNav('skills');
+  if (skillsLoaded) selectSkill(skillId);
+}
+
+// ── Message anchor ──────────────────────────────────────────────────────────
+// Find the rendered message whose text contains the search snippet and
+// scroll to it. Text-content matching (normalised) survives the markdown
+// rendering that separates the jsonl source from the DOM.
+
+function normAnchorText(t) {
+  return (t || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+function tryMessageAnchor(convoId) {
+  if (!pendingMessageAnchor || pendingMessageAnchor.convoId !== convoId) return;
+  const anchor = pendingMessageAnchor;
+  pendingMessageAnchor = null;
+  // Let the DOM paint before measuring.
+  setTimeout(() => {
+    const bubbles = document.querySelectorAll('#messages .msg .msg-bubble');
+    const needles = [normAnchorText(anchor.text), normAnchorText(anchor.fragment)].filter(n => n.length >= 3);
+    let target = null;
+    for (const needle of needles) {
+      for (const b of bubbles) {
+        if (normAnchorText(b.textContent).includes(needle)) { target = b.closest('.msg'); break; }
+      }
+      if (target) break;
+    }
+    if (!target) return; // message outside the loaded window: land at the conversation as usual
+    target.scrollIntoView({ block: 'center', behavior: 'auto' });
+    target.classList.remove('anchor-flash');
+    void target.offsetWidth; // restart the animation if re-triggered
+    target.classList.add('anchor-flash');
+    // Remove the class once the flash has served its purpose. CSS animations
+    // replay whenever the element cycles through display:none (navigating to
+    // another view and back), so a lingering class re-flashes the message on
+    // every return to the conversation. The timeout (animation is 1.6s) also
+    // covers prefers-reduced-motion, where no animationend would ever fire
+    // and the static fallback ring would otherwise persist indefinitely.
+    setTimeout(() => target.classList.remove('anchor-flash'), 1700);
+  }, 60);
+}
+
+// ── Keyboard wiring ─────────────────────────────────────────────────────────
+
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+    e.preventDefault();
+    togglePalette();
+    return;
+  }
+  if (!paletteOpen) return;
+  if (e.key === 'Escape') { e.preventDefault(); closePalette(); return; }
+  // Focus trap: while the palette is open, Tab cycles through its own
+  // controls (input + scope chips) instead of escaping into the page
+  // behind the overlay. Result rows stay arrow-key territory.
+  if (e.key === 'Tab') {
+    const focusables = [...document.querySelectorAll('#palette-overlay input, #palette-overlay button')]
+      .filter(el => el.offsetParent !== null);
+    if (!focusables.length) return;
+    const idx = focusables.indexOf(document.activeElement);
+    e.preventDefault();
+    const next = e.shiftKey
+      ? focusables[(idx - 1 + focusables.length) % focusables.length]
+      : focusables[(idx + 1) % focusables.length];
+    next.focus();
+  }
+});
+
+document.getElementById('palette-input')?.addEventListener('input', () => schedulePaletteSearch());
+document.getElementById('palette-input')?.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown') { e.preventDefault(); movePaletteSelection(1); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); movePaletteSelection(-1); }
+  else if (e.key === 'Enter') { e.preventDefault(); openPaletteResult(paletteSel); }
+});
 
 connect();
