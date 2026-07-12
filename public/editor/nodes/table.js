@@ -1,6 +1,6 @@
 // Tables: Obsidian-parity GFM tables in the Tiptap editor with STRICT
-// byte-for-byte, source-preserving serialization (FV1 policy, Liam
-// 2026-07-12: silent normalisation of a table is a defect).
+// byte-for-byte, source-preserving serialization (policy: silently
+// normalising a table on save is a defect).
 //
 // How the round-trip holds:
 //

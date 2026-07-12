@@ -1,7 +1,7 @@
 // CriticMarkup parser and serializer. DOM-free on purpose: imported by Node
 // tests directly and by the review mark extensions in the browser.
 //
-// Wire format (Roughdraft-flavoured CriticMarkup, live-proven in the OS):
+// Wire format (Roughdraft-flavoured CriticMarkup):
 //
 //   {>>comment<<}   {++insert++}   {--delete--}   {~~old~>new~~}   {==highlight==}
 //

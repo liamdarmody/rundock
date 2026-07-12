@@ -1,5 +1,5 @@
 // Byte-for-byte round-trip of CriticMarkup constructs + YAML endmatter
-// through the REAL editor (FV1 Build 2b, serialization boundary).
+// through the REAL editor (serialization boundary).
 //
 // The hard acceptance bar: an annotated document loads into the editor
 // (constructs as inline atoms, endmatter stripped) and serializes back

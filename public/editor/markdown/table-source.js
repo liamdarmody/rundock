@@ -1,7 +1,7 @@
 // Table source preservation. DOM-free on purpose: this module is imported by
 // Node tests directly and by the table node extension in the browser.
 //
-// Policy (FV1): table serialization is source-preserving, never normalising.
+// Policy: table serialization is source-preserving, never normalising.
 // The markdown-it parse stage stamps each table with its raw source slice
 // (src) and each row with its source row index (srcIdx). At serialize time:
 //
