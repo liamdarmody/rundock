@@ -119,8 +119,10 @@ export function registerCriticMarkdownIt(md) {
 // ---------------------------------------------------------------------------
 
 // Shared spec for the four content-carrying constructs. `segType` is the
-// review/criticmarkup.js segment type; `cls` the DOM class.
-function contentAtom({ name, segType, cls, registerParser = false }) {
+// review/criticmarkup.js segment type; `cls` the DOM class. Comments render
+// as a compact marker (their text lives in the review sidebar); the other
+// constructs render their content inline.
+function contentAtom({ name, segType, cls, registerParser = false, marker = false }) {
   return Node.create({
     name,
     group: 'inline',
@@ -147,11 +149,18 @@ function contentAtom({ name, segType, cls, registerParser = false }) {
     },
 
     renderHTML({ node, HTMLAttributes }) {
-      return ['span', mergeAttributes(HTMLAttributes, {
+      const attrs = mergeAttributes(HTMLAttributes, {
         class: cls,
         'data-critic-content': node.attrs.content,
         ...(node.attrs.id ? { 'data-critic-id': node.attrs.id } : {}),
-      }), node.attrs.content];
+      });
+      if (marker) {
+        // Compact marker chip; full text shows in the review sidebar and on
+        // hover via the title attribute.
+        attrs.title = node.attrs.content;
+        return ['span', attrs, node.attrs.id ? node.attrs.id : '•'];
+      }
+      return ['span', attrs, node.attrs.content];
     },
 
     renderText({ node }) {
@@ -176,7 +185,7 @@ function contentAtom({ name, segType, cls, registerParser = false }) {
 }
 
 // The markdown-it plugin is registered once, on CriticComment.
-export const CriticComment = contentAtom({ name: 'criticComment', segType: 'comment', cls: 'critic critic-comment', registerParser: true });
+export const CriticComment = contentAtom({ name: 'criticComment', segType: 'comment', cls: 'critic critic-comment', registerParser: true, marker: true });
 export const CriticInsert = contentAtom({ name: 'criticInsert', segType: 'insert', cls: 'critic critic-insert' });
 export const CriticDelete = contentAtom({ name: 'criticDelete', segType: 'delete', cls: 'critic critic-delete' });
 export const CriticHighlight = contentAtom({ name: 'criticHighlight', segType: 'highlight', cls: 'critic critic-highlight' });
