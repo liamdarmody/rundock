@@ -150,9 +150,302 @@ function fuzzyScore(needle, haystack) {
   return score;
 }
 
+// ── Highlight markers ────────────────────────────────────────────────────────
+// snippet() output uses control characters as highlight delimiters so the
+// client can HTML-escape the snippet FIRST and then swap markers for <mark>
+// tags. Real markup here would either get escaped away or force the client
+// to trust server strings as HTML.
+const HIGHLIGHT_OPEN = '\u0001';
+const HIGHLIGHT_CLOSE = '\u0002';
+
+// ── Frontmatter tags ─────────────────────────────────────────────────────────
+
+/**
+ * Extract tags from YAML frontmatter. Handles the three shapes Obsidian-style
+ * vaults actually use: `tags: [a, b]`, `tags: a, b`, and a `- item` list.
+ * Deliberately not a YAML parser: tags are the only key we read.
+ */
+function parseFrontmatterTags(content) {
+  if (typeof content !== 'string' || !content.startsWith('---')) return [];
+  const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/);
+  if (!fmMatch) return [];
+  const fm = fmMatch[1];
+  const lines = fm.split(/\r?\n/);
+  const tags = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^tags\s*:\s*(.*)$/i);
+    if (!m) continue;
+    const inline = m[1].trim();
+    if (inline) {
+      // Inline: `[a, b]` or `a, b` or a single tag
+      const cleaned = inline.replace(/^\[|\]$/g, '');
+      for (const t of cleaned.split(',')) {
+        const tag = t.trim().replace(/^["']|["']$/g, '').replace(/^#/, '');
+        if (tag) tags.push(tag.toLowerCase());
+      }
+    } else {
+      // Block list: subsequent `- item` lines
+      for (let j = i + 1; j < lines.length; j++) {
+        const item = lines[j].match(/^\s*-\s+(.+)$/);
+        if (!item) break;
+        const tag = item[1].trim().replace(/^["']|["']$/g, '').replace(/^#/, '');
+        if (tag) tags.push(tag.toLowerCase());
+      }
+    }
+    break;
+  }
+  return [...new Set(tags)];
+}
+
+// ── File walking ─────────────────────────────────────────────────────────────
+
+// Content-indexed extensions. json stays out: raw JSON is noise in a content
+// index (its filenames still surface via the in-memory title layer upstream).
+const INDEXED_EXTENSIONS = new Set(['.md', '.txt']);
+const MAX_FILE_BYTES = 2 * 1024 * 1024; // ignore pathological files
+
+function walkTextFiles(rootDir, prefix = '', out = []) {
+  let items;
+  try {
+    items = fs.readdirSync(path.join(rootDir, prefix), { withFileTypes: true });
+  } catch (e) {
+    return out;
+  }
+  for (const item of items) {
+    // Mirrors getFileTree's visibility rules (dotfiles, node_modules) plus
+    // .rundock, which never appears in the tree but lives at the root.
+    if (item.name.startsWith('.') || item.name === 'node_modules') continue;
+    const rel = prefix ? `${prefix}/${item.name}` : item.name;
+    if (item.isDirectory()) {
+      walkTextFiles(rootDir, rel, out);
+    } else if (INDEXED_EXTENSIONS.has(path.extname(item.name).toLowerCase())) {
+      out.push(rel);
+    }
+  }
+  return out;
+}
+
+// ── Search index ─────────────────────────────────────────────────────────────
+
+const SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+
+CREATE TABLE IF NOT EXISTS files (
+  id INTEGER PRIMARY KEY,
+  path TEXT UNIQUE NOT NULL,
+  title TEXT NOT NULL,
+  tags TEXT NOT NULL DEFAULT '[]',
+  content TEXT NOT NULL,
+  mtime_ms REAL NOT NULL,
+  size INTEGER NOT NULL,
+  created_ms REAL
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(
+  title, content, tags,
+  content=files, content_rowid=id
+);
+CREATE TRIGGER IF NOT EXISTS files_ai AFTER INSERT ON files BEGIN
+  INSERT INTO files_fts(rowid, title, content, tags)
+  VALUES (new.id, new.title, new.content, new.tags);
+END;
+CREATE TRIGGER IF NOT EXISTS files_ad AFTER DELETE ON files BEGIN
+  INSERT INTO files_fts(files_fts, rowid, title, content, tags)
+  VALUES ('delete', old.id, old.title, old.content, old.tags);
+END;
+CREATE TRIGGER IF NOT EXISTS files_au AFTER UPDATE ON files BEGIN
+  INSERT INTO files_fts(files_fts, rowid, title, content, tags)
+  VALUES ('delete', old.id, old.title, old.content, old.tags);
+  INSERT INTO files_fts(rowid, title, content, tags)
+  VALUES (new.id, new.title, new.content, new.tags);
+END;
+`;
+
+class SearchIndex {
+  constructor({ dbPath, DatabaseSync }) {
+    if (!dbPath) throw new Error('dbPath required');
+    if (!DatabaseSync) throw new Error('DatabaseSync required (pass probeSqlite().DatabaseSync)');
+    this.dbPath = dbPath;
+    this.DatabaseSync = DatabaseSync;
+    this.db = null;
+  }
+
+  /**
+   * Open (or create) the index. Corruption and schema-version mismatch both
+   * take the same path: delete the file and start clean. The index is
+   * derived; rebuild IS the migration story.
+   */
+  open() {
+    try {
+      this._openAt(this.dbPath);
+      const stored = this.getSchemaVersion();
+      if (stored !== SCHEMA_VERSION) {
+        this.close();
+        this._deleteDbFiles();
+        this._openAt(this.dbPath);
+        console.log(`[Search] index schema ${stored} != ${SCHEMA_VERSION}; rebuilt clean`);
+      }
+    } catch (e) {
+      // Corrupt or unreadable: recreate from nothing.
+      try { this.close(); } catch (e2) {}
+      this._deleteDbFiles();
+      this._openAt(this.dbPath);
+      console.log(`[Search] index was unreadable (${e && e.message}); rebuilt clean`);
+    }
+    return this;
+  }
+
+  _openAt(p) {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    this.db = new this.DatabaseSync(p);
+    this.db.exec('PRAGMA journal_mode = WAL');
+    this.db.exec(SCHEMA_SQL);
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get();
+    if (!row) {
+      this.db.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', ?)").run(String(SCHEMA_VERSION));
+    }
+    // A trivial FTS query doubles as a health check; throws on corruption.
+    this.db.prepare("SELECT count(*) FROM files_fts WHERE files_fts MATCH '\"__probe__\"'").get();
+  }
+
+  _deleteDbFiles() {
+    for (const suffix of ['', '-wal', '-shm']) {
+      try { fs.rmSync(this.dbPath + suffix, { force: true }); } catch (e) {}
+    }
+  }
+
+  close() {
+    if (this.db) { try { this.db.close(); } catch (e) {} this.db = null; }
+  }
+
+  getSchemaVersion() {
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get();
+    return row ? parseInt(row.value, 10) : null;
+  }
+
+  stats() {
+    return {
+      filesIndexed: this.db.prepare('SELECT count(*) AS n FROM files').get().n,
+    };
+  }
+
+  // ── Files corpus ───────────────────────────────────────────────────────────
+
+  /**
+   * Bring the files table in line with the workspace: upsert files whose
+   * mtime/size moved, remove rows whose file is gone. The files table itself
+   * is the high-water store. Returns {updated, removed, scanned}.
+   */
+  reconcileFiles(rootDir) {
+    const onDisk = walkTextFiles(rootDir);
+    const known = new Map(
+      this.db.prepare('SELECT path, mtime_ms, size FROM files').all().map(r => [r.path, r])
+    );
+    let updated = 0, removed = 0;
+    for (const rel of onDisk) {
+      let st;
+      try { st = fs.statSync(path.join(rootDir, rel)); } catch (e) { continue; }
+      const prev = known.get(rel);
+      known.delete(rel);
+      if (prev && prev.mtime_ms === st.mtimeMs && prev.size === st.size) continue;
+      if (st.size > MAX_FILE_BYTES) continue;
+      this._indexFile(rootDir, rel, st);
+      updated++;
+    }
+    // Anything left in `known` no longer exists on disk.
+    const del = this.db.prepare('DELETE FROM files WHERE path = ?');
+    for (const rel of known.keys()) { del.run(rel); removed++; }
+    return { updated, removed, scanned: onDisk.length };
+  }
+
+  /** Index one file immediately (save_file hot path); no directory walk. */
+  noteFileSaved(rootDir, relPath) {
+    const ext = path.extname(relPath).toLowerCase();
+    if (!INDEXED_EXTENSIONS.has(ext)) return false;
+    let st;
+    try { st = fs.statSync(path.join(rootDir, relPath)); } catch (e) { return false; }
+    if (st.size > MAX_FILE_BYTES) return false;
+    this._indexFile(rootDir, relPath, st);
+    return true;
+  }
+
+  removeFile(relPath) {
+    this.db.prepare('DELETE FROM files WHERE path = ?').run(relPath);
+  }
+
+  _indexFile(rootDir, rel, st) {
+    let content;
+    try { content = fs.readFileSync(path.join(rootDir, rel), 'utf-8'); } catch (e) { return; }
+    const title = path.basename(rel, path.extname(rel));
+    const tags = parseFrontmatterTags(content);
+    // birthtime is unreliable (0 or =ctime) on some filesystems; store null
+    // rather than a wrong date so created-at filters only apply where real.
+    const created = st.birthtimeMs && st.birthtimeMs > 0 ? st.birthtimeMs : null;
+    this.db.prepare(`
+      INSERT INTO files (path, title, tags, content, mtime_ms, size, created_ms)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(path) DO UPDATE SET
+        title = excluded.title, tags = excluded.tags, content = excluded.content,
+        mtime_ms = excluded.mtime_ms, size = excluded.size, created_ms = excluded.created_ms
+    `).run(rel, title, JSON.stringify(tags), content, st.mtimeMs, st.size, created);
+  }
+
+  /**
+   * Search file content. Title hits outrank content hits via bm25 column
+   * weights; tags participate in matching at a middle weight. Filters apply
+   * only where the metadata genuinely exists (created_ms may be null).
+   */
+  searchFiles(rawQuery, opts = {}) {
+    const match = sanitizeFtsQuery(rawQuery, { prefix: opts.prefix });
+    if (!match) return [];
+    const limit = Math.min(opts.limit || 20, 100);
+    const where = ['files_fts MATCH ?'];
+    const params = [match];
+    if (opts.updatedFrom) { where.push('f.mtime_ms >= ?'); params.push(opts.updatedFrom); }
+    if (opts.updatedTo) { where.push('f.mtime_ms <= ?'); params.push(opts.updatedTo); }
+    if (opts.createdFrom) { where.push('f.created_ms IS NOT NULL AND f.created_ms >= ?'); params.push(opts.createdFrom); }
+    if (opts.createdTo) { where.push('f.created_ms IS NOT NULL AND f.created_ms <= ?'); params.push(opts.createdTo); }
+    if (Array.isArray(opts.tags) && opts.tags.length) {
+      for (const tag of opts.tags.slice(0, 8)) {
+        where.push('EXISTS (SELECT 1 FROM json_each(f.tags) WHERE json_each.value = ?)');
+        params.push(String(tag).toLowerCase());
+      }
+    }
+    params.push(limit);
+    const rows = this.db.prepare(`
+      SELECT f.path, f.title, f.tags, f.mtime_ms, f.created_ms,
+             bm25(files_fts, 10.0, 1.0, 4.0) AS rank,
+             snippet(files_fts, 1, '${HIGHLIGHT_OPEN}', '${HIGHLIGHT_CLOSE}', '…', 12) AS snip
+      FROM files_fts
+      JOIN files f ON f.id = files_fts.rowid
+      WHERE ${where.join(' AND ')}
+      ORDER BY rank
+      LIMIT ?
+    `).all(...params);
+    return rows.map(r => ({
+      type: 'file',
+      path: r.path,
+      title: r.title,
+      tags: JSON.parse(r.tags),
+      snippet: r.snip,
+      score: -r.rank, // bm25 is lower-is-better; expose higher-is-better
+      mtimeMs: r.mtime_ms,
+      createdMs: r.created_ms,
+    }));
+  }
+}
+
+function createSearchIndex(opts) {
+  return new SearchIndex(opts);
+}
+
 module.exports = {
   SCHEMA_VERSION,
+  HIGHLIGHT_OPEN,
+  HIGHLIGHT_CLOSE,
   probeSqlite,
   sanitizeFtsQuery,
   fuzzyScore,
+  parseFrontmatterTags,
+  walkTextFiles,
+  createSearchIndex,
 };
