@@ -13,6 +13,7 @@
 export { Editor, Node, Mark, Extension, mergeAttributes, InputRule } from '@tiptap/core';
 export { default as StarterKit } from '@tiptap/starter-kit';
 export { default as HardBreak } from '@tiptap/extension-hard-break';
+export { OrderedList } from '@tiptap/extension-ordered-list';
 export { Table, TableRow, TableHeader, TableCell } from '@tiptap/extension-table';
 export { Markdown } from 'tiptap-markdown';
 export { Plugin, PluginKey } from '@tiptap/pm/state';

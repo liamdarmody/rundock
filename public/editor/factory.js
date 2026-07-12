@@ -15,6 +15,8 @@ import { Editor, StarterKit, Markdown } from '../vendor/tiptap-bundle.mjs';
 import { Wikilink } from './nodes/wikilink.js';
 import { Callout } from './nodes/callout.js';
 import { SoftHardBreak } from './nodes/soft-hard-break.js';
+import { SoftOrderedList } from './nodes/soft-ordered-list.js';
+import { tableExtensions, tableDirtyKey } from './nodes/table.js';
 import { FindExtension } from './plugins/find.js';
 
 export function createEditorInstance({ element, initialBody, onUpdate, onSelectionChange }) {
@@ -28,6 +30,9 @@ export function createEditorInstance({ element, initialBody, onUpdate, onSelecti
         // Disable StarterKit's HardBreak; SoftHardBreak below replaces it with
         // a `\n` serialiser so breaks:true round-trips byte-for-byte.
         hardBreak: false,
+        // Disable StarterKit's OrderedList; SoftOrderedList below replaces it
+        // with an unpadded-number serialiser (Obsidian parity for 10+ items).
+        orderedList: false,
         link: {
           // Plain click opens. Matches always-editable consumer apps like
           // Notion and Apple Notes; wikilinks already open on plain click via
@@ -42,8 +47,10 @@ export function createEditorInstance({ element, initialBody, onUpdate, onSelecti
         },
       }),
       SoftHardBreak,
+      SoftOrderedList,
       Wikilink,
       Callout,
+      ...tableExtensions,
       FindExtension,
       Markdown.configure({
         // html:false closes the XSS surface that the prototype's regex
@@ -79,6 +86,11 @@ export function createEditorInstance({ element, initialBody, onUpdate, onSelecti
     // registered by the Wikilink and Callout nodes participate here.
     editor.commands.setContent(initialBody, false);
   }
+
+  // Arm the table dirty-tracker only after the initial content is in, so the
+  // load itself never marks cells as edited. Source-preserving table
+  // serialization depends on load-time cells being clean.
+  editor.view.dispatch(editor.state.tr.setMeta(tableDirtyKey, 'arm'));
 
   return editor;
 }
