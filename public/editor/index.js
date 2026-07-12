@@ -14,6 +14,8 @@ import { createEditorInstance } from './factory.js';
 import { injectEditorStyles } from './styles.js';
 import { parseFile, serialiseFile } from './markdown/pipeline.js';
 import { attachFloatingToolbar } from './panels/floating-toolbar.js';
+import { attachReviewPanel } from './panels/review.js';
+import { createReviewController } from './review/controller.js';
 import { renderProperties } from './panels/properties.js';
 import { setFindQuery, findNext, findPrev, setFindIndex, clearFind, getFindState } from './plugins/find.js';
 
@@ -65,6 +67,25 @@ export function createEditor({
   // Properties panel is read-only today; making it editable is a follow-up.
   const propertiesCount = renderProperties(propertiesElement, parsed);
 
+  // Review: the controller owns review state (constructs + endmatter); the
+  // panel is its UI. Endmatter-only operations (reply, Done-Reviewing) do
+  // not change the ProseMirror doc, so the panel requests a save through
+  // the host's onUpdate path explicitly.
+  const review = createReviewController({
+    editor,
+    endmatter: parts.endmatter,
+    onChange: () => { if (typeof onUpdate === 'function') onUpdate({ editor }); },
+  });
+  let reviewPanel = { detach: () => {}, refresh: () => {}, openComposer: () => {} };
+  if (toolbarHostElement) {
+    reviewPanel = attachReviewPanel({
+      paneElement: toolbarHostElement,
+      editor,
+      controller: review,
+      onRequestSave: () => { if (typeof onUpdate === 'function') onUpdate({ editor }); },
+    });
+  }
+
   // Floating toolbar. Optional: host can leave both toolbar elements null
   // and the editor stays usable without a selection menu.
   let detachToolbar = () => {};
@@ -73,6 +94,7 @@ export function createEditor({
       toolbarElement,
       hostElement: toolbarHostElement,
       editor,
+      onReviewAction: (mode) => reviewPanel.openComposer(mode),
     });
   }
 
@@ -81,6 +103,8 @@ export function createEditor({
   _editorHandles.set(editor, {
     parts,
     parsedFrontmatter: parsed,
+    review,
+    reviewPanel,
     propertiesCount,
     detachToolbar,
     detachWikilinks,
@@ -95,6 +119,7 @@ export function destroyEditor(editor) {
   if (handle) {
     try { handle.detachToolbar(); }   catch {}
     try { handle.detachWikilinks(); } catch {}
+    try { handle.reviewPanel.detach(); } catch {}
     _editorHandles.delete(editor);
   }
   try { editor.destroy(); } catch {}
