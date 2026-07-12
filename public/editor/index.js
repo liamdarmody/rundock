@@ -11,6 +11,7 @@
 // save to disk via the host's existing save flow.
 
 import { createEditorInstance } from './factory.js';
+import { injectEditorStyles } from './styles.js';
 import { parseFile, serialiseFile } from './markdown/pipeline.js';
 import { attachFloatingToolbar } from './panels/floating-toolbar.js';
 import { renderProperties } from './panels/properties.js';
@@ -47,6 +48,8 @@ export function createEditor({
   onWikilinkClick = null,
 }) {
   if (!element) throw new Error('createEditor: element is required');
+
+  injectEditorStyles();
 
   const { raw, parsed, body, trailing } = parseFile(rawMarkdown || '');
 
