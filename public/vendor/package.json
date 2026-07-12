@@ -9,6 +9,7 @@
   "dependencies": {
     "@tiptap/core": "3.22.5",
     "@tiptap/extension-hard-break": "3.22.5",
+    "@tiptap/extension-table": "3.22.5",
     "@tiptap/starter-kit": "3.22.5",
     "js-yaml": "4.1.0",
     "tiptap-markdown": "0.9.0"
