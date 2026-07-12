@@ -17,7 +17,10 @@ describe('probeSqlite', () => {
     // probe must say so rather than throw. On Node 22.13+/24 it must pass.
     const result = probeSqlite();
     assert.strictEqual(typeof result.available, 'boolean');
-    if (process.versions.node.split('.')[0] >= 23 || (process.versions.node.split('.')[0] == 22 && process.versions.node.split('.')[1] >= 13)) {
+    const [major, minor] = process.versions.node.split('.').map(Number);
+    const runtimeHasSqlite = major >= 23 || (major === 22 && minor >= 13);
+    const envDisabled = process.env.RUNDOCK_SEARCH_DISABLE_SQLITE === '1';
+    if (runtimeHasSqlite && !envDisabled) {
       assert.strictEqual(result.available, true);
       assert.ok(result.DatabaseSync, 'DatabaseSync constructor exposed when available');
     }
