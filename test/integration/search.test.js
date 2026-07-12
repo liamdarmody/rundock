@@ -10,6 +10,16 @@ const path = require('node:path');
 
 const h = require('../helpers/harness.js');
 
+// This suite asserts FTS-engine behaviour (highlight markers, anchors,
+// reconcile hooks). On runtimes without node:sqlite (the Node 20 CI leg)
+// the engine is unavailable by design and the grep-fallback semantics are
+// covered by search-fallback.test.js instead.
+const probe = require('../../search.js').probeSqlite();
+if (!probe.available) {
+  require('node:test').test('universal search integration (skipped: no node:sqlite on this runtime)', { skip: true }, () => {});
+  return;
+}
+
 let client;
 
 function jsonlUser(text, ts) {
