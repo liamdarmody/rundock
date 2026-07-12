@@ -48,7 +48,7 @@ export function createEditor({
 }) {
   if (!element) throw new Error('createEditor: element is required');
 
-  const { raw, parsed, body } = parseFile(rawMarkdown || '');
+  const { raw, parsed, body, trailing } = parseFile(rawMarkdown || '');
 
   const editor = createEditorInstance({
     element,
@@ -77,6 +77,7 @@ export function createEditor({
   _editorHandles.set(editor, {
     rawFrontmatter: raw,
     parsedFrontmatter: parsed,
+    trailingNewlines: trailing,
     propertiesCount,
     detachToolbar,
     detachWikilinks,
@@ -100,5 +101,6 @@ export function getMarkdown(editor) {
   if (!editor) return '';
   const handle = _editorHandles.get(editor);
   const raw = handle ? handle.rawFrontmatter : null;
-  return serialiseFile(editor, raw);
+  const trailing = handle ? handle.trailingNewlines : '';
+  return serialiseFile(editor, raw, trailing);
 }
