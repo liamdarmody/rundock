@@ -1642,8 +1642,7 @@ function formatRecency(iso) {
   return d + '/' + m + '/' + ts.getFullYear();
 }
 
-// Left-border colour class for a convo row. Green takes priority over orange so
-// a pinned conversation that becomes unread shows green, not orange.
+// Left-border colour class for a convo row.
 function convoBorderClass(c) {
   // Left border carries the unread/working signal only. Pinned-ness is
   // conveyed by list position + the title-row pin glyph (WhatsApp model), so
@@ -1723,8 +1722,9 @@ function renderConvoList() {
 //                 dimming if the agent has since been removed.
 //   'done'     -> Done section. Delete button, fixed 0.7 opacity.
 //
-// Left-border colour state lives on the row via convoBorderClass(c):
-// green for working or unread, orange for pinned-and-idle, none otherwise.
+// Left-border colour state lives on the row via convoBorderClass(c): green
+// for working or unread, none otherwise. Pinned-ness is conveyed by list
+// position and the title-row pin glyph, not the border.
 function renderConvoItem(c, variant) {
   const isActive = activeConversation?.id === c.id;
   const cState = convoState[c.id];
@@ -3722,6 +3722,9 @@ function initFindBar() {
       return;
     }
     if (e.key === 'Escape' && findState.open) {
+      // The palette overlays the find bar; when both are open, Escape
+      // closes the topmost surface only (the palette's own handler).
+      if (typeof paletteOpen !== 'undefined' && paletteOpen) return;
       e.preventDefault();
       closeFindBar();
     }
@@ -3779,12 +3782,23 @@ var pendingMessageAnchor = null; // {convoId, text, fragment} — var: openConve
 
 const PALETTE_GROUP_ORDER = ['files', 'conversations', 'agents', 'skills'];
 const PALETTE_GROUP_LABELS = { files: 'Files', conversations: 'Conversations', agents: 'Agents', skills: 'Skills' };
+// Per-group result cap. Must match the `limit` sent in runPaletteSearch: the
+// group-count labels use it to show "8+" instead of implying a full group is
+// the exact total.
+const PALETTE_GROUP_LIMIT = 8;
+const IS_MAC = /Mac/i.test(navigator.platform);
+let paletteReturnFocus = null; // element to restore focus to on close
+
+// The nav rail tooltip teaches the shortcut with the right modifier per
+// platform (the Windows and Linux builds have no Cmd key).
+document.getElementById('nav-search-btn')?.setAttribute('data-tooltip', IS_MAC ? 'Search ⌘K' : 'Search Ctrl+K');
 
 function openPalette() {
   if (currentView === 'workspace' || !currentWorkspacePath) return; // no workspace yet
   const overlay = document.getElementById('palette-overlay');
   if (!overlay) return;
   paletteOpen = true;
+  paletteReturnFocus = document.activeElement;
   overlay.classList.remove('hidden');
   const input = document.getElementById('palette-input');
   input.value = paletteQuery = '';
@@ -3796,6 +3810,12 @@ function closePalette() {
   paletteOpen = false;
   clearTimeout(paletteTimer);
   document.getElementById('palette-overlay')?.classList.add('hidden');
+  // Return focus to where the user was (keyboard flow continuity); fall
+  // back silently when the element is gone or was never focusable.
+  if (paletteReturnFocus && document.contains(paletteReturnFocus)) {
+    try { paletteReturnFocus.focus(); } catch (e) {}
+  }
+  paletteReturnFocus = null;
 }
 
 function togglePalette() { paletteOpen ? closePalette() : openPalette(); }
@@ -3826,7 +3846,7 @@ function runPaletteSearch() {
     query: paletteQuery,
     reqId: ++paletteReqId,
     prefix: true, // type-ahead: last token matches as a prefix
-    limit: 8,
+    limit: PALETTE_GROUP_LIMIT,
   }));
 }
 
@@ -3868,7 +3888,10 @@ function renderPalette() {
     const items = groups[key] || [];
     if (!items.length) continue;
     const label = paletteReply.recent ? `Recent ${PALETTE_GROUP_LABELS[key].toLowerCase()}` : PALETTE_GROUP_LABELS[key];
-    h += `<div class="palette-group-label">${label}<span class="palette-group-count">${items.length}</span></div>`;
+    // A full group means the server hit its per-group cap: the real total may
+    // be higher, so the count is shown as a floor rather than an exact figure.
+    const countLabel = items.length >= PALETTE_GROUP_LIMIT ? `${PALETTE_GROUP_LIMIT}+` : items.length;
+    h += `<div class="palette-group-label" role="presentation">${label}<span class="palette-group-count">${countLabel}</span></div>`;
     for (const item of items) {
       const idx = paletteFlat.length;
       paletteFlat.push(item);
@@ -3877,9 +3900,14 @@ function renderPalette() {
   }
   if (!paletteFlat.length) {
     const q = paletteQuery.trim();
-    h = q
-      ? `<div class="palette-empty">No matches for &ldquo;${esc(q)}&rdquo;<div class="palette-empty-sub">Search covers file contents and names, conversation messages and titles, and agent and skill names.</div></div>`
-      : `<div class="palette-empty">Start typing to search your workspace<div class="palette-empty-sub">Files, conversations, agents, and skills.</div></div>`;
+    if (paletteReply.error) {
+      // A genuine server failure must not masquerade as "no matches".
+      h = `<div class="palette-empty">Search hit a problem<div class="palette-empty-sub">Try again; if it persists, check the server log.</div></div>`;
+    } else {
+      h = q
+        ? `<div class="palette-empty">No matches for &ldquo;${esc(q)}&rdquo;<div class="palette-empty-sub">Search covers file contents and names, conversation messages and titles, and agent and skill names.</div></div>`
+        : `<div class="palette-empty">Start typing to search your workspace<div class="palette-empty-sub">Files, conversations, agents, and skills.</div></div>`;
+    }
   }
   container.innerHTML = h;
   updatePaletteSelection();
@@ -3909,7 +3937,7 @@ function paletteItemHtml(item, idx) {
     title = esc(item.name);
     meta = esc((item.description || '').slice(0, 90));
   }
-  return `<div class="palette-item" data-idx="${idx}" onclick="openPaletteResult(${idx})" onmousemove="hoverPaletteItem(${idx})">
+  return `<div class="palette-item" id="palette-item-${idx}" role="option" aria-selected="false" data-idx="${idx}" onclick="openPaletteResult(${idx})" onmousemove="hoverPaletteItem(${idx})">
     ${icon}
     <div class="palette-item-body">
       <div class="palette-item-title">${title}</div>
@@ -3937,8 +3965,15 @@ function updatePaletteSelection(scroll = true) {
   document.querySelectorAll('.palette-item').forEach(el => {
     const selected = parseInt(el.dataset.idx) === paletteSel;
     el.classList.toggle('selected', selected);
+    el.setAttribute('aria-selected', selected ? 'true' : 'false');
     if (selected && scroll) el.scrollIntoView({ block: 'nearest' });
   });
+  // Screen readers track the arrow-key selection through the combobox input.
+  const input = document.getElementById('palette-input');
+  if (input) {
+    if (paletteFlat.length) input.setAttribute('aria-activedescendant', `palette-item-${paletteSel}`);
+    else input.removeAttribute('aria-activedescendant');
+  }
 }
 
 function movePaletteSelection(delta) {
@@ -4026,6 +4061,13 @@ function tryMessageAnchor(convoId) {
     target.classList.remove('anchor-flash');
     void target.offsetWidth; // restart the animation if re-triggered
     target.classList.add('anchor-flash');
+    // Remove the class once the flash has served its purpose. CSS animations
+    // replay whenever the element cycles through display:none (navigating to
+    // another view and back), so a lingering class re-flashes the message on
+    // every return to the conversation. The timeout (animation is 1.6s) also
+    // covers prefers-reduced-motion, where no animationend would ever fire
+    // and the static fallback ring would otherwise persist indefinitely.
+    setTimeout(() => target.classList.remove('anchor-flash'), 1700);
   }, 60);
 }
 
@@ -4038,7 +4080,21 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   if (!paletteOpen) return;
-  if (e.key === 'Escape') { e.preventDefault(); closePalette(); }
+  if (e.key === 'Escape') { e.preventDefault(); closePalette(); return; }
+  // Focus trap: while the palette is open, Tab cycles through its own
+  // controls (input + scope chips) instead of escaping into the page
+  // behind the overlay. Result rows stay arrow-key territory.
+  if (e.key === 'Tab') {
+    const focusables = [...document.querySelectorAll('#palette-overlay input, #palette-overlay button')]
+      .filter(el => el.offsetParent !== null);
+    if (!focusables.length) return;
+    const idx = focusables.indexOf(document.activeElement);
+    e.preventDefault();
+    const next = e.shiftKey
+      ? focusables[(idx - 1 + focusables.length) % focusables.length]
+      : focusables[(idx + 1) % focusables.length];
+    next.focus();
+  }
 });
 
 document.getElementById('palette-input')?.addEventListener('input', () => schedulePaletteSearch());

@@ -401,24 +401,38 @@ class SearchIndex {
       this.db.prepare('SELECT path, mtime_ms, size FROM files').all().map(r => [r.path, r])
     );
     let updated = 0, removed = 0;
-    for (const rel of onDisk) {
-      let st;
-      try { st = fs.statSync(path.join(rootDir, rel)); } catch (e) { continue; }
-      const prev = known.get(rel);
-      known.delete(rel);
-      if (prev && prev.mtime_ms === st.mtimeMs && prev.size === st.size) continue;
-      if (st.size > MAX_FILE_BYTES) {
-        // A file that grew past the cap must not keep its stale row
-        // searchable forever; drop it (no-op when it was never indexed).
-        if (prev) { this.db.prepare('DELETE FROM files WHERE path = ?').run(rel); removed++; }
-        continue;
-      }
-      this._indexFile(rootDir, rel, st);
-      updated++;
-    }
-    // Anything left in `known` no longer exists on disk.
+    // Statements hoisted and the whole pass wrapped in one transaction: on
+    // the first full index of a large workspace this is the difference
+    // between one WAL commit per file and one per reconcile (the
+    // conversations side gets the same treatment per session delta). A
+    // failure rolls the pass back; the next reconcile simply retries.
+    const upsert = this._prepareFileUpsert();
     const del = this.db.prepare('DELETE FROM files WHERE path = ?');
-    for (const rel of known.keys()) { del.run(rel); removed++; }
+    try {
+      this.db.exec('BEGIN');
+      for (const rel of onDisk) {
+        let st;
+        try { st = fs.statSync(path.join(rootDir, rel)); } catch (e) { continue; }
+        const prev = known.get(rel);
+        known.delete(rel);
+        if (prev && prev.mtime_ms === st.mtimeMs && prev.size === st.size) continue;
+        if (st.size > MAX_FILE_BYTES) {
+          // A file that grew past the cap must not keep its stale row
+          // searchable forever; drop it (no-op when it was never indexed).
+          if (prev) { del.run(rel); removed++; }
+          continue;
+        }
+        this._indexFile(rootDir, rel, st, upsert);
+        updated++;
+      }
+      // Anything left in `known` no longer exists on disk.
+      for (const rel of known.keys()) { del.run(rel); removed++; }
+      this.db.exec('COMMIT');
+    } catch (e) {
+      try { this.db.exec('ROLLBACK'); } catch (e2) {}
+      console.warn(`[Search] files reconcile failed (rolled back, will retry): ${e && e.message ? e.message : e}`);
+      return { updated: 0, removed: 0, scanned: onDisk.length };
+    }
     return { updated, removed, scanned: onDisk.length };
   }
 
@@ -448,7 +462,17 @@ class SearchIndex {
     }));
   }
 
-  _indexFile(rootDir, rel, st) {
+  _prepareFileUpsert() {
+    return this.db.prepare(`
+      INSERT INTO files (path, title, tags, content, mtime_ms, size, created_ms)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(path) DO UPDATE SET
+        title = excluded.title, tags = excluded.tags, content = excluded.content,
+        mtime_ms = excluded.mtime_ms, size = excluded.size, created_ms = excluded.created_ms
+    `);
+  }
+
+  _indexFile(rootDir, rel, st, upsert = null) {
     let content;
     try { content = fs.readFileSync(path.join(rootDir, rel), 'utf-8'); } catch (e) { return; }
     const title = path.basename(rel, path.extname(rel));
@@ -461,13 +485,8 @@ class SearchIndex {
     // birthtime is unreliable (0 or =ctime) on some filesystems; store null
     // rather than a wrong date so created-at filters only apply where real.
     const created = st.birthtimeMs && st.birthtimeMs > 0 ? st.birthtimeMs : null;
-    this.db.prepare(`
-      INSERT INTO files (path, title, tags, content, mtime_ms, size, created_ms)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(path) DO UPDATE SET
-        title = excluded.title, tags = excluded.tags, content = excluded.content,
-        mtime_ms = excluded.mtime_ms, size = excluded.size, created_ms = excluded.created_ms
-    `).run(rel, title, JSON.stringify(tags), content, st.mtimeMs, st.size, created);
+    (upsert || this._prepareFileUpsert())
+      .run(rel, title, JSON.stringify(tags), content, st.mtimeMs, st.size, created);
   }
 
   /**
@@ -669,7 +688,7 @@ Object.assign(SearchIndex.prototype, {
    * Search message content. Each hit is a message with its conversation
    * context, a highlighted snippet, and one neighbouring message (the
    * previous message in the same session, or the next when the hit opens
-   * the session) so results are recognizable. `collapse: true` (default)
+   * the session) so results are recognisable. `collapse: true` (default)
    * keeps only the best-ranked hit per conversation with a matchCount —
    * the palette lists conversations, not raw messages.
    */
@@ -698,14 +717,15 @@ Object.assign(SearchIndex.prototype, {
       LIMIT ?
     `).all(...params);
 
-    const neighbourStmt = this.db.prepare(`
+    // Neighbour context costs one to two extra statement executions per hit,
+    // so it is only assembled for uncollapsed (message-level) queries; the
+    // palette's collapsed per-conversation hits never render it.
+    const neighbourStmt = collapse ? null : this.db.prepare(`
       SELECT role, agent_id, text, ts_ms FROM messages
       WHERE session_id = ? AND seq = ?
     `);
     const toHit = (r) => {
-      const prev = r.seq > 0 ? neighbourStmt.get(r.session_id, r.seq - 1) : undefined;
-      const nb = prev || neighbourStmt.get(r.session_id, r.seq + 1);
-      return {
+      const hit = {
         type: 'conversation',
         conversationId: r.conversation_id,
         sessionId: r.session_id,
@@ -715,8 +735,13 @@ Object.assign(SearchIndex.prototype, {
         tsMs: r.ts_ms,
         snippet: r.snip,
         score: -r.rank,
-        neighbour: nb ? { role: nb.role, agentId: nb.agent_id, tsMs: nb.ts_ms, text: String(nb.text).slice(0, 300) } : null,
       };
+      if (neighbourStmt) {
+        const prev = r.seq > 0 ? neighbourStmt.get(r.session_id, r.seq - 1) : undefined;
+        const nb = prev || neighbourStmt.get(r.session_id, r.seq + 1);
+        hit.neighbour = nb ? { role: nb.role, agentId: nb.agent_id, tsMs: nb.ts_ms, text: String(nb.text).slice(0, 300) } : null;
+      }
+      return hit;
     };
 
     if (!collapse) return rows.map(toHit);

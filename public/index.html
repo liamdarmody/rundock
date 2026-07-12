@@ -100,6 +100,7 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .sidebar-pills { padding: 8px 8px 10px; display: flex; gap: 6px; flex-shrink: 0; }
 .pill { font-size: var(--caption); font-weight: 500; padding: 4px 13px; border-radius: 999px; cursor: pointer; border: 1px solid var(--border); background: transparent; color: var(--text-2); transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease; line-height: 1.5; font-family: inherit; }
 .pill:hover { border-color: var(--text-2); color: var(--text-1); }
+.pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .pill.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 /* Archive sidebar action (replaces delete on persisted, not-yet-archived items).
@@ -645,7 +646,8 @@ mark.find-match.current,
 
 /* Hallmark · component: command-palette · genre: modern-minimal (inherits app) · theme: Rundock tokens
  * states: default · hover · focus · active/selected · disabled(n/a) · loading · error · empty/recent
- * tokens: consumes existing :root vars only — no new palette, no inline colour values
+ * tokens: consumes existing :root vars only — no new palette colours; the
+ * overlay scrim and shadows use rgba per the codebase's existing convention
  */
 /* ===== Universal search palette (Cmd+K) ===== */
 .palette-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.42); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); z-index: 200; display: flex; align-items: flex-start; justify-content: center; padding: 11vh 16px 16px; }
@@ -680,6 +682,9 @@ mark.find-match.current,
 .palette-status { padding: 5px 14px; font-size: var(--label); color: var(--text-2); border-top: 1px solid var(--border); display: flex; gap: 14px; user-select: none; }
 .palette-status .spin { display: inline-block; animation: palette-spin 0.8s linear infinite; }
 @keyframes palette-spin { to { transform: rotate(360deg); } }
+/* Applies in the chat view: search-result clicks flash the matched message.
+   Lives with the palette CSS because the palette is the only thing that
+   triggers it. The class is removed by app.js once the flash completes. */
 .msg.anchor-flash > .msg-bubble { animation: anchor-flash 1.6s ease; }
 @keyframes anchor-flash { 0%, 45% { box-shadow: 0 0 0 2px var(--accent); background: var(--accent-glow); } 100% { box-shadow: none; } }
 @media (prefers-reduced-motion: reduce) { .msg.anchor-flash > .msg-bubble { animation: none; box-shadow: 0 0 0 2px var(--accent); } }
@@ -707,8 +712,9 @@ mark.find-match.current,
       </button>
       <!-- Universal search: opens the palette overlay rather than switching
            views, so it carries no data-nav and never takes the active state.
-           The tooltip doubles as the shortcut teacher. -->
-      <button class="nav-item" onclick="openPalette()" data-tooltip="Search &#8984;K">
+           The tooltip doubles as the shortcut teacher; app.js fills it in
+           with the platform's modifier (Cmd on macOS, Ctrl elsewhere). -->
+      <button class="nav-item" id="nav-search-btn" onclick="openPalette()" aria-label="Search workspace">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
       </button>
     </div>
@@ -877,16 +883,16 @@ mark.find-match.current,
   <div class="palette" role="dialog" aria-modal="true" aria-label="Search workspace">
     <div class="palette-input-row">
       <svg class="palette-glass" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-      <input id="palette-input" class="palette-input" placeholder="Search files, conversations, agents, skills..." autocomplete="off" spellcheck="false" />
+      <input id="palette-input" class="palette-input" placeholder="Search files, conversations, agents, skills..." autocomplete="off" spellcheck="false" role="combobox" aria-label="Search workspace" aria-expanded="true" aria-controls="palette-results" aria-autocomplete="list" />
     </div>
-    <div class="palette-scope-row" id="palette-scope-row">
+    <div class="palette-scope-row" id="palette-scope-row" role="tablist" aria-label="Result type">
       <button class="palette-scope active" data-scope="all" onclick="setPaletteScope('all')">All</button>
       <button class="palette-scope" data-scope="files" onclick="setPaletteScope('files')">Files</button>
       <button class="palette-scope" data-scope="conversations" onclick="setPaletteScope('conversations')">Conversations</button>
       <button class="palette-scope" data-scope="agents" onclick="setPaletteScope('agents')">Agents</button>
       <button class="palette-scope" data-scope="skills" onclick="setPaletteScope('skills')">Skills</button>
     </div>
-    <div class="palette-results" id="palette-results"></div>
+    <div class="palette-results" id="palette-results" role="listbox" aria-label="Search results"></div>
     <div class="palette-status" id="palette-status"><span>&#8593;&#8595; navigate</span><span>&#9166; open</span><span>esc close</span></div>
   </div>
 </div>
