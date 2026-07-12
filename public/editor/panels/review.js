@@ -8,6 +8,8 @@
 // Layout: the editor pane becomes a two-column grid while review is open;
 // the sidebar column is sticky inside the pane's scroll container.
 
+import { openWorkspaceLocation } from '../review/deep-link-shim.js';
+
 function el(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -98,6 +100,9 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
   // ------------------------------------------------------------------
 
   function scrollToItem(item) {
+    // Deep-link first (see review/deep-link-shim.js); local scroll is the
+    // fallback and the only path until the navigation branch merges.
+    if (openWorkspaceLocation({ path: null, anchor: item.id })) return;
     try {
       const dom = editor.view.nodeDOM(item.pos);
       if (dom && dom.scrollIntoView) {
