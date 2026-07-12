@@ -258,7 +258,67 @@ CREATE TRIGGER IF NOT EXISTS files_au AFTER UPDATE ON files BEGIN
   INSERT INTO files_fts(rowid, title, content, tags)
   VALUES (new.id, new.title, new.content, new.tags);
 END;
+
+CREATE TABLE IF NOT EXISTS messages (
+  id INTEGER PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  agent_id TEXT,
+  role TEXT NOT NULL,
+  ts_ms REAL,
+  seq INTEGER NOT NULL,
+  text TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS messages_convo ON messages(conversation_id);
+CREATE INDEX IF NOT EXISTS messages_session ON messages(session_id, seq);
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+  text,
+  content=messages, content_rowid=id
+);
+CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+  INSERT INTO messages_fts(rowid, text) VALUES (new.id, new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+  INSERT INTO messages_fts(messages_fts, rowid, text) VALUES ('delete', old.id, old.text);
+END;
+
+CREATE TABLE IF NOT EXISTS session_marks (
+  session_id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  byte_offset INTEGER NOT NULL DEFAULT 0,
+  seq_next INTEGER NOT NULL DEFAULT 0,
+  mtime_ms REAL NOT NULL DEFAULT 0,
+  size INTEGER NOT NULL DEFAULT 0
+);
 `;
+
+// ── Claude Code jsonl extraction ─────────────────────────────────────────────
+
+/**
+ * Extract indexable messages from one parsed Claude Code jsonl line.
+ * Mirrors parseSessionHistory's display semantics: user messages with string
+ * content, and assistant text blocks (trim-filtered). Tool calls and tool
+ * results are excluded in v1 — they are the main source of grep noise the
+ * spec calls out.
+ * Returns {role, text, tsMs} or null.
+ */
+function extractIndexableMessage(obj) {
+  if (!obj || typeof obj !== 'object') return null;
+  const tsMs = obj.timestamp ? Date.parse(obj.timestamp) || null : null;
+  if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
+    const text = obj.message.content.trim();
+    if (!text) return null;
+    return { role: 'user', text, tsMs };
+  }
+  if (obj.message && obj.message.role === 'assistant' && Array.isArray(obj.message.content)) {
+    const parts = obj.message.content
+      .filter(b => b && b.type === 'text' && b.text && b.text.trim())
+      .map(b => b.text);
+    if (!parts.length) return null;
+    return { role: 'agent', text: parts.join('\n\n'), tsMs };
+  }
+  return null;
+}
 
 class SearchIndex {
   constructor({ dbPath, DatabaseSync }) {
@@ -433,6 +493,167 @@ class SearchIndex {
     }));
   }
 }
+
+// ── Conversations corpus (methods) ───────────────────────────────────────────
+
+Object.assign(SearchIndex.prototype, {
+  /**
+   * Bring the message index in line with the given conversations' session
+   * jsonl files. `convos` is [{conversationId, sessions: [{sessionId,
+   * agentId, filePath}]}] — the server resolves paths (they live in
+   * ~/.claude/projects, outside the workspace).
+   *
+   * High-water mark is a byte offset per session file. The jsonl is
+   * append-only, so an unchanged (mtime, size) pair skips the file without
+   * opening it; growth reads only the delta; shrinkage or replacement
+   * (offset > size, or size < mark size) wipes that session's rows and
+   * re-reads from zero. Only newline-terminated lines are consumed, so a
+   * mid-write partial line is picked up by a later reconcile, never
+   * half-indexed.
+   */
+  reconcileConversations(convos) {
+    let indexed = 0, sessionsRead = 0;
+    const getMark = this.db.prepare('SELECT byte_offset, seq_next, mtime_ms, size FROM session_marks WHERE session_id = ?');
+    for (const c of convos || []) {
+      if (!c || !c.conversationId || !Array.isArray(c.sessions)) continue;
+      for (const s of c.sessions) {
+        if (!s || !s.sessionId || !s.filePath) continue;
+        let st;
+        try { st = fs.statSync(s.filePath); } catch (e) { continue; }
+        const mark = getMark.get(s.sessionId) || { byte_offset: 0, seq_next: 0, mtime_ms: 0, size: 0 };
+        if (st.mtimeMs === mark.mtime_ms && st.size === mark.size) continue;
+        let offset = mark.byte_offset;
+        let seq = mark.seq_next;
+        if (st.size < mark.byte_offset || st.size < mark.size) {
+          // Shrunk or replaced: this is no longer the file we indexed.
+          this.db.prepare('DELETE FROM messages WHERE session_id = ?').run(s.sessionId);
+          offset = 0;
+          seq = 0;
+        }
+        const read = this._readSessionDelta(s.filePath, offset, st.size);
+        sessionsRead++;
+        const insert = this.db.prepare(`
+          INSERT INTO messages (conversation_id, session_id, agent_id, role, ts_ms, seq, text)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `);
+        for (const line of read.lines) {
+          let obj;
+          try { obj = JSON.parse(line); } catch (e) { continue; }
+          const m = extractIndexableMessage(obj);
+          if (!m) continue;
+          insert.run(c.conversationId, s.sessionId, s.agentId || null, m.role, m.tsMs, seq, m.text);
+          seq++;
+          indexed++;
+        }
+        this.db.prepare(`
+          INSERT INTO session_marks (session_id, conversation_id, byte_offset, seq_next, mtime_ms, size)
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(session_id) DO UPDATE SET
+            conversation_id = excluded.conversation_id, byte_offset = excluded.byte_offset,
+            seq_next = excluded.seq_next, mtime_ms = excluded.mtime_ms, size = excluded.size
+        `).run(s.sessionId, c.conversationId, read.nextOffset, seq, st.mtimeMs, st.size);
+      }
+    }
+    return { indexed, sessionsRead };
+  },
+
+  /**
+   * Read complete (newline-terminated) lines from byte `offset` to `end`.
+   * Splits on raw 0x0A bytes BEFORE utf-8 decoding so a multibyte character
+   * straddling the read boundary can never be corrupted.
+   */
+  _readSessionDelta(filePath, offset, end) {
+    const want = end - offset;
+    if (want <= 0) return { lines: [], nextOffset: offset };
+    let fd;
+    try { fd = fs.openSync(filePath, 'r'); } catch (e) { return { lines: [], nextOffset: offset }; }
+    let buf;
+    try {
+      buf = Buffer.alloc(want);
+      const got = fs.readSync(fd, buf, 0, want, offset);
+      buf = buf.subarray(0, got);
+    } finally {
+      fs.closeSync(fd);
+    }
+    const lastNewline = buf.lastIndexOf(0x0A);
+    if (lastNewline === -1) return { lines: [], nextOffset: offset };
+    const complete = buf.subarray(0, lastNewline + 1);
+    const lines = complete.toString('utf-8').split('\n').filter(Boolean);
+    return { lines, nextOffset: offset + lastNewline + 1 };
+  },
+
+  removeConversation(convoId) {
+    this.db.prepare('DELETE FROM messages WHERE conversation_id = ?').run(convoId);
+    this.db.prepare('DELETE FROM session_marks WHERE conversation_id = ?').run(convoId);
+  },
+
+  /**
+   * Search message content. Each hit is a message with its conversation
+   * context, a highlighted snippet, and one neighbouring message (the
+   * previous message in the same session, or the next when the hit opens
+   * the session) so results are recognizable. `collapse: true` (default)
+   * keeps only the best-ranked hit per conversation with a matchCount —
+   * the palette lists conversations, not raw messages.
+   */
+  searchMessages(rawQuery, opts = {}) {
+    const match = sanitizeFtsQuery(rawQuery, { prefix: opts.prefix });
+    if (!match) return [];
+    const collapse = opts.collapse !== false;
+    const limit = Math.min(opts.limit || 20, 100);
+    // Over-fetch when collapsing so multiple hits in one conversation do not
+    // starve the distinct-conversation list.
+    const fetchLimit = collapse ? limit * 5 : limit;
+    const where = ['messages_fts MATCH ?'];
+    const params = [match];
+    if (opts.agentId) { where.push('m.agent_id = ?'); params.push(opts.agentId); }
+    if (opts.fromMs) { where.push('m.ts_ms IS NOT NULL AND m.ts_ms >= ?'); params.push(opts.fromMs); }
+    if (opts.toMs) { where.push('m.ts_ms IS NOT NULL AND m.ts_ms <= ?'); params.push(opts.toMs); }
+    params.push(fetchLimit);
+    const rows = this.db.prepare(`
+      SELECT m.id, m.conversation_id, m.session_id, m.agent_id, m.role, m.ts_ms, m.seq,
+             bm25(messages_fts) AS rank,
+             snippet(messages_fts, 0, '${HIGHLIGHT_OPEN}', '${HIGHLIGHT_CLOSE}', '…', 12) AS snip
+      FROM messages_fts
+      JOIN messages m ON m.id = messages_fts.rowid
+      WHERE ${where.join(' AND ')}
+      ORDER BY rank
+      LIMIT ?
+    `).all(...params);
+
+    const neighbourStmt = this.db.prepare(`
+      SELECT role, agent_id, text, ts_ms FROM messages
+      WHERE session_id = ? AND seq = ?
+    `);
+    const toHit = (r) => {
+      const prev = r.seq > 0 ? neighbourStmt.get(r.session_id, r.seq - 1) : undefined;
+      const nb = prev || neighbourStmt.get(r.session_id, r.seq + 1);
+      return {
+        type: 'conversation',
+        conversationId: r.conversation_id,
+        sessionId: r.session_id,
+        agentId: r.agent_id,
+        role: r.role,
+        seq: r.seq,
+        tsMs: r.ts_ms,
+        snippet: r.snip,
+        score: -r.rank,
+        neighbour: nb ? { role: nb.role, agentId: nb.agent_id, tsMs: nb.ts_ms, text: String(nb.text).slice(0, 300) } : null,
+      };
+    };
+
+    if (!collapse) return rows.map(toHit);
+
+    const byConvo = new Map();
+    for (const r of rows) {
+      const existing = byConvo.get(r.conversation_id);
+      if (existing) { existing.matchCount++; continue; }
+      const hit = toHit(r);
+      hit.matchCount = 1;
+      byConvo.set(r.conversation_id, hit);
+    }
+    return [...byConvo.values()].slice(0, limit);
+  },
+});
 
 function createSearchIndex(opts) {
   return new SearchIndex(opts);
