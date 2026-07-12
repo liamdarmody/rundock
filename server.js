@@ -14,6 +14,7 @@ const { spawn } = require('child_process');
 const { WebSocketServer } = require('ws');
 const readline = require('readline');
 const PKG_VERSION = require('./package.json').version;
+const searchLib = require('./search.js');
 
 const PORT = process.env.PORT || 3000;
 let ACTUAL_PORT = PORT; // Updated after server.listen() with the real listening port
@@ -2019,6 +2020,11 @@ function appendTranscript(convoId, role, agentId, text, type) {
   transcript.push(entry);
   // Persist to disk
   saveTranscript(convoId);
+  // Live search-index reconcile at end of an agent turn: by this point the
+  // Claude Code session jsonl has the turn's content, so the delta read makes
+  // the new messages findable immediately. Fire-and-forget; failures are
+  // caught inside and reconcile-on-search covers any gap.
+  if (role === 'agent' && type === undefined) noteSearchConversationActivity(convoId);
 }
 
 function formatTranscript(convoId, { excludeAgent } = {}) {
@@ -3501,6 +3507,9 @@ wss.on('connection', (ws) => {
           ws.send(JSON.stringify({ type: 'workspace_set', path: WORKSPACE, analysis, isEmpty, workspaceMode: state.workspaceMode, setupComplete: !!state.setupComplete, scaffoldError }));
           ws.send(JSON.stringify({ type: 'agents', agents: agentList }));
           try { ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) })); } catch (e) { console.warn('  File tree failed:', e.message); }
+          // Warm the search index off the open path (reconcile-on-open);
+          // ensureSearchEngine also self-heals lazily on first search.
+          setImmediate(() => { try { ensureSearchEngine(); } catch (e) { console.warn('[Search] warm-up failed:', e.message); } });
         } else {
           ws.send(JSON.stringify({ type: 'workspace_error', message: 'Directory not found' }));
         }
@@ -3759,6 +3768,11 @@ wss.on('connection', (ws) => {
         if (!WORKSPACE || !msg.id) return;
         const convos = readConversations().filter(c => c.id !== msg.id);
         writeConversations(convos);
+        // Drop the conversation's rows from the search index (spec: a
+        // deleted conversation no longer appears in results).
+        if (ensureSearchEngine()) {
+          try { searchEngine.removeConversation(msg.id); } catch (e) { /* rebuild covers it */ }
+        }
         ws.send(JSON.stringify({ type: 'conversation_deleted', id: msg.id }));
       }
 
@@ -3931,6 +3945,11 @@ wss.on('connection', (ws) => {
 
       // ── CONVERSATION SEARCH: search titles and transcript content ──
       if (msg.type === 'search_conversations') {
+        // Sidebar conversation search. Internals upgraded to the FTS index
+        // (SR1); reply shape unchanged (results carry the conversation entry
+        // plus matchType/snippet), extended with sessionId/seq anchors on
+        // content hits. Grep fallback preserves the pre-index behaviour on
+        // runtimes without node:sqlite.
         (async () => {
           const query = (msg.query || '').toLowerCase().trim();
           if (!WORKSPACE || !query) {
@@ -3940,40 +3959,25 @@ wss.on('connection', (ws) => {
           const convos = readConversations();
           // Phase 1: title matches (instant)
           const titleMatches = convos.filter(c => (c.title || '').toLowerCase().includes(query)).map(c => ({ ...c, matchType: 'title' }));
-          // Phase 2: content matches (scan JSONL transcripts)
-          const contentSearchPromises = convos.filter(c => c.sessionId).map(async (c) => {
-            const filePath = getSessionJsonlPath(c.sessionId);
-            if (!filePath) return null;
+          // Phase 2: content matches (FTS index, or the legacy jsonl grep)
+          let contentResults = [];
+          if (ensureSearchEngine()) {
             try {
-              const rl = readline.createInterface({
-                input: fs.createReadStream(filePath, { encoding: 'utf-8' }),
-                crlfDelay: Infinity
-              });
-              for await (const line of rl) {
-                try {
-                  const obj = JSON.parse(line);
-                  // Check user messages
-                  if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
-                    if (obj.message.content.toLowerCase().includes(query)) {
-                      rl.close();
-                      return { ...c, matchType: 'content', snippet: extractSnippet(obj.message.content, query) };
-                    }
-                  }
-                  // Check assistant text blocks
-                  if (obj.message && obj.message.role === 'assistant' && Array.isArray(obj.message.content)) {
-                    for (const block of obj.message.content) {
-                      if (block.type === 'text' && block.text && block.text.toLowerCase().includes(query)) {
-                        rl.close();
-                        return { ...c, matchType: 'content', snippet: extractSnippet(block.text, query) };
-                      }
-                    }
-                  }
-                } catch (e) { /* skip */ }
-              }
-            } catch (e) { /* file read error */ }
-            return null;
-          });
-          const contentResults = (await Promise.all(contentSearchPromises)).filter(Boolean);
+              reconcileSearchBeforeQuery();
+              const byId = new Map(convos.map(c => [c.id, c]));
+              contentResults = searchEngine.searchMessages(msg.query, { limit: 50 })
+                .filter(h => byId.has(h.conversationId))
+                .map(h => ({
+                  ...byId.get(h.conversationId), matchType: 'content', snippet: h.snippet,
+                  sessionId: h.sessionId, seq: h.seq, matchCount: h.matchCount,
+                }));
+            } catch (e) {
+              console.warn('[Search] FTS query failed, using grep fallback:', e.message);
+              contentResults = await grepSearchTranscripts(msg.query, convos);
+            }
+          } else {
+            contentResults = await grepSearchTranscripts(msg.query, convos);
+          }
           // Merge: title matches first, then content-only matches (no duplicates)
           const titleIds = new Set(titleMatches.map(c => c.id));
           const merged = [...titleMatches, ...contentResults.filter(c => !titleIds.has(c.id))];
@@ -3981,6 +3985,20 @@ wss.on('connection', (ws) => {
         })().catch(err => {
           console.warn('[Search] Error:', err.message);
           ws.send(JSON.stringify({ type: 'search_results', results: [], query: msg.query }));
+        });
+      }
+
+      if (msg.type === 'search_universal') {
+        // Cmd+K universal palette (SR1): one query across files,
+        // conversations, agents, and skills, grouped by type.
+        runUniversalSearch(msg).then(({ groups, recent }) => {
+          ws.send(JSON.stringify({ type: 'search_universal_results', query: (msg.query || '').trim(), groups, recent }));
+        }).catch(err => {
+          console.warn('[Search] universal error:', err && err.message ? err.message : err);
+          ws.send(JSON.stringify({
+            type: 'search_universal_results', query: (msg.query || '').trim(),
+            groups: { files: [], conversations: [], agents: [], skills: [] }, recent: false,
+          }));
         });
       }
 
@@ -4123,6 +4141,11 @@ wss.on('connection', (ws) => {
         const fullPath = path.resolve(WORKSPACE, msg.path);
         if (isInsideWorkspace(fullPath)) {
           fs.writeFileSync(fullPath, msg.content, 'utf-8');
+          // Keep the search index fresh on the save hot path; guarded so an
+          // index failure can never affect the save itself.
+          if (ensureSearchEngine()) {
+            try { searchEngine.noteFileSaved(WORKSPACE, msg.path); } catch (e) { /* reconcile catches up */ }
+          }
           ws.send(JSON.stringify({ type: 'file_saved', path: msg.path }));
         }
       }
@@ -4521,6 +4544,363 @@ process.on('exit', () => {
   }
 });
 
+// ===== UNIVERSAL SEARCH (SR1) =====
+// FTS5 engine over files + conversations when node:sqlite is available;
+// grep fallback otherwise. The engine is lazily (re)opened per workspace so
+// every entry point — WS handlers, hooks, tests driving _internal — heals
+// itself after a workspace switch.
+
+let searchEngine = null;            // SearchIndex instance or null (fallback active)
+let searchEngineWorkspace = null;   // workspace the engine was opened for
+let searchProbe = null;             // cached capability probe
+let searchFilesReconciledAt = 0;    // TTL gate for the files walk (not per-keystroke)
+const SEARCH_FILES_RECONCILE_TTL_MS = 2000;
+
+function ensureSearchEngine() {
+  if (!WORKSPACE) {
+    if (searchEngine) { try { searchEngine.close(); } catch (e) {} }
+    searchEngine = null;
+    searchEngineWorkspace = null;
+    return null;
+  }
+  if (searchEngine && searchEngineWorkspace === WORKSPACE) return searchEngine;
+  if (searchEngine) { try { searchEngine.close(); } catch (e) {} searchEngine = null; }
+  searchEngineWorkspace = WORKSPACE;
+  if (!searchProbe) {
+    searchProbe = searchLib.probeSqlite();
+    if (!searchProbe.available) {
+      console.log(`[Search] FTS index unavailable (${searchProbe.reason}); grep fallback active`);
+    }
+  }
+  if (!searchProbe.available) return null;
+  try {
+    searchEngine = searchLib.createSearchIndex({
+      dbPath: path.join(rundockDir(), 'search-index.db'),
+      DatabaseSync: searchProbe.DatabaseSync,
+    });
+    searchEngine.open();
+    // Initial reconcile (the spec's reconcile-on-open): synchronous, with a
+    // progress line. Deleting the db and reopening the workspace is the
+    // supported rebuild path and lands here too.
+    const f = searchEngine.reconcileFiles(WORKSPACE);
+    const m = searchEngine.reconcileConversations(conversationSessionsForSearch());
+    searchFilesReconciledAt = Date.now();
+    console.log(`[Search] index ready: ${f.scanned} files scanned (${f.updated} indexed), ${m.indexed} new messages`);
+  } catch (e) {
+    console.warn('[Search] engine init failed; grep fallback active:', e && e.message ? e.message : e);
+    try { if (searchEngine) searchEngine.close(); } catch (e2) {}
+    searchEngine = null;
+  }
+  return searchEngine;
+}
+
+// Session-file map for the indexer: [{conversationId, sessions:[{sessionId,
+// agentId, filePath}]}]. Paths resolve into ~/.claude/projects (outside the
+// workspace); the index itself stays inside .rundock/.
+function conversationSessionsForSearch(onlyConvoId) {
+  const out = [];
+  for (const c of readConversations()) {
+    if (onlyConvoId && c.id !== onlyConvoId) continue;
+    const sessions = [];
+    const seen = new Set();
+    const add = (sessionId, agentId) => {
+      if (!sessionId || seen.has(sessionId)) return;
+      seen.add(sessionId);
+      const filePath = getSessionJsonlPath(sessionId);
+      if (filePath) sessions.push({ sessionId, agentId: agentId || c.agentId || null, filePath });
+    };
+    add(c.sessionId, c.agentId);
+    for (const s of c.sessionIds || []) add(s && s.sessionId, s && s.agentId);
+    if (sessions.length) out.push({ conversationId: c.id, sessions });
+  }
+  return out;
+}
+
+// Pre-query reconcile. Conversations reconcile on every search (byte-offset
+// marks make unchanged files a stat-only skip, so this is ~ms and guarantees
+// "findable without reopening the workspace"). The files walk is heavier and
+// TTL-gated; our own saves stay fresh via the save_file hook.
+function reconcileSearchBeforeQuery() {
+  if (!searchEngine) return;
+  try {
+    searchEngine.reconcileConversations(conversationSessionsForSearch());
+    const now = Date.now();
+    if (now - searchFilesReconciledAt >= SEARCH_FILES_RECONCILE_TTL_MS) {
+      searchFilesReconciledAt = now;
+      searchEngine.reconcileFiles(WORKSPACE);
+    }
+  } catch (e) {
+    console.warn('[Search] pre-query reconcile failed:', e && e.message ? e.message : e);
+  }
+}
+
+// Live-path hook, called after an agent turn's transcript append. Guarded so
+// an index failure can never affect message persistence (spec risk 2): the
+// jsonl is written by Claude Code regardless, and the next reconcile-on-search
+// or reconcile-on-open catches anything missed here.
+function noteSearchConversationActivity(convoId) {
+  if (!searchEngine || searchEngineWorkspace !== WORKSPACE) return;
+  try {
+    searchEngine.reconcileConversations(conversationSessionsForSearch(convoId));
+  } catch (e) {
+    console.warn('[Search] live reconcile failed (will catch up on next search):', e && e.message ? e.message : e);
+  }
+}
+
+// ── Title layer (in-memory, shared by engine and fallback modes) ────────────
+// Fuzzy is subsequence scoring on names/titles only (fzf-style); content
+// search stays lexical in FTS5. fuzzy=false narrows the title layer to
+// substring matching.
+function titleLayerMatches(query, items, titleOf, { fuzzy = true } = {}) {
+  const out = [];
+  const q = String(query).toLowerCase();
+  for (const item of items) {
+    const title = titleOf(item);
+    if (!title) continue;
+    let score;
+    if (fuzzy) {
+      score = searchLib.fuzzyScore(query, title);
+    } else {
+      const idx = String(title).toLowerCase().indexOf(q);
+      score = idx === -1 ? null : 100 - Math.min(idx, 50);
+    }
+    if (score !== null && score !== undefined) out.push({ item, score });
+  }
+  out.sort((a, b) => b.score - a.score);
+  return out;
+}
+
+function flattenFileTree(tree, out = []) {
+  for (const entry of tree || []) {
+    if (entry.type === 'folder') flattenFileTree(entry.children, out);
+    else out.push({ path: entry.path, name: entry.name });
+  }
+  return out;
+}
+
+// ── Grep fallback (no node:sqlite on this runtime) ──────────────────────────
+// Degraded but functional: bounded synchronous scan, first match per file.
+const GREP_MAX_FILES = 500;
+const GREP_MAX_FILE_BYTES = 1024 * 1024;
+
+function grepSearchFiles(query, limit) {
+  const q = query.toLowerCase();
+  const results = [];
+  const files = flattenFileTree(getFileTree(WORKSPACE)).slice(0, GREP_MAX_FILES);
+  for (const f of files) {
+    if (results.length >= limit) break;
+    const ext = path.extname(f.name).toLowerCase();
+    if (ext !== '.md' && ext !== '.txt') continue;
+    try {
+      const full = path.join(WORKSPACE, f.path);
+      if (fs.statSync(full).size > GREP_MAX_FILE_BYTES) continue;
+      const content = fs.readFileSync(full, 'utf-8');
+      if (content.toLowerCase().includes(q)) {
+        results.push({
+          type: 'file', path: f.path, title: path.basename(f.name, ext),
+          tags: [], snippet: extractSnippet(content, q), matchType: 'content', score: 0,
+        });
+      }
+    } catch (e) { /* unreadable file: skip */ }
+  }
+  return results;
+}
+
+// Legacy jsonl grep for conversation content (the pre-index search path,
+// preserved in behaviour as the capability-gated degradation).
+async function grepSearchTranscripts(query, convos) {
+  const q = query.toLowerCase();
+  const promises = convos.filter(c => c.sessionId).map(async (c) => {
+    const filePath = getSessionJsonlPath(c.sessionId);
+    if (!filePath) return null;
+    try {
+      const rl = readline.createInterface({
+        input: fs.createReadStream(filePath, { encoding: 'utf-8' }),
+        crlfDelay: Infinity
+      });
+      for await (const line of rl) {
+        try {
+          const obj = JSON.parse(line);
+          if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
+            if (obj.message.content.toLowerCase().includes(q)) {
+              rl.close();
+              return { ...c, matchType: 'content', snippet: extractSnippet(obj.message.content, q) };
+            }
+          }
+          if (obj.message && obj.message.role === 'assistant' && Array.isArray(obj.message.content)) {
+            for (const block of obj.message.content) {
+              if (block.type === 'text' && block.text && block.text.toLowerCase().includes(q)) {
+                rl.close();
+                return { ...c, matchType: 'content', snippet: extractSnippet(block.text, q) };
+              }
+            }
+          }
+        } catch (e) { /* skip */ }
+      }
+    } catch (e) { /* file read error */ }
+    return null;
+  });
+  return (await Promise.all(promises)).filter(Boolean);
+}
+
+// ── Universal query assembly ─────────────────────────────────────────────────
+
+async function runUniversalSearch(msg) {
+  const rawQuery = (msg.query || '').trim();
+  const fuzzy = msg.fuzzy !== false;
+  const limit = Math.min(msg.limit || 8, 25);
+  const groups = { files: [], conversations: [], agents: [], skills: [] };
+  if (!WORKSPACE) return { groups, recent: false };
+
+  ensureSearchEngine();
+  const convos = readConversations();
+
+  // Empty query: recent items, not nothing (Reflect-style empty state).
+  if (!rawQuery) {
+    const recentConvos = convos.slice()
+      .sort((a, b) => new Date(b.lastActiveAt || b.createdAt || 0) - new Date(a.lastActiveAt || a.createdAt || 0))
+      .slice(0, limit)
+      .map(c => ({ type: 'conversation', id: c.id, title: c.title, agentId: c.agentId, matchType: 'recent', lastActiveAt: c.lastActiveAt }));
+    let recentFiles = [];
+    if (searchEngine) {
+      reconcileSearchBeforeQuery();
+      try { recentFiles = searchEngine.recentFiles(limit); } catch (e) { recentFiles = []; }
+    } else {
+      recentFiles = flattenFileTree(getFileTree(WORKSPACE)).slice(0, limit)
+        .map(f => ({ type: 'file', path: f.path, title: path.basename(f.name, path.extname(f.name)), matchType: 'recent', tags: [] }));
+    }
+    return { groups: { ...groups, conversations: recentConvos, files: recentFiles }, recent: true };
+  }
+
+  // ── Files: fuzzy title layer + FTS content (or bounded grep) ──
+  const allFiles = flattenFileTree(getFileTree(WORKSPACE));
+  const fileTitleHits = titleLayerMatches(rawQuery, allFiles, f => f.name, { fuzzy })
+    .slice(0, limit)
+    .map(({ item, score }) => ({
+      type: 'file', path: item.path,
+      title: path.basename(item.name, path.extname(item.name)),
+      tags: [], matchType: 'title', score,
+    }));
+  let fileContentHits = [];
+  if (searchEngine) {
+    reconcileSearchBeforeQuery();
+    try {
+      fileContentHits = searchEngine.searchFiles(rawQuery, {
+        limit, prefix: !!msg.prefix, tags: msg.tags,
+        updatedFrom: msg.updatedFromMs, updatedTo: msg.updatedToMs,
+        createdFrom: msg.createdFromMs, createdTo: msg.createdToMs,
+      }).map(h => ({ ...h, matchType: 'content' }));
+    } catch (e) {
+      console.warn('[Search] file query failed:', e && e.message ? e.message : e);
+    }
+  } else {
+    fileContentHits = grepSearchFiles(rawQuery, limit);
+  }
+  // Tag/date-filtered searches suppress the unfiltered title layer: filters
+  // only exist on indexed metadata, and mixing unfiltered title hits back in
+  // would un-filter the group.
+  const filtersActive = !!((msg.tags && msg.tags.length) || msg.updatedFromMs || msg.updatedToMs || msg.createdFromMs || msg.createdToMs);
+  {
+    const seen = new Set();
+    const merged = [];
+    const titleList = filtersActive ? [] : fileTitleHits;
+    for (const h of titleList) { seen.add(h.path); merged.push(h); }
+    for (const h of fileContentHits) {
+      if (seen.has(h.path)) {
+        const t = merged.find(m => m.path === h.path);
+        if (t && !t.snippet) { t.snippet = h.snippet; t.tags = h.tags; }
+        continue;
+      }
+      merged.push(h);
+    }
+    groups.files = merged.slice(0, limit);
+  }
+
+  // ── Conversations: fuzzy title layer + FTS content (or legacy grep) ──
+  const convoPool = msg.agentId
+    ? convos.filter(c => c.agentId === msg.agentId || (c.sessionIds || []).some(s => s && s.agentId === msg.agentId))
+    : convos;
+  const convoTitleHits = filtersActive ? [] : titleLayerMatches(rawQuery, convoPool, c => c.title, { fuzzy })
+    .slice(0, limit)
+    .map(({ item, score }) => ({
+      type: 'conversation', id: item.id, title: item.title, agentId: item.agentId,
+      matchType: 'title', score, lastActiveAt: item.lastActiveAt,
+    }));
+  let convoContentHits = [];
+  if (searchEngine) {
+    try {
+      const byId = new Map(convos.map(c => [c.id, c]));
+      convoContentHits = searchEngine.searchMessages(rawQuery, {
+        limit, prefix: !!msg.prefix, agentId: msg.agentId,
+        fromMs: msg.fromMs || msg.updatedFromMs, toMs: msg.toMs || msg.updatedToMs,
+      }).filter(h => byId.has(h.conversationId)).map(h => {
+        const c = byId.get(h.conversationId);
+        return {
+          type: 'conversation', id: c.id, title: c.title, agentId: c.agentId,
+          matchType: 'content', snippet: h.snippet, sessionId: h.sessionId,
+          seq: h.seq, tsMs: h.tsMs, matchCount: h.matchCount, score: h.score,
+          messageAgentId: h.agentId, messageRole: h.role,
+          neighbour: h.neighbour, lastActiveAt: c.lastActiveAt,
+        };
+      });
+    } catch (e) {
+      console.warn('[Search] conversation query failed:', e && e.message ? e.message : e);
+    }
+  } else {
+    convoContentHits = (await grepSearchTranscripts(rawQuery, convoPool)).map(c => ({
+      type: 'conversation', id: c.id, title: c.title, agentId: c.agentId,
+      matchType: 'content', snippet: c.snippet, lastActiveAt: c.lastActiveAt, score: 0,
+    })).slice(0, limit);
+  }
+  {
+    const seen = new Set();
+    const merged = [];
+    for (const h of convoTitleHits) { seen.add(h.id); merged.push(h); }
+    for (const h of convoContentHits) {
+      if (seen.has(h.id)) {
+        const t = merged.find(m => m.id === h.id);
+        if (t && !t.snippet) { t.snippet = h.snippet; t.sessionId = h.sessionId; t.seq = h.seq; }
+        continue;
+      }
+      merged.push(h);
+    }
+    groups.conversations = merged.slice(0, limit);
+  }
+
+  // ── Agents + skills: tiny corpora, in-memory only, name > description ──
+  // (scope addendum: do NOT index these; a query-time filter is always fresh)
+  if (!filtersActive) {
+    let agents = [];
+    try { agents = discoverAgents().filter(a => a.status === 'onTeam'); } catch (e) {}
+    const agentNameHits = titleLayerMatches(rawQuery, agents, a => `${a.displayName} ${a.role || ''}`, { fuzzy });
+    groups.agents = agentNameHits.slice(0, limit).map(({ item, score }) => ({
+      type: 'agent', id: item.id, name: item.displayName, role: item.role || '',
+      icon: item.icon, colour: item.colour, matchType: 'title', score,
+    }));
+
+    let skills = [];
+    try { skills = discoverSkills(agents); } catch (e) {}
+    const q = rawQuery.toLowerCase();
+    const skillHits = titleLayerMatches(rawQuery, skills, s => s.name, { fuzzy });
+    const seenSkills = new Set(skillHits.map(h => h.item.id));
+    groups.skills = skillHits.slice(0, limit).map(({ item, score }) => ({
+      type: 'skill', id: item.id, name: item.name, description: item.description || '',
+      matchType: 'title', score,
+    }));
+    if (groups.skills.length < limit) {
+      for (const s of skills) {
+        if (groups.skills.length >= limit) break;
+        if (seenSkills.has(s.id)) continue;
+        if ((s.description || '').toLowerCase().includes(q)) {
+          groups.skills.push({ type: 'skill', id: s.id, name: s.name, description: s.description || '', matchType: 'content', score: 0 });
+        }
+      }
+    }
+  }
+
+  return { groups, recent: false };
+}
+
 // ===== START =====
 
 function startServer(options = {}) {
@@ -4545,6 +4925,8 @@ function startServer(options = {}) {
         console.log(`  Agents: ${agents.map(a => a.displayName).join(', ')}`);
         console.log(`  Routines: ${totalRoutines}`);
         startScheduler();
+        // Warm the search index off the startup path (reconcile-on-open).
+        setImmediate(() => { try { ensureSearchEngine(); } catch (e) { console.warn('[Search] warm-up failed:', e.message); } });
       } else {
         console.log(`  No workspace set. Waiting for workspace selection.`);
       }
@@ -4601,6 +4983,10 @@ module.exports._internal = {
   chatProcesses, convoTranscripts, pendingPermissionRequests,
   agentAutoResumeCount, disconnectBuffer, connectedClients,
   incrementAutoResume, resetAutoResume,
+  // universal search (SR1)
+  ensureSearchEngine, runUniversalSearch, conversationSessionsForSearch,
+  titleLayerMatches, flattenFileTree, grepSearchFiles, grepSearchTranscripts,
+  getSearchEngine() { return searchEngine; },
   // server objects (integration test lifecycle)
   server, wss,
   // constants

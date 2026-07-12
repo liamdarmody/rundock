@@ -432,6 +432,17 @@ class SearchIndex {
     this.db.prepare('DELETE FROM files WHERE path = ?').run(relPath);
   }
 
+  /** Most recently modified files (the palette's empty-query state). */
+  recentFiles(limit = 8) {
+    return this.db.prepare(`
+      SELECT path, title, tags, mtime_ms, created_ms FROM files
+      ORDER BY mtime_ms DESC LIMIT ?
+    `).all(Math.min(limit, 50)).map(r => ({
+      type: 'file', path: r.path, title: r.title, tags: JSON.parse(r.tags),
+      mtimeMs: r.mtime_ms, createdMs: r.created_ms, matchType: 'recent',
+    }));
+  }
+
   _indexFile(rootDir, rel, st) {
     let content;
     try { content = fs.readFileSync(path.join(rootDir, rel), 'utf-8'); } catch (e) { return; }
