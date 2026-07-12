@@ -21,6 +21,25 @@ describe('editor round-trip: existing constructs (harness smoke)', () => {
     assert.equal(await roundTrip(src), src);
   });
 
+  test('ordered lists with 10+ items keep unpadded numbers', async () => {
+    // Regression: tiptap-markdown left-pads ordered-list numbers so
+    // multi-digit lists align (" 1." ... "10."), which drifted every 10+
+    // item list on every save. SoftOrderedList serializes unpadded.
+    const items = Array.from({ length: 12 }, (_, i) => `${i + 1}. Item ${i + 1}`);
+    const src = items.join('\n');
+    assert.equal(await roundTrip(src), src);
+  });
+
+  test('the file\'s trailing newline survives the round-trip', async () => {
+    // Regression: markdown parsing swallows final newlines, so every save
+    // stripped the POSIX trailing newline. The pipeline now captures the
+    // trailing newline run and re-appends it on serialize.
+    const src = '# Title\n\nBody text.\n';
+    assert.equal(await roundTrip(src), src);
+    const multi = '# Title\n\nBody text.\n\n\n';
+    assert.equal(await roundTrip(multi), multi);
+  });
+
   test('blank line between frontmatter and body survives the round-trip', async () => {
     // Regression: extractFrontmatter used to leave the separator blank line
     // in the body, where markdown parsing swallowed it, so every save of a
