@@ -231,13 +231,16 @@ const CSS = `
   cursor: col-resize;
 }
 .review-sidebar.visible {
-  transition: border-left-color 120ms ease 0s;
+  transition: border-left-color 120ms ease;
 }
-.review-sidebar:has(.review-resize-handle:hover) {
+/* Classes set by the panel (hover intent timed in JS): edge-hover after
+   300ms of genuine hover; edge-drag while the button is held. Class-based
+   rather than :has() — Chromium's :has() invalidation proved unreliable
+   for pseudo-state changes here (stale computed colour after release). */
+.review-sidebar.edge-hover {
   border-left-color: var(--text-2);
-  transition-delay: 300ms;
 }
-.review-sidebar:has(.review-resize-handle.dragging) {
+.review-sidebar.edge-drag {
   border-left-color: var(--accent, #E87A5A);
   transition: none;
 }

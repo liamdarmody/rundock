@@ -421,14 +421,24 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
   function attachResizeHandle() {
     const handle = el('div', 'review-resize-handle');
     handle.title = 'Drag to resize';
+    // Hover intent (300ms) and drag state set classes on the panel itself,
+    // recolouring its own edge border: one edge, one line, no :has().
+    let hoverTimer = null;
+    handle.addEventListener('mouseenter', () => {
+      hoverTimer = setTimeout(() => sidebar.classList.add('edge-hover'), 300);
+    });
+    handle.addEventListener('mouseleave', () => {
+      clearTimeout(hoverTimer);
+      sidebar.classList.remove('edge-hover');
+    });
     handle.addEventListener('mousedown', (e) => {
       e.preventDefault();
-      handle.classList.add('dragging');
+      sidebar.classList.add('edge-drag');
       const startX = e.clientX;
       const startW = sidebarWidth;
       const onMove = (ev) => { sidebarWidth = applyWidth(startW + (startX - ev.clientX)); };
       const onUp = () => {
-        handle.classList.remove('dragging');
+        sidebar.classList.remove('edge-drag');
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
         try { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth)); } catch { /* private mode */ }
