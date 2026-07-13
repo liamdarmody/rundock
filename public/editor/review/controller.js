@@ -165,12 +165,15 @@ export function createReviewController({ editor, endmatter, author = 'me', now =
   // node surgery helpers
   // ------------------------------------------------------------------
 
+  // Returns the range the replacement occupies in the new document, so the
+  // UI can flash exactly what changed (zero-width for pure deletions).
   function replaceRangeWithText(from, to, text) {
     editor.chain().command(({ tr, state }) => {
       if (text) tr.replaceWith(from, to, state.schema.text(text));
       else tr.delete(from, to);
       return true;
     }).run();
+    return { from, to: from + (text ? text.length : 0) };
   }
 
   function ensureSuggestionEntry(id, node) {
@@ -201,13 +204,13 @@ export function createReviewController({ editor, endmatter, author = 'me', now =
     if (node.type.name === 'criticInsert') replacement = accept ? node.attrs.content : '';
     if (node.type.name === 'criticDelete') replacement = accept ? '' : node.attrs.content;
     if (node.type.name === 'criticSubstitution') replacement = accept ? node.attrs.to : node.attrs.from;
-    replaceRangeWithText(pos, end, replacement);
+    const applied = replaceRangeWithText(pos, end, replacement);
     const entryId = node.attrs.id || nextId('s');
     const entry = ensureSuggestionEntry(entryId, node);
     entry.verdict = verdict;
     entry.decidedAt = now();
     touch();
-    return true;
+    return applied;
   }
 
   const accept = (locator) => applyVerdict(locator, 'accepted');
@@ -220,8 +223,7 @@ export function createReviewController({ editor, endmatter, author = 'me', now =
     const hit = locate(locator);
     if (!hit || hit.node.type.name !== 'criticHighlight') return false;
     if (highlightIsAnchor(hit.pos, hit.node)) return false;
-    replaceRangeWithText(hit.pos, hit.pos + hit.node.nodeSize, hit.node.attrs.content);
-    return true;
+    return replaceRangeWithText(hit.pos, hit.pos + hit.node.nodeSize, hit.node.attrs.content);
   }
 
   // ------------------------------------------------------------------
@@ -235,14 +237,14 @@ export function createReviewController({ editor, endmatter, author = 'me', now =
     const highlight = pairedHighlight(pos);
     const from = highlight ? highlight.pos : pos;
     const to = pos + node.nodeSize;
-    replaceRangeWithText(from, to, highlight ? highlight.node.attrs.content : '');
+    const applied = replaceRangeWithText(from, to, highlight ? highlight.node.attrs.content : '');
     const entryId = node.attrs.id || nextId('c');
     const entry = data.comments[entryId] || (data.comments[entryId] = {});
     if (entry.body == null && node.attrs.content) entry.body = node.attrs.content;
     entry.resolved = true;
     entry.resolvedAt = now();
     touch();
-    return true;
+    return applied;
   }
 
   function reply(parentId, text) {

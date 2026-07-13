@@ -9,7 +9,7 @@
 // the sidebar column is sticky inside the pane's scroll container.
 
 import { openWorkspaceLocation } from '../review/deep-link-shim.js';
-import { createComposingPlugin, composingKey, setComposingRange, getComposingRange } from '../review/composing-decoration.js';
+import { createComposingPlugin, composingKey, setComposingRange, getComposingRange, createFlashPlugin, flashKey, flashRange } from '../review/composing-decoration.js';
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -71,7 +71,15 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
   const PANEL_INSET = 24;
   const isOverlay = () => (typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 1000px)').matches);
   const updateLayout = () => {
-    if (isOverlay()) { sidebar.style.maxHeight = ''; sidebar.style.marginRight = ''; return; }
+    if (isOverlay()) {
+      sidebar.style.maxHeight = '';
+      sidebar.style.marginRight = '';
+      // Overlay top derives from where the pane actually starts (under the
+      // header) rather than a guessed constant.
+      sidebar.style.top = `${Math.max(0, paneElement.getBoundingClientRect().top) + 12}px`;
+      return;
+    }
+    sidebar.style.top = '';
     const h = paneElement.clientHeight - PANEL_INSET * 2;
     if (h > 0) sidebar.style.maxHeight = `${h}px`;
     // Right alignment with the header's save status: the pane's padding is
@@ -122,6 +130,7 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
   // (the editor blurs, so the native selection disappears) and the plugin
   // maps the range through any document edits.
   editor.registerPlugin(createComposingPlugin());
+  editor.registerPlugin(createFlashPlugin());
 
   const save = () => { if (typeof onRequestSave === 'function') onRequestSave(); };
 
@@ -170,11 +179,17 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     return { wrap, ta };
   }
 
-  // Settle flash on the block a verdict just changed, so every action
-  // visibly causes its effect.
-  function flashAt(pos) {
+  // Settle flash on exactly what a verdict changed, so every action visibly
+  // causes its effect. Ops return the applied range; a zero-width result
+  // (pure deletion) falls back to flashing the containing block.
+  function flashApplied(result) {
+    if (!result || typeof result !== 'object') return;
+    if (result.to > result.from) {
+      flashRange(editor, result);
+      return;
+    }
     try {
-      const clamped = Math.max(1, Math.min(pos, editor.state.doc.content.size - 1));
+      const clamped = Math.max(1, Math.min(result.from, editor.state.doc.content.size - 1));
       const dom = editor.view.domAtPos(clamped);
       const target = dom.node.nodeType === 1 ? dom.node : dom.node.parentElement;
       if (target && target.classList) {
@@ -306,12 +321,14 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     const acceptBtn = el('button', 'review-btn accept', 'Accept');
     acceptBtn.type = 'button';
     acceptBtn.onclick = () => departThen(card, () => {
-      if (controller.accept(locatorFor(item))) { flashAt(item.pos); decidedThisSession = true; }
+      const applied = controller.accept(locatorFor(item));
+      if (applied) { flashApplied(applied); decidedThisSession = true; }
     });
     const rejectBtn = el('button', 'review-btn reject', 'Reject');
     rejectBtn.type = 'button';
     rejectBtn.onclick = () => departThen(card, () => {
-      if (controller.reject(locatorFor(item))) { flashAt(item.pos); decidedThisSession = true; }
+      const applied = controller.reject(locatorFor(item));
+      if (applied) { flashApplied(applied); decidedThisSession = true; }
     });
     row.appendChild(acceptBtn);
     row.appendChild(rejectBtn);
@@ -363,7 +380,8 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     const resolveBtn = el('button', 'review-btn resolve', 'Resolve');
     resolveBtn.type = 'button';
     resolveBtn.onclick = () => departThen(card, () => {
-      if (controller.resolve(locatorFor(item))) { flashAt(item.pos); decidedThisSession = true; }
+      const applied = controller.resolve(locatorFor(item));
+      if (applied) { flashApplied(applied); decidedThisSession = true; }
     });
     row.appendChild(replyBtn);
     row.appendChild(resolveBtn);
@@ -385,7 +403,8 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     const releaseBtn = el('button', 'review-btn resolve', 'Remove highlight');
     releaseBtn.type = 'button';
     releaseBtn.onclick = () => departThen(card, () => {
-      if (controller.release(locatorFor(item))) { flashAt(item.pos); decidedThisSession = true; }
+      const applied = controller.release(locatorFor(item));
+      if (applied) { flashApplied(applied); decidedThisSession = true; }
     });
     row.appendChild(releaseBtn);
     card.appendChild(row);
@@ -517,6 +536,7 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
       paneElement.removeEventListener('click', onConstructClick);
       if (resizeObserver) resizeObserver.disconnect();
       try { editor.unregisterPlugin(composingKey); } catch { /* editor may be gone */ }
+      try { editor.unregisterPlugin(flashKey); } catch { /* editor may be gone */ }
       sidebar.remove();
       pill.remove();
       paneElement.classList.remove('review-active');

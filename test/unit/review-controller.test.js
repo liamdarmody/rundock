@@ -187,7 +187,7 @@ describe('id-less constructs and orphan handling', () => {
     await withReview(src, ({ review, save }) => {
       const ins = review.listItems().find((i) => i.type === 'criticInsert');
       assert.equal(ins.id, null);
-      assert.equal(review.accept(ins.id != null ? ins.id : { pos: ins.pos }), true);
+      assert.ok(review.accept(ins.id != null ? ins.id : { pos: ins.pos }), 'verdict applies');
       const out = save();
       assert.ok(out.includes('A {==hl==} B ins C {--del--} D.'), out);
       assert.match(out, /verdict: accepted/);
@@ -206,7 +206,7 @@ describe('id-less constructs and orphan handling', () => {
       review.resolve('c1');
       const orphan = review.listItems().find((i) => i.kind === 'highlight');
       assert.ok(orphan, 'orphan highlight must appear in listItems');
-      assert.equal(review.release({ pos: orphan.pos }), true);
+      assert.ok(review.release({ pos: orphan.pos }), 'orphan release applies');
       const out = save();
       assert.ok(out.includes('Note this gap  here.'), out);
       assert.ok(!out.includes('{=='), 'highlight construct must be gone');
@@ -234,7 +234,7 @@ describe('id-less constructs and orphan handling', () => {
     await withReview(src, ({ review, save }) => {
       const first = review.listItems()[0];
       const locator = { pos: first.pos, type: first.type, content: first.text };
-      assert.equal(review.reject(locator), true);
+      assert.ok(review.reject(locator), 'first call applies');
       assert.equal(review.reject(locator), false, 'second call with a stale locator must refuse');
       const out = save();
       assert.ok(out.includes('{++bb++}'), 'the neighbouring construct must survive');

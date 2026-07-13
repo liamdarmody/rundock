@@ -47,3 +47,42 @@ export function setComposingRange(editor, range) {
 export function getComposingRange(editor) {
   return composingKey.getState(editor.state);
 }
+
+// Settle-flash decoration: briefly marks the exact range a verdict changed
+// (rather than its whole block). Same mapped-range mechanics as composing.
+export const flashKey = new PluginKey('rundockReviewFlash');
+
+export function createFlashPlugin() {
+  return new Plugin({
+    key: flashKey,
+    state: {
+      init: () => null,
+      apply(tr, value) {
+        const meta = tr.getMeta(flashKey);
+        if (meta !== undefined) return meta;
+        if (value && tr.docChanged) {
+          const from = tr.mapping.map(value.from, -1);
+          const to = tr.mapping.map(value.to, 1);
+          return from < to ? { from, to } : null;
+        }
+        return value;
+      },
+    },
+    props: {
+      decorations(state) {
+        const range = flashKey.getState(state);
+        if (!range || range.from >= range.to) return null;
+        return DecorationSet.create(state.doc, [
+          Decoration.inline(range.from, range.to, { class: 'critic-flash-range' }),
+        ]);
+      },
+    },
+  });
+}
+
+export function flashRange(editor, range, duration = 1200) {
+  editor.view.dispatch(editor.state.tr.setMeta(flashKey, range));
+  setTimeout(() => {
+    try { editor.view.dispatch(editor.state.tr.setMeta(flashKey, null)); } catch { /* editor gone */ }
+  }, duration);
+}
