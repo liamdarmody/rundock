@@ -230,19 +230,17 @@ const CSS = `
   width: 6px;
   cursor: col-resize;
 }
-.review-sidebar.visible {
-  transition: border-left-color 120ms ease;
-}
 /* Classes set by the panel (hover intent timed in JS): edge-hover after
-   300ms of genuine hover; edge-drag while the button is held. Class-based
-   rather than :has() — Chromium's :has() invalidation proved unreliable
-   for pseudo-state changes here (stale computed colour after release). */
+   300ms of genuine hover; edge-drag while the button is held. Colour
+   changes are INSTANT by design: a CSS transition on this edge wedged in
+   Chromium (a CSSTransition frozen at currentTime 0 pinned the accent
+   colour after release), and a 120ms fade is not worth machinery that can
+   freeze. */
 .review-sidebar.edge-hover {
   border-left-color: var(--text-2);
 }
 .review-sidebar.edge-drag {
   border-left-color: var(--accent, #E87A5A);
-  transition: none;
 }
 .review-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--border); }
 .review-title { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); }
