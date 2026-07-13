@@ -420,6 +420,45 @@ describe('findDirectReportMatch', () => {
   });
 });
 
+describe('findOffRosterWorkspaceMatch', () => {
+  // The impersonation gap: an Agent tool call explicitly naming a workspace
+  // agent OUTSIDE the caller's direct reports used to fall through silently,
+  // and Claude Code spawned a generic subagent wearing that agent's name.
+  // For runtime: codex agents this silently bypassed the runtime choice.
+  test('explicit subagent_type naming an off-roster workspace agent matches', () => {
+    useWorkspace({ agents: standardTeam() });
+    // Des reports to chief-of-staff, not to Penn.
+    const byName = srv.findOffRosterWorkspaceMatch('content-lead', { subagent_type: 'lead-designer', prompt: 'design this' });
+    assert.strictEqual(byName.id, 'lead-designer');
+    const byDisplay = srv.findOffRosterWorkspaceMatch('content-lead', { subagent_type: 'Des', prompt: 'design this' });
+    assert.strictEqual(byDisplay.id, 'lead-designer');
+  });
+
+  test('direct reports are not claimed (the interception path owns them)', () => {
+    useWorkspace({ agents: standardTeam() });
+    assert.strictEqual(srv.findOffRosterWorkspaceMatch('chief-of-staff', { subagent_type: 'content-lead', prompt: 'x' }), null);
+    assert.strictEqual(srv.findOffRosterWorkspaceMatch('content-lead', { subagent_type: 'content-analyst', prompt: 'x' }), null);
+  });
+
+  test('built-in and unknown subagent types pass through untouched', () => {
+    useWorkspace({ agents: standardTeam() });
+    assert.strictEqual(srv.findOffRosterWorkspaceMatch('content-lead', { subagent_type: 'general-purpose', prompt: 'search files' }), null);
+    assert.strictEqual(srv.findOffRosterWorkspaceMatch('content-lead', { subagent_type: 'Explore', prompt: 'x' }), null);
+  });
+
+  test('prompt-only mentions of off-roster agents never match (explicit path only)', () => {
+    useWorkspace({ agents: standardTeam() });
+    assert.strictEqual(srv.findOffRosterWorkspaceMatch('content-lead', { prompt: 'Review what Des produced last week' }), null);
+    assert.strictEqual(srv.findOffRosterWorkspaceMatch('content-lead', { subagent_type: 'general-purpose', prompt: 'Review what lead-designer produced' }), null);
+  });
+
+  test('the caller itself never matches', () => {
+    useWorkspace({ agents: standardTeam() });
+    assert.strictEqual(srv.findOffRosterWorkspaceMatch('content-lead', { subagent_type: 'content-lead', prompt: 'x' }), null);
+    assert.strictEqual(srv.findOffRosterWorkspaceMatch('content-lead', { subagent_type: 'Penn', prompt: 'x' }), null);
+  });
+});
+
 describe('agent runtime field', () => {
   test('runtime: codex is parsed onto the agent; model stays unset unless frontmatter sets one', () => {
     useWorkspace({ agents: {

@@ -178,6 +178,61 @@ describe('Agent-tool interception', () => {
     h.reapConvo(convoId);
   });
 
+  test('off-roster Agent tool target is soft-blocked: no impersonation, caller resumed with a corrective message', async () => {
+    // The impersonation gap: Penn (content-lead) explicitly names Des
+    // (lead-designer), who reports to chief-of-staff, not to Penn. Pre-fix
+    // this fell through to Claude Code, which spawned a generic subagent
+    // wearing Des's name. Post-fix the call is blocked and Penn is resumed
+    // with a corrective system message.
+    const convoId = h.freshConvoId('int');
+    h.clearInvocations();
+    h.writeScenario([
+      {
+        match: { agent: 'content-lead', promptIncludes: 'offroster please' },
+        turn: [
+          { text: 'Handing to Des.' },
+          { agentTool: { subagent_type: 'lead-designer', prompt: 'offroster design brief' } },
+        ],
+      },
+      {
+        // Matching on all three strings proves the corrective prompt reached
+        // the resumed caller with the reason and the blocked target named.
+        match: { agent: 'content-lead', promptIncludes: ['[SYSTEM: delegation-blocked]', 'not one of your direct reports', 'lead-designer'] },
+        turn: [{ text: 'Understood: Des is outside my team, routing back.' }],
+      },
+    ]);
+
+    client.send({ type: 'chat', conversationId: convoId, agent: 'content-lead', content: 'offroster please' });
+
+    // The user sees the block explained
+    const { msg: info } = await client.waitFor(m => m.type === 'system' && m.subtype === 'info' && m._conversationId === convoId && /Blocked a handoff/.test(m.content || ''), { label: 'block pill' });
+    assert.match(info.content, /Des/);
+
+    // The caller is resumed and answers the corrective prompt
+    const { msg: result } = await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'content-lead' && /routing back/.test(m.result || ''), { label: 'resumed caller result' });
+    assert.ok(result);
+
+    const invs = h.readInvocations();
+    // Des was never spawned: no impersonation, no real delegation either
+    assert.strictEqual(invs.find(i => i.agent === 'lead-designer'), undefined, 'off-roster target must not be spawned');
+    // The caller was resumed with its own session (the corrective prompt's
+    // content is proven by the scenario match above: the resumed stub only
+    // answers when the prompt carries the reason and the blocked target)
+    const resumed = invs.find(i => i.agent === 'content-lead' && i.resume);
+    assert.ok(resumed, 'caller resumed via --resume');
+    assert.ok(resumed.resume.includes('stub-content-lead'), 'resumed the caller session');
+
+    // No agent_switch ever fired: the conversation never left Penn
+    const switches = client.messages.filter(m => m.type === 'system' && m.subtype === 'agent_switch' && m._conversationId === convoId);
+    assert.deepStrictEqual(switches, []);
+
+    // Penn's pre-block prose survived into the transcript
+    const t = transcript(convoId);
+    assert.ok(t.find(e => e.agent === 'content-lead' && e.text.includes('Handing to Des.')));
+
+    h.reapConvo(convoId);
+  });
+
   test('COMPLETE gate: intercepted delegate finishing restarts the parent via --resume, parked silently, with sanitized output injected', async () => {
     const convoId = h.freshConvoId('int');
     h.clearInvocations();
