@@ -55,7 +55,11 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .nav-separator { width: 24px; height: 1px; background: var(--border); margin: 8px 0; }
 
 /* Sidebar */
-.sidebar { width: 280px; background: var(--surface); border-right: none; display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; box-shadow: 1px 0 8px rgba(0,0,0,0.08); z-index: 1; }
+.sidebar { width: var(--sidebar-width, 280px); background: var(--surface); border-right: none; display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; box-shadow: 1px 0 8px rgba(0,0,0,0.08); z-index: 1; position: relative; }
+/* Drag-resize handle on the sidebar's inner edge; same interaction grammar
+   as the file editor's review panel (cursor, hover affordance, clamp). */
+.sidebar-resize-handle { position: absolute; right: 0; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 3; }
+.sidebar-resize-handle:hover, .sidebar-resize-handle.dragging { border-right: 2px solid var(--accent); }
 .sidebar > div { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 .sidebar-header { padding: 24px 16px 8px; }
 .sidebar-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); }

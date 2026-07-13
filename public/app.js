@@ -2668,7 +2668,45 @@ document.addEventListener('DOMContentLoaded', () => {
     const atBottom = m.scrollHeight - m.scrollTop - m.clientHeight < 80;
     userScrolledUp = !atBottom;
   });
+  initSidebarResize();
 });
+
+// Sidebar width: drag-adjustable via a handle on the inner edge, clamped,
+// persisted locally as a UI preference. One width shared by every sidebar
+// view (team, conversations, skills, files). Same interaction grammar as
+// the file editor's review panel resize.
+const SIDEBAR_WIDTH_KEY = 'rundock.sidebarWidth';
+const SIDEBAR_MIN_W = 200;
+const SIDEBAR_MAX_W = 480;
+function initSidebarResize() {
+  const sidebar = document.querySelector('.sidebar');
+  if (!sidebar) return;
+  const applySidebarWidth = (w) => {
+    const clamped = Math.max(SIDEBAR_MIN_W, Math.min(SIDEBAR_MAX_W, w || 280));
+    document.documentElement.style.setProperty('--sidebar-width', `${clamped}px`);
+    return clamped;
+  };
+  let width = applySidebarWidth(Number(localStorage.getItem(SIDEBAR_WIDTH_KEY)) || 280);
+  const handle = document.createElement('div');
+  handle.className = 'sidebar-resize-handle';
+  handle.title = 'Drag to resize';
+  handle.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    handle.classList.add('dragging');
+    const startX = e.clientX;
+    const startW = width;
+    const onMove = (ev) => { width = applySidebarWidth(startW + (ev.clientX - startX)); };
+    const onUp = () => {
+      handle.classList.remove('dragging');
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      try { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width)); } catch (e2) { /* private mode */ }
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+  sidebar.appendChild(handle);
+}
 
 // ===== 10. VIEWS & NAVIGATION =====
 
