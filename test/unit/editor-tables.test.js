@@ -121,6 +121,21 @@ describe('tables: strict byte-for-byte round-trip (unedited)', () => {
     assert.equal(await roundTrip(src), src);
   });
 
+  test('intra-table indentation bytes are preserved', async () => {
+    // Regression: the container-prefix-free capture stripped ALL leading
+    // whitespace per line, not just the container's share, dropping indent
+    // bytes that were previously byte-exact.
+    const cases = [
+      '| a | b |\n  |---|---|\n| 1 | 2 |',
+      '| a | b |\n|---|---|\n   | 1 | 2 |',
+      '  | a | b |\n  |---|---|\n  | 1 | 2 |',
+      '> | a | b |\n>   |---|---|\n> | 1 | 2 |',
+    ];
+    for (const src of cases) {
+      assert.equal(await roundTrip(src), src);
+    }
+  });
+
   test('undo restores byte-exact source even for non-canonical cell bytes', async () => {
     // Regression: the undo transaction itself re-marked the cell dirty, so
     // undo re-captured the cell (`_one_` -> `*one*`) instead of re-emitting

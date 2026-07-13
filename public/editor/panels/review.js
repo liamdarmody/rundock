@@ -23,9 +23,13 @@ const TYPE_LABEL = {
   criticSubstitution: 'Replace',
 };
 
-// Constructs without {#id} anchors are addressed by document position.
+// Constructs without {#id} anchors are addressed by position PLUS identity
+// (type + content): positions go stale after every operation, and the
+// controller refuses a locator whose identity no longer matches.
 function locatorFor(item) {
-  return item.id != null ? item.id : { pos: item.pos };
+  if (item.id != null) return item.id;
+  const content = item.type === 'criticSubstitution' ? `${item.from}~>${item.text}` : item.text;
+  return { pos: item.pos, type: item.type, content };
 }
 
 export function attachReviewPanel({ paneElement, editor, controller, onRequestSave = null }) {

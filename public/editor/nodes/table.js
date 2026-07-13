@@ -80,7 +80,15 @@ export function registerTableMarkdownIt(md) {
         if (tok.type === 'table_open' && tok.map) {
           const lines = [];
           for (let l = tok.map[0]; l < tok.map[1]; l++) {
-            lines.push(state.src.slice(state.bMarks[l] + state.tShift[l], state.eMarks[l]));
+            // bMarks+tShift strips the container prefix AND the line's own
+            // indentation; only the container's share must go (the
+            // serializer re-applies it as the block delimiter). The line's
+            // intra-container indent is sCount minus the container's
+            // required indent, re-emitted as spaces so indentation bytes
+            // survive the round-trip. (Tab-indented lines re-emit as the
+            // equivalent spaces: column-accurate, byte-approximate.)
+            const extra = Math.max(0, (state.sCount[l] || 0) - (state.blkIndent || 0));
+            lines.push(' '.repeat(extra) + state.src.slice(state.bMarks[l] + state.tShift[l], state.eMarks[l]));
           }
           tok.attrSet('data-src', encodeURIComponent(lines.join('\n')));
           break;

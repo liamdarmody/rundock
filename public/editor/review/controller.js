@@ -80,15 +80,27 @@ export function createReviewController({ editor, endmatter, author = 'liam', now
     return hit;
   }
 
-  // Operations accept either an anchor id ('s1') or a position locator
-  // ({ pos }) for id-less constructs — sidebar items always carry pos.
+  // Operations accept either an anchor id ('s1') or a position locator for
+  // id-less constructs — sidebar items always carry pos, type, and text.
+  // Position locators verify IDENTITY, not just position: every operation
+  // shifts positions, so a stale locator (double-fired handler, cached
+  // listItems snapshot) must refuse rather than hit whichever construct
+  // moved into that slot.
   function locate(locator) {
     if (typeof locator === 'string') return findConstruct(locator);
-    if (locator && typeof locator.pos === 'number') {
-      const node = editor.state.doc.nodeAt(locator.pos);
-      if (node && node.type.name.startsWith('critic')) return { node, pos: locator.pos };
+    if (!locator || !Number.isInteger(locator.pos) || locator.pos < 0) return null;
+    if (locator.pos >= editor.state.doc.content.size) return null;
+    let node = null;
+    try { node = editor.state.doc.nodeAt(locator.pos); } catch { return null; }
+    if (!node || !node.type.name.startsWith('critic')) return null;
+    if (locator.type && node.type.name !== locator.type) return null;
+    if (locator.content != null) {
+      const nodeContent = node.type.name === 'criticSubstitution'
+        ? `${node.attrs.from}~>${node.attrs.to}`
+        : node.attrs.content;
+      if (nodeContent !== locator.content) return null;
     }
-    return null;
+    return { node, pos: locator.pos };
   }
 
   // The highlight paired with a comment is its immediate previous sibling.
@@ -194,11 +206,13 @@ export function createReviewController({ editor, endmatter, author = 'liam', now
   const accept = (locator) => applyVerdict(locator, 'accepted');
   const reject = (locator) => applyVerdict(locator, 'rejected');
 
-  // Releases a highlight back to plain text (used for orphan highlights,
-  // which otherwise have no path out of the document).
+  // Releases an ORPHAN highlight back to plain text. A highlight anchoring
+  // a live comment is refused: resolve the comment instead (which releases
+  // its anchor as part of the resolution).
   function release(locator) {
     const hit = locate(locator);
     if (!hit || hit.node.type.name !== 'criticHighlight') return false;
+    if (highlightIsAnchor(hit.pos, hit.node)) return false;
     replaceRangeWithText(hit.pos, hit.pos + hit.node.nodeSize, hit.node.attrs.content);
     return true;
   }
@@ -226,9 +240,12 @@ export function createReviewController({ editor, endmatter, author = 'liam', now
 
   function reply(parentId, text) {
     if (!text) return false;
-    // The parent must exist (inline construct or endmatter entry): a reply
-    // to a phantom id would persist an unreviewable orphan thread.
-    if (!data.comments[parentId] && !findConstruct(parentId)) return false;
+    // The parent must be a COMMENT (inline construct or endmatter entry):
+    // replies to suggestion/highlight ids or phantom ids would persist
+    // threads nothing ever renders.
+    const construct = findConstruct(parentId);
+    const isComment = (construct && construct.node.type.name === 'criticComment') || !!data.comments[parentId];
+    if (!isComment) return false;
     const id = nextId('c');
     data.comments[id] = { body: text, re: parentId, by: author, at: now() };
     touch();

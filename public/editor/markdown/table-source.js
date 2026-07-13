@@ -15,10 +15,14 @@
 // If the column count changed, per-span reconstruction is no longer
 // meaningful; the caller falls back to canonical style for the whole table.
 
-// Splits one table line into { prefix, cells, suffix } where cells are
-// { raw, leading, content, trailing } and raw excludes the pipe delimiters.
-// Backslash escapes the next character, so \| does not split (GFM).
-export function splitRow(line) {
+// Splits one table line into { indent, prefix, cells, suffix } where cells
+// are { raw, leading, content, trailing } and raw excludes the pipe
+// delimiters. Leading whitespace is captured as indent (GFM allows up to 3
+// spaces) so it never reads as a phantom first cell. Backslash escapes the
+// next character, so \| does not split (GFM).
+export function splitRow(rawLine) {
+  const indent = (rawLine.match(/^[ \t]*/) || [''])[0];
+  const line = rawLine.slice(indent.length);
   const hasLeadingPipe = line.startsWith('|');
   let i = hasLeadingPipe ? 1 : 0;
   const prefix = hasLeadingPipe ? '|' : '';
@@ -50,7 +54,7 @@ export function splitRow(line) {
     const content = raw.slice(leading.length, raw.length - trailing.length);
     return { raw, leading, content, trailing };
   });
-  return { prefix, cells, suffix };
+  return { indent, prefix, cells, suffix };
 }
 
 // Parses a table's raw source slice into rows with exact spans.
@@ -64,10 +68,10 @@ export function parseTableSource(src) {
   if (lines.length < 2) return null;
   const header = splitRow(lines[0]);
   const delimiter = lines[1];
-  const rows = [{ line: lines[0], cells: header.cells, prefix: header.prefix, suffix: header.suffix }];
+  const rows = [{ line: lines[0], cells: header.cells, indent: header.indent, prefix: header.prefix, suffix: header.suffix }];
   for (let i = 2; i < lines.length; i++) {
     const parsed = splitRow(lines[i]);
-    rows.push({ line: lines[i], cells: parsed.cells, prefix: parsed.prefix, suffix: parsed.suffix });
+    rows.push({ line: lines[i], cells: parsed.cells, indent: parsed.indent, prefix: parsed.prefix, suffix: parsed.suffix });
   }
   return { lines, rows, delimiter, cols: header.cells.length };
 }
@@ -138,6 +142,7 @@ export function rebuildTable(source, grid) {
       if (gridCore.every((c) => !c.changed) && extras.every((c) => !c.changed)) {
         out.push(srcRow.line);
       } else {
+        const indent = srcRow.indent || '';
         const prefix = srcRow.prefix !== '' ? srcRow.prefix : '|';
         const suffix = srcRow.suffix !== '' ? srcRow.suffix : '|';
         const parts = [];
@@ -150,7 +155,7 @@ export function rebuildTable(source, grid) {
         for (const c of extras) {
           if (c.changed) parts.push(` ${c.content} `);
         }
-        out.push(prefix + parts.join('|') + suffix);
+        out.push(indent + prefix + parts.join('|') + suffix);
       }
     } else {
       out.push(canonicalRow(row.cells.map((c) => c.content)));

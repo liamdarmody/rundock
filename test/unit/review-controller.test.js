@@ -216,6 +216,48 @@ describe('id-less constructs and orphan handling', () => {
       assert.ok(!save().includes('c999'), 'no orphan thread persisted');
     });
   });
+
+  test('replying to a suggestion or highlight id is refused', async () => {
+    const src = 'Take {~~this~>that~~}{#s1} word {==here==}{#c9}.';
+    await withReview(src, ({ review, save }) => {
+      assert.equal(review.reply('s1', 'why though?'), false);
+      assert.equal(review.reply('c9', 'why though?'), false);
+      assert.ok(!save().includes('re:'), 'no orphan threads persisted');
+    });
+  });
+
+  test('a stale position locator is refused, never applied to a shifted construct', async () => {
+    const src = 'X {++aa++}{++bb++} Y.';
+    await withReview(src, ({ review, save }) => {
+      const first = review.listItems()[0];
+      const locator = { pos: first.pos, type: first.type, content: first.text };
+      assert.equal(review.reject(locator), true);
+      assert.equal(review.reject(locator), false, 'second call with a stale locator must refuse');
+      const out = save();
+      assert.ok(out.includes('{++bb++}'), 'the neighbouring construct must survive');
+    });
+  });
+
+  test('out-of-range position locators are refused, not thrown', async () => {
+    await withReview(DOC, ({ review }) => {
+      assert.equal(review.accept({ pos: 99999 }), false);
+      assert.equal(review.accept({ pos: -1 }), false);
+      assert.equal(review.accept({ pos: NaN }), false);
+    });
+  });
+
+  test('release refuses a highlight that anchors a live comment', async () => {
+    const src = 'Note {==this==}{>>why<<}{#c1} here.';
+    await withReview(src, ({ editor, review, save }) => {
+      let hlPos = null;
+      editor.state.doc.descendants((node, pos) => {
+        if (node.type.name === 'criticHighlight') hlPos = pos;
+        return true;
+      });
+      assert.equal(review.release({ pos: hlPos, type: 'criticHighlight', content: 'this' }), false);
+      assert.ok(save().includes('{==this==}{>>why<<}{#c1}'), 'anchored pair must stay intact');
+    });
+  });
 });
 
 describe('Done-Reviewing handback', () => {
