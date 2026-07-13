@@ -296,13 +296,13 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     return card;
   }
 
-  function renderCommentCard(item) {
+  function renderCommentCard(item, number) {
     const card = el('div', 'review-card comment');
     const head = el('div', 'review-card-head');
-    // The badge shows the number from the anchor id (c9 -> 9), matching the
-    // inline chip and whatever agents call the comment in conversation.
-    const m = typeof item.id === 'string' && item.id.match(/^c(\d+)$/);
-    head.appendChild(el('span', 'review-badge comment-badge', m ? m[1] : '•'));
+    // Numbered top-to-bottom, matching the inline chip's CSS counter. The
+    // number is position, not identity: cross-party references quote the
+    // comment text, and wire-format ids never render.
+    head.appendChild(el('span', 'review-badge comment-badge', String(number)));
     head.appendChild(authorBadge(item.meta));
     card.appendChild(head);
     if (item.anchor) {
@@ -441,10 +441,11 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
         body.appendChild(el('div', 'review-empty', 'No open review items. Select text and use Comment in the toolbar.'));
       }
     }
+    let commentNumber = 0;
     for (const item of items) {
       let card;
       if (item.kind === 'highlight') card = renderHighlightCard(item);
-      else if (item.kind === 'comment') card = renderCommentCard(item);
+      else if (item.kind === 'comment') card = renderCommentCard(item, ++commentNumber);
       else card = renderSuggestionCard(item);
       card.dataset.pos = String(item.pos);
       body.appendChild(card);
