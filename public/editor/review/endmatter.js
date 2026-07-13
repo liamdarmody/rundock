@@ -51,6 +51,11 @@ export function extractEndmatter(text) {
   if (fromNewline !== -1) idx = fromNewline + 1;
   if (idx === -1) return none;
 
+  // A '---' inside an unclosed code fence is fence content, not endmatter:
+  // an odd number of fence openers before it means the fence never closed.
+  const fenceCount = (text.slice(0, idx).match(/^(?:```|~~~)/gm) || []).length;
+  if (fenceCount % 2 === 1) return none;
+
   const raw = text.slice(idx);
   const yamlText = raw.slice(4); // past '---\n'
   let data = null;
@@ -70,6 +75,10 @@ export function extractEndmatter(text) {
 // buildEndmatter(data) -> the serialized block ('---\n' + YAML), or '' when
 // there is nothing to store. Sections without entries are pruned so a fully
 // resolved-and-cleared review leaves no endmatter behind.
+//
+// The block carries NO trailing newline: the pipeline's `trailing` field is
+// the single owner of end-of-file newlines. (yaml.dump always appends one;
+// leaving it in grew the file's newline run by one per review-op save.)
 export function buildEndmatter(data) {
   if (!hasReviewData(data)) return '';
   const pruned = {};
@@ -78,5 +87,5 @@ export function buildEndmatter(data) {
       pruned[key] = data[key];
     }
   }
-  return '---\n' + yaml.dump(pruned, { lineWidth: -1, quotingType: '"' });
+  return ('---\n' + yaml.dump(pruned, { lineWidth: -1, quotingType: '"' })).replace(/\n$/, '');
 }

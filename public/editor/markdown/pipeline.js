@@ -39,7 +39,12 @@ function splitTrailingNewlines(text) {
 }
 
 export function parseFile(rawMarkdown) {
-  const fm = extractFrontmatter(rawMarkdown);
+  // LF is the pipeline contract. The server already normalises CRLF on read
+  // (readNormalisedFile), so this only ever fires for content that bypassed
+  // it; half-supporting CRLF produced mixed-EOL output and blinded endmatter
+  // detection (which matches '\n---\n').
+  const normalised = typeof rawMarkdown === 'string' ? rawMarkdown.replace(/\r\n/g, '\n') : rawMarkdown;
+  const fm = extractFrontmatter(normalised);
   const fileSplit = splitTrailingNewlines(fm.body);
   const em = extractEndmatter(fileSplit.text);
   const bodySplit = splitTrailingNewlines(em.body);
@@ -60,9 +65,11 @@ export function serialiseFile(editor, parts = {}) {
   if (endmatterRaw) {
     // A review block that appears on a document that never had one needs a
     // separating blank line; an existing block reuses its original separator
-    // bytes (trailingBody). When the endmatter is cleared entirely, its
+    // bytes (trailingBody), and a document that is ONLY endmatter needs no
+    // separator at all. When the endmatter is cleared entirely, its
     // separator newlines go with it.
-    out += (parts.trailingBody || '\n\n') + endmatterRaw;
+    const separator = parts.trailingBody || (out ? '\n\n' : '');
+    out += separator + endmatterRaw;
   }
   out += parts.trailing || '';
   return out;
