@@ -333,6 +333,30 @@ describe('rosters and system prompt', () => {
     assert.ok(plain.includes('<!-- RUNDOCK:RETURN -->'));
   });
 
+  test('buildSystemPrompt: self-description is runtime-neutral (a Codex agent must not say "powered by Claude Code")', () => {
+    // Live finding: the base rules described Rundock as "powered by Claude
+    // Code" and a Codex agent said it verbatim. The identity line now names
+    // both runtimes and no agent claims a single one.
+    useWorkspace({ agents: standardTeam() });
+    const prompt = srv.buildSystemPrompt(srv.discoverAgents().find(a => a.id === 'content-lead'));
+    assert.ok(!prompt.includes('powered by Claude Code'), 'single-runtime claim removed');
+    assert.ok(prompt.includes('Claude Code') && prompt.includes('Codex'), 'both runtimes named');
+  });
+
+  test('buildSystemPrompt: injects the concrete review-annotation handle instead of a derivation rule', () => {
+    // Live finding: "by: <your agent name, lowercase>" parsed differently on
+    // GPT-5 (it wrote its ROLE). The concrete handle is now injected.
+    useWorkspace({ agents: standardTeam() });
+    const agents = srv.discoverAgents();
+    const penn = srv.buildSystemPrompt(agents.find(a => a.id === 'content-lead'));
+    assert.ok(penn.includes('Your review-annotation handle is: penn'), 'concrete handle stated');
+    assert.ok(penn.includes('by: penn'), 'metadata example uses the concrete handle');
+    assert.ok(!penn.includes('<your agent name'), 'derivation placeholder removed');
+    // displayName lowercased is the handle convention Claude agents settled on
+    const des = srv.buildSystemPrompt(agents.find(a => a.id === 'lead-designer'));
+    assert.ok(des.includes('Your review-annotation handle is: des'));
+  });
+
   test('buildSystemPrompt: knowledge mode text by default, code mode when state says so', () => {
     const dir = useWorkspace({ agents: standardTeam() });
     const agents = srv.discoverAgents();
