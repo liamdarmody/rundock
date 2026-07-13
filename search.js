@@ -32,7 +32,7 @@ const path = require('path');
 
 // Bumping this rebuilds every index on next open. That is the whole migration
 // story: rebuild, never migrate.
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2; // 2: review endmatter/CriticMarkup normalisation in file indexing
 
 const MAX_QUERY_LENGTH = 256;
 const MAX_QUERY_TOKENS = 12;
@@ -477,8 +477,10 @@ class SearchIndex {
     try { content = fs.readFileSync(path.join(rootDir, rel), 'utf-8'); } catch (e) { return; }
     const title = path.basename(rel, path.extname(rel));
     const tags = parseFrontmatterTags(content);
-    // Strip the frontmatter block from indexed content: tags live in their
-    // own column, and raw YAML in snippets reads as noise in results.
+    // Review annotations first (see normaliseReviewContent: order matters),
+    // then the frontmatter block: tags live in their own column, and raw
+    // YAML in snippets reads as noise in results.
+    content = normaliseReviewContent(content);
     if (content.startsWith('---')) {
       content = content.replace(/^---\r?\n[\s\S]*?\r?\n---(\r?\n|$)/, '');
     }
@@ -762,6 +764,33 @@ function createSearchIndex(opts) {
   return new SearchIndex(opts);
 }
 
+
+/**
+ * Normalise review annotations for indexing. The editor's review feature
+ * stores CriticMarkup constructs inline and metadata in a YAML endmatter
+ * block; agents are instructed to write the same. Raw construct syntax and
+ * endmatter YAML read as noise in search snippets (and by/at metadata is
+ * not content), so indexing flattens constructs to their text and drops the
+ * endmatter. Runs BEFORE the frontmatter strip: a file whose body begins
+ * with a lone --- line would otherwise have everything up to the
+ * endmatter's introducing --- eaten by the frontmatter regex.
+ */
+function normaliseReviewContent(content) {
+  // Drop the review endmatter: the last --- line whose following line opens
+  // a review section. Lightweight by design; indexing is not byte-critical.
+  const em = content.search(/(?:^|\r?\n)---\r?\n(?=(?:comments|suggestions|review):)/);
+  if (em !== -1) content = content.slice(0, em);
+  return content
+    .replace(/\}\{(?=[>+=~#-])/g, '} {') // adjacent constructs keep a word boundary
+    .replace(/\{~~([\s\S]*?)~>([\s\S]*?)~~\}/g, '$1 $2') // substitution: index old and new
+    .replace(/\{\+\+([\s\S]*?)\+\+\}/g, '$1')
+    .replace(/\{--([\s\S]*?)--\}/g, '$1')
+    .replace(/\{==([\s\S]*?)==\}/g, '$1')
+    .replace(/\{>>([\s\S]*?)<<\}/g, '$1')
+    .replace(/\{#[A-Za-z0-9_-]+\}/g, '')
+    .replace(/ {2,}/g, ' ');
+}
+
 module.exports = {
   SCHEMA_VERSION,
   HIGHLIGHT_OPEN,
@@ -770,6 +799,7 @@ module.exports = {
   sanitizeFtsQuery,
   fuzzyScore,
   parseFrontmatterTags,
+  normaliseReviewContent,
   walkTextFiles,
   createSearchIndex,
 };

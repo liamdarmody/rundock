@@ -22,9 +22,17 @@ export function extractFrontmatter(rawMarkdown) {
   if (!rawMarkdown) return { raw: null, parsed: null, body: '' };
   const m = rawMarkdown.match(FRONTMATTER_RE);
   if (!m) return { raw: null, parsed: null, body: rawMarkdown };
-  const raw = m[0];
+  let raw = m[0];
   const yamlBody = m[1];
-  const body = rawMarkdown.slice(raw.length);
+  let body = rawMarkdown.slice(raw.length);
+  // Blank lines between the closing --- and the body belong to neither the
+  // YAML nor the markdown content. Markdown parsing would swallow them, so
+  // they travel with the raw block to keep the save round-trip byte-exact.
+  const blankRun = body.match(/^(?:[ \t]*\r?\n)+/);
+  if (blankRun) {
+    raw += blankRun[0];
+    body = body.slice(blankRun[0].length);
+  }
   let parsed = null;
   try {
     parsed = yaml.load(yamlBody);

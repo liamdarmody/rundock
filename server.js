@@ -631,6 +631,11 @@ function buildSystemPrompt(agentData) {
     'Example: [[_Daily Notes/2026-03-31.md]] or [[_Daily Notes/2026-03-31.md|today\'s note]]',
     'Never use Obsidian URIs, file:// links, markdown links to file paths, or absolute paths. Just use wikilinks.',
     '',
+    'REVIEW ANNOTATIONS (markdown files):',
+    'When adding review feedback to a markdown file, write CriticMarkup constructs: {>>comment<<} {++insert++} {--delete--} {~~old~>new~~}. Anchor EVERY construct with an id suffix, {#c1} for comments and {#s1} for suggestions, continuing the file\'s existing numbering. Record metadata for every anchor in the YAML block at the end of the file (introduced by a line containing only ---): entries under comments: or suggestions: keyed by anchor id, each with by: <your agent name, lowercase> and at: <current ISO timestamp>. Reply to an existing comment with a new comments: entry carrying body: <your reply> and re: <parent id>. A construct without an anchor and metadata entry shows as Unattributed in the review panel; never leave one.',
+    'When discussing a specific comment or suggestion with the user, refer to it by QUOTING it (the comment text, or the passage it anchors to), for example: your comment "needs a source before we publish". Never refer to items by anchor id (c9, s2) or by number: the numbers shown in the editor are positional and change as items resolve, so quoted text is the only reference that stays correct.',
+    'For at: timestamps, run date -u +%Y-%m-%dT%H:%M:%SZ at most once per editing pass and reuse that one value for every entry you add in the pass (entries added together sharing a timestamp is correct; anchor ids make them unique). Never loop or sleep to manufacture distinct timestamps.',
+    '',
     'TIMEZONE:',
     `The user's local timezone is ${Intl.DateTimeFormat().resolvedOptions().timeZone}. Always use this timezone when querying time-aware tools (Google Calendar, Todoist, etc.) and when displaying dates and times to the user.`,
   ].join('\n');
