@@ -329,16 +329,21 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     // across sessions, since decided counts persist in the endmatter while
     // open counts come from the document).
 
-    renderComposer(sidebar);
+    // All content sits in a body with one symmetric gutter, mirroring the
+    // properties box's structure.
+    const body = el('div', 'review-body');
+    sidebar.appendChild(body);
+
+    renderComposer(body);
 
     if (!items.length && !composer) {
-      sidebar.appendChild(el('div', 'review-empty', 'No open review items. Select text and use Comment in the toolbar.'));
+      body.appendChild(el('div', 'review-empty', 'No open review items. Select text and use Comment in the toolbar.'));
     }
     let commentNumber = 0;
     for (const item of items) {
-      if (item.kind === 'highlight') sidebar.appendChild(renderHighlightCard(item));
-      else if (item.kind === 'comment') sidebar.appendChild(renderCommentCard(item, ++commentNumber));
-      else sidebar.appendChild(renderSuggestionCard(item));
+      if (item.kind === 'highlight') body.appendChild(renderHighlightCard(item));
+      else if (item.kind === 'comment') body.appendChild(renderCommentCard(item, ++commentNumber));
+      else body.appendChild(renderSuggestionCard(item));
     }
     // NOTE: "Done reviewing" (controller.doneReviewing) is deliberately not
     // rendered: the handback gate returns to the UI together with the
