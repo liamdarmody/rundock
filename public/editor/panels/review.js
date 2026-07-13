@@ -23,6 +23,11 @@ const TYPE_LABEL = {
   criticSubstitution: 'Replace',
 };
 
+// Constructs without {#id} anchors are addressed by document position.
+function locatorFor(item) {
+  return item.id != null ? item.id : { pos: item.pos };
+}
+
 export function attachReviewPanel({ paneElement, editor, controller, onRequestSave = null }) {
   if (!paneElement || !editor || !controller) return { detach: () => {}, refresh: () => {}, openComposer: () => {} };
 
@@ -133,10 +138,10 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     const row = el('div', 'review-actions');
     const acceptBtn = el('button', 'review-btn accept', 'Accept');
     acceptBtn.type = 'button';
-    acceptBtn.onclick = () => { controller.accept(item.id); render(); save(); };
+    acceptBtn.onclick = () => { controller.accept(locatorFor(item)); render(); save(); };
     const rejectBtn = el('button', 'review-btn reject', 'Reject');
     rejectBtn.type = 'button';
-    rejectBtn.onclick = () => { controller.reject(item.id); render(); save(); };
+    rejectBtn.onclick = () => { controller.reject(locatorFor(item)); render(); save(); };
     row.appendChild(acceptBtn);
     row.appendChild(rejectBtn);
     card.appendChild(row);
@@ -187,9 +192,28 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     };
     const resolveBtn = el('button', 'review-btn resolve', 'Resolve');
     resolveBtn.type = 'button';
-    resolveBtn.onclick = () => { controller.resolve(item.id); render(); save(); };
+    resolveBtn.onclick = () => { controller.resolve(locatorFor(item)); render(); save(); };
     row.appendChild(replyBtn);
     row.appendChild(resolveBtn);
+    card.appendChild(row);
+    card.querySelector('.review-card-head').style.cursor = 'pointer';
+    card.querySelector('.review-card-head').onclick = () => scrollToItem(item);
+    return card;
+  }
+
+  // A highlight with no attached comment (comment resolved separately, or
+  // edits separated the pair): releasable so it never strands in the file.
+  function renderHighlightCard(item) {
+    const card = el('div', 'review-card highlight');
+    const head = el('div', 'review-card-head');
+    head.appendChild(el('span', 'review-badge', 'Highlight'));
+    card.appendChild(head);
+    card.appendChild(el('div', 'review-card-body', item.text));
+    const row = el('div', 'review-actions');
+    const releaseBtn = el('button', 'review-btn resolve', 'Remove highlight');
+    releaseBtn.type = 'button';
+    releaseBtn.onclick = () => { controller.release(locatorFor(item)); render(); save(); };
+    row.appendChild(releaseBtn);
     card.appendChild(row);
     card.querySelector('.review-card-head').style.cursor = 'pointer';
     card.querySelector('.review-card-head').onclick = () => scrollToItem(item);
@@ -234,7 +258,9 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
       sidebar.appendChild(el('div', 'review-empty', 'No open review items. Select text and use Comment or Suggest in the toolbar.'));
     }
     for (const item of items) {
-      sidebar.appendChild(item.kind === 'comment' ? renderCommentCard(item) : renderSuggestionCard(item));
+      if (item.kind === 'highlight') sidebar.appendChild(renderHighlightCard(item));
+      else if (item.kind === 'comment') sidebar.appendChild(renderCommentCard(item));
+      else sidebar.appendChild(renderSuggestionCard(item));
     }
 
     const footer = el('div', 'review-footer');

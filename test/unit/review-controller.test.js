@@ -179,6 +179,45 @@ describe('authoring', () => {
   });
 });
 
+describe('id-less constructs and orphan handling', () => {
+  test('verdicts on id-less constructs resolve by position, not first-null-id match', async () => {
+    // Regression: findConstruct(null) matched the first critic node with a
+    // null id (often a highlight), so Accept/Reject silently no-opped.
+    const src = 'A {==hl==} B {++ins++} C {--del--} D.';
+    await withReview(src, ({ review, save }) => {
+      const ins = review.listItems().find((i) => i.type === 'criticInsert');
+      assert.equal(ins.id, null);
+      assert.equal(review.accept(ins.id != null ? ins.id : { pos: ins.pos }), true);
+      const out = save();
+      assert.ok(out.includes('A {==hl==} B ins C {--del--} D.'), out);
+      assert.match(out, /verdict: accepted/);
+    });
+  });
+
+  test('an orphan highlight is listed and releasable', async () => {
+    // A highlight separated from its comment (or left behind by external
+    // edits) must have a UI path out; it surfaces as a review item whose
+    // release restores the plain text.
+    const src = 'Note {==this==} gap {>>why<<}{#c1} here.';
+    await withReview(src, ({ review, save }) => {
+      review.resolve('c1');
+      const orphan = review.listItems().find((i) => i.kind === 'highlight');
+      assert.ok(orphan, 'orphan highlight must appear in listItems');
+      assert.equal(review.release({ pos: orphan.pos }), true);
+      const out = save();
+      assert.ok(out.includes('Note this gap  here.'), out);
+      assert.ok(!out.includes('{=='), 'highlight construct must be gone');
+    });
+  });
+
+  test('replying to a nonexistent comment id is refused', async () => {
+    await withReview(DOC, ({ review, save }) => {
+      assert.equal(review.reply('c999', 'hello?'), false);
+      assert.ok(!save().includes('c999'), 'no orphan thread persisted');
+    });
+  });
+});
+
 describe('Done-Reviewing handback', () => {
   test('stamps review status and a compact verdict summary into the endmatter', async () => {
     await withReview(DOC, ({ review, save }) => {

@@ -101,6 +101,42 @@ describe('tables: strict byte-for-byte round-trip (unedited)', () => {
     assert.equal(await roundTrip(src), src);
   });
 
+  test('a blockquoted pipe-less table round-trips without gaining nesting', async () => {
+    // Regression: the source capture included the '> ' prefix, and the
+    // serializer re-applied the blockquote delimiter on top: one extra '>'
+    // per save, doubling every cycle. Capture is now container-prefix-free.
+    const src = '> a | b\n> --- | ---\n> 1 | 2';
+    let out = src;
+    for (let i = 0; i < 3; i++) out = await roundTrip(out);
+    assert.equal(out, src);
+  });
+
+  test('a blockquoted piped table keeps delimiter, padding, and alignment bytes', async () => {
+    const src = '> | aa  | b |\n> |:----|--:|\n> | 1   | 2 |';
+    assert.equal(await roundTrip(src), src);
+  });
+
+  test('a list-nested table keeps its bytes', async () => {
+    const src = '- item\n\n  | a | b |\n  |---|---|\n  | 1 | 2 |';
+    assert.equal(await roundTrip(src), src);
+  });
+
+  test('undo restores byte-exact source even for non-canonical cell bytes', async () => {
+    // Regression: the undo transaction itself re-marked the cell dirty, so
+    // undo re-captured the cell (`_one_` -> `*one*`) instead of re-emitting
+    // source bytes. History transactions no longer touch dirty flags.
+    const src = '| a | b |\n|---|---|\n| _one_ | two |';
+    await withEditor(src, async (editor, env) => {
+      await new Promise((r) => setTimeout(r, 550));
+      const cells = findCells(editor);
+      const target = cells[2]; // the _one_ cell
+      const from = target.pos + 2;
+      editor.chain().insertContentAt({ from, to: from }, 'X').run();
+      editor.commands.undo();
+      assert.equal(env.getMarkdown(editor), src);
+    });
+  });
+
   test('a bold mark ending a cell does not corrupt neighbouring cells', async () => {
     // Regression: tiptap-markdown's expel-whitespace bookkeeping (state
     // .inlines) holds absolute offsets into the output buffer. A mark ending

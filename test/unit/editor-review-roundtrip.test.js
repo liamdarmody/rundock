@@ -105,6 +105,49 @@ describe('review round-trip: constructs and endmatter', () => {
     }
   });
 
+  test('review operations do not grow the trailing newline run across save/load cycles', async () => {
+    // Regression: buildEndmatter's yaml.dump output ends with \n and the
+    // pipeline appended the file's trailing run on top, adding one newline
+    // per review-op save/load cycle.
+    const env = await bootEditorEnv();
+    const { createReviewController } = await import('../../public/editor/review/controller.js');
+    let file = ANNOTATED;
+    for (let i = 0; i < 3; i++) {
+      const element = env.window.document.createElement('div');
+      env.window.document.body.appendChild(element);
+      const { editor } = env.createEditor({ element, rawMarkdown: file });
+      const parts = env.pipeline.parseFile(file);
+      const review = createReviewController({ editor, endmatter: parts.endmatter, now: () => '2026-07-13T00:00:00.000Z' });
+      review.reply('c1', `cycle ${i}`);
+      file = env.pipeline.serialiseFile(editor, { ...parts, endmatterRaw: review.getEndmatterRaw() });
+      env.destroyEditor(editor);
+      element.remove();
+    }
+    assert.match(file, /[^\n]\n$/, `file must end with exactly one newline, got ${JSON.stringify(file.slice(-6))}`);
+  });
+
+  test('CRLF input is normalised to LF end-to-end (no mixed line endings)', async () => {
+    // The server already normalises CRLF on read; the pipeline now applies
+    // the same contract so endmatter detection and trailing runs cannot mix
+    // \r\n into an otherwise-LF output.
+    const out = await roundTrip('One.\r\n\r\nTwo.\r\n');
+    assert.equal(out, 'One.\n\nTwo.\n');
+    const env = await bootEditorEnv();
+    const parts = env.pipeline.parseFile('Body.\r\n\r\n---\r\ncomments:\r\n  c1: { by: a, at: t }\r\n');
+    assert.ok(parts.endmatter.raw.startsWith('---\ncomments:'), 'endmatter must be detected in CRLF files');
+  });
+
+  test('a file that is only endmatter does not grow a leading separator', async () => {
+    const src = '---\ncomments:\n  c1: { by: a, at: t }\n';
+    assert.equal(await roundTrip(src), src);
+  });
+
+  test('review-shaped YAML inside an unclosed code fence is not endmatter', async () => {
+    const env = await bootEditorEnv();
+    const parts = env.pipeline.parseFile('Text.\n\n```\n---\ncomments:\n  c1: { by: a, at: t }\n');
+    assert.equal(parts.endmatter.raw, '', 'unclosed-fence tail must stay body');
+  });
+
   test('editing body text leaves the endmatter bytes untouched', async () => {
     const env = await bootEditorEnv();
     const element = env.window.document.createElement('div');
