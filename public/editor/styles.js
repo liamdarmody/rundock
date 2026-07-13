@@ -217,6 +217,16 @@ const CSS = `
 .review-close:hover { color: var(--text-1); }
 .review-body { padding: 12px; }
 .review-empty { font-size: 12px; color: var(--text-2); line-height: 1.5; }
+.review-empty.completed { color: var(--success); font-weight: 600; }
+.review-empty.completed::before { content: '✓'; margin-right: 6px; }
+
+/* The range a comment is being written about stays marked while the
+   composer is open (the editor blurs, so the native selection vanishes). */
+.tiptap-editor .review-composing {
+  background: var(--accent-glow, rgba(232, 122, 90, 0.2));
+  border-radius: 2px;
+  box-shadow: 0 1px 0 var(--accent, #E87A5A);
+}
 
 .review-card {
   background: var(--base, transparent);
@@ -227,6 +237,22 @@ const CSS = `
   font-size: 13px;
 }
 .review-card:last-child { margin-bottom: 0; }
+/* Departing card: a brief exit so the action visibly causes the removal. */
+.review-card.leaving {
+  opacity: 0;
+  transform: translateX(8px);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+/* Card called out by clicking its inline construct. */
+@keyframes review-card-attention {
+  0%, 55% { border-color: var(--accent, #E87A5A); box-shadow: 0 0 0 1px var(--accent, #E87A5A); }
+  100% { border-color: var(--border); box-shadow: none; }
+}
+.review-card.attention { animation: review-card-attention 1.2s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .review-card.leaving { transition: none; }
+  .review-card.attention, .tiptap-editor .critic-flash { animation: none; }
+}
 .review-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .review-badge {
   font-size: 10px;
