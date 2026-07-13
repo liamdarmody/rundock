@@ -32,7 +32,12 @@ function locatorFor(item) {
   return { pos: item.pos, type: item.type, content };
 }
 
-export function attachReviewPanel({ paneElement, editor, controller, onRequestSave = null }) {
+const SIDEBAR_WIDTH_KEY = 'rundock.reviewSidebarWidth';
+const SIDEBAR_MIN = 220;
+const SIDEBAR_MAX = 420;
+const SIDEBAR_DEFAULT = 260;
+
+export function attachReviewPanel({ paneElement, editor, controller, onRequestSave = null, author = null, agents = [] }) {
   if (!paneElement || !editor || !controller) return { detach: () => {}, refresh: () => {}, openComposer: () => {} };
 
   const sidebar = el('aside', 'review-sidebar');
@@ -40,6 +45,35 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
   pill.type = 'button';
   paneElement.appendChild(pill);
   paneElement.appendChild(sidebar);
+
+  // Sidebar width: a UI preference, persisted locally (never in the file).
+  const applyWidth = (w) => {
+    const clamped = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, w || SIDEBAR_DEFAULT));
+    paneElement.style.setProperty('--review-sidebar-width', `${clamped}px`);
+    return clamped;
+  };
+  let sidebarWidth = applyWidth(Number(localStorage.getItem(SIDEBAR_WIDTH_KEY)) || SIDEBAR_DEFAULT);
+
+  const agentNames = new Map();
+  for (const a of Array.isArray(agents) ? agents : []) {
+    if (a && a.name) agentNames.set(String(a.name).toLowerCase(), a.displayName || a.name);
+    if (a && a.displayName) agentNames.set(String(a.displayName).toLowerCase(), a.displayName);
+  }
+
+  // Attribution rendering. The wire format keeps real handles; the UI maps
+  // the workspace user to "Me", known agents to their roster display name
+  // (styled as agents), and everything else to the literal handle. Absent
+  // metadata renders as "Unattributed" — never a guessed name.
+  function authorBadge(meta) {
+    const by = meta && meta.by ? String(meta.by) : null;
+    if (!by) return el('span', 'review-by unattributed', 'Unattributed');
+    if (author && by.toLowerCase() === String(author).toLowerCase()) {
+      return el('span', 'review-by me', 'Me');
+    }
+    const agentName = agentNames.get(by.toLowerCase());
+    if (agentName) return el('span', 'review-by agent', agentName);
+    return el('span', 'review-by', by);
+  }
 
   let open = false;
   let composer = null; // { mode: 'comment'|'suggest', range: {from,to}|null }
@@ -126,7 +160,7 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     const card = el('div', 'review-card suggestion');
     const head = el('div', 'review-card-head');
     head.appendChild(el('span', 'review-badge', TYPE_LABEL[item.type] || 'Suggestion'));
-    if (item.meta && item.meta.by) head.appendChild(el('span', 'review-by', item.meta.by));
+    head.appendChild(authorBadge(item.meta));
     card.appendChild(head);
 
     if (item.type === 'criticSubstitution') {
@@ -154,11 +188,13 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     return card;
   }
 
-  function renderCommentCard(item) {
+  function renderCommentCard(item, number) {
     const card = el('div', 'review-card comment');
     const head = el('div', 'review-card-head');
-    head.appendChild(el('span', 'review-badge comment-badge', item.id || 'Comment'));
-    if (item.meta && item.meta.by) head.appendChild(el('span', 'review-by', item.meta.by));
+    // Numbered by document order, matching the inline chip's CSS counter.
+    // Wire-format anchor ids (c1, c2...) are plumbing and never render.
+    head.appendChild(el('span', 'review-badge comment-badge', String(number)));
+    head.appendChild(authorBadge(item.meta));
     card.appendChild(head);
     if (item.anchor) {
       card.appendChild(el('div', 'review-quote', item.anchor.length > 120 ? item.anchor.slice(0, 117) + '…' : item.anchor));
@@ -166,7 +202,7 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     card.appendChild(el('div', 'review-card-body', item.text));
     for (const r of item.replies) {
       const reply = el('div', 'review-reply');
-      reply.appendChild(el('span', 'review-by', r.by || ''));
+      reply.appendChild(authorBadge(r));
       reply.appendChild(el('span', null, r.body || ''));
       card.appendChild(reply);
     }
@@ -228,26 +264,51 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
   // render
   // ------------------------------------------------------------------
 
+  // Drag handle on the sidebar's left edge.
+  function attachResizeHandle() {
+    const handle = el('div', 'review-resize-handle');
+    handle.title = 'Drag to resize';
+    handle.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startW = sidebarWidth;
+      const onMove = (ev) => { sidebarWidth = applyWidth(startW + (startX - ev.clientX)); };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        try { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth)); } catch { /* private mode */ }
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+    sidebar.appendChild(handle);
+  }
+
   function render() {
     const { items, total } = counts();
     const progress = controller.progress();
     const decided = progress.suggestions.accepted + progress.suggestions.rejected;
     const decidable = decided + progress.suggestions.open;
 
-    // Pill: visible whenever there is anything to review or a review trail.
+    // The pill is the minimised state: open feedback stays loudly visible
+    // (accent treatment + count), and the panel re-opens automatically on
+    // every file open while items remain, so closing is never "dismiss".
     const hasTrail = controller.isDirty() || total > 0;
     pill.classList.toggle('visible', hasTrail && !open);
+    pill.classList.toggle('has-items', total > 0);
     pill.textContent = total > 0 ? `Review · ${total}` : 'Review';
+    pill.title = total > 0 ? `${total} open review item${total === 1 ? '' : 's'}` : 'Review history';
     pill.onclick = () => setOpen(true);
 
     if (!open) { sidebar.innerHTML = ''; return; }
 
     sidebar.innerHTML = '';
+    attachResizeHandle();
     const head = el('div', 'review-head');
     head.appendChild(el('span', 'review-title', 'Review'));
-    const closeBtn = el('button', 'review-close', '×');
+    const closeBtn = el('button', 'review-close', '–');
     closeBtn.type = 'button';
-    closeBtn.title = 'Close review panel';
+    closeBtn.title = 'Minimise (items stay marked in the document)';
     closeBtn.onclick = () => setOpen(false);
     head.appendChild(closeBtn);
     sidebar.appendChild(head);
@@ -259,32 +320,17 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     renderComposer(sidebar);
 
     if (!items.length && !composer) {
-      sidebar.appendChild(el('div', 'review-empty', 'No open review items. Select text and use Comment or Suggest in the toolbar.'));
+      sidebar.appendChild(el('div', 'review-empty', 'No open review items. Select text and use Comment in the toolbar.'));
     }
+    let commentNumber = 0;
     for (const item of items) {
       if (item.kind === 'highlight') sidebar.appendChild(renderHighlightCard(item));
-      else if (item.kind === 'comment') sidebar.appendChild(renderCommentCard(item));
+      else if (item.kind === 'comment') sidebar.appendChild(renderCommentCard(item, ++commentNumber));
       else sidebar.appendChild(renderSuggestionCard(item));
     }
-
-    const footer = el('div', 'review-footer');
-    const doneBtn = el('button', 'review-btn done', 'Done reviewing');
-    doneBtn.type = 'button';
-    doneBtn.title = 'Stamp the review status and verdict summary into the file';
-    doneBtn.onclick = () => {
-      const payload = controller.doneReviewing();
-      save();
-      render();
-      const json = JSON.stringify(payload, null, 2);
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(json).catch(() => {});
-      }
-      const note = el('div', 'review-done-note', 'Review stamped into the file. Verdict summary copied.');
-      sidebar.appendChild(note);
-      setTimeout(() => note.remove(), 4000);
-    };
-    footer.appendChild(doneBtn);
-    sidebar.appendChild(footer);
+    // NOTE: "Done reviewing" (controller.doneReviewing) is deliberately not
+    // rendered: the handback gate returns to the UI together with the
+    // agent-apply decision. The controller API and its tests remain.
   }
 
   // Re-render when the document changes (constructs decided inline, undo,

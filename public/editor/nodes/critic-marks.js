@@ -155,10 +155,11 @@ function contentAtom({ name, segType, cls, registerParser = false, marker = fals
         ...(node.attrs.id ? { 'data-critic-id': node.attrs.id } : {}),
       });
       if (marker) {
-        // Compact marker chip; full text shows in the review sidebar and on
-        // hover via the title attribute.
+        // Compact marker chip. The visible number is a CSS counter (document
+        // order), so wire-format anchor ids (c1, c2...) never surface in the
+        // UI; full text shows in the sidebar and on hover via the title.
         attrs.title = node.attrs.content;
-        return ['span', attrs, node.attrs.id ? node.attrs.id : '•'];
+        return ['span', attrs];
       }
       return ['span', attrs, node.attrs.content];
     },

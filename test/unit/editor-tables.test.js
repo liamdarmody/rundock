@@ -53,6 +53,18 @@ describe('tables: rendering', () => {
     });
   });
 
+  test('tables render inside a horizontal scroll wrapper', async () => {
+    // Wide tables cannot shrink below their intrinsic width; the wrapper
+    // (overflow-x: auto) keeps them scrolling inside the text column
+    // instead of overflowing under the review sidebar on narrow panes.
+    const src = '| a | b |\n|---|---|\n| 1 | 2 |';
+    await withEditor(src, (editor) => {
+      const wrapper = editor.view.dom.querySelector('.tableWrapper');
+      assert.ok(wrapper, 'expected a .tableWrapper element');
+      assert.ok(wrapper.querySelector('table'), 'expected the table inside the wrapper');
+    });
+  });
+
   test('the fixture scoring table renders with full structure', async () => {
     await withEditor(fixtureSrc, (editor) => {
       let tables = 0, rows = 0, headerCells = 0;

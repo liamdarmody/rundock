@@ -258,6 +258,15 @@ function serializeTableNode(state, node) {
 // ---------------------------------------------------------------------------
 
 export const RundockTable = Table.extend({
+  // Tables cannot shrink below their cells' intrinsic width, so a wide table
+  // would otherwise punch out of the text column (and under the review
+  // sidebar) on narrow panes. Each table renders inside its own horizontal
+  // scroll container instead.
+  renderHTML(props) {
+    const table = this.parent ? this.parent(props) : ['table', 0];
+    return ['div', { class: 'tableWrapper' }, table];
+  },
+
   addAttributes() {
     return {
       ...this.parent?.(),
