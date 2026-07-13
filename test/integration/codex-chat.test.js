@@ -158,6 +158,40 @@ describe('codex agent conversation', () => {
     assert.deepStrictEqual(raw, []);
   });
 
+  test('an unavailable-model 400 surfaces as guidance naming the model and the fix', async () => {
+    const convoId = h.freshConvoId('cdx');
+    h.clearInvocations();
+    // Real message captured live from a ChatGPT account with an unavailable model configured.
+    const raw = '{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The \'gpt-5.3-codex\' model is not supported when using Codex with a ChatGPT account."}}';
+    h.writeCodexScenario([{ match: { promptIncludes: 'bad model' }, failMessage: raw }]);
+
+    client.send({ type: 'chat', conversationId: convoId, agent: 'researcher', content: 'bad model please' });
+
+    const { msg: err } = await client.waitForEvent('system', 'codex_guidance', convoId);
+    assert.strictEqual(err._agent, 'researcher');
+    assert.strictEqual(err.detail, raw, 'verbatim CLI text travels with the guidance');
+    assert.match(err.title, /model/i);
+    assert.match(err.body, /gpt-5\.3-codex/, 'guidance names the configured model');
+    assert.match(err.body, /remove the model field/i, 'guidance states the fix');
+    await client.waitForEvent('system', 'done', convoId);
+  });
+
+  test('a signed-out 401 surfaces as guidance pointing at codex login, not transport noise', async () => {
+    const convoId = h.freshConvoId('cdx');
+    h.clearInvocations();
+    // Real message captured live from a logged-out CLI failing mid-connection.
+    const raw = 'Reconnecting... 2/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: wss://api.openai.com/v1/responses, cf-ray: a1ab5b883bdb63c9-LHR)';
+    h.writeCodexScenario([{ match: { promptIncludes: 'signed out' }, failMessage: raw }]);
+
+    client.send({ type: 'chat', conversationId: convoId, agent: 'researcher', content: 'signed out please' });
+
+    const { msg: err } = await client.waitForEvent('system', 'codex_guidance', convoId);
+    assert.strictEqual(err._agent, 'researcher');
+    assert.match(err.title, /signed in/i);
+    assert.match(err.body, /codex login/, 'guidance names the command');
+    await client.waitForEvent('system', 'done', convoId);
+  });
+
   test('a classified runtime failure surfaces as a friendly pill with the verbatim detail', async () => {
     const convoId = h.freshConvoId('cdx');
     h.clearInvocations();

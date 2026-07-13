@@ -175,10 +175,37 @@ function detectCodex(deps = {}) {
 // ordinary failures are never misclassified as quota.
 const CODEX_QUOTA_RE = /usage limit/i;
 function isCodexQuotaError(text) {
-  return typeof text === 'string' && CODEX_QUOTA_RE.test(text);
+  return classifyCodexError(text).kind === 'quota';
+}
+
+// Classifies a Codex CLI failure message so the server can surface guidance
+// instead of raw transport noise. Every pattern is keyed to a message
+// captured from a real failure; keep them narrow so ordinary failures fall
+// through to 'unknown' and surface verbatim.
+//
+// Kinds:
+//   quota    plan-limit exhaustion ("usage limit")
+//   model    the configured model is not available on this account
+//            (captured: 400 invalid_request_error "The 'gpt-5.3-codex' model
+//            is not supported when using Codex with a ChatGPT account.")
+//   auth     signed out: 401/missing-bearer transport noise or the CLI's own
+//            "not logged in" wording
+//   unknown  everything else
+const CODEX_MODEL_NAME_RE = /The '([^']+)' model is not supported/;
+const CODEX_MODEL_RE = /\bmodel\b[^.]*\bis not supported\b/i;
+const CODEX_AUTH_RE = /401 unauthorized|missing bearer or basic authentication|not (?:logged|signed) in/i;
+function classifyCodexError(text) {
+  if (typeof text !== 'string' || !text) return { kind: 'unknown', model: null };
+  if (CODEX_QUOTA_RE.test(text)) return { kind: 'quota', model: null };
+  if (CODEX_MODEL_RE.test(text)) {
+    const m = text.match(CODEX_MODEL_NAME_RE);
+    return { kind: 'model', model: m ? m[1] : null };
+  }
+  if (CODEX_AUTH_RE.test(text)) return { kind: 'auth', model: null };
+  return { kind: 'unknown', model: null };
 }
 
 module.exports = {
   buildCodexArgs, parseCodexLine, resolveCodexBin, detectCodex, isCodexQuotaError,
-  isValidThreadId,
+  classifyCodexError, isValidThreadId,
 };
