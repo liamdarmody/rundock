@@ -260,6 +260,53 @@ describe('id-less constructs and orphan handling', () => {
   });
 });
 
+describe('verdict/undo reconciliation', () => {
+  test('undoing an accepted suggestion drops the stale verdict from the endmatter', async () => {
+    // A construct present in the document is undecided by definition: after
+    // accept + Cmd+Z the construct returns, so serializing both it AND its
+    // verdict would hand agents a self-contradicting file.
+    await withReview(DOC, async ({ editor, review, save }) => {
+      await new Promise((r) => setTimeout(r, 550)); // separate history group
+      review.accept('s1');
+      editor.commands.undo();
+      const out = save();
+      assert.ok(out.includes('{++one concrete example++}{#s1}'), 'construct must be restored');
+      assert.ok(!out.includes('verdict:'), 'stale verdict must not serialize');
+    });
+  });
+
+  test('a fully undone review session serializes the original endmatter bytes', async () => {
+    await withReview(DOC, async ({ editor, review, save }) => {
+      await new Promise((r) => setTimeout(r, 550));
+      review.accept('s1');
+      editor.commands.undo();
+      const emStart = DOC.indexOf('---\ncomments:');
+      assert.equal(save(), DOC.slice(0, DOC.length), 'byte-identical after full undo');
+    });
+  });
+
+  test('undoing a resolve drops the stale resolution fields', async () => {
+    await withReview(DOC, async ({ editor, review, save }) => {
+      await new Promise((r) => setTimeout(r, 550));
+      review.resolve('c1');
+      editor.commands.undo();
+      const out = save();
+      assert.ok(out.includes('{>>Needs a source<<}{#c1}'), 'comment construct must be restored');
+      assert.ok(!out.includes('resolved:'), 'stale resolution must not serialize');
+    });
+  });
+
+  test('verdicts on constructs that stay decided still serialize', async () => {
+    await withReview(DOC, async ({ review, save }) => {
+      review.accept('s1');
+      review.reject('s2');
+      const out = save();
+      assert.match(out, /s1:[\s\S]*?verdict: accepted/);
+      assert.match(out, /s2:[\s\S]*?verdict: rejected/);
+    });
+  });
+});
+
 describe('identity', () => {
   test('the default author handle is me, never a personal name', async () => {
     const env = await bootEditorEnv();
