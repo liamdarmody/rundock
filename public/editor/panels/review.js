@@ -306,7 +306,7 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     attachResizeHandle();
     const head = el('div', 'review-head');
     head.appendChild(el('span', 'review-title', 'Review'));
-    const closeBtn = el('button', 'review-close', '–');
+    const closeBtn = el('button', 'review-close', '−');
     closeBtn.type = 'button';
     closeBtn.title = 'Minimise (items stay marked in the document)';
     closeBtn.onclick = () => setOpen(false);
