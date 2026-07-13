@@ -1012,7 +1012,12 @@ function renderOrgChart() {
     allTeam.forEach(a => {
       if (a._orgParent && nodeMap.has(a._orgParent)) {
         nodeMap.get(a._orgParent).children.push(nodeMap.get(a.id));
-      } else if (!a._orgParent) {
+      } else {
+        // No parent, OR a reportsTo that doesn't resolve to a team member
+        // (a typo, or reporting to a platform agent like Doc): attach at
+        // the root. An on-team agent must always be visible in the chart;
+        // silently dropping it made the chart lay out an empty tree at a
+        // degenerate zoom when such an agent was the whole team.
         rootData.children.push(nodeMap.get(a.id));
       }
     });
