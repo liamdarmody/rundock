@@ -78,14 +78,10 @@ const CSS = `
 .tiptap-editor .critic-highlight {
   background: rgba(232, 176, 90, 0.22);
 }
-/* Comment chips: numbered in document order via a CSS counter (wire-format
-   anchor ids never render). Sized to sit inside the line box so chips do
-   not disturb line height. */
-.tiptap-editor .ProseMirror {
-  counter-reset: critic-comment;
-}
+/* Comment chips: the number comes from the anchor id (c9 renders 9), the
+   one identity agents and humans share. Sized to sit inside the line box
+   so chips do not disturb line height. */
 .tiptap-editor .critic-comment {
-  counter-increment: critic-comment;
   display: inline-block;
   font-size: 9px;
   font-weight: 700;
@@ -100,9 +96,6 @@ const CSS = `
   background: var(--accent-glow, rgba(232, 122, 90, 0.15));
   color: var(--accent, #E87A5A);
   cursor: default;
-}
-.tiptap-editor .critic-comment::after {
-  content: counter(critic-comment);
 }
 .tiptap-editor .critic-substitution .critic-sub-from {
   color: var(--danger, #E06C6C);
