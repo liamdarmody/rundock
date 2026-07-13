@@ -175,7 +175,10 @@ export function createReviewController({ editor, endmatter, author = 'me', now =
 
   function ensureSuggestionEntry(id, node) {
     if (!data.suggestions[id]) {
-      data.suggestions[id] = { by: 'unknown', at: null };
+      // Record only what is actually known. A construct that arrived with
+      // no metadata gets a text excerpt for the audit trail and nothing
+      // else: never placeholder values (by: unknown, at: null) in files.
+      data.suggestions[id] = {};
       const excerpt = node.type.name === 'criticSubstitution'
         ? `${node.attrs.from} ~> ${node.attrs.to}`
         : node.attrs.content;
