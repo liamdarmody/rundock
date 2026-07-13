@@ -12,9 +12,13 @@ const LINK_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="non
 
 // Lucide message-square icon for the review Comment action.
 const COMMENT_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
-// Lucide edit-3 icon for the review Suggest action.
-const SUGGEST_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>';
 
+// Formatting buttons render as a row; the review Comment action renders as a
+// full-width bar beneath them (the pattern proven in Roughdraft: commenting
+// is the primary review gesture, so it gets primary prominence). Suggesting
+// was deliberately removed from the human toolbar (2026-07-13): a human in
+// an editable document just makes the edit; suggestions remain the AGENT's
+// authoring direction, decided via the sidebar's Accept/Reject.
 const BUTTON_DEFS = [
   { id: 'bold',   label: 'B',   title: 'Bold (Cmd/Ctrl+B)',   styled: 'b' },
   { id: 'italic', label: 'I',   title: 'Italic (Cmd/Ctrl+I)', styled: 'i' },
@@ -23,8 +27,6 @@ const BUTTON_DEFS = [
   { id: 'h1',     label: 'H1',  title: 'Heading 1',            styled: '' },
   { id: 'h2',     label: 'H2',  title: 'Heading 2',            styled: '' },
   { id: 'h3',     label: 'H3',  title: 'Heading 3',            styled: '' },
-  { id: 'comment', icon: COMMENT_ICON_SVG, title: 'Comment on selection', styled: '', review: true },
-  { id: 'suggest', icon: SUGGEST_ICON_SVG, title: 'Suggest a replacement', styled: '', review: true },
 ];
 
 function escapeHtml(s) {
@@ -50,8 +52,8 @@ function normaliseLinkHref(url) {
   return url;
 }
 
-function renderToolbarHTML() {
-  return BUTTON_DEFS
+function renderToolbarHTML(withComment) {
+  const buttons = BUTTON_DEFS
     .map(b => {
       const styled = b.styled ? ` data-style="${b.styled}"` : '';
       // SVG icons are hardcoded above and trusted; text labels are escaped.
@@ -59,6 +61,10 @@ function renderToolbarHTML() {
       return `<button type="button" class="tb-btn" data-cmd="${b.id}" title="${escapeHtml(b.title)}"${styled}>${content}</button>`;
     })
     .join('');
+  const commentBar = withComment
+    ? `<button type="button" class="tb-comment" data-cmd="comment" title="Comment on selection">${COMMENT_ICON_SVG}<span>Comment</span></button>`
+    : '';
+  return `<div class="tb-row">${buttons}</div>${commentBar}`;
 }
 
 function applyCommand(editor, id) {
@@ -105,17 +111,17 @@ function updateActiveStates(editor, toolbar) {
 export function attachFloatingToolbar({ toolbarElement, hostElement, editor, onReviewAction = null }) {
   if (!toolbarElement || !editor) return () => {};
 
-  toolbarElement.innerHTML = renderToolbarHTML();
+  toolbarElement.innerHTML = renderToolbarHTML(typeof onReviewAction === 'function');
   toolbarElement.classList.remove('visible');
 
   const onClick = (event) => {
-    const btn = event.target.closest('.tb-btn');
+    const btn = event.target.closest('.tb-btn, .tb-comment');
     if (!btn) return;
     event.preventDefault();
     event.stopPropagation();
     const cmd = btn.getAttribute('data-cmd');
-    if (cmd === 'comment' || cmd === 'suggest') {
-      if (typeof onReviewAction === 'function') onReviewAction(cmd);
+    if (cmd === 'comment') {
+      if (typeof onReviewAction === 'function') onReviewAction('comment');
       toolbarElement.classList.remove('visible');
       return;
     }
@@ -127,7 +133,7 @@ export function attachFloatingToolbar({ toolbarElement, hostElement, editor, onR
   // Stop selection-collapse on toolbar click by preventing the host element
   // from losing focus during the brief mousedown on the button.
   toolbarElement.addEventListener('mousedown', (e) => {
-    if (e.target.closest('.tb-btn')) e.preventDefault();
+    if (e.target.closest('.tb-btn, .tb-comment')) e.preventDefault();
   });
 
   const position = () => {

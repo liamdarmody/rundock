@@ -260,6 +260,25 @@ describe('id-less constructs and orphan handling', () => {
   });
 });
 
+describe('identity', () => {
+  test('the default author handle is me, never a personal name', async () => {
+    const env = await bootEditorEnv();
+    const { createReviewController } = await import('../../public/editor/review/controller.js');
+    const element = env.window.document.createElement('div');
+    env.window.document.body.appendChild(element);
+    const { editor } = env.createEditor({ element, rawMarkdown: 'Plain text here.' });
+    try {
+      const review = createReviewController({ editor, endmatter: { raw: '', data: null }, now: () => NOW });
+      editor.commands.setTextSelection({ from: 1, to: 6 });
+      review.addComment('note');
+      assert.equal(review.getData().comments.c1.by, 'me');
+    } finally {
+      env.destroyEditor(editor);
+      element.remove();
+    }
+  });
+});
+
 describe('Done-Reviewing handback', () => {
   test('stamps review status and a compact verdict summary into the endmatter', async () => {
     await withReview(DOC, ({ review, save }) => {

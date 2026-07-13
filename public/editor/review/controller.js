@@ -28,7 +28,11 @@ function isPlainObject(v) {
   return v != null && typeof v === 'object' && !Array.isArray(v);
 }
 
-export function createReviewController({ editor, endmatter, author = 'liam', now = () => new Date().toISOString(), onChange = null }) {
+// `author` is the workspace user's handle, resolved by the host (workspace
+// profile -> OS username -> 'me'); it is written into `by:` for everything
+// authored through the UI. Attribution is only ever read from `by:` fields,
+// never inferred.
+export function createReviewController({ editor, endmatter, author = 'me', now = () => new Date().toISOString(), onChange = null }) {
   if (!editor) throw new Error('createReviewController: editor is required');
 
   const originalRaw = (endmatter && endmatter.raw) || '';
