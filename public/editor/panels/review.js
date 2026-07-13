@@ -63,6 +63,24 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
   };
   let sidebarWidth = applyWidth(Number(localStorage.getItem(SIDEBAR_WIDTH_KEY)) || SIDEBAR_DEFAULT);
 
+  // The panel's height is derived from the pane's actual viewport so the
+  // bottom gap always equals the top and right gaps (24px each): the pane's
+  // visible height minus the top inset and the matching bottom inset. In
+  // overlay mode (narrow panes) the fixed top/bottom offsets own the height
+  // instead. Recomputed on any pane resize.
+  const PANEL_INSET = 24;
+  const isOverlay = () => (typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 1000px)').matches);
+  const updateMaxHeight = () => {
+    if (isOverlay()) { sidebar.style.maxHeight = ''; return; }
+    const h = paneElement.clientHeight - PANEL_INSET * 2;
+    if (h > 0) sidebar.style.maxHeight = `${h}px`;
+  };
+  let resizeObserver = null;
+  if (typeof ResizeObserver === 'function') {
+    resizeObserver = new ResizeObserver(updateMaxHeight);
+    resizeObserver.observe(paneElement);
+  }
+
   const agentNames = new Map();
   for (const a of Array.isArray(agents) ? agents : []) {
     if (a && a.name) agentNames.set(String(a.name).toLowerCase(), a.displayName || a.name);
@@ -177,6 +195,7 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     open = next;
     paneElement.classList.toggle('review-active', open);
     sidebar.classList.toggle('visible', open);
+    updateMaxHeight();
     render();
   }
 
@@ -489,6 +508,7 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     detach: () => {
       editor.off('transaction', onTransaction);
       paneElement.removeEventListener('click', onConstructClick);
+      if (resizeObserver) resizeObserver.disconnect();
       try { editor.unregisterPlugin(composingKey); } catch { /* editor may be gone */ }
       sidebar.remove();
       pill.remove();
