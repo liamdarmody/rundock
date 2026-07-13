@@ -293,7 +293,61 @@ const CSS = `
 }
 .review-reply .review-by { margin-left: 0; flex-shrink: 0; }
 .review-reply .review-by::after { content: ':'; }
-.review-reply-box { margin-top: 8px; display: flex; gap: 6px; align-items: flex-end; }
+/* Review text entry: the conversations-input grammar at card scale — a
+   growing textarea with an embedded circular send button that activates
+   when there is text. No button row, so narrow panels keep full input
+   width; an empty reply input dismisses itself on blur. */
+.review-input {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  padding: 5px 5px 5px 10px;
+  margin-top: 8px;
+}
+.review-input:focus-within { border-color: var(--accent, #E87A5A); }
+.review-input textarea {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  resize: none;
+  min-height: 22px;
+  max-height: 120px;
+  padding: 3px 0;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text-1);
+  outline: none;
+}
+.review-send {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: all 0.25s ease;
+}
+.review-send svg { width: 14px; height: 14px; }
+.review-send:disabled { opacity: 0.3; cursor: default; }
+.review-send.active {
+  background: var(--accent, #E87A5A);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(232, 122, 90, 0.3);
+}
+.review-send.active:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(232, 122, 90, 0.4); }
+.review-send:focus-visible { outline: 2px solid var(--accent, #E87A5A); outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) {
+  .review-send, .review-send.active:hover { transition: none; transform: none; }
+}
 .review-actions { display: flex; gap: 8px; margin-top: 10px; }
 .review-btn {
   padding: 3px 12px;
@@ -322,23 +376,12 @@ const CSS = `
   margin-bottom: 12px;
 }
 .review-composer:last-child { margin-bottom: 0; }
-.review-composer-title { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
-.review-composer textarea, .review-reply-box textarea {
-  width: 100%;
-  box-sizing: border-box;
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text-1);
-  font-size: 13px;
-  font-family: inherit;
-  padding: 6px 8px;
-  resize: vertical;
-}
-.review-composer textarea:focus, .review-reply-box textarea:focus {
-  outline: none;
-  border-color: var(--accent, #E87A5A);
-}
+.review-composer-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.review-composer-title { font-size: 12px; font-weight: 600; }
+.review-composer-close { background: none; border: none; color: var(--text-2); font-size: 15px; line-height: 1; cursor: pointer; padding: 0 2px; }
+.review-composer-close:hover { color: var(--text-1); }
+.review-composer-close:focus-visible { outline: 2px solid var(--accent, #E87A5A); outline-offset: 1px; }
+.review-composer .review-input { margin-top: 2px; background: var(--base, transparent); }
 
 /* Narrow panes: the sidebar becomes a pinned overlay instead of a column,
    so wide content keeps the full pane width underneath. */
