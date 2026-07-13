@@ -224,3 +224,48 @@ describe('isCodexQuotaError', () => {
     assert.strictEqual(codex.isCodexQuotaError(null), false);
   });
 });
+
+describe('classifyCodexError', () => {
+  // Real message captured live: a ChatGPT account with an unavailable model
+  // configured returns a raw invalid_request_error JSON blob.
+  const MODEL_400 = '{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The \'gpt-5.3-codex\' model is not supported when using Codex with a ChatGPT account."}}';
+  // Real message captured live: logged-out CLI fails mid-connection with
+  // reconnect/transport noise wrapping a 401.
+  const AUTH_401 = 'Reconnecting... 2/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: wss://api.openai.com/v1/responses, cf-ray: a1ab5b883bdb63c9-LHR)';
+
+  test('classifies an unavailable-model 400 and extracts the model name', () => {
+    const c = codex.classifyCodexError(MODEL_400);
+    assert.strictEqual(c.kind, 'model');
+    assert.strictEqual(c.model, 'gpt-5.3-codex');
+  });
+
+  test('classifies model errors without an extractable name', () => {
+    const c = codex.classifyCodexError('The requested model is not supported on this plan.');
+    assert.strictEqual(c.kind, 'model');
+    assert.strictEqual(c.model, null);
+  });
+
+  test('classifies signed-out transport failures as auth', () => {
+    assert.strictEqual(codex.classifyCodexError(AUTH_401).kind, 'auth');
+    assert.strictEqual(codex.classifyCodexError('Missing bearer or basic authentication in header').kind, 'auth');
+    assert.strictEqual(codex.classifyCodexError('Error: not logged in. Please run codex login.').kind, 'auth');
+  });
+
+  test('classifies quota wording as quota (isCodexQuotaError agrees)', () => {
+    assert.strictEqual(codex.classifyCodexError(fx.QUOTA_MESSAGE).kind, 'quota');
+    assert.strictEqual(codex.isCodexQuotaError(fx.QUOTA_MESSAGE), true);
+  });
+
+  test('leaves ordinary failures unclassified', () => {
+    assert.strictEqual(codex.classifyCodexError('sandbox denied write to /etc/hosts').kind, 'unknown');
+    assert.strictEqual(codex.classifyCodexError('unknown thread thr_x').kind, 'unknown');
+    assert.strictEqual(codex.classifyCodexError('').kind, 'unknown');
+    assert.strictEqual(codex.classifyCodexError(null).kind, 'unknown');
+  });
+
+  test('a 400 mentioning 401-free auth words does not misclassify as model', () => {
+    // Guard: auth match must not swallow model errors and vice versa.
+    assert.strictEqual(codex.classifyCodexError(MODEL_400).kind, 'model');
+    assert.strictEqual(codex.classifyCodexError(AUTH_401).kind, 'auth');
+  });
+});

@@ -439,6 +439,10 @@ function handle(d) {
         renderCodexQuotaCard(convoId, d);
         finishProcessing(convoId);
       }
+      if(d.subtype==='codex_guidance' && convoId) {
+        renderCodexGuidanceCard(convoId, d);
+        finishProcessing(convoId);
+      }
       if(d.subtype==='codex_error' && convoId) {
         renderCodexErrorPill(convoId, d);
         finishProcessing(convoId);
@@ -2309,6 +2313,24 @@ function renderCodexQuotaCard(convoId, d) {
     `<div class="auth-error-body">${name} has used this plan's Codex allowance for now. This is a plan limit, not a fault, and your conversation is safe. ${name} can pick this up once the limit resets; your Claude agents are unaffected.</div>` +
     (d.detail ? `<div class="codex-error-detail">Codex: ${esc(d.detail)}</div>` : '') +
     `<div class="auth-error-foot">Then resend your message. <a href="https://docs.rundock.ai/concepts/runtimes" target="_blank" rel="noopener">About runtimes and limits &#x2192;</a></div>`;
+  m.appendChild(el);
+  scrollBottom();
+}
+
+// Guidance card for actionable Codex failures (signed out, unavailable
+// model). Same visual grammar as the quota card: what happened, the concrete
+// fix, the CLI's own words attached for the curious.
+function renderCodexGuidanceCard(convoId, d) {
+  if (convoId && activeConversation?.id !== convoId) return;
+  const m = document.getElementById('messages');
+  if (!m) return;
+  const el = document.createElement('div');
+  el.className = 'auth-error-card';
+  el.innerHTML =
+    `<div class="auth-error-title">${esc(d.title || 'Codex needs attention')}</div>` +
+    `<div class="auth-error-body">${esc(d.body || '')}</div>` +
+    (d.detail ? `<div class="codex-error-detail">Codex: ${esc(d.detail)}</div>` : '') +
+    `<div class="auth-error-foot">Then resend your message. <a href="https://docs.rundock.ai/concepts/runtimes" target="_blank" rel="noopener">About runtimes &#x2192;</a></div>`;
   m.appendChild(el);
   scrollBottom();
 }

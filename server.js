@@ -4837,16 +4837,38 @@ function spawnCodex(args, options, onError) {
 function sendCodexError(entry, convoId, message) {
   if (entry.errorSent) return;
   entry.errorSent = true;
-  const isQuota = codexRuntime.isCodexQuotaError(message);
-  const subtype = isQuota ? 'codex_quota' : 'codex_error';
+  const classified = codexRuntime.classifyCodexError(message);
+  // Actionable failures (signed out, unavailable model) become guidance cards
+  // with a concrete fix; quota keeps its dedicated card; everything else
+  // surfaces verbatim as a classified error pill.
+  let subtype, friendly, guidance = null;
+  if (classified.kind === 'quota') {
+    subtype = 'codex_quota';
+    friendly = 'This turn stopped: the ChatGPT plan limit was reached. It can be retried once the limit resets.';
+  } else if (classified.kind === 'auth') {
+    subtype = 'codex_guidance';
+    guidance = {
+      title: 'Codex is not signed in',
+      body: 'This agent runs on Codex, but the Codex CLI is not signed in on this machine. Run codex login in a terminal, then resend your message.',
+    };
+    friendly = 'This turn stopped: Codex is not signed in on this machine. Run codex login in a terminal, then resend the message.';
+  } else if (classified.kind === 'model') {
+    subtype = 'codex_guidance';
+    const modelBit = classified.model ? `the model '${classified.model}'` : 'a model';
+    guidance = {
+      title: 'Model not available on this account',
+      body: `This agent is configured with ${modelBit}, which this Codex account does not offer. Edit the agent and remove the model field to use the account default, or pick a model your plan includes.`,
+    };
+    friendly = `This turn stopped: ${modelBit} is not available on this Codex account. Remove the agent's model field to use the account default, or pick an available model.`;
+  } else {
+    subtype = 'codex_error';
+    friendly = 'This turn stopped: the runtime hit a problem.';
+  }
   try {
-    const friendly = isQuota
-      ? 'This turn stopped: the ChatGPT plan limit was reached. It can be retried once the limit resets.'
-      : 'This turn stopped: the runtime hit a problem.';
     appendTranscript(convoId, 'agent', entry.agentId, `${friendly}\nCodex: ${message}`);
   } catch (e) { /* transcript persistence is best-effort */ }
   safeSend(JSON.stringify({
-    type: 'system', subtype, detail: message,
+    type: 'system', subtype, detail: message, ...(guidance || {}),
     _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
   }));
 }
