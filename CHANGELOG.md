@@ -6,9 +6,11 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ## Unreleased
 
-**Name:** Universal Search
+> Documented incrementally as feature branches merge; release name and version chosen at cut. Shipped so far: universal search, File View (tables + native inline review), resizable panels.
 
-Search your whole workspace from one place. Press Cmd+K (Ctrl+K on Windows and Linux) or click the new search icon in the nav rail, and one palette searches your files, conversations, agents, and skills together, with results grouped by type as you type.
+**Universal Search.** Search your whole workspace from one place. Press Cmd+K (Ctrl+K on Windows and Linux) or click the new search icon in the nav rail, and one palette searches your files, conversations, agents, and skills together, with results grouped by type as you type.
+
+**File View.** The rich markdown editor grows up: tables render and edit in place with your file's exact formatting preserved, and files agents produce can now be reviewed where they live: inline comments and suggested edits, stored in the file itself in an open format, with accept/reject decisions and threaded replies that any agent can read and act on.
 
 ### Added
 
@@ -16,12 +18,24 @@ Search your whole workspace from one place. Press Cmd+K (Ctrl+K on Windows and L
 - **Search results open at the right place.** A conversation result opens the conversation scrolled to the matched message and briefly highlights it, even in long conversations. File results open in the file viewer, agents open their profile, skills open their page.
 - **An empty search shows your recent files and conversations,** so the palette is useful before you type anything.
 - **Search works on every setup.** The index is a small local file inside the workspace's `.rundock/` folder, rebuilt automatically whenever needed, and adds no new dependencies. On systems where the index engine isn't available, search falls back to a simpler scan rather than failing.
+- **Markdown tables render and edit in the editor.** Tables that previously showed as nothing now display and edit as real tables: click into any cell and type. Your file's exact table formatting (column padding, alignment markers, spacing) is preserved on save, even after edits: an edited cell changes only its own text, and undo restores the file exactly. Wide tables scroll in place instead of breaking the layout.
+- **Review files without leaving Rundock.** Select text in any markdown file and press Comment to leave feedback anchored to that passage. Agents can propose edits (insertions, deletions, replacements) that appear inline with Accept and Reject buttons, and comments support threaded replies and resolution. A review panel lists everything open in the file, numbered top to bottom, and clicking a comment marker in the text jumps to its card (and back).
+- **Review feedback lives in the file, in an open format.** Comments and suggestions are stored as CriticMarkup with a small metadata block at the end of the file: plain text, readable and editable in any editor, no lock-in, no separate database. Feedback is attributed: your comments show as "Me", agents show under their names, and anything without authorship information says so honestly.
+- **Agents write well-formed review feedback out of the box.** Every Rundock agent now knows the annotation format (anchored constructs, attribution, timestamps, threaded replies) and refers to feedback by quoting it in conversation, so what an agent says always matches what you see.
+- **Search understands review annotations.** Files under review are indexed by their readable text: comment and suggestion content is searchable, while raw annotation syntax and metadata never leak into search results.
+- **The sidebar and review panel are resizable.** Drag the sidebar's inner edge (or the review panel's) to the width you want; it's remembered between sessions. The resize affordance stays out of the way: a subtle line appears only after an intentional hover, and the accent colour shows only while you're actually dragging.
 
 ### Changed
 
 - **Pinned conversations now stay at the top of the sidebar.** Previously a pin only tinted the conversation's edge and old pinned conversations sank down the list; pinned conversations now always group first (marked with a pin), with both groups ordered by recent activity. The sidebar filter is now All and Unread; Unread is always visible and shows "You're all caught up" when there's nothing unread, and the separate Pinned filter is gone since pins are always in view.
 - **The per-view search boxes (conversations, files, skills) are replaced by universal search,** which covers everything they did from one place. The sidebars are cleaner as a result.
 - **Internal: browser-driven test suite and client coverage measurement.** The user interface now has automated end-to-end tests (including named regression tests for two bugs caught during development) alongside the existing server test suite, and interface code coverage is now measured and tracked.
+- **Internal: editor round-trip test harness.** The markdown editor's byte-for-byte round-trip guarantee is now enforced by a test suite that runs the real editor (105 new tests; 449 total), including regression tests derived from adversarial review. CI installs the suite's DOM dependency explicitly.
+
+### Fixed
+
+- **Files no longer change on save when you haven't changed them.** Three long-standing editor bugs meant every save could alter a file: the blank line after frontmatter was dropped, ordered lists with ten or more items gained stray padding on every item, and the file's final newline was stripped. All three are fixed, with tests locking the exact-bytes guarantee.
+- **Undo is safe during review.** Undoing an accepted or rejected suggestion restores both the document and the file's review records consistently, so a file can never say "undecided" and "accepted" at the same time.
 
 ## 0.9.2: Delegation Reliability & Hardening (2026-07-03)
 
