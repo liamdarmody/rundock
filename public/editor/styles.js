@@ -215,28 +215,29 @@ const CSS = `
   z-index: 4;
 }
 .review-sidebar.visible { display: block; }
-/* Resize affordance hierarchy: the col-resize cursor is the primary signal
-   (instant); a single 1px accent line is confirmation, fading in after a
-   300ms hover-intent delay (the VS Code sash convention) so cursor transits
-   never flash it. It draws exactly OVER the panel's own edge border (left:
-   -1px) — the highlight replaces the edge line, never doubles it. Leaving
-   un-highlights immediately; an active drag shows it instantly. */
+/* Resize affordance hierarchy: the col-resize cursor is the primary,
+   instant signal. Hovering the handle (after a 300ms intent delay, the
+   sash convention) brightens the panel's OWN edge border to a neutral
+   (--text-2): the edge wakes up rather than a second line appearing, so
+   nothing can double or clip. Dragging turns the same edge accent —
+   orange means action-in-progress, and it only ever appears under a
+   held mouse button. Leaving un-highlights immediately. */
 .review-resize-handle {
   position: absolute;
-  left: -1px;
+  left: 0;
   top: 0;
   bottom: 0;
-  width: 7px;
+  width: 6px;
   cursor: col-resize;
-  border-left: 1px solid transparent;
-  border-radius: 8px 0 0 8px;
-  transition: border-color 120ms ease 0s;
 }
-.review-resize-handle:hover {
-  border-left-color: var(--accent, #E87A5A);
+.review-sidebar.visible {
+  transition: border-left-color 120ms ease 0s;
+}
+.review-sidebar:has(.review-resize-handle:hover) {
+  border-left-color: var(--text-2);
   transition-delay: 300ms;
 }
-.review-resize-handle.dragging {
+.review-sidebar:has(.review-resize-handle.dragging) {
   border-left-color: var(--accent, #E87A5A);
   transition: none;
 }
