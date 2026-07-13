@@ -155,11 +155,14 @@ function contentAtom({ name, segType, cls, registerParser = false, marker = fals
         ...(node.attrs.id ? { 'data-critic-id': node.attrs.id } : {}),
       });
       if (marker) {
-        // Compact marker chip. The visible number is a CSS counter (document
-        // order), so wire-format anchor ids (c1, c2...) never surface in the
-        // UI; full text shows in the sidebar and on hover via the title.
+        // Compact marker chip showing the NUMBER FROM THE ANCHOR ID (c9
+        // renders as 9): the one identity agents and humans share. Document-
+        // order numbering was tried and rejected — it restarts as comments
+        // resolve, so the same comment read as c9 in agent replies and 1 in
+        // the panel. Full text shows in the sidebar and on hover.
         attrs.title = node.attrs.content;
-        return ['span', attrs];
+        const m = typeof node.attrs.id === 'string' && node.attrs.id.match(/^c(\d+)$/);
+        return ['span', attrs, m ? m[1] : '•'];
       }
       return ['span', attrs, node.attrs.content];
     },
