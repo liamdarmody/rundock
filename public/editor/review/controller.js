@@ -328,6 +328,47 @@ export function createReviewController({ editor, endmatter, author = 'me', now =
   }
 
   // ------------------------------------------------------------------
+  // reconciliation
+  // ------------------------------------------------------------------
+
+  // A construct that is present in the document is undecided by definition.
+  // Undo restores constructs but not endmatter mutations, so decision fields
+  // whose construct is back (verdict/decidedAt on suggestions; resolved/
+  // resolvedAt, plus the resolution-captured body, on root comments) are
+  // stale and must not serialize — otherwise Cmd+Z after a verdict hands
+  // agents a file that says both "undecided" and "accepted".
+  function reconciledData() {
+    const out = structuredClone(data);
+    for (const [id, entry] of Object.entries(out.suggestions)) {
+      if (entry && entry.verdict != null && findConstruct(id)) {
+        delete entry.verdict;
+        delete entry.decidedAt;
+      }
+    }
+    for (const [id, entry] of Object.entries(out.comments)) {
+      if (entry && entry.resolved && findConstruct(id)) {
+        delete entry.resolved;
+        delete entry.resolvedAt;
+        // A root comment's text lives inline; its endmatter body only ever
+        // comes from resolution capture. Replies (re:) keep their body.
+        if (!entry.re) delete entry.body;
+      }
+    }
+    return out;
+  }
+
+  function getEndmatterRaw() {
+    if (!dirty) return originalRaw;
+    const reconciled = reconciledData();
+    // A fully undone session serializes the original bytes, not a
+    // semantically-equal reformatting of them.
+    if (endmatter && endmatter.data && JSON.stringify(reconciled) === JSON.stringify(endmatter.data)) {
+      return originalRaw;
+    }
+    return buildEndmatter(reconciled);
+  }
+
+  // ------------------------------------------------------------------
   // Done-Reviewing (the handback gate)
   // ------------------------------------------------------------------
 
@@ -335,8 +376,9 @@ export function createReviewController({ editor, endmatter, author = 'me', now =
     const items = listItems();
     const openSuggestions = items.filter((i) => i.kind === 'suggestion').length;
     const openComments = items.filter((i) => i.kind === 'comment').length;
-    const suggestionEntries = Object.values(data.suggestions);
-    const commentEntries = Object.values(data.comments);
+    const current = reconciledData();
+    const suggestionEntries = Object.values(current.suggestions);
+    const commentEntries = Object.values(current.comments);
     return {
       suggestions: {
         accepted: suggestionEntries.filter((s) => s && s.verdict === 'accepted').length,
@@ -355,10 +397,11 @@ export function createReviewController({ editor, endmatter, author = 'me', now =
     const summary = progress();
     data.review = { status: 'done', at: now(), summary };
     touch();
+    const current = reconciledData();
     return {
       review: data.review,
-      comments: data.comments,
-      suggestions: data.suggestions,
+      comments: current.comments,
+      suggestions: current.suggestions,
     };
   }
 
@@ -378,6 +421,6 @@ export function createReviewController({ editor, endmatter, author = 'me', now =
     doneReviewing,
     isDirty: () => dirty,
     getData: () => data,
-    getEndmatterRaw: () => (dirty ? buildEndmatter(data) : originalRaw),
+    getEndmatterRaw,
   };
 }
