@@ -191,6 +191,9 @@ describe('id-less constructs and orphan handling', () => {
       const out = save();
       assert.ok(out.includes('A {==hl==} B ins C {--del--} D.'), out);
       assert.match(out, /verdict: accepted/);
+      // Only what is known gets recorded: no placeholder authorship values.
+      assert.ok(!out.includes('by: unknown'), 'no placeholder by field');
+      assert.ok(!out.includes('at: null'), 'no null timestamps');
     });
   });
 
