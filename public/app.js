@@ -3443,13 +3443,27 @@ function setWorkspaceMode(mode) {
 // language lives in the guidance copy. When Codex is absent, the guidance IS
 // the hint, and it appears nowhere else in the product.
 function runtimeRowHtml(label, st, isDefault) {
-  let dot, text;
-  if (!st || !st.installed) { dot = 'var(--idle)'; text = 'Not installed'; }
-  else if (st.authenticated === false) { dot = 'var(--attention)'; text = 'Not signed in'; }
-  else if (st.authenticated === true) { dot = 'var(--success)'; text = 'Signed in' + (st.version ? ' · v' + esc(st.version) : ''); }
-  else { dot = 'var(--idle)'; text = 'Installed' + (st.version ? ' · v' + esc(st.version) : ''); } // auth unknown: claim nothing
+  // Each state carries a hover tooltip explaining the evidence behind it:
+  // detection only checks what exists on disk (the CLI, its sign-in
+  // credentials) and claims nothing it cannot see. "Installed" in grey is
+  // deliberate: it means the CLI is present and sign-in state is unknown,
+  // not that something is wrong.
+  let dot, text, tip;
+  if (!st || !st.installed) {
+    dot = 'var(--idle)'; text = 'Not installed';
+    tip = 'The CLI for this runtime was not found on this machine.';
+  } else if (st.authenticated === false) {
+    dot = 'var(--attention)'; text = 'Not signed in';
+    tip = 'The CLI is installed, but no sign-in credentials were found on this machine. Run its login command to sign in.';
+  } else if (st.authenticated === true) {
+    dot = 'var(--success)'; text = 'Signed in' + (st.version ? ' · v' + esc(st.version) : '');
+    tip = 'The CLI is installed and sign-in credentials were found on this machine. Rundock checks that credentials exist; it never reads them.';
+  } else {
+    dot = 'var(--idle)'; text = 'Installed' + (st.version ? ' · v' + esc(st.version) : ''); // auth unknown: claim nothing
+    tip = 'The CLI is installed. Rundock cannot tell whether it is signed in, so it makes no claim either way. Agents on this runtime may still work.';
+  }
   return `<div class="settings-row"><span class="settings-label">${label}</span>` +
-    `<span class="runtime-chip">${isDefault ? '<span class="runtime-default">Default</span>' : ''}` +
+    `<span class="runtime-chip" title="${esc(tip)}" style="cursor:help">${isDefault ? '<span class="runtime-default">Default</span>' : ''}` +
     `<span class="runtime-dot" style="background:${dot}"></span>${text}</span></div>`;
 }
 
