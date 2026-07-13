@@ -122,6 +122,11 @@ function getBareArgs() {
 function getSpawnEnv(convoId) {
   const env = { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(ACTUAL_PORT) };
   if (convoId) env.RUNDOCK_CONVO_ID = convoId;
+  // Never let spawned agent processes inherit the test runner's coverage
+  // collection: a child killed mid-turn (e.g. a superseded Codex exec)
+  // leaves truncated coverage JSON that corrupts the runner's merge and
+  // intermittently fails npm run test:coverage.
+  delete env.NODE_V8_COVERAGE;
   // In the packaged app there is no system `node`, so the PreToolUse permission
   // hook is run with Rundock's bundled runtime (process.execPath) behaving as
   // Node via ELECTRON_RUN_AS_NODE. The hook is a child of the spawned claude
