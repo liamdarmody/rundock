@@ -2383,6 +2383,7 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
                   // silently bypasses the user's runtime choice). Soft block:
                   // kill the turn and resume the caller with a corrective
                   // message so it recovers in-conversation.
+                  // KNOWN LIMITATION: without a captured sessionId the caller cannot be resumed, so the block does not fire and the call falls through (pre-fix behavior). In practice init always precedes tool_use, so sessionId is present. Narrow.
                   const offRoster = findOffRosterWorkspaceMatch(entry.agentId, toolInput);
                   if (offRoster && entry.sessionId) {
                     console.log(`[AgentIntercept] convo=${convoId} agent=${entry.agentId} blocking off-roster Agent tool target: ${offRoster.name}`);
