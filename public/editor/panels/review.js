@@ -9,6 +9,7 @@
 // the sidebar column is sticky inside the pane's scroll container.
 
 import { openWorkspaceLocation } from '../review/deep-link-shim.js';
+import { createComposingPlugin, composingKey, setComposingRange, getComposingRange } from '../review/composing-decoration.js';
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -84,9 +85,45 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
   }
 
   let open = false;
-  let composer = null; // { mode: 'comment'|'suggest', range: {from,to}|null }
+  let composer = null; // { mode: 'comment'|'suggest' }; the range lives in the composing plugin
+  let decidedThisSession = false;
+
+  // While the composer is open the target range stays visibly decorated
+  // (the editor blurs, so the native selection disappears) and the plugin
+  // maps the range through any document edits.
+  editor.registerPlugin(createComposingPlugin());
 
   const save = () => { if (typeof onRequestSave === 'function') onRequestSave(); };
+
+  // Cmd/Ctrl+Enter submits, Escape cancels — in every review textarea.
+  function wireComposeKeys(ta, submit, cancel) {
+    ta.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); submit(); }
+      else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+    });
+  }
+
+  // Settle flash on the block a verdict just changed, so every action
+  // visibly causes its effect.
+  function flashAt(pos) {
+    try {
+      const clamped = Math.max(1, Math.min(pos, editor.state.doc.content.size - 1));
+      const dom = editor.view.domAtPos(clamped);
+      const target = dom.node.nodeType === 1 ? dom.node : dom.node.parentElement;
+      if (target && target.classList) {
+        target.classList.add('critic-flash');
+        setTimeout(() => target.classList.remove('critic-flash'), 1200);
+      }
+    } catch { /* position may be gone; harmless */ }
+  }
+
+  // Card exit animation, then the operation. Input is blocked on the card
+  // while it departs so a second click cannot target a stale locator.
+  function departThen(card, op) {
+    card.classList.add('leaving');
+    card.style.pointerEvents = 'none';
+    setTimeout(() => { op(); render(); save(); }, 160);
+  }
 
   function counts() {
     const items = controller.listItems();
@@ -104,9 +141,16 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
   // composer
   // ------------------------------------------------------------------
 
+  function closeComposer() {
+    composer = null;
+    setComposingRange(editor, null);
+    render();
+  }
+
   function openComposer(mode) {
     const { from, to } = editor.state.selection;
-    composer = { mode, range: from === to ? null : { from, to } };
+    composer = { mode };
+    setComposingRange(editor, from === to ? null : { from, to });
     if (!open) setOpen(true); else render();
     const ta = sidebar.querySelector('.review-composer textarea');
     if (ta) ta.focus();
@@ -117,8 +161,11 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     const box = el('div', 'review-composer');
     const isSuggest = composer.mode === 'suggest';
     box.appendChild(el('div', 'review-composer-title', isSuggest ? 'Suggest a replacement' : 'Add a comment'));
-    if (composer.range) {
-      const quote = editor.state.doc.textBetween(composer.range.from, composer.range.to, ' ');
+    // The live range comes from the plugin, mapped through any edits made
+    // while the composer sat open.
+    const range = getComposingRange(editor);
+    if (range) {
+      const quote = editor.state.doc.textBetween(range.from, range.to, ' ');
       // Degenerate selections (a stray period, whitespace) render no quote.
       if (quote.trim().length > 1) {
         box.appendChild(el('div', 'review-quote', quote.length > 120 ? quote.slice(0, 117) + '…' : quote));
@@ -131,18 +178,22 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     const row = el('div', 'review-actions');
     const saveBtn = el('button', 'review-btn primary', isSuggest ? 'Suggest' : 'Comment');
     saveBtn.type = 'button';
-    saveBtn.onclick = () => {
+    const submit = () => {
       const text = ta.value.trim();
       if (!text) return;
-      if (isSuggest) controller.suggestReplace(text, composer.range);
-      else controller.addComment(text, composer.range);
+      const liveRange = getComposingRange(editor);
+      if (isSuggest) controller.suggestReplace(text, liveRange);
+      else controller.addComment(text, liveRange);
       composer = null;
+      setComposingRange(editor, null);
       render();
       save();
     };
+    saveBtn.onclick = submit;
     const cancelBtn = el('button', 'review-btn', 'Cancel');
     cancelBtn.type = 'button';
-    cancelBtn.onclick = () => { composer = null; render(); };
+    cancelBtn.onclick = closeComposer;
+    wireComposeKeys(ta, submit, closeComposer);
     row.appendChild(saveBtn);
     row.appendChild(cancelBtn);
     box.appendChild(row);
@@ -187,10 +238,14 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     const row = el('div', 'review-actions');
     const acceptBtn = el('button', 'review-btn accept', 'Accept');
     acceptBtn.type = 'button';
-    acceptBtn.onclick = () => { controller.accept(locatorFor(item)); render(); save(); };
+    acceptBtn.onclick = () => departThen(card, () => {
+      if (controller.accept(locatorFor(item))) { flashAt(item.pos); decidedThisSession = true; }
+    });
     const rejectBtn = el('button', 'review-btn reject', 'Reject');
     rejectBtn.type = 'button';
-    rejectBtn.onclick = () => { controller.reject(locatorFor(item)); render(); save(); };
+    rejectBtn.onclick = () => departThen(card, () => {
+      if (controller.reject(locatorFor(item))) { flashAt(item.pos); decidedThisSession = true; }
+    });
     row.appendChild(acceptBtn);
     row.appendChild(rejectBtn);
     card.appendChild(row);
@@ -227,23 +282,32 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
       const ta = el('textarea');
       ta.rows = 2;
       ta.placeholder = 'Reply…';
-      const send = el('button', 'review-btn primary', 'Send');
-      send.type = 'button';
-      send.onclick = () => {
+      const sendReply = () => {
         const text = ta.value.trim();
         if (!text) return;
         controller.reply(item.id, text);
         render();
         save();
       };
+      const cancelReply = () => box.remove();
+      const send = el('button', 'review-btn primary', 'Send');
+      send.type = 'button';
+      send.onclick = sendReply;
+      const cancel = el('button', 'review-btn', 'Cancel');
+      cancel.type = 'button';
+      cancel.onclick = cancelReply;
+      wireComposeKeys(ta, sendReply, cancelReply);
       box.appendChild(ta);
       box.appendChild(send);
+      box.appendChild(cancel);
       card.insertBefore(box, row);
       ta.focus();
     };
     const resolveBtn = el('button', 'review-btn resolve', 'Resolve');
     resolveBtn.type = 'button';
-    resolveBtn.onclick = () => { controller.resolve(locatorFor(item)); render(); save(); };
+    resolveBtn.onclick = () => departThen(card, () => {
+      if (controller.resolve(locatorFor(item))) { flashAt(item.pos); decidedThisSession = true; }
+    });
     row.appendChild(replyBtn);
     row.appendChild(resolveBtn);
     card.appendChild(row);
@@ -263,7 +327,9 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     const row = el('div', 'review-actions');
     const releaseBtn = el('button', 'review-btn resolve', 'Remove highlight');
     releaseBtn.type = 'button';
-    releaseBtn.onclick = () => { controller.release(locatorFor(item)); render(); save(); };
+    releaseBtn.onclick = () => departThen(card, () => {
+      if (controller.release(locatorFor(item))) { flashAt(item.pos); decidedThisSession = true; }
+    });
     row.appendChild(releaseBtn);
     card.appendChild(row);
     card.querySelector('.review-card-head').style.cursor = 'pointer';
@@ -335,13 +401,22 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     renderComposer(body);
 
     if (!items.length && !composer) {
-      body.appendChild(el('div', 'review-empty', 'No open review items. Select text and use Comment in the toolbar.'));
+      // Two distinct empty states: finishing a review is a product moment,
+      // not the same as never having started one.
+      if (decidedThisSession) {
+        body.appendChild(el('div', 'review-empty completed', 'All feedback addressed.'));
+      } else {
+        body.appendChild(el('div', 'review-empty', 'No open review items. Select text and use Comment in the toolbar.'));
+      }
     }
     let commentNumber = 0;
     for (const item of items) {
-      if (item.kind === 'highlight') body.appendChild(renderHighlightCard(item));
-      else if (item.kind === 'comment') body.appendChild(renderCommentCard(item, ++commentNumber));
-      else body.appendChild(renderSuggestionCard(item));
+      let card;
+      if (item.kind === 'highlight') card = renderHighlightCard(item);
+      else if (item.kind === 'comment') card = renderCommentCard(item, ++commentNumber);
+      else card = renderSuggestionCard(item);
+      card.dataset.pos = String(item.pos);
+      body.appendChild(card);
     }
     // NOTE: "Done reviewing" (controller.doneReviewing) is deliberately not
     // rendered: the handback gate returns to the UI together with the
@@ -353,12 +428,36 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
   const onTransaction = ({ transaction }) => { if (transaction.docChanged) render(); };
   editor.on('transaction', onTransaction);
 
+  // Clicking an inline construct opens the panel and lights up its card —
+  // the mirror of the card's scroll-to-construct.
+  const onConstructClick = (event) => {
+    const target = event.target.closest && event.target.closest('.critic');
+    if (!target || sidebar.contains(target)) return;
+    const item = controller.listItems().find((i) => {
+      try {
+        const dom = editor.view.nodeDOM(i.pos);
+        return dom === target || (dom && dom.contains && dom.contains(target));
+      } catch { return false; }
+    });
+    if (!item) return;
+    if (!open) setOpen(true);
+    const card = sidebar.querySelector(`.review-card[data-pos="${item.pos}"]`);
+    if (card) {
+      card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      card.classList.add('attention');
+      setTimeout(() => card.classList.remove('attention'), 1200);
+    }
+  };
+  paneElement.addEventListener('click', onConstructClick);
+
   // Open automatically when the file arrives with review items.
   if (counts().total > 0) setOpen(true); else render();
 
   return {
     detach: () => {
       editor.off('transaction', onTransaction);
+      paneElement.removeEventListener('click', onConstructClick);
+      try { editor.unregisterPlugin(composingKey); } catch { /* editor may be gone */ }
       sidebar.remove();
       pill.remove();
       paneElement.classList.remove('review-active');
