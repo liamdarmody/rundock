@@ -65,6 +65,12 @@ async function initTiptapEditor(path, content) {
     toolbarHostElement: document.getElementById('tiptap-editor-pane'),
     onUpdate: () => onTiptapEditorUpdate(),
     onWikilinkClick: (target) => openWikilink(target),
+    // Review identity: workspace profile name -> 'me' fallback; the agent
+    // roster lets review attribution render known agents as agent chips.
+    author: (workspaceAnalysis && workspaceAnalysis.userProfile && workspaceAnalysis.userProfile.fields && workspaceAnalysis.userProfile.fields.name)
+      ? String(workspaceAnalysis.userProfile.fields.name).trim().toLowerCase()
+      : 'me',
+    agents: Array.isArray(agents) ? agents.map(a => ({ name: a.name, displayName: a.displayName })) : [],
   });
   activeTiptapEditor = editor;
   // Re-sync the find-bar count from plugin state whenever the document
