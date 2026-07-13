@@ -2690,6 +2690,16 @@ function initSidebarResize() {
   const handle = document.createElement('div');
   handle.className = 'sidebar-resize-handle';
   handle.title = 'Drag to resize';
+  // Hover intent: the affordance line appears only after 300ms of genuine
+  // hover, so cursor transits between sidebar and content never flash it.
+  let hoverTimer = null;
+  handle.addEventListener('mouseenter', () => {
+    hoverTimer = setTimeout(() => handle.classList.add('edge-hover'), 300);
+  });
+  handle.addEventListener('mouseleave', () => {
+    clearTimeout(hoverTimer);
+    handle.classList.remove('edge-hover');
+  });
   handle.addEventListener('mousedown', (e) => {
     e.preventDefault();
     handle.classList.add('dragging');
