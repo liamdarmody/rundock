@@ -178,6 +178,10 @@ const CSS = `
 .review-pill:focus-visible { outline: 2px solid var(--accent, #E87A5A); outline-offset: 2px; }
 
 /* --- Review: sidebar ------------------------------------------------------ */
+/* The review panel is the same component grammar as the properties box:
+   identical border, radius, background, and header metrics, so the REVIEW
+   and PROPERTIES labels align pixel-for-pixel and the two boxes read as
+   siblings. Card gutters are symmetric by construction (.review-body). */
 .review-sidebar {
   display: none;
   grid-column: 2;
@@ -186,11 +190,12 @@ const CSS = `
   top: 0;
   max-height: calc(100vh - 140px);
   overflow-y: auto;
-  padding: 2px 10px 2px 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
   /* The pane's right padding is 32px but the header's Saved indicator sits
      at 24px; pulling the sidebar 8px right aligns their right edges. */
   margin-right: -8px;
-  background: var(--base, #1A1A1A);
   z-index: 4;
 }
 .review-sidebar.visible { display: block; }
@@ -199,28 +204,29 @@ const CSS = `
   left: 0;
   top: 0;
   bottom: 0;
-  width: 7px;
+  width: 6px;
   cursor: col-resize;
-  border-left: 1px solid var(--border);
 }
 .review-resize-handle:hover, .review-resize-handle:active {
   border-left: 2px solid var(--accent, #E87A5A);
+  border-radius: 8px 0 0 8px;
 }
-.review-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.review-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--border); }
 .review-title { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); }
-.review-close { background: none; border: none; color: var(--text-2); font-size: 16px; cursor: pointer; padding: 0 4px; }
+.review-close { background: none; border: none; color: var(--text-2); font-size: 14px; line-height: 1; cursor: pointer; padding: 0 2px; }
 .review-close:hover { color: var(--text-1); }
-.review-progress { font-size: 12px; color: var(--text-2); margin-bottom: 12px; }
-.review-empty { font-size: 12px; color: var(--text-2); line-height: 1.5; padding: 8px 0; }
+.review-body { padding: 12px; }
+.review-empty { font-size: 12px; color: var(--text-2); line-height: 1.5; }
 
 .review-card {
-  background: var(--card);
+  background: var(--base, transparent);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px 12px;
   margin-bottom: 10px;
   font-size: 13px;
 }
+.review-card:last-child { margin-bottom: 0; }
 .review-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .review-badge {
   font-size: 10px;
@@ -282,10 +288,6 @@ const CSS = `
 .review-btn.resolve:hover { background: var(--accent-glow, rgba(232, 122, 90, 0.15)); color: var(--accent, #E87A5A); border-color: var(--accent, #E87A5A); }
 .review-btn.primary { background: var(--accent, #E87A5A); border-color: var(--accent, #E87A5A); color: #1A1A1A; }
 .review-btn.primary:hover { opacity: 0.9; }
-.review-btn.done { width: 100%; padding: 7px 12px; }
-.review-btn.done:hover { background: var(--accent-glow, rgba(232, 122, 90, 0.15)); color: var(--accent, #E87A5A); border-color: var(--accent, #E87A5A); }
-.review-footer { margin-top: 4px; padding-bottom: 8px; }
-.review-done-note { font-size: 12px; color: var(--success); padding: 8px 0; }
 .review-composer {
   background: var(--card);
   border: 1px solid var(--accent, #E87A5A);
@@ -293,6 +295,7 @@ const CSS = `
   padding: 10px 12px;
   margin-bottom: 12px;
 }
+.review-composer:last-child { margin-bottom: 0; }
 .review-composer-title { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
 .review-composer textarea, .review-reply-box textarea {
   width: 100%;
@@ -322,9 +325,7 @@ const CSS = `
     bottom: 12px;
     width: var(--review-sidebar-width, 260px);
     max-height: none;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 10px 10px 10px 14px;
+    margin-right: 0;
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
     z-index: 40;
   }
