@@ -70,14 +70,20 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
   // instead. Recomputed on any pane resize.
   const PANEL_INSET = 24;
   const isOverlay = () => (typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 1000px)').matches);
-  const updateMaxHeight = () => {
-    if (isOverlay()) { sidebar.style.maxHeight = ''; return; }
+  const updateLayout = () => {
+    if (isOverlay()) { sidebar.style.maxHeight = ''; sidebar.style.marginRight = ''; return; }
     const h = paneElement.clientHeight - PANEL_INSET * 2;
     if (h > 0) sidebar.style.maxHeight = `${h}px`;
+    // Right alignment with the header's save status: the pane's padding is
+    // 32px against the header's 24px (hence the -8px pull), and the pane's
+    // scrollbar gutter (present only when the document scrolls) shifts the
+    // content edge by its width, so it joins the derivation.
+    const scrollbarWidth = paneElement.offsetWidth - paneElement.clientWidth;
+    sidebar.style.marginRight = `${-(8 + scrollbarWidth)}px`;
   };
   let resizeObserver = null;
   if (typeof ResizeObserver === 'function') {
-    resizeObserver = new ResizeObserver(updateMaxHeight);
+    resizeObserver = new ResizeObserver(updateLayout);
     resizeObserver.observe(paneElement);
   }
 
@@ -195,7 +201,7 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     open = next;
     paneElement.classList.toggle('review-active', open);
     sidebar.classList.toggle('visible', open);
-    updateMaxHeight();
+    updateLayout();
     render();
   }
 
@@ -413,6 +419,7 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
   }
 
   function render() {
+    if (open) updateLayout(); // scrollbar gutter appears/disappears with content length
     const { items, total } = counts();
 
     // The pill is the minimised state: open feedback stays loudly visible
