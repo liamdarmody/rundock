@@ -611,6 +611,40 @@ function findDirectReportMatch(agentId, toolInput) {
   return null;
 }
 
+// The impersonation guard's matcher. An Agent tool call whose explicit
+// subagent_type names an onTeam workspace agent OUTSIDE the caller's direct
+// reports must not fall through to Claude Code: the harness would spawn a
+// generic Claude subagent wearing that agent's name (no real spawn, no
+// runtime, no disclosure). For runtime: codex agents that silently bypasses
+// the user's runtime choice. Returns the off-roster workspace agent, or null.
+//
+// Explicit path ONLY (decision, Liam 2026-07-13): prompt-text mentions of
+// off-roster agents ("review what Cody wrote") are common and legitimate, so
+// the prompt word-scan stays direct-reports-only. Call this AFTER
+// findDirectReportMatch returns null; direct reports are excluded here too
+// so the two matchers never claim the same target.
+function findOffRosterWorkspaceMatch(agentId, toolInput) {
+  if (!toolInput.subagent_type) return null;
+  const wanted = String(toolInput.subagent_type).toLowerCase();
+  const allAgents = discoverAgents();
+  const leader = allAgents.find(x => x.id === agentId);
+  const isOrchestrator = leader?.type === 'orchestrator';
+  const match = allAgents.find(a =>
+    a.status === 'onTeam' && a.id !== agentId && (
+      a.name.toLowerCase() === wanted ||
+      (a.id && String(a.id).toLowerCase() === wanted) ||
+      (a.displayName && a.displayName.toLowerCase() === wanted)
+    )
+  );
+  if (!match) return null;
+  // Exclude direct reports (mirror of findDirectReportMatch's roster rules).
+  const isDirectReport =
+    match.reportsTo === agentId ||
+    match.reportsTo === leader?.name ||
+    (isOrchestrator && match.type === 'platform');
+  return isDirectReport ? null : match;
+}
+
 function buildSystemPrompt(agentData) {
   // Read workspace mode to adjust platform rules
   let isCodeMode = false;
@@ -2335,6 +2369,36 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
                     _intercepted: true, _parentSessionId: entry.sessionId, _parentAgentId: entry.agentId
                   }, chatProcesses);
                   safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: 0, _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId }));
+                } else {
+                  // Impersonation guard: an explicit subagent_type naming a
+                  // workspace agent OUTSIDE this caller's direct reports must
+                  // not fall through, or Claude Code spawns a generic subagent
+                  // wearing that agent's name (for runtime: codex agents this
+                  // silently bypasses the user's runtime choice). Soft block:
+                  // kill the turn and resume the caller with a corrective
+                  // message so it recovers in-conversation.
+                  const offRoster = findOffRosterWorkspaceMatch(entry.agentId, toolInput);
+                  if (offRoster && entry.sessionId) {
+                    console.log(`[AgentIntercept] convo=${convoId} agent=${entry.agentId} blocking off-roster Agent tool target: ${offRoster.name}`);
+                    intercepted = true;
+                    if (entry.responseText) {
+                      const toolSummary = buildToolSummary(entry.toolCalls);
+                      const textWithTools = toolSummary ? toolSummary + '\n' + entry.responseText : entry.responseText;
+                      appendTranscript(convoId, 'agent', entry.agentId, textWithTools);
+                    } else {
+                      appendTranscript(convoId, 'agent', entry.agentId, buildToolSummary(entry.toolCalls), 'routing');
+                    }
+                    try { entry.process.kill('SIGKILL'); } catch (e) {}
+                    entry.exited = true;
+                    const offName = offRoster.displayName || offRoster.name;
+                    safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: `Blocked a handoff to ${offName}: not one of this agent's direct reports.`, _conversationId: convoId }));
+                    const blockedEntry = spawnResumedProcess(convoId, entry.agentId, entry.sessionId, chatProcesses, {});
+                    blockedEntry.idle = false;
+                    safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: blockedEntry.processId, _agent: entry.agentId, autoContinue: true }));
+                    const runtimeNote = offRoster.runtime === 'codex' ? ` ${offName} runs on a different runtime (Codex), which only their own leader can start.` : '';
+                    const blockPrompt = `[SYSTEM: delegation-blocked] Your Agent tool call named "${offName}" (${offRoster.name}), a workspace agent who is not one of your direct reports, so it was NOT run. No subagent may act as ${offName}.${runtimeNote} Do not retry the same call. If the task needs ${offName}, tell the user this needs routing through ${offName}'s leader and hand back. Otherwise continue without them.`;
+                    blockedEntry.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: blockPrompt } }) + '\n');
+                  }
                 }
               } catch (e) {
                 console.log(`[AgentIntercept] convo=${convoId} failed to parse Agent tool input: ${e.message}`);
@@ -5645,7 +5709,7 @@ module.exports._internal = {
   stripRundockMarkers, isSilentParkResponse, sanitizeSpecialistOutput,
   extractSnippet, buildToolSummary, isAuthError, isModelError,
   // rosters + prompts
-  findDirectReportMatch, buildTeamRoster, buildPeerRoster,
+  findDirectReportMatch, findOffRosterWorkspaceMatch, buildTeamRoster, buildPeerRoster,
   extractSelfDescription, buildSystemPrompt,
   // workspace analysis / scaffolding
   detectWorkspaceMode, isEmptyWorkspace, analyzeWorkspace,

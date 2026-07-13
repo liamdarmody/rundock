@@ -211,4 +211,36 @@ describe('delegation to a codex specialist', () => {
     assert.ok(routed);
     h.reapConvo(convoId);
   });
+
+  test('off-roster codex target is soft-blocked: no Claude impersonation, corrective prompt names the runtime', async () => {
+    // The observed live failure: a specialist names a codex agent outside its
+    // direct reports. Pre-fix, Claude Code spawned a Claude subagent wearing
+    // the codex agent's name, silently bypassing the user's runtime choice.
+    // Ida (researcher, runtime: codex) reports to chief-of-staff, not Penn.
+    const convoId = h.freshConvoId('cdel');
+    h.clearInvocations();
+    h.writeScenario([
+      {
+        match: { agent: 'content-lead', promptIncludes: 'codex-offroster please' },
+        turn: [{ agentTool: { subagent_type: 'researcher', prompt: 'codex-offroster brief' } }],
+      },
+      {
+        // The corrective prompt must state the reason AND flag the runtime.
+        match: { agent: 'content-lead', promptIncludes: ['[SYSTEM: delegation-blocked]', 'not one of your direct reports', 'different runtime (Codex)'] },
+        turn: [{ text: 'Acknowledged: Ida runs on Codex under another leader.' }],
+      },
+    ]);
+
+    client.send({ type: 'chat', conversationId: convoId, agent: 'content-lead', content: 'codex-offroster please' });
+
+    await client.waitFor(m => m.type === 'system' && m.subtype === 'info' && m._conversationId === convoId && /Blocked a handoff to Ida/.test(m.content || ''), { label: 'block pill' });
+    await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'content-lead' && /runs on Codex under another leader/.test(m.result || ''), { label: 'resumed caller result' });
+
+    // Neither a codex exec process nor a Claude stand-in for Ida ever ran.
+    const invs = h.readInvocations();
+    assert.strictEqual(invs.find(i => i.argv && i.argv[0] === 'exec'), undefined, 'no codex process spawned');
+    assert.strictEqual(invs.find(i => i.agent === 'researcher'), undefined, 'no Claude process wearing the codex agent name');
+
+    h.reapConvo(convoId);
+  });
 });
