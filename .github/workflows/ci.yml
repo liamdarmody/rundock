@@ -2,10 +2,11 @@ name: CI
 
 # Runs the test suite on every push to main and every pull request, so no change
 # to the server (a formerly untested ~4.3k-line monolith) merges without the
-# regression net passing. The suite is Node built-ins only (node:test/assert);
-# --omit=dev installs just the runtime deps it needs (ws) and skips the heavy
-# Electron build toolchain. Matrix covers the shipping Node (.nvmrc = 20) and the
-# current dev runtime (24).
+# regression net passing. --omit=dev installs just the runtime deps (ws) and
+# skips the heavy Electron build toolchain; the editor round-trip suite runs
+# the real Tiptap editor under jsdom, which is installed individually (pinned
+# to the lockfile version) rather than pulling all devDependencies. Matrix
+# covers the shipping Node (.nvmrc = 20) and the current dev runtime (24).
 
 on:
   push:
@@ -39,6 +40,11 @@ jobs:
 
       - name: Install runtime dependencies
         run: npm ci --omit=dev
+
+      - name: Install test-only DOM dependency
+        # The editor round-trip suite boots the real editor under jsdom.
+        # Version must match package.json/package-lock.json.
+        run: npm install --no-save jsdom@29.1.1
 
       - name: Run tests
         run: npm test
