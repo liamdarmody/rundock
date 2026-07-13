@@ -74,6 +74,12 @@ async function initTiptapEditor(path, content) {
     // The minimised review pill sits in the header row, next to the save
     // status, level with the filename.
     reviewPillHostElement: document.getElementById('editor-header'),
+    // Cross-file navigation routes through the universal-search file-open
+    // path; same-file locations stay local to the editor.
+    onNavigate: (loc) => {
+      if (loc && loc.path) { paletteOpenFile(loc.path); return true; }
+      return false;
+    },
   });
   activeTiptapEditor = editor;
   // Re-sync the find-bar count from plugin state whenever the document

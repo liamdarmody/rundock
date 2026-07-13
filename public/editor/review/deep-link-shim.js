@@ -1,19 +1,28 @@
-// SEAM: swap for the universal-search deep-link at merge time.
+// Workspace navigation seam. Pre-merge this was a stub that always reported
+// "not handled"; with universal search on main it is now an injection point
+// the host wires to its real navigation (the palette's file-open route).
 //
-// The universal-search branch (unmerged while this branch is in flight)
-// introduces a navigation/deep-link mechanism for opening a workspace
-// location from anywhere in the app. The review feature must not depend on
-// an unmerged branch, so this shim carries the agreed signature and always
-// reports "not handled"; callers keep their local fallback (in-document
-// scroll). At merge, the body becomes a call into the real deep-link
-// handler and the fallback stays as the degraded path.
-//
-// Agreed shape:
+// Contract:
 //   openWorkspaceLocation({ path, anchor }) -> boolean
-//     path:   workspace-relative file path
+//     path:   workspace-relative file path (null = current file)
 //     anchor: optional construct/heading anchor within the file
-//     returns true when navigation was handled.
+//     returns true when navigation was handled; callers keep their local
+//     fallback (in-document scroll) for unhandled locations.
+//
+// Same-file locations (path null) intentionally report unhandled: the
+// caller's local scroll is the correct behaviour and needs no host help.
 
-export function openWorkspaceLocation() {
-  return false;
+let navigator_ = null;
+
+export function registerWorkspaceNavigator(fn) {
+  navigator_ = typeof fn === 'function' ? fn : null;
+}
+
+export function openWorkspaceLocation(location) {
+  if (!navigator_) return false;
+  try {
+    return navigator_(location) === true;
+  } catch {
+    return false;
+  }
 }
