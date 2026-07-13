@@ -188,8 +188,12 @@ const CSS = `
   grid-column: 2;
   grid-row: 1 / span 99;
   position: sticky;
-  top: 0;
-  max-height: calc(100vh - 140px);
+  /* Matches the pane's padding-top, so the panel keeps the same 24px gap
+     when stuck mid-scroll as it has at rest. */
+  top: 24px;
+  /* Fallback only: the panel computes its real max-height from the pane's
+     viewport so the bottom gap equals the top and right gaps (24px). */
+  max-height: calc(100vh - 160px);
   overflow-y: auto;
   background: var(--card);
   border: 1px solid var(--border);
