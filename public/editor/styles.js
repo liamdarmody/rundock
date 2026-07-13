@@ -215,17 +215,30 @@ const CSS = `
   z-index: 4;
 }
 .review-sidebar.visible { display: block; }
+/* Resize affordance hierarchy: the col-resize cursor is the primary signal
+   (instant); a single 1px accent line is confirmation, fading in after a
+   300ms hover-intent delay (the VS Code sash convention) so cursor transits
+   never flash it. It draws exactly OVER the panel's own edge border (left:
+   -1px) — the highlight replaces the edge line, never doubles it. Leaving
+   un-highlights immediately; an active drag shows it instantly. */
 .review-resize-handle {
   position: absolute;
-  left: 0;
+  left: -1px;
   top: 0;
   bottom: 0;
-  width: 6px;
+  width: 7px;
   cursor: col-resize;
-}
-.review-resize-handle:hover, .review-resize-handle:active {
-  border-left: 2px solid var(--accent, #E87A5A);
+  border-left: 1px solid transparent;
   border-radius: 8px 0 0 8px;
+  transition: border-color 120ms ease 0s;
+}
+.review-resize-handle:hover {
+  border-left-color: var(--accent, #E87A5A);
+  transition-delay: 300ms;
+}
+.review-resize-handle.dragging {
+  border-left-color: var(--accent, #E87A5A);
+  transition: none;
 }
 .review-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--border); }
 .review-title { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); }

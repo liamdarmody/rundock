@@ -423,10 +423,12 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     handle.title = 'Drag to resize';
     handle.addEventListener('mousedown', (e) => {
       e.preventDefault();
+      handle.classList.add('dragging');
       const startX = e.clientX;
       const startW = sidebarWidth;
       const onMove = (ev) => { sidebarWidth = applyWidth(startW + (startX - ev.clientX)); };
       const onUp = () => {
+        handle.classList.remove('dragging');
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
         try { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth)); } catch { /* private mode */ }
