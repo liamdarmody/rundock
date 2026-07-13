@@ -43,14 +43,12 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
   const sidebar = el('aside', 'review-sidebar');
   const pill = el('button', 'review-pill');
   pill.type = 'button';
-  // The minimised pill lives in the editor header row (level with the
-  // filename and save status) when the host provides it; otherwise it pins
-  // to the pane's top-right corner.
+  // The minimised pill lives at the far right of the editor header row,
+  // after the save status, when the host provides it; otherwise it pins to
+  // the pane's top-right corner.
   if (pillHostElement) {
     pill.classList.add('in-header');
-    const status = pillHostElement.querySelector('.editor-status');
-    if (status) pillHostElement.insertBefore(pill, status);
-    else pillHostElement.appendChild(pill);
+    pillHostElement.appendChild(pill);
   } else {
     paneElement.appendChild(pill);
   }
