@@ -48,6 +48,10 @@ export function createEditor({
   toolbarHostElement = null,
   onUpdate = null,
   onWikilinkClick = null,
+  // Review identity: the workspace user's handle (renders as "Me") and the
+  // agent roster (matched entries render as agent chips). Both optional.
+  author = null,
+  agents = [],
 }) {
   if (!element) throw new Error('createEditor: element is required');
 
@@ -74,6 +78,7 @@ export function createEditor({
   const review = createReviewController({
     editor,
     endmatter: parts.endmatter,
+    ...(author ? { author } : {}),
     onChange: () => { if (typeof onUpdate === 'function') onUpdate({ editor }); },
   });
   let reviewPanel = { detach: () => {}, refresh: () => {}, openComposer: () => {} };
@@ -82,6 +87,8 @@ export function createEditor({
       paneElement: toolbarHostElement,
       editor,
       controller: review,
+      author: author || 'me',
+      agents,
       onRequestSave: () => { if (typeof onUpdate === 'function') onUpdate({ editor }); },
     });
   }
