@@ -43,7 +43,7 @@ export function parseFile(rawMarkdown) {
   // (readNormalisedFile), so this only ever fires for content that bypassed
   // it; half-supporting CRLF produced mixed-EOL output and blinded endmatter
   // detection (which matches '\n---\n').
-  const normalised = typeof rawMarkdown === 'string' ? rawMarkdown.replace(/\r\n/g, '\n') : rawMarkdown;
+  const normalised = typeof rawMarkdown === 'string' ? rawMarkdown.replace(/\r\n?/g, '\n') : rawMarkdown;
   const fm = extractFrontmatter(normalised);
   const fileSplit = splitTrailingNewlines(fm.body);
   const em = extractEndmatter(fileSplit.text);
@@ -65,10 +65,12 @@ export function serialiseFile(editor, parts = {}) {
   if (endmatterRaw) {
     // A review block that appears on a document that never had one needs a
     // separating blank line; an existing block reuses its original separator
-    // bytes (trailingBody), and a document that is ONLY endmatter needs no
-    // separator at all. When the endmatter is cleared entirely, its
-    // separator newlines go with it.
-    const separator = parts.trailingBody || (out ? '\n\n' : '');
+    // bytes (trailingBody). A document with no BODY needs no injected
+    // separator: the frontmatter raw block (if any) already owns its own
+    // trailing bytes, and injecting one there would grow the file on every
+    // save cycle. When the endmatter is cleared entirely, its separator
+    // newlines go with it.
+    const separator = parts.trailingBody || (body ? '\n\n' : '');
     out += separator + endmatterRaw;
   }
   out += parts.trailing || '';

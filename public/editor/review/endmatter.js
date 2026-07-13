@@ -28,6 +28,28 @@ function isPlainObject(v) {
   return v != null && typeof v === 'object' && !Array.isArray(v);
 }
 
+// Minimal CommonMark fence tracker: is the end of `text` inside an open
+// fenced code block? Openers/closers may be indented up to three spaces;
+// a closer must use the opener's marker character, be at least as long,
+// and carry no info string. Lines inside an open fence never open or close
+// anything else.
+function insideUnclosedFence(text) {
+  let open = null;
+  for (const line of text.split('\n')) {
+    const m = line.match(/^ {0,3}(`{3,}|~{3,})[ \t]*(.*)$/);
+    if (!m) continue;
+    const marker = m[1][0];
+    const length = m[1].length;
+    const rest = m[2];
+    if (!open) {
+      open = { marker, length };
+    } else if (marker === open.marker && length >= open.length && rest.trim() === '') {
+      open = null;
+    }
+  }
+  return open !== null;
+}
+
 export function hasReviewData(data) {
   if (!isPlainObject(data)) return false;
   return ['comments', 'suggestions', 'review'].some(
@@ -51,10 +73,12 @@ export function extractEndmatter(text) {
   if (fromNewline !== -1) idx = fromNewline + 1;
   if (idx === -1) return none;
 
-  // A '---' inside an unclosed code fence is fence content, not endmatter:
-  // an odd number of fence openers before it means the fence never closed.
-  const fenceCount = (text.slice(0, idx).match(/^(?:```|~~~)/gm) || []).length;
-  if (fenceCount % 2 === 1) return none;
+  // A '---' inside an unclosed code fence is fence content, not endmatter.
+  // Fences pair by marker character and length (a fence closes only on the
+  // same character, at least the opening length, with nothing after it),
+  // and may be indented up to three spaces — parity counting cannot model
+  // that (a 4-backtick fence documenting ``` lines would miscount).
+  if (insideUnclosedFence(text.slice(0, idx))) return none;
 
   const raw = text.slice(idx);
   const yamlText = raw.slice(4); // past '---\n'
