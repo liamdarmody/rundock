@@ -34,18 +34,13 @@ export const tableDirtyKey = new PluginKey('rundockTableDirty');
 // markdown-it: stamp source slices onto the token stream
 // ---------------------------------------------------------------------------
 
-function stampTableSource(state) {
+function stampRowIndexes(state) {
   const tokens = state.tokens;
   if (!tokens.some((t) => t.type === 'table_open')) return;
-  const lines = state.src.split('\n');
   let rowIdx = 0;
   for (const tok of tokens) {
     if (tok.type === 'table_open') {
       rowIdx = 0;
-      if (tok.map) {
-        const raw = lines.slice(tok.map[0], tok.map[1]).join('\n');
-        tok.attrSet('data-src', encodeURIComponent(raw));
-      }
     } else if (tok.type === 'tr_open') {
       // Source row index counts the header row as 0 and skips the delimiter
       // line, matching parseTableSource's rows array.
@@ -56,7 +51,46 @@ function stampTableSource(state) {
 }
 
 export function registerTableMarkdownIt(md) {
-  md.core.ruler.push('rundock_table_src', stampTableSource);
+  // Row identity stamping is container-independent and runs as a core rule.
+  md.core.ruler.push('rundock_table_src_rows', stampRowIndexes);
+
+  // Source capture wraps the table BLOCK rule so each line is taken from
+  // bMarks + tShift: that is the line content with container prefixes
+  // (blockquote '> ' markers, list indentation) already stripped. Capturing
+  // raw file lines instead used to re-embed the '> ' prefix in the stored
+  // source, and the serializer's state.write would prepend the delimiter
+  // again: one extra nesting level per save, doubling every cycle.
+  //
+  // The ruler's __find__/__rules__ internals are markdown-it's stable
+  // private API for exactly this kind of wrap; the version is pinned by the
+  // vendor bundle. If they ever move, the guard drops source capture
+  // entirely and tables serialize canonically: degraded, never corrupted.
+  try {
+    const idx = md.block.ruler.__find__('table');
+    if (idx < 0) return;
+    const rule = md.block.ruler.__rules__[idx];
+    const original = rule.fn;
+    const alt = (rule.alt || []).filter((a) => a !== '');
+    md.block.ruler.at('table', function tableWithSrc(state, startLine, endLine, silent) {
+      const before = state.tokens.length;
+      const ok = original(state, startLine, endLine, silent);
+      if (!ok || silent) return ok;
+      for (let i = before; i < state.tokens.length; i++) {
+        const tok = state.tokens[i];
+        if (tok.type === 'table_open' && tok.map) {
+          const lines = [];
+          for (let l = tok.map[0]; l < tok.map[1]; l++) {
+            lines.push(state.src.slice(state.bMarks[l] + state.tShift[l], state.eMarks[l]));
+          }
+          tok.attrSet('data-src', encodeURIComponent(lines.join('\n')));
+          break;
+        }
+      }
+      return ok;
+    }, { alt });
+  } catch {
+    // Canonical serialization fallback; see note above.
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -97,6 +131,11 @@ function createDirtyTrackingPlugin() {
     appendTransaction(transactions, oldState, newState) {
       if (!tableDirtyKey.getState(newState).armed) return null;
       if (!transactions.some((tr) => tr.docChanged)) return null;
+      // Undo/redo must not touch dirty flags: the original edit's flag change
+      // is part of the same history event, so undo restores the clean state
+      // (and byte-exact source) and redo restores the dirty one. Re-marking
+      // on the undo transaction itself would defeat that.
+      if (transactions.some((tr) => tr.getMeta('history$'))) return null;
       const ranges = collectChangedRanges(transactions);
       if (!ranges.length) return null;
       let tr = null;

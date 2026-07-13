@@ -50,7 +50,7 @@ export function createReviewController({ editor, endmatter, author = 'liam', now
   function scan() {
     const found = [];
     editor.state.doc.descendants((node, pos, parent, index) => {
-      if (node.type.name === 'criticComment' || SUGGESTION_TYPES.has(node.type.name)) {
+      if (node.type.name === 'criticComment' || node.type.name === 'criticHighlight' || SUGGESTION_TYPES.has(node.type.name)) {
         found.push({ node, pos, index, parent });
       }
       return true;
@@ -58,7 +58,16 @@ export function createReviewController({ editor, endmatter, author = 'liam', now
     return found;
   }
 
+  // A highlight is an anchor when a comment sits immediately after it;
+  // otherwise it is an orphan (comment resolved elsewhere, or external
+  // edits separated the pair) and must stay releasable from the sidebar.
+  function highlightIsAnchor(pos, node) {
+    const after = editor.state.doc.nodeAt(pos + node.nodeSize);
+    return !!after && after.type.name === 'criticComment';
+  }
+
   function findConstruct(id) {
+    if (id == null) return null; // id-less constructs are addressed by position
     let hit = null;
     editor.state.doc.descendants((node, pos) => {
       if (hit) return false;
@@ -69,6 +78,17 @@ export function createReviewController({ editor, endmatter, author = 'liam', now
       return true;
     });
     return hit;
+  }
+
+  // Operations accept either an anchor id ('s1') or a position locator
+  // ({ pos }) for id-less constructs — sidebar items always carry pos.
+  function locate(locator) {
+    if (typeof locator === 'string') return findConstruct(locator);
+    if (locator && typeof locator.pos === 'number') {
+      const node = editor.state.doc.nodeAt(locator.pos);
+      if (node && node.type.name.startsWith('critic')) return { node, pos: locator.pos };
+    }
+    return null;
   }
 
   // The highlight paired with a comment is its immediate previous sibling.
@@ -83,6 +103,10 @@ export function createReviewController({ editor, endmatter, author = 'liam', now
 
   function listItems() {
     return scan().map(({ node, pos }) => {
+      if (node.type.name === 'criticHighlight') {
+        if (highlightIsAnchor(pos, node)) return null; // rendered with its comment
+        return { kind: 'highlight', type: node.type.name, id: node.attrs.id, pos, text: node.attrs.content, from: null, anchor: null, meta: null, replies: [] };
+      }
       const isComment = node.type.name === 'criticComment';
       const anchorNode = isComment ? pairedHighlight(pos) : null;
       const meta = isComment ? data.comments[node.attrs.id] : data.suggestions[node.attrs.id];
@@ -102,7 +126,7 @@ export function createReviewController({ editor, endmatter, author = 'liam', now
         meta: meta || null,
         replies,
       };
-    });
+    }).filter(Boolean);
   }
 
   // ------------------------------------------------------------------
@@ -148,8 +172,8 @@ export function createReviewController({ editor, endmatter, author = 'liam', now
   // verdicts (suggestions)
   // ------------------------------------------------------------------
 
-  function applyVerdict(id, verdict) {
-    const hit = findConstruct(id);
+  function applyVerdict(locator, verdict) {
+    const hit = locate(locator);
     if (!hit || !SUGGESTION_TYPES.has(hit.node.type.name)) return false;
     const { node, pos } = hit;
     const end = pos + node.nodeSize;
@@ -159,7 +183,7 @@ export function createReviewController({ editor, endmatter, author = 'liam', now
     if (node.type.name === 'criticDelete') replacement = accept ? '' : node.attrs.content;
     if (node.type.name === 'criticSubstitution') replacement = accept ? node.attrs.to : node.attrs.from;
     replaceRangeWithText(pos, end, replacement);
-    const entryId = id || nextId('s');
+    const entryId = node.attrs.id || nextId('s');
     const entry = ensureSuggestionEntry(entryId, node);
     entry.verdict = verdict;
     entry.decidedAt = now();
@@ -167,22 +191,31 @@ export function createReviewController({ editor, endmatter, author = 'liam', now
     return true;
   }
 
-  const accept = (id) => applyVerdict(id, 'accepted');
-  const reject = (id) => applyVerdict(id, 'rejected');
+  const accept = (locator) => applyVerdict(locator, 'accepted');
+  const reject = (locator) => applyVerdict(locator, 'rejected');
+
+  // Releases a highlight back to plain text (used for orphan highlights,
+  // which otherwise have no path out of the document).
+  function release(locator) {
+    const hit = locate(locator);
+    if (!hit || hit.node.type.name !== 'criticHighlight') return false;
+    replaceRangeWithText(hit.pos, hit.pos + hit.node.nodeSize, hit.node.attrs.content);
+    return true;
+  }
 
   // ------------------------------------------------------------------
   // comments
   // ------------------------------------------------------------------
 
-  function resolve(id) {
-    const hit = findConstruct(id);
+  function resolve(locator) {
+    const hit = locate(locator);
     if (!hit || hit.node.type.name !== 'criticComment') return false;
     const { node, pos } = hit;
     const highlight = pairedHighlight(pos);
     const from = highlight ? highlight.pos : pos;
     const to = pos + node.nodeSize;
     replaceRangeWithText(from, to, highlight ? highlight.node.attrs.content : '');
-    const entryId = id || nextId('c');
+    const entryId = node.attrs.id || nextId('c');
     const entry = data.comments[entryId] || (data.comments[entryId] = {});
     if (entry.body == null && node.attrs.content) entry.body = node.attrs.content;
     entry.resolved = true;
@@ -193,6 +226,9 @@ export function createReviewController({ editor, endmatter, author = 'liam', now
 
   function reply(parentId, text) {
     if (!text) return false;
+    // The parent must exist (inline construct or endmatter entry): a reply
+    // to a phantom id would persist an unreviewable orphan thread.
+    if (!data.comments[parentId] && !findConstruct(parentId)) return false;
     const id = nextId('c');
     data.comments[id] = { body: text, re: parentId, by: author, at: now() };
     touch();
@@ -312,6 +348,7 @@ export function createReviewController({ editor, endmatter, author = 'liam', now
     accept,
     reject,
     resolve,
+    release,
     reply,
     addComment,
     suggestReplace,
