@@ -188,9 +188,11 @@ const CSS = `
   grid-column: 2;
   grid-row: 1 / span 99;
   position: sticky;
-  /* Matches the pane's padding-top, so the panel keeps the same 24px gap
-     when stuck mid-scroll as it has at rest. */
-  top: 24px;
+  /* 0, not the pane padding: Chrome anchors the sticky offset to the
+     content box, so any positive value displaces the panel downward at
+     rest and breaks the top/bottom gap symmetry. The pane's padding gives
+     the resting top gap; the derived max-height gives the bottom gap. */
+  top: 0;
   /* Fallback only: the panel computes its real max-height from the pane's
      viewport so the bottom gap equals the top and right gaps (24px). */
   max-height: calc(100vh - 160px);
