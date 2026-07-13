@@ -11,6 +11,7 @@
 // save to disk via the host's existing save flow.
 
 import { createEditorInstance } from './factory.js';
+import { registerWorkspaceNavigator } from './review/deep-link-shim.js';
 import { injectEditorStyles } from './styles.js';
 import { parseFile, serialiseFile } from './markdown/pipeline.js';
 import { attachFloatingToolbar } from './panels/floating-toolbar.js';
@@ -55,6 +56,9 @@ export function createEditor({
   // Optional host element for the minimised review pill (the editor header
   // row); falls back to the pane's top-right corner.
   reviewPillHostElement = null,
+  // Optional host navigation for cross-file locations (the universal-search
+  // file-open route). Same-file scrolling stays local to the editor.
+  onNavigate = null,
 }) {
   if (!element) throw new Error('createEditor: element is required');
 
@@ -78,6 +82,8 @@ export function createEditor({
   // panel is its UI. Endmatter-only operations (reply, Done-Reviewing) do
   // not change the ProseMirror doc, so the panel requests a save through
   // the host's onUpdate path explicitly.
+  registerWorkspaceNavigator(onNavigate);
+
   const review = createReviewController({
     editor,
     endmatter: parts.endmatter,
