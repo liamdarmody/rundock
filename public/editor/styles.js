@@ -268,10 +268,10 @@ const CSS = `
   background: var(--accent-glow, rgba(232, 122, 90, 0.15));
   color: var(--accent, #E87A5A);
 }
-.review-by { font-size: 11px; color: var(--text-2); margin-left: auto; }
-.review-by.me { color: var(--text-1); font-weight: 600; }
-.review-by.agent { color: var(--accent, #E87A5A); font-weight: 600; }
-.review-by.unattributed { font-style: normal; opacity: 0.6; }
+/* One treatment for every author name: identity is information, not
+   decoration (the accent already means "action" elsewhere in the panel). */
+.review-by { font-size: 11px; font-weight: 500; color: var(--text-2); margin-left: auto; }
+.review-by.unattributed { opacity: 0.6; }
 .review-quote {
   font-size: 12px;
   color: var(--text-2);

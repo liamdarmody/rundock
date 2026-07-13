@@ -70,18 +70,24 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
   }
 
   // Attribution rendering. The wire format keeps real handles; the UI maps
-  // the workspace user to "Me", known agents to their roster display name
-  // (styled as agents), and everything else to the literal handle. Absent
-  // metadata renders as "Unattributed" — never a guessed name.
+  // the workspace user to "Me", known agents to their roster display name,
+  // and everything else to the title-cased handle (by: penn renders as
+  // Penn even when penn is not in this workspace's roster). Absent
+  // metadata renders as "Unattributed" — never a guessed name. One visual
+  // treatment for every author: identity is information, not decoration.
+  function titleCaseHandle(handle) {
+    return handle.split(' ').map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(' ');
+  }
+
   function authorBadge(meta) {
     const by = meta && meta.by ? String(meta.by) : null;
     if (!by) return el('span', 'review-by unattributed', 'Unattributed');
     if (author && by.toLowerCase() === String(author).toLowerCase()) {
-      return el('span', 'review-by me', 'Me');
+      return el('span', 'review-by', 'Me');
     }
     const agentName = agentNames.get(by.toLowerCase());
-    if (agentName) return el('span', 'review-by agent', agentName);
-    return el('span', 'review-by', by);
+    if (agentName) return el('span', 'review-by', agentName);
+    return el('span', 'review-by', titleCaseHandle(by));
   }
 
   let open = false;
