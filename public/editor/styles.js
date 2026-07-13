@@ -133,6 +133,15 @@ const CSS = `
   border-radius: 3px;
   animation: critic-flash-pulse 1.2s ease-out;
 }
+/* Range-precise settle flash: marks exactly the text a verdict changed. */
+@keyframes critic-flash-range-pulse {
+  0%, 55% { background-color: var(--accent-glow, rgba(232, 122, 90, 0.35)); }
+  100% { background-color: transparent; }
+}
+.tiptap-editor .critic-flash-range {
+  border-radius: 2px;
+  animation: critic-flash-range-pulse 1.2s ease-out;
+}
 
 /* --- Review: pane layout ------------------------------------------------- */
 .tiptap-editor-pane.review-active {
@@ -258,7 +267,7 @@ const CSS = `
 .review-card.attention { animation: review-card-attention 1.2s ease-out; }
 @media (prefers-reduced-motion: reduce) {
   .review-card.leaving { transition: none; }
-  .review-card.attention, .tiptap-editor .critic-flash { animation: none; }
+  .review-card.attention, .tiptap-editor .critic-flash, .tiptap-editor .critic-flash-range { animation: none; }
 }
 .review-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .review-badge {
