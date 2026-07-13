@@ -95,12 +95,49 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
 
   const save = () => { if (typeof onRequestSave === 'function') onRequestSave(); };
 
-  // Cmd/Ctrl+Enter submits, Escape cancels — in every review textarea.
-  function wireComposeKeys(ta, submit, cancel) {
+  // The one input grammar for review text entry, borrowed from the
+  // conversations message input: a growing textarea with an embedded
+  // circular send button that activates when there is text. Enter sends,
+  // Shift+Enter breaks the line, Cmd/Ctrl+Enter also sends, Escape cancels.
+  // With autoCollapse, an empty input dismisses itself on blur — that IS
+  // the cancel affordance, so no button row eats the narrow panel width.
+  const SEND_ARROW_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
+
+  function inputWithSend({ placeholder, onSubmit, onCancel = null, autoCollapse = false, submitTitle = 'Send' }) {
+    const wrap = el('div', 'review-input');
+    const ta = el('textarea');
+    ta.rows = 1;
+    ta.placeholder = placeholder;
+    const btn = el('button', 'review-send');
+    btn.type = 'button';
+    btn.title = submitTitle;
+    btn.innerHTML = SEND_ARROW_SVG; // static, trusted markup
+    btn.disabled = true;
+    const sync = () => {
+      const has = ta.value.trim().length > 0;
+      btn.disabled = !has;
+      btn.classList.toggle('active', has);
+      ta.style.height = 'auto';
+      ta.style.height = `${Math.min(ta.scrollHeight, 120)}px`;
+    };
+    const submit = () => {
+      const text = ta.value.trim();
+      if (text) onSubmit(text);
+    };
+    ta.addEventListener('input', sync);
     ta.addEventListener('keydown', (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); submit(); }
-      else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
+      else if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); submit(); }
+      else if (e.key === 'Escape') { e.preventDefault(); if (onCancel) onCancel(); }
     });
+    if (autoCollapse && onCancel) {
+      // Deferred so a click landing on the send button wins over the blur.
+      ta.addEventListener('blur', () => setTimeout(() => { if (!ta.value.trim()) onCancel(); }, 150));
+    }
+    btn.onclick = submit;
+    wrap.appendChild(ta);
+    wrap.appendChild(btn);
+    return { wrap, ta };
   }
 
   // Settle flash on the block a verdict just changed, so every action
@@ -160,7 +197,16 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     if (!composer) return;
     const box = el('div', 'review-composer');
     const isSuggest = composer.mode === 'suggest';
-    box.appendChild(el('div', 'review-composer-title', isSuggest ? 'Suggest a replacement' : 'Add a comment'));
+    const titleRow = el('div', 'review-composer-head');
+    titleRow.appendChild(el('div', 'review-composer-title', isSuggest ? 'Suggest a replacement' : 'Add a comment'));
+    // The composer holds decoration state, so it keeps one explicit way out
+    // for the mouse (Escape covers the keyboard).
+    const closeX = el('button', 'review-composer-close', '×');
+    closeX.type = 'button';
+    closeX.title = 'Discard';
+    closeX.onclick = closeComposer;
+    titleRow.appendChild(closeX);
+    box.appendChild(titleRow);
     // The live range comes from the plugin, mapped through any edits made
     // while the composer sat open.
     const range = getComposingRange(editor);
@@ -171,33 +217,23 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
         box.appendChild(el('div', 'review-quote', quote.length > 120 ? quote.slice(0, 117) + '…' : quote));
       }
     }
-    const ta = el('textarea');
-    ta.rows = 3;
-    ta.placeholder = isSuggest ? 'Replacement text…' : 'Comment…';
-    box.appendChild(ta);
-    const row = el('div', 'review-actions');
-    const saveBtn = el('button', 'review-btn primary', isSuggest ? 'Suggest' : 'Comment');
-    saveBtn.type = 'button';
-    const submit = () => {
-      const text = ta.value.trim();
-      if (!text) return;
-      const liveRange = getComposingRange(editor);
-      if (isSuggest) controller.suggestReplace(text, liveRange);
-      else controller.addComment(text, liveRange);
-      composer = null;
-      setComposingRange(editor, null);
-      render();
-      save();
-    };
-    saveBtn.onclick = submit;
-    const cancelBtn = el('button', 'review-btn', 'Cancel');
-    cancelBtn.type = 'button';
-    cancelBtn.onclick = closeComposer;
-    wireComposeKeys(ta, submit, closeComposer);
-    row.appendChild(saveBtn);
-    row.appendChild(cancelBtn);
-    box.appendChild(row);
+    const { wrap, ta } = inputWithSend({
+      placeholder: isSuggest ? 'Replacement text…' : 'Comment…',
+      submitTitle: isSuggest ? 'Suggest' : 'Comment',
+      onCancel: closeComposer,
+      onSubmit: (text) => {
+        const liveRange = getComposingRange(editor);
+        if (isSuggest) controller.suggestReplace(text, liveRange);
+        else controller.addComment(text, liveRange);
+        composer = null;
+        setComposingRange(editor, null);
+        render();
+        save();
+      },
+    });
+    box.appendChild(wrap);
     container.appendChild(box);
+    void ta; // focused by openComposer
   }
 
   // ------------------------------------------------------------------
@@ -277,30 +313,19 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     const replyBtn = el('button', 'review-btn', 'Reply');
     replyBtn.type = 'button';
     replyBtn.onclick = () => {
-      if (card.querySelector('.review-reply-box')) return;
-      const box = el('div', 'review-reply-box');
-      const ta = el('textarea');
-      ta.rows = 2;
-      ta.placeholder = 'Reply…';
-      const sendReply = () => {
-        const text = ta.value.trim();
-        if (!text) return;
-        controller.reply(item.id, text);
-        render();
-        save();
-      };
-      const cancelReply = () => box.remove();
-      const send = el('button', 'review-btn primary', 'Send');
-      send.type = 'button';
-      send.onclick = sendReply;
-      const cancel = el('button', 'review-btn', 'Cancel');
-      cancel.type = 'button';
-      cancel.onclick = cancelReply;
-      wireComposeKeys(ta, sendReply, cancelReply);
-      box.appendChild(ta);
-      box.appendChild(send);
-      box.appendChild(cancel);
-      card.insertBefore(box, row);
+      if (card.querySelector('.review-input')) return;
+      const { wrap, ta } = inputWithSend({
+        placeholder: 'Reply…',
+        submitTitle: 'Send reply',
+        autoCollapse: true, // an empty reply box dismisses itself on blur
+        onCancel: () => wrap.remove(),
+        onSubmit: (text) => {
+          controller.reply(item.id, text);
+          render();
+          save();
+        },
+      });
+      card.insertBefore(wrap, row);
       ta.focus();
     };
     const resolveBtn = el('button', 'review-btn resolve', 'Resolve');
