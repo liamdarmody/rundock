@@ -148,6 +148,40 @@ describe('review round-trip: constructs and endmatter', () => {
     assert.equal(parts.endmatter.raw, '', 'unclosed-fence tail must stay body');
   });
 
+  test('fence tracking understands lengths, markers, and indentation', async () => {
+    const env = await bootEditorEnv();
+    // Closed 4-backtick fence containing a 3-backtick line: endmatter is real.
+    const a = env.pipeline.parseFile('````\n```\n````\n\n---\ncomments:\n  c1: { by: a, at: t }\n');
+    assert.ok(a.endmatter.raw.startsWith('---\ncomments:'), '4-backtick fence must count as closed');
+    // Closed backtick fence containing a tilde line: endmatter is real.
+    const b = env.pipeline.parseFile('```\n~~~\n```\n\n---\ncomments:\n  c1: { by: a, at: t }\n');
+    assert.ok(b.endmatter.raw.startsWith('---\ncomments:'), 'mismatched inner marker must not open a fence');
+    // Unclosed fence indented 1-3 spaces is still a fence.
+    const c = env.pipeline.parseFile('Text.\n\n ```\n---\ncomments:\n  c1: { by: a, at: t }\n');
+    assert.equal(c.endmatter.raw, '', 'indented unclosed fence tail must stay body');
+  });
+
+  test('frontmatter + endmatter with an empty body is cycle-stable', async () => {
+    const src = '---\ntitle: x\n---\n---\ncomments:\n  c1: { by: a, at: t }\n';
+    let out = src;
+    for (let i = 0; i < 3; i++) out = await roundTrip(out);
+    assert.equal(out, src);
+  });
+
+  test('every line-ending style normalises fully to LF', async () => {
+    const env = await bootEditorEnv();
+    const element = env.window.document.createElement('div');
+    env.window.document.body.appendChild(element);
+    const { editor } = env.createEditor({ element, rawMarkdown: 'One.\r\r\nTwo.\r' });
+    try {
+      const out = env.getMarkdown(editor);
+      assert.ok(!out.includes('\r'), `no carriage returns may survive, got ${JSON.stringify(out)}`);
+    } finally {
+      env.destroyEditor(editor);
+      element.remove();
+    }
+  });
+
   test('editing body text leaves the endmatter bytes untouched', async () => {
     const env = await bootEditorEnv();
     const element = env.window.document.createElement('div');
