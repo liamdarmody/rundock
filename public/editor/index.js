@@ -52,6 +52,9 @@ export function createEditor({
   // agent roster (matched entries render as agent chips). Both optional.
   author = null,
   agents = [],
+  // Optional host element for the minimised review pill (the editor header
+  // row); falls back to the pane's top-right corner.
+  reviewPillHostElement = null,
 }) {
   if (!element) throw new Error('createEditor: element is required');
 
@@ -89,6 +92,7 @@ export function createEditor({
       controller: review,
       author: author || 'me',
       agents,
+      pillHostElement: reviewPillHostElement,
       onRequestSave: () => { if (typeof onUpdate === 'function') onUpdate({ editor }); },
     });
   }

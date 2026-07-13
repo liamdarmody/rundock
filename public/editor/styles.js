@@ -143,13 +143,14 @@ const CSS = `
 .tiptap-editor-pane.review-active > :not(.review-sidebar):not(.review-pill) {
   grid-column: 1;
 }
+/* Minimised state. In the editor header (preferred host) the pill sits in
+   the flex row next to the save status; the pane-corner fallback pins it
+   absolutely. */
 .review-pill {
   display: none;
-  position: sticky;
-  top: 0;
-  grid-column: 2;
-  justify-self: end;
-  float: right;
+  position: absolute;
+  top: 22px;
+  right: 24px;
   z-index: 5;
   padding: 4px 12px;
   border-radius: 100px;
@@ -158,7 +159,13 @@ const CSS = `
   color: var(--text-2);
   font-size: 12px;
   font-weight: 600;
+  line-height: 1.4;
   cursor: pointer;
+  white-space: nowrap;
+}
+.review-pill.in-header {
+  position: static;
+  flex-shrink: 0;
 }
 .review-pill.visible { display: inline-block; }
 /* Open items are pending work: the minimised state stays loud. */
@@ -179,10 +186,12 @@ const CSS = `
   top: 0;
   max-height: calc(100vh - 140px);
   overflow-y: auto;
-  padding: 2px 2px 2px 10px;
+  padding: 2px 10px 2px 14px;
+  /* The pane's right padding is 32px but the header's Saved indicator sits
+     at 24px; pulling the sidebar 8px right aligns their right edges. */
+  margin-right: -8px;
   background: var(--base, #1A1A1A);
   z-index: 4;
-  position: sticky;
 }
 .review-sidebar.visible { display: block; }
 .review-resize-handle {
@@ -190,7 +199,7 @@ const CSS = `
   left: 0;
   top: 0;
   bottom: 0;
-  width: 5px;
+  width: 7px;
   cursor: col-resize;
   border-left: 1px solid var(--border);
 }
@@ -251,6 +260,7 @@ const CSS = `
   gap: 8px;
 }
 .review-reply .review-by { margin-left: 0; flex-shrink: 0; }
+.review-reply .review-by::after { content: ':'; }
 .review-reply-box { margin-top: 8px; display: flex; gap: 6px; align-items: flex-end; }
 .review-actions { display: flex; gap: 8px; margin-top: 10px; }
 .review-btn {

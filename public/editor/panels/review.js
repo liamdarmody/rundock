@@ -37,13 +37,23 @@ const SIDEBAR_MIN = 220;
 const SIDEBAR_MAX = 420;
 const SIDEBAR_DEFAULT = 260;
 
-export function attachReviewPanel({ paneElement, editor, controller, onRequestSave = null, author = null, agents = [] }) {
+export function attachReviewPanel({ paneElement, editor, controller, onRequestSave = null, author = null, agents = [], pillHostElement = null }) {
   if (!paneElement || !editor || !controller) return { detach: () => {}, refresh: () => {}, openComposer: () => {} };
 
   const sidebar = el('aside', 'review-sidebar');
   const pill = el('button', 'review-pill');
   pill.type = 'button';
-  paneElement.appendChild(pill);
+  // The minimised pill lives in the editor header row (level with the
+  // filename and save status) when the host provides it; otherwise it pins
+  // to the pane's top-right corner.
+  if (pillHostElement) {
+    pill.classList.add('in-header');
+    const status = pillHostElement.querySelector('.editor-status');
+    if (status) pillHostElement.insertBefore(pill, status);
+    else pillHostElement.appendChild(pill);
+  } else {
+    paneElement.appendChild(pill);
+  }
   paneElement.appendChild(sidebar);
 
   // Sidebar width: a UI preference, persisted locally (never in the file).
@@ -111,7 +121,10 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     box.appendChild(el('div', 'review-composer-title', isSuggest ? 'Suggest a replacement' : 'Add a comment'));
     if (composer.range) {
       const quote = editor.state.doc.textBetween(composer.range.from, composer.range.to, ' ');
-      box.appendChild(el('div', 'review-quote', quote.length > 120 ? quote.slice(0, 117) + '…' : quote));
+      // Degenerate selections (a stray period, whitespace) render no quote.
+      if (quote.trim().length > 1) {
+        box.appendChild(el('div', 'review-quote', quote.length > 120 ? quote.slice(0, 117) + '…' : quote));
+      }
     }
     const ta = el('textarea');
     ta.rows = 3;
@@ -286,9 +299,6 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
 
   function render() {
     const { items, total } = counts();
-    const progress = controller.progress();
-    const decided = progress.suggestions.accepted + progress.suggestions.rejected;
-    const decidable = decided + progress.suggestions.open;
 
     // The pill is the minimised state: open feedback stays loudly visible
     // (accent treatment + count), and the panel re-opens automatically on
@@ -313,9 +323,11 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     head.appendChild(closeBtn);
     sidebar.appendChild(head);
 
-    if (decidable > 0) {
-      sidebar.appendChild(el('div', 'review-progress', `${decided} of ${decidable} suggestions decided`));
-    }
+    // No progress line: verdicts live in the file's endmatter and decided
+    // constructs leave the document, so the remaining cards ARE the open
+    // state. A derived tally added bookkeeping noise (and could read oddly
+    // across sessions, since decided counts persist in the endmatter while
+    // open counts come from the document).
 
     renderComposer(sidebar);
 
