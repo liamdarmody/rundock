@@ -65,6 +65,21 @@ async function initTiptapEditor(path, content) {
     toolbarHostElement: document.getElementById('tiptap-editor-pane'),
     onUpdate: () => onTiptapEditorUpdate(),
     onWikilinkClick: (target) => openWikilink(target),
+    // Review identity: workspace profile name -> 'me' fallback; the agent
+    // roster lets review attribution render known agents as agent chips.
+    author: (workspaceAnalysis && workspaceAnalysis.userProfile && workspaceAnalysis.userProfile.fields && workspaceAnalysis.userProfile.fields.name)
+      ? String(workspaceAnalysis.userProfile.fields.name).trim().toLowerCase()
+      : 'me',
+    agents: Array.isArray(agents) ? agents.map(a => ({ name: a.name, displayName: a.displayName })) : [],
+    // The minimised review pill sits in the header row, next to the save
+    // status, level with the filename.
+    reviewPillHostElement: document.getElementById('editor-header'),
+    // Cross-file navigation routes through the universal-search file-open
+    // path; same-file locations stay local to the editor.
+    onNavigate: (loc) => {
+      if (loc && loc.path) { paletteOpenFile(loc.path); return true; }
+      return false;
+    },
   });
   activeTiptapEditor = editor;
   // Re-sync the find-bar count from plugin state whenever the document

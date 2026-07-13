@@ -10,6 +10,15 @@
 // text buttons rather than reading as an emoji.
 const LINK_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>';
 
+// Lucide message-square icon for the review Comment action.
+const COMMENT_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
+
+// Formatting buttons render as a row; the review Comment action renders as a
+// full-width bar beneath them (the pattern proven in Roughdraft: commenting
+// is the primary review gesture, so it gets primary prominence). Suggesting
+// was deliberately removed from the human toolbar (2026-07-13): a human in
+// an editable document just makes the edit; suggestions remain the AGENT's
+// authoring direction, decided via the sidebar's Accept/Reject.
 const BUTTON_DEFS = [
   { id: 'bold',   label: 'B',   title: 'Bold (Cmd/Ctrl+B)',   styled: 'b' },
   { id: 'italic', label: 'I',   title: 'Italic (Cmd/Ctrl+I)', styled: 'i' },
@@ -43,8 +52,8 @@ function normaliseLinkHref(url) {
   return url;
 }
 
-function renderToolbarHTML() {
-  return BUTTON_DEFS
+function renderToolbarHTML(withComment) {
+  const buttons = BUTTON_DEFS
     .map(b => {
       const styled = b.styled ? ` data-style="${b.styled}"` : '';
       // SVG icons are hardcoded above and trusted; text labels are escaped.
@@ -52,6 +61,10 @@ function renderToolbarHTML() {
       return `<button type="button" class="tb-btn" data-cmd="${b.id}" title="${escapeHtml(b.title)}"${styled}>${content}</button>`;
     })
     .join('');
+  const commentBar = withComment
+    ? `<button type="button" class="tb-comment" data-cmd="comment" title="Comment on selection">${COMMENT_ICON_SVG}<span>Comment</span></button>`
+    : '';
+  return `<div class="tb-row">${buttons}</div>${commentBar}`;
 }
 
 function applyCommand(editor, id) {
@@ -95,18 +108,24 @@ function updateActiveStates(editor, toolbar) {
 
 // Attach the toolbar to an editor instance. Returns a teardown function so
 // the editor module can clean up when the editor is destroyed.
-export function attachFloatingToolbar({ toolbarElement, hostElement, editor }) {
+export function attachFloatingToolbar({ toolbarElement, hostElement, editor, onReviewAction = null }) {
   if (!toolbarElement || !editor) return () => {};
 
-  toolbarElement.innerHTML = renderToolbarHTML();
+  toolbarElement.innerHTML = renderToolbarHTML(typeof onReviewAction === 'function');
   toolbarElement.classList.remove('visible');
 
   const onClick = (event) => {
-    const btn = event.target.closest('.tb-btn');
+    const btn = event.target.closest('.tb-btn, .tb-comment');
     if (!btn) return;
     event.preventDefault();
     event.stopPropagation();
-    applyCommand(editor, btn.getAttribute('data-cmd'));
+    const cmd = btn.getAttribute('data-cmd');
+    if (cmd === 'comment') {
+      if (typeof onReviewAction === 'function') onReviewAction('comment');
+      toolbarElement.classList.remove('visible');
+      return;
+    }
+    applyCommand(editor, cmd);
     updateActiveStates(editor, toolbarElement);
   };
   toolbarElement.addEventListener('mousedown', onClick);
@@ -114,7 +133,7 @@ export function attachFloatingToolbar({ toolbarElement, hostElement, editor }) {
   // Stop selection-collapse on toolbar click by preventing the host element
   // from losing focus during the brief mousedown on the button.
   toolbarElement.addEventListener('mousedown', (e) => {
-    if (e.target.closest('.tb-btn')) e.preventDefault();
+    if (e.target.closest('.tb-btn, .tb-comment')) e.preventDefault();
   });
 
   const position = () => {
