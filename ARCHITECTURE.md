@@ -1,6 +1,6 @@
 # Rundock architecture
 
-Rundock is a local Node.js server that exposes a vanilla-JS browser client over WebSocket and orchestrates Claude Code subprocesses to do the actual AI work. There is no cloud component, no server-side database, and no build step. The whole stack runs on your machine and reaches Anthropic only through Claude Code, which you authenticate yourself.
+Rundock is a local Node.js server that exposes a vanilla-JS browser client over WebSocket and orchestrates runtime subprocesses (Claude Code by default; optionally the Codex CLI) to do the actual AI work. There is no cloud component, no server-side database, and no build step. The whole stack runs on your machine and reaches each provider only through its own CLI (Anthropic via Claude Code, OpenAI via Codex), which you authenticate yourself.
 
 This document describes the process model, the workspace directory layout, and the codebase, in enough detail that a contributor can navigate the source after reading once. Implementation detail is left to the code; this document covers shape, boundaries, and where to look.
 
@@ -19,7 +19,7 @@ Rundock has three classes of process at runtime.
                                                             | spawn / stream-json
                                                             v
                                               +-----------------------------+
-                                              |   Claude Code subprocesses  |
+                                              |    runtime subprocesses     |
                                               |   (one per active agent)    |
                                               +-----------------------------+
 ```
@@ -42,11 +42,13 @@ The client opens a single WebSocket to the server on load and uses HTTP for stat
 6. **Runs a lightweight scheduler** for routines defined in agent frontmatter. Every minute, it checks each agent's routines and invokes any whose schedule has come due.
 7. **Mediates tool permissions.** Claude Code's PreToolUse hook calls back to the server over HTTP for any tool call that needs approval; the server forwards the request to the browser as a permission card and returns the user's decision to Claude Code.
 
-The server uses Node's native `http` module and the `ws` library for WebSocket. The runtime dependency surface is intentionally small: two production dependencies (`ws` and `marked`).
+The server uses Node's native `http` module and the `ws` library for WebSocket. The runtime dependency surface is intentionally small: three production dependencies (`ws`, `marked`, and `electron-updater` for the packaged app's auto-update).
 
-### Claude Code subprocesses
+### Runtime subprocesses
 
-Every conversation that is actively producing tokens has a Claude Code child process attached to it. Rundock spawns the process with `claude` configured to read from the workspace directory, with the workspace's `.mcp.json` for MCP servers, with the workspace's `.claude/settings.local.json` for hooks, and with the agent's name passed so Claude Code loads the right system prompt from `.claude/agents/<slug>.md`.
+Every conversation that is actively producing tokens has a runtime child process attached to it. For Claude Code agents (the default), Rundock spawns `claude` configured to read from the workspace directory, with the workspace's `.mcp.json` for MCP servers, with the workspace's `.claude/settings.local.json` for hooks, and with the agent's name passed so Claude Code loads the right system prompt from `.claude/agents/<slug>.md`.
+
+Agents with `runtime: codex` spawn the official Codex CLI instead, via the adapter in `codex.js`: one `codex exec` process per turn (transactional), with conversation continuity through thread resume and the agent's instructions carried in the first-turn prompt (Codex has no `--agent` equivalent). Codex agents use Codex's own sandbox rather than Rundock's permission hook, and the orchestrator always runs on Claude Code (delegation works through the Agent tool in Claude Code's stream, which Codex exec does not have).
 
 The subprocess speaks **stream-json** on stdout: a sequence of newline-delimited JSON events (assistant tokens, tool calls, tool results, system events). The server reads this stream line by line and forwards relevant events to the browser as WebSocket messages.
 
@@ -110,16 +112,18 @@ A workspace can also contain any other user files at the root or in subfolders. 
 
 ## The codebase at a glance
 
-Four source files, two production dependencies, no bundler.
+A handful of source files, three production dependencies, no bundler.
 
 | File | Approximate size | What it owns |
 |---|---|---|
 | `server.js` | ~5,100 lines | HTTP and WebSocket server. Agent and skill discovery. Frontmatter parsing. Subprocess spawn and stdin/stdout bridging. Delegation interception. Conversation persistence. Routine scheduler. Permission mediation. Universal search wiring (engine lifecycle, reconcile triggers, the `search_universal` and `search_conversations` handlers, grep fallback). |
 | `search.js` | ~750 lines | The universal search engine: SQLite FTS5 index over workspace files and conversation transcripts, query sanitisation, fuzzy title scoring. Pure module: no WebSocket, no globals, fully unit-testable. See Universal search, below. |
-| `public/app.js` | ~4,100 lines | Single-page client. WebSocket client. Conversation rendering. Streaming token display. Org chart. Sidebar. File browser. Settings drawer. Permission card UI. Markdown editor (Tiptap-based) for inline editing. Search palette (Cmd+K). |
+| `codex.js` | ~300 lines | The Codex runtime adapter: argv construction, output parsing, binary/auth/Windows-sandbox detection, error classification, write-request markers. Pure module, fully unit-testable. |
+| `public/app.js` | ~4,400 lines | Single-page client. WebSocket client. Conversation rendering. Streaming token display. Org chart. Sidebar. File browser. Settings drawer. Permission card UI. Search palette (Cmd+K). |
+| `public/editor/` | ~2,600 lines | The rich markdown editor (Tiptap-based): tables with byte-exact source preservation, CriticMarkup review annotations, the review panel, and the round-trip pipeline. |
 | `public/index.html` | ~900 lines | Layout, CSS, and markup. Nav rail, sidebar, main panel, search palette. No external stylesheet. |
 
-**Production dependencies:** `ws` for WebSocket, `marked` for markdown rendering in conversation messages. Nothing else.
+**Production dependencies:** `ws` for WebSocket, `marked` for markdown rendering in conversation messages, `electron-updater` for the packaged app. Nothing else.
 
 **Build artefacts:** none. `npm start` runs `node server.js` directly. There is no transpilation, no bundling, no minification step. If you change a file in `public/`, reload the browser. If you change `server.js`, restart the server.
 

@@ -1,6 +1,6 @@
 # Rundock agents
 
-An agent in Rundock is a markdown file with YAML frontmatter. The frontmatter declares the agent's identity (name, role, position in the org chart, icon, colour). The body of the file is the system prompt that Claude Code loads when the agent is spawned.
+An agent in Rundock is a markdown file with YAML frontmatter. The frontmatter declares the agent's identity (name, role, position in the org chart, icon, colour) and, optionally, which runtime it runs on. The body of the file is the agent's system prompt: Claude Code loads it natively when the agent is spawned; for Codex agents, Rundock carries it in the first-turn prompt.
 
 Every Rundock agent file lives at:
 
@@ -22,7 +22,8 @@ Universal fields work with any tool that supports the Claude agent format. Rundo
 |---|---|---|---|---|---|
 | `name` | string | Universal | Yes | The agent's slug. Should match the filename without the `.md` extension. Used by Claude Code to resolve the agent and by Rundock for `reportsTo` references. | `name: chief-of-staff` |
 | `description` | string | Universal | Yes | One-line description of what this agent does. Required by Claude Code; if absent, the agent is silently excluded from spawn. Rundock displays this in the agent list and on the profile. Multi-line YAML scalars (`>` and `|`) are supported. | `description: Routes work, manages priorities, daily briefings.` |
-| `model` | string | Universal | No | The Claude model to use for this agent. Accepts `opus`, `sonnet`, `haiku`, or `inherit`. Falls through to Claude Code's default if omitted. | `model: opus` |
+| `model` | string | Universal | No | The model for this agent, interpreted per runtime. Claude Code agents: `opus`, `sonnet`, `haiku`, or `inherit`; defaults to `sonnet`. Codex agents: omit it and the ChatGPT account's default model applies (Claude model names are invalid on Codex; a model the account does not offer produces a guidance card). | `model: opus` |
+| `runtime` | enum | Rundock-only | No | `codex` runs this agent on the official Codex CLI under a ChatGPT plan; any other value (or omitting the field) means Claude Code. Case-insensitive. Orchestrators and platform agents always run on Claude Code regardless of this field: delegation works through Claude Code's Agent tool, which Codex does not have. Codex agents use Codex's built-in sandbox rather than Rundock's permission prompts. | `runtime: codex` |
 | `tools` | array of strings | Universal | No | Allowed tools for this agent. Read by Claude Code from the agent file when it spawns the subprocess; Rundock does not forward this field. Not surfaced in the Rundock UI. | `tools: [Read, Write, Bash]` |
 | `displayName` | string | Rundock-only | No | Human-readable name shown in the org chart, sidebar, and conversation header. If omitted, Rundock title-cases the slug. Recommended: short, memorable, character-style names (Cos, Penn, Lea, Ted). Not functional labels. | `displayName: Cos` |
 | `role` | string | Rundock-only | No | Short role title shown beneath the displayName on the org chart card. 2 to 4 words. If omitted, the title-cased slug is used. | `role: Chief of Staff` |
