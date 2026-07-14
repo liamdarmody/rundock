@@ -147,7 +147,7 @@ describe('detectCodex', () => {
         return '/usr/local/bin/codex\n';
       },
     }));
-    assert.deepStrictEqual(d, { installed: true, authenticated: false, version: '0.48.0' });
+    assert.deepStrictEqual(d, { installed: true, authenticated: false, version: '0.48.0', windowsSandbox: null });
   });
 
   test('signed in: auth.json present under the default home', () => {
@@ -155,7 +155,7 @@ describe('detectCodex', () => {
       execSync: (cmd) => cmd.includes('--version') ? 'codex-cli 0.48.0\n' : '/usr/local/bin/codex\n',
       existsSync: (p) => p === path.join('/home/tester', '.codex', 'auth.json'),
     }));
-    assert.deepStrictEqual(d, { installed: true, authenticated: true, version: '0.48.0' });
+    assert.deepStrictEqual(d, { installed: true, authenticated: true, version: '0.48.0', windowsSandbox: null });
   });
 
   test('CODEX_HOME overrides the default auth location', () => {
