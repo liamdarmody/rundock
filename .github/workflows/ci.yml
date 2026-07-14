@@ -55,13 +55,13 @@ jobs:
   # escaped bugs (anchor re-flash, nav-state desync) plus palette golden
   # paths, and it measures public/app.js line coverage via V8.
   #
-  # SOAK PERIOD: continue-on-error until 2026-07-27 (two weeks from landing,
-  # per Client-Test-Coverage-Spec). If the job has been flake-free by then,
-  # remove continue-on-error so it gates alongside the Node suite.
+  # Promoted to BLOCKING 2026-07-14 (owner-approved, ahead of the planned
+  # 2026-07-27 soak end): flake-free through the entire soak including ~15
+  # runs on release day, and it pins three real escaped bugs (anchor
+  # re-flash, nav-state desync, palette focus ring). ~20s runtime.
   e2e:
-    name: E2E smoke (soaking, non-blocking)
+    name: E2E
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v5
