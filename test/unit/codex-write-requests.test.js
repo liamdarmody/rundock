@@ -126,4 +126,10 @@ describe('validateWriteRequest', () => {
     assert.strictEqual(srv.validateWriteRequest(ws, '.claude/agents/evil.md', 'x', false).ok, false);
     assert.strictEqual(srv.validateWriteRequest(ws, '.rundock/state.json', 'x', false).ok, false);
   });
+
+  test('managed-directory check is case-insensitive (Windows filesystems are)', () => {
+    assert.strictEqual(srv.validateWriteRequest(ws, '.Claude/agents/evil.md', 'x', false).ok, false);
+    assert.strictEqual(srv.validateWriteRequest(ws, '.RUNDOCK/state.json', 'x', false).ok, false);
+    assert.strictEqual(srv.validateWriteRequest(ws, '.ClAuDe/skills/x.md', 'x', false).ok, false);
+  });
 });

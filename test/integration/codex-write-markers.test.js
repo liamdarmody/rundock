@@ -126,6 +126,80 @@ describe('codex write markers on win32', () => {
     h.reapConvo(convoId);
   });
 
+  test('DELEGATED codex turns get the instruction and the marker flow: clean handback, card, approved write', async () => {
+    // The delegated path has its own done-handler (wireCodexDelegate), so it
+    // must be pinned separately from direct chats: raw marker text must never
+    // reach the transcript, the result, or the parent's handback injection.
+    const convoId = h.freshConvoId('cwm');
+    h.clearInvocations();
+    const content = 'Delegated write body.';
+    h.writeScenario([
+      {
+        match: { agent: 'chief-of-staff', promptIncludes: 'delegate a write' },
+        turn: [{ agentTool: { subagent_type: 'researcher', prompt: 'delegated write brief' } }],
+      },
+      {
+        // Parent resumes with the CLEAN text injected, never raw marker soup.
+        match: { agent: 'chief-of-staff', promptIncludes: ['[SYSTEM: pipeline-complete]', '[write requested: delegated.md]'], promptExcludes: 'RUNDOCK:WRITE_FILE' },
+        turn: [{ text: '<silent>' }],
+      },
+    ]);
+    h.writeCodexScenario([{
+      match: { promptIncludes: 'delegated write brief' },
+      text: `Prepared the file.\n\n${MARKER('delegated.md', content)}\n<!-- RUNDOCK:COMPLETE -->`,
+    }]);
+
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'delegate a write please' });
+
+    // Delegate result arrives clean
+    const { msg: result } = await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'researcher', { label: 'delegate result' });
+    assert.ok(!result.result.includes('RUNDOCK:WRITE_FILE'), 'marker stripped from delegate result');
+    assert.ok(result.result.includes('[write requested: delegated.md]'));
+
+    // The cold delegate spawn carried the instruction
+    const codexInv = h.readInvocations().find(i => i.argv && i.argv[0] === 'exec');
+    assert.ok(codexInv.prompt.includes('WINDOWS FILE WRITES'), 'delegated cold spawn carries the instruction');
+
+    // Card arrives and Allow lands the exact bytes
+    const { msg: card } = await client.waitFor(m => m.type === 'control_request' && m._conversationId === convoId && m.request.input.path === 'delegated.md', { label: 'delegated write card' });
+    client.send({ type: 'permission_response', requestId: card.request_id, conversationId: convoId, allow: true });
+    await client.waitFor(m => m.type === 'file_saved' && m.path === 'delegated.md', { label: 'delegated file saved' });
+    assert.strictEqual(fs.readFileSync(path.join(h.workspaceDir, 'delegated.md'), 'utf-8'), content);
+
+    // Parent parked silently with the clean injection (scenario rule 2 only
+    // matches when the prompt excludes raw markers, so reaching silent-park
+    // proves the sanitised handback)
+    await client.waitFor(m => m.type === 'system' && m.subtype === 'process_started' && m._conversationId === convoId && m._agent === 'chief-of-staff' && m.autoContinue, { label: 'parent restart' });
+
+    h.reapConvo(convoId);
+  });
+
+  test('a symlinked directory inside the workspace cannot redirect an approved write outside it', async () => {
+    // validateWriteRequest is lexical; the write path re-verifies the REAL
+    // parent directory before writing. A symlink planted inside the
+    // workspace pointing outside must fail at that second check.
+    const outside = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'outside-'));
+    fs.symlinkSync(outside, path.join(h.workspaceDir, 'linked'), 'dir');
+    const convoId = h.freshConvoId('cwm');
+    h.clearInvocations();
+    h.writeCodexScenario([{
+      match: { promptIncludes: 'write through link' },
+      text: MARKER('linked/evil.md', 'escaped'),
+    }]);
+
+    client.send({ type: 'chat', conversationId: convoId, agent: 'researcher', content: 'write through link please' });
+    const { msg: card } = await client.waitFor(m => m.type === 'control_request' && m._conversationId === convoId, { label: 'write card' });
+    client.send({ type: 'permission_response', requestId: card.request_id, conversationId: convoId, allow: true });
+
+    const { msg: failNotice } = await client.waitFor(m => m.type === 'system' && m.subtype === 'notice' && m._conversationId === convoId && /failed/.test(m.content || ''), { label: 'write failure notice' });
+    assert.match(failNotice.content, /escapes the workspace/);
+    assert.ok(!fs.existsSync(path.join(outside, 'evil.md')), 'nothing written outside the workspace');
+
+    fs.rmSync(outside, { recursive: true, force: true });
+    try { fs.unlinkSync(path.join(h.workspaceDir, 'linked')); } catch (e) {}
+    h.reapConvo(convoId);
+  });
+
   test('two markers in one turn produce two cards; each resolves independently', async () => {
     const convoId = h.freshConvoId('cwm');
     h.clearInvocations();
