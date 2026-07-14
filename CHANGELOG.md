@@ -6,50 +6,38 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ## Unreleased
 
-**Universal Search.** Search your whole workspace from one place. Press Cmd+K (Ctrl+K on Windows and Linux) and one palette searches your files, conversations, agents, and skills together, with results grouped by type as you type.
+**Name:** Search, Review & Codex
 
-**File View.** The rich markdown editor grows up: tables render and edit in place with your file's exact formatting preserved, and files agents produce can be reviewed where they live: inline comments and suggested edits with accept/reject decisions and threaded replies, stored in the file itself in an open format.
-
-**Agents on your ChatGPT plan.** Add `runtime: codex` to any specialist and it runs on the official OpenAI Codex CLI under your ChatGPT subscription, side by side with your Claude agents: conversations with memory, delegated work, and attributed file review. Two things to know up front: setup is two terminal commands (`npm install -g @openai/codex`, then `codex login`), and the workspace orchestrator itself always runs on Claude Code.
+One palette searches everything you have, files agents produce can be reviewed where they live, and any specialist can run on your ChatGPT plan alongside your Claude agents. The biggest release since launch: universal search, an in-editor review loop, and a second runtime.
 
 ### Added
 
-- **Universal search across the workspace.** One keyboard-first palette finds file contents and names, conversation messages and titles, and agent and skill names, ranked and grouped with highlighted excerpts. Matching is forgiving: partial words match as you type, and abbreviations find titles ("rdmp" finds "Roadmap-2026").
-- **Search results open at the right place.** A conversation result opens scrolled to the matched message and briefly highlights it; files open in the viewer, agents open their profile, skills open their page.
-- **An empty search shows your recent files and conversations,** so the palette is useful before you type anything.
-- **Search works on every setup.** The index is a small local file inside the workspace's `.rundock/` folder, rebuilt automatically; where the index engine isn't available, search falls back to a simpler scan rather than failing.
-- **Markdown tables render and edit in the editor.** Click into any cell and type: your file's exact formatting (padding, alignment, spacing) is preserved on save, an edited cell changes only its own text, and wide tables scroll in place.
-- **Review files without leaving Rundock.** Select text and press Comment to leave anchored feedback; agents propose inline edits with Accept and Reject buttons; replies thread and resolve. A review panel lists everything open, and comment markers jump between text and card.
-- **Review feedback lives in the file, in an open format.** Comments and suggestions are CriticMarkup with a small metadata block: plain text, readable in any editor, no lock-in. Your comments show as "Me", agents under their names, and anything unattributed says so honestly.
-- **Agents write well-formed review feedback out of the box,** and refer to feedback by quoting it in conversation, so what an agent says always matches what you see.
-- **Search understands review annotations.** Comment and suggestion content is searchable; raw annotation syntax never leaks into results.
-- **The sidebar and review panel are resizable.** Drag to the width you want; it's remembered between sessions.
-- **Agents can run on the Codex runtime.** Direct chat with thread memory, delegation both directions, and file review with correct attribution. Leave the model field out and your account's default model applies.
-- **Settings show each runtime's status honestly:** installed, signed in (detected by the presence of a credentials file, never by reading it), and version, with tooltips explaining the evidence.
-- **Codex problems explain themselves.** A signed-out Codex, an unavailable model, or a reached plan limit each show a card with the exact fix instead of a raw error.
-- **File writes from Codex agents on Windows are first-class.** With one config line they write directly inside their sandbox, as on macOS; without it, writes arrive as permission cards you approve: never silently read-only either way.
-- **Agents cannot impersonate teammates.** A handoff to an agent outside the caller's own reports is blocked with a visible notice: work attributed to an agent is always done by that agent, on its own runtime.
+- **Universal search across the workspace:** press Cmd+K (Ctrl+K on Windows and Linux) and one keyboard-first palette finds file contents and names, conversation messages and titles, and agent and skill names, ranked and grouped with highlighted excerpts. Matching is forgiving (partial words as you type; "rdmp" finds "Roadmap-2026"), an empty query shows recent items, and every result opens at the right place: conversations scroll to the matched message and highlight it.
+- **Search works on every setup:** the index is a small local file inside the workspace's `.rundock/` folder, rebuilt automatically; where the index engine isn't available, search falls back to a simpler scan rather than failing.
+- **Markdown tables render and edit in the editor:** click into any cell and type. Your file's exact formatting (padding, alignment, spacing) is preserved on save, an edited cell changes only its own text, and wide tables scroll in place.
+- **Review files without leaving Rundock:** select text and press Comment to leave anchored feedback; agents propose inline edits with Accept and Reject buttons; replies thread and resolve; a review panel lists everything open. Feedback is stored in the file itself as CriticMarkup with a small metadata block (plain text, readable in any editor, no lock-in), attributed honestly: you show as "Me", agents under their names. Every agent knows the format out of the box, refers to feedback by quoting it, and review content is searchable while raw annotation syntax never leaks into results.
+- **Agents on the Codex runtime:** `runtime: codex` in a specialist's file runs it on the official Codex CLI under your ChatGPT plan, with thread memory, delegation both directions, and attributed file review. Settings show each runtime's status with the evidence behind it (sign-in is detected by the presence of a credentials file, never by reading it), and Codex problems (signed out, unavailable model, plan limit) show a card with the exact fix instead of a raw error.
+- **Codex file writes on Windows are first-class:** with one config line they happen directly inside the sandbox, as on macOS; without it, writes arrive as permission cards you approve. Never silently read-only either way.
+- **Agents cannot impersonate teammates:** a handoff to an agent outside the caller's own reports is blocked with a visible notice, so work attributed to an agent is always done by that agent, on its own runtime.
 - **Search finds what Codex agents said,** including in mixed conversations where a Claude orchestrator delegated to a Codex specialist.
+- **The sidebar and review panel are resizable:** drag to the width you want; it's remembered between sessions.
 
 ### Changed
 
 - **Building or running from source now requires Node.js 22 or newer** (search uses Node's built-in SQLite, absent on Node 20). Packaged app users are unaffected.
 - **Pinned conversations now stay at the top of the sidebar,** always grouped first and marked with a pin. The sidebar filter is now All and Unread; the separate Pinned filter is gone since pins are always in view.
 - **The per-view search boxes (conversations, files, skills) are replaced by universal search,** which covers everything they did from one place.
-- **Internal: browser-driven test suite and client coverage measurement,** including named regression tests for bugs caught during development.
-- **Internal: editor round-trip test harness.** The editor's byte-for-byte guarantee is enforced by a suite that runs the real editor, including regression tests from adversarial review.
+- **Internal:** browser-driven end-to-end tests with client coverage measurement, and an editor round-trip harness enforcing the byte-for-byte guarantee.
 
 ### Fixed
 
-- **Files no longer change on save when you haven't changed them.** Three long-standing bugs (the blank line after frontmatter, stray padding on long ordered lists, the stripped final newline) are fixed, with tests locking the exact-bytes guarantee.
-- **Shell commands work again on Windows machines with Git installed.** The permission hook was written for one Windows shell while recent Claude Code versions run it under another, so every terminal command was silently refused; the hook now pins its shell explicitly.
-- **Short agent replies no longer vanish.** A reply under ten characters ("Forty.") was mistaken for internal turn plumbing and never rendered; concise answers now display like any other.
-- **Plain text is no longer labelled "Visual Basic .NET".** Unlabelled code blocks now auto-detect over a curated set with a confidence gate: real code still highlights, everything else displays as plain text labelled "text". Explicit language tags behave as before.
-- **Undo is safe during review.** Undoing an accepted or rejected suggestion restores the document and the file's review records consistently.
-- **The runtime field forgives casing, and orchestrators stay on Claude Code.** `runtime: Codex` (any casing) runs on Codex instead of silently falling back to Claude, and orchestrators are kept on Claude Code, where delegation actually works.
-- **Agents with a broken reports-to line still appear,** attached at the root of the org chart instead of disappearing from the team.
-- **Installing from source on a fresh Windows machine works end to end.** The bootstrap script no longer trips over PowerShell's default script policy, and installs the Node version the app requires.
-- **No stray focus outline after searching.** Navigating somewhere from universal search no longer leaves a keyboard focus ring on the previous view's nav icon.
+- **Files no longer change on save when you haven't changed them:** three long-standing bugs (the blank line after frontmatter, stray padding on long ordered lists, the stripped final newline) are fixed, with tests locking the exact-bytes guarantee. Undoing a review decision likewise restores the document and the file's review records consistently.
+- **Shell commands work again on Windows machines with Git installed:** the permission hook was written for one Windows shell while recent Claude Code versions run it under another, so every terminal command was silently refused; the hook now pins its shell explicitly.
+- **Short agent replies no longer vanish:** a reply under ten characters ("Forty.") was mistaken for internal turn plumbing and never rendered; concise answers now display like any other.
+- **Plain text is no longer labelled "Visual Basic .NET":** unlabelled code blocks auto-detect over a curated set with a confidence gate, so real code still highlights and everything else displays as plain text labelled "text". Explicit language tags behave as before.
+- **Agent file mistakes are forgiven:** `runtime: Codex` (any casing) runs on Codex instead of silently falling back to Claude, an orchestrator declaring a Codex runtime is kept on Claude Code where delegation actually works, and an agent whose reports-to line names a missing agent appears at the root of the org chart instead of disappearing.
+- **Installing from source on a fresh Windows machine works end to end:** the bootstrap script no longer trips over PowerShell's default script policy, and installs the Node version the app requires.
+- **No stray focus outline after searching:** navigating somewhere from universal search no longer leaves a keyboard focus ring on the previous view's nav icon.
 
 ## 0.9.2: Delegation Reliability & Hardening (2026-07-03)
 
