@@ -155,12 +155,14 @@ describe('scaffoldWorkspace', () => {
     }
   });
 
-  test('Windows hook command is shell-neutral (cmd /c), never PowerShell call-operator syntax', () => {
-    // Live finding (Parallels VM, Claude Code 2.1.208): Claude Code runs
-    // hooks under Git Bash on Windows when Git is installed (PowerShell is
-    // only the fallback). The previous `& "launcher"` form is a bash syntax
-    // error, so every shell command fail-closed. `cmd /c "launcher"` is
-    // valid under bash, PowerShell, AND cmd.
+  test('Windows hook entries pin shell: powershell so Git Bash never runs them', () => {
+    // Live findings (Parallels VM, Claude Code 2.1.208, Git installed):
+    // Claude Code runs hooks under Git Bash on Windows when Git is present
+    // (PowerShell is only the fallback). `& "launcher"` is a bash syntax
+    // error (fail-closed) and `cmd /c "launcher"` gets its /c switch
+    // mangled by MSYS path conversion (cmd goes interactive; fail-open,
+    // verified live). The documented fix is the hooks `shell` field: pin
+    // the entry to PowerShell and keep the call-operator command form.
     const dir = useWorkspace({ claudeMd: '# x' });
     srv.scaffoldWorkspace(dir, { platform: 'win32' });
     const settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf-8'));
@@ -170,25 +172,40 @@ describe('scaffoldWorkspace', () => {
     assert.ok(launcherBody.includes('ELECTRON_RUN_AS_NODE=1'));
     assert.ok(launcherBody.includes('permission-hook.js'));
     for (const e of settings.hooks.PreToolUse) {
-      assert.strictEqual(e.hooks[0].command, `cmd /c "${launcher}"`);
-      assert.ok(!e.hooks[0].command.startsWith('&'), 'no PowerShell call operator');
+      assert.strictEqual(e.hooks[0].command, `& "${launcher}"`);
+      assert.strictEqual(e.hooks[0].shell, 'powershell', 'hook pinned to PowerShell');
     }
   });
 
-  test('stale Windows call-operator hook entries migrate to the cmd /c form', () => {
+  test('POSIX hook entries carry no shell field', () => {
+    const dir = useWorkspace({ claudeMd: '# x' });
+    srv.scaffoldWorkspace(dir);
+    const settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf-8'));
+    for (const e of settings.hooks.PreToolUse) {
+      assert.strictEqual(e.hooks[0].shell, undefined);
+    }
+  });
+
+  test('stale Windows hook entries migrate: both the unpinned & form and the cmd /c form', () => {
     const dir = useWorkspace({ claudeMd: '# x' });
     const settingsPath = path.join(dir, '.claude', 'settings.local.json');
     const launcher = path.join(dir, '.rundock', 'permission-hook.cmd');
     fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
     fs.writeFileSync(settingsPath, JSON.stringify({
       hooks: { PreToolUse: [
+        // ad6220c era: right command, no shell pin (breaks under Git Bash)
         { matcher: 'Bash', hooks: [{ type: 'command', command: `& "${launcher}"`, timeout: 300 }] },
+        // 5f10b26 era: cmd /c form (MSYS-mangled under Git Bash)
+        { matcher: 'PowerShell', hooks: [{ type: 'command', command: `cmd /c "${launcher}"`, timeout: 300 }] },
       ] },
     }));
     srv.scaffoldWorkspace(dir, { platform: 'win32' });
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    const matchers = settings.hooks.PreToolUse.map(e => e.matcher);
+    assert.deepStrictEqual(matchers.sort(), ['Bash', 'PowerShell', 'mcp__.*']);
     for (const e of settings.hooks.PreToolUse) {
-      assert.strictEqual(e.hooks[0].command, `cmd /c "${launcher}"`, 'old & form rewritten');
+      assert.strictEqual(e.hooks[0].command, `& "${launcher}"`);
+      assert.strictEqual(e.hooks[0].shell, 'powershell', `${e.matcher} entry migrated to the pinned form`);
     }
   });
 
