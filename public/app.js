@@ -737,9 +737,17 @@ function handleResult(d, convoId) {
   responseText = responseText.replace(/<!-- RUNDOCK:DELEGATE agent=[\w-]+ -->\n?[\s\S]*/g, '').trim();
   responseText = stripRundockMarkers(responseText).trim();
 
-  // Strip silent-park sentinel and drop if response is a no-op
+  // Strip silent-park sentinel and drop if response is a no-op.
+  // The no-op heuristic ONLY applies to turns that are actually silent-park
+  // context: the server flagged the restart silent (state.silentTurn) or the
+  // text carries the literal <silent> sentinel. It must never apply to a
+  // normal turn: legitimate short answers ("Forty.", "Ten.") are shorter
+  // than the 10-char threshold and were being swallowed unrendered, while
+  // still reaching the transcript on disk. Verbose Claude agents masked
+  // this for months; terse Codex/GPT-5 replies surfaced it immediately.
   const silentStripped = responseText.replace(/<silent>/gi, '').trim();
-  const isNoOp = silentStripped.length < 10 || /^(No response requested\.|\.|OK|ok|Understood\.|Acknowledged\.)$/i.test(silentStripped);
+  const isParkContext = state.silentTurn || /<silent>/i.test(responseText);
+  const isNoOp = isParkContext && (silentStripped.length < 10 || /^(No response requested\.|\.|OK|ok|Understood\.|Acknowledged\.)$/i.test(silentStripped));
   if (isNoOp && responseText) {
     // Silent-park turn: remove any streaming bubble and deferred resume badge from the DOM, reset state, skip render
     if (state.currentStreamingMsg) {
