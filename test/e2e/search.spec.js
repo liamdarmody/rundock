@@ -6,7 +6,6 @@
 // green server-side tests: they are named regression tests, and reverting
 // their fixes must make them fail (verified when this suite landed).
 //
-// Spec: Liam-Agent-Workspace/02_Areas/Rundock/Specs/Client-Test-Coverage-Spec.md
 const base = require('@playwright/test');
 const { appendRawCoverage, writeLcov } = require('./coverage.js');
 
