@@ -266,6 +266,17 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .auth-error-copy:hover { color: var(--text-1); border-color: var(--text-2); }
 .auth-error-foot { margin-top: 8px; font-size: var(--caption); color: var(--text-2); }
 .auth-error-foot a { color: var(--working); }
+/* Codex runtime surfaces */
+.codex-error-detail { margin-top: 8px; font-family: 'SF Mono','Fira Code','Consolas',monospace; font-size: 11px; color: var(--text-2); word-break: break-word; }
+.codex-firstrun-card { align-self: center; max-width: 480px; margin: 8px auto; padding: 14px 16px; background: rgba(122,162,232,0.07); border: 1px solid rgba(122,162,232,0.35); border-radius: 12px; font-size: var(--caption); line-height: 1.6; color: var(--text-1); animation: fadeIn 0.2s ease; }
+.codex-firstrun-title { font-weight: 600; font-size: var(--caption); color: var(--working); margin-bottom: 4px; }
+.codex-firstrun-dismiss { margin-top: 8px; padding: 4px 12px; font-size: var(--label); font-weight: 600; border-radius: 6px; background: transparent; color: var(--text-2); border: 1px solid var(--border); cursor: pointer; }
+.codex-firstrun-dismiss:hover { color: var(--text-1); border-color: var(--text-2); }
+.runtime-chip { display: inline-flex; align-items: center; gap: 6px; font-size: var(--caption); color: var(--text-2); }
+.runtime-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+.runtime-default { font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-2); border: 1px solid var(--border); padding: 1px 6px; border-radius: 4px; margin-right: 4px; }
+.runtime-guidance { padding: 0 16px 14px; font-size: var(--caption); color: var(--text-2); line-height: 1.6; }
+.runtime-guidance code { font-family: 'SF Mono','Fira Code','Consolas',monospace; font-size: 11px; background: var(--elevated); padding: 2px 6px; border-radius: 4px; color: var(--text-1); }
 .msg-tool { align-self: flex-start; max-width: 85%; padding: 8px 12px; background: var(--card); border-left: 3px solid var(--working); border-radius: 0 8px 8px 0; font-size: var(--caption); color: var(--text-2); display: flex; align-items: center; gap: 8px; animation: fadeIn 0.2s ease; }
 .msg-tool.done { border-left-color: var(--success); }
 /* Activity summary */
