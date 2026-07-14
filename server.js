@@ -51,7 +51,9 @@ function validateWriteRequest(workspaceDir, relPath, content, isCodeMode) {
   if (!(fullPath.startsWith(root + path.sep))) {
     return { ok: false, reason: 'path escapes the workspace' };
   }
-  const top = path.relative(root, fullPath).split(path.sep)[0];
+  // Case-insensitive: Windows filesystems are, so ".Claude/" must not slip
+  // past a case-sensitive name check.
+  const top = path.relative(root, fullPath).split(path.sep)[0].toLowerCase();
   if (top === '.claude' || top === '.rundock') {
     return { ok: false, reason: 'managed directory' };
   }
@@ -2902,10 +2904,13 @@ function handleDelegation(msg, processes) {
     // Codex takes the whole prompt over stdin: identity + platform rules +
     // delegation contract on a cold spawn (Codex has no --agent or
     // --append-system-prompt equivalent); contract + brief on a resumed
-    // thread (instructions are already in the thread).
+    // thread (instructions are already in the thread). Delegated turns get
+    // the same Windows write-marker fallback as direct chats: instruction
+    // on cold spawns, marker handling flagged on the entry either way.
+    delegateEntry.writeMarkersEnabled = codexWriteMarkersEnabled();
     const codexPrompt = codexResumeId
       ? `${delegationContext}\n\n${contextWithHistory}`
-      : [readAgentInstructions(targetAgent), fullPrompt, contextWithHistory].filter(Boolean).join('\n\n');
+      : [readAgentInstructions(targetAgent), fullPrompt, buildWindowsWriteNote(delegateEntry.writeMarkersEnabled), contextWithHistory].filter(Boolean).join('\n\n');
     startCodexKeepalive(delegateEntry, convoId);
     wireCodexDelegate(delegateEntry, convoId, codexPrompt);
   } else {
@@ -5045,6 +5050,42 @@ function startCodexKeepalive(entry, convoId) {
 // Deliver the completed Codex turn: persist the transcript, send the result
 // (with normalised token usage: subscription usage, never dollar costs) and
 // the done signal.
+// Whether Codex spawns on this machine need the write-marker fallback:
+// Windows without a declared native sandbox (the CLI silently downgrades
+// workspace-write to read-only there). Checked per spawn so a config edit
+// takes effect on the next turn. Shared by direct chats and delegated turns.
+function codexWriteMarkersEnabled() {
+  const codexPlatform = process.env.RUNDOCK_TEST_PLATFORM || process.platform;
+  return codexPlatform === 'win32' && !codexRuntime.hasWindowsSandboxConfig();
+}
+
+// The write-marker instruction for Codex prompts on Windows machines without
+// the native sandbox. Empty string when the fallback is not needed, so call
+// sites can join it unconditionally.
+function buildWindowsWriteNote(enabled) {
+  if (!enabled) return '';
+  return [
+    'WINDOWS FILE WRITES:',
+    'On this machine your sandbox is read-only: shell commands that write files will be rejected. To create or update a file, output a block in EXACTLY this format as part of your response:',
+    '<!-- RUNDOCK:WRITE_FILE path="relative/path/inside/workspace.md" -->',
+    '<the complete file content>',
+    '<!-- /RUNDOCK:WRITE_FILE -->',
+    'Rules: relative paths inside the workspace only; the content replaces the whole file; one block per file, multiple blocks allowed. The user approves each write AFTER your turn ends, so describe writes as requested, never as completed. Never claim a file was created. Do not attempt writes via shell commands.',
+  ].join('\n');
+}
+
+// Strip write markers from a finished Codex turn's text. Returns the display
+// text plus the parsed requests for the caller to dispatch AFTER sending its
+// result/handback (cards follow the message they belong to). Inert unless
+// the entry was spawned with the marker instruction.
+function extractCodexWriteRequests(entry, text) {
+  if (!entry.writeMarkersEnabled || !text || !text.includes('RUNDOCK:WRITE_FILE')) {
+    return { text, requests: [] };
+  }
+  const parsed = codexRuntime.parseWriteMarkers(text);
+  return { text: parsed.cleanText, requests: parsed.requests };
+}
+
 // Raise a permission card for a server-originated request (no hook HTTP
 // response to hold: the decision arrives via onDecision(allow, reason)).
 // Same card UI, same timeout, same cancel sweep as hook-originated requests.
@@ -5101,6 +5142,15 @@ function handleCodexWriteRequest(entry, convoId, req) {
       }
       try {
         fs.mkdirSync(path.dirname(v.fullPath), { recursive: true });
+        // Defence in depth against symlink traversal: the validated path is
+        // lexical; re-verify the REAL parent directory sits inside the
+        // workspace before writing, so a symlinked folder inside the
+        // workspace cannot redirect the write outside it.
+        const realParent = fs.realpathSync(path.dirname(v.fullPath));
+        const realRoot = fs.realpathSync(path.resolve(WORKSPACE));
+        if (!(realParent === realRoot || realParent.startsWith(realRoot + path.sep))) {
+          throw new Error('resolved target escapes the workspace');
+        }
         fs.writeFileSync(v.fullPath, req.content, 'utf-8');
         invalidateFileListCache();
         if (ensureSearchEngine()) {
@@ -5128,12 +5178,9 @@ function finishCodexTurn(entry, convoId) {
   // result, so the conversation shows the agent's message first and the
   // cards follow. Only turns that were given the marker instruction are
   // honoured (entry.writeMarkersEnabled).
-  let writeRequests = [];
-  if (entry.writeMarkersEnabled && text.includes('RUNDOCK:WRITE_FILE')) {
-    const parsed = codexRuntime.parseWriteMarkers(text);
-    text = parsed.cleanText;
-    writeRequests = parsed.requests;
-  }
+  const extracted = extractCodexWriteRequests(entry, text);
+  text = extracted.text;
+  const writeRequests = extracted.requests;
   if (text) appendTranscript(convoId, 'agent', entry.agentId, text);
   safeSend(JSON.stringify({
     type: 'result', result: text, is_error: false, usage: entry.usage,
@@ -5228,16 +5275,23 @@ function wireCodexDelegate(entry, convoId, prompt) {
       const hasReturn = /<!-- RUNDOCK:RETURN -->/.test(entry.responseText);
       if (hasComplete) entry.returnMarkerSeen = 'complete';
       else if (hasReturn) entry.returnMarkerSeen = 'return';
-      if (entry.responseText) appendTranscript(convoId, 'agent', entry.agentId, entry.responseText);
+      // Windows write markers: strip before the transcript, the result, and
+      // the handback injection (finalResponseText), so the orchestrator and
+      // the user both see the plain-language line, never raw marker soup.
+      // Cards dispatch after the result so they follow their message.
+      const extracted = extractCodexWriteRequests(entry, entry.responseText);
+      const displayText = extracted.text;
+      if (displayText) appendTranscript(convoId, 'agent', entry.agentId, displayText);
       safeSend(JSON.stringify({
-        type: 'result', result: entry.responseText, is_error: false, usage: ev.usage,
+        type: 'result', result: displayText, is_error: false, usage: ev.usage,
         _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
         _turnStartTime: entry.turnStartTime,
       }));
       entry.resultSent = true;
-      entry.finalResponseText = entry.responseText;
+      entry.finalResponseText = displayText;
       entry.responseText = '';
       entry.idle = true;
+      for (const req of extracted.requests) handleCodexWriteRequest(entry, convoId, req);
     } else if (ev.type === 'error') {
       sendCodexError(entry, convoId, ev.message);
     }
@@ -5294,17 +5348,8 @@ function startCodexTurn(convoId, msg, agentData) {
     stdio: ['pipe', 'pipe', 'pipe'],
   }, (err) => handleCodexSpawnError(err, convoId));
 
-  // Windows write markers: WITHOUT a [windows] sandbox declaration in the
-  // Codex config, the CLI silently downgrades workspace-write to read-only
-  // on native Windows, so win32 spawns are instructed to request writes as
-  // WRITE_FILE markers, which Rundock validates and performs itself behind
-  // a permission card. WITH the declaration, the CLI grants a real
-  // workspace-write policy (verified live) and the marker fallback stands
-  // down: the sandbox writes directly, as on macOS/Linux. Checked per spawn
-  // so a config edit takes effect on the next turn. The env var is a test
-  // seam so the flow is exercisable from any platform's CI.
-  const codexPlatform = process.env.RUNDOCK_TEST_PLATFORM || process.platform;
-  const writeMarkersEnabled = codexPlatform === 'win32' && !codexRuntime.hasWindowsSandboxConfig();
+  // Windows write markers: see codexWriteMarkersEnabled() for the policy.
+  const writeMarkersEnabled = codexWriteMarkersEnabled();
 
   const entry = {
     process: proc, runtime: 'codex', processId, agentId: agentData.id,
@@ -5321,14 +5366,7 @@ function startCodexTurn(convoId, msg, agentData) {
     _agent: agentData.id, _conversationId: convoId, _processId: processId,
   }));
 
-  const windowsWriteNote = writeMarkersEnabled ? [
-    'WINDOWS FILE WRITES:',
-    'On this machine your sandbox is read-only: shell commands that write files will be rejected. To create or update a file, output a block in EXACTLY this format as part of your response:',
-    '<!-- RUNDOCK:WRITE_FILE path="relative/path/inside/workspace.md" -->',
-    '<the complete file content>',
-    '<!-- /RUNDOCK:WRITE_FILE -->',
-    'Rules: relative paths inside the workspace only; the content replaces the whole file; one block per file, multiple blocks allowed. The user approves each write AFTER your turn ends, so describe writes as requested, never as completed. Never claim a file was created. Do not attempt writes via shell commands.',
-  ].join('\n') : '';
+  const windowsWriteNote = buildWindowsWriteNote(writeMarkersEnabled);
 
   // Prompt over stdin, never argv. First turns carry identity (the agent
   // file body) plus the platform rules; Claude gets these via --agent and
