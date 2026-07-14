@@ -37,6 +37,7 @@
     "files": [
       "server.js",
       "search.js",
+      "codex.js",
       "public/**/*",
       "scaffold/**/*",
       "scripts/**/*",
