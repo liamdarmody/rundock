@@ -12,7 +12,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 **File View.** The rich markdown editor grows up: tables render and edit in place with your file's exact formatting preserved, and files agents produce can now be reviewed where they live: inline comments and suggested edits, stored in the file itself in an open format, with accept/reject decisions and threaded replies that any agent can read and act on.
 
-**Agents on your ChatGPT plan.** Rundock now runs agents on two runtimes. Claude Code remains the default; add `runtime: codex` to any specialist and it runs on the official OpenAI Codex CLI under your ChatGPT subscription instead. Codex agents hold conversations with full context across turns, take delegated work from your orchestrator and hand results back, and leave properly attributed review feedback on files, side by side with your Claude agents in the same workspace.
+**Agents on your ChatGPT plan.** Rundock now runs agents on two runtimes. Claude Code remains the default; add `runtime: codex` to any specialist and it runs on the official OpenAI Codex CLI under your ChatGPT subscription instead. Codex agents hold conversations with full context across turns, take delegated work from your orchestrator and hand results back, and leave properly attributed review feedback on files, side by side with your Claude agents in the same workspace. Two things to know up front: Codex setup is two terminal commands (`npm install -g @openai/codex`, then `codex login`), and the workspace orchestrator itself always runs on Claude Code.
 
 ### Added
 
@@ -35,6 +35,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Changed
 
+- **Building or running from source now requires Node.js 22 or newer.** Search uses Node's built-in SQLite, which Node 20 does not have. Packaged app users are unaffected; if you run from source, upgrade Node before pulling this release.
 - **Pinned conversations now stay at the top of the sidebar.** Previously a pin only tinted the conversation's edge and old pinned conversations sank down the list; pinned conversations now always group first (marked with a pin), with both groups ordered by recent activity. The sidebar filter is now All and Unread; Unread is always visible and shows "You're all caught up" when there's nothing unread, and the separate Pinned filter is gone since pins are always in view.
 - **The per-view search boxes (conversations, files, skills) are replaced by universal search,** which covers everything they did from one place. The sidebars are cleaner as a result.
 - **Internal: browser-driven test suite and client coverage measurement.** The user interface now has automated end-to-end tests (including named regression tests for two bugs caught during development) alongside the existing server test suite, and interface code coverage is now measured and tracked.
