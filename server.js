@@ -966,8 +966,15 @@ function discoverAgents() {
           // Claude (a silent runtime override, the same class of problem the
           // off-roster delegation guard exists for). Anything that is not
           // codex (any case) is claude, the default.
-          runtime: String(meta.runtime || '').toLowerCase() === 'codex' ? 'codex' : 'claude',
-          model: String(meta.runtime || '').toLowerCase() === 'codex' ? (meta.model || null) : (meta.model || DEFAULT_MODEL),
+          // Orchestrators and platform agents ALWAYS run on Claude Code,
+          // whatever their frontmatter says: delegation works through the
+          // Agent tool in Claude Code's stream, which Codex exec does not
+          // have, so a Codex orchestrator would be told to route with a tool
+          // that does not exist for it. The docs state the rule; this line
+          // makes it true. (Revisit with the app-server protocol work.)
+          runtime: (meta.type === 'orchestrator' || meta.type === 'platform') ? 'claude'
+            : (String(meta.runtime || '').toLowerCase() === 'codex' ? 'codex' : 'claude'),
+          model: ((meta.type !== 'orchestrator' && meta.type !== 'platform') && String(meta.runtime || '').toLowerCase() === 'codex') ? (meta.model || null) : (meta.model || DEFAULT_MODEL),
           order: orderNum,
           reportsTo: meta.reportsTo || null,
           instructions: instructions.substring(0, 2000),
