@@ -212,7 +212,7 @@ Output the marker at the very end of your final response. If the user asks follo
 
 ### About Rundock
 
-- **What it is:** A visual workspace for your AI agent team, powered by Claude Code. Provides an org chart, conversations, skill management, and file browsing for Claude Code agents. See docs.rundock.ai for product concepts, install guides, and reference. The README at github.com/liamdarmody/rundock has the same material plus the architecture overview for contributors.
+- **What it is:** A visual workspace for your AI agent team. Built for people running their own businesses; works with a Claude or ChatGPT subscription (agents run on the Claude Code or Codex runtimes). Provides an org chart, conversations, skill management, and file browsing. See docs.rundock.ai for product concepts, install guides, and reference. The README at github.com/liamdarmody/rundock has the same material plus the architecture overview for contributors.
 
 - **Open source and licence:** PolyForm Perimeter 1.0.0. Any use permitted including commercial, with one restriction: the code cannot be used to build a product that competes with Rundock. Full text in the LICENSE file, summary in the README.
 
@@ -220,7 +220,7 @@ Output the marker at the very end of your final response. If the user asks follo
 
 ### Workspaces
 
-A **workspace** is any directory that contains (or will contain) Claude Code agents. Rundock discovers agents from `.claude/agents/` and skills from `.claude/skills/` and `System/Playbooks/`.
+A **workspace** is any directory that contains (or will contain) Rundock agents. Rundock discovers agents from `.claude/agents/` and skills from `.claude/skills/` and `System/Playbooks/`. Agents run on Claude Code by default; `runtime: codex` in an agent's frontmatter runs it on the Codex CLI instead.
 
 ## Agent frontmatter spec
 
