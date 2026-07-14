@@ -3136,17 +3136,15 @@ marked.use({
       let displayLang = '';
       const escapeHtml = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       try {
-        if (lang && window.hljs && hljs.getLanguage(lang)) {
-          highlighted = hljs.highlight(text, { language: lang }).value;
-          displayLang = hljs.getLanguage(lang).name || lang;
-        } else if (!lang && window.hljs && text.length <= HLJS_AUTODETECT_MAX) {
-          const result = hljs.highlightAuto(text);
-          highlighted = result.value;
-          displayLang = result.language ? (hljs.getLanguage(result.language)?.name || result.language) : '';
-        } else {
-          highlighted = escapeHtml(text);
-          displayLang = lang || '';
-        }
+        // Decision logic lives in code-language.js (pure, unit-tested):
+        // explicit hints win, plaintext hints are first-class, unlabelled
+        // blocks auto-detect over a curated subset with a relevance gate so
+        // prose is never mislabelled as code (the VB.NET bug).
+        const resolved = window.resolveCodeLanguage
+          ? resolveCodeLanguage(lang, text, window.hljs, HLJS_AUTODETECT_MAX)
+          : { html: escapeHtml(text), label: lang || '' };
+        highlighted = resolved.html;
+        displayLang = resolved.label;
       } catch (e) {
         highlighted = escapeHtml(text);
         displayLang = lang || '';
