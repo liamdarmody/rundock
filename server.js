@@ -962,8 +962,12 @@ function discoverAgents() {
           // agents get no default model injected: the Codex CLI applies its
           // own default, and Rundock only passes --model when the agent file
           // sets one explicitly.
-          runtime: meta.runtime === 'codex' ? 'codex' : 'claude',
-          model: meta.runtime === 'codex' ? (meta.model || null) : (meta.model || DEFAULT_MODEL),
+          // Case-insensitive: `runtime: Codex` must not silently run on
+          // Claude (a silent runtime override, the same class of problem the
+          // off-roster delegation guard exists for). Anything that is not
+          // codex (any case) is claude, the default.
+          runtime: String(meta.runtime || '').toLowerCase() === 'codex' ? 'codex' : 'claude',
+          model: String(meta.runtime || '').toLowerCase() === 'codex' ? (meta.model || null) : (meta.model || DEFAULT_MODEL),
           order: orderNum,
           reportsTo: meta.reportsTo || null,
           instructions: instructions.substring(0, 2000),
@@ -4180,7 +4184,7 @@ wss.on('connection', (ws) => {
             console.log(`[Agent] ${existed ? 'Updated' : 'Created'}: ${name}`);
             // Tag the confirmation with the agent's runtime so the client can
             // suffix the created pill for non-default runtimes.
-            const savedRuntime = parseAgentFrontmatter(msg.content).runtime === 'codex' ? 'codex' : 'claude';
+            const savedRuntime = String(parseAgentFrontmatter(msg.content).runtime || '').toLowerCase() === 'codex' ? 'codex' : 'claude';
             ws.send(JSON.stringify({ type: 'agent_saved', agentId: name, updated: existed, runtime: savedRuntime }));
             // Invalidate BEFORE discovering so the broadcast reflects the new
             // file. A warm (<2s) cache otherwise omits the just-saved agent

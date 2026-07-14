@@ -484,6 +484,22 @@ describe('findOffRosterWorkspaceMatch', () => {
 });
 
 describe('agent runtime field', () => {
+  test('runtime value is case-insensitive: Codex/CODEX must not silently run on Claude', () => {
+    // A silent runtime override is the same problem class as the off-roster
+    // delegation guard: the user chose a runtime; casing must not undo it.
+    useWorkspace({ agents: {
+      'r1': agentFile({ name: 'r1', type: 'specialist', order: 2, runtime: 'Codex' }),
+      'r2': agentFile({ name: 'r2', type: 'specialist', order: 3, runtime: 'CODEX' }),
+      'r3': agentFile({ name: 'r3', type: 'specialist', order: 4 }),
+    } });
+    srv.invalidateAgentCache();
+    const agents = srv.discoverAgents();
+    assert.strictEqual(agents.find(a => a.id === 'r1').runtime, 'codex');
+    assert.strictEqual(agents.find(a => a.id === 'r2').runtime, 'codex');
+    assert.strictEqual(agents.find(a => a.id === 'r1').model, null, 'codex agents never inherit the Claude default model');
+    assert.strictEqual(agents.find(a => a.id === 'r3').runtime, 'claude', 'absent runtime defaults to claude');
+  });
+
   test('runtime: codex is parsed onto the agent; model stays unset unless frontmatter sets one', () => {
     useWorkspace({ agents: {
       'researcher': agentFile({ name: 'researcher', type: 'specialist', order: 2, runtime: 'codex' }),

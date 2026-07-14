@@ -32,7 +32,8 @@ Suggest and confirm:
 - **colour:** Hex colour for avatar. Must be visually distinct from existing agents.
 - **order:** 0 for orchestrator, sequential integers for specialists. Use decimals for sub-agents (e.g. 1.1, 1.2 under a lead at order 1). Check existing agents to avoid collisions.
 - **reportsTo:** The `name` slug of the agent this one reports to. Every specialist should have this set. Direct reports of the orchestrator use the orchestrator's slug. Sub-agents use their lead's slug.
-- **model:** `opus` for orchestrator, `sonnet` for most specialists
+- **model:** depends on the runtime. Claude Code agents: `opus` for the orchestrator, `sonnet` for most specialists, `haiku` for simple lookups. Codex agents: OMIT the model field unless the user names a specific Codex model; Codex applies the account's default, and Claude model names are invalid on Codex.
+- **runtime:** omit for Claude Code (the default). `runtime: codex` (lowercase) runs the agent on the user's ChatGPT plan via the official Codex CLI. Only offer this when the RUNTIMES section of your own instructions confirms Codex is available on this machine; the workspace orchestrator always runs on Claude Code. Codex agents use Codex's built-in sandbox rather than Rundock's permission prompts.
 
 ### 3. Write instructions
 
@@ -69,7 +70,8 @@ order: {number}
 reportsTo: {parent-agent-slug}
 icon: {unicode}
 colour: {hex}
-model: {opus|sonnet|haiku}
+model: {opus|sonnet|haiku}  # Claude Code agents only; OMIT for runtime: codex
+# runtime: codex            # optional, lowercase: runs this agent on the user's ChatGPT plan
 description: >
   {What the agent does}
 prompts:
@@ -127,6 +129,7 @@ Review all agents for quality and consistency.
 
 ### Per-agent checks
 - [ ] All frontmatter fields present (name, description, displayName, role, type, order, reportsTo, icon, colour, model, prompts)
+- [ ] Runtime/model pairing valid: `runtime: codex` is lowercase and carries NO Claude model name (omit model for the account default); Claude agents use opus/sonnet/haiku
 - [ ] Identity statement in instructions
 - [ ] Specific responsibilities with skill slug references
 - [ ] Routing boundaries for specialists
