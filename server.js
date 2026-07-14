@@ -32,6 +32,38 @@ function isInsideWorkspace(targetPath) {
   return resolved === root || resolved.startsWith(root + path.sep);
 }
 
+// ── Codex write-request validation (Windows write markers) ──────────────────
+// Validates a WRITE_FILE request BEFORE any permission card is shown: a card
+// is never raised for something Rundock would refuse to do. Workspace-bound
+// by construction, managed directories excluded, knowledge-mode file types
+// enforced (defence in depth: the same policy the prompts state).
+const CODEX_WRITE_ALLOWED_EXT = new Set(['.md', '.markdown', '.yaml', '.yml', '.json', '.txt', '.csv']);
+const CODEX_WRITE_MAX_BYTES = 1024 * 1024;
+function validateWriteRequest(workspaceDir, relPath, content, isCodeMode) {
+  if (!workspaceDir) return { ok: false, reason: 'no workspace selected' };
+  const p = String(relPath || '').trim();
+  if (!p) return { ok: false, reason: 'empty path' };
+  if (path.isAbsolute(p) || p.split(/[\\/]/).includes('..')) {
+    return { ok: false, reason: 'path escapes the workspace' };
+  }
+  const root = path.resolve(workspaceDir);
+  const fullPath = path.resolve(root, p);
+  if (!(fullPath.startsWith(root + path.sep))) {
+    return { ok: false, reason: 'path escapes the workspace' };
+  }
+  const top = path.relative(root, fullPath).split(path.sep)[0];
+  if (top === '.claude' || top === '.rundock') {
+    return { ok: false, reason: 'managed directory' };
+  }
+  if (Buffer.byteLength(String(content == null ? '' : content), 'utf-8') > CODEX_WRITE_MAX_BYTES) {
+    return { ok: false, reason: 'content exceeds the 1 MB write limit' };
+  }
+  if (!isCodeMode && !CODEX_WRITE_ALLOWED_EXT.has(path.extname(fullPath).toLowerCase())) {
+    return { ok: false, reason: 'file type not supported in this workspace' };
+  }
+  return { ok: true, fullPath };
+}
+
 // Shared constants to avoid repetition across process spawn sites
 const DISALLOWED_TOOLS_KNOWLEDGE = 'Write(*.js),Write(*.jsx),Write(*.ts),Write(*.tsx),Write(*.py),Write(*.sh),Write(*.bash),Write(*.rb),Write(*.pl),Write(*.exe),Write(*.dll),Write(*.so),Edit(*.js),Edit(*.jsx),Edit(*.ts),Edit(*.tsx),Edit(*.py),Edit(*.sh),Edit(*.bash),Edit(*.rb),Edit(*.pl),Edit(*.exe)';
 // Backward compat: DISALLOWED_TOOLS used by existing code paths
@@ -3599,8 +3631,14 @@ wss.on('connection', (ws) => {
         if (pending) {
           clearTimeout(pending.timer);
           pendingPermissionRequests.delete(msg.requestId);
-          pending.res.writeHead(200, { 'Content-Type': 'application/json' });
-          pending.res.end(JSON.stringify({ allow: msg.allow }));
+          if (pending.res) {
+            // Hook-originated request: answer the held HTTP response.
+            pending.res.writeHead(200, { 'Content-Type': 'application/json' });
+            pending.res.end(JSON.stringify({ allow: msg.allow }));
+          } else if (pending.onDecision) {
+            // Server-originated request (e.g. Codex write markers): callback.
+            try { pending.onDecision(msg.allow === true, 'user'); } catch (e) { console.error('[Permission] onDecision threw:', e); }
+          }
           console.log(`[Permission] convo=${msg.conversationId} requestId=${msg.requestId} decision=${msg.allow ? 'allow' : 'deny'}`);
         } else {
           console.warn(`[Permission] No pending request for requestId=${msg.requestId} (expired or already resolved)`);
@@ -3624,8 +3662,12 @@ wss.on('connection', (ws) => {
               clearTimeout(pending.timer);
               pendingPermissionRequests.delete(reqId);
               try {
-                pending.res.writeHead(200, { 'Content-Type': 'application/json' });
-                pending.res.end(JSON.stringify({ allow: false, reason: 'cancelled' }));
+                if (pending.res) {
+                  pending.res.writeHead(200, { 'Content-Type': 'application/json' });
+                  pending.res.end(JSON.stringify({ allow: false, reason: 'cancelled' }));
+                } else if (pending.onDecision) {
+                  pending.onDecision(false, 'cancelled');
+                }
               } catch (e) {}
             }
           }
@@ -5003,10 +5045,95 @@ function startCodexKeepalive(entry, convoId) {
 // Deliver the completed Codex turn: persist the transcript, send the result
 // (with normalised token usage: subscription usage, never dollar costs) and
 // the done signal.
+// Raise a permission card for a server-originated request (no hook HTTP
+// response to hold: the decision arrives via onDecision(allow, reason)).
+// Same card UI, same timeout, same cancel sweep as hook-originated requests.
+function requestServerPermission({ convoId, toolName, toolInput, onDecision }) {
+  const requestId = 'perm-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  pendingPermissionRequests.set(requestId, {
+    onDecision,
+    conversationId: convoId,
+    toolName,
+    toolInput,
+    timer: setTimeout(() => {
+      const pending = pendingPermissionRequests.get(requestId);
+      if (pending) {
+        pendingPermissionRequests.delete(requestId);
+        console.log(`[Permission] Auto-denied (timeout): ${toolName} convo=${convoId} requestId=${requestId}`);
+        safeSend(JSON.stringify({ type: 'permission_timeout', requestId, _conversationId: convoId }));
+        try { pending.onDecision(false, 'timeout'); } catch (e) {}
+      }
+    }, PERMISSION_TIMEOUT_MS),
+  });
+  safeSend(JSON.stringify({
+    type: 'control_request',
+    request_id: requestId,
+    request: { subtype: 'can_use_tool', tool_name: toolName, input: toolInput || {} },
+    _conversationId: convoId,
+  }));
+  console.log(`[Permission] Server request: ${toolName} convo=${convoId} requestId=${requestId}`);
+}
+
+// One WRITE_FILE request from a Windows Codex turn: validate, card, write.
+// Invalid requests are refused WITHOUT a card (a card is never raised for
+// something Rundock would not do); the refusal is recorded so the user and
+// the resumed thread can see what happened.
+function handleCodexWriteRequest(entry, convoId, req) {
+  let isCodeMode = false;
+  try { isCodeMode = readState().workspaceMode === 'code'; } catch (e) {}
+  const v = validateWriteRequest(WORKSPACE, req.path, req.content, isCodeMode);
+  if (!v.ok) {
+    console.log(`[CodexWrite] convo=${convoId} refused without card: ${req.path} (${v.reason})`);
+    appendTranscript(convoId, 'agent', entry.agentId, `Write of ${req.path} refused: ${v.reason}.`);
+    safeSend(JSON.stringify({ type: 'system', subtype: 'notice', content: `Refused a file write from ${entry.agentId}: ${req.path} (${v.reason}).`, _conversationId: convoId }));
+    return;
+  }
+  requestServerPermission({
+    convoId,
+    toolName: 'WriteFile',
+    toolInput: { path: req.path, content: req.content, agent: entry.agentId },
+    onDecision: (allow, reason) => {
+      if (!allow) {
+        console.log(`[CodexWrite] convo=${convoId} not approved (${reason}): ${req.path}`);
+        appendTranscript(convoId, 'agent', entry.agentId, `Write of ${req.path} not approved.`);
+        safeSend(JSON.stringify({ type: 'system', subtype: 'notice', content: `Write of ${req.path} was not approved.`, _conversationId: convoId }));
+        return;
+      }
+      try {
+        fs.mkdirSync(path.dirname(v.fullPath), { recursive: true });
+        fs.writeFileSync(v.fullPath, req.content, 'utf-8');
+        invalidateFileListCache();
+        if (ensureSearchEngine()) {
+          try { searchEngine.noteFileSaved(WORKSPACE, req.path); } catch (e) { /* reconcile catches up */ }
+        }
+        appendTranscript(convoId, 'agent', entry.agentId, `Created ${req.path} (approved).`);
+        safeSend(JSON.stringify({ type: 'system', subtype: 'notice', content: `Created [[${req.path}]] (approved write from ${entry.agentId}).`, _conversationId: convoId }));
+        safeSend(JSON.stringify({ type: 'file_saved', path: req.path }));
+        console.log(`[CodexWrite] convo=${convoId} wrote ${req.path} (${Buffer.byteLength(req.content, 'utf-8')} bytes)`);
+      } catch (e) {
+        console.error(`[CodexWrite] convo=${convoId} write failed: ${e.message}`);
+        appendTranscript(convoId, 'agent', entry.agentId, `Write of ${req.path} failed: ${e.message}`);
+        safeSend(JSON.stringify({ type: 'system', subtype: 'notice', content: `Write of ${req.path} failed: ${e.message}`, _conversationId: convoId }));
+      }
+    },
+  });
+}
+
 function finishCodexTurn(entry, convoId) {
   if (entry.resultSent) return;
   entry.resultSent = true;
-  const text = entry.responseText || '';
+  let text = entry.responseText || '';
+  // Windows write markers: strip from the displayed/persisted text, then
+  // dispatch each request through validation + permission card AFTER the
+  // result, so the conversation shows the agent's message first and the
+  // cards follow. Only turns that were given the marker instruction are
+  // honoured (entry.writeMarkersEnabled).
+  let writeRequests = [];
+  if (entry.writeMarkersEnabled && text.includes('RUNDOCK:WRITE_FILE')) {
+    const parsed = codexRuntime.parseWriteMarkers(text);
+    text = parsed.cleanText;
+    writeRequests = parsed.requests;
+  }
   if (text) appendTranscript(convoId, 'agent', entry.agentId, text);
   safeSend(JSON.stringify({
     type: 'result', result: text, is_error: false, usage: entry.usage,
@@ -5018,6 +5145,7 @@ function finishCodexTurn(entry, convoId) {
     type: 'system', subtype: 'done', code: 0,
     _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
   }));
+  for (const req of writeRequests) handleCodexWriteRequest(entry, convoId, req);
 }
 
 // Handle one parsed line of Codex output for a running turn.
@@ -5166,10 +5294,19 @@ function startCodexTurn(convoId, msg, agentData) {
     stdio: ['pipe', 'pipe', 'pipe'],
   }, (err) => handleCodexSpawnError(err, convoId));
 
+  // Windows write markers: the Codex CLI silently downgrades workspace-write
+  // to read-only on native Windows (no enforceable sandbox; verified live on
+  // ARM64 where the native sandbox fails to initialise). win32 spawns are
+  // instructed to request writes as WRITE_FILE markers, which Rundock
+  // validates and performs itself behind a permission card. The env var is
+  // a test seam so the flow is exercisable from any platform's CI.
+  const codexPlatform = process.env.RUNDOCK_TEST_PLATFORM || process.platform;
+  const writeMarkersEnabled = codexPlatform === 'win32';
+
   const entry = {
     process: proc, runtime: 'codex', processId, agentId: agentData.id,
     responseText: '', exited: false, resultSent: false, errorSent: false,
-    doneSent: false, superseded: false, usage: null,
+    doneSent: false, superseded: false, usage: null, writeMarkersEnabled,
     sessionId: resumeThreadId, lastUserMessage: msg.content,
     toolCalls: [], turnStartTime: Date.now(),
   };
@@ -5181,12 +5318,21 @@ function startCodexTurn(convoId, msg, agentData) {
     _agent: agentData.id, _conversationId: convoId, _processId: processId,
   }));
 
+  const windowsWriteNote = writeMarkersEnabled ? [
+    'WINDOWS FILE WRITES:',
+    'On this machine your sandbox is read-only: shell commands that write files will be rejected. To create or update a file, output a block in EXACTLY this format as part of your response:',
+    '<!-- RUNDOCK:WRITE_FILE path="relative/path/inside/workspace.md" -->',
+    '<the complete file content>',
+    '<!-- /RUNDOCK:WRITE_FILE -->',
+    'Rules: relative paths inside the workspace only; the content replaces the whole file; one block per file, multiple blocks allowed. The user approves each write AFTER your turn ends, so describe writes as requested, never as completed. Never claim a file was created. Do not attempt writes via shell commands.',
+  ].join('\n') : '';
+
   // Prompt over stdin, never argv. First turns carry identity (the agent
   // file body) plus the platform rules; Claude gets these via --agent and
   // --append-system-prompt, which Codex does not support.
   const prompt = resumeThreadId
     ? msg.content
-    : [readAgentInstructions(agentData), buildSystemPrompt(agentData), msg.content].filter(Boolean).join('\n\n');
+    : [readAgentInstructions(agentData), buildSystemPrompt(agentData), windowsWriteNote, msg.content].filter(Boolean).join('\n\n');
   proc.stdin.on('error', () => { /* EPIPE on early exit: close handler reports */ });
   proc.stdin.write(prompt);
   proc.stdin.end();
@@ -5714,7 +5860,7 @@ module.exports._internal = {
   parseRoutines, parsePrompts, parseSkills, readNormalisedFile, titleCase,
   // markers + text helpers
   stripRundockMarkers, isSilentParkResponse, sanitizeSpecialistOutput,
-  extractSnippet, buildToolSummary, isAuthError, isModelError,
+  extractSnippet, buildToolSummary, isAuthError, isModelError, validateWriteRequest,
   // rosters + prompts
   findDirectReportMatch, findOffRosterWorkspaceMatch, buildTeamRoster, buildPeerRoster,
   extractSelfDescription, buildSystemPrompt,
