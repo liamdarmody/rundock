@@ -31,6 +31,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 - **Codex problems explain themselves.** A signed-out Codex, an unavailable model, or a reached plan limit each show a card saying what happened and the exact fix (run codex login; remove the model field; wait for the limit to reset) instead of a raw error, with the technical detail attached underneath.
 - **File writes from Codex agents on Windows are first-class.** With one config line, Codex agents write files directly inside their sandbox, as on macOS. Without it, their writes arrive as permission cards showing the exact content, applied only when you approve: never silently read-only either way. Settings point Windows users at the one-liner.
 - **Agents cannot impersonate teammates.** An agent that tries to hand work to a teammate outside its own reports is blocked with a visible notice and recovers gracefully: work attributed to an agent is always done by that agent, on its own runtime.
+- **Search finds what Codex agents said.** Conversation content search covers both runtimes: messages in Codex-runtime conversations are indexed and findable with highlighted snippets, including mixed conversations where a Claude orchestrator delegated to a Codex specialist.
 
 ### Changed
 
@@ -47,6 +48,9 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 - **Short agent replies no longer vanish.** A reply under ten characters ("Forty.") was mistaken for internal turn plumbing and never rendered, while still reaching the conversation's file on disk. Concise answers now display like any other.
 - **Installing from source on a fresh Windows machine works end to end.** The bootstrap script no longer trips over PowerShell's default script policy, and it installs the Node version the app actually requires.
 - **No stray focus outline after searching.** Navigating somewhere from universal search no longer leaves a keyboard focus ring on the previous view's nav icon.
+- **Plain text is no longer labelled "Visual Basic .NET".** Fenced code blocks without a language tag used to auto-detect over every grammar highlight.js knows, and VB.NET's prose-like grammar won on ordinary text, so plain sentences, lists, and logs rendered coloured and labelled as code. Unlabelled blocks now detect over a curated set with a confidence gate: real code still highlights, and everything else displays as honest plain text labelled "text". Explicit language tags behave as before.
+- **The runtime field forgives casing, and orchestrators stay on Claude Code.** `runtime: Codex` (any casing) now runs the agent on Codex instead of silently falling back to Claude, and an orchestrator or platform agent declaring `runtime: codex` is kept on Claude Code, where delegation actually works, instead of being launched onto a runtime that cannot route.
+- **Agents with a broken reports-to line still appear.** An agent whose `reportsTo` names a missing or misspelled agent now shows in the org chart attached at the root, instead of disappearing from the team entirely.
 
 ## 0.9.2: Delegation Reliability & Hardening (2026-07-03)
 
