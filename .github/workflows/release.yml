@@ -40,12 +40,37 @@ jobs:
           cache: npm
       - name: Install runtime dependencies
         run: npm ci --omit=dev
+      - name: Install jsdom for the editor suite
+        # The editor round-trip suite boots the real editor under jsdom, a
+        # devDependency the lean install omits. Same pinned install as CI;
+        # without it the gate fails on ERR_MODULE_NOT_FOUND.
+        run: npm install --no-save jsdom@29.1.1
       - name: Run tests
         run: npm test
 
+  # Browser-driven suite gates the release alongside the Node suite: a tag
+  # must never ship a broken client. Mirrors the CI e2e job.
+  e2e:
+    name: E2E
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+      - name: Install dependencies (incl. dev, for Playwright)
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run E2E suite
+        run: npx playwright test
+
   macos:
     name: Build macOS (arm64 + x64)
-    needs: test
+    needs: [test, e2e]
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -91,7 +116,7 @@ jobs:
   # ---------------------------------------------------------------------------
   windows:
     name: Build Windows (x64)
-    needs: test
+    needs: [test, e2e]
     runs-on: windows-latest
     steps:
       - name: Checkout
