@@ -176,6 +176,31 @@ describe('detectCodex', () => {
   });
 });
 
+describe('findCodexThreadFile', () => {
+  const os = require('node:os');
+  const fs = require('node:fs');
+  const path = require('node:path');
+
+  test('resolves a thread id to its rollout file via the filename convention', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-home-'));
+    const day = path.join(home, 'sessions', '2026', '07', '14');
+    fs.mkdirSync(day, { recursive: true });
+    const f = path.join(day, 'rollout-2026-07-14T10-00-00-019f0000-aaaa-7000-b000-c00000000001.jsonl');
+    fs.writeFileSync(f, '');
+    const hit = codex.findCodexThreadFile('019f0000-aaaa-7000-b000-c00000000001', { env: { CODEX_HOME: home } });
+    assert.strictEqual(hit, f);
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  test('unknown thread ids and hostile ids resolve to null', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-home-'));
+    assert.strictEqual(codex.findCodexThreadFile('019f0000-aaaa-7000-b000-c00000000002', { env: { CODEX_HOME: home } }), null);
+    assert.strictEqual(codex.findCodexThreadFile('../../etc/passwd', { env: { CODEX_HOME: home } }), null, 'invalid ids never touch the filesystem shape');
+    assert.strictEqual(codex.findCodexThreadFile('', { env: { CODEX_HOME: home } }), null);
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+});
+
 describe('resolveCodexBin', () => {
   test('unix: returns the trimmed which output', () => {
     const bin = codex.resolveCodexBin({

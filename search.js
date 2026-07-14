@@ -317,6 +317,29 @@ function extractIndexableMessage(obj) {
     if (!parts.length) return null;
     return { role: 'agent', text: parts.join('\n\n'), tsMs };
   }
+  // Codex rollout format (~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl).
+  // One rollout file per thread, appended across resumes (verified on real
+  // sessions), so the byte-offset high-water reconcile applies unchanged.
+  // Messages arrive as response_item events with role-tagged content.
+  // Skip rules, mirroring the Claude extractor's tool-noise exclusion:
+  //   - developer role: instructions, never conversation content
+  //   - user messages carrying the CLI's <environment_context> blocks
+  //   - user messages carrying Rundock's injected identity/platform prompt
+  //     (detectable by the base-rules opener); indexing those would match
+  //     every workspace search against every Codex conversation
+  if (obj.type === 'response_item' && obj.payload && obj.payload.type === 'message') {
+    const role = obj.payload.role;
+    if (role !== 'user' && role !== 'assistant') return null;
+    const parts = (Array.isArray(obj.payload.content) ? obj.payload.content : [])
+      .filter(b => b && typeof b.text === 'string' && b.text.trim())
+      .map(b => b.text);
+    if (!parts.length) return null;
+    const text = parts.join('\n\n').trim();
+    if (role === 'user' && (text.includes('<environment_context>') || text.includes('You are inside Rundock'))) {
+      return null;
+    }
+    return { role: role === 'user' ? 'user' : 'agent', text, tsMs };
+  }
   return null;
 }
 

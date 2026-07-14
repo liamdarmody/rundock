@@ -5526,7 +5526,10 @@ function resolveSessionPathCached(sessionId) {
       return null;
     }
   }
-  const resolved = getSessionJsonlPath(sessionId);
+  // Claude sessions live under ~/.claude/projects; Codex threads live under
+  // ~/.codex/sessions as rollout files. Thread ids are uuid-shaped like
+  // Claude session ids, so resolution simply tries both homes.
+  const resolved = getSessionJsonlPath(sessionId) || codexRuntime.findCodexThreadFile(sessionId);
   _sessionPathMemo.set(sessionId, { path: resolved || null, ts: now });
   return resolved;
 }

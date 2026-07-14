@@ -34,6 +34,27 @@ function jsonlToolUse(ts) {
   return JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'x', name: 'Bash', input: { command: 'TOOLNOISE ls' } }] }, timestamp: ts }) + '\n';
 }
 
+// Codex rollout fixtures, mirroring real rollout files (verified 2026-07-14):
+// response_item events with role-tagged content; developer role carries
+// instructions; the CLI injects <environment_context> user blocks; Rundock's
+// identity/platform prompt travels as a user message containing the
+// base-rules opener.
+function rolloutUser(text, ts) {
+  return JSON.stringify({ timestamp: ts, type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } }) + '\n';
+}
+function rolloutAssistant(text, ts) {
+  return JSON.stringify({ timestamp: ts, type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] } }) + '\n';
+}
+function rolloutDeveloper(text, ts) {
+  return JSON.stringify({ timestamp: ts, type: 'response_item', payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text }] } }) + '\n';
+}
+function rolloutMeta(ts) {
+  return JSON.stringify({ timestamp: ts, type: 'session_meta', payload: { id: 'thr-x', source: 'exec' } }) + '\n';
+}
+function rolloutNonMessage(ts) {
+  return JSON.stringify({ timestamp: ts, type: 'event_msg', payload: { type: 'task_started', turn_id: 't1' } }) + '\n';
+}
+
 function writeSession(name, content) {
   const p = path.join(tmpRoot, name + '.jsonl');
   fs.writeFileSync(p, content);
@@ -98,6 +119,58 @@ describe('conversations corpus', () => {
     r = idx.reconcileConversations([c]);
     assert.strictEqual(r.indexed, 1, 'only the appended message is indexed');
     assert.strictEqual(idx.searchMessages('flamingo', { collapse: false }).length, 2);
+  });
+
+  test('codex rollout sessions index user and assistant text; instructions and injected noise stay out', () => {
+    const p = writeSession('rollout-2026-07-14T10-00-00-thr-abc',
+      rolloutMeta('2026-07-14T10:00:00.000Z') +
+      rolloutDeveloper('SYSPROMPT you are an agent', '2026-07-14T10:00:01.000Z') +
+      rolloutUser('<environment_context>\n  <cwd>/tmp/ws</cwd>\n</environment_context>', '2026-07-14T10:00:02.000Z') +
+      rolloutUser('# Agent Role\n\nYou are inside Rundock, a visual interface for AI agent teams. INJECTEDRULES', '2026-07-14T10:00:03.000Z') +
+      rolloutUser('What did the aardvark report conclude?', '2026-07-14T10:00:04.000Z') +
+      rolloutNonMessage('2026-07-14T10:00:05.000Z') +
+      rolloutAssistant('The aardvark report concluded the tunnels are stable.', '2026-07-14T10:00:06.000Z')
+    );
+    idx.reconcileConversations([convo('c9', 'cody', [{ sessionId: 'thr-abc', agentId: 'cody', filePath: p }])]);
+    const hits = idx.searchMessages('aardvark', { collapse: false });
+    assert.strictEqual(hits.length, 2, 'user question and assistant answer both indexed');
+    assert.deepStrictEqual(hits.map(h => h.role).sort(), ['agent', 'user']);
+    assert.strictEqual(hits[0].conversationId, 'c9');
+    assert.strictEqual(hits[0].agentId, 'cody');
+    assert.ok(hits[0].snippet.includes(HIGHLIGHT_OPEN));
+    assert.strictEqual(idx.searchMessages('SYSPROMPT', { collapse: false }).length, 0, 'developer instructions never indexed');
+    assert.strictEqual(idx.searchMessages('INJECTEDRULES', { collapse: false }).length, 0, 'injected identity prompt never indexed');
+    assert.strictEqual(idx.searchMessages('environment_context', { collapse: false }).length, 0, 'CLI noise never indexed');
+  });
+
+  test('a mixed conversation indexes its Claude and Codex sessions under one conversation id', () => {
+    const pc = writeSession('claude-sess',
+      jsonlUser('Ask the specialist about the pelican budget.', '2026-07-14T10:00:00.000Z'));
+    const px = writeSession('rollout-2026-07-14T10-00-10-thr-mix',
+      rolloutAssistant('The pelican budget clears review at 40k.', '2026-07-14T10:00:20.000Z'));
+    idx.reconcileConversations([convo('c10', 'cos', [
+      { sessionId: 'claude-sess', agentId: 'cos', filePath: pc },
+      { sessionId: 'thr-mix', agentId: 'cody', filePath: px },
+    ])]);
+    const hits = idx.searchMessages('pelican', { collapse: false });
+    assert.strictEqual(hits.length, 2);
+    assert.ok(hits.every(h => h.conversationId === 'c10'), 'both runtimes under the one conversation');
+    const agents = hits.map(h => h.agentId).sort();
+    assert.deepStrictEqual(agents, ['cody', 'cos']);
+  });
+
+  test('codex rollouts reconcile incrementally: resume-appended turns consume only the delta', () => {
+    // Verified against real sessions: resumes APPEND to the same rollout
+    // file, so the byte-offset high-water strategy applies unchanged.
+    const p = writeSession('rollout-2026-07-14T10-00-00-thr-inc',
+      rolloutUser('first ocelot question', '2026-07-14T10:00:00.000Z'));
+    const c = convo('c11', 'cody', [{ sessionId: 'thr-inc', agentId: 'cody', filePath: p }]);
+    let r = idx.reconcileConversations([c]);
+    assert.strictEqual(r.indexed, 1);
+    fs.appendFileSync(p, rolloutAssistant('second ocelot answer', '2026-07-14T10:05:00.000Z'));
+    r = idx.reconcileConversations([c]);
+    assert.strictEqual(r.indexed, 1, 'only the appended message is indexed');
+    assert.strictEqual(idx.searchMessages('ocelot', { collapse: false }).length, 2);
   });
 
   test('an unchanged session file is skipped entirely', () => {
