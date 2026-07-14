@@ -5294,14 +5294,17 @@ function startCodexTurn(convoId, msg, agentData) {
     stdio: ['pipe', 'pipe', 'pipe'],
   }, (err) => handleCodexSpawnError(err, convoId));
 
-  // Windows write markers: the Codex CLI silently downgrades workspace-write
-  // to read-only on native Windows (no enforceable sandbox; verified live on
-  // ARM64 where the native sandbox fails to initialise). win32 spawns are
-  // instructed to request writes as WRITE_FILE markers, which Rundock
-  // validates and performs itself behind a permission card. The env var is
-  // a test seam so the flow is exercisable from any platform's CI.
+  // Windows write markers: WITHOUT a [windows] sandbox declaration in the
+  // Codex config, the CLI silently downgrades workspace-write to read-only
+  // on native Windows, so win32 spawns are instructed to request writes as
+  // WRITE_FILE markers, which Rundock validates and performs itself behind
+  // a permission card. WITH the declaration, the CLI grants a real
+  // workspace-write policy (verified live) and the marker fallback stands
+  // down: the sandbox writes directly, as on macOS/Linux. Checked per spawn
+  // so a config edit takes effect on the next turn. The env var is a test
+  // seam so the flow is exercisable from any platform's CI.
   const codexPlatform = process.env.RUNDOCK_TEST_PLATFORM || process.platform;
-  const writeMarkersEnabled = codexPlatform === 'win32';
+  const writeMarkersEnabled = codexPlatform === 'win32' && !codexRuntime.hasWindowsSandboxConfig();
 
   const entry = {
     process: proc, runtime: 'codex', processId, agentId: agentData.id,

@@ -3500,6 +3500,13 @@ function runtimesCardHtml() {
   } else if (!cx.installed) {
     h += `<div class="runtime-guidance">Want agents on your ChatGPT plan? Install the official Codex CLI, then sign in: <code>npm install -g @openai/codex</code> then <code>codex login</code></div>`;
   }
+  // windowsSandbox is only ever a boolean on Windows (null elsewhere), so
+  // this guidance self-limits to Windows machines. Without the native
+  // sandbox declared, Codex file writes arrive as approval cards; with it,
+  // agents write directly inside the sandbox, as on macOS.
+  if (cx.installed && cx.windowsSandbox === false) {
+    h += `<div class="runtime-guidance">Codex agents currently request each file write for your approval. For direct sandboxed writes, add to your Codex config (<code>%USERPROFILE%\\.codex\\config.toml</code>):<br><code>[windows]</code><br><code>sandbox = "unelevated"</code></div>`;
+  }
   return h;
 }
 

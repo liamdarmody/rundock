@@ -169,7 +169,43 @@ function detectCodex(deps = {}) {
   const codexHome = env.CODEX_HOME || path.join(homedir(), '.codex');
   const authenticated = !!exists(path.join(codexHome, 'auth.json'));
 
-  return { installed: true, authenticated, version };
+  // Windows only: whether the config declares a native sandbox (see
+  // hasWindowsSandboxConfig). null off-Windows (not applicable). Honours
+  // the RUNDOCK_TEST_PLATFORM seam for this field ONLY: binary resolution
+  // above must stay on the real platform or the probes break in CI.
+  const effectivePlatform = env.RUNDOCK_TEST_PLATFORM || platform;
+  const windowsSandbox = effectivePlatform === 'win32'
+    ? hasWindowsSandboxConfig({ homedir, env })
+    : null;
+
+  return { installed: true, authenticated, version, windowsSandbox };
+}
+
+// Presence-only scan of the Codex config for a [windows] table declaring a
+// sandbox. When declared, the CLI grants a real workspace-write policy on
+// Windows (in-process patch writes and sandboxed commands, workspace-
+// bounded), so Rundock's write-marker fallback stands down. When absent,
+// the CLI silently downgrades workspace-write to read-only (verified live)
+// and the marker fallback carries writes instead. The VALUE is never acted
+// on: any declared sandbox mode counts, mirroring the presence-only
+// principle used for auth detection.
+function hasWindowsSandboxConfig(deps = {}) {
+  const read = deps.readFileSync || fs.readFileSync;
+  const homedir = deps.homedir || os.homedir;
+  const env = deps.env || process.env;
+  try {
+    const cfgPath = path.join(env.CODEX_HOME || path.join(homedir(), '.codex'), 'config.toml');
+    const lines = String(read(cfgPath, 'utf-8')).split(/\r?\n/);
+    let inWindows = false;
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (line.startsWith('[')) { inWindows = line === '[windows]'; continue; }
+      if (inWindows && /^sandbox\s*=/.test(line)) return true;
+    }
+    return false;
+  } catch (e) {
+    return false;
+  }
 }
 
 // ── Error classification ───────────────────────────────────────────────────
@@ -239,5 +275,5 @@ function parseWriteMarkers(text) {
 
 module.exports = {
   buildCodexArgs, parseCodexLine, resolveCodexBin, detectCodex, isCodexQuotaError,
-  classifyCodexError, isValidThreadId, parseWriteMarkers,
+  classifyCodexError, isValidThreadId, parseWriteMarkers, hasWindowsSandboxConfig,
 };
