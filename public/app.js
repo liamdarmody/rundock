@@ -4092,13 +4092,21 @@ function openPalette() {
   input.focus();
 }
 
-function closePalette() {
+function closePalette(opts = {}) {
+  // restoreFocus defaults true: cancel closes (Escape, Cmd/Ctrl+K toggle)
+  // return focus to where the user was, which keyboard flow continuity
+  // requires. Selection closes pass false: after NAVIGATING somewhere,
+  // handing focus back to a stale nav-rail button paints the browser's
+  // keyboard focus ring on a view the user just left (a white border next
+  // to the new view's active highlight).
+  const restoreFocus = opts.restoreFocus !== false;
   paletteOpen = false;
   clearTimeout(paletteTimer);
+  // Blur before hiding so focus never sits inside a hidden subtree
+  // (browsers silently drop it to <body>; an explicit blur is deterministic).
+  try { document.activeElement?.blur?.(); } catch (e) {}
   document.getElementById('palette-overlay')?.classList.add('hidden');
-  // Return focus to where the user was (keyboard flow continuity); fall
-  // back silently when the element is gone or was never focusable.
-  if (paletteReturnFocus && document.contains(paletteReturnFocus)) {
+  if (restoreFocus && paletteReturnFocus && document.contains(paletteReturnFocus)) {
     try { paletteReturnFocus.focus(); } catch (e) {}
   }
   paletteReturnFocus = null;
@@ -4271,7 +4279,7 @@ function movePaletteSelection(delta) {
 function openPaletteResult(idx) {
   const item = paletteFlat[idx];
   if (!item) return;
-  closePalette();
+  closePalette({ restoreFocus: false }); // navigating away: no stale focus ring
   if (item.type === 'file') {
     paletteOpenFile(item.path);
   } else if (item.type === 'conversation') {
