@@ -140,6 +140,28 @@ describe('codex agent conversation', () => {
     await client.waitForEvent('system', 'done', convoId);
   });
 
+  test('non-Windows spawns get no write-marker instruction and markers pass through as literal text', async () => {
+    // Companion to codex-write-markers.test.js (which boots with the win32
+    // platform seam). On Mac/Linux the OS sandbox writes directly, so the
+    // marker path must be fully inert: no instruction in the prompt, no
+    // card, marker text displayed verbatim.
+    const convoId = h.freshConvoId('cdx');
+    h.clearInvocations();
+    const markerText = '<!-- RUNDOCK:WRITE_FILE path="x.md" -->\nhello\n<!-- /RUNDOCK:WRITE_FILE -->';
+    h.writeCodexScenario([{ match: { promptIncludes: 'marker passthrough' }, text: markerText }]);
+
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'researcher', content: 'marker passthrough please' });
+    const { msg: result } = await client.waitFor(m => m.type === 'result' && m._conversationId === convoId, { since, label: 'result' });
+    assert.strictEqual(result.result, markerText, 'marker text untouched off-Windows');
+    await client.waitForEvent('system', 'done', convoId);
+
+    const inv = h.readInvocations().find(i => i.argv && i.argv[0] === 'exec');
+    assert.ok(!inv.prompt.includes('WINDOWS FILE WRITES'), 'no marker instruction off-Windows');
+    const cards = client.messages.slice(since).filter(m => m.type === 'control_request' && m._conversationId === convoId);
+    assert.deepStrictEqual(cards, [], 'no permission card off-Windows');
+  });
+
   test('quota exhaustion surfaces as a structured quota message, not a raw error', async () => {
     const convoId = h.freshConvoId('cdx');
     h.clearInvocations();

@@ -306,6 +306,13 @@ function handle(d) {
           persistConversation(convo);
         }
       }
+      // Neutral notice: informational pill with NO side effects. Used for
+      // Codex write-request outcomes. Distinct from 'info', which doubles
+      // as the stale-session signal and clears the stored sessionId: that
+      // side effect must never fire for a routine notice.
+      if(d.subtype==='notice' && d.content && convoId) {
+        addSystemMsgToConvo(d.content, convoId, false);
+      }
       // Stale session: server is retrying fresh, clear the old sessionId
       if(d.subtype==='info' && d.content && convoId) {
         const convo = conversations.find(c => c.id === convoId);
@@ -2540,6 +2547,12 @@ function classifyRisk(toolName, input) {
     if (lowRisk) return 'low';
     return 'medium';
   }
+  if (toolName === 'WriteFile') {
+    // Codex write-request markers (Windows). Always high: every write gets
+    // its own card and "Always allow" is never offered. A standing allow
+    // here would let a prompt-injected agent write files ungated.
+    return 'high';
+  }
   if (toolName.startsWith('mcp__')) {
     // MCP reads auto-approve in the permission hook, so by the time a request
     // reaches the card it's a write or destructive action. Flag destructive ones
@@ -2574,6 +2587,14 @@ function describeToolRequest(toolName, input) {
     if (/(^|[;&|]\s*)(Remove-Item|ri|rm|del|erase|rmdir|rd)\b/i.test(cmd)) context = 'This will delete files';
     else if (/-Force\b/i.test(cmd)) context = 'This uses -Force and may overwrite or delete without confirmation';
     else if (/\b(iex|Invoke-Expression)\b/i.test(cmd)) context = 'This executes a downloaded or dynamic script';
+  } else if (toolName === 'WriteFile') {
+    // Codex write-request marker (Windows): the card IS the consent for the
+    // exact content shown, so the path leads and the payload is displayed.
+    const p = input.path || '';
+    const content = String(input.content || '');
+    summary = `Write ${p}`;
+    context = `${agentDisplayName(input.agent)} requested this file write. The content below will be written exactly as shown.`;
+    detail = content.length > 1500 ? content.slice(0, 1500) + `\n… (${content.length - 1500} more characters)` : content;
   } else if (toolName === 'Write') {
     summary = 'Create a file';
     detail = input.file_path || '';

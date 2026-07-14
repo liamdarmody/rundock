@@ -14,8 +14,14 @@
 //   - Only the official `codex` binary is ever spawned. No OpenAI/ChatGPT
 //     endpoints are called directly and no OAuth material is read: auth
 //     detection is the PRESENCE of auth.json, never its contents.
-//   - Codex runs inside its own sandbox (workspace-write). Approval/sandbox
-//     bypass flags are never passed; a test pins this.
+//   - workspace-write is REQUESTED on every spawn; effective enforcement is
+//     platform-dependent. macOS (Seatbelt) and Linux (Landlock) enforce it;
+//     native Windows cannot yet, and the CLI silently downgrades to a
+//     read-only sandbox there (verified live: the native AppContainer
+//     sandbox fails to initialise on ARM64). Windows writes therefore go
+//     through WRITE_FILE markers + Rundock permission cards instead (see
+//     parseWriteMarkers below). Approval/sandbox bypass flags are never
+//     passed; a test pins this.
 //
 // Normalised events returned by parseCodexLine():
 //   { type: 'session', threadId }                      thread.started
@@ -205,7 +211,33 @@ function classifyCodexError(text) {
   return { kind: 'unknown', model: null };
 }
 
+// ── Write-request markers (Windows) ─────────────────────────────────────────
+
+// The Codex CLI cannot enforce its write sandbox on native Windows: it
+// silently downgrades workspace-write to read-only (verified live; the
+// native AppContainer sandbox fails to initialise on ARM64). Rather than
+// leave Windows Codex agents read-only or pass bypass flags (pinned-never),
+// win32 spawns are instructed to request writes as markers in their
+// response. The server validates each request and performs the write itself
+// after the user approves a permission card. Mac/Linux spawns never get the
+// instruction and their markers are not honoured: the OS sandbox writes
+// directly there.
+const WRITE_MARKER_RE = /<!-- RUNDOCK:WRITE_FILE path="([^"\n]+)" -->\n([\s\S]*?)\n?<!-- \/RUNDOCK:WRITE_FILE -->/g;
+
+// Returns { cleanText, requests: [{ path, content }] }. cleanText replaces
+// each marker block with a short plain-language line so the conversation
+// shows intent without the payload; the card carries the full content.
+function parseWriteMarkers(text) {
+  if (typeof text !== 'string' || !text) return { cleanText: '', requests: [] };
+  const requests = [];
+  const cleanText = text.replace(WRITE_MARKER_RE, (m, p, content) => {
+    requests.push({ path: p, content });
+    return `[write requested: ${p}]`;
+  });
+  return { cleanText, requests };
+}
+
 module.exports = {
   buildCodexArgs, parseCodexLine, resolveCodexBin, detectCodex, isCodexQuotaError,
-  classifyCodexError, isValidThreadId,
+  classifyCodexError, isValidThreadId, parseWriteMarkers,
 };
