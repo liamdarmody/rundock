@@ -41,6 +41,15 @@ const readline = require('readline');
 const fx = require(path.join(__dirname, '..', '..', 'fixtures', 'stream-json.js'));
 
 const argv = process.argv.slice(2);
+
+// Version probe: answer immediately without touching stdin or the scenario,
+// so runtime detection never hangs on the stub. No invocation is logged for
+// version probes (they are not conversation spawns).
+if (argv.includes('--version')) {
+  process.stdout.write('0.0.0-stub (Claude Code)\n');
+  process.exit(0);
+}
+
 function argValue(flag) {
   const i = argv.indexOf(flag);
   return i >= 0 ? argv[i + 1] : null;
