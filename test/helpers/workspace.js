@@ -53,7 +53,7 @@ function makeWorkspace(opts = {}) {
 
 // Standard team used across suites: one orchestrator, one lead with a direct
 // report, two plain specialists. Mirrors the shape of a real Rundock workspace.
-function agentFile({ name, displayName, role, type, order, reportsTo, model, description, prompts, routines, skills, capabilities, body }) {
+function agentFile({ name, displayName, role, type, order, reportsTo, model, runtime, description, prompts, routines, skills, capabilities, body }) {
   const lines = ['---', `name: ${name}`];
   if (displayName) lines.push(`displayName: ${displayName}`);
   if (role) lines.push(`role: ${role}`);
@@ -62,6 +62,7 @@ function agentFile({ name, displayName, role, type, order, reportsTo, model, des
   if (order !== undefined) lines.push(`order: ${order}`);
   if (reportsTo) lines.push(`reportsTo: ${reportsTo}`);
   if (model) lines.push(`model: ${model}`);
+  if (runtime) lines.push(`runtime: ${runtime}`);
   if (capabilities) {
     lines.push('capabilities:');
     for (const [k, v] of Object.entries(capabilities)) lines.push(`  ${k}: ${v}`);

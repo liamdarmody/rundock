@@ -333,6 +333,30 @@ describe('rosters and system prompt', () => {
     assert.ok(plain.includes('<!-- RUNDOCK:RETURN -->'));
   });
 
+  test('buildSystemPrompt: self-description is runtime-neutral (a Codex agent must not say "powered by Claude Code")', () => {
+    // Live finding: the base rules described Rundock as "powered by Claude
+    // Code" and a Codex agent said it verbatim. The identity line now names
+    // both runtimes and no agent claims a single one.
+    useWorkspace({ agents: standardTeam() });
+    const prompt = srv.buildSystemPrompt(srv.discoverAgents().find(a => a.id === 'content-lead'));
+    assert.ok(!prompt.includes('powered by Claude Code'), 'single-runtime claim removed');
+    assert.ok(prompt.includes('Claude Code') && prompt.includes('Codex'), 'both runtimes named');
+  });
+
+  test('buildSystemPrompt: injects the concrete review-annotation handle instead of a derivation rule', () => {
+    // Live finding: "by: <your agent name, lowercase>" parsed differently on
+    // GPT-5 (it wrote its ROLE). The concrete handle is now injected.
+    useWorkspace({ agents: standardTeam() });
+    const agents = srv.discoverAgents();
+    const penn = srv.buildSystemPrompt(agents.find(a => a.id === 'content-lead'));
+    assert.ok(penn.includes('Your review-annotation handle is: penn'), 'concrete handle stated');
+    assert.ok(penn.includes('by: penn'), 'metadata example uses the concrete handle');
+    assert.ok(!penn.includes('<your agent name'), 'derivation placeholder removed');
+    // displayName lowercased is the handle convention Claude agents settled on
+    const des = srv.buildSystemPrompt(agents.find(a => a.id === 'lead-designer'));
+    assert.ok(des.includes('Your review-annotation handle is: des'));
+  });
+
   test('buildSystemPrompt: knowledge mode text by default, code mode when state says so', () => {
     const dir = useWorkspace({ agents: standardTeam() });
     const agents = srv.discoverAgents();
@@ -417,5 +441,87 @@ describe('findDirectReportMatch', () => {
     useWorkspace({ agents: standardTeam() });
     assert.strictEqual(srv.findDirectReportMatch('chief-of-staff', { subagent_type: 'general-purpose', prompt: 'ask Penn' }), null);
     assert.strictEqual(srv.findDirectReportMatch('chief-of-staff', { subagent_type: 'no-such-agent', prompt: 'ask Penn' }), null);
+  });
+});
+
+describe('findOffRosterWorkspaceMatch', () => {
+  // The impersonation gap: an Agent tool call explicitly naming a workspace
+  // agent OUTSIDE the caller's direct reports used to fall through silently,
+  // and Claude Code spawned a generic subagent wearing that agent's name.
+  // For runtime: codex agents this silently bypassed the runtime choice.
+  test('explicit subagent_type naming an off-roster workspace agent matches', () => {
+    useWorkspace({ agents: standardTeam() });
+    // Des reports to chief-of-staff, not to Penn.
+    const byName = srv.findOffRosterWorkspaceMatch('content-lead', { subagent_type: 'lead-designer', prompt: 'design this' });
+    assert.strictEqual(byName.id, 'lead-designer');
+    const byDisplay = srv.findOffRosterWorkspaceMatch('content-lead', { subagent_type: 'Des', prompt: 'design this' });
+    assert.strictEqual(byDisplay.id, 'lead-designer');
+  });
+
+  test('direct reports are not claimed (the interception path owns them)', () => {
+    useWorkspace({ agents: standardTeam() });
+    assert.strictEqual(srv.findOffRosterWorkspaceMatch('chief-of-staff', { subagent_type: 'content-lead', prompt: 'x' }), null);
+    assert.strictEqual(srv.findOffRosterWorkspaceMatch('content-lead', { subagent_type: 'content-analyst', prompt: 'x' }), null);
+  });
+
+  test('built-in and unknown subagent types pass through untouched', () => {
+    useWorkspace({ agents: standardTeam() });
+    assert.strictEqual(srv.findOffRosterWorkspaceMatch('content-lead', { subagent_type: 'general-purpose', prompt: 'search files' }), null);
+    assert.strictEqual(srv.findOffRosterWorkspaceMatch('content-lead', { subagent_type: 'Explore', prompt: 'x' }), null);
+  });
+
+  test('prompt-only mentions of off-roster agents never match (explicit path only)', () => {
+    useWorkspace({ agents: standardTeam() });
+    assert.strictEqual(srv.findOffRosterWorkspaceMatch('content-lead', { prompt: 'Review what Des produced last week' }), null);
+    assert.strictEqual(srv.findOffRosterWorkspaceMatch('content-lead', { subagent_type: 'general-purpose', prompt: 'Review what lead-designer produced' }), null);
+  });
+
+  test('the caller itself never matches', () => {
+    useWorkspace({ agents: standardTeam() });
+    assert.strictEqual(srv.findOffRosterWorkspaceMatch('content-lead', { subagent_type: 'content-lead', prompt: 'x' }), null);
+    assert.strictEqual(srv.findOffRosterWorkspaceMatch('content-lead', { subagent_type: 'Penn', prompt: 'x' }), null);
+  });
+});
+
+describe('agent runtime field', () => {
+  test('runtime: codex is parsed onto the agent; model stays unset unless frontmatter sets one', () => {
+    useWorkspace({ agents: {
+      'researcher': agentFile({ name: 'researcher', type: 'specialist', order: 2, runtime: 'codex' }),
+    } });
+    srv.invalidateAgentCache();
+    const a = srv.discoverAgents().find(x => x.id === 'researcher');
+    assert.strictEqual(a.runtime, 'codex');
+    // Codex applies its own default model; the Claude default must not leak in.
+    assert.strictEqual(a.model, null);
+  });
+
+  test('runtime: codex with an explicit model keeps that model', () => {
+    useWorkspace({ agents: {
+      'researcher': agentFile({ name: 'researcher', type: 'specialist', order: 2, runtime: 'codex', model: 'gpt-5.3-codex' }),
+    } });
+    srv.invalidateAgentCache();
+    const a = srv.discoverAgents().find(x => x.id === 'researcher');
+    assert.strictEqual(a.runtime, 'codex');
+    assert.strictEqual(a.model, 'gpt-5.3-codex');
+  });
+
+  test('absent runtime means claude: existing agent files see no behaviour change', () => {
+    useWorkspace({ agents: {
+      'writer': agentFile({ name: 'writer', type: 'specialist', order: 2 }),
+    } });
+    srv.invalidateAgentCache();
+    const a = srv.discoverAgents().find(x => x.id === 'writer');
+    assert.strictEqual(a.runtime, 'claude');
+    assert.strictEqual(a.model, 'sonnet');
+  });
+
+  test('unknown runtime values fall back to claude (a typo never strands an agent)', () => {
+    useWorkspace({ agents: {
+      'writer': agentFile({ name: 'writer', type: 'specialist', order: 2, runtime: 'gemini' }),
+    } });
+    srv.invalidateAgentCache();
+    const a = srv.discoverAgents().find(x => x.id === 'writer');
+    assert.strictEqual(a.runtime, 'claude');
+    assert.strictEqual(a.model, 'sonnet');
   });
 });

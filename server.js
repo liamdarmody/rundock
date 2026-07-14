@@ -13,6 +13,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { WebSocketServer } = require('ws');
 const readline = require('readline');
+const codexRuntime = require('./codex.js');
 const PKG_VERSION = require('./package.json').version;
 const searchLib = require('./search.js');
 
@@ -29,6 +30,40 @@ function isInsideWorkspace(targetPath) {
   const root = path.resolve(WORKSPACE);
   const resolved = path.resolve(targetPath);
   return resolved === root || resolved.startsWith(root + path.sep);
+}
+
+// ── Codex write-request validation (Windows write markers) ──────────────────
+// Validates a WRITE_FILE request BEFORE any permission card is shown: a card
+// is never raised for something Rundock would refuse to do. Workspace-bound
+// by construction, managed directories excluded, knowledge-mode file types
+// enforced (defence in depth: the same policy the prompts state).
+const CODEX_WRITE_ALLOWED_EXT = new Set(['.md', '.markdown', '.yaml', '.yml', '.json', '.txt', '.csv']);
+const CODEX_WRITE_MAX_BYTES = 1024 * 1024;
+function validateWriteRequest(workspaceDir, relPath, content, isCodeMode) {
+  if (!workspaceDir) return { ok: false, reason: 'no workspace selected' };
+  const p = String(relPath || '').trim();
+  if (!p) return { ok: false, reason: 'empty path' };
+  if (path.isAbsolute(p) || p.split(/[\\/]/).includes('..')) {
+    return { ok: false, reason: 'path escapes the workspace' };
+  }
+  const root = path.resolve(workspaceDir);
+  const fullPath = path.resolve(root, p);
+  if (!(fullPath.startsWith(root + path.sep))) {
+    return { ok: false, reason: 'path escapes the workspace' };
+  }
+  // Case-insensitive: Windows filesystems are, so ".Claude/" must not slip
+  // past a case-sensitive name check.
+  const top = path.relative(root, fullPath).split(path.sep)[0].toLowerCase();
+  if (top === '.claude' || top === '.rundock') {
+    return { ok: false, reason: 'managed directory' };
+  }
+  if (Buffer.byteLength(String(content == null ? '' : content), 'utf-8') > CODEX_WRITE_MAX_BYTES) {
+    return { ok: false, reason: 'content exceeds the 1 MB write limit' };
+  }
+  if (!isCodeMode && !CODEX_WRITE_ALLOWED_EXT.has(path.extname(fullPath).toLowerCase())) {
+    return { ok: false, reason: 'file type not supported in this workspace' };
+  }
+  return { ok: true, fullPath };
 }
 
 // Shared constants to avoid repetition across process spawn sites
@@ -121,6 +156,11 @@ function getBareArgs() {
 function getSpawnEnv(convoId) {
   const env = { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(ACTUAL_PORT) };
   if (convoId) env.RUNDOCK_CONVO_ID = convoId;
+  // Never let spawned agent processes inherit the test runner's coverage
+  // collection: a child killed mid-turn (e.g. a superseded Codex exec)
+  // leaves truncated coverage JSON that corrupts the runner's merge and
+  // intermittently fails npm run test:coverage.
+  delete env.NODE_V8_COVERAGE;
   // In the packaged app there is no system `node`, so the PreToolUse permission
   // hook is run with Rundock's bundled runtime (process.execPath) behaving as
   // Node via ELECTRON_RUN_AS_NODE. The hook is a child of the spawned claude
@@ -605,13 +645,53 @@ function findDirectReportMatch(agentId, toolInput) {
   return null;
 }
 
+// The impersonation guard's matcher. An Agent tool call whose explicit
+// subagent_type names an onTeam workspace agent OUTSIDE the caller's direct
+// reports must not fall through to Claude Code: the harness would spawn a
+// generic Claude subagent wearing that agent's name (no real spawn, no
+// runtime, no disclosure). For runtime: codex agents that silently bypasses
+// the user's runtime choice. Returns the off-roster workspace agent, or null.
+//
+// Explicit path ONLY (decision, Liam 2026-07-13): prompt-text mentions of
+// off-roster agents ("review what Cody wrote") are common and legitimate, so
+// the prompt word-scan stays direct-reports-only. Call this AFTER
+// findDirectReportMatch returns null; direct reports are excluded here too
+// so the two matchers never claim the same target.
+function findOffRosterWorkspaceMatch(agentId, toolInput) {
+  if (!toolInput.subagent_type) return null;
+  const wanted = String(toolInput.subagent_type).toLowerCase();
+  const allAgents = discoverAgents();
+  const leader = allAgents.find(x => x.id === agentId);
+  const isOrchestrator = leader?.type === 'orchestrator';
+  const match = allAgents.find(a =>
+    a.status === 'onTeam' && a.id !== agentId && (
+      a.name.toLowerCase() === wanted ||
+      (a.id && String(a.id).toLowerCase() === wanted) ||
+      (a.displayName && a.displayName.toLowerCase() === wanted)
+    )
+  );
+  if (!match) return null;
+  // Exclude direct reports (mirror of findDirectReportMatch's roster rules).
+  const isDirectReport =
+    match.reportsTo === agentId ||
+    match.reportsTo === leader?.name ||
+    (isOrchestrator && match.type === 'platform');
+  return isDirectReport ? null : match;
+}
+
 function buildSystemPrompt(agentData) {
   // Read workspace mode to adjust platform rules
   let isCodeMode = false;
   try { isCodeMode = readState().workspaceMode === 'code'; } catch (e) { /* default knowledge */ }
 
+  // The concrete review-annotation handle is injected per-agent because a
+  // derivation rule ("your agent name, lowercase") parses differently across
+  // runtimes: GPT-5 wrote its ROLE where Claude agents wrote their short
+  // name. displayName lowercased is the convention Claude agents settled on.
+  const annotationHandle = String(agentData?.displayName || agentData?.name || 'agent').toLowerCase();
+
   const baseRules = [
-    'You are inside Rundock, a visual interface for AI agent teams powered by Claude Code (docs.rundock.ai). Answer "what is Rundock" questions directly using that description, even if Rundock is outside your usual domain. Every agent should know this. For deeper meta questions (creator, licence, features, feedback), route the user to Doc or point at the docs.',
+    'You are inside Rundock, a visual interface for AI agent teams (docs.rundock.ai). Rundock runs agents on the Claude Code and Codex runtimes. Answer "what is Rundock" questions directly using that description, even if Rundock is outside your usual domain. Every agent should know this. For deeper meta questions (creator, licence, features, feedback), route the user to Doc or point at the docs.',
     '',
     'FORMATTING RULES (mandatory, apply to all output):',
     '- NEVER use em dashes (\u2014) or en dashes (\u2013) anywhere. This includes lists, headers, separators, and inline text. Wrong: "AI \u2014 your assistant". Right: "AI: your assistant". Use colons, full stops, commas, or restructure instead.',
@@ -632,7 +712,7 @@ function buildSystemPrompt(agentData) {
     'Never use Obsidian URIs, file:// links, markdown links to file paths, or absolute paths. Just use wikilinks.',
     '',
     'REVIEW ANNOTATIONS (markdown files):',
-    'When adding review feedback to a markdown file, write CriticMarkup constructs: {>>comment<<} {++insert++} {--delete--} {~~old~>new~~}. Anchor EVERY construct with an id suffix, {#c1} for comments and {#s1} for suggestions, continuing the file\'s existing numbering. Record metadata for every anchor in the YAML block at the end of the file (introduced by a line containing only ---): entries under comments: or suggestions: keyed by anchor id, each with by: <your agent name, lowercase> and at: <current ISO timestamp>. Reply to an existing comment with a new comments: entry carrying body: <your reply> and re: <parent id>. A construct without an anchor and metadata entry shows as Unattributed in the review panel; never leave one.',
+    `When adding review feedback to a markdown file, write CriticMarkup constructs: {>>comment<<} {++insert++} {--delete--} {~~old~>new~~}. Anchor EVERY construct with an id suffix, {#c1} for comments and {#s1} for suggestions, continuing the file's existing numbering. Your review-annotation handle is: ${annotationHandle} (use exactly this, never your role or a description). Record metadata for every anchor in the YAML block at the end of the file (introduced by a line containing only ---): entries under comments: or suggestions: keyed by anchor id, each with by: ${annotationHandle} and at: <current ISO timestamp>. Reply to an existing comment with a new comments: entry carrying body: <your reply> and re: <parent id>. A construct without an anchor and metadata entry shows as Unattributed in the review panel; never leave one.`,
     'When discussing a specific comment or suggestion with the user, refer to it by QUOTING it (the comment text, or the passage it anchors to), for example: your comment "needs a source before we publish". Never refer to items by anchor id (c9, s2) or by number: the numbers shown in the editor are positional and change as items resolve, so quoted text is the only reference that stays correct.',
     'For at: timestamps, run date -u +%Y-%m-%dT%H:%M:%SZ at most once per editing pass and reuse that one value for every entry you add in the pass (entries added together sharing a timestamp is correct; anchor ids make them unique). Never loop or sleep to manufacture distinct timestamps.',
     '',
@@ -733,11 +813,48 @@ function buildSystemPrompt(agentData) {
     ].join('\n');
   }
 
+  // Runtime awareness for platform agents (Doc): only when Codex is actually
+  // available. Doc creates agents on the default runtime without ceremony,
+  // offers the alternative once per plan, and never recommends a runtime that
+  // is not present on this machine. When Codex is absent this section is
+  // omitted entirely, so Doc never mentions it.
+  let runtimeSection = '';
+  if (agentData && agentData.type === 'platform') {
+    const cx = detectCodexCached();
+    if (cx.installed && cx.authenticated) {
+      runtimeSection = [
+        'RUNTIMES:',
+        'Two runtimes are available on this machine: Claude Code (the workspace default) and Codex (the user\'s ChatGPT plan, via the official Codex CLI).',
+        'When proposing or creating agents: create on Claude Code, the default, without asking. Mention once per plan that any agent can run on the user\'s ChatGPT plan instead, and let the user opt in; if they do, add `runtime: codex` to that agent\'s frontmatter.',
+        'For agents on Codex, omit the model field unless the user names a specific Codex model; Codex applies its own default. Never recommend a runtime or model that is not listed here.',
+        'Codex agents use Codex\'s built-in sandbox rather than Rundock\'s permission prompts, and the workspace orchestrator always runs on Claude Code.',
+      ].join('\n');
+    }
+  }
+
   const sections = [baseRules];
   if (delegationSection) sections.push(delegationSection);
   if (scopeSection) sections.push(scopeSection);
+  if (runtimeSection) sections.push(runtimeSection);
   sections.push(bashRules);
   return sections.join('\n\n');
+}
+
+// Codex detection with a short cache: buildSystemPrompt runs on every spawn
+// and detection shells out (which + --version). 30 seconds is fresh enough
+// for install/login state.
+let _codexDetectCache = null;
+let _codexDetectTime = 0;
+function detectCodexCached() {
+  const now = Date.now();
+  if (_codexDetectCache && (now - _codexDetectTime) < 30000) return _codexDetectCache;
+  try {
+    _codexDetectCache = codexRuntime.detectCodex();
+  } catch (e) {
+    _codexDetectCache = { installed: false, authenticated: false, version: null };
+  }
+  _codexDetectTime = now;
+  return _codexDetectCache;
 }
 
 // ===== AGENT DISCOVERY =====
@@ -840,7 +957,13 @@ function discoverAgents() {
           routines: routines,
           prompts: prompts.length > 0 ? prompts : null,
           skills: skills.length > 0 ? skills : null,
-          model: meta.model || DEFAULT_MODEL,
+          // Runtime is a strict two-value field: unknown values fall back to
+          // claude so a frontmatter typo can never strand an agent. Codex
+          // agents get no default model injected: the Codex CLI applies its
+          // own default, and Rundock only passes --model when the agent file
+          // sets one explicitly.
+          runtime: meta.runtime === 'codex' ? 'codex' : 'claude',
+          model: meta.runtime === 'codex' ? (meta.model || null) : (meta.model || DEFAULT_MODEL),
           order: orderNum,
           reportsTo: meta.reportsTo || null,
           instructions: instructions.substring(0, 2000),
@@ -871,6 +994,7 @@ function discoverAgents() {
         capabilities: null,
         routines: [],
         prompts: null,
+        runtime: 'claude',
         model: DEFAULT_MODEL,
         order: 0,
         instructions: content.substring(0, 2000),
@@ -916,6 +1040,7 @@ function discoverAgents() {
       capabilities: null,
       routines: [],
       prompts: ['Help me set up this workspace', 'Create an agent for my team', 'What makes a workspace Rundock-ready?'],
+      runtime: 'claude',
       model: DEFAULT_MODEL,
       order: 99,
       instructions: '',
@@ -1126,16 +1251,35 @@ function executeRoutine(agent, routine, key) {
   // Notify connected clients
   broadcastRoutineUpdate();
 
+  let proc;
+  if (agent.runtime === 'codex') {
+    // Codex agents run their routines on Codex: exec mode is naturally
+    // one-shot, the routine prompt travels over stdin with the agent's
+    // instructions, and Codex's own sandbox applies (no bypass flags exist
+    // on this path). The agent's plan choice is honoured even for
+    // unattended work.
+    // stdout/stderr are ignored: nothing consumes them on the routine path,
+    // and a chatty run would otherwise fill the pipe buffer and deadlock.
+    proc = spawnCodex(codexRuntime.buildCodexArgs({ model: agent.model || undefined }), {
+      cwd: WORKSPACE,
+      env: getSpawnEnv(null),
+      stdio: ['pipe', 'ignore', 'ignore']
+    });
+    proc.stdin.on('error', () => { /* EPIPE on early exit */ });
+    proc.stdin.write([readAgentInstructions(agent), buildSystemPrompt(agent), routine.prompt].filter(Boolean).join('\n\n'));
+    proc.stdin.end();
+  } else {
   // Routines run unattended (no user to approve), so bypass permissions.
   const args = [...getBareArgs(), ...modelArgs(agent), '--print', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
   if (agent.id !== 'default') args.push('--agent', agent.id);
   args.push(routine.prompt);
 
-  const proc = spawnClaude(args, {
+  proc = spawnClaude(args, {
     cwd: WORKSPACE,
     env: getSpawnEnv(null),
     stdio: ['ignore', 'pipe', 'pipe']
   });
+  }
 
   proc.on('close', (code) => {
     const duration = Math.round((Date.now() - startTime) / 1000);
@@ -2158,6 +2302,7 @@ function isModelError(text) {
 function sendAuthError(entry, convoId) {
   if (entry.authErrorSent) return;
   entry.authErrorSent = true;
+  _claudeAuthEvidence = false; // runtime status: sign-in is demonstrably broken
   safeSend(JSON.stringify({
     type: 'system', subtype: 'auth_error',
     _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId
@@ -2264,6 +2409,37 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
                     _intercepted: true, _parentSessionId: entry.sessionId, _parentAgentId: entry.agentId
                   }, chatProcesses);
                   safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: 0, _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId }));
+                } else {
+                  // Impersonation guard: an explicit subagent_type naming a
+                  // workspace agent OUTSIDE this caller's direct reports must
+                  // not fall through, or Claude Code spawns a generic subagent
+                  // wearing that agent's name (for runtime: codex agents this
+                  // silently bypasses the user's runtime choice). Soft block:
+                  // kill the turn and resume the caller with a corrective
+                  // message so it recovers in-conversation.
+                  // KNOWN LIMITATION: without a captured sessionId the caller cannot be resumed, so the block does not fire and the call falls through (pre-fix behavior). In practice init always precedes tool_use, so sessionId is present. Narrow.
+                  const offRoster = findOffRosterWorkspaceMatch(entry.agentId, toolInput);
+                  if (offRoster && entry.sessionId) {
+                    console.log(`[AgentIntercept] convo=${convoId} agent=${entry.agentId} blocking off-roster Agent tool target: ${offRoster.name}`);
+                    intercepted = true;
+                    if (entry.responseText) {
+                      const toolSummary = buildToolSummary(entry.toolCalls);
+                      const textWithTools = toolSummary ? toolSummary + '\n' + entry.responseText : entry.responseText;
+                      appendTranscript(convoId, 'agent', entry.agentId, textWithTools);
+                    } else {
+                      appendTranscript(convoId, 'agent', entry.agentId, buildToolSummary(entry.toolCalls), 'routing');
+                    }
+                    try { entry.process.kill('SIGKILL'); } catch (e) {}
+                    entry.exited = true;
+                    const offName = offRoster.displayName || offRoster.name;
+                    safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: `Blocked a handoff to ${offName}: not one of this agent's direct reports.`, _conversationId: convoId }));
+                    const blockedEntry = spawnResumedProcess(convoId, entry.agentId, entry.sessionId, chatProcesses, {});
+                    blockedEntry.idle = false;
+                    safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: blockedEntry.processId, _agent: entry.agentId, autoContinue: true }));
+                    const runtimeNote = offRoster.runtime === 'codex' ? ` ${offName} runs on a different runtime (Codex), which only their own leader can start.` : '';
+                    const blockPrompt = `[SYSTEM: delegation-blocked] Your Agent tool call named "${offName}" (${offRoster.name}), a workspace agent who is not one of your direct reports, so it was NOT run. No subagent may act as ${offName}.${runtimeNote} Do not retry the same call. If the task needs ${offName}, tell the user this needs routing through ${offName}'s leader and hand back. Otherwise continue without them.`;
+                    blockedEntry.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: blockPrompt } }) + '\n');
+                  }
                 }
               } catch (e) {
                 console.log(`[AgentIntercept] convo=${convoId} failed to parse Agent tool input: ${e.message}`);
@@ -2326,6 +2502,9 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
             sendAuthError(entry, convoId);
           } else if (parsed.is_error && isModelError(JSON.stringify(parsed))) {
             sendModelError(entry, convoId);
+          } else if (!parsed.is_error) {
+            // A successful turn is proof of a working sign-in (runtime status).
+            _claudeAuthEvidence = true;
           }
           // Attach server-tracked tool calls for activity summary
           parsed._toolCalls = entry.toolCalls || [];
@@ -2511,6 +2690,7 @@ function spawnResumedProcess(convoId, agentId, sessionId, processes, opts = {}) 
     responseText: '', exited: false, resultSent: false,
     pendingAgentTool: null, toolCalls: [], turnStartTime: Date.now(),
     idle: true, scopeReturnSource: opts.scopeReturnSource || null,
+    handbackAt: Date.now(), // stale end_delegation guard
   };
   processes.set(convoId, entry);
 
@@ -2610,13 +2790,24 @@ function handleDelegation(msg, processes) {
   // Spawn delegate process
   const delegateProcessId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const isPlatformDelegate = targetAgent.type === 'platform';
+  // Codex delegates are transactional: exec mode runs one process per turn,
+  // so a delegated task is briefed, completed in one response, and control
+  // returns to the parent with the output injected (the shared close handler
+  // below). Direct conversations with Codex agents remain conversational via
+  // thread resume; only the delegated flow is single-shot.
+  const isCodexDelegate = targetAgent.runtime === 'codex';
 
   // Platform delegates (Doc): transactional, auto-return after task completion
   // Specialists with direct reports: multi-step pipeline, return when the pipeline is complete
   // Plain specialists: conversational, user controls when to return
   const targetHasDirectReports = !!buildTeamRoster(targetAgent.id, true);
   let delegationContext;
-  if (isPlatformDelegate) {
+  if (isCodexDelegate) {
+    // Transactional, and honest about the runtime's shape: a Codex exec
+    // process cannot stay in the conversation to wait for a user reply, so
+    // it must never promise to. Clarifications go through the handback.
+    delegationContext = 'DELEGATION CONTEXT:\nYou have been delegated a task by another agent. Complete the task fully in this single response; you cannot wait for follow-up messages in this session. Prefer sensible defaults over asking questions. When the task is done, post your final summary and output <!-- RUNDOCK:COMPLETE --> at the very end of the response. If you genuinely cannot proceed without an answer from the user, state the question clearly in your response and still output <!-- RUNDOCK:COMPLETE -->; the reply will reach you when the task is re-delegated. Only use <!-- RUNDOCK:RETURN --> if the request is genuinely outside your scope and you cannot help.';
+  } else if (isPlatformDelegate) {
     delegationContext = 'DELEGATION CONTEXT:\nYou have been delegated a task by another agent. Complete the task in a single response if possible. When the task is done (agent created, skill saved, file written, question answered, etc.), output <!-- RUNDOCK:COMPLETE --> at the very end of that same response. Do not wait for follow-up questions. Do not ask if there is anything else. Just complete the task, confirm what you did, and return immediately. If you genuinely need clarification before you can proceed, ask, but prefer using sensible defaults over asking.\n\nException: if you have proposed a plan and are waiting for the user to confirm before you execute (e.g. you asked them to say "go ahead"), do NOT emit COMPLETE. Stay in the conversation and wait for their response. Only emit COMPLETE once the task is genuinely finished: you executed the work, or you answered the question fully with no pending user decision.\n\nOnly use <!-- RUNDOCK:RETURN --> if the request is genuinely outside your scope and you cannot help. This is rare.';
   } else if (targetHasDirectReports) {
     delegationContext = 'DELEGATION CONTEXT:\nYou have been brought into this conversation by the orchestrator to run a task in your domain. You lead a support team and may delegate parts of the work to them. Do the real work, write the deliverables, and report the outcome.\n\nYou MUST hand control back using one of two markers, on its own line, as the very last thing in your response (after any final summary):\n\n- <!-- RUNDOCK:RETURN --> when the user asks for something outside your domain of expertise. Tell them briefly that this falls outside what you handle and you are handing them back so the right person can pick it up. Do NOT name other specialists or suggest who should handle it. Then emit the marker.\n\n- <!-- RUNDOCK:COMPLETE --> when the orchestrator\'s original delegated pipeline is finished end-to-end. All deliverables are written to their final locations and the workflow has reached its final status (for example content moved to Ready for Review, spec written and linked, final audit posted). Post your final summary first, then emit the marker.\n\nDo NOT emit either marker when you are pausing at a decision point to let the user choose between options, presenting drafts, hooks, options, or recommendations for user review, asking the user to confirm something before continuing, or waiting at a human gate midway through a multi-phase pipeline. Those are pauses, not completions. Stay in the conversation as the active agent and wait for the user\'s next message. You will pick up where you left off when they respond.\n\nReturning on completion is how control flows back up the chain. If you silently stop, the user\'s next message will be routed to the wrong agent.';
@@ -2653,16 +2844,25 @@ function handleDelegation(msg, processes) {
     ...(priorSessionId ? ['--resume', priorSessionId] : []),
     '--agent', targetAgent.name];
 
-  console.log(`[Delegate] convo=${convoId} from=${originalAgentId} to=${targetAgent.id} proc=${delegateProcessId}${priorSessionId ? ` resume=${priorSessionId}` : ''}`);
+  console.log(`[Delegate] convo=${convoId} from=${originalAgentId} to=${targetAgent.id} proc=${delegateProcessId} runtime=${targetAgent.runtime}${priorSessionId ? ` resume=${priorSessionId}` : ''}`);
 
-  const delegateProc = spawnClaude(delegateArgs, {
-    cwd: WORKSPACE,
-    env: getSpawnEnv(convoId),
-    stdio: ['pipe', 'pipe', 'pipe']
-  }, (err) => handleChatSpawnError(err, convoId));
+  // Normalised for the codex path: argv and prompt must agree on whether
+  // this is a resume (see startCodexTurn for the identity-loss hazard).
+  const codexResumeId = isCodexDelegate && codexRuntime.isValidThreadId(priorSessionId) ? priorSessionId : null;
+  const delegateProc = isCodexDelegate
+    ? spawnCodex(codexRuntime.buildCodexArgs({ resumeThreadId: codexResumeId, model: targetAgent.model || undefined }), {
+        cwd: WORKSPACE,
+        env: getSpawnEnv(convoId),
+        stdio: ['pipe', 'pipe', 'pipe']
+      }, (err) => handleCodexSpawnError(err, convoId))
+    : spawnClaude(delegateArgs, {
+        cwd: WORKSPACE,
+        env: getSpawnEnv(convoId),
+        stdio: ['pipe', 'pipe', 'pipe']
+      }, (err) => handleChatSpawnError(err, convoId));
 
   const delegateEntry = {
-    process: delegateProc, buffer: '', processId: delegateProcessId,
+    process: delegateProc, runtime: targetAgent.runtime, buffer: '', processId: delegateProcessId,
     agentId: targetAgent.id, responseText: '', exited: false, resultSent: false, idle: false,
     isPlatformDelegate, lastUserMessage: msg.context, receivedFollowUp: false,
     isIntercepted,
@@ -2699,6 +2899,21 @@ function handleDelegation(msg, processes) {
   const contextWithHistory = transcript
     ? `CONVERSATION SO FAR:\n${transcript}\n\nYOUR TASK:\n${msg.context}`
     : `[DELEGATION BRIEF]\n${msg.context}`;
+
+  if (isCodexDelegate) {
+    // Codex takes the whole prompt over stdin: identity + platform rules +
+    // delegation contract on a cold spawn (Codex has no --agent or
+    // --append-system-prompt equivalent); contract + brief on a resumed
+    // thread (instructions are already in the thread). Delegated turns get
+    // the same Windows write-marker fallback as direct chats: instruction
+    // on cold spawns, marker handling flagged on the entry either way.
+    delegateEntry.writeMarkersEnabled = codexWriteMarkersEnabled();
+    const codexPrompt = codexResumeId
+      ? `${delegationContext}\n\n${contextWithHistory}`
+      : [readAgentInstructions(targetAgent), fullPrompt, buildWindowsWriteNote(delegateEntry.writeMarkersEnabled), contextWithHistory].filter(Boolean).join('\n\n');
+    startCodexKeepalive(delegateEntry, convoId);
+    wireCodexDelegate(delegateEntry, convoId, codexPrompt);
+  } else {
   delegateProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: contextWithHistory } }) + '\n');
 
   wireProcessHandlers(delegateEntry, convoId, null, {
@@ -2756,6 +2971,7 @@ function handleDelegation(msg, processes) {
       e.idle = true;
     }
   });
+  }
 
   delegateProc.on('close', (code) => {
     if (delegateEntry.spawnFailed) return; // error handler already surfaced
@@ -2810,6 +3026,7 @@ function handleDelegation(msg, processes) {
 
         orchestratorEntry.idle = true;
         orchestratorEntry.delegation = null;
+        orchestratorEntry.handbackAt = Date.now(); // stale end_delegation guard
         processes.set(convoId, orchestratorEntry);
 
         safeSend(JSON.stringify({
@@ -2893,7 +3110,8 @@ function handleDelegation(msg, processes) {
         // Tag with returning specialist so handleDelegation's scopeReturnSource
         // guard blocks immediate re-delegation to the same agent. Only set for
         // out-of-scope returns; pipeline-complete should allow re-delegation.
-        scopeReturnSource: isOutOfScope ? delegateEntry.agentId : null
+        scopeReturnSource: isOutOfScope ? delegateEntry.agentId : null,
+        handbackAt: Date.now() // stale end_delegation guard
       };
       processes.set(convoId, resumeEntry);
 
@@ -3001,6 +3219,7 @@ function handleDelegation(msg, processes) {
     } else if (orig && !orig.exited) {
       orig.idle = true;
       orig.delegation = null;
+      orig.handbackAt = Date.now(); // stale end_delegation guard
       processes.set(convoId, orig);
       console.log(`[Delegate] convo=${convoId} delegate exited, restored ${delegateEntry.delegation.originalAgentId}`);
       safeSend(JSON.stringify({
@@ -3089,6 +3308,21 @@ wss.on('connection', (ws) => {
         // (which would otherwise double-append).
         if (!msg._resumeRetry) {
           appendTranscript(convoId, 'user', 'user', msg.content);
+        }
+
+        // ── RUNTIME ROUTING ────────────────────────────────────────────
+        // Codex agents run one process per turn (exec mode) instead of a
+        // long-lived stdin conversation. Route them before the interactive
+        // path; agents without runtime: codex are entirely unaffected.
+        {
+          const requestedAgent = msg.agent || 'default';
+          const agentList = discoverAgents();
+          const routedAgent = agentList.find(a => a.id === requestedAgent)
+            || agentList.find(a => a.fileName && a.fileName.replace('.md', '') === requestedAgent);
+          if (routedAgent && routedAgent.runtime === 'codex') {
+            startCodexTurn(convoId, msg, routedAgent);
+            return;
+          }
         }
 
         // ── INTERACTIVE MODE (Deliverable A) ──────────────────────────
@@ -3402,8 +3636,14 @@ wss.on('connection', (ws) => {
         if (pending) {
           clearTimeout(pending.timer);
           pendingPermissionRequests.delete(msg.requestId);
-          pending.res.writeHead(200, { 'Content-Type': 'application/json' });
-          pending.res.end(JSON.stringify({ allow: msg.allow }));
+          if (pending.res) {
+            // Hook-originated request: answer the held HTTP response.
+            pending.res.writeHead(200, { 'Content-Type': 'application/json' });
+            pending.res.end(JSON.stringify({ allow: msg.allow }));
+          } else if (pending.onDecision) {
+            // Server-originated request (e.g. Codex write markers): callback.
+            try { pending.onDecision(msg.allow === true, 'user'); } catch (e) { console.error('[Permission] onDecision threw:', e); }
+          }
           console.log(`[Permission] convo=${msg.conversationId} requestId=${msg.requestId} decision=${msg.allow ? 'allow' : 'deny'}`);
         } else {
           console.warn(`[Permission] No pending request for requestId=${msg.requestId} (expired or already resolved)`);
@@ -3427,8 +3667,12 @@ wss.on('connection', (ws) => {
               clearTimeout(pending.timer);
               pendingPermissionRequests.delete(reqId);
               try {
-                pending.res.writeHead(200, { 'Content-Type': 'application/json' });
-                pending.res.end(JSON.stringify({ allow: false, reason: 'cancelled' }));
+                if (pending.res) {
+                  pending.res.writeHead(200, { 'Content-Type': 'application/json' });
+                  pending.res.end(JSON.stringify({ allow: false, reason: 'cancelled' }));
+                } else if (pending.onDecision) {
+                  pending.onDecision(false, 'cancelled');
+                }
               } catch (e) {}
             }
           }
@@ -3646,6 +3890,9 @@ wss.on('connection', (ws) => {
         try { agentList = discoverAgents(); } catch (e) { console.warn('  Agent discovery failed:', e.message); }
         ws.send(JSON.stringify({ type: 'agents', agents: agentList }));
       }
+      if (msg.type === 'get_runtime_status') {
+        ws.send(JSON.stringify({ type: 'runtime_status', ...getRuntimeStatus() }));
+      }
       if (msg.type === 'get_files') {
         if (!WORKSPACE) return;
         try { ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) })); } catch (e) { console.warn('  File tree failed:', e.message); }
@@ -3814,11 +4061,27 @@ wss.on('connection', (ws) => {
           // The close handler will restore the original process
         } else if (current && !current.delegation && !current.exited && !current.scopeReturn) {
           // Specialist started directly (no delegation) emitted RETURN
-          // Server-side onResult should have caught this, but handle as fallback
-          console.log(`[ScopeReturn] convo=${convoId} end_delegation fallback for non-delegated specialist`);
-          current.scopeReturn = true;
-          try { current.process.kill(); } catch (e) {}
-          // The close handler will call handleScopeReturn
+          // Server-side onResult should have caught this, but handle as fallback.
+          // Stale-message guard, two signals:
+          // 1. An entry restored/respawned by a delegate close handler within
+          //    the last 15s (handbackAt): a fast-exiting delegate (e.g. Codex)
+          //    can be handed back server-side before the client's marker scan
+          //    round-trips, so the late end_delegation refers to a handback
+          //    that already happened, for ANY parent type. Killing the
+          //    restored parent would drop its session.
+          // 2. An orchestrator or platform agent never emits RETURN, so the
+          //    fallback can never be legitimate for one.
+          const recentlyHandedBack = current.handbackAt && (Date.now() - current.handbackAt) < 15000;
+          const agentList = discoverAgents();
+          const currentAgent = agentList.find(a => a.id === current.agentId || a.name === current.agentId);
+          if (recentlyHandedBack || (currentAgent && (currentAgent.type === 'orchestrator' || currentAgent.type === 'platform'))) {
+            console.log(`[ScopeReturn] convo=${convoId} ignoring stale end_delegation for ${current.agentId} (${recentlyHandedBack ? 'recent handback' : currentAgent.type})`);
+          } else {
+            console.log(`[ScopeReturn] convo=${convoId} end_delegation fallback for non-delegated specialist`);
+            current.scopeReturn = true;
+            try { current.process.kill(); } catch (e) {}
+            // The close handler will call handleScopeReturn
+          }
         }
       }
 
@@ -3915,7 +4178,10 @@ wss.on('connection', (ws) => {
               }
             }
             console.log(`[Agent] ${existed ? 'Updated' : 'Created'}: ${name}`);
-            ws.send(JSON.stringify({ type: 'agent_saved', agentId: name, updated: existed }));
+            // Tag the confirmation with the agent's runtime so the client can
+            // suffix the created pill for non-default runtimes.
+            const savedRuntime = parseAgentFrontmatter(msg.content).runtime === 'codex' ? 'codex' : 'claude';
+            ws.send(JSON.stringify({ type: 'agent_saved', agentId: name, updated: existed, runtime: savedRuntime }));
             // Invalidate BEFORE discovering so the broadcast reflects the new
             // file. A warm (<2s) cache otherwise omits the just-saved agent
             // from this first roster broadcast.
@@ -4591,6 +4857,562 @@ function spawnClaude(args, options, onError) {
   return proc;
 }
 
+// ===== CODEX RUNTIME =====
+// Agents with `runtime: codex` in their frontmatter run on the OpenAI Codex
+// CLI (the user's ChatGPT plan) instead of Claude Code. Codex conversations
+// run one sandboxed `codex exec --json` process per turn and resume the
+// thread on follow-ups; the thread id rides the same client rails as Claude
+// session ids, so the rest of the product treats both runtimes identically.
+// All Codex-specific parsing/argv/detection logic lives in codex.js.
+
+// Resolve the codex binary lazily and cache it, mirroring resolveClaudeBin.
+let _resolvedCodexBin = null;
+function resolveCodexBinCached() {
+  if (!_resolvedCodexBin) _resolvedCodexBin = codexRuntime.resolveCodexBin();
+  return _resolvedCodexBin;
+}
+
+// Claude sign-in state, from evidence the server already has rather than a
+// live probe (a probe costs a real model call and 15 seconds; a settings
+// render must never do that). null = no evidence yet, and the UI claims
+// nothing. Set true by any successful turn, false by the auth-error
+// classifier. Self-correcting in both directions.
+let _claudeAuthEvidence = null;
+
+// Runtime status for the settings surface: which runtimes exist on this
+// machine, whether they are signed in, and which one is the workspace
+// default. The default is Claude in this version: Doc and delegation run on
+// it, so a workspace cannot exist without it.
+let _claudeProbeCache = null;
+let _claudeProbeTime = 0;
+function getRuntimeStatus() {
+  const { execSync } = require('child_process');
+  const isWindows = process.platform === 'win32';
+  // The install/version probe shells out (claude --version can take seconds)
+  // and this runs on the WebSocket handler path, so cache it. 60s keeps a
+  // fresh install visible quickly without blocking every settings open.
+  // A cached "not installed" is never trusted: the user may have just
+  // installed, and that is exactly when they will open settings to check.
+  let claudeInstalled, claudeVersion;
+  if (_claudeProbeCache && _claudeProbeCache.installed && (Date.now() - _claudeProbeTime) < 60000) {
+    ({ installed: claudeInstalled, version: claudeVersion } = _claudeProbeCache);
+  } else {
+    claudeInstalled = true;
+    try {
+      execSync(isWindows ? 'where.exe claude' : 'which claude', { timeout: 5000, encoding: 'utf-8' });
+    } catch (e) { claudeInstalled = false; }
+    claudeVersion = null;
+    if (claudeInstalled) {
+      try {
+        const out = execSync(`"${resolveClaudeBin()}" --version`, { timeout: 5000, encoding: 'utf-8' });
+        const m = String(out).match(/(\d+\.\d+(?:\.\d+)?(?:-[A-Za-z0-9.]+)?)/);
+        claudeVersion = m ? m[1] : null;
+      } catch (e) { /* installed but --version failed */ }
+    }
+    _claudeProbeCache = { installed: claudeInstalled, version: claudeVersion };
+    _claudeProbeTime = Date.now();
+  }
+  // Fresh Codex detection (the user may have just installed or signed in),
+  // and refresh the prompt-side cache while we have the answer.
+  let codexStatus;
+  try { codexStatus = codexRuntime.detectCodex(); }
+  catch (e) { codexStatus = { installed: false, authenticated: false, version: null }; }
+  _codexDetectCache = codexStatus;
+  _codexDetectTime = Date.now();
+  return {
+    defaultRuntime: 'claude',
+    claude: { installed: claudeInstalled, authenticated: claudeInstalled ? _claudeAuthEvidence : false, version: claudeVersion },
+    codex: codexStatus,
+  };
+}
+
+// Spawn a Codex process with the same PID tracking and error guarantees as
+// spawnClaude. Note: no default model is injected; Codex applies its own
+// default unless the agent's frontmatter set one (already in args).
+function spawnCodex(args, options, onError) {
+  const proc = spawn(resolveCodexBinCached(), args, options);
+  if (proc.pid) {
+    registerChildPid(proc.pid);
+    proc.on('close', () => unregisterChildPid(proc.pid));
+  }
+  proc.on('error', (err) => {
+    try {
+      console.error(`[spawnCodex] spawn error code=${err.code || ''} msg=${err.message}`);
+      if (typeof onError === 'function') onError(err);
+    } catch (e) {
+      console.error('[spawnCodex] onError handler threw:', e);
+    }
+  });
+  return proc;
+}
+
+// Surface a Codex failure once per process, classified: plan-limit exhaustion
+// becomes a structured quota message (the client renders a recovery card, the
+// same pattern as the Claude auth-error card); everything else becomes a
+// structured error message with the CLI's verbatim text attached. The failure
+// is also persisted to the transcript, so a user who wasn't looking at the
+// conversation still finds out what happened when they open it.
+function sendCodexError(entry, convoId, message) {
+  if (entry.errorSent) return;
+  entry.errorSent = true;
+  const classified = codexRuntime.classifyCodexError(message);
+  // Actionable failures (signed out, unavailable model) become guidance cards
+  // with a concrete fix; quota keeps its dedicated card; everything else
+  // surfaces verbatim as a classified error pill.
+  let subtype, friendly, guidance = null;
+  if (classified.kind === 'quota') {
+    subtype = 'codex_quota';
+    friendly = 'This turn stopped: the ChatGPT plan limit was reached. It can be retried once the limit resets.';
+  } else if (classified.kind === 'auth') {
+    subtype = 'codex_guidance';
+    guidance = {
+      title: 'Codex is not signed in',
+      body: 'This agent runs on Codex, but the Codex CLI is not signed in on this machine. Run codex login in a terminal, then resend your message.',
+    };
+    friendly = 'This turn stopped: Codex is not signed in on this machine. Run codex login in a terminal, then resend the message.';
+  } else if (classified.kind === 'model') {
+    subtype = 'codex_guidance';
+    const modelBit = classified.model ? `the model '${classified.model}'` : 'a model';
+    guidance = {
+      title: 'Model not available on this account',
+      body: `This agent is configured with ${modelBit}, which this Codex account does not offer. Edit the agent and remove the model field to use the account default, or pick a model your plan includes.`,
+    };
+    friendly = `This turn stopped: ${modelBit} is not available on this Codex account. Remove the agent's model field to use the account default, or pick an available model.`;
+  } else {
+    subtype = 'codex_error';
+    friendly = 'This turn stopped: the runtime hit a problem.';
+  }
+  try {
+    appendTranscript(convoId, 'agent', entry.agentId, `${friendly}\nCodex: ${message}`);
+  } catch (e) { /* transcript persistence is best-effort */ }
+  safeSend(JSON.stringify({
+    type: 'system', subtype, detail: message, ...(guidance || {}),
+    _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
+  }));
+}
+
+// Spawn-failure copy for Codex processes. The generic Claude spawn-error
+// handler tells users to check their Claude Code install, which is the wrong
+// guidance for a Codex agent. Marks the entry so close handlers stay silent.
+function handleCodexSpawnError(err, convoId) {
+  const entry = chatProcesses.get(convoId);
+  if (entry) entry.spawnFailed = true;
+  // Same 30s per-conversation dedupe as the Claude spawn-error handler, so
+  // retries against a missing binary do not stack pills. Keys are prefixed
+  // to keep the two runtimes' dedupe windows independent.
+  const dedupeKey = `codex:${convoId || ''}`;
+  const last = recentSpawnErrors.get(dedupeKey);
+  const now = Date.now();
+  if (last && last.code === err.code && (now - last.ts) < 30000) {
+    console.error(`[SpawnError] convo=${convoId} codex code=${err.code} (deduped within 30s)`);
+    safeSend(JSON.stringify({
+      type: 'system', subtype: 'done', code: -1,
+      _agent: entry ? entry.agentId : undefined, _conversationId: convoId,
+      _processId: entry ? entry.processId : undefined,
+    }));
+    return;
+  }
+  recentSpawnErrors.set(dedupeKey, { code: err.code, ts: now });
+  let userMessage;
+  if (err.code === 'ENOENT') {
+    userMessage = 'The Codex CLI was not found on this machine. Install the official Codex CLI, then sign in: npm install -g @openai/codex then codex login';
+  } else if (err.code === 'EACCES') {
+    userMessage = "Couldn't start Codex: permission denied. Check your Codex CLI install.";
+  } else {
+    userMessage = `Couldn't start Codex: ${err.message}. Run codex --version to check your install.`;
+  }
+  safeSend(JSON.stringify({
+    type: 'system', subtype: 'info', content: userMessage, _conversationId: convoId,
+  }));
+  safeSend(JSON.stringify({
+    type: 'system', subtype: 'done', code: -1,
+    _agent: entry ? entry.agentId : undefined, _conversationId: convoId,
+    _processId: entry ? entry.processId : undefined,
+  }));
+}
+
+// Codex emits nothing between accepting the prompt and the final message, so
+// the client's stream-inactivity watchdog (90s) would otherwise conclude the
+// turn is dead mid-task. A periodic keepalive keeps the working state honest
+// while the process lives. Interval is overridable for tests.
+const CODEX_KEEPALIVE_MS = parseInt(process.env.RUNDOCK_CODEX_KEEPALIVE_MS || '', 10) || 25000;
+function startCodexKeepalive(entry, convoId) {
+  const timer = setInterval(() => {
+    if (entry.exited || entry.resultSent || entry.spawnFailed) { clearInterval(timer); return; }
+    safeSend(JSON.stringify({
+      type: 'system', subtype: 'keepalive',
+      _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
+    }));
+  }, CODEX_KEEPALIVE_MS);
+  entry.process.on('close', () => clearInterval(timer));
+}
+
+// Deliver the completed Codex turn: persist the transcript, send the result
+// (with normalised token usage: subscription usage, never dollar costs) and
+// the done signal.
+// Whether Codex spawns on this machine need the write-marker fallback:
+// Windows without a declared native sandbox (the CLI silently downgrades
+// workspace-write to read-only there). Checked per spawn so a config edit
+// takes effect on the next turn. Shared by direct chats and delegated turns.
+function codexWriteMarkersEnabled() {
+  const codexPlatform = process.env.RUNDOCK_TEST_PLATFORM || process.platform;
+  return codexPlatform === 'win32' && !codexRuntime.hasWindowsSandboxConfig();
+}
+
+// The write-marker instruction for Codex prompts on Windows machines without
+// the native sandbox. Empty string when the fallback is not needed, so call
+// sites can join it unconditionally.
+function buildWindowsWriteNote(enabled) {
+  if (!enabled) return '';
+  return [
+    'WINDOWS FILE WRITES:',
+    'On this machine your sandbox is read-only: shell commands that write files will be rejected. To create or update a file, output a block in EXACTLY this format as part of your response:',
+    '<!-- RUNDOCK:WRITE_FILE path="relative/path/inside/workspace.md" -->',
+    '<the complete file content>',
+    '<!-- /RUNDOCK:WRITE_FILE -->',
+    'Rules: relative paths inside the workspace only; the content replaces the whole file; one block per file, multiple blocks allowed. The user approves each write AFTER your turn ends, so describe writes as requested, never as completed. Never claim a file was created. Do not attempt writes via shell commands.',
+  ].join('\n');
+}
+
+// Strip write markers from a finished Codex turn's text. Returns the display
+// text plus the parsed requests for the caller to dispatch AFTER sending its
+// result/handback (cards follow the message they belong to). Inert unless
+// the entry was spawned with the marker instruction.
+function extractCodexWriteRequests(entry, text) {
+  if (!entry.writeMarkersEnabled || !text || !text.includes('RUNDOCK:WRITE_FILE')) {
+    return { text, requests: [] };
+  }
+  const parsed = codexRuntime.parseWriteMarkers(text);
+  return { text: parsed.cleanText, requests: parsed.requests };
+}
+
+// Raise a permission card for a server-originated request (no hook HTTP
+// response to hold: the decision arrives via onDecision(allow, reason)).
+// Same card UI, same timeout, same cancel sweep as hook-originated requests.
+function requestServerPermission({ convoId, toolName, toolInput, onDecision }) {
+  const requestId = 'perm-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  pendingPermissionRequests.set(requestId, {
+    onDecision,
+    conversationId: convoId,
+    toolName,
+    toolInput,
+    timer: setTimeout(() => {
+      const pending = pendingPermissionRequests.get(requestId);
+      if (pending) {
+        pendingPermissionRequests.delete(requestId);
+        console.log(`[Permission] Auto-denied (timeout): ${toolName} convo=${convoId} requestId=${requestId}`);
+        safeSend(JSON.stringify({ type: 'permission_timeout', requestId, _conversationId: convoId }));
+        try { pending.onDecision(false, 'timeout'); } catch (e) {}
+      }
+    }, PERMISSION_TIMEOUT_MS),
+  });
+  safeSend(JSON.stringify({
+    type: 'control_request',
+    request_id: requestId,
+    request: { subtype: 'can_use_tool', tool_name: toolName, input: toolInput || {} },
+    _conversationId: convoId,
+  }));
+  console.log(`[Permission] Server request: ${toolName} convo=${convoId} requestId=${requestId}`);
+}
+
+// One WRITE_FILE request from a Windows Codex turn: validate, card, write.
+// Invalid requests are refused WITHOUT a card (a card is never raised for
+// something Rundock would not do); the refusal is recorded so the user and
+// the resumed thread can see what happened.
+function handleCodexWriteRequest(entry, convoId, req) {
+  let isCodeMode = false;
+  try { isCodeMode = readState().workspaceMode === 'code'; } catch (e) {}
+  const v = validateWriteRequest(WORKSPACE, req.path, req.content, isCodeMode);
+  if (!v.ok) {
+    console.log(`[CodexWrite] convo=${convoId} refused without card: ${req.path} (${v.reason})`);
+    appendTranscript(convoId, 'agent', entry.agentId, `Write of ${req.path} refused: ${v.reason}.`);
+    safeSend(JSON.stringify({ type: 'system', subtype: 'notice', content: `Refused a file write from ${entry.agentId}: ${req.path} (${v.reason}).`, _conversationId: convoId }));
+    return;
+  }
+  requestServerPermission({
+    convoId,
+    toolName: 'WriteFile',
+    toolInput: { path: req.path, content: req.content, agent: entry.agentId },
+    onDecision: (allow, reason) => {
+      if (!allow) {
+        console.log(`[CodexWrite] convo=${convoId} not approved (${reason}): ${req.path}`);
+        appendTranscript(convoId, 'agent', entry.agentId, `Write of ${req.path} not approved.`);
+        safeSend(JSON.stringify({ type: 'system', subtype: 'notice', content: `Write of ${req.path} was not approved.`, _conversationId: convoId }));
+        return;
+      }
+      try {
+        fs.mkdirSync(path.dirname(v.fullPath), { recursive: true });
+        // Defence in depth against symlink traversal: the validated path is
+        // lexical; re-verify the REAL parent directory sits inside the
+        // workspace before writing, so a symlinked folder inside the
+        // workspace cannot redirect the write outside it.
+        const realParent = fs.realpathSync(path.dirname(v.fullPath));
+        const realRoot = fs.realpathSync(path.resolve(WORKSPACE));
+        if (!(realParent === realRoot || realParent.startsWith(realRoot + path.sep))) {
+          throw new Error('resolved target escapes the workspace');
+        }
+        fs.writeFileSync(v.fullPath, req.content, 'utf-8');
+        invalidateFileListCache();
+        if (ensureSearchEngine()) {
+          try { searchEngine.noteFileSaved(WORKSPACE, req.path); } catch (e) { /* reconcile catches up */ }
+        }
+        appendTranscript(convoId, 'agent', entry.agentId, `Created ${req.path} (approved).`);
+        safeSend(JSON.stringify({ type: 'system', subtype: 'notice', content: `Created [[${req.path}]] (approved write from ${entry.agentId}).`, _conversationId: convoId }));
+        safeSend(JSON.stringify({ type: 'file_saved', path: req.path }));
+        console.log(`[CodexWrite] convo=${convoId} wrote ${req.path} (${Buffer.byteLength(req.content, 'utf-8')} bytes)`);
+      } catch (e) {
+        console.error(`[CodexWrite] convo=${convoId} write failed: ${e.message}`);
+        appendTranscript(convoId, 'agent', entry.agentId, `Write of ${req.path} failed: ${e.message}`);
+        safeSend(JSON.stringify({ type: 'system', subtype: 'notice', content: `Write of ${req.path} failed: ${e.message}`, _conversationId: convoId }));
+      }
+    },
+  });
+}
+
+function finishCodexTurn(entry, convoId) {
+  if (entry.resultSent) return;
+  entry.resultSent = true;
+  let text = entry.responseText || '';
+  // Windows write markers: strip from the displayed/persisted text, then
+  // dispatch each request through validation + permission card AFTER the
+  // result, so the conversation shows the agent's message first and the
+  // cards follow. Only turns that were given the marker instruction are
+  // honoured (entry.writeMarkersEnabled).
+  const extracted = extractCodexWriteRequests(entry, text);
+  text = extracted.text;
+  const writeRequests = extracted.requests;
+  if (text) appendTranscript(convoId, 'agent', entry.agentId, text);
+  safeSend(JSON.stringify({
+    type: 'result', result: text, is_error: false, usage: entry.usage,
+    _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
+    _turnStartTime: entry.turnStartTime,
+  }));
+  entry.doneSent = true;
+  safeSend(JSON.stringify({
+    type: 'system', subtype: 'done', code: 0,
+    _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
+  }));
+  for (const req of writeRequests) handleCodexWriteRequest(entry, convoId, req);
+}
+
+// Handle one parsed line of Codex output for a running turn.
+function handleCodexEvent(entry, convoId, line) {
+  const ev = codexRuntime.parseCodexLine(line);
+  if (!ev) {
+    if (line.trim()) console.log(`[Codex] convo=${convoId} skipped line: ${line.slice(0, 200)}`);
+    return;
+  }
+  switch (ev.type) {
+    case 'session':
+      entry.sessionId = ev.threadId;
+      // Same message shape the Claude init envelope produces: the client
+      // stores the id and sends it back as msg.sessionId on the next turn.
+      safeSend(JSON.stringify({
+        type: 'system', subtype: 'init', _sessionId: ev.threadId,
+        _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
+      }));
+      break;
+    case 'text':
+      entry.responseText = entry.responseText ? entry.responseText + '\n' + ev.text : ev.text;
+      break;
+    case 'done':
+      entry.usage = ev.usage;
+      finishCodexTurn(entry, convoId);
+      break;
+    case 'error':
+      sendCodexError(entry, convoId, ev.message);
+      break;
+  }
+}
+
+// Read an agent's full instruction body from its file. Claude Code loads
+// agent files natively via --agent, but Codex has no equivalent, so the
+// instructions must travel inside the first-turn prompt. Falls back to the
+// (truncated) discovery snapshot if the file cannot be read.
+function readAgentInstructions(agentData) {
+  try {
+    if (agentData.fileName && WORKSPACE) {
+      const content = readNormalisedFile(path.join(WORKSPACE, '.claude', 'agents', agentData.fileName));
+      const bodyMatch = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?([\s\S]*)/);
+      if (bodyMatch && bodyMatch[1].trim()) return bodyMatch[1].trim();
+    }
+  } catch (e) { /* fall through to snapshot */ }
+  return agentData.instructions || '';
+}
+
+// Wire a Codex delegate process. The prompt goes in whole over stdin; output
+// events deliver the specialist's result and record any handoff marker on the
+// SAME entry fields Claude delegates use (returnMarkerSeen,
+// finalResponseText), so the shared delegate close handler in
+// handleDelegation performs restoration identically for both runtimes.
+// This function sends the result message; the close handler owns
+// agent_switch/done and parent restoration.
+function wireCodexDelegate(entry, convoId, prompt) {
+  const proc = entry.process;
+  proc.stdin.on('error', () => { /* EPIPE on early exit: close handler reports */ });
+  proc.stdin.write(prompt);
+  proc.stdin.end();
+
+  let stdoutBuf = '';
+  const handleLine = (line) => {
+    const ev = codexRuntime.parseCodexLine(line);
+    if (!ev) {
+      if (line.trim()) console.log(`[Codex] convo=${convoId} delegate skipped line: ${line.slice(0, 200)}`);
+      return;
+    }
+    if (ev.type === 'session') {
+      entry.sessionId = ev.threadId;
+      safeSend(JSON.stringify({
+        type: 'system', subtype: 'init', _sessionId: ev.threadId,
+        _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
+      }));
+    } else if (ev.type === 'text') {
+      entry.responseText = entry.responseText ? entry.responseText + '\n' + ev.text : ev.text;
+    } else if (ev.type === 'done') {
+      // Marker scan, COMPLETE priority: same contract as the Claude
+      // delegate onResult handler.
+      const hasComplete = /<!-- RUNDOCK:COMPLETE -->/.test(entry.responseText);
+      const hasReturn = /<!-- RUNDOCK:RETURN -->/.test(entry.responseText);
+      if (hasComplete) entry.returnMarkerSeen = 'complete';
+      else if (hasReturn) entry.returnMarkerSeen = 'return';
+      // Windows write markers: strip before the transcript, the result, and
+      // the handback injection (finalResponseText), so the orchestrator and
+      // the user both see the plain-language line, never raw marker soup.
+      // Cards dispatch after the result so they follow their message.
+      const extracted = extractCodexWriteRequests(entry, entry.responseText);
+      const displayText = extracted.text;
+      if (displayText) appendTranscript(convoId, 'agent', entry.agentId, displayText);
+      safeSend(JSON.stringify({
+        type: 'result', result: displayText, is_error: false, usage: ev.usage,
+        _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
+        _turnStartTime: entry.turnStartTime,
+      }));
+      entry.resultSent = true;
+      entry.finalResponseText = displayText;
+      entry.responseText = '';
+      entry.idle = true;
+      for (const req of extracted.requests) handleCodexWriteRequest(entry, convoId, req);
+    } else if (ev.type === 'error') {
+      sendCodexError(entry, convoId, ev.message);
+    }
+  };
+
+  proc.stdout.on('data', (chunk) => {
+    stdoutBuf += chunk.toString();
+    let nl;
+    while ((nl = stdoutBuf.indexOf('\n')) >= 0) {
+      const line = stdoutBuf.slice(0, nl);
+      stdoutBuf = stdoutBuf.slice(nl + 1);
+      handleLine(line);
+    }
+  });
+
+  let stderrBuf = '';
+  proc.stderr.on('data', (chunk) => { stderrBuf += chunk.toString(); });
+  proc.on('close', () => {
+    if (entry.spawnFailed) return; // spawn-error handler already surfaced
+    if (stdoutBuf.trim()) handleLine(stdoutBuf); // unterminated last line
+    if (!entry.resultSent && !entry.errorSent && !entry.cancelled) {
+      sendCodexError(entry, convoId, stderrBuf.trim() || 'Codex exited unexpectedly');
+    }
+  });
+}
+
+// Run one Codex conversation turn. Each turn is its own process: fresh turns
+// carry the agent's instructions and the platform rules followed by the user
+// message; resumed turns send only the new message (instructions are never
+// re-injected, keeping resumed turns cheap).
+function startCodexTurn(convoId, msg, agentData) {
+  // A new user message supersedes a still-running turn: kill it and continue
+  // on the same thread. Mirrors the Claude path's stale-entry handling.
+  const existing = chatProcesses.get(convoId);
+  if (existing && !existing.exited) {
+    existing.superseded = true;
+    try { existing.process.kill(); } catch (e) { /* already dead */ }
+    chatProcesses.delete(convoId);
+  }
+
+  // Normalise once: an invalid session id (hostile client, corrupted
+  // persistence) must produce a FULL fresh turn, instructions included. If
+  // only argv dropped the id, the prompt would still be built resume-shaped
+  // and the agent would run without its identity.
+  const resumeThreadId = codexRuntime.isValidThreadId(msg.sessionId) ? msg.sessionId : null;
+  const args = codexRuntime.buildCodexArgs({ resumeThreadId, model: agentData.model || undefined });
+  const processId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+  console.log(`[Codex] convo=${convoId} proc=${processId} agent=${agentData.id} ${resumeThreadId ? `resume=${resumeThreadId}` : 'new thread'} model=${agentData.model || '(codex default)'}`);
+
+  const proc = spawnCodex(args, {
+    cwd: WORKSPACE,
+    env: getSpawnEnv(convoId),
+    stdio: ['pipe', 'pipe', 'pipe'],
+  }, (err) => handleCodexSpawnError(err, convoId));
+
+  // Windows write markers: see codexWriteMarkersEnabled() for the policy.
+  const writeMarkersEnabled = codexWriteMarkersEnabled();
+
+  const entry = {
+    process: proc, runtime: 'codex', processId, agentId: agentData.id,
+    responseText: '', exited: false, resultSent: false, errorSent: false,
+    doneSent: false, superseded: false, usage: null, writeMarkersEnabled,
+    sessionId: resumeThreadId, lastUserMessage: msg.content,
+    toolCalls: [], turnStartTime: Date.now(),
+  };
+  chatProcesses.set(convoId, entry);
+  startCodexKeepalive(entry, convoId);
+
+  safeSend(JSON.stringify({
+    type: 'system', subtype: 'process_started',
+    _agent: agentData.id, _conversationId: convoId, _processId: processId,
+  }));
+
+  const windowsWriteNote = buildWindowsWriteNote(writeMarkersEnabled);
+
+  // Prompt over stdin, never argv. First turns carry identity (the agent
+  // file body) plus the platform rules; Claude gets these via --agent and
+  // --append-system-prompt, which Codex does not support.
+  const prompt = resumeThreadId
+    ? msg.content
+    : [readAgentInstructions(agentData), buildSystemPrompt(agentData), windowsWriteNote, msg.content].filter(Boolean).join('\n\n');
+  proc.stdin.on('error', () => { /* EPIPE on early exit: close handler reports */ });
+  proc.stdin.write(prompt);
+  proc.stdin.end();
+
+  let stdoutBuf = '';
+  proc.stdout.on('data', (chunk) => {
+    stdoutBuf += chunk.toString();
+    let nl;
+    while ((nl = stdoutBuf.indexOf('\n')) >= 0) {
+      const line = stdoutBuf.slice(0, nl);
+      stdoutBuf = stdoutBuf.slice(nl + 1);
+      handleCodexEvent(entry, convoId, line);
+    }
+  });
+
+  let stderrBuf = '';
+  proc.stderr.on('data', (chunk) => { stderrBuf += chunk.toString(); });
+
+  proc.on('close', (code) => {
+    entry.exited = true;
+    const current = chatProcesses.get(convoId);
+    if (current === entry) chatProcesses.delete(convoId);
+    if (entry.superseded) return;   // a newer turn took over; stay silent
+    if (entry.spawnFailed) return;  // spawn-error handler already surfaced + done
+    if (entry.cancelled) return;    // user stopped the agent; stop handler already surfaced + done
+    if (stdoutBuf.trim()) handleCodexEvent(entry, convoId, stdoutBuf); // unterminated last line
+    if (!entry.resultSent && !entry.errorSent) {
+      sendCodexError(entry, convoId, stderrBuf.trim() || `Codex exited unexpectedly (code ${code})`);
+    }
+    if (!entry.doneSent) {
+      entry.doneSent = true;
+      safeSend(JSON.stringify({
+        type: 'system', subtype: 'done', code,
+        _agent: entry.agentId, _conversationId: convoId, _processId: processId,
+      }));
+    }
+  });
+}
+
 // Graceful shutdown: kill children on exit signals.
 // SIGTERM/SIGINT: graceful (SIGTERM to children, then exit).
 // 'exit': last resort, use SIGKILL since we can't wait for graceful shutdown.
@@ -5079,9 +5901,9 @@ module.exports._internal = {
   parseRoutines, parsePrompts, parseSkills, readNormalisedFile, titleCase,
   // markers + text helpers
   stripRundockMarkers, isSilentParkResponse, sanitizeSpecialistOutput,
-  extractSnippet, buildToolSummary, isAuthError, isModelError,
+  extractSnippet, buildToolSummary, isAuthError, isModelError, validateWriteRequest,
   // rosters + prompts
-  findDirectReportMatch, buildTeamRoster, buildPeerRoster,
+  findDirectReportMatch, findOffRosterWorkspaceMatch, buildTeamRoster, buildPeerRoster,
   extractSelfDescription, buildSystemPrompt,
   // workspace analysis / scaffolding
   detectWorkspaceMode, isEmptyWorkspace, analyzeWorkspace,
