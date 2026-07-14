@@ -1706,6 +1706,7 @@ function scaffoldWorkspace(dir, opts = {}) {
     // below still recognises it.
     const rundockDir = path.join(dir, '.rundock');
     let expectedHookCommand;
+    let expectedHookShell; // set on Windows only; POSIX entries carry no shell field
     try {
       fs.mkdirSync(rundockDir, { recursive: true });
       if (platform === 'win32') {
@@ -1714,14 +1715,19 @@ function scaffoldWorkspace(dir, opts = {}) {
           `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${process.execPath}" "${hookScript}" %*\r\n`);
         // Claude Code runs hooks under Git Bash on Windows when Git is
         // installed; PowerShell is only the fallback (docs: hooks shell
-        // defaults to bash, or powershell when Git Bash is absent). The
-        // previous form `& "launcher"` was PowerShell call-operator syntax:
-        // a syntax error under bash, so every shell command failed closed
-        // on any machine with Git installed. `cmd /c "launcher"` is valid
-        // under bash, PowerShell, AND cmd, so it works regardless of which
-        // shell Claude Code picks. The stale-entry cleanup below migrates
-        // old `& "..."` entries automatically.
-        expectedHookCommand = `cmd /c "${launcher}"`;
+        // defaults to bash, or powershell when Git Bash is absent). Both
+        // shell-agnostic command forms fail under Git Bash, verified live:
+        // `& "launcher"` is a bash syntax error (fail-closed), and
+        // `cmd /c "launcher"` gets its /c switch rewritten to a drive path
+        // by MSYS argument conversion, so cmd starts an interactive session
+        // instead of running the launcher (fail-open). The documented fix
+        // is the hooks `shell` field: pin the entry to PowerShell and use
+        // the call-operator form PowerShell requires to execute a quoted
+        // path. Machines without Git Bash already default to PowerShell,
+        // so behaviour converges. The stale-entry cleanup below migrates
+        // both earlier forms automatically.
+        expectedHookCommand = `& "${launcher}"`;
+        expectedHookShell = 'powershell';
       } else {
         const launcher = path.join(rundockDir, 'permission-hook.sh');
         fs.writeFileSync(launcher,
@@ -1746,26 +1752,30 @@ function scaffoldWorkspace(dir, opts = {}) {
       hooks: [{
         type: 'command',
         command: expectedHookCommand,
+        ...(expectedHookShell ? { shell: expectedHookShell } : {}),
         timeout: 300
       }]
     });
 
-    // Drop any existing permission-hook entries whose command does NOT match
-    // the current expected path. This forces rewrite of stale entries left
-    // behind by earlier versions where the hook path pointed at a location
-    // that no longer exists (e.g. inside the read-only asar archive).
+    // Drop any existing permission-hook entries whose command OR shell does
+    // NOT match the current expected form. This forces rewrite of stale
+    // entries left behind by earlier versions: paths inside the read-only
+    // asar archive, the unpinned `& "..."` form (bash syntax error), and
+    // the `cmd /c "..."` form (MSYS-mangled under Git Bash).
+    const hookUpToDate = (h) => h.command === expectedHookCommand &&
+      (expectedHookShell ? h.shell === expectedHookShell : h.shell === undefined);
     const beforeStale = settingsLocal.hooks.PreToolUse.length;
     settingsLocal.hooks.PreToolUse = settingsLocal.hooks.PreToolUse.filter(e => {
       const hooks = e.hooks || [];
       const hasStaleHook = hooks.some(h =>
-        h.command && h.command.includes('permission-hook') && h.command !== expectedHookCommand
+        h.command && h.command.includes('permission-hook') && !hookUpToDate(h)
       );
       return !hasStaleHook;
     });
     let dirty = settingsLocal.hooks.PreToolUse.length < beforeStale;
 
     const hasMatcher = (matcher) => settingsLocal.hooks.PreToolUse.some(e =>
-      e.matcher === matcher && (e.hooks || []).some(h => h.command === expectedHookCommand)
+      e.matcher === matcher && (e.hooks || []).some(hookUpToDate)
     );
 
     if (!hasMatcher('Bash')) {
