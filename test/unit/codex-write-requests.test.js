@@ -58,6 +58,37 @@ describe('parseWriteMarkers', () => {
   });
 });
 
+describe('hasWindowsSandboxConfig', () => {
+  // Presence-only scan of the Codex config for a [windows] sandbox
+  // declaration. When present, the CLI grants a real workspace-write policy
+  // (in-process patch writes, workspace-bounded), so the write-marker
+  // fallback stands down. Verified live: an unconfigured CLI silently
+  // downgrades to read-only; a configured one writes directly.
+  const withConfig = (content) => ({
+    readFileSync: () => content,
+    homedir: () => '/tmp/fake-home',
+    env: {},
+  });
+
+  test('true when [windows] declares a sandbox', () => {
+    assert.strictEqual(codex.hasWindowsSandboxConfig(withConfig('[windows]\nsandbox = "unelevated"\n')), true);
+    assert.strictEqual(codex.hasWindowsSandboxConfig(withConfig('# comment\n\n[windows]\nsandbox = "elevated"\n\n[projects.x]\ntrust_level = "trusted"\n')), true);
+  });
+
+  test('false when [windows] exists without a sandbox key', () => {
+    assert.strictEqual(codex.hasWindowsSandboxConfig(withConfig('[windows]\nsandbox_private_desktop = false\n')), false);
+  });
+
+  test('false when a sandbox key lives under a different section', () => {
+    assert.strictEqual(codex.hasWindowsSandboxConfig(withConfig('[features]\nsandbox = "x"\n')), false);
+    assert.strictEqual(codex.hasWindowsSandboxConfig(withConfig('sandbox_mode = "workspace-write"\n')), false);
+  });
+
+  test('false when the config file is missing or unreadable', () => {
+    assert.strictEqual(codex.hasWindowsSandboxConfig({ readFileSync: () => { throw new Error('ENOENT'); }, homedir: () => '/x', env: {} }), false);
+  });
+});
+
 describe('validateWriteRequest', () => {
   const ws = makeWorkspace({ claudeMd: '# x' });
 
