@@ -146,6 +146,31 @@ test('palette: Escape closes and returns focus to the opener', async ({ page }) 
   await expect(page.locator('#nav-search-btn')).toBeFocused();
 });
 
+test('palette: navigating to a result leaves no stale focus ring on the nav rail', async ({ page }) => {
+  // Regression: closePalette() restored focus unconditionally, so selecting
+  // a result handed focus back to the last-clicked nav button. In keyboard
+  // modality (Cmd/Ctrl+K, Enter) the browser then painted its focus ring on
+  // a view the user just left, alongside the new view's active highlight.
+  // Cancel closes still restore focus (pinned by the Escape test above);
+  // selection closes must not.
+  await boot(page);
+  await page.locator('.nav-item[data-nav="team"]').click(); // leave focus on a nav button
+  // Keyboard invocation, deliberately NOT the search() helper (which clicks
+  // the rail button and would toggle this palette closed): the bug only
+  // reproduces in keyboard modality.
+  await page.keyboard.press('ControlOrMeta+k');
+  await expect(page.locator('#palette-input')).toBeFocused();
+  await page.locator('#palette-input').fill('roadmap');
+  await expect(page.locator('.palette-group-label').first()).not.toContainText('Recent');
+  await expect(page.locator('.palette-item.selected[data-type="file"]')).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expectSection(page, 'files', 'editor');
+  await expect(page.locator('.nav-item[data-nav="team"]')).not.toBeFocused();
+  const railHasFocusRing = await page.evaluate(() =>
+    !!document.querySelector('.nav-item:focus-visible, .nav-btn:focus-visible'));
+  expect(railHasFocusRing).toBe(false);
+});
+
 test('palette: an empty query shows recent items, not nothing', async ({ page }) => {
   await boot(page);
   await openPalette(page);
