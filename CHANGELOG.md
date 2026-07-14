@@ -4,9 +4,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## Unreleased
-
-**Name:** Search, Review & Codex
+## 0.10.0: Search, Review & Codex (2026-07-14)
 
 One palette searches everything you have, files agents produce can be reviewed where they live, and any specialist can run on your ChatGPT plan alongside your Claude agents. The biggest release since launch: universal search, an in-editor review loop, and a second runtime.
 
