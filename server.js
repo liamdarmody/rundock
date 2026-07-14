@@ -1633,7 +1633,10 @@ const RUNDOCK_MANAGED_FILES = [
   { source: 'rundock-skills.md',    target: '.claude/skills/rundock-skills/SKILL.md' },
 ];
 
-function scaffoldWorkspace(dir) {
+function scaffoldWorkspace(dir, opts = {}) {
+  // opts.platform: test seam for the platform-specific hook wiring below
+  // (same injection pattern as resolveCodexBin in codex.js).
+  const platform = opts.platform || process.platform;
   // Never create the workspace directory as a side effect. If it was
   // deleted or renamed externally, bail so callers can handle the miss.
   if (!fs.existsSync(dir)) return;
@@ -1705,14 +1708,20 @@ function scaffoldWorkspace(dir) {
     let expectedHookCommand;
     try {
       fs.mkdirSync(rundockDir, { recursive: true });
-      if (process.platform === 'win32') {
+      if (platform === 'win32') {
         const launcher = path.join(rundockDir, 'permission-hook.cmd');
         fs.writeFileSync(launcher,
           `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${process.execPath}" "${hookScript}" %*\r\n`);
-        // Claude runs hooks via PowerShell on Windows (no Git Bash). PowerShell
-        // treats a bare quoted path as a string literal and does NOT execute it;
-        // the call operator "&" is required to actually run it.
-        expectedHookCommand = `& "${launcher}"`;
+        // Claude Code runs hooks under Git Bash on Windows when Git is
+        // installed; PowerShell is only the fallback (docs: hooks shell
+        // defaults to bash, or powershell when Git Bash is absent). The
+        // previous form `& "launcher"` was PowerShell call-operator syntax:
+        // a syntax error under bash, so every shell command failed closed
+        // on any machine with Git installed. `cmd /c "launcher"` is valid
+        // under bash, PowerShell, AND cmd, so it works regardless of which
+        // shell Claude Code picks. The stale-entry cleanup below migrates
+        // old `& "..."` entries automatically.
+        expectedHookCommand = `cmd /c "${launcher}"`;
       } else {
         const launcher = path.join(rundockDir, 'permission-hook.sh');
         fs.writeFileSync(launcher,

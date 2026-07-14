@@ -155,6 +155,43 @@ describe('scaffoldWorkspace', () => {
     }
   });
 
+  test('Windows hook command is shell-neutral (cmd /c), never PowerShell call-operator syntax', () => {
+    // Live finding (Parallels VM, Claude Code 2.1.208): Claude Code runs
+    // hooks under Git Bash on Windows when Git is installed (PowerShell is
+    // only the fallback). The previous `& "launcher"` form is a bash syntax
+    // error, so every shell command fail-closed. `cmd /c "launcher"` is
+    // valid under bash, PowerShell, AND cmd.
+    const dir = useWorkspace({ claudeMd: '# x' });
+    srv.scaffoldWorkspace(dir, { platform: 'win32' });
+    const settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf-8'));
+    const launcher = path.join(dir, '.rundock', 'permission-hook.cmd');
+    assert.ok(fs.existsSync(launcher), 'cmd launcher written');
+    const launcherBody = fs.readFileSync(launcher, 'utf-8');
+    assert.ok(launcherBody.includes('ELECTRON_RUN_AS_NODE=1'));
+    assert.ok(launcherBody.includes('permission-hook.js'));
+    for (const e of settings.hooks.PreToolUse) {
+      assert.strictEqual(e.hooks[0].command, `cmd /c "${launcher}"`);
+      assert.ok(!e.hooks[0].command.startsWith('&'), 'no PowerShell call operator');
+    }
+  });
+
+  test('stale Windows call-operator hook entries migrate to the cmd /c form', () => {
+    const dir = useWorkspace({ claudeMd: '# x' });
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    const launcher = path.join(dir, '.rundock', 'permission-hook.cmd');
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify({
+      hooks: { PreToolUse: [
+        { matcher: 'Bash', hooks: [{ type: 'command', command: `& "${launcher}"`, timeout: 300 }] },
+      ] },
+    }));
+    srv.scaffoldWorkspace(dir, { platform: 'win32' });
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    for (const e of settings.hooks.PreToolUse) {
+      assert.strictEqual(e.hooks[0].command, `cmd /c "${launcher}"`, 'old & form rewritten');
+    }
+  });
+
   test('missing workspace dir: bails without creating it', () => {
     const ghost = path.join(require('node:os').tmpdir(), 'rundock-ghost-' + Date.now());
     srv.scaffoldWorkspace(ghost);
