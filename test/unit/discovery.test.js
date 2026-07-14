@@ -484,6 +484,24 @@ describe('findOffRosterWorkspaceMatch', () => {
 });
 
 describe('agent runtime field', () => {
+  test('orchestrators and platform agents always run on Claude Code, whatever their frontmatter says', () => {
+    // Delegation works through the Agent tool in the Claude Code stream,
+    // which Codex exec mode does not have: a Codex orchestrator would be
+    // told to route with a tool that does not exist for it. The docs state
+    // the rule; discovery enforces it.
+    useWorkspace({ agents: {
+      'boss': agentFile({ name: 'boss', type: 'orchestrator', order: 1, runtime: 'codex' }),
+      'guide': agentFile({ name: 'guide', type: 'platform', order: 99, runtime: 'codex' }),
+      'spec': agentFile({ name: 'spec', type: 'specialist', order: 2, reportsTo: 'boss', runtime: 'codex' }),
+    } });
+    srv.invalidateAgentCache();
+    const agents = srv.discoverAgents();
+    assert.strictEqual(agents.find(a => a.id === 'boss').runtime, 'claude', 'orchestrator forced to claude');
+    assert.strictEqual(agents.find(a => a.id === 'guide').runtime, 'claude', 'platform agent forced to claude');
+    assert.strictEqual(agents.find(a => a.id === 'boss').model, 'sonnet', 'forced-claude orchestrator gets the Claude default model, never null');
+    assert.strictEqual(agents.find(a => a.id === 'spec').runtime, 'codex', 'specialists keep their declared runtime');
+  });
+
   test('runtime value is case-insensitive: Codex/CODEX must not silently run on Claude', () => {
     // A silent runtime override is the same problem class as the off-roster
     // delegation guard: the user chose a runtime; casing must not undo it.
