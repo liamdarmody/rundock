@@ -273,7 +273,39 @@ function parseWriteMarkers(text) {
   return { cleanText, requests };
 }
 
+// Resolve a Codex thread id to its rollout file on disk. One rollout file
+// exists per thread under $CODEX_HOME/sessions/YYYY/MM/DD, named
+// rollout-<started-at>-<threadId>.jsonl, and resumes append to the SAME
+// file (verified against real sessions; the CLI's own sqlite index maps
+// thread id -> rollout_path the same way, but the filename convention is
+// the stable public surface, so resolution scans filenames and never opens
+// the CLI's databases). Newest date directories are scanned first. Returns
+// the absolute path or null.
+function findCodexThreadFile(threadId, deps = {}) {
+  if (!isValidThreadId(threadId)) return null;
+  const readdir = deps.readdirSync || fs.readdirSync;
+  const homedir = deps.homedir || os.homedir;
+  const env = deps.env || process.env;
+  const sessionsDir = path.join(env.CODEX_HOME || path.join(homedir(), '.codex'), 'sessions');
+  const suffix = `-${threadId}.jsonl`;
+  const listDirs = (p) => {
+    try { return readdir(p).sort().reverse(); } catch (e) { return []; }
+  };
+  for (const year of listDirs(sessionsDir)) {
+    for (const month of listDirs(path.join(sessionsDir, year))) {
+      for (const day of listDirs(path.join(sessionsDir, year, month))) {
+        const dayDir = path.join(sessionsDir, year, month, day);
+        for (const f of listDirs(dayDir)) {
+          if (f.startsWith('rollout-') && f.endsWith(suffix)) return path.join(dayDir, f);
+        }
+      }
+    }
+  }
+  return null;
+}
+
 module.exports = {
   buildCodexArgs, parseCodexLine, resolveCodexBin, detectCodex, isCodexQuotaError,
   classifyCodexError, isValidThreadId, parseWriteMarkers, hasWindowsSandboxConfig,
+  findCodexThreadFile,
 };
