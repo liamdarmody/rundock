@@ -5,7 +5,7 @@
 #   irm https://raw.githubusercontent.com/liamdarmody/rundock/main/scripts/install-windows-source.ps1 | iex
 #
 # What this does, end to end:
-#   [1/5] Check Node.js 20+ and Git, install via winget if missing
+#   [1/5] Check Node.js 22+ and Git, install via winget if missing
 #   [2/5] Check Claude Code, prompt to run Anthropic's installer if missing
 #   [3/5] Clone or update the Rundock repository at %USERPROFILE%\Rundock
 #   [4/5] Run npm install
@@ -54,7 +54,7 @@ function Fail {
 }
 
 # ----------------------------------------------------------------------
-# [1/5] Dependencies: Node.js 20+ and Git, via winget if missing
+# [1/5] Dependencies: Node.js 22+ and Git, via winget if missing
 # ----------------------------------------------------------------------
 
 if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
@@ -106,7 +106,10 @@ function Ensure-Tool {
     Write-Host ("        installed ({0})" -f $output)
 }
 
-Ensure-Tool -Name 'node' -VersionFlag '--version' -WingetId 'OpenJS.NodeJS.LTS' -MinMajor 20
+# Floor is 22: Rundock's search uses node:sqlite, absent on Node 20, and
+# package.json engines requires >=22. Ensure-Tool treats a below-floor
+# install as missing and upgrades it via winget.
+Ensure-Tool -Name 'node' -VersionFlag '--version' -WingetId 'OpenJS.NodeJS.LTS' -MinMajor 22
 Ensure-Tool -Name 'git'  -VersionFlag '--version' -WingetId 'Git.Git'
 
 # ----------------------------------------------------------------------
@@ -196,7 +199,13 @@ if (-not (Test-Path $LogPath)) {
 Push-Location $InstallDir
 try {
     Write-Step '[4/5] Installing dependencies' 'running npm install'
-    & npm install
+    # npm.cmd, not npm: bare `npm` resolves to npm.ps1, which the default
+    # Restricted execution policy blocks on fresh Windows machines. This
+    # script's whole audience is fresh machines (it may have just installed
+    # Node itself), so step 4 failed exactly here for every new user. The
+    # .cmd shim is immune to execution policy. (Verified live: a fresh
+    # Windows 11 VM died on this line before the fix.)
+    & npm.cmd install
     if ($LASTEXITCODE -ne 0) {
         Fail ("npm install failed (exit {0}). See npm output above." -f $LASTEXITCODE)
     }
