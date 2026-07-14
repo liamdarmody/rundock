@@ -6,11 +6,13 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ## Unreleased
 
-> Documented incrementally as feature branches merge; release name and version chosen at cut. Shipped so far: universal search, File View (tables + native inline review), resizable panels.
+> Documented incrementally as feature branches merge; release name and version chosen at cut. Shipped so far: universal search, File View (tables + native inline review), resizable panels, the Codex runtime.
 
 **Universal Search.** Search your whole workspace from one place. Press Cmd+K (Ctrl+K on Windows and Linux) or click the new search icon in the nav rail, and one palette searches your files, conversations, agents, and skills together, with results grouped by type as you type.
 
 **File View.** The rich markdown editor grows up: tables render and edit in place with your file's exact formatting preserved, and files agents produce can now be reviewed where they live: inline comments and suggested edits, stored in the file itself in an open format, with accept/reject decisions and threaded replies that any agent can read and act on.
+
+**Agents on your ChatGPT plan.** Rundock now runs agents on two runtimes. Claude Code remains the default; add `runtime: codex` to any specialist and it runs on the official OpenAI Codex CLI under your ChatGPT subscription instead. Codex agents hold conversations with full context across turns, take delegated work from your orchestrator and hand results back, and leave properly attributed review feedback on files, side by side with your Claude agents in the same workspace.
 
 ### Added
 
@@ -24,6 +26,11 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 - **Agents write well-formed review feedback out of the box.** Every Rundock agent now knows the annotation format (anchored constructs, attribution, timestamps, threaded replies) and refers to feedback by quoting it in conversation, so what an agent says always matches what you see.
 - **Search understands review annotations.** Files under review are indexed by their readable text: comment and suggestion content is searchable, while raw annotation syntax and metadata never leak into search results.
 - **The sidebar and review panel are resizable.** Drag the sidebar's inner edge (or the review panel's) to the width you want; it's remembered between sessions. The resize affordance stays out of the way: a subtle line appears only after an intentional hover, and the accent colour shows only while you're actually dragging.
+- **Agents can run on the Codex runtime.** `runtime: codex` in an agent's file runs that agent on the official Codex CLI with your ChatGPT plan: direct chat with thread memory, delegation both directions, and file review with correct attribution. Leave the model field out and your account's default model applies; name one and Rundock passes it through.
+- **Settings show each runtime's status honestly.** The Runtimes card reports what Rundock can actually verify: installed, signed in (detected by the presence of a credentials file, never by reading it), and version, with tooltips explaining the evidence behind each state.
+- **Codex problems explain themselves.** A signed-out Codex, an unavailable model, or a reached plan limit each show a card saying what happened and the exact fix (run codex login; remove the model field; wait for the limit to reset) instead of a raw error, with the technical detail attached underneath.
+- **File writes from Codex agents on Windows are first-class.** With one config line, Codex agents write files directly inside their sandbox, as on macOS. Without it, their writes arrive as permission cards showing the exact content, applied only when you approve: never silently read-only either way. Settings point Windows users at the one-liner.
+- **Agents cannot impersonate teammates.** An agent that tries to hand work to a teammate outside its own reports is blocked with a visible notice and recovers gracefully: work attributed to an agent is always done by that agent, on its own runtime.
 
 ### Changed
 
@@ -36,6 +43,10 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 - **Files no longer change on save when you haven't changed them.** Three long-standing editor bugs meant every save could alter a file: the blank line after frontmatter was dropped, ordered lists with ten or more items gained stray padding on every item, and the file's final newline was stripped. All three are fixed, with tests locking the exact-bytes guarantee.
 - **Undo is safe during review.** Undoing an accepted or rejected suggestion restores both the document and the file's review records consistently, so a file can never say "undecided" and "accepted" at the same time.
+- **Shell commands work again on Windows machines with Git installed.** The permission system's hook was written for one Windows shell while recent Claude Code versions run it under another, so every terminal command was silently refused. The hook now pins its shell explicitly, and permission cards appear and behave as designed.
+- **Short agent replies no longer vanish.** A reply under ten characters ("Forty.") was mistaken for internal turn plumbing and never rendered, while still reaching the conversation's file on disk. Concise answers now display like any other.
+- **Installing from source on a fresh Windows machine works end to end.** The bootstrap script no longer trips over PowerShell's default script policy, and it installs the Node version the app actually requires.
+- **No stray focus outline after searching.** Navigating somewhere from universal search no longer leaves a keyboard focus ring on the previous view's nav icon.
 
 ## 0.9.2: Delegation Reliability & Hardening (2026-07-03)
 
