@@ -6,9 +6,10 @@ Rundock is early stage. Contributions are welcome, but please read this guide be
 
 **Requirements:**
 
-- Node.js 20+
+- Node.js 22+ (search uses Node's built-in `node:sqlite`)
 - Claude Code installed and signed in (`claude --version` to verify)
 - Git
+- Optional: the Codex CLI (`npm install -g @openai/codex`, then `codex login`) if you are working on the Codex runtime
 
 **Setup:**
 
@@ -23,16 +24,19 @@ This starts the server at `http://localhost:3000`. There is no build step. Chang
 
 ## Code structure
 
-Rundock is intentionally simple. Four source files, two dependencies, no bundler.
+Rundock is intentionally simple. A handful of source files, three runtime dependencies, no bundler.
 
 | File | Purpose |
 |---|---|
-| `server.js` | Node.js HTTP + WebSocket server. Agent/skill discovery, Claude Code process management, delegation, transcripts, permissions, universal search wiring. |
-| `search.js` | Universal search engine: SQLite FTS5 index (via Node's built-in `node:sqlite`) over workspace files and conversation transcripts. Pure module, fully unit-testable. See ARCHITECTURE.md, Universal search. |
+| `server.js` | Node.js HTTP + WebSocket server. Agent/skill discovery, runtime process management, delegation, transcripts, permissions, universal search wiring. |
+| `search.js` | Universal search engine: SQLite FTS5 index (via Node's built-in `node:sqlite`) over workspace files and conversation sessions. Pure module, fully unit-testable. See ARCHITECTURE.md, Universal search. |
+| `codex.js` | Codex runtime adapter: argv construction, output parsing, binary/auth/sandbox detection, error classification. Pure module, fully unit-testable. |
 | `public/app.js` | Single-page client application. Streaming, delegation UI, permission cards, conversation management, search palette. |
+| `public/code-language.js` | Language resolution for fenced code blocks (pure UMD module, unit-tested in Node). |
+| `public/editor/` | The rich markdown editor: Tiptap-based modules for tables, review annotations (CriticMarkup), and the review panel, behind a byte-for-byte round-trip guarantee. |
 | `public/index.html` | Layout, styles, and markup. Nav rail, sidebar, main panel, search palette. |
 
-**Dependencies:** `ws` (WebSocket library) and `marked` (markdown renderer). That's it.
+**Runtime dependencies:** `ws` (WebSocket library), `marked` (markdown renderer), and `electron-updater` (auto-update in the packaged app). Dev dependencies cover testing and packaging only (Playwright, jsdom, electron-builder).
 
 ## Reporting issues
 
@@ -70,7 +74,13 @@ Every entry in `CHANGELOG.md` should follow the same shape so release notes read
 
 ### Testing your changes
 
-Run the server locally and test against a real workspace with agents. There is no automated test suite yet. Verify that your change works across the team, conversations, skills, and files views as relevant.
+Rundock has a substantial automated suite, and PRs are expected to keep it green and extend it:
+
+- **`npm test`**: the full Node suite (500+ tests): unit tests for the pure modules, integration tests that drive the real server against stub runtime binaries, and an editor round-trip suite that boots the real editor under jsdom.
+- **`npx playwright test`**: the browser-driven E2E suite. Blocking in CI; run it for any client-facing change.
+- **`npm run test:coverage`**: server-side line coverage with a per-area breakdown.
+
+Expectations for a PR: the full suite green on Node 22 and 24 (CI checks both), new behaviour covered by tests (bug fixes include a regression test that fails before the fix), and byte-for-byte guarantees respected if you touch the editor. Then test by hand against a real workspace with agents: verify your change across the team, conversations, skills, and files views as relevant.
 
 ## Licence
 
