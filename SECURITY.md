@@ -14,4 +14,4 @@ I aim to acknowledge reports within 72 hours and to fix or scope a fix within tw
 
 In scope: Rundock itself. The desktop app, the Node.js server, the WebSocket protocol, the local API surface, and how Rundock reads, writes, and spawns from agent and skill files.
 
-Out of scope: vulnerabilities in third-party tools that Rundock invokes (Claude Code, Anthropic's API, Node.js, Electron). Report those upstream.
+Out of scope: vulnerabilities in third-party tools that Rundock invokes (Claude Code and Anthropic's API, the Codex CLI and OpenAI's API, Node.js, Electron). Report those upstream.
