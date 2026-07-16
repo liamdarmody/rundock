@@ -8,6 +8,10 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 **Name:** TBD
 
+### Added
+
+- **First-run setup adapts to the runtimes you have:** the wizard now detects both Claude Code and Codex. A Codex user is told plainly why Claude Code is still needed (it runs your team's orchestrator and Doc, the setup guide) instead of receiving a bare install instruction, and once Claude Code is signed in, a machine with the Codex CLI gets an optional third step to sign in to Codex so specialists can run on a ChatGPT plan, skippable and available later from Settings. Machines without Codex see the setup flow exactly as before.
+
 ### Changed
 
 - **Fresh installs no longer print security warnings:** the packaged Electron runtime moved from 35 to 42, clearing the cluster of published advisories that `npm audit` reported against every contributor install. No user-visible behaviour change; the full suite, browser tests, and a locally built packaged app were verified on the new runtime.
