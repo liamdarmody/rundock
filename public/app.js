@@ -1720,17 +1720,12 @@ function renderConvoList() {
   // left-border channel is reserved for the unread/working signal (green).
   // Pills are All | Unread only: pinning is a layout concern, not a filter,
   // so the old Pinned pill is gone.
-  const sortKeyTime = c => c.lastActiveAt || c.pinnedAt || c.createdAt || '';
-  const compareTimeDesc = (a, b) => sortKeyTime(b).localeCompare(sortKeyTime(a));
-  const pinnedFirst = (a, b) => ((b.pinned === true) - (a.pinned === true)) || compareTimeDesc(a, b);
-
-  let main = conversations.filter(c => c.status !== 'archived');
-  if (activeSidebarPill === 'unread') main = main.filter(c => unreadConvos.has(c.id));
-  main.sort(pinnedFirst);
-
-  const archived = conversations
-    .filter(c => c.status === 'archived')
-    .sort(compareTimeDesc);
+  // Ordering/filtering rules live in conversation-list.js (unit-tested;
+  // loaded before this file).
+  const { main, archived } = RundockConvoList.partitionConversations(conversations, {
+    pill: activeSidebarPill,
+    unreadIds: unreadConvos,
+  });
 
   let h = '';
   if (conversationsLoaded && !main.length && activeSidebarPill === 'unread') {
@@ -1748,8 +1743,7 @@ function renderConvoList() {
   // from-disk and not pinned. Pinned-and-persisted items keep the pin button
   // so users can still unpin them.
   for (const c of main) {
-    const variant = (c.persisted && !c.pinned) ? 'previous' : 'current';
-    h += renderConvoItem(c, variant);
+    h += renderConvoItem(c, RundockConvoList.itemVariant(c));
   }
   // Archived section preserved from 0.8.9: collapsible at the bottom, with an
   // unread dot on the header when any archived conversation has unread
