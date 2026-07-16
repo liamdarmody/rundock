@@ -205,7 +205,9 @@ function updateUnreadBadge() {
 function esc(t){const d=document.createElement('div');d.textContent=t;return d.innerHTML;}
 function escAttr(t){return t.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function stripMd(t){return t.replace(/\*\*(.*?)\*\*/g,'$1').replace(/\*(.*?)\*/g,'$1').replace(/~~(.*?)~~/g,'$1').replace(/`([^`]+)`/g,'$1').replace(/^#+\s/gm,'').replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g,'$2').replace(/\[\[([^\]]+)\]\]/g,'$1').replace(/==(.*?)==/g,'$1');}
-function stripRundockMarkers(t){return t.replace(/<!-- RUNDOCK:RETURN -->/g,'').replace(/<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:(?:SAVE|CREATE)_AGENT -->/g,'').replace(/<!-- RUNDOCK:SAVE_SKILL name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:SAVE_SKILL -->/g,'').replace(/<!-- RUNDOCK:DELETE_(?:SKILL|AGENT) name=[\w-]+ -->/g,'');}
+// Marker scanning/stripping logic lives in markers.js (unit-tested; loaded
+// before this file). This alias keeps the historical call sites readable.
+function stripRundockMarkers(t){return RundockMarkers.stripMarkers(t);}
 
 function formatTimeAgo(input) {
   if (!input) return 'never';
@@ -377,7 +379,7 @@ function handle(d) {
         if (state.streamingRawText) {
           let handoffText = state.streamingRawText;
           // Strip RUNDOCK markers (DELEGATE, SAVE_AGENT, etc.) from the finalized text
-          handoffText = handoffText.replace(/<!-- RUNDOCK:DELEGATE agent=[\w-]+ -->\n?[\s\S]*/g, '').trim();
+          handoffText = RundockMarkers.stripDelegateTail(handoffText).trim();
           handoffText = stripRundockMarkers(handoffText).trim();
           if (handoffText) {
             const convo = conversations.find(c => c.id === convoId);
@@ -661,90 +663,43 @@ function handleResult(d, convoId) {
   if(textToScan && ws) {
     let filesCreated = 0;
 
-    // SAVE_AGENT and CREATE_AGENT markers (both route to save_agent for upsert)
-    // Content is extracted between HTML comment markers. Code fences inside
-    // are cosmetic (formatting in Claude's output) and stripped if present,
-    // but NOT used as parsing delimiters. This prevents truncation when the
-    // agent body contains inner code fences (e.g. frontmatter templates).
-    const agentMarkerPattern = /<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT name=([\w-]+) -->\n([\s\S]*?)<!-- \/RUNDOCK:(?:SAVE|CREATE)_AGENT -->/g;
-    let match;
-    while((match = agentMarkerPattern.exec(textToScan)) !== null) {
-      const content = match[2].replace(/^```[^\n]*\n/, '').replace(/\n```\s*$/, '').trim();
-      ws.send(JSON.stringify({ type: 'save_agent', name: match[1], content }));
+    // Marker scanning is pure logic in markers.js (unit-tested); this block
+    // owns the WebSocket sends. Action order preserves the historical send
+    // order: agent saves, skill saves, skill deletes, agent deletes.
+    const scan = RundockMarkers.scanMarkers(textToScan);
+    const MARKER_SENDS = {
+      save_agent:   a => ({ type: 'save_agent', name: a.name, content: a.content }),
+      save_skill:   a => ({ type: 'save_skill', name: a.name, content: a.content }),
+      delete_skill: a => ({ type: 'delete_skill', name: a.name }),
+      delete_agent: a => ({ type: 'delete_agent', agentId: a.name }),
+    };
+    for (const action of scan.actions) {
+      ws.send(JSON.stringify(MARKER_SENDS[action.kind](action)));
       filesCreated++;
-      console.log('[Agent] Marker save:', match[1]);
-    }
-
-    // SAVE_SKILL markers (same fence-stripping approach)
-    const skillMarkerPattern = /<!-- RUNDOCK:SAVE_SKILL name=([\w-]+) -->\n([\s\S]*?)<!-- \/RUNDOCK:SAVE_SKILL -->/g;
-    while((match = skillMarkerPattern.exec(textToScan)) !== null) {
-      const content = match[2].replace(/^```[^\n]*\n/, '').replace(/\n```\s*$/, '').trim();
-      ws.send(JSON.stringify({ type: 'save_skill', name: match[1], content }));
-      filesCreated++;
-      console.log('[Skill] Marker save:', match[1]);
-    }
-
-    // DELETE markers (no content, just the name)
-    const deleteSkillPattern = /<!-- RUNDOCK:DELETE_SKILL name=([\w-]+) -->/g;
-    while((match = deleteSkillPattern.exec(textToScan)) !== null) {
-      ws.send(JSON.stringify({ type: 'delete_skill', name: match[1] }));
-      filesCreated++;
-      console.log('[Skill] Marker delete:', match[1]);
-    }
-    const deleteAgentPattern = /<!-- RUNDOCK:DELETE_AGENT name=([\w-]+) -->/g;
-    while((match = deleteAgentPattern.exec(textToScan)) !== null) {
-      ws.send(JSON.stringify({ type: 'delete_agent', agentId: match[1] }));
-      filesCreated++;
-      console.log('[Agent] Marker delete:', match[1]);
+      console.log('[Marker]', action.kind + ':', action.name);
     }
 
     // DELEGATE marker: orchestrator hands off to another agent
-    const delegatePattern = /<!-- RUNDOCK:DELEGATE agent=([\w-]+) -->\n?([\s\S]*?)<!-- \/RUNDOCK:DELEGATE -->/;
-    const delegateMatch = textToScan.match(delegatePattern);
-    if (delegateMatch) {
-      const targetAgent = delegateMatch[1];
-      const context = delegateMatch[2].trim();
+    if (scan.delegation) {
+      const { targetAgent, context } = scan.delegation;
       console.log('[Delegate] Detected:', targetAgent, 'context:', context.substring(0, 100));
       ws.send(JSON.stringify({ type: 'delegate', conversationId: convoId, targetAgent, context }));
       delegationTriggered = true;
     }
 
     // RETURN marker: delegate signals task complete, return to orchestrator
-    if (/<!-- RUNDOCK:RETURN -->/.test(textToScan)) {
+    if (scan.hasReturn) {
       console.log('[Delegate] Return detected');
       ws.send(JSON.stringify({ type: 'end_delegation', conversationId: convoId }));
     }
 
-    // Fallback: detect raw YAML frontmatter blocks with agent fields (name + type)
-    // This handles cases where the LLM outputs agent files without the marker wrapper
+    // Fallback: raw YAML frontmatter agent definitions without the marker
+    // wrapper. Only when the marker scan produced no save/delete actions.
     if(filesCreated === 0) {
-      const fmPattern = /```[^\n]*\n(---\n[\s\S]*?\n---[\s\S]*?)```/g;
-      let fmMatch;
-      while((fmMatch = fmPattern.exec(textToScan)) !== null) {
-        const block = fmMatch[1].trim();
-        const nameMatch = block.match(/^name:\s*(.+)$/m);
-        const typeMatch = block.match(/^type:\s*(orchestrator|specialist)$/m);
-        if(nameMatch && typeMatch) {
-          const slug = nameMatch[1].trim();
-          ws.send(JSON.stringify({ type: 'save_agent', name: slug, content: block }));
-          filesCreated++;
-          console.log('[Agent] Fallback extraction:', slug);
-        }
-      }
-      // Also try without code fences (raw frontmatter separated by ---)
-      if(filesCreated === 0) {
-        const rawBlocks = textToScan.split(/\n(?=---\nname:\s)/).filter(b => b.trim().startsWith('---'));
-        for(const block of rawBlocks) {
-          const nameMatch = block.match(/^name:\s*(.+)$/m);
-          const typeMatch = block.match(/^type:\s*(orchestrator|specialist)$/m);
-          if(nameMatch && typeMatch) {
-            const slug = nameMatch[1].trim();
-            const content = block.trim();
-            ws.send(JSON.stringify({ type: 'save_agent', name: slug, content }));
-            filesCreated++;
-            console.log('[Agent] Raw frontmatter extraction:', slug);
-          }
-        }
+      for (const fm of RundockMarkers.extractFrontmatterAgents(textToScan)) {
+        ws.send(JSON.stringify({ type: 'save_agent', name: fm.name, content: fm.content }));
+        filesCreated++;
+        console.log('[Agent] Fallback extraction:', fm.name);
       }
     }
 
@@ -765,7 +720,7 @@ function handleResult(d, convoId) {
   let responseText = state.streamingRawText || d.result || state.latestText || '';
   // Strip RUNDOCK markers from displayed text
   // DELEGATE: strip the marker block AND any text after it (orchestrator should stop after delegating)
-  responseText = responseText.replace(/<!-- RUNDOCK:DELEGATE agent=[\w-]+ -->\n?[\s\S]*/g, '').trim();
+  responseText = RundockMarkers.stripDelegateTail(responseText).trim();
   responseText = stripRundockMarkers(responseText).trim();
 
   // Strip silent-park sentinel and drop if response is a no-op.
