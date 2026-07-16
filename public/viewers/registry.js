@@ -1,0 +1,178 @@
+// File-type registry: decides which view surface owns a workspace path and
+// mounts it. Design of record: FV2 (file-type registry + sandboxed HTML
+// artifact viewer). Ordered; first match wins; 'unsupported' is the terminal
+// fallback so no path ever renders as raw corrupted bytes.
+//
+// Pre-sync-point shape: app.js keeps its markdown (Tiptap) and text (legacy
+// preview/edit pane) branches and consults this registry for everything else.
+// At the stage-2 sync point loadFileContent collapses to a registry lookup
+// and markdown/text become entries here (see the SEAM comment in app.js).
+//
+// Viewer mount contract (mirrors the editor module's boundary):
+//   mount({ paneElement, path, content }) -> { getContentForSave|null, destroy() }
+// A null getContentForSave marks the viewer read-only: it never participates
+// in autosave or Cmd+S.
+
+// ---------- classification (pure; unit-tested without a DOM) ----------
+
+export const FILE_KINDS = [
+  { kind: 'markdown', match: (p) => /\.(md|mdx)$/i.test(p) },
+  { kind: 'artifact', match: (p) => /\.(html?|svg)$/i.test(p) },
+  { kind: 'image', match: (p) => /\.(png|jpe?g|gif|webp)$/i.test(p) },
+  { kind: 'pdf', match: (p) => /\.pdf$/i.test(p) },
+  { kind: 'text', match: (p) => /\.(txt|json)$/i.test(p) },
+  { kind: 'unsupported', match: () => true },
+];
+
+export function classify(path) {
+  if (typeof path !== 'string' || !path) return 'unsupported';
+  return FILE_KINDS.find((e) => e.match(path)).kind;
+}
+
+// URL for the server's binary transport (image/pdf bytes cannot ride the
+// utf-8 WS read_file path). The server allowlists extensions and enforces
+// the workspace boundary; the client just builds the URL.
+export function workspaceFileUrl(path) {
+  return '/workspace-file?path=' + encodeURIComponent(path);
+}
+
+// The artifact preview renders the file's real DOM in a sandboxed iframe.
+// sandbox="" is maximum lockdown: no scripts, no same-origin, no forms, no
+// popups, no top-navigation. On top of that, an injected CSP blocks external
+// fetches (the app's CSP discipline): a reviewed artifact must not phone
+// home via <img src="https://..."> or @import. Inline styles and data:/blob:
+// images keep self-contained artifacts (the design-export output) faithful.
+export const ARTIFACT_CSP =
+  "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:;";
+
+const CSP_META = `<meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}">`;
+
+// Inject the CSP meta where the parser will honour it (inside <head>). A
+// meta placed before <!doctype> or after body content starts is ignored by
+// the browser, so: after <head> if present, else after <html>, else prepended
+// (fragment case: leading metas are hoisted into the implied head).
+export function buildSrcdoc(content) {
+  const src = String(content == null ? '' : content);
+  const headMatch = src.match(/<head[^>]*>/i);
+  if (headMatch) {
+    const at = headMatch.index + headMatch[0].length;
+    return src.slice(0, at) + CSP_META + src.slice(at);
+  }
+  const htmlMatch = src.match(/<html[^>]*>/i);
+  if (htmlMatch) {
+    const at = htmlMatch.index + htmlMatch[0].length;
+    return src.slice(0, at) + CSP_META + src.slice(at);
+  }
+  return CSP_META + src;
+}
+
+// ---------- styles (self-injected, editor-module precedent) ----------
+
+let stylesInjected = false;
+function ensureStyles(doc) {
+  if (stylesInjected) return;
+  stylesInjected = true;
+  const style = doc.createElement('style');
+  style.dataset.rundockViewers = '';
+  style.textContent = `
+    .viewer-host { padding: 0 !important; display: flex; flex-direction: column; }
+    .viewer-frame { flex: 1; width: 100%; border: none; background: #fff; }
+    .viewer-image-wrap { flex: 1; display: flex; align-items: center; justify-content: center; overflow: auto; padding: 24px; }
+    .viewer-image-wrap img { max-width: 100%; max-height: 100%; object-fit: contain; }
+    .viewer-unsupported { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--text-2); }
+    .viewer-unsupported .viewer-unsupported-title { font-weight: 600; color: var(--text-1); }
+  `;
+  doc.head.appendChild(style);
+}
+
+function makeHandle(paneElement, cleanup) {
+  let destroyed = false;
+  return {
+    getContentForSave: null, // read-only: never participates in save
+    destroy() {
+      if (destroyed) return;
+      destroyed = true;
+      paneElement.classList.remove('viewer-host');
+      paneElement.innerHTML = '';
+      if (cleanup) cleanup();
+    },
+  };
+}
+
+// ---------- viewers ----------
+
+// Sandboxed HTML/SVG artifact preview. Read-only; the code view (raw source
+// in the legacy textarea) stays the editing surface.
+export function mountArtifactPreview({ paneElement, content }) {
+  const doc = paneElement.ownerDocument;
+  ensureStyles(doc);
+  paneElement.innerHTML = '';
+  paneElement.classList.add('viewer-host');
+  const iframe = doc.createElement('iframe');
+  iframe.className = 'viewer-frame';
+  iframe.setAttribute('sandbox', ''); // no scripts, no same-origin: full lockdown
+  iframe.setAttribute('title', 'Artifact preview');
+  iframe.srcdoc = buildSrcdoc(content);
+  paneElement.appendChild(iframe);
+  return makeHandle(paneElement);
+}
+
+export function mountImageViewer({ paneElement, path }) {
+  const doc = paneElement.ownerDocument;
+  ensureStyles(doc);
+  paneElement.innerHTML = '';
+  paneElement.classList.add('viewer-host');
+  const wrap = doc.createElement('div');
+  wrap.className = 'viewer-image-wrap';
+  const img = doc.createElement('img');
+  img.src = workspaceFileUrl(path);
+  img.alt = path;
+  wrap.appendChild(img);
+  paneElement.appendChild(wrap);
+  return makeHandle(paneElement);
+}
+
+// The browser's native PDF viewer over the binary endpoint. Deliberately no
+// sandbox attribute: a sandboxed iframe disables Chromium's PDF plugin, and
+// the src is our own allowlisted same-origin endpoint (content-type pinned
+// to application/pdf, nosniff), not arbitrary document content.
+export function mountPdfViewer({ paneElement, path }) {
+  const doc = paneElement.ownerDocument;
+  ensureStyles(doc);
+  paneElement.innerHTML = '';
+  paneElement.classList.add('viewer-host');
+  const iframe = doc.createElement('iframe');
+  iframe.className = 'viewer-frame';
+  iframe.setAttribute('title', 'PDF viewer');
+  iframe.src = workspaceFileUrl(path);
+  paneElement.appendChild(iframe);
+  return makeHandle(paneElement);
+}
+
+export function mountUnsupportedViewer({ paneElement, path }) {
+  const doc = paneElement.ownerDocument;
+  ensureStyles(doc);
+  paneElement.innerHTML = '';
+  paneElement.classList.add('viewer-host');
+  const box = doc.createElement('div');
+  box.className = 'viewer-unsupported';
+  const ext = (String(path).match(/\.[\w]+$/) || ['file'])[0];
+  const title = doc.createElement('div');
+  title.className = 'viewer-unsupported-title';
+  title.textContent = 'Cannot preview this file';
+  const detail = doc.createElement('div');
+  detail.textContent = `${ext} files cannot be previewed in Rundock yet.`;
+  box.appendChild(title);
+  box.appendChild(detail);
+  paneElement.appendChild(box);
+  return makeHandle(paneElement);
+}
+
+// Kind -> mount, for the app.js shim's non-artifact branch (artifact preview
+// mounts from the Preview/Code toggle path instead, so code view keeps
+// working for HTML files).
+export function mountViewer(kind, opts) {
+  if (kind === 'image') return mountImageViewer(opts);
+  if (kind === 'pdf') return mountPdfViewer(opts);
+  return mountUnsupportedViewer(opts);
+}
