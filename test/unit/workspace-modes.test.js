@@ -316,7 +316,7 @@ describe('state + conversation persistence', () => {
 });
 
 describe('getFileTree', () => {
-  test('includes md/txt/json only, folders first, hides dotfiles and node_modules', () => {
+  test('includes viewable types, folders first, hides dotfiles, node_modules and code files', () => {
     const dir = makeWorkspace({ files: {
       'b-note.md': 'x',
       'a-data.json': '{}',
@@ -324,12 +324,19 @@ describe('getFileTree', () => {
       'notes/inner.txt': 'x',
       '.hidden/secret.md': 'x',
       'node_modules/pkg/readme.md': 'x',
+      // FV2: files the registry can open are first-class in the tree
+      'artifact.html': '<p>x</p>',
+      'diagram.svg': '<svg></svg>',
+      'chart.png': 'x',
+      'photo.JPEG': 'x',
+      'report.pdf': 'x',
     } });
     const tree = srv.getFileTree(dir);
     const names = tree.map(e => e.name);
-    assert.deepStrictEqual(names, ['notes', 'a-data.json', 'b-note.md']);
+    assert.deepStrictEqual(names, ['notes', 'a-data.json', 'artifact.html', 'b-note.md', 'chart.png', 'diagram.svg', 'photo.JPEG', 'report.pdf']);
     assert.strictEqual(tree[0].type, 'folder');
     assert.deepStrictEqual(tree[0].children.map(c => c.path), ['notes/inner.txt']);
+    assert.ok(!names.includes('script.js'), 'code files stay hidden');
   });
 
   test('unreadable dir returns []', () => {
