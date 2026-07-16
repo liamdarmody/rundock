@@ -16,6 +16,33 @@ function jsonlAssistant(text, ts) {
   return JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] }, timestamp: ts }) + '\n';
 }
 
+// A real, decodable 8x8 solid-colour PNG built with proper CRCs, so the
+// image-viewer test can assert naturalWidth > 0 (proving the binary endpoint
+// served unmangled bytes that Chromium actually decoded).
+function buildPng() {
+  const zlib = require('node:zlib');
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type), data]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(zlib.crc32(body) >>> 0);
+    return Buffer.concat([len, body, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(8, 0); // width
+  ihdr.writeUInt32BE(8, 4); // height
+  ihdr[8] = 8; ihdr[9] = 2; // 8-bit depth, truecolour
+  const raw = Buffer.concat(Array.from({ length: 8 }, () =>
+    Buffer.concat([Buffer.from([0]), Buffer.alloc(24, 0x4a)]))); // filter 0 + 8px RGB
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', zlib.deflateSync(raw)),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
 function buildFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rundock-e2e-'));
   const workspace = path.join(root, 'workspace');
@@ -35,6 +62,23 @@ function buildFixture() {
     '---\ntags: [strategy, pricing]\n---\n# Pricing Strategy\n\nThe enterprise pricing ladder was agreed in June.\n');
   fs.writeFileSync(path.join(workspace, 'Roadmap-2026.md'),
     '# Roadmap 2026\n\nQuarterly targets and the mobile milestone.\n');
+
+  // FV2 viewer files: a styled HTML artifact whose script/external-image
+  // must NOT run (sandbox + CSP proof), a real decodable 1x1 PNG (proves the
+  // binary endpoint serves unmangled bytes), and a minimal PDF.
+  fs.writeFileSync(path.join(workspace, 'proposal.html'), [
+    '<!doctype html><html><head><title>Artifact</title>',
+    '<style>body{background:#12355b;color:#fff;font-family:sans-serif;padding:40px}h1{font-size:32px}.stat{color:#8fd3ff;font-size:44px;font-weight:700}</style>',
+    '</head><body>',
+    '<h1 id="headline">Quarterly Proposal</h1>',
+    '<div class="stat">Three workstreams</div>',
+    '<script>document.getElementById("headline").textContent="SCRIPT RAN";</script>',
+    '</body></html>',
+  ].join('\n'));
+  fs.writeFileSync(path.join(workspace, 'chart.png'), buildPng());
+  fs.writeFileSync(path.join(workspace, 'report.pdf'), Buffer.from(
+    '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n' +
+    '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>endobj\nxref\n0 4\ntrailer<</Size 4/Root 1 0 R>>\n%%EOF\n'));
 
   // Session jsonl (canonical conversation content). s1 is long so the anchor
   // test proves scroll-to-match on a conversation far taller than the

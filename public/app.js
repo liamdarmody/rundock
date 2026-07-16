@@ -46,6 +46,16 @@ function loadTiptapEditorModule() {
 function isMarkdownPath(path) {
   return typeof path === 'string' && /\.(md|mdx)$/i.test(path);
 }
+// File-type registry (FV2): non-markdown views live in public/viewers/.
+// Loaded on demand, same pattern as the editor module above.
+let _viewersModule = null, _viewersModuleResolved = null, activeFileViewer = null;
+function loadViewersModule() {
+  if (!_viewersModule) _viewersModule = import('./viewers/registry.js').then(m => { _viewersModuleResolved = m; return m; });
+  return _viewersModule;
+}
+function destroyActiveFileViewer() {
+  if (activeFileViewer) { try { activeFileViewer.destroy(); } catch {} activeFileViewer = null; }
+}
 async function initTiptapEditor(path, content) {
   // Tear down any previous instance so a rapid file-switch leaves a clean
   // ProseMirror state and detached event listeners.
@@ -2997,6 +3007,7 @@ let editorMode='preview', rawFileContent='', fileFrontmatter='', fileBody='';
 function loadFileContent(path, content) {
   // Close any active find before swapping the editor content.
   if (currentFilePath !== path) closeFindBar();
+  destroyActiveFileViewer();
   currentFilePath = path;
   rawFileContent = content;
   document.getElementById('editor-filename').textContent = path;
@@ -3018,9 +3029,39 @@ function loadFileContent(path, content) {
     return;
   }
 
-  // Legacy preview/edit path (non-markdown files, or Tiptap flag off).
+  // SEAM(FV2->R10): every non-markdown path routes through the file-type
+  // registry (public/viewers/registry.js): html/svg render sandboxed, images
+  // and PDFs ride the binary endpoint, unknown binary types get a clear
+  // cannot-preview state, and txt/json keep the legacy preview/edit pane.
+  // At the stage-2 sync point this dispatch collapses to a registry lookup.
+  loadViewersModule().then((viewers) => {
+    if (currentFilePath !== path) return; // stale: another file opened while the module loaded
+    openNonMarkdownFile(viewers, path, content);
+  });
+}
+
+function openNonMarkdownFile(viewers, path, content) {
   destroyTiptapEditorIfActive();
   document.getElementById('tiptap-editor-pane').classList.add('hidden');
+
+  const kind = viewers.classify(path);
+  if (kind === 'image' || kind === 'pdf' || kind === 'unsupported') {
+    // Read-only viewers own the pane: no Preview/Code toggle, and no save
+    // path (their bytes ride /workspace-file; the WS text content for a
+    // binary file is utf-8-mangled and must never be written back).
+    document.getElementById('toggle-preview').classList.add('hidden');
+    document.getElementById('toggle-edit').classList.add('hidden');
+    document.getElementById('editor-textarea').classList.add('hidden');
+    const pane = document.getElementById('editor-content');
+    pane.classList.remove('hidden');
+    pane.className = 'editor-content';
+    activeFileViewer = viewers.mountViewer(kind, { paneElement: pane, path });
+    return;
+  }
+
+  // Text and artifact kinds keep the legacy preview/edit chrome. Artifact
+  // preview mode mounts the sandboxed iframe from renderEditorContent, so
+  // the Code toggle (raw source, still editable and saveable) keeps working.
   document.getElementById('toggle-preview').classList.remove('hidden');
   document.getElementById('toggle-edit').classList.remove('hidden');
   document.getElementById('editor-content').classList.remove('hidden');
@@ -3049,9 +3090,18 @@ function renderEditorContent() {
   if (editorMode === 'preview') {
     textareaEl.classList.add('hidden');
     previewEl.classList.remove('hidden');
+    destroyActiveFileViewer();
+    // Artifact files (html/svg) preview as their real rendered DOM in a
+    // sandboxed iframe instead of a markdown-ish approximation.
+    if (_viewersModuleResolved && _viewersModuleResolved.classify(currentFilePath) === 'artifact') {
+      previewEl.className = 'editor-content';
+      activeFileViewer = _viewersModuleResolved.mountArtifactPreview({ paneElement: previewEl, content: rawFileContent });
+      return;
+    }
     previewEl.className = 'editor-content formatted';
     previewEl.innerHTML = formatMdFull(fileBody);
   } else {
+    destroyActiveFileViewer();
     previewEl.classList.add('hidden');
     textareaEl.classList.remove('hidden');
     textareaEl.className = 'editor-content source';

@@ -12,6 +12,8 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 - **Organise conversations with Lists:** right-click any conversation to add it to a named list (or create one on the spot); lists appear as pills beside All and Unread and filter the sidebar with the usual pinned-first ordering. A conversation can belong to several lists, lists survive reloads and workspace switches, and deleting a list (right-click its pill) never deletes conversations: they simply leave the grouping.
 - **First-run setup adapts to the runtimes you have:** the wizard now detects both Claude Code and Codex. A Codex user is told plainly why Claude Code is still needed (it runs your team's orchestrator and Doc, the setup guide) instead of receiving a bare install instruction, and once Claude Code is signed in, a machine with the Codex CLI gets an optional third step to sign in to Codex so specialists can run on a ChatGPT plan, skippable and available later from Settings. Machines without Codex see the setup flow exactly as before.
+- **HTML files render as designed:** opening an HTML or SVG file shows the real rendered page (its own styles, layout, and fonts) instead of raw source, in a locked-down preview where scripts never run and the page cannot phone home. The Edit toggle still shows the raw source, which stays editable and saveable.
+- **Images and PDFs open in Rundock:** clicking a PNG, JPEG, GIF, WebP, or PDF in the file tree shows the actual image or a readable document view, so you never leave Rundock to look at your own files. File types Rundock cannot preview say so clearly instead of showing garbled bytes.
 
 ### Changed
 
