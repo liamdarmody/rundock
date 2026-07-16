@@ -75,8 +75,34 @@ function ensureStyles(doc) {
   const style = doc.createElement('style');
   style.dataset.rundockViewers = '';
   style.textContent = `
-    .viewer-host { padding: 0 !important; display: flex; flex-direction: column; }
+    .viewer-host { padding: 0 !important; display: flex; flex-direction: column; position: relative; }
     .viewer-frame { flex: 1; width: 100%; border: none; background: #fff; }
+    /* Review sidebar layout for the artifact pane (mirrors the editor
+       pane's review-active grid in editor/styles.js). */
+    .editor-content.viewer-host.review-active {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) var(--review-sidebar-width, 260px);
+      grid-template-rows: minmax(0, 1fr); /* the frame fills the pane; auto rows collapse an iframe to its 150px default */
+      column-gap: 20px;
+    }
+    .editor-content.viewer-host.review-active > .viewer-frame { grid-column: 1; height: 100%; }
+    .editor-content.viewer-host.review-active > .review-sidebar { align-self: start; }
+    .artifact-comment-btn {
+      display: none;
+      position: absolute;
+      z-index: 6;
+      transform: translateX(-50%);
+      padding: 4px 12px;
+      border-radius: 100px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--text-1);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    }
+    .artifact-comment-btn.visible { display: block; }
     .viewer-image-wrap { flex: 1; display: flex; align-items: center; justify-content: center; overflow: auto; padding: 24px; }
     .viewer-image-wrap img { max-width: 100%; max-height: 100%; object-fit: contain; }
     .viewer-unsupported { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--text-2); }
@@ -103,6 +129,14 @@ function makeHandle(paneElement, cleanup) {
 
 // Sandboxed HTML/SVG artifact preview. Read-only; the code view (raw source
 // in the legacy textarea) stays the editing surface.
+//
+// Sandbox posture: allow-same-origin and NOTHING else. No allow-scripts
+// means the document cannot execute any code, so the same-origin grant
+// exposes nothing to the artifact itself; it exists so the HOST can read
+// contentDocument for the review loop (selection capture, comment marks).
+// The injected CSP additionally blocks external fetches. Adding
+// allow-scripts alongside allow-same-origin would give artifact code the
+// app's origin: never combine them.
 export function mountArtifactPreview({ paneElement, content }) {
   const doc = paneElement.ownerDocument;
   ensureStyles(doc);
@@ -110,11 +144,13 @@ export function mountArtifactPreview({ paneElement, content }) {
   paneElement.classList.add('viewer-host');
   const iframe = doc.createElement('iframe');
   iframe.className = 'viewer-frame';
-  iframe.setAttribute('sandbox', ''); // no scripts, no same-origin: full lockdown
+  iframe.setAttribute('sandbox', 'allow-same-origin');
   iframe.setAttribute('title', 'Artifact preview');
   iframe.srcdoc = buildSrcdoc(content);
   paneElement.appendChild(iframe);
-  return makeHandle(paneElement);
+  const handle = makeHandle(paneElement);
+  handle.iframe = iframe; // the review loop attaches to the loaded frame
+  return handle;
 }
 
 export function mountImageViewer({ paneElement, path }) {
