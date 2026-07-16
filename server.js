@@ -2096,6 +2096,24 @@ const server = http.createServer((req, res) => {
       }
     });
 
+  } else if (/^\/[\w-]+\.m?js$/.test(req.url)) {
+    // Top-level client modules under public/ (code-language.js, markers.js,
+    // and future extracted modules). The pattern allows no slashes and no
+    // dots outside the extension, so traversal cannot be expressed; the
+    // realpath prefix check guards anything that somehow gets past it.
+    // Regression note: code-language.js shipped in 0.10.0 with a script tag
+    // but no route, so browsers 404ed it and a defensive fallback in app.js
+    // silently masked the loss. The index-html-to-route test pins every
+    // script tag to a live route now.
+    const publicRoot = path.resolve(__dirname, 'public');
+    const filePath = path.resolve(publicRoot, req.url.slice(1));
+    if (filePath.startsWith(publicRoot + path.sep) && fs.existsSync(filePath)) {
+      res.writeHead(200, { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-cache, no-store, must-revalidate' });
+      res.end(fs.readFileSync(filePath));
+    } else {
+      res.writeHead(404);
+      res.end('Not found');
+    }
   } else if (/^\/(editor|vendor)\/[\w./-]+\.(m?js|css)$/.test(req.url)) {
     // Static JS/MJS/CSS files for the Tiptap editor module, its vendor bundle,
     // and vendored assets (e.g. highlight.js). Path is constrained to /editor/...
