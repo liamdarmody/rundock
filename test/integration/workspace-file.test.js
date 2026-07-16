@@ -112,6 +112,42 @@ describe('/workspace-file binary endpoint', () => {
   });
 });
 
+describe('/api/review-sidecar', () => {
+  function post(body) {
+    return fetch(`http://127.0.0.1:${h.port}/api/review-sidecar`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+  }
+
+  test('creates .rundock/reviews/ on first use and writes the sidecar', async () => {
+    const res = await post({ path: '.rundock/reviews/proposal.html-12345678.json', content: '{"path":"proposal.html"}' });
+    assert.strictEqual(res.status, 200);
+    const written = path.join(h.workspaceDir, '.rundock', 'reviews', 'proposal.html-12345678.json');
+    assert.strictEqual(fs.readFileSync(written, 'utf-8'), '{"path":"proposal.html"}');
+  });
+
+  test('refuses paths outside .rundock/reviews/ (flat json filenames only)', async () => {
+    for (const bad of [
+      'notes.md',
+      '.rundock/reviews/../../CLAUDE.md',
+      '.rundock/reviews/nested/dir.json',
+      '.rundock/reviews/evil.sh',
+      '/etc/passwd',
+    ]) {
+      const res = await post({ path: bad, content: 'x' });
+      assert.strictEqual(res.status, 400, `must refuse: ${bad}`);
+    }
+    assert.strictEqual(fs.existsSync(path.join(h.workspaceDir, '..', 'CLAUDE.md')), false);
+  });
+
+  test('malformed body is 400', async () => {
+    const res = await fetch(`http://127.0.0.1:${h.port}/api/review-sidecar`, { method: 'POST', body: 'not json' });
+    assert.strictEqual(res.status, 400);
+    const noContent = await post({ path: '.rundock/reviews/a.json' });
+    assert.strictEqual(noContent.status, 400);
+  });
+});
+
 describe('file tree includes viewable types', () => {
   test('images, PDFs and HTML appear in the tree; code files stay hidden', () => {
     const tree = h.internal.getFileTree(h.workspaceDir);

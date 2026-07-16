@@ -36,18 +36,48 @@ export function captureSelector(index, start, end, ctx = CONTEXT_LENGTH) {
   };
 }
 
-// Map a DOM Range (whose boundary containers are text nodes under root)
-// to [start, end) offsets in the index. Returns null for anything else:
-// callers treat that as "no usable selection".
+// Map a DOM Range to [start, end) offsets in the index. Text-node boundary
+// containers take the fast path; element containers (triple-click,
+// selectNodeContents) resolve by comparing boundary points against the
+// index's text nodes. Anything unmappable (foreign document, collapsed
+// span) returns null: callers treat that as "no usable selection".
 export function rangeToOffsets(index, range) {
-  const locate = (container, offset) => {
+  const doc = index.root.ownerDocument;
+  const boundaryOffset = (which) => {
+    const container = which === 'start' ? range.startContainer : range.endContainer;
+    const offset = which === 'start' ? range.startOffset : range.endOffset;
     const entry = index.nodes.find((e) => e.node === container);
-    return entry ? entry.start + offset : null;
+    if (entry) return entry.start + offset;
+    const boundary = range.cloneRange();
+    boundary.collapse(which === 'start');
+    const probe = doc.createRange();
+    // < 0: the probe point sits before the boundary.
+    const cmpAt = (node, off) => {
+      probe.setStart(node, off);
+      probe.collapse(true);
+      return probe.compareBoundaryPoints(0 /* START_TO_START */, boundary);
+    };
+    for (const e of index.nodes) {
+      const len = e.node.nodeValue.length;
+      if (cmpAt(e.node, len) < 0) continue;      // node ends before the boundary
+      if (cmpAt(e.node, 0) >= 0) return e.start; // boundary at/before node start
+      let lo = 0, hi = len;                      // boundary inside this node
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (cmpAt(e.node, mid) < 0) lo = mid + 1; else hi = mid;
+      }
+      return e.start + lo;
+    }
+    return index.text.length;
   };
-  const start = locate(range.startContainer, range.startOffset);
-  const end = locate(range.endContainer, range.endOffset);
-  if (start == null || end == null || end <= start) return null;
-  return { start, end };
+  try {
+    const start = boundaryOffset('start');
+    const end = boundaryOffset('end');
+    if (start == null || end == null || end <= start) return null;
+    return { start, end };
+  } catch {
+    return null; // e.g. a range from another document
+  }
 }
 
 // How many characters of `expected` match `actual`, comparing from the end

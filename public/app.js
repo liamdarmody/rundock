@@ -54,7 +54,53 @@ function loadViewersModule() {
   return _viewersModule;
 }
 function destroyActiveFileViewer() {
+  destroyActiveArtifactReview();
   if (activeFileViewer) { try { activeFileViewer.destroy(); } catch {} activeFileViewer = null; }
+}
+// Artifact review (FV2 phase 2): sidecar-backed comments on the HTML
+// preview. Detached before its pane is cleared so the header pill and the
+// frame listeners never leak.
+let activeArtifactReview = null;
+function destroyActiveArtifactReview() {
+  if (activeArtifactReview) { try { activeArtifactReview.detach(); } catch {} activeArtifactReview = null; }
+}
+async function attachArtifactReviewForCurrentFile(paneEl) {
+  const path = currentFilePath;
+  const iframe = activeFileViewer && activeFileViewer.iframe;
+  if (!iframe) return;
+  const mod = await import('./viewers/artifact-review.js');
+  const sidecarPath = mod.sidecarPathFor(path);
+  let sidecarContent = null;
+  try {
+    const res = await fetch('/api/file?path=' + encodeURIComponent(sidecarPath));
+    if (res.ok) sidecarContent = await res.text(); // 404 = no reviews yet
+  } catch { /* offline pane still renders; comments just start empty */ }
+  const wire = () => {
+    if (currentFilePath !== path || !iframe.isConnected) return; // stale: file switched meanwhile
+    destroyActiveArtifactReview();
+    activeArtifactReview = mod.attachArtifactReview({
+      iframe,
+      paneElement: paneEl,
+      path,
+      sidecarContent,
+      author: (workspaceAnalysis && workspaceAnalysis.userProfile && workspaceAnalysis.userProfile.fields && workspaceAnalysis.userProfile.fields.name)
+        ? String(workspaceAnalysis.userProfile.fields.name).trim().toLowerCase()
+        : 'me',
+      agents: Array.isArray(agents) ? agents.map(a => ({ name: a.name, displayName: a.displayName })) : [],
+      pillHostElement: document.getElementById('editor-header'),
+      onSaveSidecar: (content) => {
+        // Dedicated endpoint: creates .rundock/reviews/ on first use (the
+        // WS save path expects existing parents).
+        fetch('/api/review-sidecar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: sidecarPath, content }),
+        }).catch(() => { /* next mutation retries; comments also live in memory */ });
+      },
+    });
+  };
+  if (iframe.contentDocument && iframe.contentDocument.readyState === 'complete' && iframe.contentDocument.body) wire();
+  else iframe.addEventListener('load', wire, { once: true });
 }
 async function initTiptapEditor(path, content) {
   // Tear down any previous instance so a rapid file-switch leaves a clean
@@ -3096,6 +3142,7 @@ function renderEditorContent() {
     if (_viewersModuleResolved && _viewersModuleResolved.classify(currentFilePath) === 'artifact') {
       previewEl.className = 'editor-content';
       activeFileViewer = _viewersModuleResolved.mountArtifactPreview({ paneElement: previewEl, content: rawFileContent });
+      attachArtifactReviewForCurrentFile(previewEl);
       return;
     }
     previewEl.className = 'editor-content formatted';
