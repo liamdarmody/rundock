@@ -92,7 +92,12 @@ describe('viewer mounts', () => {
     const handle = mountArtifactPreview({ paneElement: el, content: '<p>Hello artifact</p>' });
     const iframe = el.querySelector('iframe.viewer-frame');
     assert.ok(iframe, 'iframe mounted');
-    assert.equal(iframe.getAttribute('sandbox'), '', 'sandbox is full lockdown: no tokens');
+    // allow-same-origin with NO allow-scripts: the document cannot execute
+    // code, and the host can read it for the review loop. The dangerous
+    // combination is allow-scripts + allow-same-origin: pin its absence.
+    assert.equal(iframe.getAttribute('sandbox'), 'allow-same-origin');
+    assert.ok(!iframe.getAttribute('sandbox').includes('allow-scripts'), 'scripts stay off, always');
+    assert.ok(handle.iframe === iframe, 'handle exposes the frame for the review loop');
     assert.ok(iframe.getAttribute('srcdoc').includes('<p>Hello artifact</p>'));
     assert.ok(iframe.getAttribute('srcdoc').includes('Content-Security-Policy'));
     assert.equal(handle.getContentForSave, null, 'read-only: never participates in save');

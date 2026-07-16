@@ -100,6 +100,15 @@ describe('offset <-> Range mapping', () => {
     assert.equal(range.endContainer.nodeValue, 'one');
   });
 
+  test('element-container ranges (selectNodeContents, triple-click) map correctly', () => {
+    const idx = indexOf('<p>before</p><div id="t">Quarterly <b>Proposal</b></div><p>after</p>');
+    const doc = idx.root.ownerDocument;
+    const range = doc.createRange();
+    range.selectNodeContents(doc.getElementById('t'));
+    const offs = rangeToOffsets(idx, range);
+    assert.equal(idx.text.slice(offs.start, offs.end), 'Quarterly Proposal');
+  });
+
   test('degenerate inputs return null', () => {
     const idx = indexOf('<p>abc</p>');
     assert.equal(offsetsToRange(idx, 2, 2), null);
