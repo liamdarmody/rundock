@@ -49,6 +49,30 @@ describe('static + JSON endpoints', () => {
     assert.strictEqual(marked.status, 200);
   });
 
+  test('every local script tag in index.html resolves to a live route', async () => {
+    // code-language.js shipped in 0.10.0 with a script tag but no serving
+    // route; a defensive fallback in app.js masked the 404 so the browser
+    // silently ran without it. This test makes that class unshippable: any
+    // local script index.html references must serve as javascript.
+    const html = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'index.html'), 'utf-8');
+    const srcs = [...html.matchAll(/<script[^>]+src="(\/[^"]+)"/g)].map(m => m[1])
+      .filter(s => !s.startsWith('http'));
+    assert.ok(srcs.length >= 3, `sanity: found ${srcs.length} local scripts`);
+    for (const src of srcs) {
+      const res = await get(src);
+      assert.strictEqual(res.status, 200, `${src} must serve (script tag without a route)`);
+      assert.match(res.headers.get('content-type') || '', /javascript/, `${src} content type`);
+    }
+  });
+
+  test('top-level module route rejects unknown files and non-module paths', async () => {
+    assert.strictEqual((await get('/no-such-module.js')).status, 404);
+    // Traversal cannot be expressed in the route pattern (no slashes or
+    // non-extension dots), so these fall through to the 404 handler.
+    assert.strictEqual((await get('/..%2Fserver.js')).status, 404);
+    assert.strictEqual((await get('/markers.min.map')).status, 404);
+  });
+
   test('/api/agents returns the discovered team as JSON', async () => {
     const res = await get('/api/agents');
     assert.strictEqual(res.status, 200);
