@@ -2133,10 +2133,11 @@ const server = http.createServer((req, res) => {
       res.writeHead(404);
       res.end('Not found');
     }
-  } else if (/^\/(editor|vendor)\/[\w./-]+\.(m?js|css)$/.test(req.url)) {
+  } else if (/^\/(editor|vendor|viewers)\/[\w./-]+\.(m?js|css)$/.test(req.url)) {
     // Static JS/MJS/CSS files for the Tiptap editor module, its vendor bundle,
-    // and vendored assets (e.g. highlight.js). Path is constrained to /editor/...
-    // and /vendor/... under public/, with only .js/.mjs/.css extensions and only
+    // vendored assets (e.g. highlight.js), and the file-type registry. Path is
+    // constrained to /editor/..., /vendor/... and /viewers/... under public/,
+    // with only .js/.mjs/.css extensions and only
     // word chars + dot/slash/hyphen in the path. The realpath check below blocks
     // any directory traversal that somehow gets past the regex.
     const publicRoot = path.resolve(__dirname, 'public');
