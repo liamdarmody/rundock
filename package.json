@@ -23,7 +23,7 @@
   "devDependencies": {
     "@highlightjs/cdn-assets": "^11.11.1",
     "@playwright/test": "^1.61.1",
-    "electron": "^35.0.0",
+    "electron": "^42.7.0",
     "electron-builder": "^26.0.0",
     "jsdom": "^29.1.1",
     "v8-to-istanbul": "^9.3.0"
