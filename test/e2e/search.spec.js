@@ -7,16 +7,17 @@
 // their fixes must make them fail (verified when this suite landed).
 //
 const base = require('@playwright/test');
-const { appendRawCoverage, writeLcov } = require('./coverage.js');
+const { appendRawCoverage, writeLcov, isClientEntry } = require('./coverage.js');
 
-// Auto-fixture: collect V8 coverage for app.js on every page this suite
-// opens, so the client gets a measured coverage number (see coverage.js).
+// Auto-fixture: collect V8 coverage for every hand-written client module on
+// every page this suite opens, so the client gets measured coverage numbers
+// (see coverage.js).
 const test = base.test.extend({
   page: async ({ page }, use) => {
     await page.coverage.startJSCoverage({ resetOnNavigation: false });
     await use(page);
     const entries = await page.coverage.stopJSCoverage();
-    appendRawCoverage(entries.filter(e => e.url.endsWith('/app.js')));
+    appendRawCoverage(entries.filter(e => isClientEntry(e.url)));
   },
 });
 const { expect } = base;
@@ -24,7 +25,11 @@ const { expect } = base;
 test.afterAll(async () => {
   const summary = await writeLcov();
   if (summary) {
-    console.log(`\n[client coverage] public/app.js: ${summary.pct.toFixed(1)}% lines (${summary.covered}/${summary.total}) -> ${summary.out}`);
+    console.log('');
+    for (const f of summary.files) {
+      console.log(`[client coverage] public/${f.file}: ${f.pct.toFixed(1)}% lines (${f.covered}/${f.total})`);
+    }
+    console.log(`[client coverage] combined: ${summary.pct.toFixed(1)}% lines (${summary.covered}/${summary.total}) -> ${summary.out}`);
   }
 });
 
