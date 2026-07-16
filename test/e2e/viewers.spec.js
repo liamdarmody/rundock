@@ -52,7 +52,9 @@ test('HTML artifact renders sandboxed: styles apply, scripts do not run', async 
 
   const iframe = page.locator('iframe.viewer-frame');
   await expect(iframe).toBeVisible();
-  await expect(iframe).toHaveAttribute('sandbox', '');
+  // allow-same-origin, never allow-scripts: the frame cannot execute code;
+  // the host reads it for the review loop.
+  await expect(iframe).toHaveAttribute('sandbox', 'allow-same-origin');
 
   const frame = page.frameLocator('iframe.viewer-frame');
   // Script suppressed: the headline keeps its authored text.
@@ -123,6 +125,113 @@ test('unsupported binary types get the cannot-preview state, never raw bytes', a
   const paneText = await page.locator('#editor-content').textContent();
   expect(paneText).not.toContain('PK');
   await page.screenshot({ path: `${SHOTS}/unsupported-fallback.png` });
+});
+
+// ── FV2 phase 2: sidecar comments on the artifact preview ────────────────────
+
+async function selectInFrame(page, selector) {
+  // The review loop attaches asynchronously (sidecar fetch + frame load);
+  // selecting before its selectionchange listener exists would never show
+  // the button. The button's presence in the pane marks attachment.
+  await page.waitForSelector('.artifact-comment-btn', { state: 'attached' });
+  // Real selection inside the sandboxed frame (allow-same-origin, no
+  // scripts), via the frame's own Selection API.
+  await page.evaluate((sel) => {
+    const iframe = document.querySelector('iframe.viewer-frame');
+    const doc = iframe.contentDocument;
+    const el = doc.querySelector(sel);
+    const range = doc.createRange();
+    range.selectNodeContents(el);
+    const selection = doc.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }, selector);
+}
+
+test('comment on an artifact: select, comment, sidecar written, reload re-anchors, resolve hands back', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'proposal.html');
+  await expect(page.locator('iframe.viewer-frame')).toBeVisible();
+
+  // Select the stat line in the frame; the floating Comment button appears.
+  await selectInFrame(page, '.stat');
+  const btn = page.locator('.artifact-comment-btn');
+  await expect(btn).toBeVisible();
+
+  // Compose and submit an anchored comment.
+  await btn.dispatchEvent('mousedown');
+  const composer = page.locator('.review-composer');
+  await expect(composer).toBeVisible();
+  await expect(composer.locator('.review-quote')).toHaveText('Three workstreams');
+  await composer.locator('textarea').fill('Make this four workstreams');
+  await composer.locator('textarea').press('Enter');
+
+  // Card renders; the passage is marked in the frame.
+  const card = page.locator('.review-card.comment');
+  await expect(card).toHaveCount(1);
+  await expect(card).toContainText('Make this four workstreams');
+  await expect(card.locator('.review-quote')).toContainText('Three workstreams');
+  const frame = page.frameLocator('iframe.viewer-frame');
+  await expect(frame.locator('mark[data-rundock-review]')).toHaveText('Three workstreams');
+  await page.screenshot({ path: `${SHOTS}/artifact-comment.png` });
+
+  // The sidecar is on disk, openly stored, discoverable by path.
+  const { sidecarPathFor } = await import('../../public/viewers/sidecar-controller.js');
+  const sidecarPath = sidecarPathFor('proposal.html');
+  const res = await page.request.get('/api/file?path=' + encodeURIComponent(sidecarPath));
+  expect(res.status()).toBe(200);
+  const sidecar = JSON.parse(await res.text());
+  expect(sidecar.path).toBe('proposal.html');
+  expect(sidecar.comments.c1.quote).toBe('Three workstreams');
+  expect(sidecar.comments.c1.body).toBe('Make this four workstreams');
+
+  // Full reload: the comment re-anchors from the sidecar.
+  await page.reload();
+  await expect(page.locator('.convo-item').first()).toBeVisible();
+  await openFromTree(page, 'proposal.html');
+  await expect(page.locator('.review-card.comment')).toContainText('Make this four workstreams');
+  await expect(frame.locator('mark[data-rundock-review]')).toHaveText('Three workstreams');
+
+  // Resolve: card leaves, audit trail persists with resolved: true.
+  await page.locator('.review-card .review-btn.resolve').click();
+  await expect(page.locator('.review-card.comment')).toHaveCount(0);
+  await expect.poll(async () => {
+    const r = await page.request.get('/api/file?path=' + encodeURIComponent(sidecarPath));
+    return JSON.parse(await r.text()).comments.c1.resolved;
+  }).toBe(true);
+});
+
+test('an anchor whose passage was edited away lists as orphaned, never dropped', async ({ page }) => {
+  await boot(page);
+  // A dedicated artifact so this test cannot interfere with the flow above.
+  await page.evaluate(() => new Promise((resolve) => {
+    ws.send(JSON.stringify({ type: 'save_file', path: 'orphan-demo.html', content: '<html><body><p id="target">Delete this passage soon.</p><p>Stable text.</p></body></html>' }));
+    setTimeout(resolve, 300);
+  }));
+  await openFilesView(page);
+  await page.evaluate(() => { ws.send(JSON.stringify({ type: 'read_file', path: 'orphan-demo.html' })); });
+  await expect(page.locator('iframe.viewer-frame')).toBeVisible();
+
+  await selectInFrame(page, '#target');
+  await page.locator('.artifact-comment-btn').dispatchEvent('mousedown');
+  await page.locator('.review-composer textarea').fill('anchored to a doomed passage');
+  await page.locator('.review-composer textarea').press('Enter');
+  await expect(page.locator('.review-card.comment')).toHaveCount(1);
+
+  // The passage disappears from the file (an agent rewrite, in real life).
+  await page.evaluate(() => new Promise((resolve) => {
+    ws.send(JSON.stringify({ type: 'save_file', path: 'orphan-demo.html', content: '<html><body><p>Rewritten entirely.</p><p>Stable text.</p></body></html>' }));
+    setTimeout(resolve, 300);
+  }));
+  await page.evaluate(() => { ws.send(JSON.stringify({ type: 'read_file', path: 'orphan-demo.html' })); });
+
+  const card = page.locator('.review-card.comment');
+  await expect(card).toHaveCount(1);
+  await expect(card).toContainText('anchored to a doomed passage');
+  await expect(card.locator('.review-badge.orphaned')).toHaveText('Orphaned');
+  const frame = page.frameLocator('iframe.viewer-frame');
+  await expect(frame.locator('mark[data-rundock-review]')).toHaveCount(0);
+  await page.screenshot({ path: `${SHOTS}/artifact-orphan.png` });
 });
 
 test('markdown files still open in the rich editor after the registry shim', async ({ page }) => {

@@ -754,6 +754,9 @@ function buildSystemPrompt(agentData) {
     'When discussing a specific comment or suggestion with the user, refer to it by QUOTING it (the comment text, or the passage it anchors to), for example: your comment "needs a source before we publish". Never refer to items by anchor id (c9, s2) or by number: the numbers shown in the editor are positional and change as items resolve, so quoted text is the only reference that stays correct.',
     'For at: timestamps, run date -u +%Y-%m-%dT%H:%M:%SZ at most once per editing pass and reuse that one value for every entry you add in the pass (entries added together sharing a timestamp is correct; anchor ids make them unique). Never loop or sleep to manufacture distinct timestamps.',
     '',
+    'REVIEW ANNOTATIONS (HTML and other non-markdown files):',
+    `Review feedback for a non-markdown file lives in a sidecar JSON under .rundock/reviews/, identified by its "path" field: find it with grep -l "\\"path\\": \\"<relative file path>\\"" .rundock/reviews/*.json. Root entries under "comments" are keyed c1, c2, ... and carry quote/prefix/suffix (the anchored passage), body, by, at. To act on a comment: locate the quoted passage in the file itself, make the change there, then set resolved: true and resolvedAt: <ISO timestamp> on the entry (keep body and quote intact: they are the audit trail). Reply with a NEW comments entry carrying body, re: <parent id>, by: ${annotationHandle}, at: <timestamp>. Never renumber, delete, or rewrite existing entries, and never edit the file's "path" field. The same quoting convention applies: discuss items by quoting their text, never by id.`,
+    '',
     'TIMEZONE:',
     `The user's local timezone is ${Intl.DateTimeFormat().resolvedOptions().timeZone}. Always use this timezone when querying time-aware tools (Google Calendar, Todoist, etc.) and when displaying dates and times to the user.`,
   ].join('\n');
@@ -2050,6 +2053,37 @@ const server = http.createServer((req, res) => {
       res.writeHead(404);
       res.end('File not found');
     }
+  // Review-sidecar writes: the WS save_file path expects existing parent
+  // directories; sidecars live under .rundock/reviews/ which is created on
+  // first use. Constrained to exactly that directory, flat filenames only.
+  } else if (req.method === 'POST' && req.url === '/api/review-sidecar') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const relPath = String(data.path || '');
+        if (!/^\.rundock\/reviews\/[\w.-]+\.json$/.test(relPath) || typeof data.content !== 'string') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid sidecar request' }));
+          return;
+        }
+        const fullPath = path.resolve(WORKSPACE, relPath);
+        if (!isInsideWorkspace(fullPath)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid path' }));
+          return;
+        }
+        fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+        fs.writeFileSync(fullPath, data.content, 'utf-8');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ saved: true }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid request' }));
+      }
+    });
+
   } else if (req.url.startsWith('/api/file?path=')) {
     const filePath = decodeURIComponent(req.url.split('path=')[1]);
     const fullPath = path.resolve(WORKSPACE, filePath);

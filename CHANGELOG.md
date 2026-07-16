@@ -12,6 +12,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 - **HTML files render as designed:** opening an HTML or SVG file shows the real rendered page (its own styles, layout, and fonts) instead of raw source, in a locked-down preview where scripts never run and the page cannot phone home. The Edit toggle still shows the raw source, which stays editable and saveable.
 - **Images and PDFs open in Rundock:** clicking a PNG, JPEG, GIF, WebP, or PDF in the file tree shows the actual image or a readable document view, so you never leave Rundock to look at your own files. File types Rundock cannot preview say so clearly instead of showing garbled bytes.
+- **Comment on HTML files the way you review markdown:** select a passage in the rendered preview, press Comment, and the same review sidebar handles threads, replies, and resolve. Feedback anchors to the exact text you selected and lives in an open JSON file under the workspace's `.rundock/reviews/` folder (the HTML file itself is never touched), agents know how to read it, act on it, and resolve it, and a comment whose passage was edited away is kept and labelled Orphaned rather than silently dropped.
 
 ### Changed
 
