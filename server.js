@@ -2031,6 +2031,25 @@ const server = http.createServer((req, res) => {
   } else if (req.url === '/api/files') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(getFileTree(WORKSPACE)));
+  } else if (req.url.startsWith('/workspace-file?path=')) {
+    // Binary transport for the file-type registry's image and PDF viewers.
+    // Allowlist-only; bytes are served raw (the WS read_file path utf-8
+    // normalises and would corrupt them). Boundary guard mirrors /api/file.
+    const filePath = decodeURIComponent(req.url.split('path=')[1]);
+    const fullPath = path.resolve(WORKSPACE, filePath);
+    const mime = BINARY_FILE_TYPES[path.extname(fullPath).toLowerCase()];
+    if (mime && isInsideWorkspace(fullPath) && fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
+      res.writeHead(200, {
+        'Content-Type': mime,
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Disposition': 'inline',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+      });
+      res.end(fs.readFileSync(fullPath));
+    } else {
+      res.writeHead(404);
+      res.end('File not found');
+    }
   } else if (req.url.startsWith('/api/file?path=')) {
     const filePath = decodeURIComponent(req.url.split('path=')[1]);
     const fullPath = path.resolve(WORKSPACE, filePath);
@@ -4696,6 +4715,23 @@ function parseSkillFile(content, slug) {
 
 // ===== FILE TREE =====
 
+// File types the client can open: text rides the WS read_file path; html/svg
+// render sandboxed via srcdoc; images and PDFs ride /workspace-file. Code and
+// config files stay hidden from the tree, as before.
+const VIEWABLE_FILE_RE = /\.(md|txt|json|html?|svg|png|jpe?g|gif|webp|pdf)$/i;
+
+// The /workspace-file allowlist: binary types only. Everything else either
+// rides the WS text path or is not served at all; this endpoint must never
+// become a generic file server for the workspace.
+const BINARY_FILE_TYPES = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.pdf': 'application/pdf',
+};
+
 function getFileTree(dir, prefix = '') {
   const entries = [];
   try {
@@ -4710,7 +4746,7 @@ function getFileTree(dir, prefix = '') {
       const relativePath = prefix ? `${prefix}/${item.name}` : item.name;
       if (item.isDirectory()) {
         entries.push({ type: 'folder', name: item.name, path: relativePath, children: getFileTree(path.join(dir, item.name), relativePath) });
-      } else if (item.name.endsWith('.md') || item.name.endsWith('.txt') || item.name.endsWith('.json')) {
+      } else if (VIEWABLE_FILE_RE.test(item.name)) {
         entries.push({ type: 'file', name: item.name, path: relativePath });
       }
     }
