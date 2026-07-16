@@ -3898,12 +3898,8 @@ let palettePendingSkill = null;
 let paletteReqId = 0;         // stale-reply guard (query text alone can't distinguish filter/fuzzy toggles)
 var pendingMessageAnchor = null; // {convoId, text, fragment} — var: openConversation clears it and runs before this section during load-order-sensitive paths
 
-const PALETTE_GROUP_ORDER = ['files', 'conversations', 'agents', 'skills'];
-const PALETTE_GROUP_LABELS = { files: 'Files', conversations: 'Conversations', agents: 'Agents', skills: 'Skills' };
-// Per-group result cap. Must match the `limit` sent in runPaletteSearch: the
-// group-count labels use it to show "8+" instead of implying a full group is
-// the exact total.
-const PALETTE_GROUP_LIMIT = 8;
+// Group order/labels/limit live in palette-model.js (unit-tested).
+const PALETTE_GROUP_LIMIT = RundockPalette.GROUP_LIMIT;
 const IS_MAC = /Mac/i.test(navigator.platform);
 let paletteReturnFocus = null; // element to restore focus to on close
 
@@ -3980,7 +3976,7 @@ function handlePaletteResults(d) {
   if (!paletteOpen) return;
   // Stale replies are dropped by request id (query text alone can't
   // distinguish a fuzzy/filter toggle on the same query).
-  if (d.reqId !== paletteReqId) return;
+  if (RundockPalette.isStaleReply(d, paletteReqId)) return;
   paletteLoading = false;
   paletteReply = d;
   paletteSel = 0;
@@ -3990,13 +3986,9 @@ function handlePaletteResults(d) {
 // Escape then swap the server's control-char highlight markers for <mark>.
 // Order matters: HTML is escaped FIRST, so the only markup in the string is
 // the <mark> pair we introduce ourselves.
-function paletteHl(s) {
-  return esc(s || '').replace(/\u0001/g, '<mark>').replace(/\u0002/g, '</mark>');
-}
+function paletteHl(s) { return RundockPalette.highlightToMark(s, esc); }
 
-function paletteSnippetPlain(s) {
-  return (s || '').replace(/[\u0001\u0002]/g, '');
-}
+function paletteSnippetPlain(s) { return RundockPalette.snippetPlain(s); }
 
 const PALETTE_ICONS = {
   file: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
@@ -4006,32 +3998,22 @@ const PALETTE_ICONS = {
 function renderPalette() {
   const container = document.getElementById('palette-results');
   if (!container || !paletteReply) return;
-  const groups = paletteReply.groups || {};
-  paletteFlat = [];
+  // Grouping, ordering, and count-floor rules live in palette-model.js.
+  const flattened = RundockPalette.flattenReply(paletteReply, paletteScope);
+  paletteFlat = flattened.flat;
   let h = '';
-  for (const key of PALETTE_GROUP_ORDER) {
-    if (paletteScope !== 'all' && paletteScope !== key) continue;
-    const items = groups[key] || [];
-    if (!items.length) continue;
-    const label = paletteReply.recent ? `Recent ${PALETTE_GROUP_LABELS[key].toLowerCase()}` : PALETTE_GROUP_LABELS[key];
-    // A full group means the server hit its per-group cap: the real total may
-    // be higher, so the count is shown as a floor rather than an exact figure.
-    const countLabel = items.length >= PALETTE_GROUP_LIMIT ? `${PALETTE_GROUP_LIMIT}+` : items.length;
-    h += `<div class="palette-group-label" role="presentation">${label}<span class="palette-group-count">${countLabel}</span></div>`;
-    for (const item of items) {
-      const idx = paletteFlat.length;
-      paletteFlat.push(item);
-      h += paletteItemHtml(item, idx);
-    }
+  for (const g of flattened.groups) {
+    h += `<div class="palette-group-label" role="presentation">${g.label}<span class="palette-group-count">${g.countLabel}</span></div>`;
+    g.items.forEach((item, i) => { h += paletteItemHtml(item, g.startIdx + i); });
   }
   if (!paletteFlat.length) {
-    const q = paletteQuery.trim();
-    if (paletteReply.error) {
+    const state = RundockPalette.emptyState(paletteReply, paletteQuery);
+    if (state === 'error') {
       // A genuine server failure must not masquerade as "no matches".
       h = `<div class="palette-empty">Search hit a problem<div class="palette-empty-sub">Try again; if it persists, check the server log.</div></div>`;
     } else {
-      h = q
-        ? `<div class="palette-empty">No matches for &ldquo;${esc(q)}&rdquo;<div class="palette-empty-sub">Search covers file contents and names, conversation messages and titles, and agent and skill names.</div></div>`
+      h = state === 'no-matches'
+        ? `<div class="palette-empty">No matches for &ldquo;${esc(paletteQuery.trim())}&rdquo;<div class="palette-empty-sub">Search covers file contents and names, conversation messages and titles, and agent and skill names.</div></div>`
         : `<div class="palette-empty">Start typing to search your workspace<div class="palette-empty-sub">Files, conversations, agents, and skills.</div></div>`;
     }
   }
@@ -4104,7 +4086,7 @@ function updatePaletteSelection(scroll = true) {
 
 function movePaletteSelection(delta) {
   if (!paletteFlat.length) return;
-  paletteSel = (paletteSel + delta + paletteFlat.length) % paletteFlat.length;
+  paletteSel = RundockPalette.moveSelection(paletteSel, delta, paletteFlat.length);
   updatePaletteSelection();
 }
 
@@ -4141,7 +4123,7 @@ function paletteOpenConversation(item) {
     pendingMessageAnchor = {
       convoId: item.id,
       text: paletteSnippetPlain(item.snippet).replace(/…/g, ' ').trim(),
-      fragment: (item.snippet.match(/\u0001([^\u0002]+)\u0002/) || [])[1] || '',
+      fragment: RundockPalette.snippetFragment(item.snippet),
     };
   } else {
     pendingMessageAnchor = null;
@@ -4163,9 +4145,7 @@ function paletteOpenSkill(skillId) {
 // scroll to it. Text-content matching (normalised) survives the markdown
 // rendering that separates the jsonl source from the DOM.
 
-function normAnchorText(t) {
-  return (t || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-}
+function normAnchorText(t) { return RundockPalette.normAnchorText(t); }
 
 function tryMessageAnchor(convoId) {
   if (!pendingMessageAnchor || pendingMessageAnchor.convoId !== convoId) return;
@@ -4174,14 +4154,8 @@ function tryMessageAnchor(convoId) {
   // Let the DOM paint before measuring.
   setTimeout(() => {
     const bubbles = document.querySelectorAll('#messages .msg .msg-bubble');
-    const needles = [normAnchorText(anchor.text), normAnchorText(anchor.fragment)].filter(n => n.length >= 3);
-    let target = null;
-    for (const needle of needles) {
-      for (const b of bubbles) {
-        if (normAnchorText(b.textContent).includes(needle)) { target = b.closest('.msg'); break; }
-      }
-      if (target) break;
-    }
+    const idx = RundockPalette.findAnchorIndex([...bubbles].map(b => b.textContent), anchor);
+    const target = idx === -1 ? null : bubbles[idx].closest('.msg');
     if (!target) return; // message outside the loaded window: land at the conversation as usual
     target.scrollIntoView({ block: 'center', behavior: 'auto' });
     target.classList.remove('anchor-flash');
