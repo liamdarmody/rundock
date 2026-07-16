@@ -131,10 +131,18 @@ describe('path traversal guards', () => {
     }
   });
 
-  test('/editor and /vendor static routes reject traversal and unknown extensions', async () => {
+  test('/editor, /vendor and /viewers static routes reject traversal and unknown extensions', async () => {
     assert.strictEqual((await get('/editor/../server.js')).status, 404);
     assert.strictEqual((await get('/vendor/x.png')).status, 404);
     assert.strictEqual((await get('/editor/%2e%2e/server.js')).status, 404);
+    assert.strictEqual((await get('/viewers/../server.js')).status, 404);
+    assert.strictEqual((await get('/viewers/x.png')).status, 404);
+  });
+
+  test('/viewers/registry.js is served as javascript (the file-type registry module)', async () => {
+    const res = await get('/viewers/registry.js');
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.body.includes('classify'), 'registry module content served');
   });
 
   test('WS read_file is guarded the same way as /api/file', async () => {
