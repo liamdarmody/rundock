@@ -299,6 +299,12 @@ const CSS = `
   background: var(--accent-glow, rgba(232, 122, 90, 0.15));
   color: var(--accent, #E87A5A);
 }
+/* A sidecar anchor whose passage left the document: visible and honest,
+   never dropped. Muted, not alarming: the comment still reads fine. */
+.review-badge.orphaned {
+  background: var(--card, rgba(128, 128, 128, 0.12));
+  color: var(--text-2);
+}
 /* One treatment for every author name: identity is information, not
    decoration (the accent already means "action" elsewhere in the panel). */
 .review-by { font-size: 11px; font-weight: 500; color: var(--text-2); margin-left: auto; }

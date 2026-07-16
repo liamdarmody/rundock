@@ -9,7 +9,7 @@
 // the sidebar column is sticky inside the pane's scroll container.
 
 import { openWorkspaceLocation } from '../review/deep-link-shim.js';
-import { createComposingPlugin, composingKey, setComposingRange, getComposingRange, createFlashPlugin, flashKey, flashRange } from '../review/composing-decoration.js';
+import { createEditorReviewSurface } from '../review/editor-surface.js';
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -38,8 +38,12 @@ const SIDEBAR_MIN = 220;
 const SIDEBAR_MAX = 420;
 const SIDEBAR_DEFAULT = 260;
 
-export function attachReviewPanel({ paneElement, editor, controller, onRequestSave = null, author = null, agents = [], pillHostElement = null }) {
-  if (!paneElement || !editor || !controller) return { detach: () => {}, refresh: () => {}, openComposer: () => {} };
+export function attachReviewPanel({ paneElement, editor = null, surface = null, controller, onRequestSave = null, author = null, agents = [], pillHostElement = null }) {
+  // The surface owns everything document-specific (selection, decoration,
+  // flash, scroll, change events). Passing an editor builds the ProseMirror
+  // surface, the FV1 behaviour; the artifact viewer passes its own surface.
+  if (!surface && editor) surface = createEditorReviewSurface(editor);
+  if (!paneElement || !surface || !controller) return { detach: () => {}, refresh: () => {}, openComposer: () => {} };
 
   const sidebar = el('aside', 'review-sidebar');
   const pill = el('button', 'review-pill');
@@ -127,10 +131,9 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
   let decidedThisSession = false;
 
   // While the composer is open the target range stays visibly decorated
-  // (the editor blurs, so the native selection disappears) and the plugin
+  // (the surface blurs, so the native selection disappears) and the surface
   // maps the range through any document edits.
-  editor.registerPlugin(createComposingPlugin());
-  editor.registerPlugin(createFlashPlugin());
+  surface.setup();
 
   const save = () => { if (typeof onRequestSave === 'function') onRequestSave(); };
 
@@ -183,20 +186,7 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
   // causes its effect. Ops return the applied range; a zero-width result
   // (pure deletion) falls back to flashing the containing block.
   function flashApplied(result) {
-    if (!result || typeof result !== 'object') return;
-    if (result.to > result.from) {
-      flashRange(editor, result);
-      return;
-    }
-    try {
-      const clamped = Math.max(1, Math.min(result.from, editor.state.doc.content.size - 1));
-      const dom = editor.view.domAtPos(clamped);
-      const target = dom.node.nodeType === 1 ? dom.node : dom.node.parentElement;
-      if (target && target.classList) {
-        target.classList.add('critic-flash');
-        setTimeout(() => target.classList.remove('critic-flash'), 1200);
-      }
-    } catch { /* position may be gone; harmless */ }
+    surface.flashApplied(result);
   }
 
   // Card exit animation, then the operation. Input is blocked on the card
@@ -226,14 +216,14 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
 
   function closeComposer() {
     composer = null;
-    setComposingRange(editor, null);
+    surface.setComposing(null);
     render();
   }
 
   function openComposer(mode) {
-    const { from, to } = editor.state.selection;
+    if (mode === 'suggest' && !surface.supportsSuggest) mode = 'comment';
     composer = { mode };
-    setComposingRange(editor, from === to ? null : { from, to });
+    surface.setComposing(surface.captureSelection());
     if (!open) setOpen(true); else render();
     const ta = sidebar.querySelector('.review-composer textarea');
     if (ta) ta.focus();
@@ -253,26 +243,25 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     closeX.onclick = closeComposer;
     titleRow.appendChild(closeX);
     box.appendChild(titleRow);
-    // The live range comes from the plugin, mapped through any edits made
+    // The live range comes from the surface, mapped through any edits made
     // while the composer sat open.
-    const range = getComposingRange(editor);
-    if (range) {
-      const quote = editor.state.doc.textBetween(range.from, range.to, ' ');
-      // Degenerate selections (a stray period, whitespace) render no quote.
-      if (quote.trim().length > 1) {
-        box.appendChild(el('div', 'review-quote', quote.length > 120 ? quote.slice(0, 117) + '…' : quote));
-      }
+    const range = surface.liveComposingRange();
+    const quote = range ? surface.quoteFor(range) : null;
+    // Degenerate selections (a stray period, whitespace) render no quote.
+    if (quote && quote.trim().length > 1) {
+      box.appendChild(el('div', 'review-quote', quote.length > 120 ? quote.slice(0, 117) + '…' : quote));
     }
     const { wrap, ta } = inputWithSend({
       placeholder: isSuggest ? 'Replacement text…' : 'Comment…',
       submitTitle: isSuggest ? 'Suggest' : 'Comment',
       onCancel: closeComposer,
       onSubmit: (text) => {
-        const liveRange = getComposingRange(editor);
-        if (isSuggest) controller.suggestReplace(text, liveRange);
-        else controller.addComment(text, liveRange);
+        const liveRange = surface.liveComposingRange();
+        const selector = surface.selectorFor(liveRange);
+        if (isSuggest) controller.suggestReplace(text, selector);
+        else controller.addComment(text, selector);
         composer = null;
-        setComposingRange(editor, null);
+        surface.setComposing(null);
         render();
         save();
       },
@@ -290,14 +279,7 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     // Deep-link first (see review/deep-link-shim.js); local scroll is the
     // fallback and the only path until the navigation branch merges.
     if (openWorkspaceLocation({ path: null, anchor: item.id })) return;
-    try {
-      const dom = editor.view.nodeDOM(item.pos);
-      if (dom && dom.scrollIntoView) {
-        dom.scrollIntoView({ block: 'center', behavior: 'smooth' });
-        dom.classList.add('critic-flash');
-        setTimeout(() => dom.classList.remove('critic-flash'), 1200);
-      }
-    } catch { /* node may have moved; harmless */ }
+    surface.scrollToItem(item);
   }
 
   function renderSuggestionCard(item) {
@@ -346,6 +328,9 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
     // comment text, and wire-format ids never render.
     head.appendChild(el('span', 'review-badge comment-badge', String(number)));
     head.appendChild(authorBadge(item.meta));
+    // Sidecar anchors whose passage no longer exists in the document: kept
+    // visible (spec: orphaned, never dropped) and labelled honestly.
+    if (item.orphaned) head.appendChild(el('span', 'review-badge orphaned', 'Orphaned'));
     card.appendChild(head);
     if (item.anchor) {
       card.appendChild(el('div', 'review-quote', item.anchor.length > 120 ? item.anchor.slice(0, 117) + '…' : item.anchor));
@@ -514,21 +499,22 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
 
   // Re-render when the document changes (constructs decided inline, undo,
   // typing near constructs) — cheap enough at sidebar scale.
-  const onTransaction = ({ transaction }) => { if (transaction.docChanged) render(); };
-  editor.on('transaction', onTransaction);
+  const offDocChange = surface.onDocChange(render);
 
-  // Clicking an inline construct opens the panel and lights up its card —
-  // the mirror of the card's scroll-to-construct.
+  // Clicking an inline mark opens the panel and lights up its card —
+  // the mirror of the card's scroll-to-mark.
   const onConstructClick = (event) => {
     const target = event.target.closest && event.target.closest('.critic');
     if (!target || sidebar.contains(target)) return;
-    const item = controller.listItems().find((i) => {
-      try {
-        const dom = editor.view.nodeDOM(i.pos);
-        return dom === target || (dom && dom.contains && dom.contains(target));
-      } catch { return false; }
-    });
+    const item = surface.itemAtEventTarget(controller.listItems(), target);
     if (!item) return;
+    activateCard(item);
+  };
+  paneElement.addEventListener('click', onConstructClick);
+
+  // Card activation from a document-side mark (the surface may also call
+  // this directly, e.g. the artifact viewer's in-frame mark clicks).
+  function activateCard(item) {
     if (!open) setOpen(true);
     const card = sidebar.querySelector(`.review-card[data-pos="${item.pos}"]`);
     if (card) {
@@ -536,19 +522,18 @@ export function attachReviewPanel({ paneElement, editor, controller, onRequestSa
       card.classList.add('attention');
       setTimeout(() => card.classList.remove('attention'), 1200);
     }
-  };
-  paneElement.addEventListener('click', onConstructClick);
+  }
+  if (typeof surface.onItemActivate === 'function') surface.onItemActivate(activateCard);
 
   // Open automatically when the file arrives with review items.
   if (counts().total > 0) setOpen(true); else render();
 
   return {
     detach: () => {
-      editor.off('transaction', onTransaction);
+      offDocChange();
       paneElement.removeEventListener('click', onConstructClick);
       if (resizeObserver) resizeObserver.disconnect();
-      try { editor.unregisterPlugin(composingKey); } catch { /* editor may be gone */ }
-      try { editor.unregisterPlugin(flashKey); } catch { /* editor may be gone */ }
+      surface.teardown();
       sidebar.remove();
       pill.remove();
       paneElement.classList.remove('review-active');
