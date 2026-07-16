@@ -8,6 +8,11 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 **Name:** TBD
 
+### Added
+
+- **HTML files render as designed:** opening an HTML or SVG file shows the real rendered page (its own styles, layout, and fonts) instead of raw source, in a locked-down preview where scripts never run and the page cannot phone home. The Edit toggle still shows the raw source, which stays editable and saveable.
+- **Images and PDFs open in Rundock:** clicking a PNG, JPEG, GIF, WebP, or PDF in the file tree shows the actual image or a readable document view, so you never leave Rundock to look at your own files. File types Rundock cannot preview say so clearly instead of showing garbled bytes.
+
 ### Changed
 
 - **Fresh installs no longer print security warnings:** the packaged Electron runtime moved from 35 to 42, clearing the cluster of published advisories that `npm audit` reported against every contributor install. No user-visible behaviour change; the full suite, browser tests, and a locally built packaged app were verified on the new runtime.
