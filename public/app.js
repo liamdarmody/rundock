@@ -2464,125 +2464,15 @@ const alwaysAllowedTools = new Set();
 // Pending permission callbacks (avoids inline onclick injection)
 const pendingPermissions = new Map();
 
-const BASH_DESCRIPTIONS = {
-  ls: 'List directory contents', cat: 'Read file contents', head: 'Read start of file',
-  tail: 'Read end of file', grep: 'Search file contents', rg: 'Search file contents',
-  find: 'Find files', echo: 'Print text', pwd: 'Show current directory',
-  mkdir: 'Create directory', cp: 'Copy files', mv: 'Move or rename files',
-  rm: 'Delete files', npm: 'Run npm', node: 'Run JavaScript', python: 'Run Python',
-  python3: 'Run Python', pip: 'Install Python packages', git: 'Run git command',
-  curl: 'Make HTTP request', wget: 'Download file', chmod: 'Change permissions',
-  sudo: 'Run as superuser'
-};
-
-function bashBin(cmd) { return cmd.split(/\s+/)[0].replace(/^.*\//, ''); }
-
-// Classify risk level of a tool request
-function classifyRisk(toolName, input) {
-  if (toolName === 'Bash') {
-    const cmd = (input.command || '').trim();
-    const highRisk = /^(rm|sudo|chmod|chown|kill|mkfs|dd|curl\s.*\|\s*sh|wget\s.*\|\s*sh)/.test(cmd)
-      || /--force|--hard|-rf\b/.test(cmd)
-      || /git\s+(push|reset|clean|checkout\s+\.)/.test(cmd);
-    if (highRisk) return 'high';
-    const lowRisk = /^(ls|cat|head|tail|echo|pwd|whoami|which|grep|rg|find|wc|sort|uniq|diff|file|stat|date|env|printenv|node\s+-e|python3?\s+-c)/.test(cmd);
-    if (lowRisk) return 'low';
-    return 'medium';
-  }
-  if (toolName === 'PowerShell') {
-    // Windows shell tool. Same input shape as Bash (a `command` field).
-    // Destructive checks run first so a read that also deletes can't be low.
-    const cmd = (input.command || '').trim();
-    const highRisk = /(^|[;&|]\s*)(Remove-Item|ri|rm|del|erase|rmdir|rd|Stop-Process|spps|kill|Stop-Service|Format-Volume|Clear-Content|Clear-Item|Set-ExecutionPolicy|Uninstall-[A-Za-z]+)\b/i.test(cmd)
-      || /-Force\b/i.test(cmd)
-      || /\b(iex|Invoke-Expression)\b/i.test(cmd)
-      || /\b(irm|Invoke-RestMethod|iwr|Invoke-WebRequest|curl|wget)\b[\s\S]*\|\s*(iex|Invoke-Expression)/i.test(cmd);
-    if (highRisk) return 'high';
-    const lowRisk = /^(Get-[A-Za-z]+|ls|dir|gci|gc|cat|type|pwd|gl|echo|Write-Output|Write-Host|Select-Object|Where-Object|Measure-Object|Test-Path|Resolve-Path|Split-Path|Format-Table|Format-List|Sort-Object)\b/i.test(cmd);
-    if (lowRisk) return 'low';
-    return 'medium';
-  }
-  if (toolName === 'WriteFile') {
-    // Codex write-request markers (Windows). Always high: every write gets
-    // its own card and "Always allow" is never offered. A standing allow
-    // here would let a prompt-injected agent write files ungated.
-    return 'high';
-  }
-  if (toolName.startsWith('mcp__')) {
-    // MCP reads auto-approve in the permission hook, so by the time a request
-    // reaches the card it's a write or destructive action. Flag destructive ones
-    // as high (no "Always allow"); other writes are medium.
-    const action = toolName.split('__').slice(2).join('_').toLowerCase();
-    if (/(^|[_\-])(delete|remove|destroy|drop|cancel|abort|archive|trash|purge|clear|uninstall)([_\-]|$)/.test(action)) return 'high';
-    return 'medium';
-  }
-  return 'medium';
-}
-
-// Build human-readable summary and context for a tool request
+// Permission/trust decision logic lives in permissions.js (unit-tested;
+// loaded before this file). The aliases keep historical call sites readable;
+// describeToolRequest injects the app's agent-name resolver for WriteFile
+// card copy.
+function classifyRisk(toolName, input) { return RundockPermissions.classifyRisk(toolName, input); }
 function describeToolRequest(toolName, input) {
-  let summary = '';
-  let context = '';
-  let detail = '';
-
-  if (toolName === 'Bash') {
-    const cmd = (input.command || '').trim();
-    detail = cmd;
-    const bin = bashBin(cmd);
-    summary = input.description || BASH_DESCRIPTIONS[bin] || `Run ${bin}`;
-    if (bin === 'rm') context = 'This will permanently delete files';
-    else if (bin === 'sudo') context = 'This runs with elevated privileges';
-    else if (/git\s+push/.test(cmd)) context = 'This will push changes to a remote repository';
-    else if (/git\s+reset\s+--hard/.test(cmd)) context = 'This will discard uncommitted changes';
-    else if (bin === 'npm' && /install/.test(cmd)) context = 'This will install packages and modify node_modules';
-  } else if (toolName === 'PowerShell') {
-    const cmd = (input.command || '').trim();
-    detail = cmd;
-    summary = input.description || 'Run PowerShell command';
-    if (/(^|[;&|]\s*)(Remove-Item|ri|rm|del|erase|rmdir|rd)\b/i.test(cmd)) context = 'This will delete files';
-    else if (/-Force\b/i.test(cmd)) context = 'This uses -Force and may overwrite or delete without confirmation';
-    else if (/\b(iex|Invoke-Expression)\b/i.test(cmd)) context = 'This executes a downloaded or dynamic script';
-  } else if (toolName === 'WriteFile') {
-    // Codex write-request marker (Windows): the card IS the consent for the
-    // exact content shown, so the path leads and the payload is displayed.
-    const p = input.path || '';
-    const content = String(input.content || '');
-    summary = `Write ${p}`;
-    context = `${agentDisplayName(input.agent)} requested this file write. The content below will be written exactly as shown.`;
-    detail = content.length > 1500 ? content.slice(0, 1500) + `\n… (${content.length - 1500} more characters)` : content;
-  } else if (toolName === 'Write') {
-    summary = 'Create a file';
-    detail = input.file_path || '';
-  } else if (toolName === 'Edit') {
-    summary = 'Edit a file';
-    detail = input.file_path || '';
-  } else if (toolName === 'Read') {
-    summary = 'Read a file';
-    detail = input.file_path || '';
-  } else if (toolName.startsWith('mcp__')) {
-    const parts = toolName.split('__');
-    const server = (parts[1] || 'connector').replace(/^claude_ai_/, '').replace(/_/g, ' ').trim();
-    const action = parts.slice(2).join('_').replace(/^api[_\-\s]+/i, '').replace(/[_\-]+/g, ' ').trim();
-    summary = action ? `${server}: ${action}` : `Use ${server}`;
-    detail = toolName;
-  } else {
-    summary = `Use ${toolName}`;
-    detail = JSON.stringify(input).substring(0, 200);
-  }
-  return { summary, context, detail };
+  return RundockPermissions.describeToolRequest(toolName, input, { agentDisplayName });
 }
-
-// Key for always-allow matching
-function toolAllowKey(toolName, input) {
-  if (toolName === 'Bash') {
-    return 'Bash:' + bashBin((input.command || '').trim());
-  }
-  if (toolName === 'PowerShell') {
-    const verb = ((input.command || '').trim().match(/^[A-Za-z][\w-]*/) || ['PowerShell'])[0];
-    return 'PowerShell:' + verb;
-  }
-  return toolName;
-}
+function toolAllowKey(toolName, input) { return RundockPermissions.toolAllowKey(toolName, input); }
 
 function handlePermissionRequest(d, convoId) {
   const isActive = activeConversation?.id === convoId;
@@ -2596,16 +2486,11 @@ function handlePermissionRequest(d, convoId) {
   const { summary, context, detail } = describeToolRequest(toolName, input);
   const key = toolAllowKey(toolName, input);
 
-  // Auto-allow if user previously chose "Always allow" for this pattern
-  if (alwaysAllowedTools.has(key)) {
-    if (ws) {
-      ws.send(JSON.stringify({ type: 'permission_response', requestId, conversationId: convoId, allow: true }));
-    }
-    return;
-  }
-
-  // Auto-allow low-risk (read-only) commands: no permission card, activity summary provides visibility
-  if (risk === 'low') {
+  // The auto-allow decision path is a named, unit-tested function in
+  // permissions.js: standing "Always allow" grants and the low-risk
+  // (read-only) auto-approve policy skip the card; everything else asks.
+  const decision = RundockPermissions.decidePermission(risk, key, alwaysAllowedTools);
+  if (decision.action === 'allow') {
     if (ws) {
       ws.send(JSON.stringify({ type: 'permission_response', requestId, conversationId: convoId, allow: true }));
     }
@@ -2638,7 +2523,7 @@ function handlePermissionRequest(d, convoId) {
         : `<code class="permission-detail">${esc(detail)}</code>`}
       <div class="permission-actions">
         <button class="btn-perm btn-allow" data-perm-id="${esc(requestId)}" data-perm-action="allow">Allow</button>
-        ${risk !== 'high' ? `<button class="btn-perm btn-always" data-perm-id="${esc(requestId)}" data-perm-action="always">Always allow</button>` : ''}
+        ${RundockPermissions.offersAlwaysAllow(risk) ? `<button class="btn-perm btn-always" data-perm-id="${esc(requestId)}" data-perm-action="always">Always allow</button>` : ''}
         <button class="btn-perm btn-deny" data-perm-id="${esc(requestId)}" data-perm-action="deny">Deny</button>
       </div>
     </div>
