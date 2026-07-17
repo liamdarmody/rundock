@@ -249,6 +249,37 @@ function writeConversations(list) {
   fs.writeFileSync(path.join(dir, 'conversations.json'), JSON.stringify(list, null, 2));
 }
 
+// Conversation lists (user-named, many-to-many groupings shown as sidebar
+// pills). The registry lives in .rundock/lists.json; membership lives on each
+// conversation entry (listIds) so it rides the existing conversation
+// persistence. Deleting a list removes the registry entry and strips the id
+// from every conversation, never touching the conversations themselves.
+function readLists() {
+  try {
+    const list = JSON.parse(fs.readFileSync(path.join(rundockDir(), 'lists.json'), 'utf-8'));
+    return Array.isArray(list) ? list.filter(l => l && typeof l.id === 'string' && typeof l.name === 'string') : [];
+  } catch (e) { return []; }
+}
+
+function writeLists(lists) {
+  const dir = rundockDir();
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'lists.json'), JSON.stringify(lists, null, 2));
+}
+
+function deleteListEverywhere(listId) {
+  writeLists(readLists().filter(l => l.id !== listId));
+  const convos = readConversations();
+  let changed = false;
+  for (const c of convos) {
+    if (Array.isArray(c.listIds) && c.listIds.includes(listId)) {
+      c.listIds = c.listIds.filter(id => id !== listId);
+      changed = true;
+    }
+  }
+  if (changed) writeConversations(convos);
+}
+
 function readState() {
   try {
     const file = path.join(rundockDir(), 'state.json');
@@ -4114,12 +4145,38 @@ wss.on('connection', (ws) => {
           status: msg.conversation.status || 'active',
           pinned: msg.conversation.pinned || false,
           pinnedAt: msg.conversation.pinnedAt || null,
+          listIds: Array.isArray(msg.conversation.listIds) ? msg.conversation.listIds.filter(x => typeof x === 'string') : [],
           createdAt: msg.conversation.createdAt || new Date().toISOString(),
           lastActiveAt: new Date().toISOString()
         };
         if (idx >= 0) { convos[idx] = entry; } else { convos.unshift(entry); }
         // Cap at 100 conversations
         writeConversations(convos.slice(0, 100));
+      }
+
+      // ── CONVERSATION LISTS: named many-to-many sidebar groupings ──
+      if (msg.type === 'get_lists') {
+        if (!WORKSPACE) return;
+        ws.send(JSON.stringify({ type: 'lists', lists: readLists() }));
+      }
+
+      if (msg.type === 'create_list') {
+        if (!WORKSPACE) return;
+        const name = typeof msg.name === 'string' ? msg.name.trim().slice(0, 60) : '';
+        if (!name) return;
+        const lists = readLists();
+        // Same name twice is a no-op rather than a duplicate pill.
+        if (!lists.some(l => l.name.toLowerCase() === name.toLowerCase())) {
+          lists.push({ id: 'list-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name, createdAt: new Date().toISOString() });
+          writeLists(lists);
+        }
+        ws.send(JSON.stringify({ type: 'lists', lists }));
+      }
+
+      if (msg.type === 'delete_list') {
+        if (!WORKSPACE || typeof msg.id !== 'string') return;
+        deleteListEverywhere(msg.id);
+        ws.send(JSON.stringify({ type: 'lists', lists: readLists() }));
       }
 
       // ── DELEGATION: orchestrator hands off to another agent in the same conversation ──
@@ -5994,6 +6051,7 @@ module.exports._internal = {
   readMcpServerNames, getFileTree, validateAgentSlug, isInsideWorkspace,
   // persistence
   readConversations, writeConversations, readState, writeState,
+  readLists, writeLists, deleteListEverywhere,
   loadTranscript, saveTranscript, appendTranscript, formatTranscript,
   transcriptDir, countSessionMessagesSync, countConversationMessages,
   parseSessionHistory, getSessionJsonlPath,
