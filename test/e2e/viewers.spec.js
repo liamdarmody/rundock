@@ -271,6 +271,24 @@ test('callouts render as admonition boxes with working fold; frontmatter wikilin
   await expect(page.locator('#editor-filename')).toHaveText('Roadmap-2026.md');
 });
 
+test('a wikilink to an image or PDF in a conversation opens the real viewer', async ({ page }) => {
+  await boot(page);
+  await page.locator('.convo-item', { hasText: 'Export handoff' }).click();
+  const link = page.locator('.wikilink', { hasText: 'chart.png' }).first();
+  await expect(link).toBeVisible();
+  await link.click();
+  const img = page.locator('.viewer-image-wrap img');
+  await expect(img).toBeVisible();
+  expect(await img.evaluate(el => el.naturalWidth)).toBe(8); // the real decoded file, not a chart.png.md dead end
+
+  // Back to the conversation; the PDF link routes to the PDF frame.
+  await page.locator('.nav-item[data-nav="conversations"]').click();
+  await page.locator('.convo-item', { hasText: 'Export handoff' }).click();
+  await page.locator('.wikilink', { hasText: 'report.pdf' }).first().click();
+  await expect(page.locator('iframe.viewer-frame')).toHaveAttribute('src', '/workspace-file?path=report.pdf');
+  await page.screenshot({ path: `${SHOTS}/conversation-wikilink-binary.png` });
+});
+
 // ── FV2 phase 4: property editing + external-edit guard ─────────────────────
 
 test('editing a frontmatter property persists byte-honestly to the file', async ({ page }) => {
