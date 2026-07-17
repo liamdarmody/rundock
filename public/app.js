@@ -3138,53 +3138,47 @@ function loadFileContent(path, content) {
   document.getElementById('editor-header').classList.remove('hidden');
   document.getElementById('editor-empty').classList.add('hidden');
 
-  // Markdown files open in the Tiptap surface; the legacy DOM and
-  // Preview/Edit toggle are hidden and the Tiptap pane is shown and seeded.
-  if (isMarkdownPath(path)) {
-    document.getElementById('editor-content').classList.add('hidden');
-    document.getElementById('editor-textarea').classList.add('hidden');
-    document.getElementById('toggle-preview').classList.add('hidden');
-    document.getElementById('toggle-edit').classList.add('hidden');
-    document.getElementById('tiptap-editor-pane').classList.remove('hidden');
-    fileFrontmatter = '';
-    fileBody = content;
-    initTiptapEditor(path, content);
-    return;
-  }
-
-  // SEAM(FV2->R10): every non-markdown path routes through the file-type
-  // registry (public/viewers/registry.js): html/svg render sandboxed, images
-  // and PDFs ride the binary endpoint, unknown binary types get a clear
-  // cannot-preview state, and txt/json keep the legacy preview/edit pane.
-  // At the stage-2 sync point this dispatch collapses to a registry lookup.
+  // The file-type registry decides the surface for EVERY path (the FV2
+  // swap: the old per-type if-chain is gone). markdown -> Tiptap editor,
+  // text -> legacy preview/edit pane, artifact -> sandboxed preview with
+  // the legacy code view, image/pdf -> read-only viewers over the binary
+  // endpoint, anything else -> the cannot-preview state. A new file type
+  // lands as one registry entry + one surface function, no dispatch edits.
   loadViewersModule().then((viewers) => {
     if (currentFilePath !== path) return; // stale: another file opened while the module loaded
-    openNonMarkdownFile(viewers, path, content);
+    const surface = FILE_SURFACES[viewers.classify(path)] || openBinaryOrUnsupportedFile;
+    surface(viewers, path, content);
   });
 }
 
-function openNonMarkdownFile(viewers, path, content) {
+const FILE_SURFACES = {
+  markdown: openMarkdownFile,
+  text: openLegacyTextFile,
+  artifact: openLegacyTextFile, // preview mode mounts the sandboxed iframe from renderEditorContent
+  image: openBinaryOrUnsupportedFile,
+  pdf: openBinaryOrUnsupportedFile,
+  unsupported: openBinaryOrUnsupportedFile,
+};
+
+// Markdown: the Tiptap surface; the legacy DOM and Preview/Edit toggle are
+// hidden and the Tiptap pane is shown and seeded.
+function openMarkdownFile(viewers, path, content) {
+  document.getElementById('editor-content').classList.add('hidden');
+  document.getElementById('editor-textarea').classList.add('hidden');
+  document.getElementById('toggle-preview').classList.add('hidden');
+  document.getElementById('toggle-edit').classList.add('hidden');
+  document.getElementById('tiptap-editor-pane').classList.remove('hidden');
+  fileFrontmatter = '';
+  fileBody = content;
+  initTiptapEditor(path, content);
+}
+
+// Text keeps the legacy preview/edit chrome; artifacts share it so the Code
+// toggle (raw source, still editable and saveable) keeps working, with
+// preview mode mounting the sandboxed iframe from renderEditorContent.
+function openLegacyTextFile(viewers, path, content) {
   destroyTiptapEditorIfActive();
   document.getElementById('tiptap-editor-pane').classList.add('hidden');
-
-  const kind = viewers.classify(path);
-  if (kind === 'image' || kind === 'pdf' || kind === 'unsupported') {
-    // Read-only viewers own the pane: no Preview/Code toggle, and no save
-    // path (their bytes ride /workspace-file; the WS text content for a
-    // binary file is utf-8-mangled and must never be written back).
-    document.getElementById('toggle-preview').classList.add('hidden');
-    document.getElementById('toggle-edit').classList.add('hidden');
-    document.getElementById('editor-textarea').classList.add('hidden');
-    const pane = document.getElementById('editor-content');
-    pane.classList.remove('hidden');
-    pane.className = 'editor-content';
-    activeFileViewer = viewers.mountViewer(kind, { paneElement: pane, path });
-    return;
-  }
-
-  // Text and artifact kinds keep the legacy preview/edit chrome. Artifact
-  // preview mode mounts the sandboxed iframe from renderEditorContent, so
-  // the Code toggle (raw source, still editable and saveable) keeps working.
   document.getElementById('toggle-preview').classList.remove('hidden');
   document.getElementById('toggle-edit').classList.remove('hidden');
   document.getElementById('editor-content').classList.remove('hidden');
@@ -3202,6 +3196,21 @@ function openNonMarkdownFile(viewers, path, content) {
   // Always open in preview mode
   editorMode = 'preview';
   renderEditorContent();
+}
+
+// Read-only viewers own the pane: no Preview/Code toggle, and no save path
+// (their bytes ride /workspace-file; the WS text content for a binary file
+// is utf-8-mangled and must never be written back).
+function openBinaryOrUnsupportedFile(viewers, path) {
+  destroyTiptapEditorIfActive();
+  document.getElementById('tiptap-editor-pane').classList.add('hidden');
+  document.getElementById('toggle-preview').classList.add('hidden');
+  document.getElementById('toggle-edit').classList.add('hidden');
+  document.getElementById('editor-textarea').classList.add('hidden');
+  const pane = document.getElementById('editor-content');
+  pane.classList.remove('hidden');
+  pane.className = 'editor-content';
+  activeFileViewer = viewers.mountViewer(viewers.classify(path), { paneElement: pane, path });
 }
 
 function renderEditorContent() {
