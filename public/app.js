@@ -27,7 +27,7 @@
 const sunIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`;
 const moonIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
 
-let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false, currentWorkspacePath=null, workspaceAnalysis=null, workspaceIsEmpty=false, workspaceMode='knowledge', setupComplete=true, conversationsLoaded=false, activeSidebarPill='all';
+let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false, currentWorkspacePath=null, workspaceAnalysis=null, workspaceIsEmpty=false, workspaceMode='knowledge', setupComplete=true, conversationsLoaded=false, activeSidebarPill='all', convoLists=[];
 let runtimeStatus = null; // { defaultRuntime, claude: {installed, authenticated, version}, codex: {...} }
 const agentLastActivity = {}; // { agentId: { time: Date, label: string } }
 // Per-conversation state: { convoId: { isProcessing, currentStreamingMsg, latestText } }
@@ -276,6 +276,23 @@ function handle(d) {
     case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesSidebar(); renderConvoList(); break;
     case 'skills': skills=d.skills; skillsLoaded=true; renderSkills(); if(palettePendingSkill){const s=palettePendingSkill;palettePendingSkill=null;selectSkill(s);} break;
     case 'conversations': handlePersistedConversations(d.conversations, d.lastActiveConversationId); break;
+    case 'lists': {
+      const prevIds = new Set(convoLists.map(l => l.id));
+      convoLists = d.lists || [];
+      // Create-and-add flow: a list created from a conversation's context menu
+      // adds that conversation to it once the server confirms creation.
+      if (pendingListAdd) {
+        const created = convoLists.filter(l => !prevIds.has(l.id));
+        if (created.length === 1) toggleConvoListMembership(pendingListAdd, created[0].id);
+        pendingListAdd = null;
+      }
+      renderListPills();
+      // If the active pill's list was deleted, fall back to All (via
+      // setSidebarPill so the fixed pills' active classes update too).
+      if (RundockConvoList.isListPill(activeSidebarPill) && !convoLists.some(l => 'list:' + l.id === activeSidebarPill)) setSidebarPill('all');
+      else renderConvoList();
+      break;
+    }
     case 'system':
       // Track active process per conversation to ignore stale events
       if(d.subtype==='process_started' && convoId && d._processId) {
@@ -1317,6 +1334,7 @@ function persistConversation(convo) {
       status: convo.status,
       pinned: convo.pinned || false,
       pinnedAt: convo.pinnedAt || null,
+      listIds: convo.listIds || [],
       createdAt: convo.createdAt || new Date().toISOString()
     }
   }));
@@ -1345,6 +1363,7 @@ function handlePersistedConversations(persisted, persistedLastActiveId) {
       sessionIds: entry.sessionIds || [],
       pinned: entry.pinned || false,
       pinnedAt: entry.pinnedAt || null,
+      listIds: entry.listIds || [],
       createdAt: entry.createdAt,
       lastActiveAt: entry.lastActiveAt,
       lastAgentId: entry.lastAgentId || null,
@@ -1704,12 +1723,120 @@ function convoBorderClass(c) {
 }
 
 // Switch the active sidebar pill filter and re-render. Reset to 'all' on
-// workspace switch via onWorkspaceReady.
+// workspace switch via onWorkspaceReady. Pills are 'all', 'unread', or
+// 'list:<id>' (user-created lists render as pills after Unread).
 function setSidebarPill(pill) {
   activeSidebarPill = pill;
   ['all','unread'].forEach(p => {
     document.getElementById('pill-' + p)?.classList.toggle('active', p === pill);
   });
+  document.querySelectorAll('#sidebar-pills .pill-list').forEach(el => {
+    el.classList.toggle('active', el.dataset.pill === pill);
+  });
+  renderConvoList();
+}
+
+// Render the user-created list pills after the fixed All | Unread pair.
+// Right-click a list pill to delete the list (conversations are never
+// deleted with it; they just leave the grouping).
+function renderListPills() {
+  const wrap = document.getElementById('sidebar-pills');
+  if (!wrap) return;
+  wrap.querySelectorAll('.pill-list').forEach(el => el.remove());
+  for (const l of convoLists) {
+    const btn = document.createElement('button');
+    btn.className = 'pill pill-list' + ('list:' + l.id === activeSidebarPill ? ' active' : '');
+    btn.dataset.pill = 'list:' + l.id;
+    btn.textContent = l.name;
+    btn.onclick = () => setSidebarPill('list:' + l.id);
+    btn.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      openConvoMenu(e, [{ label: `Delete list "${l.name}"`, action: () => ws.send(JSON.stringify({ type: 'delete_list', id: l.id })) }]);
+    });
+    wrap.appendChild(btn);
+  }
+}
+
+// Minimal shared context menu (positioned card, closes on any click or Esc).
+// Items: [{ label, action, checked? }] plus an optional inline input row via
+// { input: true, placeholder, onSubmit }.
+function openConvoMenu(evt, items) {
+  closeConvoMenu();
+  const menu = document.createElement('div');
+  menu.id = 'convo-context-menu';
+  menu.className = 'convo-menu';
+  for (const item of items) {
+    if (item.input) {
+      const row = document.createElement('div');
+      row.className = 'convo-menu-input';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.placeholder = item.placeholder || '';
+      input.maxLength = 60;
+      input.onkeydown = (e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter' && input.value.trim()) { item.onSubmit(input.value.trim()); closeConvoMenu(); }
+        if (e.key === 'Escape') closeConvoMenu();
+      };
+      input.onclick = (e) => e.stopPropagation();
+      row.appendChild(input);
+      menu.appendChild(row);
+    } else {
+      const row = document.createElement('button');
+      row.className = 'convo-menu-item';
+      row.innerHTML = `<span class="convo-menu-check">${item.checked ? '✓' : ''}</span>${esc(item.label)}`;
+      row.onclick = (e) => { e.stopPropagation(); item.action(); closeConvoMenu(); };
+      menu.appendChild(row);
+    }
+  }
+  document.body.appendChild(menu);
+  // Clamp to viewport.
+  const r = menu.getBoundingClientRect();
+  menu.style.left = Math.min(evt.clientX, window.innerWidth - r.width - 8) + 'px';
+  menu.style.top = Math.min(evt.clientY, window.innerHeight - r.height - 8) + 'px';
+  menu.querySelector('input')?.focus();
+  setTimeout(() => {
+    document.addEventListener('click', closeConvoMenu, { once: true });
+    document.addEventListener('keydown', convoMenuEsc);
+  }, 0);
+}
+function convoMenuEsc(e) { if (e.key === 'Escape') closeConvoMenu(); }
+function closeConvoMenu() {
+  document.getElementById('convo-context-menu')?.remove();
+  document.removeEventListener('keydown', convoMenuEsc);
+}
+
+// Right-click menu on a conversation row: toggle membership per list plus
+// create-and-add via the inline input. Membership is many-to-many.
+function openConvoListMenu(evt, convoId) {
+  evt.preventDefault();
+  evt.stopPropagation();
+  const convo = conversations.find(c => c.id === convoId);
+  if (!convo) return;
+  const items = convoLists.map(l => ({
+    label: l.name,
+    checked: Array.isArray(convo.listIds) && convo.listIds.includes(l.id),
+    action: () => toggleConvoListMembership(convoId, l.id),
+  }));
+  items.push({ input: true, placeholder: 'New list…', onSubmit: (name) => {
+    pendingListAdd = convoId;
+    ws.send(JSON.stringify({ type: 'create_list', name }));
+  }});
+  openConvoMenu(evt, items);
+}
+
+// When a list is created from a conversation's menu, add that conversation to
+// it as soon as the server confirms the list exists.
+let pendingListAdd = null;
+
+function toggleConvoListMembership(convoId, listId) {
+  const convo = conversations.find(c => c.id === convoId);
+  if (!convo) return;
+  if (!Array.isArray(convo.listIds)) convo.listIds = [];
+  convo.listIds = convo.listIds.includes(listId)
+    ? convo.listIds.filter(id => id !== listId)
+    : [...convo.listIds, listId];
+  persistConversation(convo);
   renderConvoList();
 }
 
@@ -1852,7 +1979,7 @@ function renderConvoItem(c, variant) {
     leftButton = `<button class="convo-delete" onclick="deleteConversation('${c.id}', event)" data-tooltip="Delete">${deleteSvg}</button>`;
   }
 
-  return `<div class="${classes.join(' ')}" ${styleAttr} onclick="openConversation('${c.id}')">
+  return `<div class="${classes.join(' ')}" ${styleAttr} onclick="openConversation('${c.id}')" oncontextmenu="openConvoListMenu(event, '${c.id}')">
     ${leftButton}
     ${titleSection}
     ${preview ? `<span class="convo-preview">${esc(preview)}</span>` : ''}
@@ -3478,6 +3605,7 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   ws.send(JSON.stringify({ type: 'get_files' }));
   ws.send(JSON.stringify({ type: 'get_skills' }));
   ws.send(JSON.stringify({ type: 'get_conversations' }));
+  ws.send(JSON.stringify({ type: 'get_lists' }));
   ws.send(JSON.stringify({ type: 'get_runtime_status' }));
   skillsLoaded = false;
   currentSkillId = null;
@@ -3492,6 +3620,8 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   conversations = [];
   conversationsLoaded = false;
   activeSidebarPill = 'all';
+  convoLists = [];
+  renderListPills();
   ['all','unread'].forEach(p => document.getElementById('pill-' + p)?.classList.toggle('active', p === 'all'));
   activeConversation = null;
   // Clear per-conversation client state that keys by convoId. Leftover entries
