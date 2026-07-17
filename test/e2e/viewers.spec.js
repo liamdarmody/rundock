@@ -7,26 +7,29 @@
 // decoded bytes), the PDF frame, and the cannot-preview fallback.
 // Screenshots land in test-results/viewers/ as run evidence.
 const base = require('@playwright/test');
-const { appendRawCoverage } = require('./coverage.js');
+const { appendRawCoverage, writeLcov, isClientEntry } = require('./coverage.js');
 
 const test = base.test.extend({
   page: async ({ page }, use) => {
     await page.coverage.startJSCoverage({ resetOnNavigation: false });
     await use(page);
     const entries = await page.coverage.stopJSCoverage();
-    appendRawCoverage(entries.filter(e => e.url.endsWith('/app.js')));
+    appendRawCoverage(entries.filter(e => isClientEntry(e.url)));
   },
 });
 const { expect } = base;
 
 // Both spec files write the lcov summary in afterAll; writeLcov reads the
 // full accumulated raw file, so whichever runs last prints the complete
-// number (the ratchet reads that final line).
+// numbers (the ratchet reads that final block).
 test.afterAll(async () => {
-  const { writeLcov } = require('./coverage.js');
   const summary = await writeLcov();
   if (summary) {
-    console.log(`\n[client coverage] public/app.js: ${summary.pct.toFixed(1)}% lines (${summary.covered}/${summary.total}) -> ${summary.out}`);
+    console.log('');
+    for (const f of summary.files) {
+      console.log(`[client coverage] public/${f.file}: ${f.pct.toFixed(1)}% lines (${f.covered}/${f.total})`);
+    }
+    console.log(`[client coverage] combined: ${summary.pct.toFixed(1)}% lines (${summary.covered}/${summary.total}) -> ${summary.out}`);
   }
 });
 
