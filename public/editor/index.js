@@ -18,7 +18,7 @@ import { attachFloatingToolbar } from './panels/floating-toolbar.js';
 import { attachReviewPanel } from './panels/review.js';
 import { createReviewController } from './review/controller.js';
 import { renderProperties } from './panels/properties.js';
-import { replaceProperty } from './markdown/frontmatter-edit.js';
+import { replaceProperty, editListItem } from './markdown/frontmatter-edit.js';
 import { extractFrontmatter } from './markdown/frontmatter.js';
 import { setFindQuery, findNext, findPrev, setFindIndex, clearFind, getFindState } from './plugins/find.js';
 
@@ -89,7 +89,11 @@ export function createEditor({
     onWikilinkClick,
     resolveWikilink,
     onEditProperty: (key, value) => {
-      const res = replaceProperty(parts.raw, key, value);
+      // A { list: { remove|add } } mutation is a byte-honest single-item
+      // list edit; anything else is a scalar/bool/full-value replacement.
+      const res = (value && typeof value === 'object' && value.list)
+        ? editListItem(parts.raw, key, value.list)
+        : replaceProperty(parts.raw, key, value);
       if (!res.changed) { renderPanel(); return false; }
       const check = extractFrontmatter(res.raw);
       if (!check.parsed || typeof check.parsed !== 'object') { renderPanel(); return false; }

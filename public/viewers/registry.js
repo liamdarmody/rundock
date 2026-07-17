@@ -105,6 +105,7 @@ function ensureStyles(doc) {
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
     }
     .artifact-comment-btn.visible { display: block; }
+    .artifact-review-readonly { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 6; max-width: 70%; padding: 6px 14px; border-radius: 8px; background: rgba(232,168,76,0.14); border: 1px solid rgba(232,168,76,0.35); color: var(--text-1); font-size: 12px; text-align: center; }
     .viewer-image-wrap { flex: 1; display: flex; align-items: center; justify-content: center; overflow: auto; padding: 24px; }
     .viewer-image-wrap img { max-width: 100%; max-height: 100%; object-fit: contain; }
     .viewer-unsupported { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--text-2); }

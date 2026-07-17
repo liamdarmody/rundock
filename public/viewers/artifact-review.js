@@ -204,6 +204,28 @@ export function attachArtifactReview({
   };
   doc.addEventListener('click', onFrameClick);
 
+  // When saving is disabled (the sidecar could not be read cleanly or parsed
+  // as corrupt), authoring is suppressed entirely and a read-only notice is
+  // shown, so a user never leaves comments that would silently vanish. Any
+  // comments that DID parse still render (read-only).
+  if (!saveEnabled) {
+    const notice = hostDoc.createElement('div');
+    notice.className = 'artifact-review-readonly';
+    notice.textContent = 'Review is read-only: this file’s saved comments could not be read safely, so new comments are disabled to avoid overwriting them.';
+    paneElement.appendChild(notice);
+    renderMarks();
+    return {
+      controller,
+      refresh: () => { renderMarks(); panel.refresh(); },
+      detach: () => {
+        doc.removeEventListener('click', onFrameClick);
+        notice.remove();
+        clearMarks();
+        panel.detach();
+      },
+    };
+  }
+
   // Floating Comment button: host-positioned over the iframe, shown while a
   // selection exists in the frame. mousedown (not click) so the selection
   // survives the press.

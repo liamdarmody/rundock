@@ -172,11 +172,11 @@ export const MathBlock = Node.create({
     return {
       markdown: {
         serialize(state, node) {
-          const lines = String(node.attrs.src).split('\n');
-          for (let i = 0; i < lines.length; i++) {
-            state.write(lines[i]);
-            if (i < lines.length - 1) state.ensureNewLine();
-          }
+          // state.text splits on \n and emits the separators itself, so
+          // BLANK lines inside the block survive (aligned LaTeX with spacing).
+          // The per-line write()+ensureNewLine loop collapsed them: an empty
+          // line wrote nothing and ensureNewLine no-oped at line start.
+          state.text(String(node.attrs.src), false);
           state.closeBlock(node);
         },
         // registerMathMarkdownIt already ran via MathInline's setup; running

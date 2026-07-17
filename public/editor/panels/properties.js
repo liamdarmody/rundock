@@ -222,19 +222,18 @@ function attachEditing(container, parsed, onEditProperty) {
     const type = row.getAttribute('data-prop-type');
     const value = parsed[key];
 
-    // List item removal.
+    // List item removal / addition go through index-based mutations so
+    // untouched items keep their exact bytes (never re-parsed).
     const removeBtn = event.target.closest('.prop-chip-remove');
     if (removeBtn) {
       const idx = Number(removeBtn.closest('.prop-chip').getAttribute('data-item-index'));
-      const items = value.map(String).filter((_, i) => i !== idx);
-      onEditProperty(key, items);
+      onEditProperty(key, { list: { remove: idx } });
       return;
     }
-    // List item addition.
     if (event.target.closest('.prop-add')) {
       openInput(row, key, '', (text) => {
         const t = text.trim();
-        if (t) onEditProperty(key, [...value.map(String), t]);
+        if (t) onEditProperty(key, { list: { add: t } });
         else if (typeof container.__propsRerender === 'function') container.__propsRerender();
       });
       return;
