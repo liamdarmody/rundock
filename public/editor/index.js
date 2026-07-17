@@ -18,6 +18,8 @@ import { attachFloatingToolbar } from './panels/floating-toolbar.js';
 import { attachReviewPanel } from './panels/review.js';
 import { createReviewController } from './review/controller.js';
 import { renderProperties } from './panels/properties.js';
+import { replaceProperty } from './markdown/frontmatter-edit.js';
+import { extractFrontmatter } from './markdown/frontmatter.js';
 import { setFindQuery, findNext, findPrev, setFindIndex, clearFind, getFindState } from './plugins/find.js';
 
 export { setFindQuery, findNext, findPrev, setFindIndex, clearFind, getFindState };
@@ -78,10 +80,32 @@ export function createEditor({
     },
   });
 
-  // Properties panel is read-only today; making it editable is a follow-up.
-  // Frontmatter wikilink values are clickable and route through the same
-  // host hook as inline wikilinks.
-  const propertiesCount = renderProperties(propertiesElement, parsed, { onWikilinkClick, resolveWikilink });
+  // Properties panel: wikilink values are clickable (routed through the same
+  // host hook as inline wikilinks) and values edit inline. Edits are surgical
+  // line replacements in the raw YAML block (frontmatter-edit.js): the edited
+  // key's lines change, every other byte round-trips. A refused or
+  // would-corrupt edit re-renders from the file's truth and changes nothing.
+  const panelOpts = {
+    onWikilinkClick,
+    resolveWikilink,
+    onEditProperty: (key, value) => {
+      const res = replaceProperty(parts.raw, key, value);
+      if (!res.changed) { renderPanel(); return false; }
+      const check = extractFrontmatter(res.raw);
+      if (!check.parsed || typeof check.parsed !== 'object') { renderPanel(); return false; }
+      parts.raw = res.raw;
+      parts.parsed = check.parsed;
+      renderPanel();
+      if (typeof onUpdate === 'function') onUpdate({ editor }); // host save path picks up parts.raw
+      return true;
+    },
+  };
+  const renderPanel = () => {
+    const count = renderProperties(propertiesElement, parts.parsed, panelOpts);
+    if (propertiesElement) propertiesElement.__propsRerender = renderPanel;
+    return count;
+  };
+  const propertiesCount = renderPanel();
 
   // Review: the controller owns review state (constructs + endmatter); the
   // panel is its UI. Endmatter-only operations (reply, Done-Reviewing) do

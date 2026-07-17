@@ -165,15 +165,82 @@ function saveTiptapFile() {
   if (!currentFilePath || !activeTiptapEditor || !_tiptapEditorModule) return;
   _tiptapEditorModule.then(mod => {
     const content = mod.getMarkdown(activeTiptapEditor);
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'save_file', path: currentFilePath, content }));
-    }
-    const statusEl = document.getElementById('editor-status');
-    if (statusEl) {
-      statusEl.style.color = 'var(--success)';
-      statusEl.textContent = 'Saved';
+    saveFileGuarded(currentFilePath, content);
+  });
+}
+
+// ---- External-edit guard (FV2 phase 4) ----
+// Rundock and Obsidian edit the same vault interchangeably, so auto-save
+// must never silently overwrite an edit made outside Rundock. Baseline =
+// the bytes we believe are on disk (set at load and after each save we
+// made). Before every save, the current disk bytes are fetched and
+// compared: an unexpected difference surfaces a reload-theirs / keep-mine
+// choice instead of a write. Our own saves move the baseline, so
+// Rundock-caused writes (including agent writes we then reload) never
+// false-positive; a disk state identical to what we are writing is not a
+// conflict either.
+const diskBaselines = new Map();
+
+async function saveFileGuarded(path, content) {
+  let disk = null;
+  try {
+    const res = await fetch('/api/file?path=' + encodeURIComponent(path));
+    if (res.ok) disk = (await res.text()).replace(/\r\n?/g, '\n');
+  } catch { /* offline check: fall through and save as before */ }
+  const baseline = diskBaselines.get(path);
+  if (disk !== null && baseline !== undefined && disk !== baseline && disk !== content) {
+    showExternalEditConflict(path, disk, content);
+    return false;
+  }
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'save_file', path, content }));
+    diskBaselines.set(path, content);
+  }
+  const statusEl = document.getElementById('editor-status');
+  if (statusEl) {
+    statusEl.style.color = 'var(--success)';
+    statusEl.textContent = 'Saved';
+  }
+  hideExternalEditConflict();
+  return true;
+}
+
+function hideExternalEditConflict() {
+  const banner = document.getElementById('external-edit-banner');
+  if (banner) banner.remove();
+}
+
+function showExternalEditConflict(path, diskContent, myContent) {
+  hideExternalEditConflict();
+  const statusEl = document.getElementById('editor-status');
+  if (statusEl) {
+    statusEl.style.color = 'var(--attention)';
+    statusEl.textContent = 'Changed outside Rundock';
+  }
+  const header = document.getElementById('editor-header');
+  if (!header) return;
+  const banner = document.createElement('div');
+  banner.id = 'external-edit-banner';
+  banner.innerHTML = `
+    <span class="banner-text">This file changed outside Rundock while you were editing.</span>
+    <button type="button" class="banner-btn" data-choice="theirs">Reload theirs</button>
+    <button type="button" class="banner-btn primary" data-choice="mine">Keep mine</button>`;
+  banner.addEventListener('click', (e) => {
+    const btn = e.target.closest('.banner-btn');
+    if (!btn || currentFilePath !== path) return;
+    if (btn.dataset.choice === 'theirs') {
+      hideExternalEditConflict();
+      diskBaselines.set(path, diskContent);
+      loadFileContent(path, diskContent);
+      const s = document.getElementById('editor-status');
+      if (s) { s.style.color = 'var(--success)'; s.textContent = 'Reloaded'; }
+    } else {
+      // Keep mine: an explicit human decision to overwrite.
+      diskBaselines.set(path, diskContent); // guard passes because disk now matches
+      saveFileGuarded(path, myContent);
     }
   });
+  header.insertAdjacentElement('afterend', banner);
 }
 function destroyTiptapEditorIfActive() {
   // Capture the current instance and clear the global ref synchronously so a
@@ -2834,8 +2901,12 @@ function loadFileContent(path, content) {
   // Close any active find before swapping the editor content.
   if (currentFilePath !== path) closeFindBar();
   destroyActiveFileViewer();
+  hideExternalEditConflict();
   currentFilePath = path;
   rawFileContent = content;
+  // What we believe is on disk: the external-edit guard compares against
+  // this before every save.
+  diskBaselines.set(path, content);
   document.getElementById('editor-filename').textContent = path;
   document.getElementById('editor-status').textContent = '';
   document.getElementById('editor-header').classList.remove('hidden');
@@ -3635,7 +3706,7 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
 
 // Editor save
 let saveTimer=null;
-document.addEventListener('input',e=>{if((e.target.id==='editor-content'||e.target.id==='editor-textarea')&&currentFilePath&&editorMode==='edit'){document.getElementById('editor-status').textContent='Unsaved';document.getElementById('editor-status').style.color='var(--attention)';clearTimeout(saveTimer);saveTimer=setTimeout(()=>{ws.send(JSON.stringify({type:'save_file',path:currentFilePath,content:getFileContentForSave()}));document.getElementById('editor-status').style.color='var(--success)';document.getElementById('editor-status').textContent='Saved';},1500);}});
+document.addEventListener('input',e=>{if((e.target.id==='editor-content'||e.target.id==='editor-textarea')&&currentFilePath&&editorMode==='edit'){document.getElementById('editor-status').textContent='Unsaved';document.getElementById('editor-status').style.color='var(--attention)';clearTimeout(saveTimer);saveTimer=setTimeout(()=>{saveFileGuarded(currentFilePath,getFileContentForSave());},1500);}});
 const msgInput = document.getElementById('msg-input');
 msgInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}});
 msgInput.addEventListener('input',()=>{
