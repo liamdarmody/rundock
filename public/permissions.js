@@ -171,5 +171,65 @@
   // High-risk requests never offer a standing "Always allow".
   function offersAlwaysAllow(risk) { return risk !== 'high'; }
 
-  return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow };
+  // ── Pending permission requests for background conversations ────────────
+  // A control_request for a conversation that is not on screen must never
+  // be dropped (the server auto-denies an unanswered request at the
+  // timeout, silently degrading work the user never got to consent to).
+  // These functions own the store's decisions; app.js glues them to the
+  // DOM (render on open, unread badge) and the socket. Pinned by
+  // test/unit/permissions.test.js; the server's acceptance of the late
+  // response a queued card produces is pinned in
+  // test/integration/background-approvals.test.js.
+
+  // Where a permission request goes when it arrives. Auto-allow decisions
+  // (standing grants, low-risk reads) answer immediately regardless of
+  // which conversation is on screen; anything needing a card renders when
+  // its conversation is active and queues when it is not.
+  function routePermissionRequest(decision, isActive) {
+    if (decision && decision.action === 'allow') return 'respond-allow';
+    return isActive ? 'render' : 'queue';
+  }
+
+  // byConvo: Map convoId -> Map requestId -> payload (the raw
+  // control_request message). Keyed by requestId so a server re-send
+  // (reconnect) never duplicates. Returns the conversation's queue size.
+  function queuePendingPermission(byConvo, convoId, requestId, payload) {
+    if (!requestId) return 0;
+    let m = byConvo.get(convoId);
+    if (!m) { m = new Map(); byConvo.set(convoId, m); }
+    m.set(requestId, payload);
+    return m.size;
+  }
+
+  // The still-pending payloads for a conversation, in arrival order.
+  function pendingPermissionsFor(byConvo, convoId) {
+    const m = byConvo.get(convoId);
+    return m ? Array.from(m.values()) : [];
+  }
+
+  // Remove a request wherever it is stored (answered, timed out, or
+  // otherwise resolved server-side) so a stale card can never be rendered
+  // or answered. Returns the conversation it was queued under, or null.
+  function removePendingPermission(byConvo, requestId) {
+    for (const entry of byConvo) {
+      const convoId = entry[0], m = entry[1];
+      if (m.delete(requestId)) {
+        if (m.size === 0) byConvo.delete(convoId);
+        return convoId;
+      }
+    }
+    return null;
+  }
+
+  // Drop every queued request for one conversation (the server's cancel
+  // sweep has already answered them). Returns how many were dropped.
+  function clearPendingPermissions(byConvo, convoId) {
+    const m = byConvo.get(convoId);
+    if (!m) return 0;
+    byConvo.delete(convoId);
+    return m.size;
+  }
+
+  return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow,
+    routePermissionRequest, queuePendingPermission, pendingPermissionsFor, removePendingPermission, clearPendingPermissions };
 }));

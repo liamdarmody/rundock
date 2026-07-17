@@ -338,6 +338,10 @@ function handle(d) {
       }
       // Agent was cancelled by user
       if(d.subtype==='cancelled' && convoId) {
+        // The server's cancel sweep has already answered every pending
+        // permission request for this conversation, so any queued
+        // background cards are stale and must never render.
+        RundockPermissions.clearPendingPermissions(pendingPermissionsByConvo, convoId);
         const r = RundockConversationState.reduce(getConvoState(convoId), d, {});
         convoState[convoId] = r.state;
         executeEffects(convoId, r.effects);
@@ -447,6 +451,9 @@ function handle(d) {
         card.innerHTML = `<div class="permission-resolved denied"><span>✕ Timed out</span></div>`;
       }
       pendingPermissions.delete(d.requestId);
+      // Expired: a copy queued for a background conversation must never be
+      // rendered (and answered) after the server has auto-denied it.
+      RundockPermissions.removePendingPermission(pendingPermissionsByConvo, d.requestId);
       const t = document.getElementById('thinking-indicator');
       if (t) t.style.display = '';
       break;
@@ -2127,6 +2134,11 @@ function openConversation(id, withAnchor) {
     document.getElementById('msg-input').disabled=false;
     document.getElementById('msg-input').focus();
   }
+  // Approval cards that arrived while this conversation was in the
+  // background render now, at the bottom of the thread, still answerable
+  // until the server's permission timeout expires them. (Session-history
+  // loads prepend above existing content, so these cards keep their place.)
+  renderPendingPermissionCards(id);
   showView('chat'); scrollBottom(true); renderConvoList();
 }
 
@@ -2621,6 +2633,13 @@ function renderSessionHistory(d) {
 const alwaysAllowedTools = new Set();
 // Pending permission callbacks (avoids inline onclick injection)
 const pendingPermissions = new Map();
+// Permission requests for conversations that are not on screen, awaiting
+// render when their conversation opens: convoId -> Map(requestId -> the raw
+// control_request payload). Entries leave on answer (respondPermission),
+// server timeout (permission_timeout), or cancel (the server's cancel sweep
+// already answered them). The store's decisions are pure functions in
+// permissions.js (unit-tested); this map is the app's single instance.
+const pendingPermissionsByConvo = new Map();
 
 // Permission/trust decision logic lives in permissions.js (unit-tested;
 // loaded before this file). The aliases keep historical call sites readable;
@@ -2633,9 +2652,46 @@ function describeToolRequest(toolName, input) {
 function toolAllowKey(toolName, input) { return RundockPermissions.toolAllowKey(toolName, input); }
 
 function handlePermissionRequest(d, convoId) {
-  const isActive = activeConversation?.id === convoId;
-  if (!isActive) return;
+  const req = d.request || {};
+  const requestId = d.request_id || '';
+  const toolName = req.tool_name || 'Unknown';
+  const input = req.input || {};
+  const risk = classifyRisk(toolName, input);
+  const key = toolAllowKey(toolName, input);
 
+  // The auto-allow decision path is a named, unit-tested function in
+  // permissions.js: standing "Always allow" grants and the low-risk
+  // (read-only) auto-approve policy skip the card; everything else asks.
+  // Auto-allows answer regardless of which conversation is on screen (a
+  // standing grant is session-wide); card-worthy requests render only in
+  // the active conversation and QUEUE for background ones, where they used
+  // to be silently dropped and auto-denied at the server timeout.
+  const decision = RundockPermissions.decidePermission(risk, key, alwaysAllowedTools);
+  const isActive = activeConversation?.id === convoId;
+  const route = RundockPermissions.routePermissionRequest(decision, isActive);
+  if (route === 'respond-allow') {
+    if (ws) {
+      ws.send(JSON.stringify({ type: 'permission_response', requestId, conversationId: convoId, allow: true }));
+    }
+    return;
+  }
+  if (route === 'queue') {
+    // Keep the request for renderPendingPermissionCards (fires when the
+    // conversation opens) and surface the unread signal so the user knows
+    // something in that conversation needs their attention.
+    RundockPermissions.queuePendingPermission(pendingPermissionsByConvo, convoId, requestId, d);
+    unreadConvos.add(convoId);
+    updateUnreadBadge();
+    renderConvoList();
+    return;
+  }
+  renderPermissionCard(d, convoId);
+}
+
+// Render one approval card into the active conversation's message list.
+// Extracted verbatim from handlePermissionRequest so queued background
+// requests render through the exact same path when their conversation opens.
+function renderPermissionCard(d, convoId) {
   const req = d.request || {};
   const requestId = d.request_id || '';
   const toolName = req.tool_name || 'Unknown';
@@ -2643,17 +2699,6 @@ function handlePermissionRequest(d, convoId) {
   const risk = classifyRisk(toolName, input);
   const { summary, context, detail } = describeToolRequest(toolName, input);
   const key = toolAllowKey(toolName, input);
-
-  // The auto-allow decision path is a named, unit-tested function in
-  // permissions.js: standing "Always allow" grants and the low-risk
-  // (read-only) auto-approve policy skip the card; everything else asks.
-  const decision = RundockPermissions.decidePermission(risk, key, alwaysAllowedTools);
-  if (decision.action === 'allow') {
-    if (ws) {
-      ws.send(JSON.stringify({ type: 'permission_response', requestId, conversationId: convoId, allow: true }));
-    }
-    return;
-  }
 
   // Store callback data for safe event handling (no inline onclick injection).
   // toolInput is echoed back in control_response (required by Claude Code).
@@ -2704,10 +2749,27 @@ function handlePermissionRequest(d, convoId) {
   scrollBottom();
 }
 
+// Append cards for any approval requests that arrived while this
+// conversation was in the background. Idempotent: a card already in the DOM
+// is skipped, and entries stay queued until answered or timed out, so
+// switching away and back re-renders them. Called when a conversation
+// becomes the active view (openConversation).
+function renderPendingPermissionCards(convoId) {
+  if (activeConversation?.id !== convoId) return;
+  if (!document.getElementById('messages')) return;
+  for (const d of RundockPermissions.pendingPermissionsFor(pendingPermissionsByConvo, convoId)) {
+    if (document.getElementById('perm-' + (d.request_id || ''))) continue;
+    renderPermissionCard(d, convoId);
+  }
+}
+
 function respondPermission(requestId, allow, always) {
   const pending = pendingPermissions.get(requestId);
   if (!pending || !ws) return;
   pendingPermissions.delete(requestId);
+  // Answered: the queued copy (if this card was rendered from the
+  // background store) must never render again.
+  RundockPermissions.removePendingPermission(pendingPermissionsByConvo, requestId);
 
   ws.send(JSON.stringify({
     type: 'permission_response',

@@ -2806,32 +2806,47 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
     _conversationId: convoId, _processId: processId, _agent: orchestrator.id, autoContinue: true,
     ...(wasPipelineComplete ? { silent: true } : {}) }));
 
-  // Circuit breaker: check consecutive auto-resume count before sending prompt.
-  // COMPLETE paths are low-risk (orchestrator goes silent) but still count.
-  const resumeCount = incrementAutoResume(convoId);
-  if (resumeCount >= MAX_CONSECUTIVE_AGENT_RESUMES) {
-    console.log(`[CircuitBreaker] convo=${convoId} ${resumeCount} consecutive agent resumes in handleScopeReturn, pausing orchestrator`);
-    resetAutoResume(convoId);
+  // A chat message buffered during the kill/restore window supersedes the
+  // out-of-scope routing prompt: the user has spoken, so the fresh
+  // orchestrator parks idle and the replay (endConvoTransition below)
+  // drives it instead. Same rule as the three finishDelegateClose gates;
+  // without it the replayed message queues BEHIND the routing prompt and
+  // dies unread in stdin when that prompt re-delegates (interception
+  // SIGKILLs the orchestrator). The pipeline-complete prompt is not gated:
+  // it only parks the orchestrator silently, never re-delegates, so the
+  // replay queues safely behind it (matching the delegate COMPLETE paths).
+  const bufferedFollowUp = convoHasBufferedChat(convoId);
+  if (!wasPipelineComplete && bufferedFollowUp) {
     orchEntry.idle = true;
-    safeSend(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: `[Auto-paused: ${resumeCount} consecutive agent handoffs without user input. Last specialist: ${specialistEntry.agentId}. Please review the output above and send your next message to continue.]` }, _agent: orchestrator.id, _conversationId: convoId }));
+    console.log(`[KillWindow] convo=${convoId} skipping scope-return routing prompt, buffered follow-up takes over`);
   } else {
-    // Build context for orchestrator. Both shapes inject the specialist's final output
-    // so the orchestrator has visibility into what was delivered. Without this, the
-    // orchestrator's JSONL only contains its own pre-delegation state and it has to
-    // guess or re-read files to know what the specialist did.
-    const specialistOutput = sanitizeSpecialistOutput(specialistEntry.finalResponseText || specialistEntry.responseText);
-    const outputBlock = specialistOutput
-      ? `\n\n--- ${specialistEntry.agentId} ---\n${specialistOutput}\n---`
-      : '';
-    let prompt;
-    if (wasPipelineComplete) {
-      prompt = `[SYSTEM: pipeline-complete] ${specialistEntry.agentId} has finished the delegated work. Here is their final message to the conversation:${outputBlock}\n\nYour output for this turn MUST be exactly the literal string <silent> and nothing else. Do not narrate, summarise, or quote the specialist's output. Do not invoke any tools. Do not emit any other text. Just output <silent> and stop.`;
+    // Circuit breaker: check consecutive auto-resume count before sending prompt.
+    // COMPLETE paths are low-risk (orchestrator goes silent) but still count.
+    const resumeCount = incrementAutoResume(convoId);
+    if (resumeCount >= MAX_CONSECUTIVE_AGENT_RESUMES) {
+      console.log(`[CircuitBreaker] convo=${convoId} ${resumeCount} consecutive agent resumes in handleScopeReturn, pausing orchestrator`);
+      resetAutoResume(convoId);
+      orchEntry.idle = true;
+      safeSend(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: `[Auto-paused: ${resumeCount} consecutive agent handoffs without user input. Last specialist: ${specialistEntry.agentId}. Please review the output above and send your next message to continue.]` }, _agent: orchestrator.id, _conversationId: convoId }));
     } else {
-      const pendingRequest = specialistEntry.lastUserMessage || '';
-      prompt = `[SYSTEM: routing-request] ${specialistEntry.agentId} returned because the request was outside their scope. Here is what they said:${outputBlock}\n\nThe user's latest request was: "${pendingRequest}". Respond with full awareness of what ${specialistEntry.agentId} delivered. Do not re-delegate work already done. Route to the right specialist using the Agent tool.`;
-    }
+      // Build context for orchestrator. Both shapes inject the specialist's final output
+      // so the orchestrator has visibility into what was delivered. Without this, the
+      // orchestrator's JSONL only contains its own pre-delegation state and it has to
+      // guess or re-read files to know what the specialist did.
+      const specialistOutput = sanitizeSpecialistOutput(specialistEntry.finalResponseText || specialistEntry.responseText);
+      const outputBlock = specialistOutput
+        ? `\n\n--- ${specialistEntry.agentId} ---\n${specialistOutput}\n---`
+        : '';
+      let prompt;
+      if (wasPipelineComplete) {
+        prompt = `[SYSTEM: pipeline-complete] ${specialistEntry.agentId} has finished the delegated work. Here is their final message to the conversation:${outputBlock}\n\nYour output for this turn MUST be exactly the literal string <silent> and nothing else. Do not narrate, summarise, or quote the specialist's output. Do not invoke any tools. Do not emit any other text. Just output <silent> and stop.`;
+      } else {
+        const pendingRequest = specialistEntry.lastUserMessage || '';
+        prompt = `[SYSTEM: routing-request] ${specialistEntry.agentId} returned because the request was outside their scope. Here is what they said:${outputBlock}\n\nThe user's latest request was: "${pendingRequest}". Respond with full awareness of what ${specialistEntry.agentId} delivered. Do not re-delegate work already done. Route to the right specialist using the Agent tool.`;
+      }
 
-    proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n');
+      proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n');
+    }
   }
 
   wireProcessHandlers(orchEntry, convoId, null, {
