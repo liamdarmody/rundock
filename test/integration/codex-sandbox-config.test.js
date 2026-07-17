@@ -1,11 +1,11 @@
 'use strict';
-// Integration: on Windows WITH a [windows] sandbox declared in the Codex
-// config, the CLI grants a real workspace-write policy and writes directly
-// (verified live), so the write-marker fallback must stand down entirely:
-// no instruction in the prompt, markers pass through as literal text, no
-// permission card. Companion files: codex-write-markers.test.js (win32
-// WITHOUT the config: markers active) and codex-chat.test.js (non-Windows:
-// always inert).
+// Integration: Windows sandbox reporting after the write-marker retirement.
+// hasWindowsSandboxConfig stays (Settings uses it to explain whether Codex
+// writes run silently inside the native sandbox or arrive as per-action
+// approval cards), but the marker behaviour it used to gate is GONE: no
+// prompt instruction on any platform, and marker-shaped output passes
+// through as literal text. This file pins both halves with the win32
+// platform seam active and a [windows] sandbox declared.
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -18,7 +18,7 @@ const { agentFile, standardTeam } = require('../helpers/workspace.js');
 let client;
 
 // A codex home whose config declares the native Windows sandbox. Created
-// before boot so the server's per-spawn check sees it from turn one.
+// before boot so runtime detection sees it from the first status render.
 const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-home-'));
 fs.writeFileSync(path.join(codexHome, 'config.toml'), '[windows]\nsandbox = "unelevated"\n');
 
@@ -44,7 +44,7 @@ after(async () => {
 });
 
 describe('codex on win32 with the native sandbox configured', () => {
-  test('marker fallback stands down: no instruction, literal pass-through, no card', async () => {
+  test('no marker instruction in any prompt; marker-shaped text passes through; no card', async () => {
     const convoId = h.freshConvoId('csc');
     h.clearInvocations();
     const markerText = '<!-- RUNDOCK:WRITE_FILE path="x.md" -->\nhello\n<!-- /RUNDOCK:WRITE_FILE -->';
@@ -53,11 +53,13 @@ describe('codex on win32 with the native sandbox configured', () => {
     const since = client.messages.length;
     client.send({ type: 'chat', conversationId: convoId, agent: 'researcher', content: 'sandboxed question please' });
     const { msg: result } = await client.waitFor(m => m.type === 'result' && m._conversationId === convoId, { since, label: 'result' });
-    assert.strictEqual(result.result, markerText, 'marker text untouched when the sandbox is declared');
+    assert.strictEqual(result.result, markerText, 'marker text untouched: the marker mechanism is retired');
     await client.waitForEvent('system', 'done', convoId);
 
-    const inv = h.readInvocations().find(i => i.argv && i.argv[0] === 'exec');
-    assert.ok(!inv.prompt.includes('WINDOWS FILE WRITES'), 'no marker instruction when the sandbox is declared');
+    const prompts = h.codexTurnPrompts();
+    assert.strictEqual(prompts.length, 1, 'one turn recorded');
+    assert.ok(!prompts[0].includes('WINDOWS FILE WRITES'), 'no marker instruction in the prompt');
+    assert.ok(!prompts[0].includes('RUNDOCK:WRITE_FILE'), 'no marker format taught to the agent');
     const cards = client.messages.slice(since).filter(m => m.type === 'control_request' && m._conversationId === convoId);
     assert.deepStrictEqual(cards, [], 'no permission card');
 

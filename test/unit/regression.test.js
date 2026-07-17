@@ -190,8 +190,10 @@ describe('P1 regressions', () => {
     // timer no-ops when pendingKill was cleared. Full behavior in
     // delegation.test.js "kill-window follow-up".
     const src = fs.readFileSync(path.join(__dirname, '../../server.js'), 'utf-8');
-    // The follow-up write condition no longer excludes pendingKill.
-    assert.match(src, /if \(existing && !existing\.exited && existing\.process\.stdin && existing\.process\.stdin\.writable\)/,
+    // The follow-up write condition no longer excludes pendingKill. (The
+    // existing.process presence check exists for process-less Codex entries,
+    // which route to the spawn-fresh branch; it does not exclude pendingKill.)
+    assert.match(src, /if \(existing && !existing\.exited && existing\.process && existing\.process\.stdin && existing\.process\.stdin\.writable\)/,
       'follow-up write condition accepts a pendingKill process');
     assert.ok(!/!existing\.exited && !existing\.pendingKill/.test(src),
       'the pendingKill exclusion is removed from the follow-up write');
