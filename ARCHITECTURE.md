@@ -118,7 +118,8 @@ A handful of source files, three production dependencies, no bundler.
 |---|---|---|
 | `server.js` | ~5,100 lines | HTTP and WebSocket server. Agent and skill discovery. Frontmatter parsing. Subprocess spawn and stdin/stdout bridging. Delegation interception. Conversation persistence. Routine scheduler. Permission mediation. Universal search wiring (engine lifecycle, reconcile triggers, the `search_universal` and `search_conversations` handlers, grep fallback). |
 | `search.js` | ~750 lines | The universal search engine: SQLite FTS5 index over workspace files and conversation transcripts, query sanitisation, fuzzy title scoring. Pure module: no WebSocket, no globals, fully unit-testable. See Universal search, below. |
-| `codex.js` | ~300 lines | The Codex runtime adapter: argv construction, output parsing, binary/auth/Windows-sandbox detection, error classification, write-request markers. Pure module, fully unit-testable. |
+| `codex.js` | ~200 lines | Codex runtime support: binary/auth/Windows-sandbox detection, thread-id hygiene, error classification, rollout-file resolution. Pure module, fully unit-testable. |
+| `codex-appserver.js` | ~640 lines | The Codex app-server protocol client and supervisor: one long-lived `codex app-server` process serves every Codex conversation (JSON-RPC over stdio), with streamed turns, first-class approval requests, interrupt, crash restart, and pinned policy invariants. Pure module, fully unit-testable against the protocol stub. |
 | `public/app.js` | ~4,400 lines | Single-page client. WebSocket client. Conversation rendering. Streaming token display. Org chart. Sidebar. File browser. Settings drawer. Permission card UI. Search palette (Cmd+K). |
 | `public/editor/` | ~2,600 lines | The rich markdown editor (Tiptap-based): tables with byte-exact source preservation, CriticMarkup review annotations, the review panel, and the round-trip pipeline. |
 | `public/index.html` | ~900 lines | Layout, CSS, and markup. Nav rail, sidebar, main panel, search palette. No external stylesheet. |
@@ -164,11 +165,20 @@ The things worth knowing that no single file states:
 
 The engine is exercised by `test/unit/search-*.test.js` (including a 10k-message performance suite) and `test/integration/search*.test.js`.
 
+## Auditing the trust claims
+
+The licence invites you to fork Rundock and audit it. If you take that up, the claims on the trust page reduce to a small set of named places; this is the ten-minute guided path.
+
+- **"Every risky action asks the human first."** The permission decision path spans three layers, and all three are inspectable: the PreToolUse hook script (`scripts/` — what Claude Code consults before any tool runs), the server bridge (`server.js`: `/api/permission-request` for hook-originated requests, `requestServerPermission` for server-originated ones, both with a hard timeout that fails closed), and the client decision module **`public/permissions.js`** — the risk classification, the low-risk read-only auto-approve policy, and the rule that high-risk requests never offer a standing "Always allow" all live there, unit-tested and findable by name.
+- **"Codex agents are sandboxed, and where the sandbox cannot protect you, you approve each action."** The sandbox request and the never-bypassed flags are pinned in `test/integration/spawn-argv-freeze.test.js` (no full-access sandbox, approvals reviewer is always the user, no experimental API surface). Approval requests arrive over the app-server protocol and route through the same permission cards: `handleCodexApproval` in `server.js`, decisions mapped in one place. Platform status detection (installed / signed in / Windows sandbox) is presence-only evidence: `detectCodex` and `hasWindowsSandboxConfig` in `codex.js` never read credential files, only check they exist.
+- **"Rundock itself makes no outbound network calls."** The dependency footprint is three production packages (`package.json`); the runtimes (Claude Code, Codex CLI) are separate tools you installed and authenticated yourself, spawned as subprocesses: `spawnClaude` and `getCodexAppServer` in `server.js` are the only spawn sites.
+- **"Agents cannot impersonate teammates."** The off-roster delegation block lives in the delegation interception path (`server.js`, search for the blocked-handoff notice); the orchestrator-runtime enforcement is in agent discovery.
+
 ## What Rundock does NOT do
 
 - **No backend service.** Rundock runs entirely on your machine. There is nothing to deploy and no account to create.
 - **No database as a source of truth.** Persistence is JSON files in `.rundock/` and Claude Code's own JSONL transcripts. The one SQLite file (`search-index.db`, behind universal search) is a derived, disposable index rebuilt from those sources: nothing to migrate, nothing to back up, nothing lost if it is deleted. It uses Node's built-in `node:sqlite`, so it adds no dependency.
-- **No telemetry.** Rundock does not phone home, does not log usage to a remote service, does not collect crash reports. The two-dependency footprint makes this easy to verify.
+- **No telemetry.** Rundock does not phone home, does not log usage to a remote service, does not collect crash reports. The three-dependency footprint makes this easy to verify.
 - **No outbound network calls from Rundock itself.** The only external connection is from Claude Code (a separate tool you installed and authenticated yourself) to Anthropic's API. Rundock does not make HTTP requests to Anthropic, does not handle API keys, and does not see your Claude credentials.
 - **No agent-format reinvention.** Agent files use Claude Code's standard format with optional Rundock extension fields. An agent file written for Rundock works in plain Claude Code; an agent file written for Claude Code works in Rundock with reduced UI affordances. See AGENTS.md.
 
