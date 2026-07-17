@@ -25,6 +25,7 @@ const FRAME_STYLES = `
 export function attachArtifactReview({
   iframe, paneElement, path, sidecarContent = null,
   author = 'me', agents = [], onSaveSidecar = null, pillHostElement = null,
+  allowSave = true,
 }) {
   const doc = iframe && iframe.contentDocument;
   if (!doc || !doc.body) return { detach: () => {}, refresh: () => {}, controller: null };
@@ -50,6 +51,12 @@ export function attachArtifactReview({
     author,
     onChange: () => renderMarks(),
   });
+
+  // Data-safety gate: a sidecar that parsed as corrupt, or that the host
+  // could not read cleanly (allowSave false), must NEVER be written back:
+  // saving would overwrite existing comments with a fresh/partial store.
+  // Existing (parsed) comments still render; new mutations just don't persist.
+  const saveEnabled = allowSave && !controller.wasCorrupt();
 
   // ----- marks (render-only wraps inside the frame) -----
 
@@ -184,7 +191,7 @@ export function attachArtifactReview({
     author,
     agents,
     pillHostElement,
-    onRequestSave: () => { if (typeof onSaveSidecar === 'function') onSaveSidecar(controller.serialize()); },
+    onRequestSave: () => { if (saveEnabled && typeof onSaveSidecar === 'function') onSaveSidecar(controller.serialize()); },
   });
 
   // ----- in-frame interactions -----
