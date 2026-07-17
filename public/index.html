@@ -127,10 +127,19 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .convo-menu-item { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; padding: 7px 10px; border: none; background: transparent; color: var(--text-1); font-size: var(--caption); font-weight: 500; font-family: inherit; border-radius: 6px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .convo-menu-item:hover { background: var(--card); }
 .convo-menu-check { width: 14px; flex-shrink: 0; color: var(--accent); }
-.convo-menu-input { padding: 4px; }
-.convo-menu-input input { width: 100%; box-sizing: border-box; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text-1); font-size: var(--caption); font-family: inherit; }
+/* Small-input composer pattern (matches .review-input in the editor's review
+   panel): the container is the field, border goes accent on focus-within, and
+   the circular submit button lives INSIDE the field — faded while empty,
+   accent-filled once there is text. */
+.convo-menu-input { display: flex; align-items: center; gap: 4px; margin: 4px; padding: 2px 2px 2px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.convo-menu-input:focus-within { border-color: var(--accent); }
+.convo-menu-input input { flex: 1; min-width: 0; border: none; background: transparent; padding: 4px 0; color: var(--text-1); font-size: var(--caption); font-family: inherit; outline: none; }
 .convo-menu-input input::placeholder { color: var(--text-2); }
-.convo-menu-input input:focus { border-color: var(--accent); outline: none; }
+.convo-menu-send { width: 24px; height: 24px; border: none; border-radius: 50%; background: transparent; color: var(--text-2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; cursor: pointer; padding: 0; transition: all 0.25s ease; }
+.convo-menu-send svg { width: 13px; height: 13px; }
+.convo-menu-send:disabled { opacity: 0.3; cursor: default; }
+.convo-menu-send.active { background: var(--accent); color: #fff; box-shadow: 0 2px 8px rgba(232, 122, 90, 0.3); }
+@media (prefers-reduced-motion: reduce) { .convo-menu-send { transition: none; } }
 
 /* Archive sidebar action (replaces delete on persisted, not-yet-archived items).
    Mirrors .convo-delete shape; hover uses a neutral bright text colour rather
