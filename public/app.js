@@ -1751,7 +1751,7 @@ function renderListPills() {
     btn.onclick = () => setSidebarPill('list:' + l.id);
     btn.addEventListener('contextmenu', (e) => {
       e.preventDefault();
-      openConvoMenu(e, [{ label: `Delete list "${l.name}"`, action: () => ws.send(JSON.stringify({ type: 'delete_list', id: l.id })) }]);
+      openConvoMenu(e, [{ label: `Delete list "${l.name}"`, action: () => ws.send(JSON.stringify({ type: 'delete_list', id: l.id })) }], btn);
     });
     wrap.appendChild(btn);
   }
@@ -1759,12 +1759,15 @@ function renderListPills() {
 
 // Minimal shared context menu (positioned card, closes on any click or Esc).
 // Items: [{ label, action, checked? }] plus an optional inline input row via
-// { input: true, placeholder, onSubmit }.
-function openConvoMenu(evt, items) {
+// { input: true, placeholder, onSubmit }. Positioning: at the pointer for
+// row context menus, or anchored below an element (dropdown-style) when
+// anchorEl is passed, so the menu never covers its own trigger.
+function openConvoMenu(evt, items, anchorEl) {
   closeConvoMenu();
   const menu = document.createElement('div');
   menu.id = 'convo-context-menu';
   menu.className = 'convo-menu';
+  menu.style.visibility = 'hidden';
   for (const item of items) {
     if (item.input) {
       const row = document.createElement('div');
@@ -1790,10 +1793,23 @@ function openConvoMenu(evt, items) {
     }
   }
   document.body.appendChild(menu);
-  // Clamp to viewport.
+  // Position (clamped to the viewport), then reveal: anchored menus sit
+  // below their trigger's left edge with a 4px gap; pointer menus open at
+  // the cursor.
   const r = menu.getBoundingClientRect();
-  menu.style.left = Math.min(evt.clientX, window.innerWidth - r.width - 8) + 'px';
-  menu.style.top = Math.min(evt.clientY, window.innerHeight - r.height - 8) + 'px';
+  let x, y;
+  if (anchorEl) {
+    const a = anchorEl.getBoundingClientRect();
+    x = a.left;
+    y = a.bottom + 4;
+    if (y + r.height > window.innerHeight - 8) y = Math.max(8, a.top - r.height - 4); // flip above if no room
+  } else {
+    x = evt.clientX;
+    y = evt.clientY;
+  }
+  menu.style.left = Math.min(x, window.innerWidth - r.width - 8) + 'px';
+  menu.style.top = Math.min(y, window.innerHeight - r.height - 8) + 'px';
+  menu.style.visibility = '';
   menu.querySelector('input')?.focus();
   setTimeout(() => {
     document.addEventListener('click', closeConvoMenu, { once: true });
