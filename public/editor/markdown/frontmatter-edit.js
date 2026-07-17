@@ -34,6 +34,17 @@ function isTopLevelKeyLine(line) {
   return /^[^\s#-][^:\n]*:/.test(line);
 }
 
+// The scalar value of a `- item` line, unquoted, for matching survivors
+// against the panel's new string array (which are always strings).
+function parseItemScalar(line) {
+  const raw = line.replace(/^\s*-\s+/, '').trim();
+  if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
+    const inner = raw.slice(1, -1);
+    return raw[0] === "'" ? inner.replace(/''/g, "'") : inner;
+  }
+  return raw;
+}
+
 // Locate a top-level key inside the raw block's lines. Returns
 // { keyLine, valueStart, valueEnd } where [valueStart, valueEnd) are the
 // indented/list continuation lines following the key line, or null.
@@ -46,8 +57,12 @@ function locateKey(lines, key) {
   for (let i = 1; i < close; i++) {
     const m = lines[i].match(/^([^\s#-][^:\n]*):/);
     if (!m || m[1].trim() !== key) continue;
+    // Continuation lines: indented (nested map / indented list / wrapped
+    // scalar), a zero-indent `- ` block-list item (Obsidian writes lists at
+    // column 0), or a blank line followed by more of either.
+    const isContinuation = (l) => /^\s+\S/.test(l) || /^-\s/.test(l);
     let end = i + 1;
-    while (end < close && (/^\s+\S/.test(lines[end]) || /^\s*$/.test(lines[end]) && end + 1 < close && /^\s+\S/.test(lines[end + 1]))) end++;
+    while (end < close && (isContinuation(lines[end]) || (/^\s*$/.test(lines[end]) && end + 1 < close && isContinuation(lines[end + 1])))) end++;
     return { keyLine: i, valueStart: i + 1, valueEnd: end, close };
   }
   return null;
@@ -82,26 +97,38 @@ export function replaceProperty(raw, key, newValue) {
       const items = newValue.map(flowFormat).join(', ');
       lines[loc.keyLine] = `${keyPart}${spacing || ' '}[${items}]`;
       lines.splice(loc.valueStart, loc.valueEnd - loc.valueStart);
+    } else if (newValue.length === 0) {
+      lines[loc.keyLine] = `${keyPart}${spacing || ' '}[]`;
+      lines.splice(loc.valueStart, loc.valueEnd - loc.valueStart);
     } else {
-      // Block style: reuse the first existing item's indentation and quote
-      // style; default to two spaces + quoted (the vault's dominant style).
+      // Block style, byte-honest: keep each surviving item's ORIGINAL line
+      // verbatim (its indentation, quote style, and scalar type), so an edit
+      // that removes one item touches only that item's bytes. Only genuinely
+      // new values are formatted, using an existing item as the style
+      // template (indent + quote style), or the vault default.
       const template = blockItems[0] || '  - "x"';
       const indent = template.match(/^\s*/)[0];
       const oldItemRaw = template.replace(/^\s*- /, '');
-      const itemLines = newValue.map((v) => `${indent}- ${formatScalar(v, oldItemRaw)}`);
-      if (newValue.length === 0) {
-        lines[loc.keyLine] = `${keyPart}${spacing || ' '}[]`;
-        lines.splice(loc.valueStart, loc.valueEnd - loc.valueStart);
-      } else {
-        lines.splice(loc.valueStart, loc.valueEnd - loc.valueStart, ...itemLines);
-      }
+      const available = blockItems.map((l) => ({ raw: l, value: parseItemScalar(l), used: false }));
+      const itemLines = newValue.map((v) => {
+        const want = String(v);
+        const hit = available.find((it) => !it.used && it.value === want);
+        if (hit) { hit.used = true; return hit.raw; }
+        return `${indent}- ${formatScalar(v, oldItemRaw)}`;
+      });
+      lines.splice(loc.valueStart, loc.valueEnd - loc.valueStart, ...itemLines);
     }
     return { raw: lines.join('\n'), changed: true };
   }
 
-  // Scalar. Refuse if the existing value is a block (nested object/list):
-  // that is not a scalar edit.
-  if (after.trim() === '' && loc.valueEnd > loc.valueStart) return { raw, changed: false };
+  // Scalar. Refuse whenever the key has ANY continuation lines: a nested
+  // object/list (empty inline value) OR a block/folded/multi-line scalar
+  // (`title: >` + indented lines, or a plain scalar wrapped across lines).
+  // Editing only the key line there would leave the stale continuation body
+  // behind, and for a plain multi-line scalar the result is still valid YAML
+  // that silently merges the old body into the new value. Refuse; the panel
+  // snaps back to the file's truth.
+  if (loc.valueEnd > loc.valueStart) return { raw, changed: false };
   const spacing = after.match(/^[ \t]*/)[0] || ' ';
   // Preserve a trailing comment if one sits after the value? YAML comments
   // in property lines are rare in this vault; a value edit replaces the
