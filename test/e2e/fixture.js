@@ -118,11 +118,17 @@ function buildFixture() {
   fs.writeFileSync(path.join(sessions, 's2.jsonl'),
     jsonlUser('What should the July content calendar prioritise?', '2026-07-02T09:00:00.000Z')
     + jsonlAssistant('Three hooks shortlisted for the agent-team essay.', '2026-07-02T09:00:30.000Z'));
+  // s3: an agent referencing binary outputs by wikilink (FV2: those links
+  // must open the real viewers, not dead-end on a phantom .md).
+  fs.writeFileSync(path.join(sessions, 's3.jsonl'),
+    jsonlUser('Where did the export land?', '2026-06-20T09:00:00.000Z')
+    + jsonlAssistant('Saved the render to [[chart.png]] and the summary to [[report.pdf]].', '2026-06-20T09:00:30.000Z'));
 
   // Conversation metadata: one pinned + one unpinned, deliberately ordered so
   // pinned-first grouping is observable (the pinned one is LESS recent).
   fs.mkdirSync(path.join(workspace, '.rundock'), { recursive: true });
   fs.writeFileSync(path.join(workspace, '.rundock', 'conversations.json'), JSON.stringify([
+    { id: 'c3', agentId: 'penn', sessionId: 's3', sessionIds: [], title: 'Export handoff', status: 'active', createdAt: '2026-06-20T08:59:00.000Z', lastActiveAt: '2026-06-20T10:00:00.000Z' },
     { id: 'c2', agentId: 'penn', sessionId: 's2', sessionIds: [], title: 'July content calendar', status: 'active', createdAt: '2026-07-02T08:59:00.000Z', lastActiveAt: '2026-07-10T10:00:00.000Z' },
     { id: 'c1', agentId: 'default', sessionId: 's1', sessionIds: [], title: 'Board prep planning', status: 'active', pinned: true, pinnedAt: '2026-07-05T09:00:00.000Z', createdAt: '2026-07-01T09:59:00.000Z', lastActiveAt: '2026-07-08T10:00:00.000Z' },
   ], null, 2));
