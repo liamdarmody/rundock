@@ -200,12 +200,16 @@ describe('P1 regressions', () => {
     // The write path clears pendingKill to cancel the pending auto-return.
     assert.match(src, /existing\.pendingKill = false;/,
       'the follow-up write cancels the pending auto-return');
-    // The kill sites still flag pendingKill before the 500ms timer.
-    assert.ok((src.match(/e\.pendingKill = true;/g) || []).length >= 3,
-      'each scope-return/auto-return kill window flags pendingKill');
-    // Each kill timer no-ops if pendingKill was cleared inside the window.
-    assert.ok((src.match(/if \(!e\.exited && e\.pendingKill\)/g) || []).length >= 3,
-      'each 500ms kill timer guards on pendingKill so a cancelled auto-return does not fire');
+    // The kill sites still flag pendingKill before the 500ms timer: now
+    // centralised in scheduleScopeReturnKill (the kill-window state machine),
+    // armed from every scope-return/auto-return marker site.
+    assert.match(src, /function scheduleScopeReturnKill\(e, convoId\) \{\s*\n\s*e\.pendingKill = true;/,
+      'the shared kill scheduler flags pendingKill');
+    assert.ok((src.match(/scheduleScopeReturnKill\(e, convoId\)/g) || []).length >= 4,
+      'each scope-return/auto-return kill window arms the shared scheduler');
+    // The kill timer no-ops if pendingKill was cleared inside the window.
+    assert.ok((src.match(/if \(!e\.exited && e\.pendingKill\)/g) || []).length >= 1,
+      'the 500ms kill timer guards on pendingKill so a cancelled auto-return does not fire');
     // Behavioral check: a pendingKill live process now DOES receive the follow-up.
     const canFollowUp = (e) => !!(e && !e.exited && e.stdin && e.stdin.writable);
     assert.strictEqual(canFollowUp({ exited: false, pendingKill: true, stdin: { writable: true } }), true,

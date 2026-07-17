@@ -26,6 +26,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Fixed
 
+- **A message sent in the moment an agent handoff completes is delivered to the restored agent instead of being lost:** conversations now pass through an explicit killing/restoring state while a handoff finishes, and any message arriving inside that window is queued and replayed to the incoming agent the instant it is ready. Previously the message could be written to the outgoing agent's dying process and silently vanish.
 - **Scheduled routines fire reliably and never twice:** routine run state now persists in the workspace's `.rundock/` folder, so quitting and reopening Rundock after a routine has run can no longer fire it again the same day. The due-check itself is also fixed: a routine whose scheduled time has passed without running today now fires on the next scheduler tick (previously the timing comparison was so strict that scheduled routines effectively never fired on their own). A run interrupted by a quit shows as "interrupted" rather than appearing to still be running.
 
 ## 0.10.0: Search, Review & Codex (2026-07-14)
