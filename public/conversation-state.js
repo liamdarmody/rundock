@@ -39,10 +39,12 @@
   else root.RundockConversationState = factory(root.RundockMarkers);
 }(typeof self !== 'undefined' ? self : this, function (RundockMarkers) {
 
-  // Initial per-conversation reducer state. app.js keeps DOM-only fields
+  // Initial per-conversation reducer state. app.js keeps DOM/glue fields
   // (currentStreamingMsg, processingTimeout, lastStreamActivity) alongside
   // these on the same object; reduce() carries unknown fields through
-  // untouched.
+  // untouched. lastStreamActivity is bumped by the glue on stream_event and
+  // assistant messages, and by the keepalive reducer below (from ctx.now, so
+  // the reducer itself never reads the wall clock).
   function createState() {
     return {
       isProcessing: false,
@@ -239,6 +241,18 @@
     return { state: next, effects };
   }
 
+  function reduceKeepalive(state, message, ctx) {
+    // Server heartbeat for turns that legitimately emit nothing for long
+    // stretches (a silent Codex turn thinking or running a long tool). It
+    // counts as stream activity so the watchdog never declares a working
+    // turn dead, and renders nothing. The wall clock arrives as ctx.now:
+    // the reducer stays pure. Keepalives from a superseded process must not
+    // keep the UI alive for a turn that no longer owns the conversation.
+    if (isStale(state, message)) return none(state);
+    if (ctx.now == null) return none(state);
+    return { state: { ...state, lastStreamActivity: ctx.now }, effects: [] };
+  }
+
   function reduceSystem(state, message, ctx) {
     switch (message.subtype) {
       case 'process_started': return reduceProcessStarted(state, message);
@@ -248,8 +262,30 @@
       case 'cancelled': return reduceCancelled(state, message);
       case 'done': return reduceDone(state, message);
       case 'agent_switch': return reduceAgentSwitch(state, message, ctx);
+      case 'keepalive': return reduceKeepalive(state, message, ctx);
       default: return none(state);
     }
+  }
+
+  // ── stream-inactivity watchdog ────────────────────────────────────────────
+
+  // Default idle limit for the glue's safety-net interval (app.js
+  // startProcessing): with no stream activity for this long, a turn is
+  // declared dead and auto-finished to prevent a stuck UI.
+  const WATCHDOG_IDLE_LIMIT_MS = 90000;
+
+  // The watchdog's per-tick decision, extracted here so it is directly
+  // unit-testable. The CALLER must evaluate it against the CURRENT state
+  // object (convoState lookup per tick): reduce() returns fresh objects and
+  // the glue reassigns convoState[convoId], so a reference captured when the
+  // interval was armed goes stale, its lastStreamActivity freezes, and every
+  // turn longer than the idle limit would be auto-finished mid-stream.
+  // Returns { action: 'stop' | 'finish' | 'wait', idleMs }.
+  function watchdogVerdict(state, now, idleLimitMs) {
+    if (!state.isProcessing) return { action: 'stop', idleMs: 0 };
+    const idleMs = now - (state.lastStreamActivity || 0);
+    if (idleMs > (idleLimitMs || WATCHDOG_IDLE_LIMIT_MS)) return { action: 'finish', idleMs };
+    return { action: 'wait', idleMs };
   }
 
   // ── streaming reducers ────────────────────────────────────────────────────
@@ -446,5 +482,5 @@
     }
   }
 
-  return { createState, reduce, isStale };
+  return { createState, reduce, isStale, watchdogVerdict };
 }));

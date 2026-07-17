@@ -74,6 +74,9 @@ describe('classifyRisk PowerShell', () => {
 describe('classifyRisk other tools', () => {
   test('WriteFile is always high (no standing allow for agent-requested writes)', () => {
     assert.strictEqual(P.classifyRisk('WriteFile', { path: 'a.md', content: 'x' }), 'high');
+    // Approval-style fileChange requests (no content) are just as high: they
+    // grant write access to a whole directory subtree.
+    assert.strictEqual(P.classifyRisk('WriteFile', { path: '/etc/rundock', content: null, approvalKind: 'fileChange' }), 'high');
   });
 
   test('destructive MCP actions are high, other MCP writes medium', () => {
@@ -100,7 +103,7 @@ describe('describeToolRequest', () => {
     assert.strictEqual(P.describeToolRequest('Bash', { command: 'git push' }).context, 'This will push changes to a remote repository');
   });
 
-  test('WriteFile names the agent via the injected resolver and previews content', () => {
+  test('WriteFile with genuine content names the agent via the injected resolver and previews it', () => {
     const { summary, context, detail } = P.describeToolRequest(
       'WriteFile',
       { path: 'Notes/a.md', content: 'hello', agent: 'codex-tester' },
@@ -115,6 +118,37 @@ describe('describeToolRequest', () => {
     const { detail } = P.describeToolRequest('WriteFile', { path: 'a.md', content: 'x'.repeat(2000) });
     assert.ok(detail.length < 1600);
     assert.ok(detail.includes('500 more characters'));
+  });
+
+  test('WriteFile approval-style requests (no content) never claim the write is shown', () => {
+    // The app-server fileChange approval carries only a grant root and the
+    // runtime's reason; the patch content is not available. The card must
+    // say what it IS (write access under a directory, sandbox-flagged) and
+    // render the reason, never the marker-era "exactly as shown" claim over
+    // an empty preview.
+    const { summary, context, detail } = P.describeToolRequest(
+      'WriteFile',
+      { path: '/etc/rundock', content: null, agent: 'codex-tester', reason: 'writes outside writable roots', approvalKind: 'fileChange' },
+      { agentDisplayName: id => (id === 'codex-tester' ? 'Cody' : id) }
+    );
+    assert.strictEqual(summary, 'Approve file changes in /etc/rundock');
+    assert.strictEqual(context, 'Cody wants to change files here. The sandbox flagged this for approval.');
+    assert.strictEqual(detail, 'writes outside writable roots', 'the runtime reason is rendered');
+    assert.ok(!context.includes('exactly as shown'), 'no exact-content claim without content');
+  });
+
+  test('WriteFile approval-style requests without a reason fall back to the path, never an empty preview', () => {
+    const { summary, context, detail } = P.describeToolRequest(
+      'WriteFile', { path: '/workspace', content: null, agent: 'a' });
+    assert.strictEqual(summary, 'Approve file changes in /workspace');
+    assert.ok(context.includes('wants to change files here'));
+    assert.strictEqual(detail, '/workspace', 'detail is the path when no reason travels');
+  });
+
+  test('WriteFile with empty-string content is approval-style too (a fake-empty preview is dishonest)', () => {
+    const { summary, context } = P.describeToolRequest('WriteFile', { path: '/w', content: '', agent: 'a' });
+    assert.strictEqual(summary, 'Approve file changes in /w');
+    assert.ok(!context.includes('exactly as shown'));
   });
 
   test('MCP tools describe as server: action', () => {

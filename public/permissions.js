@@ -103,13 +103,26 @@
       else if (/-Force\b/i.test(cmd)) context = 'This uses -Force and may overwrite or delete without confirmation';
       else if (/\b(iex|Invoke-Expression)\b/i.test(cmd)) context = 'This executes a downloaded or dynamic script';
     } else if (toolName === 'WriteFile') {
-      // Codex write-request card: the card IS the consent for the exact
-      // content shown, so the path leads and the payload is displayed.
       const p = input.path || '';
-      const content = String(input.content || '');
-      summary = `Write ${p}`;
-      context = `${agentName(input.agent)} requested this file write. The content below will be written exactly as shown.`;
-      detail = content.length > 1500 ? content.slice(0, 1500) + `\n… (${content.length - 1500} more characters)` : content;
+      const hasContent = typeof input.content === 'string' && input.content.length > 0;
+      if (hasContent) {
+        // Content-bearing write request: the card IS the consent for the
+        // exact content shown, so the path leads and the payload is
+        // displayed.
+        const content = input.content;
+        summary = `Write ${p}`;
+        context = `${agentName(input.agent)} requested this file write. The content below will be written exactly as shown.`;
+        detail = content.length > 1500 ? content.slice(0, 1500) + `\n… (${content.length - 1500} more characters)` : content;
+      } else {
+        // Approval-style request (app-server fileChange): only the grant
+        // root and the runtime's reason are available, so the copy must
+        // never claim the content is shown. Consent here is for write
+        // access under the path; the reason is the honest context and takes
+        // the detail slot when present.
+        summary = `Approve file changes in ${p}`;
+        context = `${agentName(input.agent)} wants to change files here. The sandbox flagged this for approval.`;
+        detail = input.reason || p;
+      }
     } else if (toolName === 'Write') {
       summary = 'Create a file';
       detail = input.file_path || '';
