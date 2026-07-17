@@ -1,0 +1,111 @@
+// Byte-honest frontmatter property editing. The raw YAML block is the
+// source of truth on save (pipeline.js), so editing a property is surgical
+// line replacement inside that block: the edited key's lines change,
+// every other byte of the block stays identical. No YAML re-emission, no
+// reformatting of untouched keys: the byte-honesty rule from the story
+// ("editing one property changes only that property").
+//
+// Scope matches the panel: top-level scalar values (string, number, date,
+// bool) and lists (block `- item` style or flow `[a, b]` style). Nested
+// objects are not editable (the panel hides them).
+
+// A bare YAML scalar would misparse for these shapes: quote them.
+function needsQuoting(s) {
+  if (s === '') return true;
+  if (/^[\s]|[\s]$/.test(s)) return true;
+  if (/^[\[\]{}&*!|>%@`"',#-]/.test(s)) return true; // leading indicator chars (covers [[wikilinks]])
+  if (/: |\s#/.test(s)) return true;
+  if (/^(true|false|null|~|yes|no|on|off)$/i.test(s)) return true;
+  if (/^-?\d+(\.\d+)?$/.test(s)) return true;
+  return false;
+}
+
+// Format one scalar, preserving the old value's quote style where possible.
+function formatScalar(newValue, oldRaw) {
+  const s = String(newValue);
+  const old = (oldRaw || '').trim();
+  if (typeof newValue === 'boolean' || typeof newValue === 'number') return String(newValue);
+  if (old.startsWith('"')) return JSON.stringify(s);
+  if (old.startsWith("'")) return `'${s.replace(/'/g, "''")}'`;
+  return needsQuoting(s) ? JSON.stringify(s) : s;
+}
+
+function isTopLevelKeyLine(line) {
+  return /^[^\s#-][^:\n]*:/.test(line);
+}
+
+// Locate a top-level key inside the raw block's lines. Returns
+// { keyLine, valueStart, valueEnd } where [valueStart, valueEnd) are the
+// indented/list continuation lines following the key line, or null.
+function locateKey(lines, key) {
+  // Line 0 is the opening ---; the closing --- ends the searchable region.
+  let close = lines.length;
+  for (let i = 1; i < lines.length; i++) {
+    if (/^---\s*$/.test(lines[i])) { close = i; break; }
+  }
+  for (let i = 1; i < close; i++) {
+    const m = lines[i].match(/^([^\s#-][^:\n]*):/);
+    if (!m || m[1].trim() !== key) continue;
+    let end = i + 1;
+    while (end < close && (/^\s+\S/.test(lines[end]) || /^\s*$/.test(lines[end]) && end + 1 < close && /^\s+\S/.test(lines[end + 1]))) end++;
+    return { keyLine: i, valueStart: i + 1, valueEnd: end, close };
+  }
+  return null;
+}
+
+// Replace a top-level property's value in the raw frontmatter block.
+// newValue: string | number | boolean | array of strings.
+// Returns { raw, changed }; unlocatable keys and unsupported shapes return
+// changed:false with the block untouched (never a guess).
+export function replaceProperty(raw, key, newValue) {
+  if (typeof raw !== 'string' || !raw.startsWith('---')) return { raw, changed: false };
+  const lines = raw.split('\n');
+  const loc = locateKey(lines, key);
+  if (!loc) return { raw, changed: false };
+
+  const keyLine = lines[loc.keyLine];
+  const after = keyLine.slice(keyLine.indexOf(':') + 1);
+  const keyPart = keyLine.slice(0, keyLine.indexOf(':') + 1);
+
+  if (Array.isArray(newValue)) {
+    const spacing = after.match(/^[ \t]*/)[0];
+    const flow = after.trim().startsWith('[');
+    const blockItems = lines.slice(loc.valueStart, loc.valueEnd).filter((l) => /^\s*- /.test(l));
+    if (flow) {
+      // Flow style [a, b]: re-emit in flow. Flow context adds its own
+      // hazards (commas, brackets) on top of the plain-scalar rules.
+      const flowFormat = (v) => {
+        if (typeof v === 'boolean' || typeof v === 'number') return String(v);
+        const s = String(v);
+        return (needsQuoting(s) || /[,\[\]{}]/.test(s)) ? JSON.stringify(s) : s;
+      };
+      const items = newValue.map(flowFormat).join(', ');
+      lines[loc.keyLine] = `${keyPart}${spacing || ' '}[${items}]`;
+      lines.splice(loc.valueStart, loc.valueEnd - loc.valueStart);
+    } else {
+      // Block style: reuse the first existing item's indentation and quote
+      // style; default to two spaces + quoted (the vault's dominant style).
+      const template = blockItems[0] || '  - "x"';
+      const indent = template.match(/^\s*/)[0];
+      const oldItemRaw = template.replace(/^\s*- /, '');
+      const itemLines = newValue.map((v) => `${indent}- ${formatScalar(v, oldItemRaw)}`);
+      if (newValue.length === 0) {
+        lines[loc.keyLine] = `${keyPart}${spacing || ' '}[]`;
+        lines.splice(loc.valueStart, loc.valueEnd - loc.valueStart);
+      } else {
+        lines.splice(loc.valueStart, loc.valueEnd - loc.valueStart, ...itemLines);
+      }
+    }
+    return { raw: lines.join('\n'), changed: true };
+  }
+
+  // Scalar. Refuse if the existing value is a block (nested object/list):
+  // that is not a scalar edit.
+  if (after.trim() === '' && loc.valueEnd > loc.valueStart) return { raw, changed: false };
+  const spacing = after.match(/^[ \t]*/)[0] || ' ';
+  // Preserve a trailing comment if one sits after the value? YAML comments
+  // in property lines are rare in this vault; a value edit replaces the
+  // whole remainder deliberately (documented behaviour).
+  lines[loc.keyLine] = `${keyPart}${spacing}${formatScalar(newValue, after.trim())}`;
+  return { raw: lines.join('\n'), changed: true };
+}

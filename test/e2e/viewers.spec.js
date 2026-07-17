@@ -268,6 +268,74 @@ test('callouts render as admonition boxes with working fold; frontmatter wikilin
   await expect(page.locator('#editor-filename')).toHaveText('Roadmap-2026.md');
 });
 
+// ── FV2 phase 4: property editing + external-edit guard ─────────────────────
+
+test('editing a frontmatter property persists byte-honestly to the file', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'briefing.md');
+  const titleRow = page.locator('.prop-row[data-prop-key="title"]');
+  await expect(titleRow).toBeVisible();
+  await titleRow.locator('.prop-value').click();
+  const input = titleRow.locator('input.prop-edit-input');
+  await expect(input).toBeVisible();
+  await input.fill('Evening Briefing');
+  await input.press('Enter');
+  await expect(page.locator('.prop-row[data-prop-key="title"]')).toContainText('Evening Briefing');
+  // The file on disk: only the title line changed; quotes preserved.
+  await expect.poll(async () => {
+    const res = await page.request.get('/api/file?path=briefing.md');
+    return await res.text();
+  }).toContain('title: "Evening Briefing"');
+  const after = await (await page.request.get('/api/file?path=briefing.md')).text();
+  expect(after).toContain('  - "[[Roadmap-2026]]"'); // untouched neighbour bytes
+  expect(after).toContain('> [!abstract]+ Today at a glance'); // body untouched
+  await page.screenshot({ path: `${SHOTS}/property-edit.png` });
+});
+
+test('an external edit while typing produces reload-theirs/keep-mine, never a silent overwrite', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'Roadmap-2026.md');
+  await expect(page.locator('#tiptap-editor-pane')).toBeVisible();
+
+  // The user starts typing.
+  await page.locator('#tiptap-editor .ProseMirror').click();
+  await page.keyboard.type('My local addition. ');
+
+  // Meanwhile the file changes outside the editor (an agent or Obsidian).
+  await page.evaluate(() => {
+    ws.send(JSON.stringify({ type: 'save_file', path: 'Roadmap-2026.md', content: '# Roadmap 2026\n\nEdited elsewhere while Rundock was open.\n' }));
+  });
+
+  // The next auto-save must surface the choice instead of overwriting.
+  await page.keyboard.type('More typing triggers the save.');
+  const banner = page.locator('#external-edit-banner');
+  await expect(banner).toBeVisible({ timeout: 10000 });
+  await page.screenshot({ path: `${SHOTS}/external-edit-banner.png` });
+
+  // Reload theirs: the external content wins and renders.
+  await banner.locator('[data-choice="theirs"]').click();
+  await expect(banner).toHaveCount(0);
+  await expect(page.locator('#tiptap-editor-pane')).toContainText('Edited elsewhere while Rundock was open.');
+
+  // And the disk was never clobbered by the local edit.
+  const disk = await (await page.request.get('/api/file?path=Roadmap-2026.md')).text();
+  expect(disk).not.toContain('My local addition');
+});
+
+test('normal editing never shows the conflict banner (zero false positives)', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'CLAUDE.md');
+  await page.locator('#tiptap-editor .ProseMirror').click();
+  await page.keyboard.type('A quiet edit. ');
+  // Wait past the autosave debounce and confirm a clean save.
+  await expect(page.locator('#editor-status')).toHaveText('Saved', { timeout: 10000 });
+  await expect(page.locator('#external-edit-banner')).toHaveCount(0);
+  // A second edit after our own save is also quiet (the baseline moved).
+  await page.keyboard.type('Another. ');
+  await expect(page.locator('#editor-status')).toHaveText('Saved', { timeout: 10000 });
+  await expect(page.locator('#external-edit-banner')).toHaveCount(0);
+});
+
 test('markdown files still open in the rich editor after the registry shim', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'Roadmap-2026.md');

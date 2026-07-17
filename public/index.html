@@ -462,6 +462,24 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .tiptap-editor-pane .prop-wikilink:hover { text-decoration: underline; }
 .tiptap-editor-pane .prop-wikilink:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; border-radius: 2px; }
 .tiptap-editor-pane .prop-wikilink.dead { color: var(--text-2); cursor: default; text-decoration: underline dashed; text-underline-offset: 3px; opacity: 0.75; }
+/* Inline property editing: values invite a click; chips remove; lists add. */
+.props-editable .prop-row.editable .prop-value { cursor: text; border-radius: 4px; }
+.props-editable .prop-row.editable .prop-value:hover { background: var(--accent-glow, rgba(232,122,90,0.10)); }
+.props-editable .prop-row.editable .prop-value .bool { cursor: pointer; }
+.prop-edit-input { flex: 1; min-width: 120px; background: var(--card); border: 1px solid var(--accent); border-radius: 4px; color: var(--text-1); font-size: var(--body); font-family: inherit; padding: 2px 8px; outline: none; }
+.prop-chip-remove { display: none; background: none; border: none; color: var(--text-2); font-size: 12px; line-height: 1; padding: 0 0 0 4px; cursor: pointer; }
+.props-editable .prop-chip:hover .prop-chip-remove { display: inline; }
+.prop-chip-remove:hover { color: var(--accent); }
+.prop-add { display: none; background: none; border: 1px solid var(--border); border-radius: 100px; color: var(--text-2); width: 20px; height: 20px; line-height: 1; cursor: pointer; font-size: 13px; }
+.props-editable .prop-row.editable:hover .prop-add { display: inline-flex; align-items: center; justify-content: center; }
+.prop-add:hover { color: var(--accent); border-color: var(--accent); }
+/* External-edit conflict banner: a visible choice, never a silent overwrite. */
+#external-edit-banner { display: flex; align-items: center; gap: 10px; padding: 10px 24px; background: rgba(232,168,76,0.10); border-bottom: 1px solid rgba(232,168,76,0.35); font-size: var(--body); color: var(--text-1); }
+#external-edit-banner .banner-text { flex: 1; }
+#external-edit-banner .banner-btn { padding: 4px 14px; border-radius: 6px; border: 1px solid var(--border); background: var(--card); color: var(--text-1); font-size: 12px; font-weight: 600; cursor: pointer; }
+#external-edit-banner .banner-btn:hover { border-color: var(--accent); color: var(--accent); }
+#external-edit-banner .banner-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+#external-edit-banner .banner-btn.primary:hover { opacity: 0.9; color: #fff; }
 .tiptap-editor-pane .prop-value .bool { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 100px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; }
 .tiptap-editor-pane .prop-value .bool.t { background: rgba(107,198,126,0.15); color: var(--success); }
 .tiptap-editor-pane .prop-value .bool.f { background: rgba(122,117,110,0.15); color: var(--idle); }
