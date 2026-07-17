@@ -234,6 +234,40 @@ test('an anchor whose passage was edited away lists as orphaned, never dropped',
   await page.screenshot({ path: `${SHOTS}/artifact-orphan.png` });
 });
 
+// ── FV2 phase 3: callouts + frontmatter wikilinks ────────────────────────────
+
+test('callouts render as admonition boxes with working fold; frontmatter wikilinks navigate', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'briefing.md');
+  const pane = page.locator('#tiptap-editor-pane');
+  await expect(pane).toBeVisible();
+
+  // Fold states: + open, - closed; no literal [!type] or fold chars.
+  const folds = pane.locator('details.callout-fold');
+  await expect(folds).toHaveCount(3); // abstract+, warning-, and the nested note- (in DOM even while its parent is closed)
+  await expect(folds.nth(0)).toHaveAttribute('open', /.*/);
+  await expect(folds.nth(0)).toContainText('Today at a glance');
+  await expect(folds.nth(1)).not.toHaveAttribute('open', /.*/);
+  const paneText = await pane.textContent();
+  expect(paneText).not.toContain('[!abstract]');
+  expect(paneText).not.toContain('[!warning]');
+
+  // Clicking the closed callout's header expands it, revealing the nested box.
+  await folds.nth(1).locator('summary').first().click();
+  await expect(folds.nth(1)).toHaveAttribute('open', /.*/);
+  await expect(pane.locator('.callout-nested details.callout-fold')).toBeVisible();
+  await expect(pane.locator('.callout-nested')).toContainText('Context');
+  await page.screenshot({ path: `${SHOTS}/callouts-rendered.png` });
+
+  // Frontmatter wikilinks: the live one navigates, the missing one is dead.
+  const live = page.locator('a.prop-wikilink:not(.dead)', { hasText: 'Roadmap-2026' });
+  const dead = page.locator('a.prop-wikilink.dead', { hasText: 'Missing Note' });
+  await expect(live).toBeVisible();
+  await expect(dead).toBeVisible();
+  await live.click();
+  await expect(page.locator('#editor-filename')).toHaveText('Roadmap-2026.md');
+});
+
 test('markdown files still open in the rich editor after the registry shim', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'Roadmap-2026.md');
