@@ -40,7 +40,13 @@ function escapeHtml(s) {
   return String(s)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+    .replace(/>/g, '&gt;')
+    // Quotes MUST be escaped: these values interpolate into double-quoted
+    // attributes (data-target, data-prop-key). Without this a frontmatter
+    // wikilink like [[x" onmouseover=alert(1)]] breaks out of the attribute
+    // and injects a handler that runs in the app's own (unsandboxed) origin.
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function dateString(value) {
@@ -203,6 +209,13 @@ function attachEditing(container, parsed, onEditProperty) {
   }
 
   container.addEventListener('click', (event) => {
+    // A click on a wikilink value is navigation, not an edit: the wikilink
+    // handler (a separate listener on this same container) owns it. Without
+    // this bail, clicking a wikilink would ALSO open an inline editor over
+    // it, whose blur then fires a spurious write. (stopPropagation between
+    // sibling listeners on one node does not suppress this; an explicit
+    // check does.)
+    if (event.target.closest('.prop-wikilink')) return;
     const row = event.target.closest && event.target.closest('.prop-row.editable');
     if (!row) return;
     const key = row.getAttribute('data-prop-key');

@@ -87,6 +87,32 @@ describe('list edits', () => {
   });
 });
 
+describe('byte-honesty (adversarial regressions)', () => {
+  test('removing one block-list item leaves the others byte-identical (no requoting, no type change)', () => {
+    const raw = '---\ntags:\n  - plain\n  - "quoted with spaces"\n  - 42\n---\n';
+    // Remove the middle item -> the survivors keep their exact original lines.
+    const { raw: out, changed } = replaceProperty(raw, 'tags', ['plain', '42']);
+    assert.equal(changed, true);
+    assert.ok(out.includes('  - plain\n  - 42'), 'survivors keep raw form (42 stays a number, no quotes added)');
+    assert.ok(!out.includes('"quoted with spaces"'), 'removed item gone');
+    assert.ok(!out.includes('- "plain"') && !out.includes('- "42"'), 'no spurious requoting of untouched items');
+  });
+
+  test('a folded/multi-line scalar is refused, not merged into the value', () => {
+    const folded = '---\ntitle: >\n  first line\n  second line\nother: x\n---\n';
+    assert.equal(replaceProperty(folded, 'title', 'short').changed, false, 'block scalar refused');
+    const plainMulti = '---\ntitle: first\n  second\n---\n';
+    assert.equal(replaceProperty(plainMulti, 'title', 'short').changed, false, 'wrapped plain scalar refused');
+  });
+
+  test('zero-indent block lists (Obsidian style) are located and edited, not corrupted', () => {
+    const raw = '---\ntags:\n- alpha\n- beta\n---\n';
+    const { raw: out, changed } = replaceProperty(raw, 'tags', ['alpha']);
+    assert.equal(changed, true);
+    assert.equal(out, '---\ntags:\n- alpha\n---\n', 'beta removed, alpha kept verbatim, no phantom insertion');
+  });
+});
+
 describe('refusals (never a guess)', () => {
   test('missing key, nested object, and non-frontmatter input are refused', () => {
     assert.equal(replaceProperty(RAW, 'ghost', 'x').changed, false);

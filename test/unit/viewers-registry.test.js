@@ -49,19 +49,18 @@ describe('workspaceFileUrl', () => {
 });
 
 describe('buildSrcdoc: CSP injection', () => {
-  test('injects the CSP meta inside an existing <head>', () => {
+  test('injects the CSP meta right after a leading doctype (before every element)', () => {
     const out = buildSrcdoc('<!doctype html><html><head><title>T</title></head><body>x</body></html>');
-    assert.ok(out.includes(`<head><meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}"><title>`));
+    assert.match(out, new RegExp('^<!doctype html><meta http-equiv="Content-Security-Policy" content="' + ARTIFACT_CSP.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '"><html>'));
   });
 
-  test('head with attributes still gets the meta inside it', () => {
+  test('no doctype: the meta is prepended as the first token', () => {
     const out = buildSrcdoc('<html><head lang="en"><style>p{}</style></head><body></body></html>');
-    assert.match(out, /<head lang="en"><meta http-equiv="Content-Security-Policy"/);
+    assert.ok(out.startsWith('<meta http-equiv="Content-Security-Policy"'));
+    assert.ok(out.indexOf('Content-Security-Policy') < out.indexOf('<html'));
   });
 
-  test('no <head>: injects after <html>; fragment: prepends', () => {
-    const html = buildSrcdoc('<html><body><p>x</p></body></html>');
-    assert.match(html, /<html><meta http-equiv="Content-Security-Policy"/);
+  test('a fragment gets the meta prepended', () => {
     const frag = buildSrcdoc('<p>fragment</p>');
     assert.ok(frag.startsWith('<meta http-equiv="Content-Security-Policy"'));
     assert.ok(frag.endsWith('<p>fragment</p>'));
@@ -76,6 +75,22 @@ describe('buildSrcdoc: CSP injection', () => {
   test('null/undefined content produces a valid empty document, not "null"', () => {
     assert.equal(buildSrcdoc(null).includes('null'), false);
     assert.ok(buildSrcdoc(undefined).startsWith('<meta'));
+  });
+
+  // Adversarial regression: the CSP meta must precede EVERY element so the
+  // policy commits before any resource fetch. A leading <img> before the
+  // artifact's own <head> previously escaped the policy entirely.
+  test('the CSP meta precedes a resource element placed before the artifact head', () => {
+    const evil = '<img src="https://evil.example/beacon">\n<html><head></head><body></body></html>';
+    const out = buildSrcdoc(evil);
+    assert.ok(out.indexOf('Content-Security-Policy') < out.indexOf('<img'), 'CSP comes before the img');
+    assert.ok(out.startsWith('<meta http-equiv="Content-Security-Policy"'));
+  });
+
+  test('a leading doctype is preserved with the meta right after it (no quirks mode)', () => {
+    const out = buildSrcdoc('<!doctype html><html><head></head><body><img src="https://x/y"></body></html>');
+    assert.match(out, /^<!doctype html><meta http-equiv="Content-Security-Policy"/i);
+    assert.ok(out.indexOf('Content-Security-Policy') < out.indexOf('<img'));
   });
 });
 

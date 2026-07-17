@@ -101,6 +101,13 @@ describe('path traversal guards', () => {
     assert.strictEqual(nested.body, 'inner file');
   });
 
+  test('/api/file returns 400 on malformed percent-encoding instead of crashing', async () => {
+    const res = await get('/api/file?path=%');
+    assert.strictEqual(res.status, 400);
+    const alive = await get('/api/file?path=notes.md');
+    assert.strictEqual(alive.status, 200, 'server survived the malformed request');
+  });
+
   test('/api/file blocks ../ traversal out of the workspace', async () => {
     // Plant a secret OUTSIDE the workspace
     const outside = path.join(h.workspaceDir, '..', `outside-secret-${Date.now()}.txt`);
