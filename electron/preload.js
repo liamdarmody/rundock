@@ -10,9 +10,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // App version for display
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
 
-  // Wizard-specific (only used during first-run)
-  checkClaude: () => ipcRenderer.invoke('wizard-check-claude'),
+  // Wizard-specific (only used during first-run). checkRuntimes detects both
+  // CLIs (Claude Code and Codex) so the wizard can adapt to what the user has.
+  checkRuntimes: () => ipcRenderer.invoke('wizard-check-runtimes'),
   signInClaude: () => ipcRenderer.invoke('wizard-signin-claude'),
+  signInCodex: () => ipcRenderer.invoke('wizard-signin-codex'),
   wizardDone: () => ipcRenderer.invoke('wizard-done'),
 
   // Listen for update notifications from main process
