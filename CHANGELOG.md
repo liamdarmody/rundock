@@ -10,6 +10,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Added
 
+- **Organise conversations with Lists:** right-click any conversation to add it to a named list (or create one on the spot); lists appear as pills beside All and Unread and filter the sidebar with the usual pinned-first ordering. A conversation can belong to several lists, lists survive reloads and workspace switches, and deleting a list (right-click its pill) never deletes conversations: they simply leave the grouping.
 - **First-run setup adapts to the runtimes you have:** the wizard now detects both Claude Code and Codex. A Codex user is told plainly why Claude Code is still needed (it runs your team's orchestrator and Doc, the setup guide) instead of receiving a bare install instruction, and once Claude Code is signed in, a machine with the Codex CLI gets an optional third step to sign in to Codex so specialists can run on a ChatGPT plan, skippable and available later from Settings. Machines without Codex see the setup flow exactly as before.
 
 ### Changed

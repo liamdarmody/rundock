@@ -77,3 +77,55 @@ describe('itemVariant', () => {
     assert.strictEqual(M.itemVariant(convo('c', { persisted: true, pinned: true })), 'current');
   });
 });
+
+describe('list pills (conversation Lists card)', () => {
+  const listData = [
+    convo('in-work', { listIds: ['l1'], lastActiveAt: '2026-07-10T00:00:00Z' }),
+    convo('in-both', { listIds: ['l1', 'l2'], lastActiveAt: '2026-07-12T00:00:00Z' }),
+    convo('pinned-in-work', { pinned: true, listIds: ['l1'], lastActiveAt: '2026-07-01T00:00:00Z' }),
+    convo('no-lists', { lastActiveAt: '2026-07-16T00:00:00Z' }),
+    convo('legacy-no-field', {}),
+    convo('archived-in-work', { status: 'archived', listIds: ['l1'] }),
+  ];
+
+  test('isListPill / listPillId round the encoding', () => {
+    assert.strictEqual(M.isListPill('list:abc'), true);
+    assert.strictEqual(M.isListPill('all'), false);
+    assert.strictEqual(M.isListPill('unread'), false);
+    assert.strictEqual(M.listPillId('list:abc'), 'abc');
+    assert.strictEqual(M.listPillId('all'), null);
+  });
+
+  test('a list pill filters main to that list, pinned-first ordering unchanged', () => {
+    const { main } = M.partitionConversations(listData, { pill: 'list:l1' });
+    assert.deepStrictEqual(main.map(c => c.id), ['pinned-in-work', 'in-both', 'in-work']);
+  });
+
+  test('many-to-many: a conversation in two lists appears under both pills', () => {
+    const l1 = M.partitionConversations(listData, { pill: 'list:l1' }).main.map(c => c.id);
+    const l2 = M.partitionConversations(listData, { pill: 'list:l2' }).main.map(c => c.id);
+    assert.ok(l1.includes('in-both') && l2.includes('in-both'));
+  });
+
+  test('archived conversations stay in the archived section even when in the list', () => {
+    const { main, archived } = M.partitionConversations(listData, { pill: 'list:l1' });
+    assert.ok(!main.some(c => c.id === 'archived-in-work'));
+    assert.ok(archived.some(c => c.id === 'archived-in-work'));
+  });
+
+  test('conversations without a listIds field are tolerated (legacy entries)', () => {
+    const { main } = M.partitionConversations(listData, { pill: 'list:l1' });
+    assert.ok(!main.some(c => c.id === 'legacy-no-field'));
+    assert.strictEqual(M.inList({ id: 'x' }, 'l1'), false);
+  });
+
+  test('unknown list id yields an empty main list, not an error', () => {
+    const { main } = M.partitionConversations(listData, { pill: 'list:nope' });
+    assert.deepStrictEqual(main, []);
+  });
+
+  test('the all pill ignores list membership entirely', () => {
+    const { main } = M.partitionConversations(listData, { pill: 'all' });
+    assert.strictEqual(main.length, 5);
+  });
+});

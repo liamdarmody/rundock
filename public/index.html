@@ -112,6 +112,18 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .pill:hover { border-color: var(--text-2); color: var(--text-1); }
 .pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .pill.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.sidebar-pills { flex-wrap: wrap; }
+.pill-list { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Context menu for conversation lists (row right-click: membership;
+   list-pill right-click: delete). Positioned card, closes on click or Esc. */
+.convo-menu { position: fixed; z-index: 1000; min-width: 180px; max-width: 260px; background: var(--bg-2, var(--bg-1)); border: 1px solid var(--border); border-radius: 8px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.35); }
+.convo-menu-item { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; padding: 7px 10px; border: none; background: transparent; color: var(--text-1); font-size: var(--caption); font-family: inherit; border-radius: 5px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.convo-menu-item:hover { background: var(--bg-3, rgba(128,128,128,0.12)); }
+.convo-menu-check { width: 14px; flex-shrink: 0; color: var(--accent); }
+.convo-menu-input { padding: 4px; }
+.convo-menu-input input { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--border); border-radius: 5px; background: transparent; color: var(--text-1); font-size: var(--caption); font-family: inherit; }
+.convo-menu-input input:focus { outline: 1px solid var(--accent); }
 
 /* Archive sidebar action (replaces delete on persisted, not-yet-archived items).
    Mirrors .convo-delete shape; hover uses a neutral bright text colour rather
