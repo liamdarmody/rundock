@@ -71,10 +71,12 @@ async function attachArtifactReviewForCurrentFile(paneEl) {
   const mod = await import('./viewers/artifact-review.js');
   const sidecarPath = mod.sidecarPathFor(path);
   let sidecarContent = null;
+  let loadFailed = false;
   try {
     const res = await fetch('/api/file?path=' + encodeURIComponent(sidecarPath));
-    if (res.ok) sidecarContent = await res.text(); // 404 = no reviews yet
-  } catch { /* offline pane still renders; comments just start empty */ }
+    if (res.ok) sidecarContent = await res.text();
+    else if (res.status !== 404) loadFailed = true; // 404 = no reviews yet; anything else = a real read failure
+  } catch { loadFailed = true; /* network failure: existing sidecar may be on disk */ }
   const wire = () => {
     if (currentFilePath !== path || !iframe.isConnected) return; // stale: file switched meanwhile
     destroyActiveArtifactReview();
@@ -88,9 +90,12 @@ async function attachArtifactReviewForCurrentFile(paneEl) {
         : 'me',
       agents: Array.isArray(agents) ? agents.map(a => ({ name: a.name, displayName: a.displayName })) : [],
       pillHostElement: document.getElementById('editor-header'),
+      // Data-safety gate: never overwrite a sidecar we could not read
+      // cleanly (a fetch/5xx failure) or one that parsed as corrupt: either
+      // could destroy existing comments. Saving is disabled for this mount;
+      // the artifact still renders and existing comments still show.
+      allowSave: !loadFailed,
       onSaveSidecar: (content) => {
-        // Dedicated endpoint: creates .rundock/reviews/ on first use (the
-        // WS save path expects existing parents).
         fetch('/api/review-sidecar', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

@@ -36,31 +36,33 @@ export function workspaceFileUrl(path) {
   return '/workspace-file?path=' + encodeURIComponent(path);
 }
 
-// The artifact preview renders the file's real DOM in a sandboxed iframe.
-// sandbox="" is maximum lockdown: no scripts, no same-origin, no forms, no
-// popups, no top-navigation. On top of that, an injected CSP blocks external
-// fetches (the app's CSP discipline): a reviewed artifact must not phone
-// home via <img src="https://..."> or @import. Inline styles and data:/blob:
-// images keep self-contained artifacts (the design-export output) faithful.
+// The artifact preview renders the file's real DOM in a sandboxed iframe
+// (sandbox="allow-same-origin", NO allow-scripts: see mountArtifactPreview
+// for why the host needs same-origin and why scripts stay off). Script
+// execution is off regardless of CSP; the injected CSP additionally blocks
+// external fetches (the app's CSP discipline): a reviewed artifact must not
+// phone home via <img src="https://..."> or @import. Inline styles and
+// data:/blob: images keep self-contained artifacts (design-export) faithful.
 export const ARTIFACT_CSP =
   "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:;";
 
 const CSP_META = `<meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}">`;
 
-// Inject the CSP meta where the parser will honour it (inside <head>). A
-// meta placed before <!doctype> or after body content starts is ignored by
-// the browser, so: after <head> if present, else after <html>, else prepended
-// (fragment case: leading metas are hoisted into the implied head).
+// Inject the CSP meta so it is honoured for EVERY resource the artifact
+// references. A meta CSP only applies to fetches that come after it in
+// document order, and only when it parses into the head. Injecting after the
+// artifact's own <head> is defeatable: any resource-loading element placed
+// before that head (e.g. a leading <img src="https://...">) both fires its
+// fetch first AND displaces the meta out of the real head, voiding the whole
+// policy. So the meta must be the FIRST thing the parser sees: it lands in
+// the implied head and commits the policy before any element is processed.
+// A leading <!doctype> is preserved (the meta goes right after it, still
+// ahead of every element, avoiding quirks mode).
 export function buildSrcdoc(content) {
   const src = String(content == null ? '' : content);
-  const headMatch = src.match(/<head[^>]*>/i);
-  if (headMatch) {
-    const at = headMatch.index + headMatch[0].length;
-    return src.slice(0, at) + CSP_META + src.slice(at);
-  }
-  const htmlMatch = src.match(/<html[^>]*>/i);
-  if (htmlMatch) {
-    const at = htmlMatch.index + htmlMatch[0].length;
+  const doctypeMatch = src.match(/^\s*<!doctype[^>]*>/i);
+  if (doctypeMatch) {
+    const at = doctypeMatch[0].length;
     return src.slice(0, at) + CSP_META + src.slice(at);
   }
   return CSP_META + src;

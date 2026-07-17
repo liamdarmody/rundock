@@ -37,6 +37,21 @@ describe('parseSidecar', () => {
     assert.equal(res.corrupt, true);
     assert.deepEqual(res.data.comments, {});
   });
+
+  test('a wrong-shape section (comments as an array) flags corrupt, not empty', () => {
+    // Adversarial regression: valid JSON whose comments is an array is NOT
+    // an empty sidecar; coercing it to {} would silently drop data.
+    const res = parseSidecar(JSON.stringify({ path: 'a.html', comments: ['stray'] }), 'a.html');
+    assert.equal(res.corrupt, true);
+    const ok = parseSidecar(JSON.stringify({ path: 'a.html', comments: {}, review: {} }), 'a.html');
+    assert.equal(ok.corrupt, false);
+  });
+
+  test('a controller over corrupt content exposes wasCorrupt()', () => {
+    const c = fresh('not json {');
+    assert.equal(c.wasCorrupt(), true);
+    assert.equal(fresh('{"comments":{},"suggestions":{},"review":{}}').wasCorrupt(), false);
+  });
 });
 
 describe('comments: add, reply, resolve', () => {

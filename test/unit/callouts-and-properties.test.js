@@ -92,4 +92,20 @@ describe('frontmatter wikilink properties', () => {
     dead.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
     assert.deepEqual(clicks, ['Live Note'], 'live link routes; dead link is inert');
   });
+
+  test('a malicious wikilink target cannot break out of the attribute (stored XSS regression)', () => {
+    const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
+    global.HTMLElement = dom.window.HTMLElement;
+    const container = dom.window.document.getElementById('p');
+    // A frontmatter value that tries to inject an event handler.
+    renderProperties(container, {
+      ref: '[[x" onmouseover="pwn()]]',
+    }, { onWikilinkClick: () => {}, resolveWikilink: () => true });
+    const link = container.querySelector('a.prop-wikilink');
+    // The quote is escaped, so no onmouseover attribute materialises.
+    assert.equal(link.getAttribute('onmouseover'), null, 'no injected handler');
+    assert.ok(container.innerHTML.includes('&quot;'), 'the quote is entity-escaped');
+    // The whole hostile string lives inside data-target as inert text.
+    assert.ok(link.getAttribute('data-target').includes('onmouseover'));
+  });
 });

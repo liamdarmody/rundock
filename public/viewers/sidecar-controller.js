@@ -51,6 +51,14 @@ export function parseSidecar(content, path) {
   try {
     const parsed = JSON.parse(content);
     if (!isPlainObject(parsed)) return { data: fresh, corrupt: true };
+    // A present-but-wrong-shape section (e.g. comments serialized as an
+    // array, or a newer schema field type) means this is NOT an empty
+    // sidecar: flag corrupt so the caller refuses to overwrite it, rather
+    // than silently coercing the data away.
+    const shapeOk = (k) => parsed[k] === undefined || isPlainObject(parsed[k]);
+    if (!shapeOk('comments') || !shapeOk('suggestions') || !shapeOk('review')) {
+      return { data: fresh, corrupt: true };
+    }
     return {
       data: {
         format: SIDECAR_FORMAT,

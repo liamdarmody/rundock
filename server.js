@@ -2050,7 +2050,11 @@ const server = http.createServer((req, res) => {
     // Binary transport for the file-type registry's image and PDF viewers.
     // Allowlist-only; bytes are served raw (the WS read_file path utf-8
     // normalises and would corrupt them). Boundary guard mirrors /api/file.
-    const filePath = decodeURIComponent(req.url.split('path=')[1]);
+    // decodeURIComponent throws a URIError on malformed escapes (e.g. a lone
+    // '%'); guard it so one bad request cannot take the process down.
+    let filePath;
+    try { filePath = decodeURIComponent(req.url.split('path=')[1]); }
+    catch { res.writeHead(400); res.end('Bad request'); return; }
     const fullPath = path.resolve(WORKSPACE, filePath);
     const mime = BINARY_FILE_TYPES[path.extname(fullPath).toLowerCase()];
     if (mime && isInsideWorkspace(fullPath) && fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
@@ -2070,8 +2074,22 @@ const server = http.createServer((req, res) => {
   // first use. Constrained to exactly that directory, flat filenames only.
   } else if (req.method === 'POST' && req.url === '/api/review-sidecar') {
     let body = '';
-    req.on('data', chunk => { body += chunk; });
+    let tooBig = false;
+    // Cap the accumulated body: an unbounded string is a memory/disk DoS
+    // primitive. Review sidecars are small; 4 MB is generous headroom.
+    const SIDECAR_MAX_BYTES = 4 * 1024 * 1024;
+    req.on('data', chunk => {
+      if (tooBig) return;
+      body += chunk;
+      if (body.length > SIDECAR_MAX_BYTES) {
+        tooBig = true;
+        body = ''; // release; stop accumulating (remaining chunks are ignored)
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Sidecar too large' }));
+      }
+    });
     req.on('end', () => {
+      if (tooBig) return;
       try {
         const data = JSON.parse(body);
         const relPath = String(data.path || '');
@@ -2097,7 +2115,11 @@ const server = http.createServer((req, res) => {
     });
 
   } else if (req.url.startsWith('/api/file?path=')) {
-    const filePath = decodeURIComponent(req.url.split('path=')[1]);
+    // Guard decodeURIComponent: a malformed escape (lone '%') throws a
+    // URIError that would otherwise crash the process (no top-level handler).
+    let filePath;
+    try { filePath = decodeURIComponent(req.url.split('path=')[1]); }
+    catch { res.writeHead(400); res.end('Bad request'); return; }
     const fullPath = path.resolve(WORKSPACE, filePath);
     if (isInsideWorkspace(fullPath) && fs.existsSync(fullPath)) {
       res.writeHead(200, { 'Content-Type': 'text/plain' });

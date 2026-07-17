@@ -110,6 +110,15 @@ describe('/workspace-file binary endpoint', () => {
     fs.mkdirSync(path.join(h.workspaceDir, 'weird.png'), { recursive: true });
     assert.strictEqual((await getRaw('/workspace-file?path=weird.png')).status, 404);
   });
+
+  test('malformed percent-encoding returns 400, does not crash the server', async () => {
+    // Adversarial regression: decodeURIComponent throws URIError on a lone
+    // '%'; unguarded that killed the process. 400 + a live sentinel proves
+    // the server survived.
+    assert.strictEqual((await getRaw('/workspace-file?path=%')).status, 400);
+    assert.strictEqual((await getRaw('/workspace-file?path=%zz')).status, 400);
+    assert.strictEqual((await getRaw('/workspace-file?path=chart.png')).status, 200, 'server still serving');
+  });
 });
 
 describe('/api/review-sidecar', () => {
@@ -145,6 +154,13 @@ describe('/api/review-sidecar', () => {
     assert.strictEqual(res.status, 400);
     const noContent = await post({ path: '.rundock/reviews/a.json' });
     assert.strictEqual(noContent.status, 400);
+  });
+
+  test('an oversized body is rejected (413), not accumulated unboundedly', async () => {
+    const huge = 'x'.repeat(5 * 1024 * 1024); // 5 MB > the 4 MB cap
+    const res = await post({ path: '.rundock/reviews/big.json', content: huge });
+    assert.strictEqual(res.status, 413);
+    assert.strictEqual(fs.existsSync(path.join(h.workspaceDir, '.rundock', 'reviews', 'big.json')), false);
   });
 });
 
