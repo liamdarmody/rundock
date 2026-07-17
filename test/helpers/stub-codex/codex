@@ -1,34 +1,48 @@
 #!/usr/bin/env node
 'use strict';
-// Stub `codex` binary for the Rundock test suite.
+// Stub `codex` binary for the Rundock test suite. Two modes, matching the
+// real CLI surfaces Rundock uses:
 //
-// Mimics `codex exec --json`: reads the prompt from stdin (the trailing `-`
-// argument), emits scripted JSONL events on stdout, exits when the turn ends.
-// One process per turn, exactly like the real CLI's exec mode. No network.
+//   codex exec --json ... -   one process per turn (legacy runtime; this
+//                             path is deleted in a later slice once the
+//                             server migrates to the app-server client)
+//   codex app-server          long-lived JSONL JSON-RPC 2.0 server on stdio
 //
-// Injection: the test harness prepends this directory to PATH, so the
-// server's codex binary resolution (`which codex`) finds this stub with zero
-// production changes.
+// Injection: the test harness prepends this directory to PATH (or passes the
+// path directly via binPath), so the codex binary resolution finds this stub
+// with zero production changes. No network.
 //
-// Scripting: reads `stub-codex-scenario.json` from cwd (the server spawns
-// codex with cwd = workspace, so scenarios live in the test workspace).
-// Scenario format:
-//   { "rules": [ {
-//       "match": { "promptIncludes": "a" | ["a","b"] },
-//       "threadId": "cthr_fixed",       // default: resume id, else generated
-//       "text": "final agent message",
-//       "usage": { "input": 100, "cached": 0, "output": 50 },
-//       "failMessage": "...",           // emit turn.failed instead of a message
-//       "noise": true,                  // emit unknown + malformed lines first
-//       "crash": 1,                     // exit with this code, no events at all
-//       "delayMs": 0
-//   } ] }
-// First matching rule wins. Every invocation is appended to
-// `stub-invocations.jsonl` (cwd) including the full stdin prompt, for
-// spawn-argument and prompt-content assertions.
+// Scripting: reads `stub-codex-scenario.json` from cwd. Exec-mode rules live
+// under top-level "rules" (unchanged); app-server behaviour lives under
+// "appServer":
+//   { "appServer": {
+//       "version": "0.144.3",             // embedded in the initialize userAgent
+//       "dropMethods": ["thread/resume"], // requests logged but never answered
+//       "overload": {"method": "thread/start", "times": 2},  // first N get -32001
+//       "rules": [ {
+//         "match": {"promptIncludes": "..."},
+//         "deltas": ["chunk1 ", "chunk2"],  // item/agentMessage/delta sequence
+//         "text": "full final text",         // item/completed agentMessage
+//         "usage": {"inputTokens":100, "cachedInputTokens":0, "outputTokens":50},
+//         "approval": {"kind":"command"|"fileChange", "command":"...",
+//                      "reason":"...", "grantRoot":null,
+//                      "afterDecision": {"accept":{"text":"..."}, "decline":{"text":"..."}}},
+//         "error": {"codexErrorInfo":"usageLimitExceeded", "message":"...", "willRetry":false},
+//         "delayMs": 0,                      // pause before the agent output
+//         "noise": true,                     // malformed line + unknown notification + ghost delta
+//         "crashMidTurn": true,              // exit(1) after the deltas
+//         "hangAfterDeltas": true            // never complete (interrupt tests)
+//   } ] } }
+// First matching rule wins. Every invocation and every incoming app-server
+// request is appended to `stub-invocations.jsonl` (cwd) for spawn-argument,
+// prompt-content, and policy-invariant assertions.
 //
-// Event shapes come from test/fixtures/codex-jsonl.js: the SAME fixtures the
-// parser unit tests pin, so stub and parser can never drift apart.
+// Event shapes come from the shared fixture files (test/fixtures/
+// codex-jsonl.js for exec, test/fixtures/codex-appserver-protocol.js for
+// app-server): the SAME fixtures the parser and client unit tests pin, so
+// stub and client can never drift apart. Everything the app-server mode
+// sends omits the `jsonrpc` field, exactly like the real server
+// (docs/protocol/codex-app-server/RESEARCH.md section 1).
 
 const fs = require('fs');
 const path = require('path');
@@ -43,28 +57,12 @@ if (argv.includes('--version')) {
   process.exit(0);
 }
 
-function argValue(flag) {
-  const i = argv.indexOf(flag);
-  return i >= 0 ? argv[i + 1] : null;
-}
-const MODEL = argValue('--model');
-const resumeIdx = argv.indexOf('resume');
-const RESUME = resumeIdx >= 0 ? argv[resumeIdx + 1] : null;
-
 const SCENARIO_FILE = path.join(process.cwd(), 'stub-codex-scenario.json');
 const LOG_FILE = path.join(process.cwd(), 'stub-invocations.jsonl');
 
 process.stdout.on('error', () => {});
 function writeOut(s) {
   try { process.stdout.write(s); } catch (e) { /* killed mid-write */ }
-}
-
-function loadRules() {
-  try {
-    return JSON.parse(fs.readFileSync(SCENARIO_FILE, 'utf-8')).rules || [];
-  } catch (e) {
-    return [];
-  }
 }
 
 function matches(rule, prompt) {
@@ -74,60 +72,337 @@ function matches(rule, prompt) {
   return true;
 }
 
-// Read the entire prompt from stdin, then play the matching rule.
-let prompt = '';
-process.stdin.setEncoding('utf-8');
-process.stdin.on('data', (c) => { prompt += c; });
-process.stdin.on('end', () => {
-  // Record the invocation for spawn-arg and prompt-content assertions.
-  try {
-    fs.appendFileSync(LOG_FILE, JSON.stringify({
-      bin: 'codex', pid: process.pid, ts: Date.now(),
-      model: MODEL, resume: RESUME, argv, prompt,
-      env: {
-        RUNDOCK: process.env.RUNDOCK || null,
-        RUNDOCK_CONVO_ID: process.env.RUNDOCK_CONVO_ID || null,
-        RUNDOCK_PORT: process.env.RUNDOCK_PORT || null,
-      },
-    }) + '\n');
-  } catch (e) { /* logging is best-effort */ }
+if (argv[0] === 'app-server') {
+  runAppServer();
+} else {
+  runExecMode();
+}
 
-  const rule = loadRules().find(r => matches(r, prompt)) || {
-    text: `STUB-CODEX-NO-RULE prompt=${prompt.slice(0, 120)}`,
-  };
+// ── App-server mode ─────────────────────────────────────────────────────────
 
-  if (rule.crash != null) {
-    // Abnormal death before any output, optionally delayed.
-    const code = typeof rule.crash === 'number' ? rule.crash : 1;
-    if (rule.delayMs > 0) setTimeout(() => process.exit(code), rule.delayMs);
-    else process.exit(code);
-    return;
+function runAppServer() {
+  const asfx = require(path.join(__dirname, '..', '..', 'fixtures', 'codex-appserver-protocol.js'));
+  const crypto = require('crypto');
+
+  // Scenario is re-read per message so tests can rewrite it between turns.
+  function loadConfig() {
+    try {
+      return JSON.parse(fs.readFileSync(SCENARIO_FILE, 'utf-8')).appServer || {};
+    } catch (e) {
+      return {};
+    }
   }
 
-  // Like the real CLI: the thread is announced as soon as the turn starts;
-  // delayMs simulates a LONG-RUNNING turn (work happening), not a slow start.
-  // Tests that supersede or heartbeat a mid-flight turn depend on this shape.
-  const threadId = RESUME || rule.threadId || `cthr_${process.pid}`;
-  writeOut(JSON.stringify(fx.threadStarted(threadId)) + '\n');
+  function log(entry) {
+    try {
+      fs.appendFileSync(LOG_FILE, JSON.stringify({
+        bin: 'codex', mode: 'app-server', pid: process.pid, ts: Date.now(), ...entry,
+      }) + '\n');
+    } catch (e) { /* logging is best-effort */ }
+  }
+  log({ event: 'spawn', argv });
 
-  const finish = () => {
+  function send(obj) { writeOut(JSON.stringify(obj) + '\n'); }
+
+  let initializedDone = false;
+  let serverReqId = 1000;                    // server-to-client request ids (approvals)
+  const pendingServerRequests = new Map();   // id -> resolve(decision)
+  const activeTurns = new Map();             // threadId -> { turnId, threadId, finished }
+  const overloadCounts = new Map();          // method -> requests already rejected
+
+  const tick = (ms = 2) => new Promise(r => setTimeout(r, ms));
+
+  function finishTurn(t, status, error) {
+    if (t.finished) return;
+    t.finished = true;
+    activeTurns.delete(t.threadId);
+    send(asfx.threadStatusChanged(t.threadId, 'idle'));
+    send(asfx.turnCompleted(t.threadId, t.turnId, status, error || null));
+  }
+
+  // Drive one scripted turn. Realistic notification order per RESEARCH.md
+  // section 4. Each step awaits a tick so concurrent turns on other threads
+  // interleave on the shared stdout, exactly like the real server, and so a
+  // turn/interrupt arriving mid-sequence can stop the remaining steps.
+  async function runTurn(t, prompt, rule) {
+    const { threadId, turnId } = t;
+    const shortId = turnId.slice(0, 8);
+    send(asfx.threadStatusChanged(threadId, 'active'));
+    send(asfx.turnStarted(threadId, turnId));
+    await tick();
+    if (t.finished) return;
+    const userItemId = `item_user_${shortId}`;
+    send(asfx.itemStartedUserMessage(threadId, turnId, userItemId, prompt));
+    send(asfx.itemCompletedUserMessage(threadId, turnId, userItemId, prompt));
+
+    if (rule.delayMs > 0) await tick(rule.delayMs);
+    if (t.finished) return;
+
+    let text = rule.text || '';
+
+    if (rule.approval) {
+      const a = rule.approval;
+      const approvalItemId = `item_appr_${shortId}`;
+      const reqId = ++serverReqId;
+      let request;
+      if (a.kind === 'fileChange') {
+        send(asfx.itemStartedFileChange(threadId, turnId, approvalItemId));
+        request = asfx.fileChangeApprovalRequest(reqId, {
+          threadId, turnId, itemId: approvalItemId,
+          grantRoot: a.grantRoot ?? null, reason: a.reason || null,
+        });
+      } else {
+        send(asfx.itemStartedCommandExecution(threadId, turnId, approvalItemId, a.command || 'true'));
+        request = asfx.commandApprovalRequest(reqId, {
+          threadId, turnId, itemId: approvalItemId,
+          command: a.command || 'true', reason: a.reason || null,
+        });
+      }
+      // Blocking, like the real server: the turn does not progress until the
+      // client answers this server-to-client request (section 5).
+      const decision = await new Promise(resolve => {
+        pendingServerRequests.set(reqId, resolve);
+        send(request);
+      });
+      log({ approvalDecision: decision, requestId: reqId });
+      if (t.finished) return;
+      // Object decisions (execpolicy/network amendments) count as accepts.
+      const key = (decision === 'decline') ? 'decline'
+        : (decision === 'cancel') ? 'cancel'
+        : 'accept';
+      if (key === 'cancel') { finishTurn(t, 'interrupted'); return; }
+      const after = (a.afterDecision || {})[key] || {};
+      if (after.text != null) text = after.text;
+    }
+
+    if (rule.error) {
+      send(asfx.errorNotification(threadId, turnId, rule.error));
+      finishTurn(t, 'failed', {
+        message: rule.error.message || 'stub turn error',
+        codexErrorInfo: rule.error.codexErrorInfo || null,
+      });
+      return;
+    }
+
     if (rule.noise) {
-      // Format-drift resilience: unknown event types and malformed JSON must
-      // be skipped by the consumer without breaking the turn.
-      writeOut(JSON.stringify({ type: 'turn.started' }) + '\n');
+      // Format-drift resilience (mirrors the exec stub): a malformed line,
+      // an unknown notification, and a delta for an item that never started
+      // must all be skipped by the client without breaking the turn.
       writeOut('{not json at all\n');
+      send({ method: 'totally/unknown', params: { threadId } });
+      send(asfx.agentMessageDelta(threadId, turnId, 'item_ghost', 'GHOST'));
     }
-    const events = [];
-    if (rule.failMessage) {
-      events.push(fx.turnFailed(rule.failMessage));
-    } else {
-      events.push(fx.agentMessage(rule.text || ''));
-      events.push(fx.turnCompleted(rule.usage || {}));
-    }
-    for (const e of events) writeOut(JSON.stringify(e) + '\n');
-    process.exit(rule.failMessage ? 1 : 0);
-  };
 
-  if (rule.delayMs > 0) setTimeout(finish, rule.delayMs);
-  else finish();
-});
+    const agentItemId = `msg_${shortId}`;
+    send(asfx.itemStartedAgentMessage(threadId, turnId, agentItemId));
+    for (const d of rule.deltas || []) {
+      await tick();
+      if (t.finished) return;
+      send(asfx.agentMessageDelta(threadId, turnId, agentItemId, d));
+    }
+
+    if (rule.crashMidTurn) process.exit(1);
+    if (rule.hangAfterDeltas) return; // only turn/interrupt completes it now
+
+    await tick();
+    if (t.finished) return;
+    const finalText = text || (rule.deltas || []).join('');
+    send(asfx.itemCompletedAgentMessage(threadId, turnId, agentItemId, finalText));
+    send(asfx.tokenUsageUpdated(threadId, turnId, rule.usage || {}));
+    send(asfx.accountRateLimitsUpdated());
+    finishTurn(t, 'completed');
+  }
+
+  function handleMessage(msg) {
+    // A message with an id but no method is the client answering one of OUR
+    // server-to-client requests (an approval decision).
+    if (msg.method === undefined && msg.id !== undefined) {
+      log({ serverRequestResponse: msg.id, result: msg.result ?? null, error: msg.error ?? null });
+      const resolve = pendingServerRequests.get(msg.id);
+      if (resolve) {
+        pendingServerRequests.delete(msg.id);
+        resolve(msg.result ? msg.result.decision : 'decline');
+      }
+      return;
+    }
+
+    const { id, method, params } = msg;
+    log({ method, id: id ?? null, params: params ?? null });
+    const cfg = loadConfig();
+
+    // Request-timeout tests: swallow configured methods entirely.
+    if (id !== undefined && Array.isArray(cfg.dropMethods) && cfg.dropMethods.includes(method)) return;
+
+    // Overload simulation: the first N requests to a method get -32001.
+    if (id !== undefined && cfg.overload && cfg.overload.method === method) {
+      const n = overloadCounts.get(method) || 0;
+      if (n < (cfg.overload.times || 0)) {
+        overloadCounts.set(method, n + 1);
+        send(asfx.overloadErrorResponse(id));
+        return;
+      }
+    }
+
+    switch (method) {
+      case 'initialize': {
+        const version = cfg.version || '0.144.3';
+        const ci = (params && params.clientInfo) || { name: 'unknown', version: '0' };
+        send(asfx.response(id, asfx.initializeResult(ci.name, ci.version, version)));
+        return;
+      }
+      case 'initialized': {
+        initializedDone = true;
+        // The real server pushes unsolicited notifications right after the
+        // handshake (RESEARCH.md section 2); clients must ignore them.
+        send(asfx.remoteControlStatusChanged());
+        return;
+      }
+    }
+
+    // Like the real server: nothing but initialize works pre-handshake.
+    if (!initializedDone && id !== undefined) {
+      send(asfx.errorResponse(id, -32600, 'not initialized'));
+      return;
+    }
+
+    switch (method) {
+      case 'thread/start': {
+        const threadId = crypto.randomUUID();
+        send(asfx.response(id, asfx.threadStartResult(threadId, params || {})));
+        send(asfx.threadStartedNotification(threadId, params || {}));
+        return;
+      }
+      case 'thread/resume': {
+        const threadId = params && params.threadId;
+        send(asfx.response(id, asfx.threadStartResult(threadId, params || {})));
+        return;
+      }
+      case 'turn/start': {
+        const threadId = params && params.threadId;
+        if (activeTurns.has(threadId)) {
+          // One active turn per thread (RESEARCH.md section 9).
+          send(asfx.errorResponse(id, -32600, `turn already active on thread ${threadId}`));
+          return;
+        }
+        const turnId = crypto.randomUUID();
+        const prompt = ((params && params.input) || [])
+          .filter(p => p && p.type === 'text').map(p => p.text).join('\n');
+        const rules = cfg.rules || [];
+        const rule = rules.find(r => matches(r, prompt))
+          || { text: `STUB-APPSERVER-NO-RULE prompt=${prompt.slice(0, 120)}` };
+        const t = { turnId, threadId, finished: false };
+        activeTurns.set(threadId, t);
+        send(asfx.response(id, asfx.turnStartResult(turnId)));
+        runTurn(t, prompt, rule).catch(() => {});
+        return;
+      }
+      case 'turn/interrupt': {
+        send(asfx.response(id, {}));
+        const t = activeTurns.get(params && params.threadId);
+        if (t && !t.finished && (!params.turnId || params.turnId === t.turnId)) {
+          finishTurn(t, 'interrupted');
+        }
+        return;
+      }
+      default:
+        if (id !== undefined) send(asfx.unknownMethodError(id, method));
+        // Unknown notifications are ignored, like the real server.
+    }
+  }
+
+  process.stdin.setEncoding('utf-8');
+  let buf = '';
+  process.stdin.on('data', chunk => {
+    buf += chunk;
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i);
+      buf = buf.slice(i + 1);
+      if (!line.trim()) continue;
+      let msg;
+      try { msg = JSON.parse(line); } catch (e) { log({ badLine: line.slice(0, 200) }); continue; }
+      if (!msg || typeof msg !== 'object') continue;
+      handleMessage(msg);
+    }
+  });
+  // The real server exits cleanly on stdin EOF (RESEARCH.md, shutdown notes).
+  process.stdin.on('end', () => process.exit(0));
+}
+
+// ── Exec mode (legacy; unchanged behaviour) ─────────────────────────────────
+
+function runExecMode() {
+  function argValue(flag) {
+    const i = argv.indexOf(flag);
+    return i >= 0 ? argv[i + 1] : null;
+  }
+  const MODEL = argValue('--model');
+  const resumeIdx = argv.indexOf('resume');
+  const RESUME = resumeIdx >= 0 ? argv[resumeIdx + 1] : null;
+
+  function loadRules() {
+    try {
+      return JSON.parse(fs.readFileSync(SCENARIO_FILE, 'utf-8')).rules || [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  // Read the entire prompt from stdin, then play the matching rule.
+  let prompt = '';
+  process.stdin.setEncoding('utf-8');
+  process.stdin.on('data', (c) => { prompt += c; });
+  process.stdin.on('end', () => {
+    // Record the invocation for spawn-arg and prompt-content assertions.
+    try {
+      fs.appendFileSync(LOG_FILE, JSON.stringify({
+        bin: 'codex', pid: process.pid, ts: Date.now(),
+        model: MODEL, resume: RESUME, argv, prompt,
+        env: {
+          RUNDOCK: process.env.RUNDOCK || null,
+          RUNDOCK_CONVO_ID: process.env.RUNDOCK_CONVO_ID || null,
+          RUNDOCK_PORT: process.env.RUNDOCK_PORT || null,
+        },
+      }) + '\n');
+    } catch (e) { /* logging is best-effort */ }
+
+    const rule = loadRules().find(r => matches(r, prompt)) || {
+      text: `STUB-CODEX-NO-RULE prompt=${prompt.slice(0, 120)}`,
+    };
+
+    if (rule.crash != null) {
+      // Abnormal death before any output, optionally delayed.
+      const code = typeof rule.crash === 'number' ? rule.crash : 1;
+      if (rule.delayMs > 0) setTimeout(() => process.exit(code), rule.delayMs);
+      else process.exit(code);
+      return;
+    }
+
+    // Like the real CLI: the thread is announced as soon as the turn starts;
+    // delayMs simulates a LONG-RUNNING turn (work happening), not a slow start.
+    // Tests that supersede or heartbeat a mid-flight turn depend on this shape.
+    const threadId = RESUME || rule.threadId || `cthr_${process.pid}`;
+    writeOut(JSON.stringify(fx.threadStarted(threadId)) + '\n');
+
+    const finish = () => {
+      if (rule.noise) {
+        // Format-drift resilience: unknown event types and malformed JSON must
+        // be skipped by the consumer without breaking the turn.
+        writeOut(JSON.stringify({ type: 'turn.started' }) + '\n');
+        writeOut('{not json at all\n');
+      }
+      const events = [];
+      if (rule.failMessage) {
+        events.push(fx.turnFailed(rule.failMessage));
+      } else {
+        events.push(fx.agentMessage(rule.text || ''));
+        events.push(fx.turnCompleted(rule.usage || {}));
+      }
+      for (const e of events) writeOut(JSON.stringify(e) + '\n');
+      process.exit(rule.failMessage ? 1 : 0);
+    };
+
+    if (rule.delayMs > 0) setTimeout(finish, rule.delayMs);
+    else finish();
+  });
+}
