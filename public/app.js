@@ -351,6 +351,14 @@ function handle(d) {
         convoState[convoId] = r.state;
         executeEffects(convoId, r.effects);
       }
+      // Keepalive heartbeat from a silent Codex turn: the reducer bumps the
+      // stream-activity clock (ctx.now keeps it pure) so the 90s watchdog
+      // never declares a legitimately working turn dead. No render effect.
+      if(d.subtype==='keepalive' && convoId) {
+        const r = RundockConversationState.reduce(getConvoState(convoId), d, { now: Date.now() });
+        convoState[convoId] = r.state;
+        executeEffects(convoId, r.effects);
+      }
       // Agent switch: delegation handoff or return
       if(d.subtype==='agent_switch' && convoId) {
         const toAgent = agents.find(a => a.id === d.toAgent);
@@ -2188,14 +2196,22 @@ function startProcessing(convoId) {
   const state = getConvoState(convoId);
   state.isProcessing=true; state.latestText=''; state.latestAgentId=null;
   state.lastStreamActivity = Date.now();
-  // Safety net: if no streaming activity for 90s, auto-finish to prevent stuck UI
+  // Safety net: if no streaming activity for 90s, auto-finish to prevent stuck UI.
+  // The decision (watchdogVerdict) lives in conversation-state.js where it is
+  // unit-tested; each tick re-reads the LIVE state via getConvoState. Never
+  // decide on the `state` object captured above: reduce() returns fresh state
+  // objects and the glue reassigns convoState[convoId], so a captured
+  // reference is orphaned after the first reduced message, its
+  // lastStreamActivity freezes, and every turn longer than 90s would be
+  // auto-finished mid-stream. Pinned by test/unit/regression.test.js.
   if(state.processingTimeout) clearInterval(state.processingTimeout);
   state.processingTimeout = setInterval(() => {
-    if(!state.isProcessing) { clearInterval(state.processingTimeout); state.processingTimeout=null; return; }
-    const idle = Date.now() - (state.lastStreamActivity || 0);
-    if(idle > 90000) {
-      console.warn(`[Timeout] convo=${convoId} no streaming activity for ${Math.round(idle/1000)}s, auto-finishing`);
-      clearInterval(state.processingTimeout); state.processingTimeout=null;
+    const live = getConvoState(convoId);
+    const verdict = RundockConversationState.watchdogVerdict(live, Date.now());
+    if(verdict.action === 'stop') { clearInterval(live.processingTimeout); live.processingTimeout=null; return; }
+    if(verdict.action === 'finish') {
+      console.warn(`[Timeout] convo=${convoId} no streaming activity for ${Math.round(verdict.idleMs/1000)}s, auto-finishing`);
+      clearInterval(live.processingTimeout); live.processingTimeout=null;
       finishProcessing(convoId);
     }
   }, 10000);
