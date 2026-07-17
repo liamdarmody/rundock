@@ -1770,19 +1770,34 @@ function openConvoMenu(evt, items, anchorEl) {
   menu.style.visibility = 'hidden';
   for (const item of items) {
     if (item.input) {
+      // Small-input composer pattern (the review-input grammar): submit via
+      // Enter or the in-field circular button, which activates with content.
       const row = document.createElement('div');
       row.className = 'convo-menu-input';
       const input = document.createElement('input');
       input.type = 'text';
       input.placeholder = item.placeholder || '';
       input.maxLength = 60;
+      const send = document.createElement('button');
+      send.className = 'convo-menu-send';
+      send.disabled = true;
+      send.title = 'Create';
+      send.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>';
+      const submit = () => { if (input.value.trim()) { item.onSubmit(input.value.trim()); closeConvoMenu(); } };
+      input.oninput = () => {
+        const hasText = !!input.value.trim();
+        send.disabled = !hasText;
+        send.classList.toggle('active', hasText);
+      };
       input.onkeydown = (e) => {
         e.stopPropagation();
-        if (e.key === 'Enter' && input.value.trim()) { item.onSubmit(input.value.trim()); closeConvoMenu(); }
+        if (e.key === 'Enter') submit();
         if (e.key === 'Escape') closeConvoMenu();
       };
       input.onclick = (e) => e.stopPropagation();
+      send.onclick = (e) => { e.stopPropagation(); submit(); };
       row.appendChild(input);
+      row.appendChild(send);
       menu.appendChild(row);
     } else {
       const row = document.createElement('button');
