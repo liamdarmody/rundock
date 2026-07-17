@@ -60,8 +60,20 @@ function writeScenario(rules) {
   fs.writeFileSync(path.join(workspaceDir, 'stub-scenario.json'), JSON.stringify({ rules }, null, 2));
 }
 
-function writeCodexScenario(rules) {
-  fs.writeFileSync(path.join(workspaceDir, 'stub-codex-scenario.json'), JSON.stringify({ rules }, null, 2));
+// App-server scenario rules for the stub codex binary (see the rule shape
+// documented in test/helpers/stub-codex/codex). `extra` merges into the
+// appServer block for config beyond rules (dropMethods, overload, version).
+function writeCodexScenario(rules, extra = {}) {
+  fs.writeFileSync(path.join(workspaceDir, 'stub-codex-scenario.json'),
+    JSON.stringify({ appServer: { ...extra, rules } }, null, 2));
+}
+
+// Convenience view over the stub invocation log: the text of every
+// turn/start prompt the codex stub received, in order.
+function codexTurnPrompts() {
+  return readInvocations()
+    .filter(i => i.mode === 'app-server' && i.method === 'turn/start')
+    .map(i => ((i.params && i.params.input) || []).filter(p => p && p.type === 'text').map(p => p.text).join('\n'));
 }
 
 function readInvocations() {
@@ -181,7 +193,8 @@ function freshConvoId(prefix = 'it') {
 }
 
 module.exports = {
-  boot, shutdown, connect, writeScenario, writeCodexScenario, readInvocations, clearInvocations,
+  boot, shutdown, connect, writeScenario, writeCodexScenario, codexTurnPrompts,
+  readInvocations, clearInvocations,
   delay, freshConvoId, reapConvo,
   get internal() { return internal; },
   get port() { return port; },

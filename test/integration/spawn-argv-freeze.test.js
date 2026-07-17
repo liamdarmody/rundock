@@ -22,11 +22,23 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const h = require('../helpers/harness.js');
+const { agentFile, standardTeam } = require('../helpers/workspace.js');
 
 let client;
 
 before(async () => {
-  await h.boot();
+  await h.boot({
+    agents: {
+      ...standardTeam(),
+      // For the codex spawn freeze below.
+      'codex-freeze': agentFile({
+        name: 'codex-freeze', displayName: 'Frost', role: 'Frozen',
+        description: 'Pins the codex spawn', type: 'specialist', order: 9,
+        reportsTo: 'chief-of-staff', runtime: 'codex',
+        body: 'You are Frost.',
+      }),
+    },
+  });
   client = await h.connect();
 });
 after(async () => h.shutdown());
@@ -158,5 +170,38 @@ describe('spawn argv freeze', () => {
       '--agent', 'content-lead',
       'freeze routine path',
     ]);
+  });
+
+  test('codex app-server spawn: full argv frozen and thread policy invariants pinned', async () => {
+    // The Codex runtime runs on ONE shared `codex app-server` process; its
+    // argv is the bare subcommand (everything else travels over the
+    // protocol) and the safety posture rides thread/start params instead:
+    // sandboxed workspace-write, per-action approvals to the USER, never a
+    // danger mode, never the experimental protocol surface.
+    const convoId = h.freshConvoId('frz');
+    h.clearInvocations();
+    h.writeCodexScenario([{ match: { promptIncludes: 'freeze codex path' }, text: 'codex frozen.' }]);
+
+    client.send({ type: 'chat', conversationId: convoId, agent: 'codex-freeze', content: 'freeze codex path' });
+    await client.waitForEvent('system', 'done', convoId);
+
+    const inv = h.readInvocations().filter(i => i.mode === 'app-server');
+    const spawns = inv.filter(i => i.event === 'spawn');
+    assert.strictEqual(spawns.length, 1, 'exactly one app-server spawn');
+    assert.deepStrictEqual(spawns[0].argv, ['app-server']);
+
+    const init = inv.find(i => i.method === 'initialize');
+    assert.strictEqual(init.params.capabilities.experimentalApi, false, 'stable protocol surface only');
+
+    const starts = inv.filter(i => i.method === 'thread/start');
+    assert.strictEqual(starts.length, 1, 'one thread for the turn');
+    assert.strictEqual(starts[0].params.sandbox, 'workspace-write');
+    assert.strictEqual(starts[0].params.approvalPolicy, 'on-request');
+    assert.strictEqual(starts[0].params.approvalsReviewer, 'user');
+
+    // Belt and braces: no danger mode anywhere on the wire.
+    for (const e of inv) {
+      assert.ok(!JSON.stringify(e).includes('danger'), `danger mode leaked: ${JSON.stringify(e).slice(0, 120)}`);
+    }
   });
 });
