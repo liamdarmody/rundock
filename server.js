@@ -2350,6 +2350,118 @@ function safeSend(data) {
   }
 }
 
+// ── KILL-WINDOW STATE MACHINE (queued-message buffer) ─────────────────────
+// A conversation whose process is being replaced moves through explicit
+// transition states so a user message can never be written to a dying stdin
+// and silently lost. Beyond the implicit idle/processing states (no record
+// in this map: normal chat handling), the smallest set covering the real
+// windows is:
+//
+//   killing    a scope-return or end_delegation kill has FIRED (signal sent)
+//              but the process's close event has not yet run
+//   restoring  the delegate close handler is restoring/respawning the parent
+//
+// A `chat` message arriving during either state is BUFFERED and replayed
+// through the normal message handler once the replacement process is ready.
+// Previously such a message passed the follow-up stdin gate (the dying
+// process still looked live), cancelled the committed handback, and was
+// written to a stdin that was about to close: the worst chat failure mode.
+//
+// The Codex runtime needs no buffer for its own supersede path: a new
+// message there is captured by the superseding turn's closure and only sent
+// to the shared app-server after the bounded _turnEnd wait, so it never
+// touches a dying process (see startCodexTurn). Codex DELEGATES restore
+// through the shared delegate close handler, so this buffer covers them.
+const convoTransitions = new Map(); // convoId -> { state, owner, queued, failsafe }
+
+// Test-only seam: widens the restoring window so the race is
+// deterministically testable (see test/integration/kill-window.test.js).
+// Default 0: production restoration stays synchronous.
+const RESTORE_DELAY_MS = parseInt(process.env.RUNDOCK_TEST_RESTORE_DELAY_MS || '0', 10) || 0;
+
+// `owner` is the dying entry whose replacement the window waits for; ends
+// from an unrelated flow (a stale close handler racing a newer transition)
+// are ignored so they cannot flush a window they do not own.
+function beginConvoTransition(convoId, state, owner) {
+  const existing = convoTransitions.get(convoId);
+  if (existing) {
+    // Same flow moving killing -> restoring keeps its queue.
+    existing.state = state;
+    existing.owner = owner;
+    return existing;
+  }
+  const t = { state, owner, queued: [] };
+  // Failsafe: a transition must never outlive its restoration. If an exotic
+  // path replaces the dying entry before its close handler runs, nothing
+  // would end the window and every later message would buffer forever; this
+  // timer force-flushes instead. 10s is far beyond any real kill-to-close gap.
+  t.failsafe = setTimeout(() => {
+    console.warn(`[KillWindow] convo=${convoId} transition failsafe fired (${t.state}), flushing ${t.queued.length} buffered message(s)`);
+    endConvoTransition(convoId, t.owner);
+  }, 10000);
+  if (t.failsafe.unref) t.failsafe.unref();
+  convoTransitions.set(convoId, t);
+  return t;
+}
+
+// Buffer a chat message when its conversation is mid-transition. Returns
+// true when buffered (the caller must not process the message further).
+function bufferChatIfTransitioning(convoId, msg) {
+  const t = convoTransitions.get(convoId);
+  if (!t) return false;
+  t.queued.push(msg);
+  console.log(`[KillWindow] convo=${convoId} buffered chat during ${t.state} (${t.queued.length} queued)`);
+  return true;
+}
+
+// True when a chat message arrived during this conversation's current
+// transition window. The restoration paths use it to skip their auto-continue
+// routing prompts: the user's newer message supersedes the handoff, mirroring
+// the live-window rule where a follow-up cancels the auto-return.
+function convoHasBufferedChat(convoId) {
+  const t = convoTransitions.get(convoId);
+  return !!(t && t.queued.length);
+}
+
+// End the transition and replay buffered messages through the normal chat
+// handler, in arrival order. The map entry is deleted BEFORE replaying so
+// the replayed message flows through the full handler (transcript append,
+// runtime routing, follow-up gate) against the freshly restored process.
+function endConvoTransition(convoId, owner) {
+  const t = convoTransitions.get(convoId);
+  if (!t) return;
+  if (owner && t.owner && owner !== t.owner) return; // not this flow's window
+  clearTimeout(t.failsafe);
+  convoTransitions.delete(convoId);
+  if (!t.queued.length) return;
+  const liveWs = [...connectedClients].find(c => c.readyState === 1) || [...connectedClients][0];
+  if (!liveWs) {
+    console.warn(`[KillWindow] convo=${convoId} no client to replay ${t.queued.length} buffered message(s)`);
+    return;
+  }
+  for (const queued of t.queued) {
+    console.log(`[KillWindow] convo=${convoId} replaying buffered chat`);
+    liveWs.emit('message', JSON.stringify(queued));
+  }
+}
+
+// Arm the 500ms scope-return auto-kill for an entry that emitted a handoff
+// marker. A user follow-up inside the window cancels it by clearing
+// pendingKill (the follow-up stdin path). Once the kill actually FIRES the
+// conversation enters the killing state, so any later message is buffered
+// (see convoTransitions) instead of being written to the dying stdin.
+function scheduleScopeReturnKill(e, convoId) {
+  e.pendingKill = true;
+  setTimeout(() => {
+    if (!e.exited && e.pendingKill) { // no-op if a follow-up cleared pendingKill
+      // Only open the window if this entry still executes the conversation;
+      // a parked/replaced entry's kill must not buffer the successor's chat.
+      if (chatProcesses.get(convoId) === e) beginConvoTransition(convoId, 'killing', e);
+      try { e.process.kill(); } catch (err) {}
+    }
+  }, 500);
+}
+
 // Heartbeat: detect silently dead connections every 15s
 // unref(): the interval must not hold the event loop open on its own. In
 // production the listening server keeps the process alive and the interval
@@ -2649,6 +2761,8 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
     safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: 0,
       _agent: specialistEntry.agentId, _conversationId: convoId,
       _processId: specialistEntry.processId }));
+    // Close any kill-window transition (replays buffer into a fresh spawn).
+    endConvoTransition(convoId, specialistEntry);
     return;
   }
 
@@ -2749,6 +2863,10 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
   safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: 0,
     _agent: specialistEntry.agentId, _conversationId: convoId,
     _processId: specialistEntry.processId }));
+
+  // The orchestrator is live: close any kill-window transition opened when
+  // the specialist's auto-return kill fired, replaying buffered messages.
+  endConvoTransition(convoId, specialistEntry);
 }
 
 // Respawn an orchestrator/parent with --resume as an idle, live process wired
@@ -2791,9 +2909,7 @@ function spawnResumedProcess(convoId, agentId, sessionId, processes, opts = {}) 
       if ((hasOutOfScope || hasComplete) && !e.delegation) {
         e.scopeReturn = true;
         e.scopeReturnMode = hasComplete ? 'complete' : 'return';
-        e.pendingKill = true;
-        // No-op if a user follow-up cleared pendingKill inside the window.
-        setTimeout(() => { if (!e.exited && e.pendingKill) { try { e.process.kill(); } catch (err) {} } }, 500);
+        scheduleScopeReturnKill(e, convoId); // follow-up in-window cancels; post-kill messages buffer
       }
       if (e.responseText && !isSilentParkResponse(e.responseText)) {
         const toolSummary = buildToolSummary(e.toolCalls);
@@ -2813,7 +2929,10 @@ function spawnResumedProcess(convoId, agentId, sessionId, processes, opts = {}) 
       handleScopeReturn(entry, convoId, entry.scopeReturnMode === 'complete');
       return;
     }
-    if (cur === entry) processes.delete(convoId);
+    if (cur === entry) {
+      processes.delete(convoId);
+      endConvoTransition(convoId, entry); // replay buffered messages into a fresh spawn
+    }
     safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: rCode, _agent: entry.agentId, _conversationId: convoId, _processId: processId }));
   });
   return entry;
@@ -3042,12 +3161,9 @@ function handleDelegation(msg, processes) {
 
       if (shouldAutoReturn) {
         console.log(`[Delegate] Server-side auto-return convo=${convoId} (outOfScope=${hasOutOfScope}, complete=${hasComplete}, crud=${hasCrudMarker})`);
-        e.pendingKill = true; // a user follow-up in this window cancels the auto-return
-        setTimeout(() => {
-          if (!e.exited && e.pendingKill) { // no-op if the follow-up cleared pendingKill
-            try { e.process.kill(); } catch (err) {}
-          }
-        }, 500);
+        // A user follow-up in this window cancels the auto-return; once the
+        // kill fires, later messages buffer instead of hitting dying stdin.
+        scheduleScopeReturnKill(e, convoId);
       }
 
       e.finalResponseText = e.responseText;
@@ -3071,6 +3187,34 @@ function handleDelegation(msg, processes) {
     delegateEntry.exited = true;
     const current = processes.get(convoId);
     if (current !== delegateEntry) return;
+
+    // The delegate is gone but its replacement (restored parent, respawned
+    // orchestrator) is not ready yet: enter the restoring state so a chat
+    // message arriving now is buffered rather than racing the restoration.
+    // When an auto-return kill opened the window this moves killing ->
+    // restoring on the same queue. endConvoTransition replays any buffered
+    // messages against the restored process once restoration completes.
+    beginConvoTransition(convoId, 'restoring', delegateEntry);
+    const runRestore = () => {
+      try { finishDelegateClose(code); }
+      finally { endConvoTransition(convoId, delegateEntry); }
+    };
+    // RUNDOCK_TEST_RESTORE_DELAY_MS (test-only seam, default 0) widens this
+    // window so the race is deterministically testable; in production the
+    // restoration runs synchronously on the close event, exactly as before.
+    if (RESTORE_DELAY_MS > 0) setTimeout(runRestore, RESTORE_DELAY_MS);
+    else runRestore();
+  };
+
+  // Restoration body (behaviour unchanged apart from the buffered-follow-up
+  // gates); separated from handleDelegateClose so the restoring window above
+  // can wrap, and under test delay, it.
+  const finishDelegateClose = (code) => {
+    // A chat message buffered during the kill/restore window supersedes the
+    // handoff's auto-continue: the user has spoken, so their replayed message
+    // drives the restored parent instead of a routing prompt. Mirrors the
+    // live-window rule where a follow-up cancels the auto-return.
+    const bufferedFollowUp = convoHasBufferedChat(convoId);
 
     // If cancelled by user, skip all parent restoration logic
     if (delegateEntry.cancelled) {
@@ -3132,6 +3276,10 @@ function handleDelegation(msg, processes) {
         // the specialist's output and decides what to do next.
         if (isPipelineComplete) {
           console.log(`[AgentIntercept] convo=${convoId} COMPLETE gate: specialist ${delegateEntry.agentId} finished, orchestrator ${orchestratorAgentId} stays idle`);
+        } else if (bufferedFollowUp) {
+          // Buffered user message supersedes the RETURN auto-continue: the
+          // orchestrator stays idle and the replayed message drives it.
+          console.log(`[KillWindow] convo=${convoId} skipping RETURN auto-continue, buffered follow-up takes over`);
         } else if (orchestratorEntry.process && orchestratorEntry.process.stdin && orchestratorEntry.process.stdin.writable && !orchestratorEntry.process.killed) {
           // RETURN path: auto-continue to route the pending request to another specialist
           const resumeCount = incrementAutoResume(convoId);
@@ -3224,7 +3372,12 @@ function handleDelegation(msg, processes) {
         ? `\n\n--- ${delegateEntry.agentId} ---\n${delegateOutput}\n---`
         : '';
 
-      if (isOutOfScope) {
+      if (isOutOfScope && bufferedFollowUp) {
+        // Buffered user message supersedes the RETURN routing prompt: park
+        // the resumed parent idle and let the replayed message drive it.
+        resumeEntry.idle = true;
+        console.log(`[KillWindow] convo=${convoId} skipping RETURN routing prompt, buffered follow-up takes over`);
+      } else if (isOutOfScope) {
         const resumeCount = incrementAutoResume(convoId);
         if (resumeCount >= MAX_CONSECUTIVE_AGENT_RESUMES) {
           console.log(`[CircuitBreaker] convo=${convoId} ${resumeCount} consecutive agent resumes on parked-parent RETURN path, pausing`);
@@ -3268,12 +3421,8 @@ function handleDelegation(msg, processes) {
             // COMPLETE takes priority when both markers are present
             e.scopeReturnMode = hasComplete ? 'complete' : 'return';
             console.log(`[ScopeReturn] convo=${convoId} agent=${e.agentId} ${e.scopeReturnMode} marker on resumed parent`);
-            e.pendingKill = true; // a user follow-up in this window cancels the auto-return
-            setTimeout(() => {
-              if (!e.exited && e.pendingKill) { // no-op if the follow-up cleared pendingKill
-                try { e.process.kill(); } catch (err) {}
-              }
-            }, 500);
+            // Follow-up in-window cancels the auto-return; post-kill messages buffer.
+            scheduleScopeReturnKill(e, convoId);
           }
           // Filter silent-park responses: strip sentinel and suppress near-empty/no-op output
           if (e.responseText && !isSilentParkResponse(e.responseText)) {
@@ -3305,7 +3454,10 @@ function handleDelegation(msg, processes) {
           return;
         }
 
-        if (cur === resumeEntry) processes.delete(convoId);
+        if (cur === resumeEntry) {
+          processes.delete(convoId);
+          endConvoTransition(convoId, resumeEntry); // replay buffered messages into a fresh spawn
+        }
         safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: rCode, _agent: resumeEntry.agentId, _conversationId: convoId, _processId: resumeProcessId }));
       });
 
@@ -3320,7 +3472,9 @@ function handleDelegation(msg, processes) {
         fromAgent: delegateEntry.agentId, toAgent: delegateEntry.delegation.originalAgentId
       }));
 
-      if (!delegateEntry.isPlatformDelegate && delegateEntry.receivedFollowUp && orig.process && orig.process.stdin && orig.process.stdin.writable) {
+      // bufferedFollowUp gate: a message buffered during the window replays
+      // to the restored parent directly, superseding the auto-continue.
+      if (!delegateEntry.isPlatformDelegate && delegateEntry.receivedFollowUp && !bufferedFollowUp && orig.process && orig.process.stdin && orig.process.stdin.writable) {
         const resumeCount = incrementAutoResume(convoId);
         if (resumeCount >= MAX_CONSECUTIVE_AGENT_RESUMES) {
           console.log(`[CircuitBreaker] convo=${convoId} ${resumeCount} consecutive agent resumes on delegate return path, pausing`);
@@ -3396,6 +3550,13 @@ wss.on('connection', (ws) => {
         const convoId = msg.conversationId || 'default';
         const useLegacy = process.env.RUNDOCK_LEGACY_SPAWN === '1';
 
+        // KILL-WINDOW GUARD: if this conversation is mid-transition (a
+        // handoff kill has fired, or a delegate's parent restoration is in
+        // flight), the current process is dying and must not receive this
+        // message. Buffer it; it replays through this handler once the
+        // replacement process is ready. See convoTransitions.
+        if (bufferChatIfTransitioning(convoId, msg)) return;
+
         // Track user messages in conversation transcript. Skip on a resume-
         // failure retry (_resumeRetry): the message was already appended on the
         // first pass, and the retry re-emits the same message into this handler
@@ -3436,7 +3597,13 @@ wss.on('connection', (ws) => {
             existing = null; // Force fall-through to spawn path
           }
 
-          // KNOWN LIMITATION: kill-already-fired race. A follow-up arriving in the SIGTERM-to-close gap passes this gate (no !existing.process.killed check) and writes to a dying process; on non-delegate paths the handback is dropped and the message lost. Clean fix is a state-machine change (queue the follow-up until close/handback completes, then re-route), not a point-fix.
+          // Kill-window safety: a follow-up arriving BEFORE a scheduled
+          // auto-return kill fires passes this gate and cancels the kill
+          // (pendingKill cleared below) so the still-live process serves it.
+          // One arriving AFTER the kill fires never reaches this gate: the
+          // conversation is in the killing/restoring transition and the
+          // message was buffered above (see convoTransitions), so nothing is
+          // ever written into the signal-to-close gap of a dying process.
           if (existing && !existing.exited && existing.process && existing.process.stdin && existing.process.stdin.writable) {
             const processId = existing.processId;
             console.log(`[Chat] convo=${convoId} proc=${processId} FOLLOW-UP (interactive stdin)`);
@@ -3555,12 +3722,8 @@ wss.on('connection', (ws) => {
                   // to 'return' on both-markers here.
                   e.scopeReturnMode = hasComplete ? 'complete' : 'return';
                   console.log(`[ScopeReturn] convo=${convoId} agent=${e.agentId} ${e.scopeReturnMode} marker on non-delegated process`);
-                  e.pendingKill = true; // a user follow-up in this window cancels the auto-return
-                  setTimeout(() => {
-                    if (!e.exited && e.pendingKill) { // no-op if the follow-up cleared pendingKill
-                      try { e.process.kill(); } catch (err) {}
-                    }
-                  }, 500);
+                  // Follow-up in-window cancels the auto-return; post-kill messages buffer.
+                  scheduleScopeReturnKill(e, convoId);
                 }
                 // Preserve the specialist output for handleScopeReturn:
                 // mirror the delegate path so a direct RETURN injects the real
@@ -3627,6 +3790,7 @@ wss.on('connection', (ws) => {
                 safeSend(JSON.stringify({ type: 'system', subtype: 'done', code, _agent: entry.agentId, _conversationId: convoId, _processId: processId }));
               }
               processes.delete(convoId);
+              endConvoTransition(convoId, entry); // replay buffered messages into a fresh spawn
             });
           }
 
@@ -4189,7 +4353,11 @@ wss.on('connection', (ws) => {
         const current = processes.get(convoId);
         if (current && current.delegation && !current.exited) {
           console.log(`[Delegate] convo=${convoId} ending delegation, killing delegate`);
-          // KNOWN LIMITATION: follow-up racing explicit end_delegation. This kills immediately and uncancellably while setting scopeReturn; a follow-up landing in the kill-to-close gap clears scopeReturn (follow-up clear block) and drops the committed handback. Needs the same queue-and-re-route state machine as the kill-already-fired race above.
+          // This kill is immediate and uncancellable, so open the killing
+          // window first: a follow-up landing in the kill-to-close gap is
+          // buffered (see convoTransitions) instead of clearing the committed
+          // handback and vanishing into the dying delegate's stdin.
+          beginConvoTransition(convoId, 'killing', current);
           stopEntryProcess(current);
           // The close path (process close for Claude, turn done for Codex)
           // will restore the original process
@@ -4213,6 +4381,10 @@ wss.on('connection', (ws) => {
           } else {
             console.log(`[ScopeReturn] convo=${convoId} end_delegation fallback for non-delegated specialist`);
             current.scopeReturn = true;
+            // Immediate uncancellable kill: open the killing window so a
+            // follow-up in the kill-to-close gap buffers instead of clearing
+            // scopeReturn and dying with the process (see convoTransitions).
+            beginConvoTransition(convoId, 'killing', current);
             stopEntryProcess(current);
             // The close handler will call handleScopeReturn
           }
@@ -5460,7 +5632,10 @@ function handleCodexTurnStartFailure(entry, convoId, err) {
     sendCodexError(entry, convoId, err.message);
     sendCodexDone(entry, convoId, -1);
   }
-  if (chatProcesses.get(convoId) === entry) chatProcesses.delete(convoId);
+  if (chatProcesses.get(convoId) === entry) {
+    chatProcesses.delete(convoId);
+    endConvoTransition(convoId, entry); // never strand a kill-window buffer
+  }
 }
 
 // Wire a Codex delegate turn on the shared app-server. Events deliver the
@@ -5577,6 +5752,13 @@ function startCodexTurn(convoId, msg, agentData) {
   // continue on the same thread once the slot frees (one active turn per
   // thread). Mirrors the Claude path's stale-entry handling. The shared
   // app-server itself is never killed here.
+  //
+  // No kill-window buffer (convoTransitions) is needed on this path: unlike
+  // the Claude runtime, where a follow-up could be written into a dying
+  // process's stdin, the new message here is captured by THIS turn's closure
+  // and only sent to the app-server after the bounded _turnEnd wait below,
+  // so it is never lost. Pinned by test/integration/codex-chat.test.js
+  // ("a new user message while a codex turn is running supersedes it").
   const existing = chatProcesses.get(convoId);
   let priorTurnEnd = null;
   if (existing && !existing.exited) {
@@ -5681,7 +5863,13 @@ function handleCodexChatEvent(entry, convoId, ev) {
       entry.exited = true;
       entry._turnThreadId = null;
       if (entry._turnEndResolve) entry._turnEndResolve();
-      if (chatProcesses.get(convoId) === entry) chatProcesses.delete(convoId);
+      if (chatProcesses.get(convoId) === entry) {
+        chatProcesses.delete(convoId);
+        // Close any kill-window transition this entry owned (an interrupt
+        // driven by end_delegation): buffered messages replay into a fresh
+        // turn. Codex entries have no process close event to do this from.
+        endConvoTransition(convoId, entry);
+      }
       if (entry.superseded) return; // a newer turn took over; stay silent
       if (entry.cancelled) return;  // cancel handler already sent cancelled + done
       if (ev.status === 'completed') {
@@ -6222,6 +6410,7 @@ module.exports._internal = {
   // live state maps
   chatProcesses, convoTranscripts, pendingPermissionRequests,
   agentAutoResumeCount, disconnectBuffer, connectedClients,
+  convoTransitions,
   incrementAutoResume, resetAutoResume,
   // universal search (SR1)
   ensureSearchEngine, runUniversalSearch, conversationSessionsForSearch,
