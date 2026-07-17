@@ -59,6 +59,9 @@ export function createEditor({
   // Optional host navigation for cross-file locations (the universal-search
   // file-open route). Same-file scrolling stays local to the editor.
   onNavigate = null,
+  // Optional resolver for wikilink targets: (target) -> bool. Used by the
+  // properties panel to render unresolvable frontmatter links visibly dead.
+  resolveWikilink = null,
 }) {
   if (!element) throw new Error('createEditor: element is required');
 
@@ -76,7 +79,9 @@ export function createEditor({
   });
 
   // Properties panel is read-only today; making it editable is a follow-up.
-  const propertiesCount = renderProperties(propertiesElement, parsed);
+  // Frontmatter wikilink values are clickable and route through the same
+  // host hook as inline wikilinks.
+  const propertiesCount = renderProperties(propertiesElement, parsed, { onWikilinkClick, resolveWikilink });
 
   // Review: the controller owns review state (constructs + endmatter); the
   // panel is its UI. Endmatter-only operations (reply, Done-Reviewing) do

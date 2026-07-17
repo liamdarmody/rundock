@@ -49,7 +49,28 @@ function dateString(value) {
   return String(value);
 }
 
-function renderValue(value, type) {
+// A property value that IS a wikilink: "[[target]]" or "[[target|alias]]"
+// (quotes already consumed by YAML). Obsidian renders these as links in its
+// properties panel; so do we. Values merely CONTAINING a wikilink stay text.
+const PROP_WIKILINK_RE = /^\[\[([^\[\]\|\n]+?)(?:\|([^\[\]\|\n]+?))?\]\]$/;
+
+export function parsePropWikilink(value) {
+  if (typeof value !== 'string') return null;
+  const m = value.trim().match(PROP_WIKILINK_RE);
+  if (!m) return null;
+  const target = m[1].trim();
+  if (!target) return null;
+  return { target, alias: m[2] ? m[2].trim() : null };
+}
+
+function renderWikilinkValue(link, resolveWikilink) {
+  const display = link.alias || link.target;
+  // Unresolvable targets look visibly dead rather than erroring on click.
+  const dead = typeof resolveWikilink === 'function' && !resolveWikilink(link.target);
+  return `<a class="prop-wikilink${dead ? ' dead' : ''}" tabindex="0" data-target="${escapeHtml(link.target)}"${dead ? ' title="No matching file in this workspace"' : ''}>${escapeHtml(display)}</a>`;
+}
+
+function renderValue(value, type, resolveWikilink) {
   if (type === 'null') return '<span class="prop-value empty">empty</span>';
   if (type === 'bool') {
     const on = value === true;
@@ -60,7 +81,11 @@ function renderValue(value, type) {
   }
   if (type === 'list') {
     const chips = value
-      .map(v => `<span class="prop-chip">${escapeHtml(String(v))}</span>`)
+      .map(v => {
+        const link = parsePropWikilink(v);
+        if (link) return `<span class="prop-chip">${renderWikilinkValue(link, resolveWikilink)}</span>`;
+        return `<span class="prop-chip">${escapeHtml(String(v))}</span>`;
+      })
       .join('');
     return `<span class="prop-value list">${chips || '<span class="empty">empty</span>'}</span>`;
   }
@@ -70,12 +95,17 @@ function renderValue(value, type) {
   if (type === 'object') {
     return '<span class="prop-value empty">nested object (Phase 2)</span>';
   }
+  const link = parsePropWikilink(value);
+  if (link) return `<span class="prop-value string">${renderWikilinkValue(link, resolveWikilink)}</span>`;
   return `<span class="prop-value string">${escapeHtml(String(value))}</span>`;
 }
 
 // Renders the panel into the given container element. Returns the count of
 // rows rendered so the caller can decide whether to show the panel at all.
-export function renderProperties(container, parsed) {
+// opts.onWikilinkClick: wikilink property values become clickable and route
+// through it; opts.resolveWikilink(target) -> bool marks dead links.
+export function renderProperties(container, parsed, opts = {}) {
+  const { onWikilinkClick = null, resolveWikilink = null } = opts;
   if (!container) return 0;
   container.innerHTML = '';
   if (!parsed || typeof parsed !== 'object') {
@@ -98,7 +128,7 @@ export function renderProperties(container, parsed) {
       <div class="prop-row">
         <span class="prop-icon" title="${escapeHtml(type)}">${TYPE_ICONS[type] || 'T'}</span>
         <span class="prop-key">${escapeHtml(key)}</span>
-        ${renderValue(value, type)}
+        ${renderValue(value, type, resolveWikilink)}
       </div>
     `);
   }
@@ -111,5 +141,19 @@ export function renderProperties(container, parsed) {
   `;
   container.innerHTML = header + '<div class="properties-body">' + rows.join('') + '</div>';
   container.classList.add('visible');
+
+  // One delegated click/keyboard handler per render (innerHTML assignment
+  // above dropped any previous one). Dead links are inert by design.
+  if (typeof onWikilinkClick === 'function') {
+    const activate = (event) => {
+      const el = event.target.closest && event.target.closest('a.prop-wikilink');
+      if (!el || el.classList.contains('dead')) return;
+      if (event.type === 'keydown' && event.key !== 'Enter') return;
+      event.preventDefault();
+      onWikilinkClick(el.getAttribute('data-target') || '');
+    };
+    container.addEventListener('click', activate);
+    container.addEventListener('keydown', activate);
+  }
   return rows.length;
 }

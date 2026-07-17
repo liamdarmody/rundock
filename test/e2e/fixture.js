@@ -63,6 +63,28 @@ function buildFixture() {
   fs.writeFileSync(path.join(workspace, 'Roadmap-2026.md'),
     '# Roadmap 2026\n\nQuarterly targets and the mobile milestone.\n');
 
+  // A briefing-style note: foldable + nested callouts and frontmatter
+  // wikilinks (the FV2 phase-3 story's acceptance surface).
+  fs.writeFileSync(path.join(workspace, 'briefing.md'), [
+    '---',
+    'title: "Morning Briefing"',
+    'related:',
+    '  - "[[Roadmap-2026]]"',
+    '  - "[[Missing Note]]"',
+    '---',
+    '',
+    '> [!abstract]+ Today at a glance',
+    '> Two meetings, one deadline.',
+    '',
+    '> [!warning]- Blocked items',
+    '> The vendor reply is overdue.',
+    '> > [!note]- Context',
+    '> > Chased twice this week.',
+    '',
+    'Plain paragraph after the callouts.',
+    '',
+  ].join('\n'));
+
   // FV2 viewer files: a styled HTML artifact whose script/external-image
   // must NOT run (sandbox + CSP proof), a real decodable 1x1 PNG (proves the
   // binary endpoint serves unmangled bytes), and a minimal PDF.

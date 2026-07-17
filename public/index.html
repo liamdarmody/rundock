@@ -457,6 +457,11 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .tiptap-editor-pane .prop-key { font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 12px; color: var(--text-2); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tiptap-editor-pane .prop-value { font-size: var(--body); color: var(--text-1); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
 .tiptap-editor-pane .prop-value.empty { color: var(--text-2); font-style: italic; }
+/* Frontmatter wikilinks: clickable like inline wikilinks; unresolvable targets look dead, not broken. */
+.tiptap-editor-pane .prop-wikilink { color: var(--accent); cursor: pointer; text-decoration: none; }
+.tiptap-editor-pane .prop-wikilink:hover { text-decoration: underline; }
+.tiptap-editor-pane .prop-wikilink:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; border-radius: 2px; }
+.tiptap-editor-pane .prop-wikilink.dead { color: var(--text-2); cursor: default; text-decoration: underline dashed; text-underline-offset: 3px; opacity: 0.75; }
 .tiptap-editor-pane .prop-value .bool { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 100px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; }
 .tiptap-editor-pane .prop-value .bool.t { background: rgba(107,198,126,0.15); color: var(--success); }
 .tiptap-editor-pane .prop-value .bool.f { background: rgba(122,117,110,0.15); color: var(--idle); }
@@ -493,6 +498,15 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .tiptap-editor .ProseMirror .callout-body { font-size: var(--body); color: var(--text-1); line-height: 1.55; }
 .tiptap-editor .ProseMirror .callout-line { min-height: 1.55em; }
 .tiptap-editor .ProseMirror .callout-line.empty { color: transparent; }
+/* Foldable callouts (+ open, - closed): native details/summary, disclosure caret on the header. */
+.tiptap-editor .ProseMirror .callout details.callout-fold > summary { cursor: pointer; list-style: none; }
+.tiptap-editor .ProseMirror .callout details.callout-fold > summary::-webkit-details-marker { display: none; }
+.tiptap-editor .ProseMirror .callout details.callout-fold > summary.callout-header::before { content: '\25B8'; color: var(--callout-color); font-size: 12px; transition: transform 0.15s ease; }
+.tiptap-editor .ProseMirror .callout details.callout-fold[open] > summary.callout-header::before { content: '\25BE'; }
+.tiptap-editor .ProseMirror .callout details.callout-fold > summary.callout-header { margin-bottom: 0; }
+.tiptap-editor .ProseMirror .callout details.callout-fold[open] > summary.callout-header { margin-bottom: 6px; }
+/* Nested callouts render as real boxes inside the parent body. */
+.tiptap-editor .ProseMirror .callout .callout-nested { border: 1px solid rgba(122,162,232,0.20); border-radius: 8px; padding: 10px 14px; margin: 8px 0; }
 .floating-toolbar { position: absolute; display: none; gap: 2px; padding: 4px; background: var(--card); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.25); z-index: 50; left: 0; top: 0; }
 .floating-toolbar.visible { display: inline-flex; }
 .floating-toolbar .tb-btn { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 28px; padding: 0 8px; background: transparent; color: var(--text-2); border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 600; font-family: inherit; }
