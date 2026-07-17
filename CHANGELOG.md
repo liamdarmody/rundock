@@ -15,7 +15,14 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Changed
 
+- **Codex replies stream live:** agents on the Codex runtime now type their answers into the conversation as they think, exactly like Claude agents, instead of showing a working indicator until the whole reply landed at once. Under the hood all Codex conversations share one long-lived runtime process that survives between messages, so follow-up turns start faster and a crash recovers automatically with the conversation resuming where it left off.
+- **Every Codex action that needs extra access gets its own approval card:** when a Codex agent wants to run a command outside its sandbox or write somewhere it normally can't (including all writes on Windows without the native sandbox config), the familiar permission card appears at that moment, mid-turn, naming the command or location and the agent's reason. Approve and the agent carries on; deny and it works around the refusal; ignore it and the request is declined automatically so a turn can never hang.
+- **Stopping a Codex agent is instant:** cancel now interrupts the running turn directly instead of killing a process and waiting for it to die, and any approval card still open for that conversation is withdrawn at the same time.
 - **Fresh installs no longer print security warnings:** the packaged Electron runtime moved from 35 to 42, clearing the cluster of published advisories that `npm audit` reported against every contributor install. No user-visible behaviour change; the full suite, browser tests, and a locally built packaged app were verified on the new runtime.
+
+### Removed
+
+- **The separate Codex write-request mechanism is gone,** subsumed by per-action approvals. Windows Codex agents no longer describe file writes in their reply for approval after the turn ends; the write is requested and approved while the agent works, on every platform, through the same cards as everything else.
 
 ### Fixed
 
