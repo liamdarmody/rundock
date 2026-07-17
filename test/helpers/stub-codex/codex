@@ -15,6 +15,7 @@
 //       "version": "0.144.3",             // embedded in the initialize userAgent
 //       "dropMethods": ["thread/resume"], // requests logged but never answered
 //       "overload": {"method": "thread/start", "times": 2},  // first N get -32001
+//       "resumeFails": true,              // thread/resume -> -32600 "no rollout found"
 //       "rules": [ {
 //         "match": {"promptIncludes": "..."},
 //         "deltas": ["chunk1 ", "chunk2"],  // item/agentMessage/delta sequence
@@ -271,6 +272,15 @@ function runAppServer() {
       }
       case 'thread/resume': {
         const threadId = params && params.threadId;
+        // Session-expiry simulation ("resumeFails": true in the appServer
+        // config): the real CLI answers thread/resume for a valid-shaped but
+        // unknown id with -32600 "no rollout found for thread id ..."
+        // (verified live against codex-cli 0.144.3). Config is re-read per
+        // message, so tests can fail one turn's resume and let the next pass.
+        if (cfg.resumeFails) {
+          send(asfx.errorResponse(id, -32600, `no rollout found for thread id ${threadId}`));
+          return;
+        }
         send(asfx.response(id, asfx.threadStartResult(threadId, params || {})));
         return;
       }

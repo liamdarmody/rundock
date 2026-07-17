@@ -12,7 +12,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 
-const { createState, reduce, isStale } = require('../../public/conversation-state.js');
+const { createState, reduce, isStale, watchdogVerdict } = require('../../public/conversation-state.js');
 const { scanMarkers } = require('../../public/markers.js');
 const seq = require('../fixtures/orchestration-sequences.js');
 
@@ -520,4 +520,73 @@ test('agent_switch with no outgoing agent identity skips the working-indicator c
 test('attribution fields default to null when the message omits them', () => {
   const r = reduce(createState(), { type: 'system', subtype: 'done' }, {});
   assert.deepStrictEqual(r.effects[0].attribution, { agentId: null, processId: null, timestamp: null });
+});
+
+// ── stream-inactivity watchdog (re-gate R1) ─────────────────────────────────
+// The glue's 90s safety-net interval must make its finish decision against
+// the CURRENT state object: reduce() returns fresh objects and the glue
+// reassigns convoState[convoId], so a closure over the object captured when
+// the interval was armed goes stale and would auto-finish every long turn
+// mid-stream. The decision itself lives here (watchdogVerdict) so it is
+// directly testable; a source pin in regression.test.js guards the live
+// lookup in app.js.
+
+test('watchdogVerdict: waits under the idle limit, finishes over it, stops once the turn ended', () => {
+  const now = 1000000;
+  const working = { ...createState(), isProcessing: true, lastStreamActivity: now - 1000 };
+  assert.deepStrictEqual(watchdogVerdict(working, now), { action: 'wait', idleMs: 1000 });
+  const idle = { ...createState(), isProcessing: true, lastStreamActivity: now - 90001 };
+  assert.deepStrictEqual(watchdogVerdict(idle, now), { action: 'finish', idleMs: 90001 });
+  const done = { ...createState(), isProcessing: false, lastStreamActivity: now - 90001 };
+  assert.strictEqual(watchdogVerdict(done, now).action, 'stop');
+});
+
+test('watchdogVerdict: exactly the idle limit still waits (strictly-greater threshold, as before)', () => {
+  const now = 500000;
+  const s = { ...createState(), isProcessing: true, lastStreamActivity: now - 90000 };
+  assert.strictEqual(watchdogVerdict(s, now).action, 'wait');
+});
+
+test('watchdogVerdict: a caller-supplied idle limit overrides the 90s default', () => {
+  const now = 500000;
+  const s = { ...createState(), isProcessing: true, lastStreamActivity: now - 300 };
+  assert.strictEqual(watchdogVerdict(s, now, 200).action, 'finish');
+  assert.strictEqual(watchdogVerdict(s, now, 400).action, 'wait');
+});
+
+test('lastStreamActivity survives reducer reassignment; the live lookup stays fresh while a captured reference goes stale', () => {
+  // Reproduces the exact bug shape: the glue arms the watchdog, then the
+  // first reduced server message replaces convoState[convoId] with a fresh
+  // object. Activity refreshes land on the CURRENT object only.
+  const convoState = {};
+  convoState.c1 = Object.assign(createState(), { isProcessing: true, lastStreamActivity: 1000 });
+  const captured = convoState.c1; // what a stale closure would hold
+  const r = reduce(convoState.c1, { type: 'system', subtype: 'process_started', _processId: 'p1' }, {});
+  convoState.c1 = r.state; // the glue's reassignment
+  assert.notStrictEqual(convoState.c1, captured, 'reduce returned a fresh object (the hazard is real)');
+  assert.strictEqual(convoState.c1.lastStreamActivity, 1000, 'glue-owned activity field carried through reduce');
+  convoState.c1.isProcessing = true;
+  const now = 1000 + 95000;
+  convoState.c1.lastStreamActivity = now - 50; // a delta just arrived (handleStreamEvent bumps the current object)
+  assert.strictEqual(watchdogVerdict(convoState.c1, now).action, 'wait', 'live lookup sees the fresh activity');
+  assert.strictEqual(watchdogVerdict(captured, now).action, 'finish', 'the captured object froze: deciding on it would kill a live turn');
+});
+
+// ── system/keepalive (re-gate R2) ───────────────────────────────────────────
+// Silent Codex turns (long tools, silent reasoning) emit no stream events;
+// the server's 25s keepalive keeps the watchdog honest. The reducer bumps the
+// activity clock from ctx.now (wall clock stays in the glue) and renders
+// nothing.
+
+test('keepalive bumps lastStreamActivity to the glue-supplied wall clock with no effects', () => {
+  const s = { ...createState(), isProcessing: true, activeProcessId: 'p1', lastStreamActivity: 500 };
+  const r = reduce(s, { type: 'system', subtype: 'keepalive', _processId: 'p1' }, { now: 99999 });
+  assert.strictEqual(r.state.lastStreamActivity, 99999, 'keepalive counts as stream activity');
+  assert.deepStrictEqual(r.effects, [], 'no render effect');
+});
+
+test('a keepalive from a stale process is dropped without touching the activity clock', () => {
+  const s = { ...createState(), isProcessing: true, activeProcessId: 'p2', lastStreamActivity: 500 };
+  const r = reduce(s, { type: 'system', subtype: 'keepalive', _processId: 'p1' }, { now: 99999 });
+  assert.strictEqual(r.state.lastStreamActivity, 500, 'stale keepalive must not keep a superseded turn "alive"');
 });

@@ -418,3 +418,35 @@ describe('additional regressions', () => {
     cleanup();
   });
 });
+
+describe('re-gate R1/R2: stream-inactivity watchdog and keepalive glue (source invariants)', () => {
+  // Behavioural companions in test/unit/conversation-state.test.js
+  // (watchdogVerdict decision table, reassignment simulation, keepalive
+  // reducer). jsdom-driving app.js was rejected for this suite, so the glue
+  // half of each fix is pinned at source level, the same bracket pattern as
+  // the pairs above.
+  const appSrc = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'app.js'), 'utf-8');
+
+  test('startProcessing watchdog decides on the LIVE state via getConvoState, never the captured object', () => {
+    // The reducer returns fresh state objects and the glue reassigns
+    // convoState[convoId]; a watchdog closing over the object captured when
+    // the interval was armed would see lastStreamActivity freeze and
+    // auto-finish every turn longer than the idle limit mid-stream.
+    const m = appSrc.match(/state\.processingTimeout = setInterval\(\(\) => \{([\s\S]*?)\n\s*\}, 10000\);/);
+    assert.ok(m, 'watchdog interval found in startProcessing');
+    const body = m[1];
+    assert.ok(body.includes('getConvoState(convoId)'),
+      'the watchdog must re-read the live state each tick (reducer reassignment orphans a captured object)');
+    assert.ok(body.includes('watchdogVerdict'),
+      'the finish decision must live in conversation-state.js (watchdogVerdict), where it is unit-tested');
+    assert.ok(!/\bstate\.(isProcessing|lastStreamActivity|processingTimeout)\b/.test(body),
+      'the watchdog body must not read the state object captured at arm time');
+  });
+
+  test('the system/keepalive glue reduces with the wall clock so silent turns reset the watchdog', () => {
+    const branch = appSrc.match(/if\s*\(\s*d\.subtype\s*===\s*'keepalive'[\s\S]{0,400}/);
+    assert.ok(branch, "app.js handles system/keepalive (silent Codex turns depend on it)");
+    assert.ok(/now:\s*Date\.now\(\)/.test(branch[0]),
+      'keepalive must be reduced with ctx.now = Date.now() (the reducer stays pure)');
+  });
+});

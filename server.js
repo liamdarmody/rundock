@@ -3110,9 +3110,13 @@ function handleDelegation(msg, processes) {
     // delegation contract on a fresh thread (Codex has no --agent or
     // --append-system-prompt equivalent); contract + brief on a resumed
     // thread (instructions are already in the thread).
+    // The fresh variant travels too: if the stored thread turns out to be
+    // expired, wireCodexDelegate falls back to a fresh thread and must use
+    // the full prompt.
+    const codexFreshPrompt = [readAgentInstructions(targetAgent), fullPrompt, contextWithHistory].filter(Boolean).join('\n\n');
     const codexPrompt = codexResumeId
       ? `${delegationContext}\n\n${contextWithHistory}`
-      : [readAgentInstructions(targetAgent), fullPrompt, contextWithHistory].filter(Boolean).join('\n\n');
+      : codexFreshPrompt;
     // With no per-turn process there is no 'close' event: the turn's done
     // event fires this hook instead, running the SAME restoration handler
     // Claude delegates attach to process close (defined below).
@@ -3120,6 +3124,7 @@ function handleDelegation(msg, processes) {
     wireCodexDelegate(delegateEntry, convoId, codexPrompt, {
       resumeThreadId: codexResumeId,
       model: targetAgent.model || undefined,
+      freshPrompt: codexFreshPrompt,
     });
   } else {
   delegateProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: contextWithHistory } }) + '\n');
@@ -5498,11 +5503,21 @@ function handleCodexApproval(entry, convoId, ev) {
   } else {
     // fileChange. v1 limitation: the approval request carries only the
     // grant root and reason; the patch content lives on the fileChange item,
-    // which the protocol client does not expose. The card therefore shows
-    // WHERE the agent wants write access with an empty content preview.
+    // which the protocol client does not expose. The input is honest about
+    // that: content is null (never an empty string a card could present as
+    // "the exact content"), the approval kind is explicit, and the runtime's
+    // reason (the one honest context available) travels so the card renders
+    // it. The client copy for this shape says the agent wants write access
+    // under the path, without claiming any content is shown (see
+    // public/permissions.js describeToolRequest).
     toolName = 'WriteFile';
-    toolInput = { path: params.grantRoot || WORKSPACE || '', content: '', agent: entry.agentId };
-    if (params.reason) toolInput.reason = params.reason;
+    toolInput = {
+      path: params.grantRoot || WORKSPACE || '',
+      content: null,
+      agent: entry.agentId,
+      reason: params.reason || null,
+      approvalKind: 'fileChange',
+    };
   }
   requestServerPermission({
     convoId,
@@ -5519,6 +5534,44 @@ function handleCodexApproval(entry, convoId, ev) {
       } catch (e) { /* approval already resolved (module timeout won) */ }
     },
   });
+}
+
+// Turn-activity keepalive for Codex turns. The protocol client forwards ONLY
+// agentMessage deltas to the browser, so a turn that thinks silently or runs
+// a long tool (npm install, a test suite: minutes of legitimate silence)
+// produces zero watchdog-resetting messages and the client's 90s
+// stream-inactivity watchdog would auto-finish the UI mid-task. While the
+// turn entry is live, a periodic system/keepalive keeps the working state
+// honest; the client reducer treats it as stream activity and renders
+// nothing. Design note: a fixed-interval heartbeat was chosen over
+// forwarding the protocol's non-agentMessage activity (reasoning deltas,
+// command output deltas, item/started) because it bounds the client's
+// activity gap at CODEX_KEEPALIVE_MS regardless of WHAT the runtime emits;
+// an activity forward would add protocol surface without improving that
+// worst case. Interval is env-overridable for tests, exactly like the
+// exec-era heartbeat this reinstates.
+const CODEX_KEEPALIVE_MS = parseInt(process.env.RUNDOCK_CODEX_KEEPALIVE_MS || '', 10) || 25000;
+function startCodexTurnKeepalive(entry, convoId) {
+  const timer = setInterval(() => {
+    // Self-clearing liveness check: the entry has no child process (its turn
+    // runs on the shared app-server), so terminal states are flags.
+    if (entry.exited || entry.resultSent || entry.spawnFailed || entry.cancelled || entry.superseded) {
+      clearInterval(timer);
+      if (entry._keepaliveTimer === timer) entry._keepaliveTimer = null;
+      return;
+    }
+    safeSend(JSON.stringify({
+      type: 'system', subtype: 'keepalive',
+      _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
+    }));
+  }, CODEX_KEEPALIVE_MS);
+  // Never hold the event loop open for a heartbeat (the done/failure paths
+  // below stop it deterministically anyway).
+  if (timer.unref) timer.unref();
+  entry._keepaliveTimer = timer;
+}
+function stopCodexTurnKeepalive(entry) {
+  if (entry._keepaliveTimer) { clearInterval(entry._keepaliveTimer); entry._keepaliveTimer = null; }
 }
 
 // Terminal done envelope, exactly once per turn.
@@ -5584,6 +5637,24 @@ function makeCodexEntryControls(entry) {
 // init envelope (same shape as the Claude init: the client stores the id and
 // sends it back as msg.sessionId on the next turn). Shared by direct chats
 // and delegated turns.
+// A resume-shaped thread/resume failure: codex-cli answers a valid-shaped
+// but unknown thread id with -32600 "no rollout found for thread id ..."
+// (verified live against 0.144.3). Real-world triggers: Codex pruning
+// sessions under ~/.codex, thread/delete, a CODEX_HOME change, a workspace
+// synced across machines. The wording patterns are a fallback for CLI
+// releases that phrase it differently. Only ever evaluated against a
+// thread/resume rejection, so the generic -32600 code cannot misfire for
+// other requests.
+function isCodexResumeFailure(err) {
+  if (!err) return false;
+  if (err.code === -32600) return true;
+  return /no rollout|not found/i.test(err.message || '');
+}
+
+// Returns { server, threadId, resumed } (or null when the conversation moved
+// on). `resumed` is true ONLY when the stored thread actually resumed:
+// callers must compose a FULL first-turn prompt (identity + platform rules)
+// whenever it is false, including the expired-session fallback below.
 async function openCodexThread(entry, convoId, resumeThreadId, model) {
   // Bail (without a turn) once the conversation has moved on; resolve the
   // turn-end promise so a superseding message never waits on a turn that
@@ -5602,16 +5673,44 @@ async function openCodexThread(entry, convoId, resumeThreadId, model) {
     sandbox: 'workspace-write',
     approvalPolicy: 'on-request',
   };
-  const { threadId } = resumeThreadId
-    ? await server.resumeThread(resumeThreadId, threadOpts)
-    : await server.startThread(threadOpts);
+  let threadId;
+  let resumed = false;
+  if (resumeThreadId) {
+    try {
+      ({ threadId } = await server.resumeThread(resumeThreadId, threadOpts));
+      resumed = true;
+    } catch (err) {
+      // Mirror the Claude path's stale-session recovery (isResumeFailure in
+      // the chat close handlers): the stored thread is gone, so tell the
+      // user with the same copy and fall back to a FRESH thread in the same
+      // pass, so this message is still answered instead of the conversation
+      // bricking on every retry. Direct chats use subtype 'info', the
+      // client's stale-session signal, which also clears the stored primary
+      // session id; delegate turns use the neutral 'notice' because 'info'
+      // would clear the ORCHESTRATOR's primary session, and the delegate's
+      // fresh id supersedes the stale one in the sessionIds chain via the
+      // init envelope below. Non-resume-shaped failures still propagate to
+      // the caller's error surface.
+      if (!isCodexResumeFailure(err)) throw err;
+      if (abandoned()) return null;
+      console.log(`[Codex] convo=${convoId} thread/resume failed for ${resumeThreadId} (${err.message}); starting fresh`);
+      safeSend(JSON.stringify({
+        type: 'system', subtype: entry.delegation ? 'notice' : 'info',
+        content: 'Previous session expired. Starting fresh.',
+        _conversationId: convoId, _processId: entry.processId,
+      }));
+      ({ threadId } = await server.startThread(threadOpts));
+    }
+  } else {
+    ({ threadId } = await server.startThread(threadOpts));
+  }
   if (abandoned()) return null;
   entry.sessionId = threadId;
   safeSend(JSON.stringify({
     type: 'system', subtype: 'init', _sessionId: threadId,
     _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
   }));
-  return { server, threadId };
+  return { server, threadId, resumed };
 }
 
 // Failure before the turn could start (binary missing, handshake failed,
@@ -5620,6 +5719,7 @@ async function openCodexThread(entry, convoId, resumeThreadId, model) {
 // way the client is unblocked with a done envelope and the entry released.
 function handleCodexTurnStartFailure(entry, convoId, err) {
   entry.exited = true;
+  stopCodexTurnKeepalive(entry);
   if (entry._turnEndResolve) entry._turnEndResolve();
   if (entry.cancelled || entry.superseded) {
     if (chatProcesses.get(convoId) === entry) chatProcesses.delete(convoId);
@@ -5646,14 +5746,22 @@ function handleCodexTurnStartFailure(entry, convoId, err) {
 // turn's done event fires entry.onTurnDone (set by handleDelegation to the
 // same handler Claude delegates attach to process close), which owns
 // agent_switch/done and parent restoration. This function sends the result.
-function wireCodexDelegate(entry, convoId, prompt, { resumeThreadId = null, model = undefined } = {}) {
+function wireCodexDelegate(entry, convoId, prompt, { resumeThreadId = null, model = undefined, freshPrompt = null } = {}) {
   makeCodexEntryControls(entry);
+  // Same silent-turn heartbeat as direct chats: a delegate has no per-turn
+  // process either, and its brief is exactly the kind of long quiet work
+  // (research, tool runs) the watchdog would otherwise declare dead.
+  startCodexTurnKeepalive(entry, convoId);
   (async () => {
     const opened = await openCodexThread(entry, convoId, resumeThreadId, model);
     if (!opened) return;
     const { server, threadId } = opened;
     entry._turnThreadId = threadId;
-    const sub = server.startTurn(threadId, prompt);
+    // An expired delegate session falls back to a fresh thread inside
+    // openCodexThread; a fresh thread needs the FULL delegate prompt
+    // (identity + delegation contract + brief), never the resume-shaped one.
+    const turnPrompt = opened.resumed ? prompt : (freshPrompt || prompt);
+    const sub = server.startTurn(threadId, turnPrompt);
     entry.subscription = sub;
     sub.on('event', (ev) => {
       try {
@@ -5671,6 +5779,7 @@ function wireCodexDelegate(entry, convoId, prompt, { resumeThreadId = null, mode
       sendCodexError(entry, convoId, err.message);
     }
     entry.exited = true;
+    stopCodexTurnKeepalive(entry);
     if (entry._turnEndResolve) entry._turnEndResolve();
     if (entry.onTurnDone) entry.onTurnDone(-1);
   });
@@ -5710,6 +5819,7 @@ function handleCodexDelegateEvent(entry, convoId, ev) {
     case 'done': {
       entry.exited = true;
       entry._turnThreadId = null;
+      stopCodexTurnKeepalive(entry);
       if (entry._turnEndResolve) entry._turnEndResolve();
       if (ev.status === 'completed' && !entry.cancelled) {
         // Marker scan, COMPLETE priority: same contract as the Claude
@@ -5795,6 +5905,9 @@ function startCodexTurn(convoId, msg, agentData) {
     type: 'system', subtype: 'process_started',
     _agent: agentData.id, _conversationId: convoId, _processId: processId,
   }));
+  // Heartbeat from the moment the client shows "working": thread opening
+  // (resume can be slow) counts as silence too.
+  startCodexTurnKeepalive(entry, convoId);
 
   (async () => {
     // Bounded wait for the superseded turn to actually end: the server
@@ -5810,7 +5923,11 @@ function startCodexTurn(convoId, msg, agentData) {
     // Prompt composition, same as exec mode: first turns carry identity
     // (the agent file body) plus the platform rules; Claude gets these via
     // --agent and --append-system-prompt, which Codex does not support.
-    const prompt = resumeThreadId
+    // Decided on opened.resumed, NOT resumeThreadId: an expired session
+    // falls back to a fresh thread inside openCodexThread, and a fresh
+    // thread must never receive a resume-shaped prompt (it would lose the
+    // agent's identity).
+    const prompt = opened.resumed
       ? msg.content
       : [readAgentInstructions(agentData), buildSystemPrompt(agentData), msg.content].filter(Boolean).join('\n\n');
     entry._turnThreadId = threadId;
@@ -5830,9 +5947,11 @@ function handleCodexChatEvent(entry, convoId, ev) {
   switch (ev.type) {
     case 'delta':
       // Forward as the synthesised Claude-shaped stream event: the client's
-      // handleStreamEvent consumes it unchanged, live text replaces the old
-      // keepalive heartbeat, and the authoritative full text still arrives
-      // via the 'text' event (never double-counted into responseText).
+      // handleStreamEvent consumes it unchanged, and the authoritative full
+      // text still arrives via the 'text' event (never double-counted into
+      // responseText). Deltas cover STREAMING turns only; silent stretches
+      // (reasoning, long tools) are covered by the keepalive heartbeat
+      // (startCodexTurnKeepalive), which the client treats as activity.
       if (!entry.superseded && !entry.cancelled) {
         safeSend(JSON.stringify({
           type: 'stream_event',
@@ -5862,6 +5981,7 @@ function handleCodexChatEvent(entry, convoId, ev) {
     case 'done': {
       entry.exited = true;
       entry._turnThreadId = null;
+      stopCodexTurnKeepalive(entry);
       if (entry._turnEndResolve) entry._turnEndResolve();
       if (chatProcesses.get(convoId) === entry) {
         chatProcesses.delete(convoId);
