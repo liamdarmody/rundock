@@ -130,7 +130,7 @@
 </head>
 <body>
   <h1>Rundock Setup</h1>
-  <p class="subtitle">Rundock needs Claude Code to power your agent team.</p>
+  <p class="subtitle" id="subtitle">Rundock needs Claude Code to power your agent team.</p>
 
   <div class="status">
     <div class="step" id="step-install">
@@ -147,10 +147,21 @@
         <div class="hint" id="auth-hint">Click <strong>Sign in to Claude</strong> below. A terminal opens to complete the sign-in.</div>
       </div>
     </div>
+    <!-- Rendered only when the Codex CLI is detected on this machine; Claude-only
+         machines see the wizard exactly as before. -->
+    <div class="step" id="step-codex" style="display:none">
+      <div class="step-icon pending" id="icon-codex">3</div>
+      <div class="step-text">
+        <div>Sign in to Codex</div>
+        <div class="hint" id="codex-hint">Optional. Specialists can run on your ChatGPT plan via the official Codex CLI.</div>
+      </div>
+    </div>
   </div>
 
   <button class="btn" id="btn-signin" style="display:none" onclick="signIn()">Sign in to Claude</button>
+  <button class="btn" id="btn-codex-signin" style="display:none" onclick="signInCodex()">Sign in to Codex</button>
   <button class="btn" id="btn-check" onclick="checkNow()">Check again</button>
+  <button class="btn-secondary" id="btn-codex-skip" style="display:none" onclick="skipCodex()">Skip for now</button>
   <button class="btn-secondary" id="btn-skip" onclick="skipAndQuit()">Quit</button>
 
   <script>
@@ -183,15 +194,65 @@
       }
     }
 
+    // The user can defer Codex sign-in; guidance stays available in Settings.
+    let codexSkipped = false;
+
+    // Copy rule (0.10.0 docs sweep): a ChatGPT plan is always an addition for
+    // specialists, never an alternative to Claude Code, and a Codex user is
+    // never told to install Claude Code without being told why it is needed.
+    const BASE_SUBTITLE = 'Rundock needs Claude Code to power your agent team.';
+    const CODEX_SUBTITLE = 'Your specialists can run on your ChatGPT plan via the official Codex CLI. '
+      + "Rundock still needs Claude Code: it runs your team's orchestrator and Doc, your setup guide.";
+
+    function renderCodexStep(codex, claudeReady) {
+      const step = document.getElementById('step-codex');
+      const hint = document.getElementById('codex-hint');
+      const codexSigninBtn = document.getElementById('btn-codex-signin');
+      const codexSkipBtn = document.getElementById('btn-codex-skip');
+      step.style.display = codex.installed ? 'flex' : 'none';
+      codexSigninBtn.style.display = 'none';
+      codexSkipBtn.style.display = 'none';
+      if (!codex.installed) return { pendingCodex: false };
+      if (codex.authenticated) {
+        updateStep('codex', 'done');
+        hint.textContent = 'Signed in. Specialists can run on your ChatGPT plan.';
+        return { pendingCodex: false };
+      }
+      if (codexSkipped) {
+        updateStep('codex', 'pending');
+        hint.textContent = 'Skipped. You can sign in any time from Settings.';
+        return { pendingCodex: false };
+      }
+      if (!claudeReady) {
+        updateStep('codex', 'pending');
+        return { pendingCodex: false };
+      }
+      // Claude is ready and Codex is installed but not signed in: offer the
+      // optional sign-in step now.
+      updateStep('codex', 'active');
+      hint.textContent = 'Optional. A terminal opens to run codex login with your ChatGPT account.';
+      codexSigninBtn.style.display = 'inline-block';
+      codexSkipBtn.style.display = 'inline-block';
+      return { pendingCodex: true };
+    }
+
     async function checkStatus() {
-      const result = await window.electronAPI.checkClaude();
+      const runtimes = await window.electronAPI.checkRuntimes();
+      const result = runtimes.claude;
+      const codex = runtimes.codex || { installed: false, authenticated: false };
 
       const signinBtn = document.getElementById('btn-signin');
       const checkBtn = document.getElementById('btn-check');
 
+      // A Codex user waiting on the Claude steps is told why Claude Code is
+      // still required rather than being handed a bare install instruction.
+      document.getElementById('subtitle').textContent =
+        (codex.installed && result.status !== 'ready') ? CODEX_SUBTITLE : BASE_SUBTITLE;
+
       if (result.status === 'not-installed') {
         updateStep('install', 'active');
         updateStep('auth', 'pending');
+        renderCodexStep(codex, false);
         // Install step: Check again is the primary action.
         signinBtn.style.display = 'none';
         checkBtn.style.display = 'inline-block';
@@ -201,6 +262,7 @@
       if (result.status === 'not-authenticated') {
         updateStep('install', 'done');
         updateStep('auth', 'active');
+        renderCodexStep(codex, false);
         // Sign-in step: the Sign in button replaces Check again (single action).
         signinBtn.style.display = 'inline-block';
         checkBtn.style.display = 'none';
@@ -211,6 +273,14 @@
         updateStep('install', 'done');
         updateStep('auth', 'done');
         signinBtn.style.display = 'none';
+        const { pendingCodex } = renderCodexStep(codex, true);
+        if (pendingCodex) {
+          // The optional Codex step holds the wizard open; Sign in to Codex
+          // and Skip for now are the actions.
+          checkBtn.style.display = 'none';
+          document.getElementById('btn-skip').style.display = 'none';
+          return false;
+        }
         checkBtn.style.display = 'inline-block';
         checkBtn.textContent = 'Continue';
         checkBtn.onclick = () => window.electronAPI.wizardDone();
@@ -242,6 +312,33 @@
           ? ('Could not start sign-in: ' + res.error)
           : 'Could not start sign-in. Please try again.';
       }
+    }
+
+    async function signInCodex() {
+      const btn = document.getElementById('btn-codex-signin');
+      btn.disabled = true;
+      btn.textContent = 'Opening sign-in...';
+      const res = await window.electronAPI.signInCodex();
+      const hint = document.getElementById('codex-hint');
+      if (res && res.ok) {
+        btn.textContent = 'Waiting for sign-in...';
+        if (hint) hint.textContent =
+          'A terminal opened with codex login. Sign in with your ChatGPT account; '
+          + 'this screen continues automatically once you finish.';
+        // Poll so the wizard advances the moment auth.json appears.
+        if (!polling) polling = setInterval(checkStatus, 3000);
+      } else {
+        btn.disabled = false;
+        btn.textContent = 'Sign in to Codex';
+        if (hint) hint.textContent = (res && res.error)
+          ? ('Could not start sign-in: ' + res.error)
+          : 'Could not start sign-in. Please try again.';
+      }
+    }
+
+    function skipCodex() {
+      codexSkipped = true;
+      checkStatus();
     }
 
     async function checkNow() {

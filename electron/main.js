@@ -123,6 +123,50 @@ function isClaudeAuthenticated() {
   }
 }
 
+// Codex detection for the wizard. Reuses the server-side detector in codex.js
+// (packaged with the app) rather than porting it: binary resolution is
+// .cmd-shim aware on Windows, auth detection is the PRESENCE of auth.json
+// under $CODEX_HOME or ~/.codex, contents never read. Detection must never
+// break the wizard's Claude path, so failures collapse to "not installed".
+function detectCodexForWizard() {
+  try {
+    const { detectCodex } = require('../codex.js');
+    const d = detectCodex();
+    return { installed: !!d.installed, authenticated: !!d.authenticated };
+  } catch {
+    return { installed: false, authenticated: false };
+  }
+}
+
+// Launch Codex's sign-in (`codex login`) in a visible terminal, mirroring
+// launchClaudeSignIn below. Best-effort (never throws); the wizard keeps
+// polling auth.json presence and advances automatically once sign-in lands.
+function launchCodexSignIn() {
+  let bin = null;
+  try { bin = require('../codex.js').resolveCodexBin(); } catch { /* fall through */ }
+  if (!bin) return { ok: false, error: 'Codex was not found.' };
+  const { spawn } = require('child_process');
+  try {
+    if (process.platform === 'win32') {
+      spawn(`start "Sign in to Codex" cmd /k ""${bin}" login"`, {
+        shell: true, detached: true, stdio: 'ignore',
+      }).unref();
+    } else if (process.platform === 'darwin') {
+      // Terminal.app opens files, not commands with arguments, so the login
+      // command travels via a tiny generated .command script.
+      const os = require('os');
+      const script = path.join(os.tmpdir(), 'rundock-codex-login.command');
+      fs.writeFileSync(script, `#!/bin/bash\n"${bin}" login\n`, { mode: 0o755 });
+      spawn('open', ['-a', 'Terminal', script], { detached: true, stdio: 'ignore' }).unref();
+    } else {
+      spawn('x-terminal-emulator', ['-e', `${bin} login`], { detached: true, stdio: 'ignore' }).unref();
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+}
+
 // Launch Claude Code's interactive sign-in in a visible terminal, so the user
 // can complete the browser OAuth without opening a terminal or knowing any
 // commands themselves. The wizard keeps polling and advances automatically once
@@ -180,31 +224,42 @@ function showWizard() {
 
     wizard.loadFile(path.join(__dirname, 'wizard.html'));
 
-    // Wizard polls for Claude Code via IPC
-    ipcMain.handle('wizard-check-claude', () => {
-      const bin = findClaude();
-      if (!bin) return { status: 'not-installed' };
-      // Claude is installed: make sure its directory is on the user's PATH so
-      // they can simply type `claude` in a new terminal to sign in.
-      ensureClaudeOnUserPath(path.dirname(bin));
-      if (!isClaudeAuthenticated()) return { status: 'not-authenticated' };
-      return { status: 'ready' };
+    // Wizard polls for both runtimes via IPC. The Claude checks are unchanged;
+    // Codex detection rides alongside so the wizard can adapt honestly to what
+    // the user has (a Codex user is told why Claude Code is still needed, and
+    // can sign in to Codex as an optional final step).
+    ipcMain.handle('wizard-check-runtimes', () => {
+      const claude = (() => {
+        const bin = findClaude();
+        if (!bin) return { status: 'not-installed' };
+        // Claude is installed: make sure its directory is on the user's PATH so
+        // they can simply type `claude` in a new terminal to sign in.
+        ensureClaudeOnUserPath(path.dirname(bin));
+        if (!isClaudeAuthenticated()) return { status: 'not-authenticated' };
+        return { status: 'ready' };
+      })();
+      return { claude, codex: detectCodexForWizard() };
     });
 
     // Launch Claude's browser sign-in for the user (no terminal needed).
     ipcMain.handle('wizard-signin-claude', () => launchClaudeSignIn());
 
+    // Launch Codex's terminal sign-in (optional wizard step).
+    ipcMain.handle('wizard-signin-codex', () => launchCodexSignIn());
+
     ipcMain.handle('wizard-done', () => {
-      ipcMain.removeHandler('wizard-check-claude');
+      ipcMain.removeHandler('wizard-check-runtimes');
       ipcMain.removeHandler('wizard-signin-claude');
+      ipcMain.removeHandler('wizard-signin-codex');
       ipcMain.removeHandler('wizard-done');
       wizard.close();
       resolve();
     });
 
     wizard.on('closed', () => {
-      ipcMain.removeHandler('wizard-check-claude');
+      ipcMain.removeHandler('wizard-check-runtimes');
       ipcMain.removeHandler('wizard-signin-claude');
+      ipcMain.removeHandler('wizard-signin-codex');
       ipcMain.removeHandler('wizard-done');
       resolve();
     });
