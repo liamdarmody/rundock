@@ -96,11 +96,14 @@ describe('codex per-action approvals', () => {
     assert.deepStrictEqual(stubDecisions(), ['decline']);
   });
 
-  test('file-change approval renders as a WriteFile card with the grant root and reason', async () => {
+  test('file-change approval renders as an honest WriteFile card: grant root, reason, and NO content claim', async () => {
     // v1 limitation: the protocol's fileChange approval request carries only
     // grantRoot + reason (the patch itself lives on the fileChange item,
-    // which the client module does not expose), so the card shows WHERE the
-    // agent wants write access with an empty content preview.
+    // which the client module does not expose). The wire input must say so
+    // honestly: content is null (never a fake-empty string a card could
+    // present as "the exact content"), the approval kind is explicit, and
+    // the runtime's reason travels so the card can render it. The card copy
+    // itself is pinned in test/unit/permissions.test.js.
     const convoId = h.freshConvoId('capr');
     h.clearInvocations();
     h.writeCodexScenario([{
@@ -118,9 +121,10 @@ describe('codex per-action approvals', () => {
     const { msg: card } = await client.waitFor(m => m.type === 'control_request' && m._conversationId === convoId, { since, label: 'file-change card' });
     assert.strictEqual(card.request.tool_name, 'WriteFile');
     assert.strictEqual(card.request.input.path, '/etc/rundock');
-    assert.strictEqual(card.request.input.content, '');
+    assert.strictEqual(card.request.input.content, null, 'no content is available, so none is claimed');
+    assert.strictEqual(card.request.input.approvalKind, 'fileChange', 'approval-style request is explicit');
     assert.strictEqual(card.request.input.agent, 'researcher');
-    assert.strictEqual(card.request.input.reason, 'writes outside writable roots');
+    assert.strictEqual(card.request.input.reason, 'writes outside writable roots', 'the one honest context travels to the card');
 
     client.send({ type: 'permission_response', requestId: card.request_id, conversationId: convoId, allow: true });
     const { msg: result } = await client.waitFor(m => m.type === 'result' && m._conversationId === convoId, { since, label: 'result after accept' });
