@@ -455,12 +455,6 @@ function handle(d) {
       if(d.subtype==='auth_error' && convoId) {
         renderAuthErrorCard(convoId);
       }
-      if(d.subtype==='keepalive' && convoId) {
-        // A runtime that emits no stream events (Codex) heartbeats instead;
-        // refresh the inactivity watchdog so long turns are not auto-finished.
-        const kaState = getConvoState(convoId);
-        if (kaState.isProcessing) kaState.lastStreamActivity = Date.now();
-      }
       if(d.subtype==='codex_quota' && convoId) {
         renderCodexQuotaCard(convoId, d);
         finishProcessing(convoId);

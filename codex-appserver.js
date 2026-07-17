@@ -120,6 +120,7 @@ class CodexAppServer extends EventEmitter {
     this._log = typeof opts.log === 'function' ? opts.log : () => {};
 
     this._proc = null;
+    this._spawnError = null;
     this._ready = false;
     this._everReady = false;
     this._closing = false;
@@ -146,6 +147,9 @@ class CodexAppServer extends EventEmitter {
 
   isReady() { return this._ready; }
   version() { return this._version; }
+  // Child pid, for crash-cleanup registration by the supervisor's host.
+  // Changes across restarts: re-read on every 'ready' event.
+  pid() { return this._proc ? this._proc.pid : null; }
 
   // Clean shutdown: interrupt any active turns so the server can end them,
   // then SIGTERM, escalating to SIGKILL after the grace period. Disables
@@ -214,6 +218,10 @@ class CodexAppServer extends EventEmitter {
     proc.on('close', onGone);
     proc.on('error', err => {
       this._log(`codex app-server spawn error: ${err.message}`);
+      // Remember the spawn failure so in-flight request rejections (the
+      // initialize handshake in particular) can carry the real error code:
+      // the host maps ENOENT to install guidance.
+      this._spawnError = err;
       onGone(-1, null);
     });
   }
@@ -238,10 +246,18 @@ class CodexAppServer extends EventEmitter {
   _onExit(code, signal) {
     this._proc = null;
     this._ready = false;
-    // In-flight requests can never complete: reject them now.
+    const spawnError = this._spawnError;
+    this._spawnError = null;
+    // In-flight requests can never complete: reject them now. When the exit
+    // was a spawn failure, carry its code (ENOENT etc) on the rejection so
+    // the host can surface accurate guidance.
     for (const [, pending] of this._pending) {
       clearTimeout(pending.timer);
-      pending.reject(new Error(`codex app-server exited before responding to ${pending.method}`));
+      const err = new Error(spawnError
+        ? `codex app-server failed to start: ${spawnError.message}`
+        : `codex app-server exited before responding to ${pending.method}`);
+      if (spawnError && spawnError.code) err.code = spawnError.code;
+      pending.reject(err);
     }
     this._pending.clear();
     // In-flight turns are gone with the process. Thread state lives on disk

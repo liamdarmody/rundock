@@ -106,7 +106,7 @@ function main() {
   console.log('\n===== server.js coverage by functional area =====\n');
   console.log(`OVERALL server.js: ${pct(fileCovered, fileTotal)}  (${fileCovered}/${fileTotal} executable lines)`);
   // Sibling modules included in coverage get their own overall line.
-  for (const extra of ['codex.js', 'search.js']) {
+  for (const extra of ['codex.js', 'codex-appserver.js', 'search.js']) {
     const extraHits = parseLcov(lcovPath, extra);
     if (extraHits) {
       let t = 0, c2 = 0;

@@ -184,8 +184,8 @@ function itemStartedFileChange(threadId, turnId, itemId) {
 // ── Usage and completion (RESEARCH.md section 6) ────────────────────────────
 
 // Token usage rides its own notification and arrives BEFORE turn/completed;
-// clients buffer it per turnId. Defaults mirror codex-jsonl.js so the two
-// fixture families agree on baseline numbers.
+// clients buffer it per turnId. Defaults (100 in / 0 cached / 50 out) are
+// the suite's baseline numbers.
 function tokenUsageUpdated(threadId, turnId, usage = {}) {
   const last = {
     inputTokens: usage.inputTokens ?? 100,
@@ -263,7 +263,14 @@ function fileChangeApprovalRequest(id, { threadId, turnId, itemId, grantRoot = n
   };
 }
 
+// ── Captured failure texts ──────────────────────────────────────────────────
+
+// The quota-exhaustion message the CLI emits when a ChatGPT plan's Codex
+// allowance is used up. Wording varies; the classifier keys on "usage limit".
+const QUOTA_MESSAGE = "You've hit your usage limit. Try again at 3pm.";
+
 module.exports = {
+  QUOTA_MESSAGE,
   response, errorResponse, overloadErrorResponse, unknownMethodError,
   initializeResult, remoteControlStatusChanged,
   threadObject, threadStartResult, threadStartedNotification,

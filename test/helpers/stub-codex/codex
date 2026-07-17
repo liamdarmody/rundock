@@ -1,20 +1,16 @@
 #!/usr/bin/env node
 'use strict';
-// Stub `codex` binary for the Rundock test suite. Two modes, matching the
-// real CLI surfaces Rundock uses:
-//
-//   codex exec --json ... -   one process per turn (legacy runtime; this
-//                             path is deleted in a later slice once the
-//                             server migrates to the app-server client)
-//   codex app-server          long-lived JSONL JSON-RPC 2.0 server on stdio
+// Stub `codex` binary for the Rundock test suite: a long-lived JSONL
+// JSON-RPC 2.0 app-server on stdio (`codex app-server`), matching the real
+// CLI surface Rundock uses. The exec mode of earlier releases is gone with
+// the exec runtime itself.
 //
 // Injection: the test harness prepends this directory to PATH (or passes the
 // path directly via binPath), so the codex binary resolution finds this stub
 // with zero production changes. No network.
 //
-// Scripting: reads `stub-codex-scenario.json` from cwd. Exec-mode rules live
-// under top-level "rules" (unchanged); app-server behaviour lives under
-// "appServer":
+// Scripting: reads `stub-codex-scenario.json` from cwd; app-server behaviour
+// lives under "appServer":
 //   { "appServer": {
 //       "version": "0.144.3",             // embedded in the initialize userAgent
 //       "dropMethods": ["thread/resume"], // requests logged but never answered
@@ -37,16 +33,14 @@
 // request is appended to `stub-invocations.jsonl` (cwd) for spawn-argument,
 // prompt-content, and policy-invariant assertions.
 //
-// Event shapes come from the shared fixture files (test/fixtures/
-// codex-jsonl.js for exec, test/fixtures/codex-appserver-protocol.js for
-// app-server): the SAME fixtures the parser and client unit tests pin, so
-// stub and client can never drift apart. Everything the app-server mode
-// sends omits the `jsonrpc` field, exactly like the real server
+// Event shapes come from the shared fixture file (test/fixtures/
+// codex-appserver-protocol.js): the SAME fixtures the client unit tests pin,
+// so stub and client can never drift apart. Everything the stub sends omits
+// the `jsonrpc` field, exactly like the real server
 // (docs/protocol/codex-app-server/RESEARCH.md section 1).
 
 const fs = require('fs');
 const path = require('path');
-const fx = require(path.join(__dirname, '..', '..', 'fixtures', 'codex-jsonl.js'));
 
 const argv = process.argv.slice(2);
 
@@ -75,7 +69,10 @@ function matches(rule, prompt) {
 if (argv[0] === 'app-server') {
   runAppServer();
 } else {
-  runExecMode();
+  // The exec runtime is retired: nothing should invoke this stub any other
+  // way. Fail loudly so a regression is visible in the failing test.
+  process.stderr.write(`stub codex: unsupported invocation: ${argv.join(' ')}\n`);
+  process.exit(2);
 }
 
 // ── App-server mode ─────────────────────────────────────────────────────────
@@ -327,82 +324,4 @@ function runAppServer() {
   });
   // The real server exits cleanly on stdin EOF (RESEARCH.md, shutdown notes).
   process.stdin.on('end', () => process.exit(0));
-}
-
-// ── Exec mode (legacy; unchanged behaviour) ─────────────────────────────────
-
-function runExecMode() {
-  function argValue(flag) {
-    const i = argv.indexOf(flag);
-    return i >= 0 ? argv[i + 1] : null;
-  }
-  const MODEL = argValue('--model');
-  const resumeIdx = argv.indexOf('resume');
-  const RESUME = resumeIdx >= 0 ? argv[resumeIdx + 1] : null;
-
-  function loadRules() {
-    try {
-      return JSON.parse(fs.readFileSync(SCENARIO_FILE, 'utf-8')).rules || [];
-    } catch (e) {
-      return [];
-    }
-  }
-
-  // Read the entire prompt from stdin, then play the matching rule.
-  let prompt = '';
-  process.stdin.setEncoding('utf-8');
-  process.stdin.on('data', (c) => { prompt += c; });
-  process.stdin.on('end', () => {
-    // Record the invocation for spawn-arg and prompt-content assertions.
-    try {
-      fs.appendFileSync(LOG_FILE, JSON.stringify({
-        bin: 'codex', pid: process.pid, ts: Date.now(),
-        model: MODEL, resume: RESUME, argv, prompt,
-        env: {
-          RUNDOCK: process.env.RUNDOCK || null,
-          RUNDOCK_CONVO_ID: process.env.RUNDOCK_CONVO_ID || null,
-          RUNDOCK_PORT: process.env.RUNDOCK_PORT || null,
-        },
-      }) + '\n');
-    } catch (e) { /* logging is best-effort */ }
-
-    const rule = loadRules().find(r => matches(r, prompt)) || {
-      text: `STUB-CODEX-NO-RULE prompt=${prompt.slice(0, 120)}`,
-    };
-
-    if (rule.crash != null) {
-      // Abnormal death before any output, optionally delayed.
-      const code = typeof rule.crash === 'number' ? rule.crash : 1;
-      if (rule.delayMs > 0) setTimeout(() => process.exit(code), rule.delayMs);
-      else process.exit(code);
-      return;
-    }
-
-    // Like the real CLI: the thread is announced as soon as the turn starts;
-    // delayMs simulates a LONG-RUNNING turn (work happening), not a slow start.
-    // Tests that supersede or heartbeat a mid-flight turn depend on this shape.
-    const threadId = RESUME || rule.threadId || `cthr_${process.pid}`;
-    writeOut(JSON.stringify(fx.threadStarted(threadId)) + '\n');
-
-    const finish = () => {
-      if (rule.noise) {
-        // Format-drift resilience: unknown event types and malformed JSON must
-        // be skipped by the consumer without breaking the turn.
-        writeOut(JSON.stringify({ type: 'turn.started' }) + '\n');
-        writeOut('{not json at all\n');
-      }
-      const events = [];
-      if (rule.failMessage) {
-        events.push(fx.turnFailed(rule.failMessage));
-      } else {
-        events.push(fx.agentMessage(rule.text || ''));
-        events.push(fx.turnCompleted(rule.usage || {}));
-      }
-      for (const e of events) writeOut(JSON.stringify(e) + '\n');
-      process.exit(rule.failMessage ? 1 : 0);
-    };
-
-    if (rule.delayMs > 0) setTimeout(finish, rule.delayMs);
-    else finish();
-  });
 }
