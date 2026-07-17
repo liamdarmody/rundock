@@ -202,3 +202,79 @@ describe('offersAlwaysAllow', () => {
     assert.strictEqual(P.offersAlwaysAllow('low'), true);
   });
 });
+
+// ── Pending permission requests for background conversations ────────────────
+// A control_request for a conversation that is not on screen used to be
+// dropped on the floor: the server then auto-denied it at the 120s timeout
+// with no user affordance at any point. The store's decisions are pure and
+// pinned here; app.js glues them to the DOM (render on open, unread badge)
+// and the socket. TEST SPLIT: the end-to-end conversation switch is not
+// drivable in the integration harness (bare WebSocket, no DOM), so the
+// client store logic is pinned HERE at unit level, and the server's
+// willingness to accept a late (pre-timeout) response, which the queued
+// card relies on, is pinned in
+// test/integration/background-approvals.test.js.
+
+describe('routePermissionRequest', () => {
+  test('auto-allow decisions respond immediately, foreground or background', () => {
+    assert.strictEqual(P.routePermissionRequest({ action: 'allow', reason: 'low-risk' }, true), 'respond-allow');
+    assert.strictEqual(P.routePermissionRequest({ action: 'allow', reason: 'always-allowed' }, false), 'respond-allow');
+  });
+
+  test('a card renders when the conversation is on screen', () => {
+    assert.strictEqual(P.routePermissionRequest({ action: 'card' }, true), 'render');
+  });
+
+  test('a card for a background conversation queues instead of dropping (the pre-fix silent drop)', () => {
+    assert.strictEqual(P.routePermissionRequest({ action: 'card' }, false), 'queue');
+  });
+});
+
+describe('pending permission store', () => {
+  const payload = id => ({ request_id: id, request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'npm test' } } });
+
+  test('queued requests list per conversation, in arrival order', () => {
+    const byConvo = new Map();
+    P.queuePendingPermission(byConvo, 'convo-a', 'r1', payload('r1'));
+    P.queuePendingPermission(byConvo, 'convo-a', 'r2', payload('r2'));
+    P.queuePendingPermission(byConvo, 'convo-b', 'r3', payload('r3'));
+    assert.deepStrictEqual(P.pendingPermissionsFor(byConvo, 'convo-a').map(p => p.request_id), ['r1', 'r2']);
+    assert.deepStrictEqual(P.pendingPermissionsFor(byConvo, 'convo-b').map(p => p.request_id), ['r3']);
+    assert.deepStrictEqual(P.pendingPermissionsFor(byConvo, 'convo-c'), [], 'no bleed between conversations');
+  });
+
+  test('re-queueing the same requestId (server re-send on reconnect) does not duplicate', () => {
+    const byConvo = new Map();
+    P.queuePendingPermission(byConvo, 'convo-a', 'r1', payload('r1'));
+    P.queuePendingPermission(byConvo, 'convo-a', 'r1', payload('r1'));
+    assert.strictEqual(P.pendingPermissionsFor(byConvo, 'convo-a').length, 1);
+  });
+
+  test('removal (answered or timed out) deletes wherever stored and reports the conversation', () => {
+    const byConvo = new Map();
+    P.queuePendingPermission(byConvo, 'convo-a', 'r1', payload('r1'));
+    P.queuePendingPermission(byConvo, 'convo-b', 'r2', payload('r2'));
+    assert.strictEqual(P.removePendingPermission(byConvo, 'r2'), 'convo-b');
+    assert.deepStrictEqual(P.pendingPermissionsFor(byConvo, 'convo-b'), [], 'a timed-out card can never be rendered again');
+    assert.strictEqual(byConvo.has('convo-b'), false, 'empty buckets are dropped');
+    assert.strictEqual(P.pendingPermissionsFor(byConvo, 'convo-a').length, 1, 'other conversations untouched');
+  });
+
+  test('removing an unknown requestId is a no-op and returns null', () => {
+    const byConvo = new Map();
+    P.queuePendingPermission(byConvo, 'convo-a', 'r1', payload('r1'));
+    assert.strictEqual(P.removePendingPermission(byConvo, 'r-unknown'), null);
+    assert.strictEqual(P.pendingPermissionsFor(byConvo, 'convo-a').length, 1);
+  });
+
+  test('clearing a conversation (cancel sweep denied its requests server-side) empties its queue only', () => {
+    const byConvo = new Map();
+    P.queuePendingPermission(byConvo, 'convo-a', 'r1', payload('r1'));
+    P.queuePendingPermission(byConvo, 'convo-a', 'r2', payload('r2'));
+    P.queuePendingPermission(byConvo, 'convo-b', 'r3', payload('r3'));
+    assert.strictEqual(P.clearPendingPermissions(byConvo, 'convo-a'), 2);
+    assert.deepStrictEqual(P.pendingPermissionsFor(byConvo, 'convo-a'), []);
+    assert.strictEqual(P.pendingPermissionsFor(byConvo, 'convo-b').length, 1);
+    assert.strictEqual(P.clearPendingPermissions(byConvo, 'convo-a'), 0, 'clearing an empty conversation is a no-op');
+  });
+});
