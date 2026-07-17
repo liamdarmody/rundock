@@ -27,15 +27,25 @@
     return ((b.pinned === true) - (a.pinned === true)) || compareTimeDesc(a, b);
   }
 
+  // List pills are encoded as 'list:<id>' so they travel through the same
+  // pill channel as 'all' and 'unread'. Membership lives on the conversation
+  // (listIds, many-to-many); a conversation with no listIds field is simply
+  // in no lists.
+  function isListPill(pill) { return typeof pill === 'string' && pill.startsWith('list:'); }
+  function listPillId(pill) { return isListPill(pill) ? pill.slice(5) : null; }
+  function inList(c, listId) { return Array.isArray(c.listIds) && c.listIds.includes(listId); }
+
   // Split and order the sidebar's data: the main list (non-archived,
-  // optionally filtered to unread, pinned grouped first) and the archived
-  // section (recency only). unreadIds is a Set-like with .has().
+  // optionally filtered to unread or to a list's members, pinned grouped
+  // first) and the archived section (recency only). unreadIds is a Set-like
+  // with .has().
   function partitionConversations(conversations, opts) {
     const pill = (opts && opts.pill) || 'all';
     const unreadIds = (opts && opts.unreadIds) || { has: () => false };
 
     let main = conversations.filter(c => c.status !== 'archived');
     if (pill === 'unread') main = main.filter(c => unreadIds.has(c.id));
+    if (isListPill(pill)) main = main.filter(c => inList(c, listPillId(pill)));
     main.sort(pinnedFirst);
 
     const archived = conversations
@@ -50,5 +60,5 @@
   // stays 'current' so users can still unpin it.
   function itemVariant(c) { return (c.persisted && !c.pinned) ? 'previous' : 'current'; }
 
-  return { sortKeyTime, compareTimeDesc, pinnedFirst, partitionConversations, itemVariant };
+  return { sortKeyTime, compareTimeDesc, pinnedFirst, partitionConversations, itemVariant, isListPill, listPillId, inList };
 }));
