@@ -121,6 +121,10 @@ export function replaceProperty(raw, key, newValue) {
     return { raw: lines.join('\n'), changed: true };
   }
 
+  // (list edits go through editListItem, which is index-based and never
+  // reparses survivors; the Array branch above is kept only for direct
+  // full-list replacement callers.)
+
   // Scalar. Refuse whenever the key has ANY continuation lines: a nested
   // object/list (empty inline value) OR a block/folded/multi-line scalar
   // (`title: >` + indented lines, or a plain scalar wrapped across lines).
@@ -135,4 +139,65 @@ export function replaceProperty(raw, key, newValue) {
   // whole remainder deliberately (documented behaviour).
   lines[loc.keyLine] = `${keyPart}${spacing}${formatScalar(newValue, after.trim())}`;
   return { raw: lines.join('\n'), changed: true };
+}
+
+// Byte-honest single-item list edit. mutation is { remove: index } or
+// { add: valueString }. Untouched item lines are NEVER re-parsed or
+// re-emitted: a removal splices out exactly one line, an add appends one
+// formatted line. This sidesteps the survivor-matching hazard entirely
+// (a `- ~`, a comment-bearing item, or a quote-twin can never be corrupted
+// by editing a DIFFERENT item). Returns { raw, changed }.
+export function editListItem(raw, key, mutation) {
+  if (typeof raw !== 'string' || !raw.startsWith('---')) return { raw, changed: false };
+  const lines = raw.split('\n');
+  const loc = locateKey(lines, key);
+  if (!loc) return { raw, changed: false };
+  const keyLine = lines[loc.keyLine];
+  const after = keyLine.slice(keyLine.indexOf(':') + 1);
+  const keyPart = keyLine.slice(0, keyLine.indexOf(':') + 1);
+  const spacing = after.match(/^[ \t]*/)[0] || ' ';
+  const flow = after.trim().startsWith('[');
+
+  // Flow lists ([a, b]) have no per-item bytes to preserve (single line);
+  // parse, mutate, re-emit. Block lists are edited by line, byte-honestly.
+  if (flow) {
+    const inner = after.trim().replace(/^\[/, '').replace(/\]\s*$/, '').trim();
+    const items = inner ? inner.match(/(?:"[^"]*"|'[^']*'|[^,])+/g).map((s) => s.trim()) : [];
+    if (mutation.remove != null) {
+      if (mutation.remove < 0 || mutation.remove >= items.length) return { raw, changed: false };
+      items.splice(mutation.remove, 1);
+    } else if (mutation.add != null) {
+      const s = String(mutation.add);
+      items.push((needsQuoting(s) || /[,\[\]{}]/.test(s)) ? JSON.stringify(s) : s);
+    }
+    lines[loc.keyLine] = `${keyPart}${spacing}[${items.join(', ')}]`;
+    return { raw: lines.join('\n'), changed: true };
+  }
+
+  // Block: the item lines within the value region, with their line indices.
+  const itemLineIdxs = [];
+  for (let i = loc.valueStart; i < loc.valueEnd; i++) if (/^\s*- /.test(lines[i])) itemLineIdxs.push(i);
+
+  if (mutation.remove != null) {
+    if (mutation.remove < 0 || mutation.remove >= itemLineIdxs.length) return { raw, changed: false };
+    lines.splice(itemLineIdxs[mutation.remove], 1);
+    // Last item gone: collapse to an inline empty list so the key stays valid.
+    if (itemLineIdxs.length === 1) lines[loc.keyLine] = `${keyPart}${spacing}[]`;
+    return { raw: lines.join('\n'), changed: true };
+  }
+  if (mutation.add != null) {
+    const template = itemLineIdxs.length ? lines[itemLineIdxs[0]] : '  - "x"';
+    const indent = template.match(/^\s*/)[0];
+    const oldItemRaw = template.replace(/^\s*- /, '');
+    const newLine = `${indent}- ${formatScalar(mutation.add, oldItemRaw)}`;
+    if (itemLineIdxs.length) {
+      lines.splice(itemLineIdxs[itemLineIdxs.length - 1] + 1, 0, newLine);
+    } else {
+      // Was inline `key: []` or empty: convert to a block list.
+      lines[loc.keyLine] = `${keyPart}`;
+      lines.splice(loc.keyLine + 1, 0, newLine);
+    }
+    return { raw: lines.join('\n'), changed: true };
+  }
+  return { raw, changed: false };
 }

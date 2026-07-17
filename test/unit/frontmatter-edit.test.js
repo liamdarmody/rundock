@@ -3,7 +3,7 @@
 // quoted, unlocatable keys refused.
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { replaceProperty } from '../../public/editor/markdown/frontmatter-edit.js';
+import { replaceProperty, editListItem } from '../../public/editor/markdown/frontmatter-edit.js';
 
 const RAW = [
   '---',
@@ -110,6 +110,47 @@ describe('byte-honesty (adversarial regressions)', () => {
     const { raw: out, changed } = replaceProperty(raw, 'tags', ['alpha']);
     assert.equal(changed, true);
     assert.equal(out, '---\ntags:\n- alpha\n---\n', 'beta removed, alpha kept verbatim, no phantom insertion');
+  });
+});
+
+describe('editListItem: index-based, byte-honest (round-2 regressions)', () => {
+  test('removing an item never re-parses survivors: ~, comments, and quote-twins are untouched', () => {
+    // Remove "alpha" (index 0); every other item's LINE must be byte-identical,
+    // including the null sigil and the comment-bearing item.
+    const raw = '---\ntags:\n  - alpha\n  - ~\n  - foo # keep this comment\n  - "beta"\n---\n';
+    const { raw: out, changed } = editListItem(raw, 'tags', { remove: 0 });
+    assert.equal(changed, true);
+    assert.equal(out, '---\ntags:\n  - ~\n  - foo # keep this comment\n  - "beta"\n---\n');
+  });
+
+  test('adding an item appends one formatted line, leaving all others verbatim', () => {
+    const raw = '---\ntags:\n  - alpha\n  - "quoted item"\n---\n';
+    const { raw: out } = editListItem(raw, 'tags', { add: 'gamma' });
+    assert.ok(out.includes('  - alpha\n  - "quoted item"\n  - gamma'));
+    const hazard = editListItem(raw, 'tags', { add: '[[Note]]' }).raw;
+    assert.ok(hazard.includes('  - "[[Note]]"'), 'hazardous new items are quoted');
+  });
+
+  test('removing the last block item collapses to []', () => {
+    const { raw: out } = editListItem('---\ntags:\n  - only\n---\n', 'tags', { remove: 0 });
+    assert.ok(out.includes('tags: []'));
+    assert.ok(!out.includes('- only'));
+  });
+
+  test('zero-indent block lists edit by line too', () => {
+    const { raw: out } = editListItem('---\ntags:\n- a\n- b\n- c\n---\n', 'tags', { remove: 1 });
+    assert.equal(out, '---\ntags:\n- a\n- c\n---\n');
+  });
+
+  test('flow lists mutate in place; adding to [] works', () => {
+    assert.ok(editListItem('---\ntags: [a, b]\n---\n', 'tags', { remove: 0 }).raw.includes('tags: [b]'));
+    assert.ok(editListItem('---\ntags: [a]\n---\n', 'tags', { add: 'x,y' }).raw.includes('tags: [a, "x,y"]'));
+    assert.ok(editListItem('---\ntags: []\n---\n', 'tags', { add: 'first' }).raw.includes('tags: [first]'));
+  });
+
+  test('out-of-range and unlocatable are refused', () => {
+    assert.equal(editListItem('---\ntags:\n  - a\n---\n', 'tags', { remove: 5 }).changed, false);
+    assert.equal(editListItem('---\ntags:\n  - a\n---\n', 'ghost', { remove: 0 }).changed, false);
   });
 });
 
