@@ -12,6 +12,11 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 - **HTML files render as designed:** opening an HTML or SVG file shows the real rendered page (its own styles, layout, and fonts) instead of raw source, in a locked-down preview where scripts never run and the page cannot phone home. The Edit toggle still shows the raw source, which stays editable and saveable.
 - **Images and PDFs open in Rundock:** clicking a PNG, JPEG, GIF, WebP, or PDF in the file tree shows the actual image or a readable document view, so you never leave Rundock to look at your own files. File types Rundock cannot preview say so clearly instead of showing garbled bytes.
+- **Obsidian callouts render as Obsidian renders them:** typed, coloured admonition boxes with titles, working expand/collapse for `+`/`-` fold markers, and nested callouts as real nested boxes, never literal `[!type]` text. Byte-for-byte round-trip holds, including a fix for callout-final files gaining a newline on every save.
+- **Frontmatter wikilinks are clickable:** a `related:` list (or any property value that is a wikilink) navigates to the file on click; links to files that do not exist look visibly dead instead of erroring.
+- **Headings four to six survive:** `####` and deeper previously flattened to plain text on save.
+- **Maths survives saving:** `$inline$` and `$$block$$` LaTeX previously had its backslashes doubled on every save (compounding corruption); it now passes through byte-exact. Typeset rendering is a separate, planned feature.
+- **An Obsidian syntax parity test corpus** now pins round-trip byte-safety for twenty-one construct families, with the known remaining gaps documented and tracked openly.
 - **Comment on HTML files the way you review markdown:** select a passage in the rendered preview, press Comment, and the same review sidebar handles threads, replies, and resolve. Feedback anchors to the exact text you selected and lives in an open JSON file under the workspace's `.rundock/reviews/` folder (the HTML file itself is never touched), agents know how to read it, act on it, and resolve it, and a comment whose passage was edited away is kept and labelled Orphaned rather than silently dropped.
 
 ### Changed
