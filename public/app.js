@@ -3039,7 +3039,11 @@ function getFileContentForSave() {
 // Wikilink navigation
 function openWikilink(name) {
   const baseName = name.split('#')[0].trim();
-  const searchName = baseName.endsWith('.md') ? baseName : baseName + '.md';
+  // Agents reference their outputs by wikilink: [[chart.png]] or
+  // [[report.pdf]] must open the real file through the registry, not chase
+  // a phantom chart.png.md. Only extensionless targets get the .md default.
+  const hasViewableExt = /\.(md|mdx|txt|json|html?|svg|png|jpe?g|gif|webp|pdf)$/i.test(baseName);
+  const searchName = hasViewableExt ? baseName : baseName + '.md';
   editorReturnView = 'editor';
 
   // Push current file onto history so back button returns to it
