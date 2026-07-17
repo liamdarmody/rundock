@@ -18,6 +18,7 @@ import { SoftHardBreak } from './nodes/soft-hard-break.js';
 import { SoftOrderedList } from './nodes/soft-ordered-list.js';
 import { tableExtensions, tableDirtyKey } from './nodes/table.js';
 import { criticExtensions } from './nodes/critic-marks.js';
+import { mathExtensions } from './nodes/math.js';
 import { FindExtension } from './plugins/find.js';
 
 export function createEditorInstance({ element, initialBody, onUpdate, onSelectionChange }) {
@@ -27,7 +28,9 @@ export function createEditorInstance({ element, initialBody, onUpdate, onSelecti
     element,
     extensions: [
       StarterKit.configure({
-        heading: { levels: [1, 2, 3] },
+        // All six levels: #### and deeper previously fell out of the schema
+        // and flattened to plain paragraphs on save (OFM parity corpus).
+        heading: { levels: [1, 2, 3, 4, 5, 6] },
         // Disable StarterKit's HardBreak; SoftHardBreak below replaces it with
         // a `\n` serialiser so breaks:true round-trips byte-for-byte.
         hardBreak: false,
@@ -53,6 +56,7 @@ export function createEditorInstance({ element, initialBody, onUpdate, onSelecti
       Callout,
       ...tableExtensions,
       ...criticExtensions,
+      ...mathExtensions,
       FindExtension,
       Markdown.configure({
         // html:false closes the XSS surface that the prototype's regex

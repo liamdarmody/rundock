@@ -122,6 +122,12 @@ async function initTiptapEditor(path, content) {
     toolbarHostElement: document.getElementById('tiptap-editor-pane'),
     onUpdate: () => onTiptapEditorUpdate(),
     onWikilinkClick: (target) => openWikilink(target),
+    // Frontmatter wikilinks that match no file render visibly dead.
+    resolveWikilink: (target) => {
+      if (!cachedFileTree) return true; // tree not loaded yet: never false-flag
+      const base = String(target).split('#')[0].trim();
+      return !!findFileInTree(cachedFileTree, base.endsWith('.md') ? base : base + '.md');
+    },
     // Review identity: workspace profile name -> 'me' fallback; the agent
     // roster lets review attribution render known agents as agent chips.
     author: (workspaceAnalysis && workspaceAnalysis.userProfile && workspaceAnalysis.userProfile.fields && workspaceAnalysis.userProfile.fields.name)
