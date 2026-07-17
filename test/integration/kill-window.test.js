@@ -179,6 +179,112 @@ describe('kill-window race: message during handoff completion', () => {
   });
 });
 
+describe('kill-window race: direct (non-delegated) scope return', () => {
+  // handleScopeReturn serves the direct scope-return path (a specialist the
+  // user chatted with directly hands off with RETURN) and the resumed-parent
+  // return. Both spawn a fresh orchestrator and write the out-of-scope
+  // routing prompt; the buffered-message supersede rule that guards the
+  // delegate restoration paths above must hold here too, or a follow-up
+  // buffered in the kill window queues BEHIND the routing prompt and dies
+  // with the orchestrator when that prompt re-delegates.
+  //
+  // Determinism: the killing window is seeded directly while the entry is
+  // still the specialist (the real 500ms kill would open it moments later;
+  // beginConvoTransition reuses the seeded record and keeps its queue), so
+  // the follow-up reliably lands inside the window.
+  test('a message buffered in the window supersedes the routing prompt and is answered exactly once', async () => {
+    const convoId = h.freshConvoId('dsr');
+    h.clearInvocations();
+    h.writeScenario([
+      // Direct chat to the specialist; it hands off out-of-scope.
+      { match: { agent: 'content-lead', promptIncludes: 'dsr direct return please' },
+        turn: [{ text: `Not my lane. ${MARKERS.RETURN}` }] },
+      // Trap rule: handleScopeReturn's routing prompt must NOT fire when a
+      // newer user message is buffered in the kill window.
+      { match: { agent: 'chief-of-staff', promptIncludes: 'returned because the request was outside their scope' },
+        turn: [{ text: 'DSR-ROUTING-PROMPT-FIRED' }] },
+      // Correct path: the replayed message drives the fresh orchestrator.
+      { match: { agent: 'chief-of-staff', promptIncludes: 'dsr buffered follow-up' },
+        turn: [{ text: 'DSR-FOLLOWUP-ANSWER' }] },
+    ]);
+
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'content-lead', content: 'dsr direct return please' });
+    await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'content-lead', { since, label: 'specialist RETURN result' });
+
+    const entry = h.internal.chatProcesses.get(convoId);
+    assert.ok(entry && entry.scopeReturn, 'specialist is in the auto-return window');
+    h.internal.convoTransitions.set(convoId, { state: 'killing', owner: entry, queued: [], failsafe: setTimeout(() => {}, 30000) });
+
+    client.send({ type: 'chat', conversationId: convoId, agent: 'content-lead', content: 'dsr buffered follow-up' });
+    await waitForBuffered(convoId);
+
+    const { msg: answer } = await client.waitFor(
+      m => m.type === 'result' && m._conversationId === convoId && m.result === 'DSR-FOLLOWUP-ANSWER',
+      { since, label: 'fresh orchestrator answers the buffered message', timeout: 15000 });
+    assert.strictEqual(answer._agent, 'chief-of-staff', 'the fresh orchestrator answered it');
+    await h.delay(800); // window for a stray routing-prompt result to land if one were coming
+
+    // The user's newer message superseded the routing prompt, matching the
+    // delegate COMPLETE/RETURN restoration gates and the live-window rule.
+    assert.ok(!client.messages.some(m => JSON.stringify(m).includes('DSR-ROUTING-PROMPT-FIRED')),
+      'the routing prompt was skipped in favour of the buffered message');
+    assert.ok(!transcript(convoId).some(e => e.text && e.text.includes('DSR-ROUTING-PROMPT-FIRED')));
+
+    // Exactly once: one answer envelope, one transcript row.
+    const answers = client.messages.slice(since).filter(m => m.type === 'result' && m._conversationId === convoId && m.result === 'DSR-FOLLOWUP-ANSWER');
+    assert.strictEqual(answers.length, 1, 'the buffered message is answered exactly once');
+    const rows = transcript(convoId).filter(e => e.role === 'user' && e.text === 'dsr buffered follow-up');
+    assert.strictEqual(rows.length, 1, 'the buffered message reached the transcript exactly once');
+
+    noErrorCards(convoId, since);
+    assert.strictEqual(h.internal.convoTransitions.has(convoId), false, 'transition ended after restoration');
+    h.reapConvo(convoId);
+  });
+
+  test('the buffered follow-up survives the routing prompt re-delegating (silent-loss variant)', async () => {
+    // Pre-fix the ungated routing prompt does what it literally asks: the
+    // orchestrator re-delegates, interception SIGKILLs it, and the replayed
+    // follow-up (already written to its stdin) dies unread. The message is
+    // silently lost: the exact failure class the kill-window machine closed.
+    const convoId = h.freshConvoId('dsl');
+    h.clearInvocations();
+    h.writeScenario([
+      { match: { agent: 'content-lead', promptIncludes: 'dsl direct return please' },
+        turn: [{ text: `Not my lane. ${MARKERS.RETURN}` }] },
+      // The routing prompt drives a re-delegation (what it literally asks for).
+      { match: { agent: 'chief-of-staff', promptIncludes: 'returned because the request was outside their scope' },
+        turn: [{ agentTool: { subagent_type: 'lead-designer', prompt: 'dsl re-routed brief' } }] },
+      { match: { agent: 'lead-designer', promptIncludes: 'dsl re-routed brief' },
+        turn: [{ text: `Re-routed work done. ${MARKERS.COMPLETE}` }] },
+      { match: { agent: 'chief-of-staff', promptIncludes: '[SYSTEM: pipeline-complete]' },
+        turn: [{ text: '<silent>' }] },
+      { match: { agent: 'chief-of-staff', promptIncludes: 'dsl buffered follow-up' },
+        turn: [{ text: 'DSL-FOLLOWUP-ANSWER' }] },
+    ]);
+
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'content-lead', content: 'dsl direct return please' });
+    await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'content-lead', { since, label: 'specialist RETURN result' });
+
+    const entry = h.internal.chatProcesses.get(convoId);
+    assert.ok(entry && entry.scopeReturn, 'specialist is in the auto-return window');
+    h.internal.convoTransitions.set(convoId, { state: 'killing', owner: entry, queued: [], failsafe: setTimeout(() => {}, 30000) });
+
+    client.send({ type: 'chat', conversationId: convoId, agent: 'content-lead', content: 'dsl buffered follow-up' });
+    await waitForBuffered(convoId);
+
+    const answered = await client.waitFor(
+      m => m.type === 'result' && m._conversationId === convoId && m.result === 'DSL-FOLLOWUP-ANSWER',
+      { since, timeout: 12000, label: 'buffered follow-up answered' }
+    ).then(() => true).catch(() => false);
+    assert.ok(answered, 'the buffered follow-up must not be lost');
+    const answers = client.messages.slice(since).filter(m => m.type === 'result' && m._conversationId === convoId && m.result === 'DSL-FOLLOWUP-ANSWER');
+    assert.strictEqual(answers.length, 1, 'answered exactly once');
+    h.reapConvo(convoId);
+  });
+});
+
 describe('kill-window: ordinary paths untouched', () => {
   test('a message to an idle conversation spawns and answers as before; a follow-up to a live idle process reuses stdin; no transition is ever created', async () => {
     const convoId = h.freshConvoId('kwo');
