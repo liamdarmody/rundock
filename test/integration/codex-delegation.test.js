@@ -1,13 +1,14 @@
 'use strict';
 // Integration: a Claude orchestrator delegating to a specialist that runs on
 // the Codex runtime. The orchestrator's Agent tool call is intercepted as
-// usual; the delegate turn runs as one sandboxed codex exec process; handback
-// markers round-trip through the same restoration machinery as Claude
-// delegates; the transcript persists both sides.
+// usual; the delegate turn runs as one sandboxed streamed turn on the shared
+// codex app-server; handback markers round-trip through the same restoration
+// machinery as Claude delegates; the transcript persists both sides.
 //
-// Codex delegates are transactional by design: exec mode runs one turn per
-// process, so a delegated task is briefed, completed, and control returns to
-// the orchestrator with the specialist's output injected. Direct
+// Codex delegates are transactional by design: a delegated task is briefed,
+// completed in one turn, and control returns to the orchestrator with the
+// specialist's output injected when the turn's done event fires (the
+// runtime's equivalent of the delegate process closing). Direct
 // conversations with Codex agents remain fully conversational (thread
 // resume); only the delegated flow is single-shot.
 const { test, describe, before, after } = require('node:test');
@@ -84,13 +85,17 @@ describe('delegation to a codex specialist', () => {
     // logged before spawn-argument assertions run.
     await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'chief-of-staff', { since: startedIdx + 1, label: 'resumed parent result' });
 
-    // The delegate spawn was a codex exec process carrying identity + brief.
-    const codexInv = h.readInvocations().find(i => i.bin === 'codex');
-    assert.ok(codexInv, 'codex delegate spawn recorded');
-    assert.deepStrictEqual(codexInv.argv, ['exec', '--json', '--sandbox', 'workspace-write', '--skip-git-repo-check', '-']);
-    assert.ok(codexInv.prompt.includes('You are Ida'), 'agent identity in the delegate prompt');
-    assert.ok(codexInv.prompt.includes('DELEGATION CONTEXT'), 'delegation contract in the delegate prompt');
-    assert.ok(codexInv.prompt.includes('codex-del brief'), 'brief in the delegate prompt');
+    // The delegate turn ran on the shared app-server, sandboxed, carrying
+    // identity + delegation contract + brief in its prompt.
+    const start = h.readInvocations().find(i => i.mode === 'app-server' && i.method === 'thread/start');
+    assert.ok(start, 'codex delegate thread recorded');
+    assert.strictEqual(start.params.sandbox, 'workspace-write');
+    assert.strictEqual(start.params.approvalPolicy, 'on-request');
+    const prompt = h.codexTurnPrompts().pop();
+    assert.ok(prompt, 'codex delegate turn recorded');
+    assert.ok(prompt.includes('You are Ida'), 'agent identity in the delegate prompt');
+    assert.ok(prompt.includes('DELEGATION CONTEXT'), 'delegation contract in the delegate prompt');
+    assert.ok(prompt.includes('codex-del brief'), 'brief in the delegate prompt');
 
     // Parent resumed its own session.
     const cosResume = h.readInvocations().filter(i => i.agent === 'chief-of-staff' && i.resume);
@@ -236,9 +241,9 @@ describe('delegation to a codex specialist', () => {
     await client.waitFor(m => m.type === 'system' && m.subtype === 'info' && m._conversationId === convoId && /Blocked a handoff to Ida/.test(m.content || ''), { label: 'block pill' });
     await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'content-lead' && /runs on Codex under another leader/.test(m.result || ''), { label: 'resumed caller result' });
 
-    // Neither a codex exec process nor a Claude stand-in for Ida ever ran.
+    // Neither a codex turn nor a Claude stand-in for Ida ever ran.
     const invs = h.readInvocations();
-    assert.strictEqual(invs.find(i => i.argv && i.argv[0] === 'exec'), undefined, 'no codex process spawned');
+    assert.strictEqual(invs.find(i => i.mode === 'app-server' && i.method === 'turn/start'), undefined, 'no codex turn started');
     assert.strictEqual(invs.find(i => i.agent === 'researcher'), undefined, 'no Claude process wearing the codex agent name');
 
     h.reapConvo(convoId);

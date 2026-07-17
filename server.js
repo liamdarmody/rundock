@@ -14,6 +14,7 @@ const { spawn } = require('child_process');
 const { WebSocketServer } = require('ws');
 const readline = require('readline');
 const codexRuntime = require('./codex.js');
+const codexAppServerLib = require('./codex-appserver.js');
 const PKG_VERSION = require('./package.json').version;
 const searchLib = require('./search.js');
 
@@ -30,40 +31,6 @@ function isInsideWorkspace(targetPath) {
   const root = path.resolve(WORKSPACE);
   const resolved = path.resolve(targetPath);
   return resolved === root || resolved.startsWith(root + path.sep);
-}
-
-// ── Codex write-request validation (Windows write markers) ──────────────────
-// Validates a WRITE_FILE request BEFORE any permission card is shown: a card
-// is never raised for something Rundock would refuse to do. Workspace-bound
-// by construction, managed directories excluded, knowledge-mode file types
-// enforced (defence in depth: the same policy the prompts state).
-const CODEX_WRITE_ALLOWED_EXT = new Set(['.md', '.markdown', '.yaml', '.yml', '.json', '.txt', '.csv']);
-const CODEX_WRITE_MAX_BYTES = 1024 * 1024;
-function validateWriteRequest(workspaceDir, relPath, content, isCodeMode) {
-  if (!workspaceDir) return { ok: false, reason: 'no workspace selected' };
-  const p = String(relPath || '').trim();
-  if (!p) return { ok: false, reason: 'empty path' };
-  if (path.isAbsolute(p) || p.split(/[\\/]/).includes('..')) {
-    return { ok: false, reason: 'path escapes the workspace' };
-  }
-  const root = path.resolve(workspaceDir);
-  const fullPath = path.resolve(root, p);
-  if (!(fullPath.startsWith(root + path.sep))) {
-    return { ok: false, reason: 'path escapes the workspace' };
-  }
-  // Case-insensitive: Windows filesystems are, so ".Claude/" must not slip
-  // past a case-sensitive name check.
-  const top = path.relative(root, fullPath).split(path.sep)[0].toLowerCase();
-  if (top === '.claude' || top === '.rundock') {
-    return { ok: false, reason: 'managed directory' };
-  }
-  if (Buffer.byteLength(String(content == null ? '' : content), 'utf-8') > CODEX_WRITE_MAX_BYTES) {
-    return { ok: false, reason: 'content exceeds the 1 MB write limit' };
-  }
-  if (!isCodeMode && !CODEX_WRITE_ALLOWED_EXT.has(path.extname(fullPath).toLowerCase())) {
-    return { ok: false, reason: 'file type not supported in this workspace' };
-  }
-  return { ok: true, fullPath };
 }
 
 // Shared constants to avoid repetition across process spawn sites
@@ -1340,46 +1307,60 @@ function executeRoutine(agent, routine, key) {
   // Notify connected clients
   broadcastRoutineUpdate();
 
-  let proc;
-  if (agent.runtime === 'codex') {
-    // Codex agents run their routines on Codex: exec mode is naturally
-    // one-shot, the routine prompt travels over stdin with the agent's
-    // instructions, and Codex's own sandbox applies (no bypass flags exist
-    // on this path). The agent's plan choice is honoured even for
-    // unattended work.
-    // stdout/stderr are ignored: nothing consumes them on the routine path,
-    // and a chatty run would otherwise fill the pipe buffer and deadlock.
-    proc = spawnCodex(codexRuntime.buildCodexArgs({ model: agent.model || undefined }), {
-      cwd: WORKSPACE,
-      env: getSpawnEnv(null),
-      stdio: ['pipe', 'ignore', 'ignore']
+  const recordOutcome = (ok) => {
+    const duration = Math.round((Date.now() - startTime) / 1000);
+    recordRoutineRun(key, {
+      lastRun: new Date().toISOString(),
+      status: ok ? 'completed' : 'failed',
+      duration
     });
-    proc.stdin.on('error', () => { /* EPIPE on early exit */ });
-    proc.stdin.write([readAgentInstructions(agent), buildSystemPrompt(agent), routine.prompt].filter(Boolean).join('\n\n'));
-    proc.stdin.end();
-  } else {
+    console.log(`[Scheduler] Routine "${routine.name}" ${ok ? 'completed' : 'failed'} (${duration}s)`);
+    broadcastRoutineUpdate();
+  };
+
+  if (agent.runtime === 'codex') {
+    // Codex agents run their routines on the shared Codex app-server: one
+    // fresh thread per run, the routine prompt travelling with the agent's
+    // instructions (Codex has no --agent equivalent). Routines run
+    // unattended with nobody to approve escalations, so approvalPolicy is
+    // an EXPLICIT 'never' (the client refuses to default to it):
+    // sandbox-blocked actions fail instead of hanging on an approval,
+    // matching the retired exec mode. The agent's plan choice is honoured
+    // even for unattended work.
+    const routinePrompt = [readAgentInstructions(agent), buildSystemPrompt(agent), routine.prompt].filter(Boolean).join('\n\n');
+    (async () => {
+      const server = await getCodexAppServer();
+      await waitForCodexReady(server);
+      const { threadId } = await server.startThread({
+        cwd: WORKSPACE,
+        model: agent.model || undefined,
+        sandbox: 'workspace-write',
+        approvalPolicy: 'never',
+      });
+      const sub = server.startTurn(threadId, routinePrompt);
+      const status = await new Promise((resolve) => {
+        sub.on('event', (ev) => { if (ev.type === 'done') resolve(ev.status); });
+      });
+      return status === 'completed';
+    })().then(recordOutcome, (err) => {
+      console.error(`[Scheduler] Codex routine "${routine.name}" failed to run: ${err.message}`);
+      recordOutcome(false);
+    });
+    return;
+  }
+
   // Routines run unattended (no user to approve), so bypass permissions.
   const args = [...getBareArgs(), ...modelArgs(agent), '--print', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
   if (agent.id !== 'default') args.push('--agent', agent.id);
   args.push(routine.prompt);
 
-  proc = spawnClaude(args, {
+  const proc = spawnClaude(args, {
     cwd: WORKSPACE,
     env: getSpawnEnv(null),
     stdio: ['ignore', 'pipe', 'pipe']
   });
-  }
 
-  proc.on('close', (code) => {
-    const duration = Math.round((Date.now() - startTime) / 1000);
-    recordRoutineRun(key, {
-      lastRun: new Date().toISOString(),
-      status: code === 0 ? 'completed' : 'failed',
-      duration
-    });
-    console.log(`[Scheduler] Routine "${routine.name}" ${code === 0 ? 'completed' : 'failed'} (${duration}s)`);
-    broadcastRoutineUpdate();
-  });
+  proc.on('close', (code) => recordOutcome(code === 0));
 }
 
 function broadcastRoutineUpdate() {
@@ -2953,15 +2934,13 @@ function handleDelegation(msg, processes) {
 
   console.log(`[Delegate] convo=${convoId} from=${originalAgentId} to=${targetAgent.id} proc=${delegateProcessId} runtime=${targetAgent.runtime}${priorSessionId ? ` resume=${priorSessionId}` : ''}`);
 
-  // Normalised for the codex path: argv and prompt must agree on whether
-  // this is a resume (see startCodexTurn for the identity-loss hazard).
+  // Normalised for the codex path: thread resolution and prompt must agree
+  // on whether this is a resume (see startCodexTurn for the identity-loss
+  // hazard). Codex delegates have NO per-turn child process: their turn runs
+  // on the shared app-server, so delegateProc stays null for them.
   const codexResumeId = isCodexDelegate && codexRuntime.isValidThreadId(priorSessionId) ? priorSessionId : null;
   const delegateProc = isCodexDelegate
-    ? spawnCodex(codexRuntime.buildCodexArgs({ resumeThreadId: codexResumeId, model: targetAgent.model || undefined }), {
-        cwd: WORKSPACE,
-        env: getSpawnEnv(convoId),
-        stdio: ['pipe', 'pipe', 'pipe']
-      }, (err) => handleCodexSpawnError(err, convoId))
+    ? null
     : spawnClaude(delegateArgs, {
         cwd: WORKSPACE,
         env: getSpawnEnv(convoId),
@@ -2969,7 +2948,7 @@ function handleDelegation(msg, processes) {
       }, (err) => handleChatSpawnError(err, convoId));
 
   const delegateEntry = {
-    process: delegateProc, runtime: targetAgent.runtime, buffer: '', processId: delegateProcessId,
+    process: delegateProc || undefined, runtime: targetAgent.runtime, buffer: '', processId: delegateProcessId,
     agentId: targetAgent.id, responseText: '', exited: false, resultSent: false, idle: false,
     isPlatformDelegate, lastUserMessage: msg.context, receivedFollowUp: false,
     isIntercepted,
@@ -3008,18 +2987,21 @@ function handleDelegation(msg, processes) {
     : `[DELEGATION BRIEF]\n${msg.context}`;
 
   if (isCodexDelegate) {
-    // Codex takes the whole prompt over stdin: identity + platform rules +
-    // delegation contract on a cold spawn (Codex has no --agent or
+    // Codex takes the whole prompt in one turn: identity + platform rules +
+    // delegation contract on a fresh thread (Codex has no --agent or
     // --append-system-prompt equivalent); contract + brief on a resumed
-    // thread (instructions are already in the thread). Delegated turns get
-    // the same Windows write-marker fallback as direct chats: instruction
-    // on cold spawns, marker handling flagged on the entry either way.
-    delegateEntry.writeMarkersEnabled = codexWriteMarkersEnabled();
+    // thread (instructions are already in the thread).
     const codexPrompt = codexResumeId
       ? `${delegationContext}\n\n${contextWithHistory}`
-      : [readAgentInstructions(targetAgent), fullPrompt, buildWindowsWriteNote(delegateEntry.writeMarkersEnabled), contextWithHistory].filter(Boolean).join('\n\n');
-    startCodexKeepalive(delegateEntry, convoId);
-    wireCodexDelegate(delegateEntry, convoId, codexPrompt);
+      : [readAgentInstructions(targetAgent), fullPrompt, contextWithHistory].filter(Boolean).join('\n\n');
+    // With no per-turn process there is no 'close' event: the turn's done
+    // event fires this hook instead, running the SAME restoration handler
+    // Claude delegates attach to process close (defined below).
+    delegateEntry.onTurnDone = (code) => handleDelegateClose(code);
+    wireCodexDelegate(delegateEntry, convoId, codexPrompt, {
+      resumeThreadId: codexResumeId,
+      model: targetAgent.model || undefined,
+    });
   } else {
   delegateProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: contextWithHistory } }) + '\n');
 
@@ -3080,7 +3062,11 @@ function handleDelegation(msg, processes) {
   });
   }
 
-  delegateProc.on('close', (code) => {
+  // Shared close path for BOTH runtimes: Claude delegates attach it to the
+  // child process's 'close'; Codex delegates fire it from their turn's done
+  // event (entry.onTurnDone above). It owns agent_switch/done and parent
+  // restoration.
+  const handleDelegateClose = (code) => {
     if (delegateEntry.spawnFailed) return; // error handler already surfaced
     delegateEntry.exited = true;
     const current = processes.get(convoId);
@@ -3146,7 +3132,7 @@ function handleDelegation(msg, processes) {
         // the specialist's output and decides what to do next.
         if (isPipelineComplete) {
           console.log(`[AgentIntercept] convo=${convoId} COMPLETE gate: specialist ${delegateEntry.agentId} finished, orchestrator ${orchestratorAgentId} stays idle`);
-        } else if (orchestratorEntry.process.stdin && orchestratorEntry.process.stdin.writable && !orchestratorEntry.process.killed) {
+        } else if (orchestratorEntry.process && orchestratorEntry.process.stdin && orchestratorEntry.process.stdin.writable && !orchestratorEntry.process.killed) {
           // RETURN path: auto-continue to route the pending request to another specialist
           const resumeCount = incrementAutoResume(convoId);
           if (resumeCount >= MAX_CONSECUTIVE_AGENT_RESUMES) {
@@ -3334,7 +3320,7 @@ function handleDelegation(msg, processes) {
         fromAgent: delegateEntry.agentId, toAgent: delegateEntry.delegation.originalAgentId
       }));
 
-      if (!delegateEntry.isPlatformDelegate && delegateEntry.receivedFollowUp && orig.process.stdin && orig.process.stdin.writable) {
+      if (!delegateEntry.isPlatformDelegate && delegateEntry.receivedFollowUp && orig.process && orig.process.stdin && orig.process.stdin.writable) {
         const resumeCount = incrementAutoResume(convoId);
         if (resumeCount >= MAX_CONSECUTIVE_AGENT_RESUMES) {
           console.log(`[CircuitBreaker] convo=${convoId} ${resumeCount} consecutive agent resumes on delegate return path, pausing`);
@@ -3366,7 +3352,8 @@ function handleDelegation(msg, processes) {
       console.log(`[Delegate] convo=${convoId} delegate exited, original process gone`);
     }
     safeSend(JSON.stringify({ type: 'system', subtype: 'done', code, _agent: delegateEntry.agentId, _conversationId: convoId, _processId: delegateProcessId }));
-  });
+  };
+  if (delegateProc) delegateProc.on('close', handleDelegateClose);
 }
 
 wss.on('connection', (ws) => {
@@ -3444,13 +3431,13 @@ wss.on('connection', (ws) => {
           // kill the process so it respawns with a fresh system prompt via --resume.
           if (existing && !existing.exited && existing.needsRosterRefresh) {
             console.log(`[Roster] convo=${convoId} killing stale orchestrator for roster refresh`);
-            try { existing.process.kill(); } catch (e) {}
+            stopEntryProcess(existing);
             processes.delete(convoId);
             existing = null; // Force fall-through to spawn path
           }
 
           // KNOWN LIMITATION: kill-already-fired race. A follow-up arriving in the SIGTERM-to-close gap passes this gate (no !existing.process.killed check) and writes to a dying process; on non-delegate paths the handback is dropped and the message lost. Clean fix is a state-machine change (queue the follow-up until close/handback completes, then re-route), not a point-fix.
-          if (existing && !existing.exited && existing.process.stdin && existing.process.stdin.writable) {
+          if (existing && !existing.exited && existing.process && existing.process.stdin && existing.process.stdin.writable) {
             const processId = existing.processId;
             console.log(`[Chat] convo=${convoId} proc=${processId} FOLLOW-UP (interactive stdin)`);
             // A user follow-up that lands inside a pending 500ms auto-return kill
@@ -3489,9 +3476,10 @@ wss.on('connection', (ws) => {
             existing.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: msg.content } }) + '\n');
           } else {
             // No live process: spawn a new one (first message or after disconnect)
-            // Kill stale entry if present
+            // Stop any stale entry first (runtime-aware: a leftover Codex
+            // entry interrupts its turn rather than killing anything).
             if (existing) {
-              try { existing.process.kill(); } catch (e) { /* already dead */ }
+              stopEntryProcess(existing);
               processes.delete(convoId);
             }
 
@@ -3648,7 +3636,7 @@ wss.on('connection', (ws) => {
 
           // Kill existing process for this conversation only
           if (processes.has(convoId)) {
-            processes.get(convoId).process.kill();
+            stopEntryProcess(processes.get(convoId));
             processes.delete(convoId);
           }
 
@@ -3795,12 +3783,18 @@ wss.on('connection', (ws) => {
             _toolCalls: entry.toolCalls || [], _turnStartTime: entry.turnStartTime || null
           }));
 
-          // Kill the active process
-          try { entry.process.kill('SIGTERM'); } catch (e) {}
-          // Safety net: SIGKILL after 2 seconds
-          setTimeout(() => {
-            try { entry.process.kill('SIGKILL'); } catch (e) {}
-          }, 2000);
+          // Stop the active work. Runtime-aware: Codex entries interrupt
+          // their turn on the SHARED app-server (never kill it on a
+          // conversation cancel); Claude entries kill their child process.
+          if (entry.interrupt) {
+            entry.interrupt();
+          } else {
+            try { entry.process.kill('SIGTERM'); } catch (e) {}
+            // Safety net: SIGKILL after 2 seconds
+            setTimeout(() => {
+              try { entry.process.kill('SIGKILL'); } catch (e) {}
+            }, 2000);
+          }
 
           // If this is a delegate, also kill every parked ANCESTOR. Walk the
           // full parent chain rather than only orchestratorEntry, which is null
@@ -3811,8 +3805,12 @@ wss.on('connection', (ws) => {
               if (!e || e.exited) return;
               e.exited = true;
               e.cancelled = true;
-              try { e.process.kill('SIGTERM'); } catch (err) {}
-              setTimeout(() => { try { e.process.kill('SIGKILL'); } catch (err) {} }, 2000);
+              if (e.interrupt) {
+                e.interrupt();
+              } else if (e.process) {
+                try { e.process.kill('SIGTERM'); } catch (err) {}
+                setTimeout(() => { try { e.process.kill('SIGKILL'); } catch (err) {} }, 2000);
+              }
               console.log(`[Cancel] convo=${convoId} also killed parked ancestor agent=${e.agentId}`);
             };
             const seen = new Set([entry]);
@@ -4192,8 +4190,9 @@ wss.on('connection', (ws) => {
         if (current && current.delegation && !current.exited) {
           console.log(`[Delegate] convo=${convoId} ending delegation, killing delegate`);
           // KNOWN LIMITATION: follow-up racing explicit end_delegation. This kills immediately and uncancellably while setting scopeReturn; a follow-up landing in the kill-to-close gap clears scopeReturn (follow-up clear block) and drops the committed handback. Needs the same queue-and-re-route state machine as the kill-already-fired race above.
-          try { current.process.kill(); } catch (e) {}
-          // The close handler will restore the original process
+          stopEntryProcess(current);
+          // The close path (process close for Claude, turn done for Codex)
+          // will restore the original process
         } else if (current && !current.delegation && !current.exited && !current.scopeReturn) {
           // Specialist started directly (no delegation) emitted RETURN
           // Server-side onResult should have caught this, but handle as fallback.
@@ -4214,7 +4213,7 @@ wss.on('connection', (ws) => {
           } else {
             console.log(`[ScopeReturn] convo=${convoId} end_delegation fallback for non-delegated specialist`);
             current.scopeReturn = true;
-            try { current.process.kill(); } catch (e) {}
+            stopEntryProcess(current);
             // The close handler will call handleScopeReturn
           }
         }
@@ -4812,14 +4811,27 @@ function unregisterChildPid(pid) {
   savePidFile(pids);
 }
 
-// Kill all tracked child processes (called on exit)
+// Stop whatever executes a conversation entry. Claude entries own a child
+// process and get the signal; Codex entries are process-less (their turns
+// run on the SHARED app-server, which must never be killed for one
+// conversation) and interrupt their own turn instead.
+function stopEntryProcess(entry, signal) {
+  if (!entry) return;
+  if (entry.interrupt) { entry.interrupt(); return; }
+  if (entry.process) {
+    try { entry.process.kill(signal); } catch (e) { /* already dead */ }
+  }
+}
+
+// Kill all tracked child processes (called on exit and workspace switch).
 function killAllChildren() {
   for (const [, entry] of chatProcesses) {
-    if (!entry.exited) {
-      try { entry.process.kill('SIGTERM'); } catch (e) {}
-    }
+    if (!entry.exited) stopEntryProcess(entry, 'SIGTERM');
   }
   chatProcesses.clear();
+  // The shared Codex app-server goes down with the rest; the next Codex
+  // turn recreates it lazily (against the new workspace after a switch).
+  shutdownCodexAppServer();
   // Clear PID file since we handled cleanup
   savePidFile([]);
 }
@@ -4994,11 +5006,15 @@ function spawnClaude(args, options, onError) {
 
 // ===== CODEX RUNTIME =====
 // Agents with `runtime: codex` in their frontmatter run on the OpenAI Codex
-// CLI (the user's ChatGPT plan) instead of Claude Code. Codex conversations
-// run one sandboxed `codex exec --json` process per turn and resume the
-// thread on follow-ups; the thread id rides the same client rails as Claude
-// session ids, so the rest of the product treats both runtimes identically.
-// All Codex-specific parsing/argv/detection logic lives in codex.js.
+// CLI (the user's ChatGPT plan) instead of Claude Code. ONE long-lived
+// `codex app-server` process (a lazy singleton, see getCodexAppServer)
+// serves every Codex conversation concurrently: each conversation is a
+// thread, each message a streamed turn, and sandbox escalations arrive as
+// per-action approval requests that ride the existing permission-card
+// bridge. Thread ids ride the same client rails as Claude session ids, so
+// the rest of the product treats both runtimes identically. Protocol
+// plumbing lives in codex-appserver.js; detection/classification helpers in
+// codex.js.
 
 // Resolve the codex binary lazily and cache it, mirroring resolveClaudeBin.
 let _resolvedCodexBin = null;
@@ -5061,36 +5077,123 @@ function getRuntimeStatus() {
   };
 }
 
-// Spawn a Codex process with the same PID tracking and error guarantees as
-// spawnClaude. Note: no default model is injected; Codex applies its own
-// default unless the agent's frontmatter set one (already in args).
-function spawnCodex(args, options, onError) {
-  const proc = spawn(resolveCodexBinCached(), args, options);
-  if (proc.pid) {
-    registerChildPid(proc.pid);
-    proc.on('close', () => unregisterChildPid(proc.pid));
-  }
-  proc.on('error', (err) => {
-    try {
-      console.error(`[spawnCodex] spawn error code=${err.code || ''} msg=${err.message}`);
-      if (typeof onError === 'function') onError(err);
-    } catch (e) {
-      console.error('[spawnCodex] onError handler threw:', e);
-    }
-  });
-  return proc;
+// ── Shared app-server singleton ──────────────────────────────────────────
+// One `codex app-server` process for the whole Rundock server, created and
+// started lazily on the first Codex turn. The client module owns restarts
+// (capped backoff); this host re-registers the child pid on every 'ready'
+// so crash cleanup always tracks the CURRENT process. A conversation cancel
+// must NEVER kill this process: it interrupts its own turn instead.
+let _codexAppServerPromise = null;   // in-flight or resolved creation
+let _codexAppServerInstance = null;  // resolved instance (sync access)
+let _codexAppServerPid = null;       // current child pid (crash cleanup)
+
+// Environment for the shared server. The app-server is conversation-
+// agnostic, so the per-conversation parts of getSpawnEnv (RUNDOCK_CONVO_ID,
+// RUNDOCK_CODE_MODE and ELECTRON_RUN_AS_NODE, which exist for the Claude
+// permission hook that Codex never runs) do not apply; only the global
+// bits survive: the RUNDOCK marker, the port, and the coverage guard
+// (a SIGKILLed child mid-test would otherwise corrupt coverage merges).
+function codexAppServerEnv() {
+  const env = { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(ACTUAL_PORT) };
+  delete env.NODE_V8_COVERAGE;
+  return env;
 }
 
-// Surface a Codex failure once per process, classified: plan-limit exhaustion
+// The tested protocol range for this release (RESEARCH.md section 10). The
+// app-server surface is experimental and drifts between CLI releases:
+// outside the range, warn loudly but do not block (thread state lives on
+// disk; the worst case is turns failing with visible errors). The version
+// comes from the initialize response's userAgent: the authoritative signal
+// for the RUNNING process, unlike a separate `codex --version` probe.
+function warnIfCodexVersionUntested(version) {
+  const m = /^(\d+)\.(\d+)/.exec(String(version || ''));
+  if (!m) {
+    console.warn(`[CodexAppServer] could not parse server version '${version}'; tested range is >=0.144 <0.146`);
+    return;
+  }
+  const major = parseInt(m[1], 10);
+  const minor = parseInt(m[2], 10);
+  if (!(major === 0 && minor >= 144 && minor < 146)) {
+    console.warn(`[CodexAppServer] codex-cli ${version} is outside the tested range (>=0.144 <0.146); the app-server protocol may have drifted`);
+  }
+}
+
+function getCodexAppServer() {
+  if (_codexAppServerPromise) return _codexAppServerPromise;
+  _codexAppServerPromise = (async () => {
+    const server = codexAppServerLib.createCodexAppServer({
+      binPath: resolveCodexBinCached(),
+      // cwd does not affect thread behaviour (every thread passes an
+      // absolute cwd), but keep it at the workspace for tidy child context.
+      cwd: WORKSPACE || process.cwd(),
+      env: codexAppServerEnv(),
+      // The protocol client's own approval timeout must fire AFTER the
+      // permission card's (PERMISSION_TIMEOUT_MS), so the card timeout
+      // drives the outcome and the module timeout stays a backstop.
+      approvalTimeoutMs: PERMISSION_TIMEOUT_MS + 30000,
+      log: (m) => console.log(`[CodexAppServer] ${m}`),
+    });
+    server.on('ready', ({ version }) => {
+      const pid = server.pid();
+      if (pid) { _codexAppServerPid = pid; registerChildPid(pid); }
+      warnIfCodexVersionUntested(version);
+    });
+    server.on('exit', ({ code, signal, intentional }) => {
+      if (_codexAppServerPid) { unregisterChildPid(_codexAppServerPid); _codexAppServerPid = null; }
+      if (!intentional) console.warn(`[CodexAppServer] exited (code=${code} signal=${signal || ''})`);
+    });
+    server.on('restart', ({ attempt, delayMs }) => {
+      console.log(`[CodexAppServer] restart scheduled (attempt ${attempt}, ${delayMs}ms)`);
+    });
+    await server.start();
+    _codexAppServerInstance = server;
+    return server;
+  })();
+  // A failed boot (binary missing, bad install) must not poison the
+  // singleton: reset so the next turn retries after the user fixes it.
+  _codexAppServerPromise.catch(() => { _codexAppServerPromise = null; });
+  return _codexAppServerPromise;
+}
+
+// After a crash the client restarts with backoff; a turn arriving in that
+// window waits (bounded) for readiness instead of failing instantly.
+function waitForCodexReady(server, timeoutMs = 20000) {
+  if (server.isReady()) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      server.removeListener('ready', onReady);
+      reject(new Error('the Codex runtime is restarting and did not come back in time'));
+    }, timeoutMs);
+    const onReady = () => { clearTimeout(timer); resolve(); };
+    server.once('ready', onReady);
+  });
+}
+
+// Intentional teardown: workspace switch and server shutdown. Clears the
+// singleton so the next Codex turn recreates it (with the new workspace's
+// cwd). The pid stays registered until the child actually exits, so crash
+// cleanup still covers a SIGTERM that never lands.
+function shutdownCodexAppServer() {
+  const server = _codexAppServerInstance;
+  _codexAppServerInstance = null;
+  _codexAppServerPromise = null;
+  if (server) server.shutdown().catch((e) => console.warn(`[CodexAppServer] shutdown failed: ${e.message}`));
+}
+
+// Surface a Codex failure once per turn, classified: plan-limit exhaustion
 // becomes a structured quota message (the client renders a recovery card, the
 // same pattern as the Claude auth-error card); everything else becomes a
 // structured error message with the CLI's verbatim text attached. The failure
 // is also persisted to the transcript, so a user who wasn't looking at the
 // conversation still finds out what happened when they open it.
-function sendCodexError(entry, convoId, message) {
+// `kind` is the protocol's typed classification (auth/quota/context/model/
+// unknown, from codexErrorInfo); it is preferred when present, with the
+// message-pattern classifier as the fallback for untyped failures.
+function sendCodexError(entry, convoId, message, kind) {
   if (entry.errorSent) return;
   entry.errorSent = true;
   const classified = codexRuntime.classifyCodexError(message);
+  if (kind && kind !== 'unknown') classified.kind = kind;
   // Actionable failures (signed out, unavailable model) become guidance cards
   // with a concrete fix; quota keeps its dedicated card; everything else
   // surfaces verbatim as a classified error pill.
@@ -5113,6 +5216,9 @@ function sendCodexError(entry, convoId, message) {
       body: `This agent is configured with ${modelBit}, which this Codex account does not offer. Edit the agent and remove the model field to use the account default, or pick a model your plan includes.`,
     };
     friendly = `This turn stopped: ${modelBit} is not available on this Codex account. Remove the agent's model field to use the account default, or pick an available model.`;
+  } else if (classified.kind === 'context') {
+    subtype = 'codex_error';
+    friendly = 'This turn stopped: the conversation has outgrown the model\'s context window. Start a new conversation to continue.';
   } else {
     subtype = 'codex_error';
     friendly = 'This turn stopped: the runtime hit a problem.';
@@ -5126,9 +5232,12 @@ function sendCodexError(entry, convoId, message) {
   }));
 }
 
-// Spawn-failure copy for Codex processes. The generic Claude spawn-error
-// handler tells users to check their Claude Code install, which is the wrong
-// guidance for a Codex agent. Marks the entry so close handlers stay silent.
+// Spawn-failure copy for the shared Codex app-server. The generic Claude
+// spawn-error handler tells users to check their Claude Code install, which
+// is the wrong guidance for a Codex agent. Surfaces once per conversation-
+// turn attempt (the singleton resets on a failed boot, so every retry against
+// a missing binary lands here, deduped below). Marks the entry so any close
+// paths stay silent.
 function handleCodexSpawnError(err, convoId) {
   const entry = chatProcesses.get(convoId);
   if (entry) entry.spawnFailed = true;
@@ -5166,61 +5275,6 @@ function handleCodexSpawnError(err, convoId) {
   }));
 }
 
-// Codex emits nothing between accepting the prompt and the final message, so
-// the client's stream-inactivity watchdog (90s) would otherwise conclude the
-// turn is dead mid-task. A periodic keepalive keeps the working state honest
-// while the process lives. Interval is overridable for tests.
-const CODEX_KEEPALIVE_MS = parseInt(process.env.RUNDOCK_CODEX_KEEPALIVE_MS || '', 10) || 25000;
-function startCodexKeepalive(entry, convoId) {
-  const timer = setInterval(() => {
-    if (entry.exited || entry.resultSent || entry.spawnFailed) { clearInterval(timer); return; }
-    safeSend(JSON.stringify({
-      type: 'system', subtype: 'keepalive',
-      _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
-    }));
-  }, CODEX_KEEPALIVE_MS);
-  entry.process.on('close', () => clearInterval(timer));
-}
-
-// Deliver the completed Codex turn: persist the transcript, send the result
-// (with normalised token usage: subscription usage, never dollar costs) and
-// the done signal.
-// Whether Codex spawns on this machine need the write-marker fallback:
-// Windows without a declared native sandbox (the CLI silently downgrades
-// workspace-write to read-only there). Checked per spawn so a config edit
-// takes effect on the next turn. Shared by direct chats and delegated turns.
-function codexWriteMarkersEnabled() {
-  const codexPlatform = process.env.RUNDOCK_TEST_PLATFORM || process.platform;
-  return codexPlatform === 'win32' && !codexRuntime.hasWindowsSandboxConfig();
-}
-
-// The write-marker instruction for Codex prompts on Windows machines without
-// the native sandbox. Empty string when the fallback is not needed, so call
-// sites can join it unconditionally.
-function buildWindowsWriteNote(enabled) {
-  if (!enabled) return '';
-  return [
-    'WINDOWS FILE WRITES:',
-    'On this machine your sandbox is read-only: shell commands that write files will be rejected. To create or update a file, output a block in EXACTLY this format as part of your response:',
-    '<!-- RUNDOCK:WRITE_FILE path="relative/path/inside/workspace.md" -->',
-    '<the complete file content>',
-    '<!-- /RUNDOCK:WRITE_FILE -->',
-    'Rules: relative paths inside the workspace only; the content replaces the whole file; one block per file, multiple blocks allowed. The user approves each write AFTER your turn ends, so describe writes as requested, never as completed. Never claim a file was created. Do not attempt writes via shell commands.',
-  ].join('\n');
-}
-
-// Strip write markers from a finished Codex turn's text. Returns the display
-// text plus the parsed requests for the caller to dispatch AFTER sending its
-// result/handback (cards follow the message they belong to). Inert unless
-// the entry was spawned with the marker instruction.
-function extractCodexWriteRequests(entry, text) {
-  if (!entry.writeMarkersEnabled || !text || !text.includes('RUNDOCK:WRITE_FILE')) {
-    return { text, requests: [] };
-  }
-  const parsed = codexRuntime.parseWriteMarkers(text);
-  return { text: parsed.cleanText, requests: parsed.requests };
-}
-
 // Raise a permission card for a server-originated request (no hook HTTP
 // response to hold: the decision arrives via onDecision(allow, reason)).
 // Same card UI, same timeout, same cancel sweep as hook-originated requests.
@@ -5250,114 +5304,75 @@ function requestServerPermission({ convoId, toolName, toolInput, onDecision }) {
   console.log(`[Permission] Server request: ${toolName} convo=${convoId} requestId=${requestId}`);
 }
 
-// One WRITE_FILE request from a Windows Codex turn: validate, card, write.
-// Invalid requests are refused WITHOUT a card (a card is never raised for
-// something Rundock would not do); the refusal is recorded so the user and
-// the resumed thread can see what happened.
-function handleCodexWriteRequest(entry, convoId, req) {
-  let isCodeMode = false;
-  try { isCodeMode = readState().workspaceMode === 'code'; } catch (e) {}
-  const v = validateWriteRequest(WORKSPACE, req.path, req.content, isCodeMode);
-  if (!v.ok) {
-    console.log(`[CodexWrite] convo=${convoId} refused without card: ${req.path} (${v.reason})`);
-    appendTranscript(convoId, 'agent', entry.agentId, `Write of ${req.path} refused: ${v.reason}.`);
-    safeSend(JSON.stringify({ type: 'system', subtype: 'notice', content: `Refused a file write from ${entry.agentId}: ${req.path} (${v.reason}).`, _conversationId: convoId }));
+// One approval request from a Codex turn (RESEARCH.md section 5): the agent
+// needs something its sandbox blocks (a command outside the sandbox, network
+// access, a write outside writable roots). Route it through the existing
+// permission-card bridge; the protocol client keeps the turn blocked until
+// respond() is called, and its own timeout (approvalTimeoutMs, set longer
+// than PERMISSION_TIMEOUT_MS) backstops a card that never resolves.
+function handleCodexApproval(entry, convoId, ev) {
+  const params = ev.params || {};
+  if (entry.cancelled || entry.superseded) {
+    // The conversation already moved on; stop the turn rather than leave
+    // the server blocked on a card nobody will see.
+    try { ev.respond('cancel'); } catch (e) { /* already resolved */ }
     return;
+  }
+  let toolName, toolInput;
+  if (ev.kind === 'command') {
+    toolName = process.platform === 'win32' ? 'PowerShell' : 'Bash';
+    toolInput = { command: params.command || '' };
+    if (params.reason) toolInput.description = params.reason;
+  } else {
+    // fileChange. v1 limitation: the approval request carries only the
+    // grant root and reason; the patch content lives on the fileChange item,
+    // which the protocol client does not expose. The card therefore shows
+    // WHERE the agent wants write access with an empty content preview.
+    toolName = 'WriteFile';
+    toolInput = { path: params.grantRoot || WORKSPACE || '', content: '', agent: entry.agentId };
+    if (params.reason) toolInput.reason = params.reason;
   }
   requestServerPermission({
     convoId,
-    toolName: 'WriteFile',
-    toolInput: { path: req.path, content: req.content, agent: entry.agentId },
+    toolName,
+    toolInput,
     onDecision: (allow, reason) => {
-      if (!allow) {
-        console.log(`[CodexWrite] convo=${convoId} not approved (${reason}): ${req.path}`);
-        appendTranscript(convoId, 'agent', entry.agentId, `Write of ${req.path} not approved.`);
-        safeSend(JSON.stringify({ type: 'system', subtype: 'notice', content: `Write of ${req.path} was not approved.`, _conversationId: convoId }));
-        return;
-      }
       try {
-        fs.mkdirSync(path.dirname(v.fullPath), { recursive: true });
-        // Defence in depth against symlink traversal: the validated path is
-        // lexical; re-verify the REAL parent directory sits inside the
-        // workspace before writing, so a symlinked folder inside the
-        // workspace cannot redirect the write outside it.
-        const realParent = fs.realpathSync(path.dirname(v.fullPath));
-        const realRoot = fs.realpathSync(path.resolve(WORKSPACE));
-        if (!(realParent === realRoot || realParent.startsWith(realRoot + path.sep))) {
-          throw new Error('resolved target escapes the workspace');
-        }
-        fs.writeFileSync(v.fullPath, req.content, 'utf-8');
-        invalidateFileListCache();
-        if (ensureSearchEngine()) {
-          try { searchEngine.noteFileSaved(WORKSPACE, req.path); } catch (e) { /* reconcile catches up */ }
-        }
-        appendTranscript(convoId, 'agent', entry.agentId, `Created ${req.path} (approved).`);
-        safeSend(JSON.stringify({ type: 'system', subtype: 'notice', content: `Created [[${req.path}]] (approved write from ${entry.agentId}).`, _conversationId: convoId }));
-        safeSend(JSON.stringify({ type: 'file_saved', path: req.path }));
-        console.log(`[CodexWrite] convo=${convoId} wrote ${req.path} (${Buffer.byteLength(req.content, 'utf-8')} bytes)`);
-      } catch (e) {
-        console.error(`[CodexWrite] convo=${convoId} write failed: ${e.message}`);
-        appendTranscript(convoId, 'agent', entry.agentId, `Write of ${req.path} failed: ${e.message}`);
-        safeSend(JSON.stringify({ type: 'system', subtype: 'notice', content: `Write of ${req.path} failed: ${e.message}`, _conversationId: convoId }));
-      }
+        if (allow) ev.respond('accept');
+        // A conversation cancel becomes the protocol's 'cancel' decision
+        // (deny AND interrupt the turn); deny/timeout decline, letting the
+        // agent continue and work around the refusal.
+        else if (reason === 'cancelled') ev.respond('cancel');
+        else ev.respond('decline');
+      } catch (e) { /* approval already resolved (module timeout won) */ }
     },
   });
 }
 
+// Terminal done envelope, exactly once per turn.
+function sendCodexDone(entry, convoId, code) {
+  if (entry.doneSent) return;
+  entry.doneSent = true;
+  safeSend(JSON.stringify({
+    type: 'system', subtype: 'done', code,
+    _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
+  }));
+}
+
+// Deliver the completed Codex turn: persist the transcript, send the result
+// (with normalised token usage: subscription usage, never dollar costs) and
+// the done signal.
 function finishCodexTurn(entry, convoId) {
   if (entry.resultSent) return;
   entry.resultSent = true;
-  let text = entry.responseText || '';
-  // Windows write markers: strip from the displayed/persisted text, then
-  // dispatch each request through validation + permission card AFTER the
-  // result, so the conversation shows the agent's message first and the
-  // cards follow. Only turns that were given the marker instruction are
-  // honoured (entry.writeMarkersEnabled).
-  const extracted = extractCodexWriteRequests(entry, text);
-  text = extracted.text;
-  const writeRequests = extracted.requests;
+  const text = entry.responseText || '';
   if (text) appendTranscript(convoId, 'agent', entry.agentId, text);
   safeSend(JSON.stringify({
     type: 'result', result: text, is_error: false, usage: entry.usage,
     _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
     _turnStartTime: entry.turnStartTime,
   }));
-  entry.doneSent = true;
-  safeSend(JSON.stringify({
-    type: 'system', subtype: 'done', code: 0,
-    _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
-  }));
-  for (const req of writeRequests) handleCodexWriteRequest(entry, convoId, req);
-}
-
-// Handle one parsed line of Codex output for a running turn.
-function handleCodexEvent(entry, convoId, line) {
-  const ev = codexRuntime.parseCodexLine(line);
-  if (!ev) {
-    if (line.trim()) console.log(`[Codex] convo=${convoId} skipped line: ${line.slice(0, 200)}`);
-    return;
-  }
-  switch (ev.type) {
-    case 'session':
-      entry.sessionId = ev.threadId;
-      // Same message shape the Claude init envelope produces: the client
-      // stores the id and sends it back as msg.sessionId on the next turn.
-      safeSend(JSON.stringify({
-        type: 'system', subtype: 'init', _sessionId: ev.threadId,
-        _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
-      }));
-      break;
-    case 'text':
-      entry.responseText = entry.responseText ? entry.responseText + '\n' + ev.text : ev.text;
-      break;
-    case 'done':
-      entry.usage = ev.usage;
-      finishCodexTurn(entry, convoId);
-      break;
-    case 'error':
-      sendCodexError(entry, convoId, ev.message);
-      break;
-  }
+  sendCodexDone(entry, convoId, 0);
 }
 
 // Read an agent's full instruction body from its file. Claude Code loads
@@ -5375,177 +5390,315 @@ function readAgentInstructions(agentData) {
   return agentData.instructions || '';
 }
 
-// Wire a Codex delegate process. The prompt goes in whole over stdin; output
-// events deliver the specialist's result and record any handoff marker on the
-// SAME entry fields Claude delegates use (returnMarkerSeen,
-// finalResponseText), so the shared delegate close handler in
-// handleDelegation performs restoration identically for both runtimes.
-// This function sends the result message; the close handler owns
-// agent_switch/done and parent restoration.
-function wireCodexDelegate(entry, convoId, prompt) {
-  const proc = entry.process;
-  proc.stdin.on('error', () => { /* EPIPE on early exit: close handler reports */ });
-  proc.stdin.write(prompt);
-  proc.stdin.end();
-
-  let stdoutBuf = '';
-  const handleLine = (line) => {
-    const ev = codexRuntime.parseCodexLine(line);
-    if (!ev) {
-      if (line.trim()) console.log(`[Codex] convo=${convoId} delegate skipped line: ${line.slice(0, 200)}`);
-      return;
-    }
-    if (ev.type === 'session') {
-      entry.sessionId = ev.threadId;
-      safeSend(JSON.stringify({
-        type: 'system', subtype: 'init', _sessionId: ev.threadId,
-        _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
-      }));
-    } else if (ev.type === 'text') {
-      entry.responseText = entry.responseText ? entry.responseText + '\n' + ev.text : ev.text;
-    } else if (ev.type === 'done') {
-      // Marker scan, COMPLETE priority: same contract as the Claude
-      // delegate onResult handler.
-      const hasComplete = /<!-- RUNDOCK:COMPLETE -->/.test(entry.responseText);
-      const hasReturn = /<!-- RUNDOCK:RETURN -->/.test(entry.responseText);
-      if (hasComplete) entry.returnMarkerSeen = 'complete';
-      else if (hasReturn) entry.returnMarkerSeen = 'return';
-      // Windows write markers: strip before the transcript, the result, and
-      // the handback injection (finalResponseText), so the orchestrator and
-      // the user both see the plain-language line, never raw marker soup.
-      // Cards dispatch after the result so they follow their message.
-      const extracted = extractCodexWriteRequests(entry, entry.responseText);
-      const displayText = extracted.text;
-      if (displayText) appendTranscript(convoId, 'agent', entry.agentId, displayText);
-      safeSend(JSON.stringify({
-        type: 'result', result: displayText, is_error: false, usage: ev.usage,
-        _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
-        _turnStartTime: entry.turnStartTime,
-      }));
-      entry.resultSent = true;
-      entry.finalResponseText = displayText;
-      entry.responseText = '';
-      entry.idle = true;
-      for (const req of extracted.requests) handleCodexWriteRequest(entry, convoId, req);
-    } else if (ev.type === 'error') {
-      sendCodexError(entry, convoId, ev.message);
+// Shared per-entry plumbing for Codex turns. The entry has NO per-
+// conversation child process: `interrupt()` stops the entry's own turn on
+// the shared app-server (the runtime-aware replacement for process.kill),
+// and `_turnEnd` resolves when the turn reaches its done event, so a
+// superseding message can wait (bounded) for the thread's slot to free.
+function makeCodexEntryControls(entry) {
+  entry.interrupt = () => {
+    const server = _codexAppServerInstance;
+    if (server && entry._turnThreadId) {
+      try {
+        const p = server.interruptTurn(entry._turnThreadId);
+        if (p && p.catch) p.catch(() => {});
+      } catch (e) { /* no active turn: nothing to interrupt */ }
     }
   };
+  entry._turnEnd = new Promise((resolve) => { entry._turnEndResolve = resolve; });
+}
 
-  proc.stdout.on('data', (chunk) => {
-    stdoutBuf += chunk.toString();
-    let nl;
-    while ((nl = stdoutBuf.indexOf('\n')) >= 0) {
-      const line = stdoutBuf.slice(0, nl);
-      stdoutBuf = stdoutBuf.slice(nl + 1);
-      handleLine(line);
-    }
-  });
+// Resolve the shared server and this conversation's thread, then send the
+// init envelope (same shape as the Claude init: the client stores the id and
+// sends it back as msg.sessionId on the next turn). Shared by direct chats
+// and delegated turns.
+async function openCodexThread(entry, convoId, resumeThreadId, model) {
+  // Bail (without a turn) once the conversation has moved on; resolve the
+  // turn-end promise so a superseding message never waits on a turn that
+  // will not happen.
+  const abandoned = () => {
+    if (!entry.cancelled && !entry.superseded) return false;
+    if (entry._turnEndResolve) entry._turnEndResolve();
+    return true;
+  };
+  const server = await getCodexAppServer();
+  await waitForCodexReady(server);
+  if (abandoned()) return null;
+  const threadOpts = {
+    cwd: WORKSPACE,
+    model: model || undefined,
+    sandbox: 'workspace-write',
+    approvalPolicy: 'on-request',
+  };
+  const { threadId } = resumeThreadId
+    ? await server.resumeThread(resumeThreadId, threadOpts)
+    : await server.startThread(threadOpts);
+  if (abandoned()) return null;
+  entry.sessionId = threadId;
+  safeSend(JSON.stringify({
+    type: 'system', subtype: 'init', _sessionId: threadId,
+    _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
+  }));
+  return { server, threadId };
+}
 
-  let stderrBuf = '';
-  proc.stderr.on('data', (chunk) => { stderrBuf += chunk.toString(); });
-  proc.on('close', () => {
-    if (entry.spawnFailed) return; // spawn-error handler already surfaced
-    if (stdoutBuf.trim()) handleLine(stdoutBuf); // unterminated last line
-    if (!entry.resultSent && !entry.errorSent && !entry.cancelled) {
-      sendCodexError(entry, convoId, stderrBuf.trim() || 'Codex exited unexpectedly');
+// Failure before the turn could start (binary missing, handshake failed,
+// thread/start rejected). Spawn-level failures get the Codex install
+// guidance; everything else surfaces as a classified runtime error. Either
+// way the client is unblocked with a done envelope and the entry released.
+function handleCodexTurnStartFailure(entry, convoId, err) {
+  entry.exited = true;
+  if (entry._turnEndResolve) entry._turnEndResolve();
+  if (entry.cancelled || entry.superseded) {
+    if (chatProcesses.get(convoId) === entry) chatProcesses.delete(convoId);
+    return;
+  }
+  console.error(`[Codex] convo=${convoId} turn failed to start: ${err.message}`);
+  if (err && (err.code === 'ENOENT' || err.code === 'EACCES')) {
+    handleCodexSpawnError(err, convoId); // sends info + done (reads the entry from the map)
+  } else {
+    sendCodexError(entry, convoId, err.message);
+    sendCodexDone(entry, convoId, -1);
+  }
+  if (chatProcesses.get(convoId) === entry) chatProcesses.delete(convoId);
+}
+
+// Wire a Codex delegate turn on the shared app-server. Events deliver the
+// specialist's result and record any handoff marker on the SAME entry fields
+// Claude delegates use (returnMarkerSeen, finalResponseText), so the shared
+// delegate close path in handleDelegation performs restoration identically
+// for both runtimes. With no per-turn process there is no 'close' event: the
+// turn's done event fires entry.onTurnDone (set by handleDelegation to the
+// same handler Claude delegates attach to process close), which owns
+// agent_switch/done and parent restoration. This function sends the result.
+function wireCodexDelegate(entry, convoId, prompt, { resumeThreadId = null, model = undefined } = {}) {
+  makeCodexEntryControls(entry);
+  (async () => {
+    const opened = await openCodexThread(entry, convoId, resumeThreadId, model);
+    if (!opened) return;
+    const { server, threadId } = opened;
+    entry._turnThreadId = threadId;
+    const sub = server.startTurn(threadId, prompt);
+    entry.subscription = sub;
+    sub.on('event', (ev) => {
+      try {
+        handleCodexDelegateEvent(entry, convoId, ev);
+      } catch (e) {
+        console.error(`[Codex] convo=${convoId} delegate event handling failed:`, e);
+      }
+    });
+  })().catch((err) => {
+    // Same surface as a delegate process that died before its result; the
+    // done hook still fires so handleDelegation can restore the parent.
+    if (err && (err.code === 'ENOENT' || err.code === 'EACCES')) {
+      handleCodexSpawnError(err, convoId);
+    } else if (!entry.cancelled) {
+      sendCodexError(entry, convoId, err.message);
     }
+    entry.exited = true;
+    if (entry._turnEndResolve) entry._turnEndResolve();
+    if (entry.onTurnDone) entry.onTurnDone(-1);
   });
 }
 
-// Run one Codex conversation turn. Each turn is its own process: fresh turns
+function handleCodexDelegateEvent(entry, convoId, ev) {
+  switch (ev.type) {
+    case 'delta':
+      // Live streaming to the browser, same synthesised shape as direct
+      // chats; the delegate's text appears as it is produced.
+      if (!entry.cancelled) {
+        safeSend(JSON.stringify({
+          type: 'stream_event',
+          event: { type: 'content_block_delta', delta: { type: 'text_delta', text: ev.text } },
+          _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
+        }));
+      }
+      return;
+    case 'text':
+      entry.responseText = entry.responseText ? entry.responseText + '\n' + ev.text : ev.text;
+      return;
+    case 'usage':
+      entry.usage = ev.usage;
+      return;
+    case 'approval':
+      handleCodexApproval(entry, convoId, ev);
+      return;
+    case 'error':
+      // willRetry means the server is retrying internally: not terminal,
+      // never surfaced (only turn/completed ends the turn).
+      if (ev.willRetry) {
+        console.log(`[Codex] convo=${convoId} delegate transient error (retrying): ${ev.message}`);
+        return;
+      }
+      if (!entry.cancelled) sendCodexError(entry, convoId, ev.message, ev.kind);
+      return;
+    case 'done': {
+      entry.exited = true;
+      entry._turnThreadId = null;
+      if (entry._turnEndResolve) entry._turnEndResolve();
+      if (ev.status === 'completed' && !entry.cancelled) {
+        // Marker scan, COMPLETE priority: same contract as the Claude
+        // delegate onResult handler.
+        const hasComplete = /<!-- RUNDOCK:COMPLETE -->/.test(entry.responseText);
+        const hasReturn = /<!-- RUNDOCK:RETURN -->/.test(entry.responseText);
+        if (hasComplete) entry.returnMarkerSeen = 'complete';
+        else if (hasReturn) entry.returnMarkerSeen = 'return';
+        const displayText = entry.responseText;
+        if (displayText) appendTranscript(convoId, 'agent', entry.agentId, displayText);
+        safeSend(JSON.stringify({
+          type: 'result', result: displayText, is_error: false, usage: entry.usage || ev.usage,
+          _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
+          _turnStartTime: entry.turnStartTime,
+        }));
+        entry.resultSent = true;
+        entry.finalResponseText = displayText;
+        entry.responseText = '';
+        entry.idle = true;
+      } else if (ev.status === 'failed' && !entry.cancelled) {
+        if (!entry.resultSent && !entry.errorSent) {
+          sendCodexError(entry, convoId, (ev.error && ev.error.message) || 'Codex turn failed');
+        }
+      }
+      // Fire the shared restoration path (it no-ops for cancelled/replaced
+      // entries via its own current-entry and cancelled checks).
+      if (entry.onTurnDone) entry.onTurnDone(ev.status === 'completed' ? 0 : 1);
+      return;
+    }
+  }
+}
+
+// Run one Codex conversation turn on the shared app-server. Fresh turns
 // carry the agent's instructions and the platform rules followed by the user
 // message; resumed turns send only the new message (instructions are never
-// re-injected, keeping resumed turns cheap).
+// re-injected, keeping resumed turns cheap). Replies stream live to the
+// browser as synthesised Claude-shaped stream events.
 function startCodexTurn(convoId, msg, agentData) {
-  // A new user message supersedes a still-running turn: kill it and continue
-  // on the same thread. Mirrors the Claude path's stale-entry handling.
+  // A new user message supersedes a still-running turn: interrupt it and
+  // continue on the same thread once the slot frees (one active turn per
+  // thread). Mirrors the Claude path's stale-entry handling. The shared
+  // app-server itself is never killed here.
   const existing = chatProcesses.get(convoId);
+  let priorTurnEnd = null;
   if (existing && !existing.exited) {
     existing.superseded = true;
-    try { existing.process.kill(); } catch (e) { /* already dead */ }
+    if (existing.interrupt) {
+      existing.interrupt();
+      priorTurnEnd = existing._turnEnd || null;
+    } else if (existing.process) {
+      try { existing.process.kill(); } catch (e) { /* already dead */ }
+    }
     chatProcesses.delete(convoId);
   }
 
   // Normalise once: an invalid session id (hostile client, corrupted
-  // persistence) must produce a FULL fresh turn, instructions included. If
-  // only argv dropped the id, the prompt would still be built resume-shaped
-  // and the agent would run without its identity.
+  // persistence) must produce a FULL fresh turn, instructions included,
+  // never a resume-shaped prompt on a fresh thread.
   const resumeThreadId = codexRuntime.isValidThreadId(msg.sessionId) ? msg.sessionId : null;
-  const args = codexRuntime.buildCodexArgs({ resumeThreadId, model: agentData.model || undefined });
   const processId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
   console.log(`[Codex] convo=${convoId} proc=${processId} agent=${agentData.id} ${resumeThreadId ? `resume=${resumeThreadId}` : 'new thread'} model=${agentData.model || '(codex default)'}`);
 
-  const proc = spawnCodex(args, {
-    cwd: WORKSPACE,
-    env: getSpawnEnv(convoId),
-    stdio: ['pipe', 'pipe', 'pipe'],
-  }, (err) => handleCodexSpawnError(err, convoId));
-
-  // Windows write markers: see codexWriteMarkersEnabled() for the policy.
-  const writeMarkersEnabled = codexWriteMarkersEnabled();
-
   const entry = {
-    process: proc, runtime: 'codex', processId, agentId: agentData.id,
+    runtime: 'codex', processId, agentId: agentData.id,
     responseText: '', exited: false, resultSent: false, errorSent: false,
-    doneSent: false, superseded: false, usage: null, writeMarkersEnabled,
+    doneSent: false, superseded: false, usage: null,
     sessionId: resumeThreadId, lastUserMessage: msg.content,
     toolCalls: [], turnStartTime: Date.now(),
+    subscription: null,
   };
+  makeCodexEntryControls(entry);
   chatProcesses.set(convoId, entry);
-  startCodexKeepalive(entry, convoId);
 
   safeSend(JSON.stringify({
     type: 'system', subtype: 'process_started',
     _agent: agentData.id, _conversationId: convoId, _processId: processId,
   }));
 
-  const windowsWriteNote = buildWindowsWriteNote(writeMarkersEnabled);
-
-  // Prompt over stdin, never argv. First turns carry identity (the agent
-  // file body) plus the platform rules; Claude gets these via --agent and
-  // --append-system-prompt, which Codex does not support.
-  const prompt = resumeThreadId
-    ? msg.content
-    : [readAgentInstructions(agentData), buildSystemPrompt(agentData), windowsWriteNote, msg.content].filter(Boolean).join('\n\n');
-  proc.stdin.on('error', () => { /* EPIPE on early exit: close handler reports */ });
-  proc.stdin.write(prompt);
-  proc.stdin.end();
-
-  let stdoutBuf = '';
-  proc.stdout.on('data', (chunk) => {
-    stdoutBuf += chunk.toString();
-    let nl;
-    while ((nl = stdoutBuf.indexOf('\n')) >= 0) {
-      const line = stdoutBuf.slice(0, nl);
-      stdoutBuf = stdoutBuf.slice(nl + 1);
-      handleCodexEvent(entry, convoId, line);
+  (async () => {
+    // Bounded wait for the superseded turn to actually end: the server
+    // allows one active turn per thread, so starting before the interrupt
+    // lands would fail. The timeout keeps a wedged turn from blocking the
+    // user's new message forever.
+    if (priorTurnEnd) {
+      await Promise.race([priorTurnEnd, new Promise(r => setTimeout(r, 2000))]);
     }
-  });
+    const opened = await openCodexThread(entry, convoId, resumeThreadId, agentData.model);
+    if (!opened) return;
+    const { server, threadId } = opened;
+    // Prompt composition, same as exec mode: first turns carry identity
+    // (the agent file body) plus the platform rules; Claude gets these via
+    // --agent and --append-system-prompt, which Codex does not support.
+    const prompt = resumeThreadId
+      ? msg.content
+      : [readAgentInstructions(agentData), buildSystemPrompt(agentData), msg.content].filter(Boolean).join('\n\n');
+    entry._turnThreadId = threadId;
+    const sub = server.startTurn(threadId, prompt);
+    entry.subscription = sub;
+    sub.on('event', (ev) => {
+      try {
+        handleCodexChatEvent(entry, convoId, ev);
+      } catch (e) {
+        console.error(`[Codex] convo=${convoId} event handling failed:`, e);
+      }
+    });
+  })().catch((err) => handleCodexTurnStartFailure(entry, convoId, err));
+}
 
-  let stderrBuf = '';
-  proc.stderr.on('data', (chunk) => { stderrBuf += chunk.toString(); });
-
-  proc.on('close', (code) => {
-    entry.exited = true;
-    const current = chatProcesses.get(convoId);
-    if (current === entry) chatProcesses.delete(convoId);
-    if (entry.superseded) return;   // a newer turn took over; stay silent
-    if (entry.spawnFailed) return;  // spawn-error handler already surfaced + done
-    if (entry.cancelled) return;    // user stopped the agent; stop handler already surfaced + done
-    if (stdoutBuf.trim()) handleCodexEvent(entry, convoId, stdoutBuf); // unterminated last line
-    if (!entry.resultSent && !entry.errorSent) {
-      sendCodexError(entry, convoId, stderrBuf.trim() || `Codex exited unexpectedly (code ${code})`);
+function handleCodexChatEvent(entry, convoId, ev) {
+  switch (ev.type) {
+    case 'delta':
+      // Forward as the synthesised Claude-shaped stream event: the client's
+      // handleStreamEvent consumes it unchanged, live text replaces the old
+      // keepalive heartbeat, and the authoritative full text still arrives
+      // via the 'text' event (never double-counted into responseText).
+      if (!entry.superseded && !entry.cancelled) {
+        safeSend(JSON.stringify({
+          type: 'stream_event',
+          event: { type: 'content_block_delta', delta: { type: 'text_delta', text: ev.text } },
+          _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
+        }));
+      }
+      return;
+    case 'text':
+      // Authoritative full item text; items join with a blank-free newline,
+      // matching the exec-era text-event behaviour.
+      entry.responseText = entry.responseText ? entry.responseText + '\n' + ev.text : ev.text;
+      return;
+    case 'usage':
+      entry.usage = ev.usage;
+      return;
+    case 'approval':
+      handleCodexApproval(entry, convoId, ev);
+      return;
+    case 'error':
+      if (ev.willRetry) {
+        console.log(`[Codex] convo=${convoId} transient error (retrying): ${ev.message}`);
+        return;
+      }
+      if (!entry.superseded && !entry.cancelled) sendCodexError(entry, convoId, ev.message, ev.kind);
+      return;
+    case 'done': {
+      entry.exited = true;
+      entry._turnThreadId = null;
+      if (entry._turnEndResolve) entry._turnEndResolve();
+      if (chatProcesses.get(convoId) === entry) chatProcesses.delete(convoId);
+      if (entry.superseded) return; // a newer turn took over; stay silent
+      if (entry.cancelled) return;  // cancel handler already sent cancelled + done
+      if (ev.status === 'completed') {
+        finishCodexTurn(entry, convoId);
+      } else if (ev.status === 'failed') {
+        if (!entry.errorSent) {
+          sendCodexError(entry, convoId, (ev.error && ev.error.message) || 'Codex turn failed');
+        }
+        sendCodexDone(entry, convoId, -1);
+      } else {
+        // Interrupted without a user cancel (e.g. runtime shutdown): just
+        // unblock the client.
+        sendCodexDone(entry, convoId, null);
+      }
+      return;
     }
-    if (!entry.doneSent) {
-      entry.doneSent = true;
-      safeSend(JSON.stringify({
-        type: 'system', subtype: 'done', code,
-        _agent: entry.agentId, _conversationId: convoId, _processId: processId,
-      }));
-    }
-  });
+  }
 }
 
 // Graceful shutdown: kill children on exit signals.
@@ -5563,9 +5716,14 @@ process.on('SIGINT', gracefulShutdown);
 process.on('exit', () => {
   // 'exit' handler must be synchronous. Kill any stragglers with SIGKILL.
   for (const [, entry] of chatProcesses) {
-    if (!entry.exited) {
+    if (!entry.exited && entry.process) {
       try { entry.process.kill('SIGKILL'); } catch (e) {}
     }
+  }
+  // The shared Codex app-server may still be draining its graceful
+  // SIGTERM; it must not outlive the server process.
+  if (_codexAppServerPid) {
+    try { process.kill(_codexAppServerPid, 'SIGKILL'); } catch (e) {}
   }
 });
 
@@ -6041,7 +6199,7 @@ module.exports._internal = {
   parseRoutines, parsePrompts, parseSkills, readNormalisedFile, titleCase,
   // markers + text helpers
   stripRundockMarkers, isSilentParkResponse, sanitizeSpecialistOutput,
-  extractSnippet, buildToolSummary, isAuthError, isModelError, validateWriteRequest,
+  extractSnippet, buildToolSummary, isAuthError, isModelError,
   // rosters + prompts
   findDirectReportMatch, findOffRosterWorkspaceMatch, buildTeamRoster, buildPeerRoster,
   extractSelfDescription, buildSystemPrompt,

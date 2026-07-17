@@ -2,104 +2,43 @@
 // Codex runtime adapter.
 //
 // Rundock agents can run on the OpenAI Codex CLI (a user's ChatGPT plan)
-// alongside Claude Code. This module owns everything Codex-specific:
+// alongside Claude Code. Protocol-level integration (spawn, handshake,
+// threads, turns, approvals) lives in codex-appserver.js; this module owns
+// the environment-facing helpers:
 //
-//   - buildCodexArgs():  argv for `codex exec --json` turns (fresh + resume)
-//   - parseCodexLine():  one JSONL line -> one normalised event, or null
 //   - detectCodex():     is the CLI installed / signed in / which version
 //   - resolveCodexBin(): absolute binary path, Windows .cmd shim aware
-//   - isCodexQuotaError(): classifies plan-limit errors for friendly surfacing
+//   - isValidThreadId(): thread-id hygiene for client-supplied session ids
+//   - isCodexQuotaError() / classifyCodexError(): failure classification
+//   - hasWindowsSandboxConfig(): native Windows sandbox declared in config
+//   - findCodexThreadFile(): thread id -> rollout file (search indexing)
 //
 // Policy invariants (do not weaken):
 //   - Only the official `codex` binary is ever spawned. No OpenAI/ChatGPT
 //     endpoints are called directly and no OAuth material is read: auth
 //     detection is the PRESENCE of auth.json, never its contents.
-//   - workspace-write is REQUESTED on every spawn; effective enforcement is
+//   - workspace-write is REQUESTED on every thread; effective enforcement is
 //     platform-dependent. macOS (Seatbelt) and Linux (Landlock) enforce it;
-//     native Windows cannot yet, and the CLI silently downgrades to a
-//     read-only sandbox there (verified live: the native AppContainer
-//     sandbox fails to initialise on ARM64). Windows writes therefore go
-//     through WRITE_FILE markers + Rundock permission cards instead (see
-//     parseWriteMarkers below). Approval/sandbox bypass flags are never
-//     passed; a test pins this.
-//
-// Normalised events returned by parseCodexLine():
-//   { type: 'session', threadId }                      thread.started
-//   { type: 'text', text }                             item.completed (agent_message)
-//   { type: 'done', usage: {inputTokens, cachedInputTokens, outputTokens} }
-//                                                      turn.completed
-//   { type: 'error', message }                         turn.failed / error
-//   null                                               anything else (skip)
+//     native Windows needs a [windows] sandbox declaration in config.toml
+//     (see hasWindowsSandboxConfig) or actions that need writes escalate as
+//     per-action approval requests instead. Approval/sandbox bypass modes
+//     are never passed; tests pin this.
 
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 const { execSync } = require('node:child_process');
 
-// ── Argv construction ──────────────────────────────────────────────────────
+// ── Thread-id hygiene ──────────────────────────────────────────────────────
 
-// Build argv for one Codex turn. The prompt travels via stdin (the trailing
-// `-`), matching how Rundock pipes prompts to Claude Code rather than putting
-// user content into argv. `--skip-git-repo-check` is required because
-// knowledge workspaces are frequently not git repositories and the CLI
-// refuses to run in one otherwise. The model flag is passed only when the
-// agent's frontmatter sets one; Codex's own default applies otherwise.
-// Thread ids appear in argv as a positional after the `resume` subcommand,
-// where the CLI still parses flags. A client-supplied id starting with a
-// hyphen could therefore smuggle flags (including the forbidden bypass
-// flags) into the invocation. Ids must start with an alphanumeric and stay
-// within a safe charset; anything else starts a fresh thread instead.
+// Client-supplied session ids ride the same rails as Claude session ids, so
+// a hostile or corrupted value could reach the runtime. Ids must start with
+// an alphanumeric and stay within a safe charset (UUIDs and the historic
+// exec-era `cthr_` ids both pass); anything else starts a fresh thread
+// instead of resuming.
 const THREAD_ID_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
 function isValidThreadId(id) {
   return typeof id === 'string' && THREAD_ID_RE.test(id);
-}
-
-function buildCodexArgs({ resumeThreadId, model } = {}) {
-  const args = ['exec', '--json', '--sandbox', 'workspace-write', '--skip-git-repo-check'];
-  if (model) args.push('--model', model);
-  if (resumeThreadId && isValidThreadId(resumeThreadId)) args.push('resume', resumeThreadId);
-  args.push('-');
-  return args;
-}
-
-// ── Output parsing ─────────────────────────────────────────────────────────
-
-// Parse one line of `codex exec --json` output into a normalised event.
-// Unknown or malformed lines return null; callers may log and must skip.
-// The Codex CLI's output format can gain event types across versions, so
-// this parser is deliberately a whitelist of the four shapes Rundock needs.
-function parseCodexLine(line) {
-  if (!line || !line.trim()) return null;
-  let ev;
-  try { ev = JSON.parse(line); } catch (e) { return null; }
-  if (!ev || typeof ev !== 'object') return null;
-
-  switch (ev.type) {
-    case 'thread.started':
-      return { type: 'session', threadId: ev.thread_id };
-    case 'item.completed':
-      if (ev.item && ev.item.type === 'agent_message') {
-        return { type: 'text', text: ev.item.text };
-      }
-      return null; // command runs, reasoning steps etc: not user-facing
-    case 'turn.completed': {
-      const u = ev.usage || {};
-      return {
-        type: 'done',
-        usage: {
-          inputTokens: u.input_tokens || 0,
-          cachedInputTokens: u.cached_input_tokens || 0,
-          outputTokens: u.output_tokens || 0,
-        },
-      };
-    }
-    case 'turn.failed':
-      return { type: 'error', message: (ev.error && ev.error.message) || 'Codex turn failed' };
-    case 'error':
-      return { type: 'error', message: ev.message || 'Codex error' };
-    default:
-      return null;
-  }
 }
 
 // ── Binary resolution ──────────────────────────────────────────────────────
@@ -184,11 +123,12 @@ function detectCodex(deps = {}) {
 // Presence-only scan of the Codex config for a [windows] table declaring a
 // sandbox. When declared, the CLI grants a real workspace-write policy on
 // Windows (in-process patch writes and sandboxed commands, workspace-
-// bounded), so Rundock's write-marker fallback stands down. When absent,
-// the CLI silently downgrades workspace-write to read-only (verified live)
-// and the marker fallback carries writes instead. The VALUE is never acted
-// on: any declared sandbox mode counts, mirroring the presence-only
-// principle used for auth detection.
+// bounded) and writes run silently inside it. When absent, the CLI
+// downgrades workspace-write on native Windows (verified live), so writes
+// surface as per-action approval requests instead; Settings uses this field
+// to explain that difference and point at the one-line config fix. The
+// VALUE is never acted on: any declared sandbox mode counts, mirroring the
+// presence-only principle used for auth detection.
 function hasWindowsSandboxConfig(deps = {}) {
   const read = deps.readFileSync || fs.readFileSync;
   const homedir = deps.homedir || os.homedir;
@@ -247,32 +187,6 @@ function classifyCodexError(text) {
   return { kind: 'unknown', model: null };
 }
 
-// ── Write-request markers (Windows) ─────────────────────────────────────────
-
-// The Codex CLI cannot enforce its write sandbox on native Windows: it
-// silently downgrades workspace-write to read-only (verified live; the
-// native AppContainer sandbox fails to initialise on ARM64). Rather than
-// leave Windows Codex agents read-only or pass bypass flags (pinned-never),
-// win32 spawns are instructed to request writes as markers in their
-// response. The server validates each request and performs the write itself
-// after the user approves a permission card. Mac/Linux spawns never get the
-// instruction and their markers are not honoured: the OS sandbox writes
-// directly there.
-const WRITE_MARKER_RE = /<!-- RUNDOCK:WRITE_FILE path="([^"\n]+)" -->\n([\s\S]*?)\n?<!-- \/RUNDOCK:WRITE_FILE -->/g;
-
-// Returns { cleanText, requests: [{ path, content }] }. cleanText replaces
-// each marker block with a short plain-language line so the conversation
-// shows intent without the payload; the card carries the full content.
-function parseWriteMarkers(text) {
-  if (typeof text !== 'string' || !text) return { cleanText: '', requests: [] };
-  const requests = [];
-  const cleanText = text.replace(WRITE_MARKER_RE, (m, p, content) => {
-    requests.push({ path: p, content });
-    return `[write requested: ${p}]`;
-  });
-  return { cleanText, requests };
-}
-
 // Resolve a Codex thread id to its rollout file on disk. One rollout file
 // exists per thread under $CODEX_HOME/sessions/YYYY/MM/DD, named
 // rollout-<started-at>-<threadId>.jsonl, and resumes append to the SAME
@@ -305,7 +219,7 @@ function findCodexThreadFile(threadId, deps = {}) {
 }
 
 module.exports = {
-  buildCodexArgs, parseCodexLine, resolveCodexBin, detectCodex, isCodexQuotaError,
-  classifyCodexError, isValidThreadId, parseWriteMarkers, hasWindowsSandboxConfig,
+  resolveCodexBin, detectCodex, isCodexQuotaError,
+  classifyCodexError, isValidThreadId, hasWindowsSandboxConfig,
   findCodexThreadFile,
 };

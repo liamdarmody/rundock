@@ -1,6 +1,8 @@
 'use strict';
-// Unit tests for the Codex runtime adapter: line parsing, argv construction,
-// binary/auth detection, and quota-error classification.
+// Unit tests for the Codex runtime adapter: thread-id hygiene, binary/auth
+// detection, failure classification, rollout resolution, and the Windows
+// sandbox config scan. (Protocol-level behaviour lives in codex-appserver.js
+// and its own test file.)
 //
 // Everything here is pure or dependency-injected; no processes are spawned
 // and no real home directory is read.
@@ -8,121 +10,22 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 
-const fx = require('../fixtures/codex-jsonl.js');
+const { QUOTA_MESSAGE } = require('../fixtures/codex-appserver-protocol.js');
 const codex = require('../../codex.js');
 
-describe('parseCodexLine', () => {
-  test('thread.started -> session event with thread id', () => {
-    const ev = codex.parseCodexLine(JSON.stringify(fx.threadStarted('thr_abc123')));
-    assert.deepStrictEqual(ev, { type: 'session', threadId: 'thr_abc123' });
+describe('isValidThreadId', () => {
+  test('accepts UUIDs and historic exec-era ids', () => {
+    assert.strictEqual(codex.isValidThreadId('019f0000-aaaa-7000-b000-c00000000001'), true);
+    assert.strictEqual(codex.isValidThreadId('cthr_01HXYZ.9-a'), true);
   });
 
-  test('item.completed agent_message -> text event', () => {
-    const ev = codex.parseCodexLine(JSON.stringify(fx.agentMessage('Hello from Codex.')));
-    assert.deepStrictEqual(ev, { type: 'text', text: 'Hello from Codex.' });
-  });
-
-  test('item.completed with a non-message item is skipped', () => {
-    assert.strictEqual(codex.parseCodexLine(JSON.stringify(fx.otherItem())), null);
-    assert.strictEqual(codex.parseCodexLine(JSON.stringify(fx.otherItem('reasoning'))), null);
-  });
-
-  test('turn.completed -> done event carrying normalised usage', () => {
-    const ev = codex.parseCodexLine(JSON.stringify(fx.turnCompleted({ input: 1200, cached: 800, output: 340 })));
-    assert.deepStrictEqual(ev, {
-      type: 'done',
-      usage: { inputTokens: 1200, cachedInputTokens: 800, outputTokens: 340 },
-    });
-  });
-
-  test('turn.completed with missing usage fields still emits done with zeroed usage', () => {
-    const ev = codex.parseCodexLine(JSON.stringify({ type: 'turn.completed' }));
-    assert.deepStrictEqual(ev, {
-      type: 'done',
-      usage: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 },
-    });
-  });
-
-  test('turn.failed -> error event with the message', () => {
-    const ev = codex.parseCodexLine(JSON.stringify(fx.turnFailed('sandbox denied write')));
-    assert.deepStrictEqual(ev, { type: 'error', message: 'sandbox denied write' });
-  });
-
-  test('turn.failed without an error object falls back to a generic message', () => {
-    const ev = codex.parseCodexLine(JSON.stringify({ type: 'turn.failed' }));
-    assert.deepStrictEqual(ev, { type: 'error', message: 'Codex turn failed' });
-  });
-
-  test('bare error event -> error event', () => {
-    const ev = codex.parseCodexLine(JSON.stringify(fx.bareError('boom')));
-    assert.deepStrictEqual(ev, { type: 'error', message: 'boom' });
-  });
-
-  test('unknown event types are skipped', () => {
-    assert.strictEqual(codex.parseCodexLine(JSON.stringify({ type: 'turn.started' })), null);
-    assert.strictEqual(codex.parseCodexLine(JSON.stringify({ type: 'item.started', item: {} })), null);
-  });
-
-  test('malformed JSON, empty and whitespace lines are skipped, never throw', () => {
-    assert.strictEqual(codex.parseCodexLine('{not json'), null);
-    assert.strictEqual(codex.parseCodexLine(''), null);
-    assert.strictEqual(codex.parseCodexLine('   '), null);
-    assert.strictEqual(codex.parseCodexLine('null'), null);
-    assert.strictEqual(codex.parseCodexLine('42'), null);
-  });
-});
-
-describe('buildCodexArgs', () => {
-  test('fresh turn: exec --json with sandbox, git check skipped, prompt on stdin', () => {
-    assert.deepStrictEqual(codex.buildCodexArgs({}), [
-      'exec', '--json',
-      '--sandbox', 'workspace-write',
-      '--skip-git-repo-check',
-      '-',
-    ]);
-  });
-
-  test('model flag only when a model is set', () => {
-    assert.deepStrictEqual(codex.buildCodexArgs({ model: 'gpt-5.3-codex' }), [
-      'exec', '--json',
-      '--sandbox', 'workspace-write',
-      '--skip-git-repo-check',
-      '--model', 'gpt-5.3-codex',
-      '-',
-    ]);
-  });
-
-  test('resume turn: resume subcommand with the thread id', () => {
-    assert.deepStrictEqual(codex.buildCodexArgs({ resumeThreadId: 'thr_abc123' }), [
-      'exec', '--json',
-      '--sandbox', 'workspace-write',
-      '--skip-git-repo-check',
-      'resume', 'thr_abc123',
-      '-',
-    ]);
-  });
-
-  test('never emits approval or sandbox bypass flags', () => {
-    const variants = [
-      codex.buildCodexArgs({}),
-      codex.buildCodexArgs({ model: 'gpt-5.3-codex' }),
-      codex.buildCodexArgs({ resumeThreadId: 'thr_x' }),
-    ];
-    for (const args of variants) {
-      for (const a of args) {
-        assert.ok(!/bypass|yolo|full-auto|dangerously/i.test(a), `forbidden flag in argv: ${a}`);
-      }
-    }
-  });
-
-  test('malformed thread ids are rejected: no flag smuggling through the resume positional', () => {
-    // A hostile client-supplied session id must never reach argv.
-    const hostile = codex.buildCodexArgs({ resumeThreadId: '--dangerously-bypass-approvals-and-sandbox' });
-    assert.deepStrictEqual(hostile, ['exec', '--json', '--sandbox', 'workspace-write', '--skip-git-repo-check', '-']);
-    const spacey = codex.buildCodexArgs({ resumeThreadId: 'thr abc' });
-    assert.ok(!spacey.includes('resume'), 'ids with spaces rejected');
-    // Legitimate ids still resume.
-    assert.ok(codex.buildCodexArgs({ resumeThreadId: 'cthr_01HXYZ.9-a' }).includes('resume'));
+  test('rejects flag-shaped, spaced, empty and non-string ids', () => {
+    // A hostile client-supplied session id must never be treated as a resume.
+    assert.strictEqual(codex.isValidThreadId('--dangerously-bypass-approvals-and-sandbox'), false);
+    assert.strictEqual(codex.isValidThreadId('thr abc'), false);
+    assert.strictEqual(codex.isValidThreadId(''), false);
+    assert.strictEqual(codex.isValidThreadId(null), false);
+    assert.strictEqual(codex.isValidThreadId(42), false);
   });
 });
 
@@ -237,7 +140,7 @@ describe('resolveCodexBin', () => {
 
 describe('isCodexQuotaError', () => {
   test("recognises the CLI's usage-limit wording", () => {
-    assert.strictEqual(codex.isCodexQuotaError(fx.QUOTA_MESSAGE), true);
+    assert.strictEqual(codex.isCodexQuotaError(QUOTA_MESSAGE), true);
     assert.strictEqual(codex.isCodexQuotaError('usage limit reached, resets 15:00'), true);
     assert.strictEqual(codex.isCodexQuotaError('You have hit your usage limit.'), true);
   });
@@ -277,8 +180,8 @@ describe('classifyCodexError', () => {
   });
 
   test('classifies quota wording as quota (isCodexQuotaError agrees)', () => {
-    assert.strictEqual(codex.classifyCodexError(fx.QUOTA_MESSAGE).kind, 'quota');
-    assert.strictEqual(codex.isCodexQuotaError(fx.QUOTA_MESSAGE), true);
+    assert.strictEqual(codex.classifyCodexError(QUOTA_MESSAGE).kind, 'quota');
+    assert.strictEqual(codex.isCodexQuotaError(QUOTA_MESSAGE), true);
   });
 
   test('leaves ordinary failures unclassified', () => {
@@ -292,5 +195,36 @@ describe('classifyCodexError', () => {
     // Guard: auth match must not swallow model errors and vice versa.
     assert.strictEqual(codex.classifyCodexError(MODEL_400).kind, 'model');
     assert.strictEqual(codex.classifyCodexError(AUTH_401).kind, 'auth');
+  });
+});
+
+describe('hasWindowsSandboxConfig', () => {
+  // Presence-only scan of the Codex config for a [windows] sandbox
+  // declaration. When present, the CLI grants a real workspace-write policy
+  // on Windows and writes run silently inside the sandbox; when absent,
+  // writes surface as per-action approval cards instead. Settings uses this
+  // field to explain the difference and point at the one-line config fix.
+  const withConfig = (content) => ({
+    readFileSync: () => content,
+    homedir: () => '/tmp/fake-home',
+    env: {},
+  });
+
+  test('true when [windows] declares a sandbox', () => {
+    assert.strictEqual(codex.hasWindowsSandboxConfig(withConfig('[windows]\nsandbox = "unelevated"\n')), true);
+    assert.strictEqual(codex.hasWindowsSandboxConfig(withConfig('# comment\n\n[windows]\nsandbox = "elevated"\n\n[projects.x]\ntrust_level = "trusted"\n')), true);
+  });
+
+  test('false when [windows] exists without a sandbox key', () => {
+    assert.strictEqual(codex.hasWindowsSandboxConfig(withConfig('[windows]\nsandbox_private_desktop = false\n')), false);
+  });
+
+  test('false when a sandbox key lives under a different section', () => {
+    assert.strictEqual(codex.hasWindowsSandboxConfig(withConfig('[features]\nsandbox = "x"\n')), false);
+    assert.strictEqual(codex.hasWindowsSandboxConfig(withConfig('sandbox_mode = "workspace-write"\n')), false);
+  });
+
+  test('false when the config file is missing or unreadable', () => {
+    assert.strictEqual(codex.hasWindowsSandboxConfig({ readFileSync: () => { throw new Error('ENOENT'); }, homedir: () => '/x', env: {} }), false);
   });
 });

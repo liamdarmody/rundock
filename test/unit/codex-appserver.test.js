@@ -70,7 +70,10 @@ function record(sub) {
   return events;
 }
 
-function nextEvent(sub, type, { timeout = 5000 } = {}) {
+// Generous default: these tests run concurrently with the whole suite, and
+// a starved stub process under full parallel load can push an event past a
+// tight window (observed: 'done' after interrupt landing just beyond 5s).
+function nextEvent(sub, type, { timeout = 15000 } = {}) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       sub.removeListener('event', onEvent);
@@ -454,8 +457,12 @@ test('interrupt mid-turn: done arrives with status interrupted', async () => {
     const sub = server.startTurn(threadId, 'hang forever');
     await nextEvent(sub, 'delta');
     const { turnId } = await sub.started;
+    // Subscribe BEFORE interrupting: the interrupt response and the
+    // follow-up turn/completed can arrive in one pipe chunk, in which case
+    // the done event fires synchronously before an await continuation runs.
+    const doneP = nextEvent(sub, 'done');
     await server.interruptTurn(threadId, turnId);
-    const done = await nextEvent(sub, 'done');
+    const done = await doneP;
     assert.strictEqual(done.status, 'interrupted');
     assert.strictEqual(done.error, null, 'interrupted is done-with-flag, not an error');
   } finally {
@@ -475,8 +482,10 @@ test('second startTurn on a thread with an active turn fails fast client-side', 
     await nextEvent(sub, 'delta');
     assert.throws(() => server.startTurn(threadId, 'me too'), /already active/);
     // interruptTurn without an explicit turnId uses the tracked one.
+    // (Subscribe before interrupting; see the interrupt mid-turn test.)
+    const doneP = nextEvent(sub, 'done');
     await server.interruptTurn(threadId);
-    const done = await nextEvent(sub, 'done');
+    const done = await doneP;
     assert.strictEqual(done.status, 'interrupted');
     // The slot is free again after completion.
     const sub2 = server.startTurn(threadId, 'plain follow-up');
