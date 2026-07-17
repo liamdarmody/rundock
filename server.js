@@ -491,9 +491,47 @@ function discoverWorkspaces() {
   return candidates;
 }
 
-// ===== ROUTINE STATE (in-memory) =====
+// ===== ROUTINE STATE =====
+// In-memory view of routine run state, persisted to .rundock/routine-state.json
+// so a server restart cannot re-fire a routine that already ran in its window
+// (the desktop quit-and-reopen pattern). The file is workspace-scoped like the
+// other .rundock stores; loadRoutineState() runs at startup and on every
+// workspace switch.
 
 const routineState = {}; // { routineKey: { lastRun, status, duration } }
+
+function loadRoutineState() {
+  for (const key of Object.keys(routineState)) delete routineState[key];
+  try {
+    const file = path.join(rundockDir(), 'routine-state.json');
+    const saved = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    for (const [key, state] of Object.entries(saved)) {
+      if (!state || typeof state.lastRun !== 'string') continue;
+      // A run that was 'running' when the server died never finished; surface
+      // that honestly. lastRun stays, so the run still suppresses a re-fire
+      // (the work was started; firing it again is the bug this file prevents).
+      if (state.status === 'running') state.status = 'interrupted';
+      routineState[key] = state;
+    }
+  } catch (e) { /* missing or unreadable file: start empty */ }
+}
+
+function saveRoutineState() {
+  const dir = rundockDir();
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'routine-state.json'), JSON.stringify(routineState, null, 2));
+}
+
+function recordRoutineRun(key, state) {
+  routineState[key] = state;
+  try {
+    saveRoutineState();
+  } catch (e) {
+    // Persistence is protection for the NEXT process; this one already has
+    // the in-memory state. An unwritable .rundock must not kill the scheduler.
+    console.error('[Scheduler] Failed to persist routine state:', e && e.message ? e.message : e);
+  }
+}
 
 // ===== AGENT HELPERS =====
 
@@ -1220,15 +1258,20 @@ function getNextRun(schedule, lastRunISO) {
   // Parse "every day at HH:MM"
   const dailyMatch = s.match(/every day at (\d{2}):(\d{2})/);
   if (dailyMatch) {
-    const target = new Date(now);
-    target.setHours(parseInt(dailyMatch[1]), parseInt(dailyMatch[2]), 0, 0);
-    // If already past today, next is tomorrow
-    if (now > target) target.setDate(target.getDate() + 1);
-    // Don't re-run if already ran today
+    // Don't re-run if already ran today. This suppression (fed by the
+    // persisted routine state) is the ONLY thing standing between a due
+    // routine and a duplicate fire, which is why it is checked first.
     if (lastRunISO) {
       const lastRun = new Date(lastRunISO);
       if (lastRun.toDateString() === now.toDateString() && lastRun.getHours() >= parseInt(dailyMatch[1])) return null;
     }
+    const target = new Date(now);
+    target.setHours(parseInt(dailyMatch[1]), parseInt(dailyMatch[2]), 0, 0);
+    // A target already past today stays TODAY: the scheduler's `now >= nextRun`
+    // check fires it on the next tick (same-day catch-up). The previous code
+    // rolled it to tomorrow, which meant the fire condition was only
+    // satisfiable in the single millisecond HH:MM:00.000 - routines whose
+    // tick did not land exactly on that instant never fired at all.
     return target;
   }
 
@@ -1238,17 +1281,19 @@ function getNextRun(schedule, lastRunISO) {
     const days = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
     const targetDay = days[weeklyMatch[1]];
     if (targetDay === undefined) return null;
-    const target = new Date(now);
-    target.setHours(parseInt(weeklyMatch[2]), parseInt(weeklyMatch[3]), 0, 0);
-    const daysUntil = (targetDay - now.getDay() + 7) % 7;
-    if (daysUntil === 0 && now > target) target.setDate(target.getDate() + 7);
-    else target.setDate(target.getDate() + daysUntil);
-    // Don't re-run if already ran this week
+    // Suppression first, same reasoning as the daily branch.
     if (lastRunISO) {
       const lastRun = new Date(lastRunISO);
       const daysSinceLastRun = (now - lastRun) / (1000 * 60 * 60 * 24);
       if (daysSinceLastRun < 1 && lastRun.getDay() === targetDay) return null;
     }
+    const target = new Date(now);
+    target.setHours(parseInt(weeklyMatch[2]), parseInt(weeklyMatch[3]), 0, 0);
+    const daysUntil = (targetDay - now.getDay() + 7) % 7;
+    target.setDate(target.getDate() + daysUntil);
+    // On the target weekday a past-due target stays TODAY so the scheduler
+    // fires it (same-day catch-up); the suppression above prevents re-fires.
+    // See the daily branch for why the old roll-forward meant never firing.
     return target;
   }
 
@@ -1257,7 +1302,9 @@ function getNextRun(schedule, lastRunISO) {
 
 function executeRoutine(agent, routine, key) {
   const startTime = Date.now();
-  routineState[key] = { lastRun: new Date().toISOString(), status: 'running', duration: null };
+  // Persisted immediately: if the server dies mid-run, the restarted process
+  // still knows the run started and will not fire it again in the same window.
+  recordRoutineRun(key, { lastRun: new Date().toISOString(), status: 'running', duration: null });
 
   // Notify connected clients
   broadcastRoutineUpdate();
@@ -1294,11 +1341,11 @@ function executeRoutine(agent, routine, key) {
 
   proc.on('close', (code) => {
     const duration = Math.round((Date.now() - startTime) / 1000);
-    routineState[key] = {
+    recordRoutineRun(key, {
       lastRun: new Date().toISOString(),
       status: code === 0 ? 'completed' : 'failed',
       duration
-    };
+    });
     console.log(`[Scheduler] Routine "${routine.name}" ${code === 0 ? 'completed' : 'failed'} (${duration}s)`);
     broadcastRoutineUpdate();
   });
@@ -3784,6 +3831,7 @@ wss.on('connection', (ws) => {
           // serve the previous workspace's cached file/skill lists.
           searchEngineFailedWorkspace = null;
           invalidateAgentCache();
+          loadRoutineState();
           saveRecentWorkspace(dir);
           // Clean up orphaned processes from previous sessions in this workspace
           cleanOrphanedProcesses();
@@ -3868,6 +3916,7 @@ wss.on('connection', (ws) => {
             // Kill all running processes when creating/switching workspace
             killAllChildren();
             WORKSPACE = dir;
+            loadRoutineState();
             saveRecentWorkspace(dir);
 
             // New workspace is always empty: scaffold defaults
@@ -5872,6 +5921,7 @@ function startServer(options = {}) {
         WORKSPACE = null;
       }
       if (WORKSPACE) {
+        loadRoutineState();
         saveRecentWorkspace(WORKSPACE);
         try { scaffoldWorkspace(WORKSPACE); } catch (e) { console.warn('Scaffold warning:', e.message); }
         const agents = discoverAgents();
@@ -5909,6 +5959,7 @@ module.exports._internal = {
   getWorkspace() { return WORKSPACE; },
   // scheduler
   getNextRun, executeRoutine, routineState,
+  loadRoutineState, saveRoutineState, recordRoutineRun,
   // agent + skill discovery / parsing
   discoverAgents, invalidateAgentCache, discoverSkills, parseSkillFile,
   parseAgentFrontmatter, extractFrontmatterText, parseCapabilities,

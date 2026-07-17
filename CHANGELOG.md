@@ -12,6 +12,10 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 - **Fresh installs no longer print security warnings:** the packaged Electron runtime moved from 35 to 42, clearing the cluster of published advisories that `npm audit` reported against every contributor install. No user-visible behaviour change; the full suite, browser tests, and a locally built packaged app were verified on the new runtime.
 
+### Fixed
+
+- **Scheduled routines fire reliably and never twice:** routine run state now persists in the workspace's `.rundock/` folder, so quitting and reopening Rundock after a routine has run can no longer fire it again the same day. The due-check itself is also fixed: a routine whose scheduled time has passed without running today now fires on the next scheduler tick (previously the timing comparison was so strict that scheduled routines effectively never fired on their own). A run interrupted by a quit shows as "interrupted" rather than appearing to still be running.
+
 ## 0.10.0: Search, Review & Codex (2026-07-14)
 
 One palette searches everything you have, files agents produce can be reviewed where they live, and any specialist can run on your ChatGPT plan alongside your Claude agents. The biggest release since launch: universal search, an in-editor review loop, and a second runtime.
