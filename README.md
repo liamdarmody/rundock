@@ -14,6 +14,10 @@ Built by [Liam Darmody](https://www.linkedin.com/in/liamdarmody/). Learn more at
 
 ![Rundock app: an AI agent team org chart with the orchestrator at the top, six specialists, and a routines panel showing scheduled automations](docs/rundock-app-hero.png)
 
+## How Rundock fits
+
+Rundock is two things at once. For you, it is the visual workspace: an org chart, parallel conversations, delegation you can watch happen. Underneath, it is a runtime-agnostic orchestration layer. It catches requests, routes them to the right agent, hands context between them, and keeps the team coordinated. The execution engine is pluggable: Claude Code and Codex today, more later. Your agents are plain markdown you own, so the same team runs on whichever engine you choose, switchable without a rebuild. Rundock owns the coordination, the interface, and the portability. The engine underneath can change. The layer you built stays yours.
+
 ## Principles
 
 Five ideas shape every decision in Rundock: **local-first**, **markdown all the way down**, **the human leads**, **the team is the unit of value**, and **built from real use**.
