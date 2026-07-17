@@ -294,160 +294,77 @@ function handle(d) {
       break;
     }
     case 'system':
+      // Decision logic for process lifecycle, session capture, cancellation
+      // and delegation lives in RundockConversationState (conversation-state.js);
+      // this branch builds the read-only ctx facts, applies the reduced state
+      // and executes the returned effects against the DOM/WebSocket.
       // Track active process per conversation to ignore stale events
       if(d.subtype==='process_started' && convoId && d._processId) {
         const state = getConvoState(convoId);
         console.log(`[Process] convo=${convoId} process_started pid=${d._processId} prev=${state.activeProcessId} agent=${d._agent||'?'}`);
-        state.activeProcessId = d._processId;
-        // Remove stale permission cards from the previous process
-        document.querySelectorAll('.msg-permission').forEach(el => el.remove());
-        // Silent-park turn: suppress all UI (no thinking indicator, no resume badge)
-        state.silentTurn = d.silent === true;
-        // Auto-continue: orchestrator picking up after specialist return
-        if(d.autoContinue && !state.silentTurn) { startProcessing(convoId); }
+        const r = RundockConversationState.reduce(state, d, {});
+        convoState[convoId] = r.state;
+        executeEffects(convoId, r.effects);
       }
       // Capture session ID from init message and persist for resume after refresh
       if(d.subtype==='init' && d._sessionId && convoId) {
         const convo = conversations.find(c => c.id === convoId);
-        if(convo) {
-          const agentId = d._agent || convo.agentId;
-          const isOrchestrator = agentId === convo.agentId;
-          // Only set the primary sessionId for the orchestrator (used for --resume on reload).
-          // Delegate sessions are tracked in sessionIds but don't replace the primary.
-          if (isOrchestrator || !convo.sessionId) {
-            convo.sessionId = d._sessionId;
-          }
-          // Track all sessionIds for history loading across delegation chain
-          if (!convo.sessionIds) convo.sessionIds = [];
-          if (!convo.sessionIds.find(s => s.sessionId === d._sessionId)) {
-            convo.sessionIds.push({ sessionId: d._sessionId, agentId });
-          }
-          persistConversation(convo);
-        }
+        const r = RundockConversationState.reduce(getConvoState(convoId), d, {
+          convoExists: !!convo,
+          convoAgentId: convo?.agentId,
+          hasPrimarySession: !!convo?.sessionId,
+          knownSessionIds: (convo?.sessionIds || []).map(s => s.sessionId),
+        });
+        convoState[convoId] = r.state;
+        executeEffects(convoId, r.effects);
       }
       // Neutral notice: informational pill with NO side effects. Used for
       // Codex write-request outcomes. Distinct from 'info', which doubles
       // as the stale-session signal and clears the stored sessionId: that
       // side effect must never fire for a routine notice.
       if(d.subtype==='notice' && d.content && convoId) {
-        addSystemMsgToConvo(d.content, convoId, false);
+        const r = RundockConversationState.reduce(getConvoState(convoId), d, {});
+        convoState[convoId] = r.state;
+        executeEffects(convoId, r.effects);
       }
       // Stale session: server is retrying fresh, clear the old sessionId
       if(d.subtype==='info' && d.content && convoId) {
         const convo = conversations.find(c => c.id === convoId);
-        if(convo && convo.sessionId) {
-          convo.sessionId = null;
-          persistConversation(convo);
-        }
-        addSystemMsgToConvo(d.content, convoId, false);
+        const r = RundockConversationState.reduce(getConvoState(convoId), d, {
+          hasPrimarySession: !!(convo && convo.sessionId),
+        });
+        convoState[convoId] = r.state;
+        executeEffects(convoId, r.effects);
       }
       // Agent was cancelled by user
       if(d.subtype==='cancelled' && convoId) {
-        const state = getConvoState(convoId);
-        // Add a cancelled badge to the current streaming message if there is one
-        const streamEl = state.currentStreamingMsg;
-        if (streamEl) {
-          const badge = document.createElement('span');
-          badge.className = 'cancelled-badge';
-          badge.textContent = 'Cancelled';
-          const bubble = streamEl.querySelector('.msg-bubble');
-          if (bubble) bubble.appendChild(badge);
-          const actSummary = buildActivitySummary(d._toolCalls || [], d._turnStartTime || null);
-          if (actSummary) streamEl.appendChild(actSummary);
-        }
-        addSystemMsgToConvo('Agent stopped by user.', convoId, false);
+        const r = RundockConversationState.reduce(getConvoState(convoId), d, {});
+        convoState[convoId] = r.state;
+        executeEffects(convoId, r.effects);
       }
       // Only finish if this done event is from the currently active process
       if(d.subtype==='done' && convoId) {
         const state = getConvoState(convoId);
         const match = !d._processId || !state.activeProcessId || d._processId === state.activeProcessId;
         console.log(`[Done] convo=${convoId} pid=${d._processId} active=${state.activeProcessId} match=${match} isProcessing=${state.isProcessing}`);
-        if(match) {
-          finishProcessing(convoId);
-        } else {
-          console.warn(`[Done] SKIPPED finishProcessing: process ID mismatch`);
-        }
+        const r = RundockConversationState.reduce(state, d, {});
+        convoState[convoId] = r.state;
+        executeEffects(convoId, r.effects);
       }
       // Agent switch: delegation handoff or return
       if(d.subtype==='agent_switch' && convoId) {
         const toAgent = agents.find(a => a.id === d.toAgent);
         const fromAgent = agents.find(a => a.id === d.fromAgent);
-        const state = getConvoState(convoId);
-        // Capture the agent we're switching away from so we can clear its
-        // working indicator. Without this, the outgoing agent stays pinned
-        // to "working" in the sidebar row and org chart dot forever.
-        const outgoingAgentId = state.activeAgentId || conversations.find(c=>c.id===convoId)?.agentId;
-        state.delegationActive = !!toAgent && toAgent.type !== 'orchestrator';
-        state.activeAgentId = d.toAgent;
-        // Clear the outgoing agent's working indicator, but only if it isn't
-        // still legitimately working on another conversation. Also stamp
-        // last-activity so the sidebar row shows a timestamp instead of blank.
-        if (outgoingAgentId && outgoingAgentId !== d.toAgent && !getWorkingAgentIds().has(outgoingAgentId)) {
-          const convo = conversations.find(c => c.id === convoId);
-          agentLastActivity[outgoingAgentId] = { time: new Date(), label: convo?.title || '' };
-          const outRow = document.querySelector(`[data-status="${outgoingAgentId}"]`);
-          if (outRow) { outRow.textContent = formatTimeAgo(new Date()); outRow.classList.remove('working'); }
-          const outDot = document.querySelector(`[data-org-status="${outgoingAgentId}"]`);
-          if (outDot) outDot.classList.remove('working');
-        }
-        // Finalize any in-progress orchestrator text before resetting streaming state.
-        // Without this, the orchestrator's handoff message (e.g. "I'll delegate this to Dev")
-        // is orphaned when currentStreamingMsg is nulled and the specialist's stream overwrites it.
-        if (state.streamingRawText) {
-          let handoffText = state.streamingRawText;
-          // Strip RUNDOCK markers (DELEGATE, SAVE_AGENT, etc.) from the finalized text
-          handoffText = RundockMarkers.stripDelegateTail(handoffText).trim();
-          handoffText = stripRundockMarkers(handoffText).trim();
-          if (handoffText) {
-            const convo = conversations.find(c => c.id === convoId);
-            const orchestratorAgentId = outgoingAgentId || convo?.agentId;
-            if (convo) {
-              convo.messages.push({ role: 'agent', content: handoffText, agentId: orchestratorAgentId, timestamp: new Date().toISOString() });
-            }
-            // If the streaming bubble exists in the DOM, promote it to a permanent node
-            // by clearing the streaming-text class and re-rendering with final content
-            if (state.currentStreamingMsg && activeConversation?.id === convoId) {
-              const streamEl = state.currentStreamingMsg.querySelector('.streaming-text');
-              if (streamEl) {
-                streamEl.classList.remove('streaming-text');
-                streamEl.innerHTML = formatMd(handoffText);
-              }
-            }
-          }
-        }
-        // Reset streaming state so the new agent gets a fresh bubble
-        state.currentStreamingMsg = null;
-        state.streamingRawText = '';
-        state.latestText = '';
-        state.latestAgentId = null;
-        renderConvoList();
-        // Determine if this is a return (back to orchestrator or back to parent)
-        // vs a forward delegation (orchestrator->specialist or specialist->sub-specialist)
-        const isReturn = toAgent?.type === 'orchestrator';
-        if(activeConversation?.id === convoId) {
-          if(toAgent && fromAgent) {
-            const m = document.getElementById('messages');
-            m.appendChild(buildDelegationDivider(toAgent, isReturn));
-            scrollBottom();
-            // Persist divider as explicit marker so it survives navigate-away/back
-            const convo = conversations.find(c => c.id === convoId);
-            if (convo) {
-              convo.messages.push({ role: 'divider', agentId: d.toAgent, fromAgentId: d.fromAgent, isReturn });
-            }
-          }
-          // Update chat header
-          if(toAgent) {
-            const headerLabel = document.getElementById('chat-agent-label');
-            const headerAvatar = document.getElementById('chat-agent-avatar');
-            if(headerLabel) headerLabel.textContent = toAgent.displayName;
-            if(headerAvatar) { headerAvatar.style.background = toAgent.colour; headerAvatar.textContent = toAgent.icon; }
-            document.getElementById('msg-input').placeholder = 'Message ' + toAgent.displayName + '...';
-          }
-        }
-        // Show delegate as working AFTER the divider is rendered
-        if (!isReturn && state.delegationActive) {
-          startProcessing(convoId);
-        }
+        const convo = conversations.find(c => c.id === convoId);
+        const r = RundockConversationState.reduce(getConvoState(convoId), d, {
+          isActive: activeConversation?.id === convoId,
+          convoAgentId: convo?.agentId,
+          toAgentExists: !!toAgent,
+          toAgentType: toAgent ? toAgent.type : null,
+          fromAgentExists: !!fromAgent,
+        });
+        convoState[convoId] = r.state;
+        executeEffects(convoId, r.effects);
       }
       if(d.subtype==='delegation_error' && convoId) {
         addSystemMsgToConvo(d.content || 'Delegation failed', convoId, true);
@@ -536,8 +453,199 @@ function handle(d) {
   }
 }
 function getConvoState(convoId) {
-  if(!convoState[convoId]) convoState[convoId] = { isProcessing: false, currentStreamingMsg: null, latestText: '', streamingRawText: '', latestAgentId: null, activeProcessId: null };
+  // Reducer-owned fields come from createState(); currentStreamingMsg is the
+  // one DOM field that lives alongside them (the reducer tracks it only as
+  // the boolean hasStreamingBubble and carries it through untouched).
+  if(!convoState[convoId]) convoState[convoId] = Object.assign(RundockConversationState.createState(), { currentStreamingMsg: null });
   return convoState[convoId];
+}
+
+// Execute the declarative effects returned by RundockConversationState.reduce.
+// Each executor is the thin DOM/WebSocket glue for one decision the reducer
+// made; no decision logic lives here beyond guards on live DOM state that the
+// reducer cannot see (e.g. cross-conversation working indicators).
+const EFFECT_EXECUTORS = {
+  'drop-stale': (convoId, ef) => {
+    if (ef.reason === 'stale-done') {
+      console.log(`[Done] SKIPPED finishProcessing: process ID mismatch`);
+    } else {
+      console.warn(`[Stale] convo=${convoId} dropped ${ef.messageType} from pid=${ef.processId} (active=${ef.activeProcessId})`);
+    }
+  },
+  'remove-permission-cards': () => {
+    // Remove stale permission cards from the previous process
+    document.querySelectorAll('.msg-permission').forEach(el => el.remove());
+  },
+  'start-processing': (convoId) => startProcessing(convoId),
+  'finish-processing': (convoId) => finishProcessing(convoId),
+  'set-session': (convoId, ef) => {
+    const convo = conversations.find(c => c.id === convoId);
+    if (!convo) return;
+    if (ef.setPrimary) convo.sessionId = ef.sessionId;
+    if (!convo.sessionIds) convo.sessionIds = [];
+    if (ef.addToChain) convo.sessionIds.push({ sessionId: ef.sessionId, agentId: ef.agentId });
+    persistConversation(convo);
+  },
+  'clear-session': (convoId) => {
+    const convo = conversations.find(c => c.id === convoId);
+    if (!convo) return;
+    convo.sessionId = null;
+    persistConversation(convo);
+  },
+  'notice': (convoId, ef) => addSystemMsgToConvo(ef.content, convoId, false),
+  'add-cancelled-badge': (convoId, ef) => {
+    // Add a cancelled badge to the current streaming message if there is one
+    const streamEl = getConvoState(convoId).currentStreamingMsg;
+    if (!streamEl) return;
+    const badge = document.createElement('span');
+    badge.className = 'cancelled-badge';
+    badge.textContent = 'Cancelled';
+    const bubble = streamEl.querySelector('.msg-bubble');
+    if (bubble) bubble.appendChild(badge);
+    const actSummary = buildActivitySummary(ef.toolCalls, ef.turnStartTime);
+    if (actSummary) streamEl.appendChild(actSummary);
+  },
+  'clear-outgoing-working': (convoId, ef) => {
+    // Clear the outgoing agent's working indicator, but only if it isn't
+    // still legitimately working on another conversation. Also stamp
+    // last-activity so the sidebar row shows a timestamp instead of blank.
+    const outgoingAgentId = ef.outgoingAgentId;
+    if (getWorkingAgentIds().has(outgoingAgentId)) return;
+    const convo = conversations.find(c => c.id === convoId);
+    agentLastActivity[outgoingAgentId] = { time: new Date(), label: convo?.title || '' };
+    const outRow = document.querySelector(`[data-status="${outgoingAgentId}"]`);
+    if (outRow) { outRow.textContent = formatTimeAgo(new Date()); outRow.classList.remove('working'); }
+    const outDot = document.querySelector(`[data-org-status="${outgoingAgentId}"]`);
+    if (outDot) outDot.classList.remove('working');
+  },
+  'promote-handoff-message': (convoId, ef) => {
+    // Persist the orchestrator's handoff text and, if the streaming bubble
+    // exists in the DOM, promote it to a permanent node by clearing the
+    // streaming-text class and re-rendering with final content.
+    const convo = conversations.find(c => c.id === convoId);
+    const agentId = ef.agentId || convo?.agentId;
+    if (convo) {
+      convo.messages.push({ role: 'agent', content: ef.text, agentId, timestamp: new Date().toISOString() });
+    }
+    const state = getConvoState(convoId);
+    if (state.currentStreamingMsg && activeConversation?.id === convoId) {
+      const streamEl = state.currentStreamingMsg.querySelector('.streaming-text');
+      if (streamEl) {
+        streamEl.classList.remove('streaming-text');
+        streamEl.innerHTML = formatMd(ef.text);
+      }
+    }
+  },
+  'clear-streaming-bubble': (convoId) => {
+    getConvoState(convoId).currentStreamingMsg = null;
+  },
+  'render-convo-list': () => renderConvoList(),
+  'show-delegation-divider': (convoId, ef) => {
+    const toAgent = agents.find(a => a.id === ef.toAgentId);
+    const m = document.getElementById('messages');
+    m.appendChild(buildDelegationDivider(toAgent, ef.isReturn));
+    scrollBottom();
+    // Persist divider as explicit marker so it survives navigate-away/back
+    const convo = conversations.find(c => c.id === convoId);
+    if (convo) {
+      convo.messages.push({ role: 'divider', agentId: ef.toAgentId, fromAgentId: ef.fromAgentId, isReturn: ef.isReturn });
+    }
+  },
+  'update-chat-header': (convoId, ef) => {
+    const toAgent = agents.find(a => a.id === ef.toAgentId);
+    if (!toAgent) return;
+    const headerLabel = document.getElementById('chat-agent-label');
+    const headerAvatar = document.getElementById('chat-agent-avatar');
+    if (headerLabel) headerLabel.textContent = toAgent.displayName;
+    if (headerAvatar) { headerAvatar.style.background = toAgent.colour; headerAvatar.textContent = toAgent.icon; }
+    document.getElementById('msg-input').placeholder = 'Message ' + toAgent.displayName + '...';
+  },
+  'start-streaming-bubble': (convoId, ef) => {
+    const state = getConvoState(convoId);
+    if (state.currentStreamingMsg) return;
+    // Remove thinking indicator, replace with streaming bubble
+    const t = document.getElementById('thinking-indicator'); if (t) t.remove();
+    const a = agents.find(x => x.id === ef.agentId) || activeConversation?.agent || agents[0];
+    const m = document.getElementById('messages'), el = document.createElement('div');
+    el.className = 'msg msg-agent';
+    el.innerHTML = `<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.displayName||'Agent'}<span class="msg-time">${new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></div><div class="msg-bubble"><span class="streaming-text"></span></div>`;
+    m.appendChild(el);
+    state.currentStreamingMsg = el;
+  },
+  'render-stream-text': (convoId, ef) => {
+    const state = getConvoState(convoId);
+    const streamEl = state.currentStreamingMsg ? state.currentStreamingMsg.querySelector('.streaming-text') : null;
+    if (streamEl) streamEl.innerHTML = formatMd(ef.text);
+    scrollBottom();
+  },
+  'ensure-tool-status': (convoId, ef) => {
+    let status = document.getElementById('thinking-status');
+    if (!status) {
+      // Thinking indicator was removed when streaming started; re-add it below the streaming message
+      const a = agents.find(x => x.id === ef.agentId) || activeConversation?.agent || agents[0];
+      const m = document.getElementById('messages'), el = document.createElement('div');
+      el.className = 'msg msg-agent'; el.id = 'thinking-indicator';
+      el.innerHTML = `<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.displayName||'Agent'}</div><div class="msg-bubble thinking-bubble"><div class="thinking-pulse" style="background:${a?.colour||'var(--accent)'}"></div><div><div class="thinking-label">Thinking</div><div class="thinking-status" id="thinking-status"></div></div></div>`;
+      m.appendChild(el);
+      scrollBottom();
+      status = el.querySelector('#thinking-status');
+    }
+    if (status) status.textContent = formatToolName(ef.toolName);
+  },
+  'update-tool-status': (convoId, ef) => {
+    const status = document.getElementById('thinking-status');
+    if (status) status.textContent = formatToolName(ef.toolName);
+    scrollBottom();
+  },
+  'schedule-file-refresh': () => {
+    // Refresh file tree when file-writing tools are used (with delay for disk flush)
+    setTimeout(() => {
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'get_files' }));
+    }, 1000);
+  },
+  'suppress-silent-park': (convoId) => {
+    // Silent-park turn: remove any streaming bubble from the DOM, skip render
+    const state = getConvoState(convoId);
+    if (state.currentStreamingMsg) state.currentStreamingMsg.remove();
+    state.currentStreamingMsg = null;
+  },
+  'finalize-agent-message': (convoId, ef) => {
+    const convo = conversations.find(c => c.id === convoId);
+    if (!convo) return;
+    convo.messages.push({ role: 'agent', content: ef.text, agentId: ef.agentId, timestamp: new Date().toISOString() });
+    convo.lastAgentId = ef.agentId;
+    convo.lastMessagePreview = stripMd(ef.text).substring(0, 80);
+  },
+  'mark-unread': (convoId) => {
+    unreadConvos.add(convoId);
+    updateUnreadBadge();
+  },
+  'remove-thinking-indicator': () => {
+    const t = document.getElementById('thinking-indicator'); if (t) t.remove();
+  },
+  'finalize-stream-bubble': (convoId, ef) => {
+    // Text was already streamed in real-time. Do a final re-render with complete markdown.
+    const state = getConvoState(convoId);
+    if (!state.currentStreamingMsg) return;
+    const streamEl = state.currentStreamingMsg.querySelector('.streaming-text');
+    if (streamEl && ef.text) streamEl.innerHTML = formatMd(ef.text);
+    const actSummary = buildActivitySummary(ef.toolCalls, ef.turnStartTime);
+    if (actSummary) state.currentStreamingMsg.appendChild(actSummary);
+  },
+  'append-final-message': (convoId, ef) => {
+    // No streaming happened (e.g. very short response). Render now.
+    const msgEl = addAgentMsg(ef.text, ef.agentId);
+    const actSummary = buildActivitySummary(ef.toolCalls, ef.turnStartTime);
+    if (actSummary && msgEl) msgEl.appendChild(actSummary);
+  },
+};
+
+function executeEffects(convoId, effects) {
+  for (const ef of effects) {
+    const run = EFFECT_EXECUTORS[ef.type];
+    if (run) run(convoId, ef);
+    else console.warn('[Effects] Unknown effect type:', ef.type);
+  }
 }
 // Flush a deferred "resumed" badge into the message stream.
 // Build a delegation divider element. Used by live agent_switch, in-memory replay, and history replay.
@@ -554,115 +662,39 @@ function buildDelegationDivider(agentData, isReturn, opts = {}) {
 }
 
 function isStaleProcess(d, convoId) {
-  if(!d._processId) return false;
+  // The activeProcessId acceptance rule lives in the reducer module; this
+  // wrapper adds the diagnostic log and keeps the pre-handler gate in place
+  // so stale messages are dropped BEFORE any glue side effects run.
   const state = getConvoState(convoId);
-  const stale = state.activeProcessId && d._processId !== state.activeProcessId;
+  const stale = RundockConversationState.isStale(state, d);
   if(stale) console.warn(`[Stale] convo=${convoId} dropped ${d.type} from pid=${d._processId} (active=${state.activeProcessId})`);
   return stale;
 }
 
 function handleStreamEvent(d, convoId) {
-  const evt = d.event; if(!evt) return;
+  if(!d.event) return;
   const state = getConvoState(convoId);
-  state.lastStreamActivity = Date.now();
-  const isActive = activeConversation?.id === convoId;
-
-  // Text streaming: always accumulate raw text, only render DOM when active
-  if(evt.type === 'content_block_delta' && evt.delta?.type === 'text_delta' && evt.delta.text) {
-    let text = evt.delta.text;
-    // Insert newline between tool-use progress updates so they don't run together
-    if(state.afterToolUse && state.streamingRawText && state.streamingRawText.length > 0) {
-      text = '\n\n' + text;
-    }
-    state.afterToolUse = false;
-
-    state.streamingRawText += text;
-
-    if(isActive && !state.silentTurn) {
-      // Create streaming message bubble if it doesn't exist yet
-      if(!state.currentStreamingMsg) {
-        // Remove thinking indicator, replace with streaming bubble
-        const t = document.getElementById('thinking-indicator'); if(t) t.remove();
-        const agentId = d._agent || state.activeAgentId || state.latestAgentId;
-        const a = agents.find(x => x.id === agentId) || activeConversation?.agent || agents[0];
-        const m = document.getElementById('messages'), el = document.createElement('div');
-        el.className = 'msg msg-agent';
-        el.innerHTML = `<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.displayName||'Agent'}<span class="msg-time">${new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></div><div class="msg-bubble"><span class="streaming-text"></span></div>`;
-        m.appendChild(el);
-        state.currentStreamingMsg = el;
-      }
-
-      const streamEl = state.currentStreamingMsg.querySelector('.streaming-text');
-      if(streamEl) {
-        // Strip RUNDOCK markers during streaming so marker content never leaks to the user
-        let displayText = state.streamingRawText;
-        // Complete marker blocks (opening + content + closing)
-        displayText = displayText.replace(/<!--\s*RUNDOCK:[A-Z_]+ [^>]*-->\n?[\s\S]*?<!--\s*\/RUNDOCK:[A-Z_]+ -->/g, '');
-        // Standalone markers (DELETE, RETURN)
-        displayText = displayText.replace(/<!--\s*RUNDOCK:(?:DELETE_\w+ name=[\w-]+|RETURN)\s*-->/g, '');
-        // Partial/incomplete marker still streaming (no closing tag yet)
-        displayText = displayText.replace(/<!--\s*RUNDOCK:[\s\S]*$/g, '');
-        streamEl.innerHTML = formatMd(displayText);
-      }
-      scrollBottom();
-    }
-  }
-
-  // Tool use: update thinking indicator when active
-  if(evt.type === 'content_block_start' && evt.content_block?.type === 'tool_use') {
-    state.afterToolUse = true;
-    const toolName = evt.content_block.name || '';
-
-    if(isActive && !state.silentTurn) {
-      let status = document.getElementById('thinking-status');
-      if(!status) {
-        // Thinking indicator was removed when streaming started; re-add it below the streaming message
-        const agentId = d._agent || state.activeAgentId || state.latestAgentId;
-        const a = agents.find(x => x.id === agentId) || activeConversation?.agent || agents[0];
-        const m = document.getElementById('messages'), el = document.createElement('div');
-        el.className = 'msg msg-agent'; el.id = 'thinking-indicator';
-        el.innerHTML = `<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.displayName||'Agent'}</div><div class="msg-bubble thinking-bubble"><div class="thinking-pulse" style="background:${a?.colour||'var(--accent)'}"></div><div><div class="thinking-label">Thinking</div><div class="thinking-status" id="thinking-status"></div></div></div>`;
-        m.appendChild(el);
-        scrollBottom();
-        status = el.querySelector('#thinking-status');
-      }
-      if(status) status.textContent = formatToolName(toolName);
-    }
-    // Refresh file tree when file-writing tools are used (with delay for disk flush)
-    if(/^(Write|Edit|Bash|NotebookEdit)/.test(toolName)) {
-      setTimeout(() => {
-        if(ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'get_files' }));
-      }, 1000);
-    }
-  }
+  state.lastStreamActivity = Date.now(); // wall clock stays in glue; the reducer is pure
+  const r = RundockConversationState.reduce(state, d, { isActive: activeConversation?.id === convoId });
+  convoState[convoId] = r.state;
+  executeEffects(convoId, r.effects);
 }
 
 function handleAssistant(d, convoId) {
-  const msg=d.message; if(!msg?.content) return;
+  if(!d.message?.content) return;
   const state = getConvoState(convoId);
   state.lastStreamActivity = Date.now();
-  const isActive = activeConversation?.id === convoId;
-
-  for(const block of msg.content) {
-    if(block.type==='text' && block.text) {
-      state.latestText = block.text;
-      state.latestAgentId = d._agent;
-    } else if(block.type==='tool_use') {
-      if(isActive) {
-        const status = document.getElementById('thinking-status');
-        if(status) status.textContent = formatToolName(block.name);
-        scrollBottom();
-      }
-    }
-  }
+  const r = RundockConversationState.reduce(state, d, { isActive: activeConversation?.id === convoId });
+  convoState[convoId] = r.state;
+  executeEffects(convoId, r.effects);
 }
 
 function handleResult(d, convoId) {
   const state = getConvoState(convoId);
   const isActive = activeConversation?.id === convoId;
   const convo = conversations.find(c => c.id === convoId);
-  const agentId = d._agent || state.activeAgentId || state.latestAgentId;
   let delegationTriggered = false;
+  let reduced = null;
 
   try {
   // Detect agent and skill definitions in responses and route to server.
@@ -725,73 +757,36 @@ function handleResult(d, convoId) {
     }
   }
 
-  // In stream-json mode, the response text arrives via stream_event deltas
-  // and is rendered in real-time. The 'result' message is a completion signal.
-  // Use streamed text if result field is empty (which it usually is in stream-json).
-  let responseText = state.streamingRawText || d.result || state.latestText || '';
-  // Strip RUNDOCK markers from displayed text
-  // DELEGATE: strip the marker block AND any text after it (orchestrator should stop after delegating)
-  responseText = RundockMarkers.stripDelegateTail(responseText).trim();
-  responseText = stripRundockMarkers(responseText).trim();
-
-  // Strip silent-park sentinel and drop if response is a no-op.
-  // The no-op heuristic ONLY applies to turns that are actually silent-park
-  // context: the server flagged the restart silent (state.silentTurn) or the
-  // text carries the literal <silent> sentinel. It must never apply to a
-  // normal turn: legitimate short answers ("Forty.", "Ten.") are shorter
-  // than the 10-char threshold and were being swallowed unrendered, while
-  // still reaching the transcript on disk. Verbose Claude agents masked
-  // this for months; terse Codex/GPT-5 replies surfaced it immediately.
-  const silentStripped = responseText.replace(/<silent>/gi, '').trim();
-  const isParkContext = state.silentTurn || /<silent>/i.test(responseText);
-  const isNoOp = isParkContext && (silentStripped.length < 10 || /^(No response requested\.|\.|OK|ok|Understood\.|Acknowledged\.)$/i.test(silentStripped));
-  if (isNoOp && responseText) {
-    // Silent-park turn: remove any streaming bubble and deferred resume badge from the DOM, reset state, skip render
-    if (state.currentStreamingMsg) {
-      state.currentStreamingMsg.remove();
-    }
-    state.currentStreamingMsg = null; state.streamingRawText = ''; state.latestText = ''; state.latestAgentId = null; state.silentTurn = false;
-    if (!delegationTriggered) finishProcessing(convoId);
-    renderConvoList();
-    return;
-  }
-  responseText = silentStripped;
-
-  if(responseText && convo) {
-    convo.messages.push({role:'agent', content: responseText, agentId, timestamp: new Date().toISOString()});
-    convo.lastAgentId = agentId;
-    convo.lastMessagePreview = stripMd(responseText).substring(0, 80);
-    const viewingChat = isActive && currentView === 'chat';
-    const convoInWorkspace = conversations.some(c => c.id === convoId);
-    if (convoInWorkspace && !viewingChat) {
-      unreadConvos.add(convoId);
-      updateUnreadBadge();
-    }
-  }
-
-  if(isActive) {
-    const t=document.getElementById('thinking-indicator'); if(t) t.remove();
-    if(state.currentStreamingMsg) {
-      // Text was already streamed in real-time. Do a final re-render with complete markdown.
-      const streamEl = state.currentStreamingMsg.querySelector('.streaming-text');
-      if(streamEl && responseText) streamEl.innerHTML = formatMd(responseText);
-      const actSummary = buildActivitySummary(d._toolCalls || [], d._turnStartTime || null);
-      if(actSummary) state.currentStreamingMsg.appendChild(actSummary);
-    } else if(responseText) {
-      // No streaming happened (e.g. very short response). Render now.
-      const msgEl = addAgentMsg(responseText, agentId);
-      const actSummary = buildActivitySummary(d._toolCalls || [], d._turnStartTime || null);
-      if(actSummary && msgEl) msgEl.appendChild(actSummary);
-    }
-  }
+  // Everything from here (silent-park heuristic, message finalisation,
+  // render decisions, processing finish) is decided by the reducer; the
+  // effects are executed against the DOM below. The marker scan above stays
+  // in the glue because it owns the WebSocket sends.
+  reduced = RundockConversationState.reduce(state, d, {
+    isActive,
+    viewingChat: isActive && currentView === 'chat',
+    convoExists: !!convo,
+    convoInWorkspace: conversations.some(c => c.id === convoId),
+    delegationTriggered,
+  });
+  convoState[convoId] = reduced.state;
+  executeEffects(convoId, reduced.effects.filter(ef => ef.type !== 'finish-processing' && ef.type !== 'render-convo-list'));
 
   } catch(err) {
     console.error('[handleResult] Error:', err);
   }
-  state.currentStreamingMsg=null; state.streamingRawText=''; state.latestText=''; state.latestAgentId=null; state.silentTurn=false;
-  // Don't finish processing when the orchestrator just delegated: the delegate is about to start
-  if (!delegationTriggered) finishProcessing(convoId);
-  renderConvoList();
+  // The tail runs even when the render half threw, matching the old
+  // handler's post-catch lines: reset the streaming bubble, finish
+  // processing (unless a delegation is starting) and re-render the list.
+  getConvoState(convoId).currentStreamingMsg = null;
+  if (reduced) {
+    executeEffects(convoId, reduced.effects.filter(ef => ef.type === 'finish-processing' || ef.type === 'render-convo-list'));
+  } else {
+    // reduce itself failed: fall back to the old unconditional reset
+    const st = getConvoState(convoId);
+    st.streamingRawText=''; st.latestText=''; st.latestAgentId=null; st.silentTurn=false; st.hasStreamingBubble=false;
+    if (!delegationTriggered) finishProcessing(convoId);
+    renderConvoList();
+  }
 }
 
 function addSystemMsgToConvo(text, convoId, isError = true) {
@@ -2109,6 +2104,7 @@ function openConversation(id, withAnchor) {
       el.innerHTML = `<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.displayName||'Agent'}<span class="msg-time">${new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></div><div class="msg-bubble"><span class="streaming-text">${formatMd(state.streamingRawText)}</span></div>`;
       m2.appendChild(el);
       state.currentStreamingMsg = el;
+      state.hasStreamingBubble = true; // keep the reducer's bubble flag in sync with this out-of-band creation
     }
     // Show thinking indicator only if no text has been streamed yet.
     // If we have snapshot text, the stream is active and the bubble is unnecessary.
@@ -2235,7 +2231,7 @@ function startProcessing(convoId) {
 }
 function finishProcessing(convoId) {
   const state = getConvoState(convoId);
-  state.isProcessing=false; state.currentStreamingMsg=null;
+  state.isProcessing=false; state.currentStreamingMsg=null; state.hasStreamingBubble=false;
   if(state.processingTimeout) { clearInterval(state.processingTimeout); state.processingTimeout=null; }
   workingConvos.delete(convoId);
   // If user isn't viewing this conversation, mark as unread
