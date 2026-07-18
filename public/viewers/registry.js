@@ -86,6 +86,16 @@ function ensureStyles(doc) {
       grid-template-columns: minmax(0, 1fr) var(--review-sidebar-width, 260px);
       grid-template-rows: minmax(0, 1fr); /* the frame fills the pane; auto rows collapse an iframe to its 150px default */
       column-gap: 20px;
+      /* The shared review panel derives its whole gap box from the pane's
+         padding: sticky top rests on the content box (top gap = padding-top),
+         the -8px margin-right pulls it 8px INTO a 32px padding-right (right
+         gap = 24px), and max-height insets 24px each end. With .viewer-host's
+         zero padding those sums go negative: the panel sits flush to the top
+         and 8px past the pane's edge, which is also exactly the pane's
+         horizontal overflow. Restore the editor pane's padding while review
+         is open (the preview is full-bleed again the moment it closes); the
+         !important outweighs .viewer-host's, by specificity. */
+      padding: 24px 32px !important;
     }
     .editor-content.viewer-host.review-active > .viewer-frame { grid-column: 1; height: 100%; }
     .editor-content.viewer-host.review-active > .review-sidebar { align-self: start; }
