@@ -543,6 +543,15 @@ function handle(d) {
     case 'file_tree': cachedFileTree = d.tree; renderFileTree(d.tree); break;
     case 'file_content': loadFileContent(d.path, d.content); break;
     case 'file_saved': document.getElementById('editor-status').textContent='Saved'; break;
+    case 'path_created':
+      // The tree was refreshed by the preceding file_tree push; open a new
+      // note/board in the editor and reveal it. A new folder just appears.
+      if (d.kind !== 'folder') { ws.send(JSON.stringify({ type: 'read_file', path: d.path })); }
+      setTimeout(() => highlightFileInSidebar(d.path), 0);
+      break;
+    case 'create_error':
+      alert('Could not create "' + d.path + '": ' + d.reason);
+      break;
     case 'agent_saved':
       if (!d.updated) setupComplete = true;
       // Non-default runtimes are worth calling out on the confirmation pill.
@@ -3126,21 +3135,147 @@ function renderFileTree(tree) {
     <span style="color:var(--text-2);font-size:var(--body)">Select a file from the sidebar</span>`;
   buildTree(tree,c);
 }
+// Tree icons keyed by the server-provided file kind, matching the creation
+// menu's entity icons (a board file shows the kanban icon, a note the note
+// icon), so the tree and the "+" menu speak the same visual language.
+const TREE_ICONS = {
+  folder:     '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  folderOpen: '<path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>',
+  note:  FilesMenuModel.ICONS.note,
+  board: FilesMenuModel.ICONS.board,
+  artifact: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="m10 13-2 2 2 2"/><path d="m14 13 2 2-2 2"/>',
+  pdf:   '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 12h4"/><path d="M10 16h2"/>',
+  image: '<rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"/>',
+  file:  '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+};
+function treeIconSvg(inner) {
+  return '<svg class="file-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + inner + '</svg>';
+}
 function buildTree(items,container) {
   for(const item of items) {
     if(item.type==='folder') {
-      const f=document.createElement('div'); f.className='folder-item'; f.innerHTML=`<span class="folder-icon">&#x25B6;</span> ${esc(item.name)}`;
-      f.onclick=()=>{const ch=f.nextElementSibling,ic=f.querySelector('.folder-icon');ch.classList.toggle('collapsed');ic.innerHTML=ch.classList.contains('collapsed')?'&#x25B6;':'&#x25BC;';};
+      const f=document.createElement('div'); f.className='folder-item'; f.innerHTML=`${treeIconSvg(TREE_ICONS.folder)} ${esc(item.name)}`;
+      f.onclick=()=>{const ch=f.nextElementSibling,svg=f.querySelector('svg.file-item-icon');const collapsed=ch.classList.toggle('collapsed');if(svg)svg.innerHTML=collapsed?TREE_ICONS.folder:TREE_ICONS.folderOpen;};
+      f.oncontextmenu=(e)=>{e.preventDefault();openRowContextMenu(e,item.path,'folder');};
       container.appendChild(f);
       const ch=document.createElement('div'); ch.className='file-children collapsed'; buildTree(item.children,ch); container.appendChild(ch);
     } else {
       const fi=document.createElement('div'); fi.className='file-item';
-      fi.innerHTML=`<svg class="file-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> ${esc(item.name)}`;
+      fi.innerHTML=`${treeIconSvg(TREE_ICONS[item.kind]||TREE_ICONS.file)} ${esc(item.name)}`;
       fi.dataset.path = item.path;
       fi.onclick=()=>{document.querySelectorAll('.file-item').forEach(x=>x.classList.remove('active'));fi.classList.add('active');editorReturnView='editor';fileHistory=[];ws.send(JSON.stringify({type:'read_file',path:item.path}));showView('editor');};
+      fi.oncontextmenu=(e)=>{e.preventDefault();openRowContextMenu(e,item.path,'file');};
       container.appendChild(fi);
     }
   }
+}
+
+// ---- Files-sidebar creation menu ("+" header button and row context menu) ----
+// Creatable types and path helpers live in files-menu-model.js (unit-tested);
+// this is the DOM menu that consumes them.
+const CREATABLE_TYPES = FilesMenuModel.CREATABLE_TYPES;
+function contentForKind(kind) {
+  return kind === 'board' && window.Kanban ? window.Kanban.newBoardContent() : '';
+}
+function menuIconSvg(inner) {
+  return '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" '
+    + 'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + inner + '</svg>';
+}
+
+let _filesMenu = null;
+function closeFilesMenu() {
+  if (_filesMenu) { _filesMenu.remove(); _filesMenu = null; }
+}
+// Any floating menu (files or the board's lane menu) closes when this fires, so
+// opening one always dismisses the others and only one is ever open.
+document.addEventListener('rundock:closemenus', closeFilesMenu);
+// Outside-click close in the CAPTURE phase, so a board control's
+// stopPropagation (e.g. the column collapse chevron) cannot stop it. A click
+// INSIDE an open menu lets that item's handler act (it closes itself); a click
+// on a menu TRIGGER lets the trigger toggle itself; anything else closes.
+document.addEventListener('click', (e) => {
+  if (!document.querySelector('.files-menu, .board-lane-popup')) return;
+  if (e.target.closest && e.target.closest('.files-menu, .board-lane-popup, #files-add-btn, .board-lane-menu-btn')) return;
+  document.dispatchEvent(new CustomEvent('rundock:closemenus'));
+}, true);
+
+// A small floating menu at (x, y) built from [label, fn, icon, danger] rows
+// (falsy row = a divider). Returns the menu element.
+function buildFloatingMenu(x, y, rows) {
+  document.dispatchEvent(new CustomEvent('rundock:closemenus')); // dismiss any other open menu first
+  const menu = document.createElement('div');
+  menu.className = 'files-menu';
+  for (const row of rows) {
+    if (!row) { const d = document.createElement('div'); d.className = 'files-menu-divider'; menu.appendChild(d); continue; }
+    const [label, fn, icon, danger] = row;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'files-menu-item' + (danger ? ' danger' : '');
+    btn.innerHTML = (icon ? menuIconSvg(icon) : '') + '<span>' + esc(label) + '</span>';
+    btn.addEventListener('click', (e) => { e.stopPropagation(); closeFilesMenu(); fn(); });
+    menu.appendChild(btn);
+  }
+  document.body.appendChild(menu);
+  const w = menu.offsetWidth, h = menu.offsetHeight;
+  menu.style.left = Math.min(x, window.innerWidth - w - 8) + 'px';
+  menu.style.top = Math.min(y, window.innerHeight - h - 8) + 'px';
+  _filesMenu = menu;
+  return menu;
+}
+
+// Replace the menu's contents with an inline name input (the standing small-
+// input composer grammar): Enter creates, Escape cancels.
+function promptCreate(menu, type, folder) {
+  menu.innerHTML = '';
+  const field = document.createElement('div');
+  field.className = 'files-menu-field';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = type.kind === 'folder' ? 'Folder name' : type.label.replace('New ', '') + ' name';
+  field.appendChild(input);
+  menu.appendChild(field);
+  input.focus();
+  const submit = () => {
+    const rel = FilesMenuModel.creatablePath(folder, input.value, type.ext);
+    if (!rel) { closeFilesMenu(); return; }
+    ws.send(JSON.stringify({ type: 'create_path', kind: type.kind, path: rel, content: contentForKind(type.kind) }));
+    closeFilesMenu();
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); submit(); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeFilesMenu(); }
+  });
+  // Keep the menu open while the field is focused.
+}
+
+// A creation row: opens an inline name field (keeping the chosen type's icon).
+function creationRow(t, x, y, folder) {
+  return [t.label, () => {
+    const m = buildFloatingMenu(x, y, [[t.label, () => {}, t.icon]]);
+    promptCreate(m, t, folder);
+  }, t.icon];
+}
+
+// The "+" header menu: creation rows only, creating at workspace root. The
+// button toggles: clicking it while the menu is open closes it (the button's
+// own click fires before the outside-click handler, so without this it would
+// close and immediately reopen).
+function openCreateMenu(anchor, folder) {
+  if (_filesMenu) { closeFilesMenu(); return; }
+  const r = anchor.getBoundingClientRect();
+  buildFloatingMenu(r.left, r.bottom + 4, CREATABLE_TYPES.map((t) => creationRow(t, r.left, r.bottom + 4, folder)));
+}
+
+// Right-click on a row: the same creation rows (creating IN the folder, or the
+// file's parent), plus clipboard and reveal actions.
+function openRowContextMenu(e, targetPath, targetKind) {
+  const folder = FilesMenuModel.parentFolder(targetPath, targetKind === 'folder');
+  const rows = CREATABLE_TYPES.map((t) => creationRow(t, e.clientX, e.clientY, folder));
+  rows.push(null);
+  rows.push(['Copy workspace path', () => { try { navigator.clipboard.writeText(targetPath); } catch (err) {} }, FilesMenuModel.ICONS.copy]);
+  rows.push(['Copy wikilink', () => { try { navigator.clipboard.writeText(FilesMenuModel.wikilinkFor(targetPath)); } catch (err) {} }, FilesMenuModel.ICONS.link]);
+  rows.push(['Reveal in Finder', () => ws.send(JSON.stringify({ type: 'reveal_in_finder', path: targetPath })), FilesMenuModel.ICONS.reveal]);
+  buildFloatingMenu(e.clientX, e.clientY, rows);
 }
 
 // Editor

@@ -16,6 +16,7 @@
 <script src="/permissions.js"></script>
 <script src="/conversation-list.js"></script>
 <script src="/palette-model.js"></script>
+<script src="/files-menu-model.js"></script>
 <script src="/conversation-state.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -68,7 +69,18 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .sidebar-resize-handle.edge-hover { border-right-color: var(--text-2); }
 .sidebar-resize-handle.dragging { border-right-color: var(--accent); }
 .sidebar > div { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
-.sidebar-header { padding: 24px 16px 8px; }
+.sidebar-header { padding: 24px 16px 8px; position: relative; }
+.files-add-btn { position: absolute; top: 18px; right: 10px; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 6px; color: var(--text-2); }
+.files-add-btn:hover { color: var(--text-1); background: var(--elevated); }
+.files-menu { position: fixed; z-index: 200; min-width: 180px; padding: 4px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.25); display: flex; flex-direction: column; }
+.files-menu-item { display: flex; align-items: center; gap: 9px; text-align: left; padding: 7px 10px; border-radius: 6px; color: var(--text-1); font-size: var(--body); }
+.files-menu-item svg { flex: 0 0 auto; color: var(--text-2); }
+.files-menu-item:hover { background: var(--elevated); }
+.files-menu-item:hover svg { color: var(--text-1); }
+.files-menu-item.danger:hover { color: var(--danger, #E85A5A); }
+.files-menu-divider { height: 1px; background: var(--border); margin: 4px 6px; }
+.files-menu-field { padding: 2px; }
+.files-menu-field input { width: 100%; background: var(--elevated); border: 1px solid var(--accent); border-radius: 6px; color: var(--text-1); font-size: var(--body); padding: 6px 8px; outline: none; }
 .sidebar-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); }
 
 /* Compact agent status list */
@@ -845,7 +857,7 @@ mark.find-match.current,
       <div class="skills-sidebar-list" id="skills-sidebar-list"></div>
     </div>
     <div id="sidebar-files" class="hidden">
-      <div class="sidebar-header"><span class="sidebar-label">Files</span></div>
+      <div class="sidebar-header"><span class="sidebar-label">Files</span><button class="files-add-btn" id="files-add-btn" title="New…" onclick="openCreateMenu(this, '')"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg></button></div>
       <div class="file-tree" id="file-tree"></div>
     </div>
     <div id="sidebar-settings" class="hidden">
