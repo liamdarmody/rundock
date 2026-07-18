@@ -647,6 +647,23 @@ test('the lane menu renames, inserts, and deletes lists with undo', async ({ pag
   await expect(page.locator('.board-lane')).toHaveCount(4);
 });
 
+test('the lane menu moves a column right, reordering it in the file', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'reorder-board.md');
+  const titles = () => page.locator('.board-lane-title');
+  const first = (await titles().nth(0).textContent()) || '';
+  const second = (await titles().nth(1).textContent()) || '';
+  await page.locator('.board-lane').first().locator('.board-lane-menu-btn').click();
+  await page.locator('.board-lane-popup-item', { hasText: 'Move list right' }).click();
+  // Order swapped in the UI and in the file heading order.
+  await expect(titles().nth(0)).toHaveText(second);
+  await expect(titles().nth(1)).toHaveText(first);
+  await expect.poll(async () => {
+    const md = await (await page.request.get('/api/file?path=reorder-board.md')).text();
+    return md.indexOf('## ' + second) < md.indexOf('## ' + first);
+  }).toBe(true);
+});
+
 test('markdown files still open in the rich editor after the registry shim', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'Roadmap-2026.md');

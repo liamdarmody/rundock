@@ -379,6 +379,8 @@ export function mountBoardView({ paneElement, content }, Kanban) {
     menu.className = 'board-lane-popup';
     const items = [
       ['Rename list', () => renameLaneInline(anchor.closest('.board-lane-head'), anchor.closest('.board-lane-head').querySelector('.board-lane-title'), laneIndex)],
+      ...(laneIndex > 0 ? [['Move list left', () => { Kanban.moveLane(board, laneIndex, laneIndex - 1); onChange(); render(); }]] : []),
+      ...(laneIndex < board.lanes.length - 1 ? [['Move list right', () => { Kanban.moveLane(board, laneIndex, laneIndex + 1); onChange(); render(); }]] : []),
       ['Insert list before', () => { Kanban.insertLane(board, laneIndex, 'New list'); onChange(); render(); }],
       ['Insert list after', () => { Kanban.insertLane(board, laneIndex + 1, 'New list'); onChange(); render(); }],
       ['Sort by card text', () => { Kanban.sortLane(board, laneIndex, 'text'); onChange(); render(); }],
