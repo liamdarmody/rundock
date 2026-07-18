@@ -664,6 +664,39 @@ test('the lane menu moves a column right, reordering it in the file', async ({ p
   }).toBe(true);
 });
 
+test('an open file persists across a view switch and is revealed in the tree', async ({ page }) => {
+  await boot(page);
+  await openFilesView(page);
+  // Open a nested file, then collapse its folder.
+  await page.locator('.folder-item', { hasText: 'notes' }).click();
+  await page.locator('.file-item', { hasText: 'pricing-strategy' }).click();
+  await expect(page.locator('#tiptap-editor-pane')).toBeVisible();
+  await page.locator('.folder-item', { hasText: 'notes' }).click(); // collapse
+  // Leave Files for another view, then return.
+  await page.locator('.nav-item[data-nav="team"]').click();
+  await page.locator('.nav-item[data-nav="files"]').click();
+  // The file is still open (not the empty state)...
+  await expect(page.locator('#editor-empty')).toBeHidden();
+  await expect(page.locator('#tiptap-editor-pane')).toBeVisible();
+  // ...and revealed: its folder is expanded again and the row is active.
+  await expect(page.locator('.file-item.active', { hasText: 'pricing-strategy' })).toBeVisible();
+});
+
+test('the editor back control hides when a file is opened straight from the tree', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'proposal.html');
+  await expect(page.locator('#editor-back')).toBeHidden();
+});
+
+test('the editor back control shows when a file was opened from another view', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'proposal.html');
+  await expect(page.locator('#editor-back')).toBeHidden();
+  // Opening from Skills sets a return view, so back becomes useful and appears.
+  await page.evaluate(() => openSkillFile('CLAUDE.md'));
+  await expect(page.locator('#editor-back')).toBeVisible();
+});
+
 test('markdown files still open in the rich editor after the registry shim', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'Roadmap-2026.md');
