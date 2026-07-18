@@ -3073,7 +3073,25 @@ function switchNav(nav) {
   closeFindBar();
   setNavState(nav);
   if(nav==='settings') { showView('settings'); showSettingsSection('workspace'); }
-  else if(nav==='files') { editorReturnView = 'editor'; if(currentFilePath && document.querySelector('.file-item.active')) { showView('editor'); } else { currentFilePath = null; destroyTiptapEditorIfActive(); document.getElementById('editor-header').classList.add('hidden'); document.getElementById('editor-content').classList.add('hidden'); document.getElementById('editor-textarea').classList.add('hidden'); document.getElementById('tiptap-editor-pane').classList.add('hidden'); document.getElementById('editor-empty').classList.remove('hidden'); showView('editor'); } }
+  else if(nav==='files') {
+    editorReturnView = 'editor';
+    if (currentFilePath) {
+      // A file is open: keep it open across the view switch (its editor/viewer
+      // is still mounted, just hidden) and re-reveal it in the tree.
+      showView('editor');
+      highlightFileInSidebar(currentFilePath);
+      updateEditorBackButton();
+    } else {
+      // Nothing open: show the empty state.
+      destroyTiptapEditorIfActive();
+      document.getElementById('editor-header').classList.add('hidden');
+      document.getElementById('editor-content').classList.add('hidden');
+      document.getElementById('editor-textarea').classList.add('hidden');
+      document.getElementById('tiptap-editor-pane').classList.add('hidden');
+      document.getElementById('editor-empty').classList.remove('hidden');
+      showView('editor');
+    }
+  }
   else if(nav==='skills') { showView('skills'); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } else if(skills.length && !currentSkillId) { selectSkill(skills[0].id); } }
   else if(nav==='conversations') { if(activeConversation) { showView('chat'); if(unreadConvos.delete(activeConversation.id)) { updateUnreadBadge(); renderConvoList(); } } else { const target = pickDefaultConversation(); if(target) { openConversation(target.id); } else { newConversation(); } } }
   else if(nav==='team') { showView('home'); renderOrgChart(); }
@@ -3143,6 +3161,7 @@ function loadFileContent(path, content) {
   document.getElementById('editor-status').textContent = '';
   document.getElementById('editor-header').classList.remove('hidden');
   document.getElementById('editor-empty').classList.add('hidden');
+  updateEditorBackButton();
 
   // The file-type registry decides the surface for EVERY path (the FV2
   // swap: the old per-type if-chain is gone). markdown -> Tiptap editor,
@@ -3356,11 +3375,22 @@ function openWikilink(name) {
 
 function highlightFileInSidebar(filePath) {
   document.querySelectorAll('.file-item').forEach(x => x.classList.remove('active'));
-  document.querySelectorAll('.file-item').forEach(fi => {
-    if (fi.dataset.path === filePath) {
-      fi.classList.add('active');
+  const target = Array.from(document.querySelectorAll('.file-item')).find(fi => fi.dataset.path === filePath);
+  if (!target) return;
+  target.classList.add('active');
+  // Reveal it: expand every collapsed ancestor folder so the highlighted file
+  // is actually visible, then scroll it into view within the sidebar.
+  let node = target.parentElement;
+  while (node && node !== document.body) {
+    if (node.classList && node.classList.contains('file-children') && node.classList.contains('collapsed')) {
+      node.classList.remove('collapsed');
+      const folder = node.previousElementSibling;
+      const ic = folder && folder.classList.contains('folder-item') ? folder.querySelector('.folder-icon') : null;
+      if (ic) ic.innerHTML = '&#x25BC;';
     }
-  });
+    node = node.parentElement;
+  }
+  if (target.scrollIntoView) target.scrollIntoView({ block: 'nearest' });
 }
 
 function findFileInTree(items, searchName) {
@@ -3389,6 +3419,17 @@ function findFileInTree(items, searchName) {
 let editorReturnView = 'editor';
 let fileHistory = [];
 
+// The editor back control is only useful when "back" leads somewhere: to the
+// view a file was opened from (Skills, Agents) or to the previous file in a
+// wikilink chain. Opened straight from the file tree with no history, "back"
+// would only blank the pane, which reads as losing your place, so it is hidden.
+function updateEditorBackButton() {
+  const btn = document.getElementById('editor-back');
+  if (!btn) return;
+  const useful = editorReturnView !== 'editor' || fileHistory.length > 0;
+  btn.style.display = useful ? '' : 'none';
+}
+
 function openSkillFile(filePath) {
   editorReturnView = 'skills';
   fileHistory = [];
@@ -3409,9 +3450,11 @@ function editorGoBack() {
     const prev = fileHistory.pop();
     ws.send(JSON.stringify({ type: 'read_file', path: prev }));
     highlightFileInSidebar(prev);
+    updateEditorBackButton();
     return;
   }
-  // Otherwise stay in files view: clear file content, show empty state
+  // No useful back target: this branch is now unreachable from the UI (the
+  // control hides itself in that state), but keep the safe fallback.
   currentFilePath = null;
   destroyTiptapEditorIfActive();
   document.getElementById('editor-header').classList.add('hidden');
