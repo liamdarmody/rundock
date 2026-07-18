@@ -34,6 +34,11 @@
 //     rendering entirely instead of finalising a message.
 //   - agent_switch promotes any in-progress streamed text to a permanent
 //     handoff message (markers stripped) before resetting streaming state.
+//   - cancelled and a process_started carrying a NEW process id both cut the
+//     streaming accumulators (streamingRawText/latestText): a stopped or
+//     superseded turn's partial text must never leak into the next turn's
+//     rendered answer. The already-rendered partial bubble stays in the DOM
+//     as the stopped reply (detached, never removed).
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory(require('./markers.js'));
   else root.RundockConversationState = factory(root.RundockMarkers);
@@ -106,6 +111,21 @@
   function reduceProcessStarted(state, message) {
     if (!message._processId) return none(state);
     const next = { ...state, activeProcessId: message._processId, silentTurn: message.silent === true };
+    // A fresh process can never legitimately inherit streamed text: reset the
+    // streaming accumulators so nothing from a previous turn (cancelled or
+    // superseded) leaks into this turn's deltas or result resolution. Safe
+    // for the delegation handback path: agent_switch (which promotes any
+    // in-progress streamingRawText to a handoff message) always arrives
+    // BEFORE the delegate's process_started and has already reset these.
+    // hasStreamingBubble is deliberately carried through: the glue may reuse
+    // an existing DOM bubble for the new process's stream (see the
+    // stale-done sequence pin).
+    if (message._processId !== state.activeProcessId) {
+      next.streamingRawText = '';
+      next.latestText = '';
+      next.latestAgentId = null;
+      next.afterToolUse = false;
+    }
     // Stale permission cards from the previous process are removed on every
     // new process.
     const effects = [{ type: 'remove-permission-cards' }];
@@ -151,14 +171,30 @@
   }
 
   function reduceCancelled(state, message) {
+    // Cut the streaming accumulators so nothing from the stopped turn carries
+    // forward (r10-phase2 defect: streamingRawText/latestText survived
+    // `cancelled`, so an immediate follow-up turn appended its deltas to the
+    // stale partial and rendered old+new concatenated). The partial bubble
+    // already rendered stays visible as the stopped reply: the bubble
+    // reference is detached (clear-streaming-bubble, AFTER the badge lands
+    // on it) but never removed from the DOM.
+    const next = {
+      ...state,
+      streamingRawText: '',
+      latestText: '',
+      latestAgentId: null,
+      hasStreamingBubble: false,
+      afterToolUse: false,
+    };
     return {
-      state,
+      state: next,
       effects: [
         {
           type: 'add-cancelled-badge',
           toolCalls: message._toolCalls || [],
           turnStartTime: message._turnStartTime || null,
         },
+        { type: 'clear-streaming-bubble' },
         { type: 'notice', content: 'Agent stopped by user.' },
       ],
     };
