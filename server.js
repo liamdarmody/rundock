@@ -5152,7 +5152,10 @@ function resolveClaudeBin() {
   try {
     const { execSync } = require('child_process');
     const lookupCmd = isWindows ? 'where.exe claude' : 'which claude';
-    const output = execSync(lookupCmd, { timeout: 5000, encoding: 'utf-8' }).trim();
+    // PROBE_STDIO closes stdin: on Windows a version/which probe against an
+    // open piped stdin can hang for its full timeout (verified live for
+    // codex, Findings 4/5); the claude probes take the same precaution.
+    const output = execSync(lookupCmd, { timeout: 5000, encoding: 'utf-8', stdio: codexRuntime.PROBE_STDIO }).trim();
     if (!output) return (_resolvedClaudeBin = 'claude');
     if (isWindows) {
       const candidates = output.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
@@ -5242,12 +5245,15 @@ function getRuntimeStatus() {
   } else {
     claudeInstalled = true;
     try {
-      execSync(isWindows ? 'where.exe claude' : 'which claude', { timeout: 5000, encoding: 'utf-8' });
+      // Closed stdin (PROBE_STDIO): an open piped stdin can hang a Windows
+      // version/which probe for its full timeout (Findings 4/5, verified
+      // live for the codex probe; applied consistently to both runtimes).
+      execSync(isWindows ? 'where.exe claude' : 'which claude', { timeout: 5000, encoding: 'utf-8', stdio: codexRuntime.PROBE_STDIO });
     } catch (e) { claudeInstalled = false; }
     claudeVersion = null;
     if (claudeInstalled) {
       try {
-        const out = execSync(`"${resolveClaudeBin()}" --version`, { timeout: 5000, encoding: 'utf-8' });
+        const out = execSync(`"${resolveClaudeBin()}" --version`, { timeout: 5000, encoding: 'utf-8', stdio: codexRuntime.PROBE_STDIO });
         const m = String(out).match(/(\d+\.\d+(?:\.\d+)?(?:-[A-Za-z0-9.]+)?)/);
         claudeVersion = m ? m[1] : null;
       } catch (e) { /* installed but --version failed */ }
@@ -5255,13 +5261,29 @@ function getRuntimeStatus() {
     _claudeProbeCache = { installed: claudeInstalled, version: claudeVersion };
     _claudeProbeTime = Date.now();
   }
-  // Fresh Codex detection (the user may have just installed or signed in),
-  // and refresh the prompt-side cache while we have the answer.
+  // Codex detection, cached with the same policy as the claude probe above
+  // (60s, and a cached "not installed" is never trusted: the user may have
+  // just installed, and that is exactly when they open settings to check).
+  // Finding 5 (Windows VM): detectCodex shells out twice (where + codex
+  // --version) on this WebSocket handler path, and the version probe hung
+  // ~5s per call against an open stdin; even with the closed-stdin fix the
+  // repeat calls should never re-pay the shell-out. The prompt-side cache
+  // (_codexDetectCache, also read by detectCodexCached) doubles as this
+  // probe cache and is refreshed whenever a fresh detection runs.
   let codexStatus;
-  try { codexStatus = codexRuntime.detectCodex(); }
-  catch (e) { codexStatus = { installed: false, authenticated: false, version: null }; }
-  _codexDetectCache = codexStatus;
-  _codexDetectTime = Date.now();
+  if (_codexDetectCache && _codexDetectCache.installed && (Date.now() - _codexDetectTime) < 60000) {
+    // Serve the expensive shell-out results (installed/version) from the
+    // cache, but re-read the cheap presence fields (auth.json, Windows
+    // sandbox config: a stat each) live, so a fresh `codex login` shows on
+    // the very next settings open.
+    codexStatus = { ..._codexDetectCache, ...codexRuntime.codexPresenceFields() };
+    _codexDetectCache = codexStatus;
+  } else {
+    try { codexStatus = codexRuntime.detectCodex(); }
+    catch (e) { codexStatus = { installed: false, authenticated: false, version: null }; }
+    _codexDetectCache = codexStatus;
+    _codexDetectTime = Date.now();
+  }
   return {
     defaultRuntime: 'claude',
     claude: { installed: claudeInstalled, authenticated: claudeInstalled ? _claudeAuthEvidence : false, version: claudeVersion },
@@ -5323,6 +5345,10 @@ function getCodexAppServer() {
       // permission card's (PERMISSION_TIMEOUT_MS), so the card timeout
       // drives the outcome and the module timeout stays a backstop.
       approvalTimeoutMs: PERMISSION_TIMEOUT_MS + 30000,
+      // Slot-release failsafe after an interrupt whose response or
+      // turn/completed never arrives (Finding 6 Mode 2); env-overridable
+      // for tests, like the keepalive interval.
+      interruptFailsafeMs: CODEX_INTERRUPT_FAILSAFE_MS,
       log: (m) => console.log(`[CodexAppServer] ${m}`),
     });
     server.on('ready', ({ version }) => {
@@ -5566,6 +5592,17 @@ function handleCodexApproval(entry, convoId, ev) {
 // worst case. Interval is env-overridable for tests, exactly like the
 // exec-era heartbeat this reinstates.
 const CODEX_KEEPALIVE_MS = parseInt(process.env.RUNDOCK_CODEX_KEEPALIVE_MS || '', 10) || 25000;
+
+// Post-cancel follow-up window tunables (Windows VM Finding 6). Both are
+// env-overridable so tests can run the paths in milliseconds.
+// - Failsafe: how long the protocol client waits after sending an interrupt
+//   before releasing the client-side turn slot locally (Mode 2).
+// - Retry: how long to wait before the single thread/resume retry when the
+//   failure is the transient not-yet-flushed-rollout class (Mode 1). ~2s
+//   matches the observed flush behaviour: the rollout appears shortly after
+//   codex finishes wrapping up the interrupted turn.
+const CODEX_INTERRUPT_FAILSAFE_MS = parseInt(process.env.RUNDOCK_CODEX_INTERRUPT_FAILSAFE_MS || '', 10) || 10000;
+const CODEX_RESUME_RETRY_MS = parseInt(process.env.RUNDOCK_CODEX_RESUME_RETRY_MS || '', 10) || 2000;
 function startCodexTurnKeepalive(entry, convoId) {
   const timer = setInterval(() => {
     // Self-clearing liveness check: the entry has no child process (its turn
@@ -5641,7 +5678,10 @@ function makeCodexEntryControls(entry) {
     if (server && entry._turnThreadId) {
       try {
         const p = server.interruptTurn(entry._turnThreadId);
-        if (p && p.catch) p.catch(() => {});
+        // A failed interrupt is a real signal, not noise (Finding 6 Mode 2:
+        // lost interrupt responses left turns wedged for tens of seconds).
+        // Surface it; the protocol client's failsafe releases the slot.
+        if (p && p.catch) p.catch((e) => console.warn(`[Codex] turn/interrupt failed on thread ${entry._turnThreadId}: ${e.message}`));
       } catch (e) { /* no active turn: nothing to interrupt */ }
     }
   };
@@ -5652,18 +5692,68 @@ function makeCodexEntryControls(entry) {
 // init envelope (same shape as the Claude init: the client stores the id and
 // sends it back as msg.sessionId on the next turn). Shared by direct chats
 // and delegated turns.
-// A resume-shaped thread/resume failure: codex-cli answers a valid-shaped
-// but unknown thread id with -32600 "no rollout found for thread id ..."
-// (verified live against 0.144.3). Real-world triggers: Codex pruning
-// sessions under ~/.codex, thread/delete, a CODEX_HOME change, a workspace
-// synced across machines. The wording patterns are a fallback for CLI
-// releases that phrase it differently. Only ever evaluated against a
+// Classify a thread/resume rejection. Only ever evaluated against a
 // thread/resume rejection, so the generic -32600 code cannot misfire for
-// other requests.
-function isCodexResumeFailure(err) {
+// other requests. Returns:
+//
+//   'transient'  The thread EXISTS but is not readable yet. Captured live
+//                (Windows 11, codex-cli 0.144.4, Finding 6 Mode 1): a resume
+//                arriving seconds after an interrupted turn fails with
+//                "failed to read thread: thread-store internal error: failed
+//                to read session metadata ...rollout-...jsonl: rollout at
+//                ... is empty", because codex had not flushed the rollout
+//                yet (it appeared moments later). Falling back to a fresh
+//                thread here would permanently discard a thread about to
+//                become resumable, so this class retries and then asks the
+//                user to resend, never clearing the stored session id.
+//   'permanent'  The thread is GONE: -32600 "no rollout found for thread id
+//                ..." (verified live against 0.144.3). Real-world triggers:
+//                Codex pruning sessions under ~/.codex, thread/delete, a
+//                CODEX_HOME change, a workspace synced across machines. The
+//                wording patterns are a fallback for CLI releases that
+//                phrase it differently. Recovery starts a fresh thread.
+//   null         Not resume-shaped (transport failure etc.): propagate.
+//
+// Transient wording is checked FIRST: it is more specific, and the
+// read-race message must never fall into the permanent class (that is the
+// exact bug this classification fixes).
+const CODEX_RESUME_TRANSIENT_RE = /rollout at .* is empty|thread-store internal error|failed to read session metadata/i;
+function classifyCodexResumeFailure(err) {
+  if (!err) return null;
+  const message = err.message || '';
+  if (CODEX_RESUME_TRANSIENT_RE.test(message)) return 'transient';
+  if (err.code === -32600) return 'permanent';
+  if (/no rollout|not found/i.test(message)) return 'permanent';
+  return null;
+}
+
+// A turn-start refusal because the thread's previous turn is still winding
+// down (Finding 6 Mode 2). Two sources share the wording: the protocol
+// client's own synchronous guard ("a turn is already active on thread ...")
+// when the local slot has not been released yet, and the server's rejection
+// of turn/start when ITS turn state is still active (the server is
+// authoritative; the local failsafe may have already released the slot).
+// Both are the same user situation: pressed stop, sent the next message too
+// quickly. Surfaced as a retryable notice, never an error card.
+const CODEX_TURN_BUSY_RE = /already active on thread/i;
+function isCodexTurnBusy(err) {
   if (!err) return false;
-  if (err.code === -32600) return true;
-  return /no rollout|not found/i.test(err.message || '');
+  return !!err.codexBusy || CODEX_TURN_BUSY_RE.test(err.message || '');
+}
+
+// The retryable "resend in a moment" notice for both Finding 6 modes.
+// Subtype 'notice' (the neutral pill): 'info' would clear the stored
+// session id client-side, and preserving the session is the whole point.
+const CODEX_BUSY_NOTICE = 'The runtime is still wrapping up the previous turn. Resend your message in a moment.';
+function sendCodexBusyNotice(entry, convoId) {
+  if (entry.busyNoticeSent) return;
+  entry.busyNoticeSent = true;
+  // Suppress any later error surface for this turn: busy is not a failure.
+  entry.errorSent = true;
+  safeSend(JSON.stringify({
+    type: 'system', subtype: 'notice', content: CODEX_BUSY_NOTICE,
+    _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
+  }));
 }
 
 // Returns { server, threadId, resumed } (or null when the conversation moved
@@ -5695,26 +5785,59 @@ async function openCodexThread(entry, convoId, resumeThreadId, model) {
       ({ threadId } = await server.resumeThread(resumeThreadId, threadOpts));
       resumed = true;
     } catch (err) {
-      // Mirror the Claude path's stale-session recovery (isResumeFailure in
-      // the chat close handlers): the stored thread is gone, so tell the
-      // user with the same copy and fall back to a FRESH thread in the same
-      // pass, so this message is still answered instead of the conversation
-      // bricking on every retry. Direct chats use subtype 'info', the
-      // client's stale-session signal, which also clears the stored primary
-      // session id; delegate turns use the neutral 'notice' because 'info'
-      // would clear the ORCHESTRATOR's primary session, and the delegate's
-      // fresh id supersedes the stale one in the sessionIds chain via the
-      // init envelope below. Non-resume-shaped failures still propagate to
-      // the caller's error surface.
-      if (!isCodexResumeFailure(err)) throw err;
+      // Non-resume-shaped failures still propagate to the caller's error
+      // surface; resume-shaped ones split by class (see
+      // classifyCodexResumeFailure).
+      let cls = classifyCodexResumeFailure(err);
+      if (!cls) throw err;
       if (abandoned()) return null;
-      console.log(`[Codex] convo=${convoId} thread/resume failed for ${resumeThreadId} (${err.message}); starting fresh`);
-      safeSend(JSON.stringify({
-        type: 'system', subtype: entry.delegation ? 'notice' : 'info',
-        content: 'Previous session expired. Starting fresh.',
-        _conversationId: convoId, _processId: entry.processId,
-      }));
-      ({ threadId } = await server.startThread(threadOpts));
+      if (cls === 'transient') {
+        // Finding 6 Mode 1: the interrupted thread's rollout has not been
+        // flushed yet. Retry ONCE after a short wait; if the thread is
+        // still unreadable, hand the moment back to the user (busy notice +
+        // clean done via the codexBusy path) with the session id intact.
+        // NEVER fall back to a fresh thread here: the thread becomes
+        // resumable once codex flushes, and a fresh thread would discard it
+        // permanently.
+        console.log(`[Codex] convo=${convoId} thread/resume transient failure for ${resumeThreadId} (${err.message}); retrying in ${CODEX_RESUME_RETRY_MS}ms`);
+        await new Promise(r => setTimeout(r, CODEX_RESUME_RETRY_MS));
+        if (abandoned()) return null;
+        try {
+          ({ threadId } = await server.resumeThread(resumeThreadId, threadOpts));
+          resumed = true;
+        } catch (err2) {
+          const cls2 = classifyCodexResumeFailure(err2);
+          if (cls2 === 'transient') {
+            const busy = new Error(`codex thread ${resumeThreadId} is still settling after the previous turn: ${err2.message}`);
+            busy.codexBusy = true;
+            throw busy;
+          }
+          if (cls2 !== 'permanent') throw err2;
+          // Transient turned permanent on the retry: the thread really is
+          // gone; fall through to the fresh-thread recovery below.
+          cls = 'permanent';
+          err = err2;
+        }
+      }
+      if (!resumed && cls === 'permanent') {
+        // Mirror the Claude path's stale-session recovery (isResumeFailure
+        // in the chat close handlers): the stored thread is gone, so tell
+        // the user with the same copy and fall back to a FRESH thread in
+        // the same pass, so this message is still answered instead of the
+        // conversation bricking on every retry. Direct chats use subtype
+        // 'info', the client's stale-session signal, which also clears the
+        // stored primary session id; delegate turns use the neutral
+        // 'notice' because 'info' would clear the ORCHESTRATOR's primary
+        // session, and the delegate's fresh id supersedes the stale one in
+        // the sessionIds chain via the init envelope below.
+        console.log(`[Codex] convo=${convoId} thread/resume failed for ${resumeThreadId} (${err.message}); starting fresh`);
+        safeSend(JSON.stringify({
+          type: 'system', subtype: entry.delegation ? 'notice' : 'info',
+          content: 'Previous session expired. Starting fresh.',
+          _conversationId: convoId, _processId: entry.processId,
+        }));
+        ({ threadId } = await server.startThread(threadOpts));
+      }
     }
   } else {
     ({ threadId } = await server.startThread(threadOpts));
@@ -5738,6 +5861,21 @@ function handleCodexTurnStartFailure(entry, convoId, err) {
   if (entry._turnEndResolve) entry._turnEndResolve();
   if (entry.cancelled || entry.superseded) {
     if (chatProcesses.get(convoId) === entry) chatProcesses.delete(convoId);
+    return;
+  }
+  if (isCodexTurnBusy(err)) {
+    // Finding 6: the previous (usually just-cancelled) turn is still winding
+    // down, either locally (slot not yet released; the failsafe will free
+    // it) or server-side (the server rejected turn/start; its state is
+    // authoritative). Retryable, not an error: notice + clean done, session
+    // preserved so the resend simply works.
+    console.log(`[Codex] convo=${convoId} turn not started, previous turn still active: ${err.message}`);
+    sendCodexBusyNotice(entry, convoId);
+    sendCodexDone(entry, convoId, 0);
+    if (chatProcesses.get(convoId) === entry) {
+      chatProcesses.delete(convoId);
+      endConvoTransition(convoId, entry);
+    }
     return;
   }
   console.error(`[Codex] convo=${convoId} turn failed to start: ${err.message}`);
@@ -5790,6 +5928,11 @@ function wireCodexDelegate(entry, convoId, prompt, { resumeThreadId = null, mode
     // done hook still fires so handleDelegation can restore the parent.
     if (err && (err.code === 'ENOENT' || err.code === 'EACCES')) {
       handleCodexSpawnError(err, convoId);
+    } else if (!entry.cancelled && isCodexTurnBusy(err)) {
+      // Finding 6: previous turn on the delegate's thread still winding
+      // down. Retryable notice instead of an error card (see
+      // handleCodexTurnStartFailure).
+      sendCodexBusyNotice(entry, convoId);
     } else if (!entry.cancelled) {
       sendCodexError(entry, convoId, err.message);
     }
@@ -5827,6 +5970,12 @@ function handleCodexDelegateEvent(entry, convoId, ev) {
       // never surfaced (only turn/completed ends the turn).
       if (ev.willRetry) {
         console.log(`[Codex] convo=${convoId} delegate transient error (retrying): ${ev.message}`);
+        return;
+      }
+      if (!entry.cancelled && isCodexTurnBusy(ev)) {
+        // Server-side turn still active on the delegate's thread (Finding
+        // 6): retryable notice, never an error card.
+        sendCodexBusyNotice(entry, convoId);
         return;
       }
       if (!entry.cancelled) sendCodexError(entry, convoId, ev.message, ev.kind);
@@ -5991,6 +6140,15 @@ function handleCodexChatEvent(entry, convoId, ev) {
         console.log(`[Codex] convo=${convoId} transient error (retrying): ${ev.message}`);
         return;
       }
+      if (!entry.superseded && !entry.cancelled && isCodexTurnBusy(ev)) {
+        // The SERVER rejected turn/start because the previous turn is still
+        // active there (Finding 6 Mode 2: its state is authoritative even
+        // after the local failsafe freed the slot). Retryable notice, not
+        // an error card; the following done event closes the turn cleanly.
+        console.log(`[Codex] convo=${convoId} turn rejected, previous turn still active server-side: ${ev.message}`);
+        sendCodexBusyNotice(entry, convoId);
+        return;
+      }
       if (!entry.superseded && !entry.cancelled) sendCodexError(entry, convoId, ev.message, ev.kind);
       return;
     case 'done': {
@@ -6010,6 +6168,12 @@ function handleCodexChatEvent(entry, convoId, ev) {
       if (ev.status === 'completed') {
         finishCodexTurn(entry, convoId);
       } else if (ev.status === 'failed') {
+        if (entry.busyNoticeSent) {
+          // Busy is retryable, not a failure: close with a NORMAL done so
+          // the conversation stays healthy for the resend.
+          sendCodexDone(entry, convoId, 0);
+          return;
+        }
         if (!entry.errorSent) {
           sendCodexError(entry, convoId, (ev.error && ev.error.message) || 'Codex turn failed');
         }

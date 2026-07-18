@@ -116,6 +116,8 @@ class CodexAppServer extends EventEmitter {
     const rb = opts.restartBackoff || {};
     this._restartBaseMs = rb.baseMs ?? 500;
     this._restartMaxMs = rb.maxMs ?? 30000;
+    // Interrupt-initiated slot-release failsafe window; see interruptTurn.
+    this._interruptFailsafeMs = opts.interruptFailsafeMs ?? 10000;
     this._shutdownGraceMs = opts.shutdownGraceMs ?? 3000;
     this._log = typeof opts.log === 'function' ? opts.log : () => {};
 
@@ -264,6 +266,7 @@ class CodexAppServer extends EventEmitter {
     // (RESEARCH.md section 3) so the THREAD survives, but the turn itself is
     // unrecoverable: surface it as an error.
     for (const [, state] of this._activeTurns) {
+      if (state.interruptFailsafeTimer) { clearTimeout(state.interruptFailsafeTimer); state.interruptFailsafeTimer = null; }
       for (const [, approval] of state.approvals) clearTimeout(approval.timer);
       state.approvals.clear();
       this._emitTurnEvent(state, { type: 'error', message: 'codex app-server exited mid-turn', kind: 'unknown', willRetry: false });
@@ -454,6 +457,7 @@ class CodexAppServer extends EventEmitter {
       approvals: new Map(),    // server request id -> { timer, respond }
       finished: false,
       startedPromise: null,
+      interruptFailsafeTimer: null, // armed by interruptTurn; see _armInterruptFailsafe
     };
     this._activeTurns.set(threadId, state);
 
@@ -485,7 +489,31 @@ class CodexAppServer extends EventEmitter {
       id = state.turnId;
     }
     if (id == null) throw new Error(`no active turn to interrupt on thread ${threadId}`);
+    // Slot-release failsafe (Windows VM Finding 6, Mode 2): the client-side
+    // active-turn slot normally frees only on the turn's done event, so a
+    // lost interrupt response/turn/completed (observed live with periodic
+    // network stream disconnects) left the slot occupied for tens of
+    // seconds and every follow-up failed with "a turn is already active".
+    // Once an interrupt has been sent, a bounded window is armed: if no
+    // terminal event arrives inside it, the slot is released locally and
+    // done {status:'interrupted'} is emitted. The SERVER's protocol state
+    // stays authoritative for a turn that is genuinely still active there:
+    // a subsequent turn/start it rejects surfaces to the host, which treats
+    // it as retryable.
+    if (state) this._armInterruptFailsafe(state);
     return this.request('turn/interrupt', { threadId, turnId: id });
+  }
+
+  _armInterruptFailsafe(state) {
+    if (state.finished || state.interruptFailsafeTimer) return;
+    const timer = setTimeout(() => {
+      state.interruptFailsafeTimer = null;
+      if (state.finished) return;
+      this._log(`no turn/completed within ${this._interruptFailsafeMs}ms of interrupting thread ${state.threadId}; releasing the turn slot locally`);
+      this._finishTurn(state, { status: 'interrupted' });
+    }, this._interruptFailsafeMs);
+    if (timer.unref) timer.unref();
+    state.interruptFailsafeTimer = timer;
   }
 
   _emitTurnEvent(state, ev) {
@@ -496,6 +524,10 @@ class CodexAppServer extends EventEmitter {
   // Terminal: emits done exactly once and releases the thread's active slot.
   _finishTurn(state, { status, error = null }) {
     if (state.finished) return;
+    if (state.interruptFailsafeTimer) {
+      clearTimeout(state.interruptFailsafeTimer);
+      state.interruptFailsafeTimer = null;
+    }
     for (const [, approval] of state.approvals) {
       clearTimeout(approval.timer);
       // Unblock the server if an approval is still pending at turn end; a
