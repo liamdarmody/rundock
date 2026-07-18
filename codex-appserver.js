@@ -118,6 +118,10 @@ class CodexAppServer extends EventEmitter {
     this._restartMaxMs = rb.maxMs ?? 30000;
     // Interrupt-initiated slot-release failsafe window; see interruptTurn.
     this._interruptFailsafeMs = opts.interruptFailsafeMs ?? 10000;
+    // One interrupt retry before the failsafe fires (Windows Finding 7: the
+    // VM's lost streams could swallow the first turn/interrupt in transit).
+    // Defaults to the halfway point of the failsafe window; injectable.
+    this._interruptRetryMs = opts.interruptRetryMs ?? Math.floor(this._interruptFailsafeMs / 2);
     this._shutdownGraceMs = opts.shutdownGraceMs ?? 3000;
     this._log = typeof opts.log === 'function' ? opts.log : () => {};
 
@@ -130,6 +134,13 @@ class CodexAppServer extends EventEmitter {
     this._nextId = 1;
     this._pending = new Map();     // request id -> { method, resolve, reject, timer }
     this._activeTurns = new Map(); // threadId -> turn state (one active turn per thread)
+    // Tombstones for turns released locally by the interrupt failsafe while
+    // the SERVER may still be running them (Windows Finding 7: an accepted
+    // interrupt the CLI then ignores). Late notifications carrying a
+    // tombstoned turnId are dropped instead of being misrouted to whichever
+    // turn now occupies the thread's slot. Bounded both ways; see
+    // _tombstoneTurn.
+    this._staleTurns = new Map();  // threadId -> Set of released turnIds
     this._restartAttempt = 0;
     this._restartTimer = null;
     this._readBuffer = '';
@@ -265,8 +276,12 @@ class CodexAppServer extends EventEmitter {
     // In-flight turns are gone with the process. Thread state lives on disk
     // (RESEARCH.md section 3) so the THREAD survives, but the turn itself is
     // unrecoverable: surface it as an error.
+    // Tombstones exist to filter late notifications from THIS process; a
+    // fresh process cannot replay them, so they never outlive it.
+    this._staleTurns.clear();
     for (const [, state] of this._activeTurns) {
       if (state.interruptFailsafeTimer) { clearTimeout(state.interruptFailsafeTimer); state.interruptFailsafeTimer = null; }
+      if (state.interruptRetryTimer) { clearTimeout(state.interruptRetryTimer); state.interruptRetryTimer = null; }
       for (const [, approval] of state.approvals) clearTimeout(approval.timer);
       state.approvals.clear();
       this._emitTurnEvent(state, { type: 'error', message: 'codex app-server exited mid-turn', kind: 'unknown', willRetry: false });
@@ -458,6 +473,7 @@ class CodexAppServer extends EventEmitter {
       finished: false,
       startedPromise: null,
       interruptFailsafeTimer: null, // armed by interruptTurn; see _armInterruptFailsafe
+      interruptRetryTimer: null,    // one halfway-point interrupt re-send
     };
     this._activeTurns.set(threadId, state);
 
@@ -510,10 +526,59 @@ class CodexAppServer extends EventEmitter {
       state.interruptFailsafeTimer = null;
       if (state.finished) return;
       this._log(`no turn/completed within ${this._interruptFailsafeMs}ms of interrupting thread ${state.threadId}; releasing the turn slot locally`);
+      // The SERVER may still be running this turn (Windows Finding 7: the
+      // interrupt was accepted but ignored). Tombstone the turnId so its
+      // late notifications are dropped instead of leaking into whichever
+      // turn occupies this thread's slot next.
+      if (state.turnId != null) this._tombstoneTurn(state.threadId, state.turnId);
       this._finishTurn(state, { status: 'interrupted' });
     }, this._interruptFailsafeMs);
     if (timer.unref) timer.unref();
     state.interruptFailsafeTimer = timer;
+    // One interrupt re-send at the (injectable) halfway point: rescues a
+    // first interrupt lost in transit (the VM's periodic stream disconnects)
+    // and is harmless when it landed, because interrupting an ended turn
+    // errors benignly and the rejection is swallowed here.
+    const retryTimer = setTimeout(() => {
+      state.interruptRetryTimer = null;
+      if (state.finished || state.turnId == null) return;
+      this._log(`no turn/completed within ${this._interruptRetryMs}ms of interrupting thread ${state.threadId}; re-sending turn/interrupt for turn ${state.turnId}`);
+      this.request('turn/interrupt', { threadId: state.threadId, turnId: state.turnId })
+        .catch(() => { /* already ended or not running: benign */ });
+    }, this._interruptRetryMs);
+    if (retryTimer.unref) retryTimer.unref();
+    state.interruptRetryTimer = retryTimer;
+  }
+
+  // ── Stale-turn tombstones (Windows Finding 7) ────────────────────────────
+
+  // Bounded per thread (a runaway interrupt loop cannot grow a set without
+  // limit) and across threads (an abandoned thread's tombstones age out
+  // FIFO once many threads have released turns).
+  _tombstoneTurn(threadId, turnId) {
+    let set = this._staleTurns.get(threadId);
+    if (!set) {
+      if (this._staleTurns.size >= 64) {
+        const oldestThread = this._staleTurns.keys().next().value;
+        this._staleTurns.delete(oldestThread);
+      }
+      set = new Set();
+      this._staleTurns.set(threadId, set);
+    }
+    set.add(turnId);
+    while (set.size > 8) set.delete(set.values().next().value);
+  }
+
+  _isStaleTurn(threadId, turnId) {
+    const set = this._staleTurns.get(threadId);
+    return !!(set && set.has(turnId));
+  }
+
+  _clearStaleTurn(threadId, turnId) {
+    const set = this._staleTurns.get(threadId);
+    if (!set) return;
+    set.delete(turnId);
+    if (set.size === 0) this._staleTurns.delete(threadId);
   }
 
   _emitTurnEvent(state, ev) {
@@ -527,6 +592,10 @@ class CodexAppServer extends EventEmitter {
     if (state.interruptFailsafeTimer) {
       clearTimeout(state.interruptFailsafeTimer);
       state.interruptFailsafeTimer = null;
+    }
+    if (state.interruptRetryTimer) {
+      clearTimeout(state.interruptRetryTimer);
+      state.interruptRetryTimer = null;
     }
     for (const [, approval] of state.approvals) {
       clearTimeout(approval.timer);
@@ -542,12 +611,37 @@ class CodexAppServer extends EventEmitter {
 
   // ── Notifications (server to client) ─────────────────────────────────────
 
-  // Demultiplexed strictly by threadId: one process serves many threads and
-  // their notifications interleave on the same pipe (RESEARCH.md section 9).
-  // Unknown methods are ignored by design (section 10).
+  // Demultiplexed by threadId AND turnId: one process serves many threads
+  // and their notifications interleave on the same pipe (RESEARCH.md section
+  // 9), and consecutive turns can overlap on ONE thread when an interrupt is
+  // accepted but ignored (Windows Finding 7: the "cancelled" turn runs to
+  // completion in the background while a new turn streams). threadId alone
+  // picks the slot; the notification's turnId must then match the slot's
+  // turn, or the event is dropped. Unknown methods are ignored by design
+  // (section 10).
   _onNotification(method, params) {
     if (!params || typeof params !== 'object') return;
     const state = params.threadId != null ? this._activeTurns.get(params.threadId) : null;
+    // Every turn-scoped notification carries its turnId: item/* and
+    // thread/tokenUsage/updated and error as params.turnId, turn/started and
+    // turn/completed inside params.turn.
+    const notifTurnId = params.turnId != null ? params.turnId
+      : (params.turn && params.turn.id != null ? params.turn.id : null);
+    if (notifTurnId != null && params.threadId != null && this._isStaleTurn(params.threadId, notifTurnId)) {
+      // A turn released locally by the interrupt failsafe finished on the
+      // server after all: drop everything it emits. Its late turn/completed
+      // is also the signal that nothing more can arrive for it, so the
+      // tombstone (the last internal state held for the turn) is cleared.
+      if (method === 'turn/completed') this._clearStaleTurn(params.threadId, notifTurnId);
+      this._log(`codex app-server: dropping ${method} from superseded turn ${notifTurnId} on thread ${params.threadId}`);
+      return;
+    }
+    if (state && notifTurnId != null && state.turnId != null && notifTurnId !== state.turnId) {
+      // Turn-scoped event for a turn that does not own this thread's slot
+      // (e.g. a zombie whose tombstone aged out): never misroute it.
+      this._log(`codex app-server: dropping ${method} for turn ${notifTurnId} on thread ${params.threadId} (active turn is ${state.turnId})`);
+      return;
+    }
     switch (method) {
       case 'turn/started': {
         // Backup turnId source: the notification can beat the turn/start
@@ -581,7 +675,9 @@ class CodexAppServer extends EventEmitter {
       }
       case 'thread/tokenUsage/updated': {
         // Arrives BEFORE turn/completed; buffer per turn (section 6).
-        if (state && (state.turnId == null || params.turnId == null || params.turnId === state.turnId)) {
+        // Cross-turn mismatches were already dropped by the turn-strict
+        // routing above.
+        if (state) {
           state.usage = normalizeUsage(params.tokenUsage && params.tokenUsage.last);
           this._emitTurnEvent(state, { type: 'usage', usage: state.usage });
         }
