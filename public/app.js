@@ -4837,6 +4837,7 @@ var pendingMessageAnchor = null; // {convoId, text, fragment} — var: openConve
 const PALETTE_GROUP_LIMIT = RundockPalette.GROUP_LIMIT;
 const IS_MAC = /Mac/i.test(navigator.platform);
 let paletteReturnFocus = null; // element to restore focus to on close
+let palettePrevNav = null;     // nav we came from, restored on cancel (destination wins on navigate)
 
 // The nav rail tooltip teaches the shortcut with the right modifier per
 // platform (the Windows and Linux builds have no Cmd key).
@@ -4846,6 +4847,15 @@ function openPalette() {
   if (currentView === 'workspace' || !currentWorkspacePath) return; // no workspace yet
   const overlay = document.getElementById('palette-overlay');
   if (!overlay) return;
+  if (!paletteOpen) {
+    // Search is now the active surface: light the search icon and clear the
+    // origin view's highlight so it does not show through the overlay. Capture
+    // the origin once (guard against a re-entrant open losing the return nav).
+    const prevActive = document.querySelector('.nav-item[data-nav].active');
+    palettePrevNav = prevActive ? prevActive.getAttribute('data-nav') : null;
+    prevActive?.classList.remove('active');
+    document.getElementById('nav-search-btn')?.classList.add('active');
+  }
   paletteOpen = true;
   paletteReturnFocus = document.activeElement;
   overlay.classList.remove('hidden');
@@ -4869,6 +4879,14 @@ function closePalette(opts = {}) {
   // (browsers silently drop it to <body>; an explicit blur is deterministic).
   try { document.activeElement?.blur?.(); } catch (e) {}
   document.getElementById('palette-overlay')?.classList.add('hidden');
+  // Clear the search icon regardless of how we close. On cancel (restoreFocus)
+  // return the highlight to the origin view; on navigate the destination's own
+  // routing sets the active nav, so leave it alone (destination wins).
+  document.getElementById('nav-search-btn')?.classList.remove('active');
+  if (restoreFocus && palettePrevNav) {
+    document.querySelector(`.nav-item[data-nav="${palettePrevNav}"]`)?.classList.add('active');
+  }
+  palettePrevNav = null;
   if (restoreFocus && paletteReturnFocus && document.contains(paletteReturnFocus)) {
     try { paletteReturnFocus.focus(); } catch (e) {}
   }

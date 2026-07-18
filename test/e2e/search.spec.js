@@ -113,6 +113,35 @@ test('nav state: every result type from every origin view lands consistently (SR
   }
 });
 
+// ── search icon active state ────────────────────────────────────────────────
+
+test('nav rail: the search icon activates while the palette is open and the origin view dims', async ({ page }) => {
+  await boot(page);
+  await page.locator('.nav-item[data-nav="files"]').click();
+  await expect(page.locator('.nav-item.active[data-nav="files"]')).toBeVisible();
+  // Opening search lights the search icon and clears the origin highlight, so
+  // no view icon shows through the overlay.
+  await openPalette(page);
+  await expect(page.locator('#nav-search-btn')).toHaveClass(/\bactive\b/);
+  await expect(page.locator('.nav-item[data-nav="files"]')).not.toHaveClass(/\bactive\b/);
+  // Cancelling returns to the view we came from.
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#palette-overlay')).toBeHidden();
+  await expect(page.locator('#nav-search-btn')).not.toHaveClass(/\bactive\b/);
+  await expect(page.locator('.nav-item.active[data-nav="files"]')).toBeVisible();
+});
+
+test('nav rail: navigating from search hands the active icon to the destination, not the origin', async ({ page }) => {
+  await boot(page);
+  await page.locator('.nav-item[data-nav="conversations"]').click();
+  await search(page, 'pricing');
+  await page.locator('.palette-item[data-type="file"]').first().click();
+  // Destination (files) wins; search icon and origin are both cleared.
+  await expect(page.locator('#nav-search-btn')).not.toHaveClass(/\bactive\b/);
+  await expect(page.locator('.nav-item.active[data-nav="files"]')).toBeVisible();
+  await expect(page.locator('.nav-item[data-nav="conversations"]')).not.toHaveClass(/\bactive\b/);
+});
+
 // ── palette golden paths ─────────────────────────────────────────────────────
 
 test('palette: opens from the nav rail icon and via the keyboard shortcut', async ({ page }) => {
