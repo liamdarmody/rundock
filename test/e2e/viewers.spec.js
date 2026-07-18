@@ -505,6 +505,43 @@ test('in-view find covers the frontmatter properties panel', async ({ page }) =>
   await expect(page.locator('#tiptap-properties mark.find-match')).toHaveText('Briefing');
 });
 
+test('a kanban board file opens as a column board and renders rich cards', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'board.md');
+  // Detected as a board (not the markdown editor) by its frontmatter key.
+  await expect(page.locator('.board-lane')).toHaveCount(3);
+  await expect(page.locator('#tiptap-editor-pane')).toBeHidden();
+  const lanes = page.locator('.board-lane-title');
+  await expect(lanes.nth(0)).toHaveText('To do');
+  await expect(lanes.nth(1)).toHaveText('Doing');
+  await expect(lanes.nth(2)).toHaveText('Done');
+  // Cards render styled markdown, not raw syntax.
+  await expect(page.locator('.board-card-text strong', { hasText: 'Review' })).toBeVisible();
+  await expect(page.locator('.board-card-text a.board-wikilink', { hasText: 'Board' })).toBeVisible();
+  await page.screenshot({ path: `${SHOTS}/board-view.png` });
+});
+
+test('opening a board changes zero bytes; adding a card persists canonical markdown', async ({ page }) => {
+  await boot(page);
+  const before = await (await page.request.get('/api/file?path=board.md')).text();
+  await openFromTree(page, 'board.md');
+  await expect(page.locator('.board-lane')).toHaveCount(3);
+  // Merely opening a board must not rewrite it.
+  const afterOpen = await (await page.request.get('/api/file?path=board.md')).text();
+  expect(afterOpen).toBe(before);
+  // Add a card to the first lane through the composer.
+  await page.locator('.board-lane').first().locator('.board-add-open').click();
+  await page.locator('.board-lane').first().locator('.board-add textarea').fill('A brand new card');
+  await page.locator('.board-lane').first().locator('.board-add textarea').press('Enter');
+  await expect(page.locator('.board-card-text', { hasText: 'A brand new card' })).toBeVisible();
+  // The new card persists as a canonical markdown line in the To do lane.
+  await expect.poll(async () => (await (await page.request.get('/api/file?path=board.md')).text()))
+    .toContain('- [ ] A brand new card');
+  const saved = await (await page.request.get('/api/file?path=board.md')).text();
+  expect(saved).toContain('## To do\n\n- [ ] Draft the outline\n- [ ] **Review** the brief\n- [ ] A brand new card');
+  expect(saved.endsWith('%%')).toBe(true); // no trailing newline: still canonical
+});
+
 test('markdown files still open in the rich editor after the registry shim', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'Roadmap-2026.md');

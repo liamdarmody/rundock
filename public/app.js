@@ -3151,8 +3151,45 @@ function loadFileContent(path, content) {
   // lands as one registry entry + one surface function, no dispatch edits.
   loadViewersModule().then((viewers) => {
     if (currentFilePath !== path) return; // stale: another file opened while the module loaded
+    // A markdown file whose frontmatter carries the kanban-plugin key opens as
+    // a board (detection is content-based, so it cannot ride the path-keyed
+    // classify table); everything else dispatches by file kind.
+    if (viewers.classify(path) === 'markdown' && window.Kanban && window.Kanban.isBoardFile(content)) {
+      openBoardFile(path, content);
+      return;
+    }
     const surface = FILE_SURFACES[viewers.classify(path)] || openBinaryOrUnsupportedFile;
     surface(viewers, path, content);
+  });
+}
+
+// Board view: a writable registry view. Mounts the board into the editor pane
+// and wires its edits to the same guarded autosave the editor uses. Unlike the
+// read-only viewers, its getContentForSave is non-null (unless the board holds
+// content the grammar would drop, in which case saving is refused).
+let boardSaveTimer = null;
+function openBoardFile(path, content) {
+  destroyTiptapEditorIfActive();
+  document.getElementById('tiptap-editor-pane').classList.add('hidden');
+  document.getElementById('toggle-preview').classList.add('hidden');
+  document.getElementById('toggle-edit').classList.add('hidden');
+  document.getElementById('editor-textarea').classList.add('hidden');
+  const pane = document.getElementById('editor-content');
+  pane.classList.remove('hidden');
+  pane.className = 'editor-content';
+  import('./viewers/board-view.js').then((mod) => {
+    if (currentFilePath !== path) return; // stale
+    activeFileViewer = mod.mountBoardView({ paneElement: pane, path, content }, window.Kanban);
+    if (typeof activeFileViewer.setOnChange === 'function' && typeof activeFileViewer.getContentForSave === 'function') {
+      activeFileViewer.setOnChange(() => {
+        const md = activeFileViewer.getContentForSave();
+        if (md == null) return; // save refused (droppable content)
+        const status = document.getElementById('editor-status');
+        if (status) { status.textContent = 'Unsaved'; status.style.color = 'var(--attention)'; }
+        clearTimeout(boardSaveTimer);
+        boardSaveTimer = setTimeout(() => saveFileGuarded(path, md), 500);
+      });
+    }
   });
 }
 

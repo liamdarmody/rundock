@@ -109,6 +109,10 @@ function buildFixture() {
     '<p>A third needle sits far below for the scroll.</p>',
     '</body></html>',
   ].join('\n'));
+  // A canonical Kanban board (frontmatter carries the kanban-plugin key), used
+  // to prove the board registry view renders columns and round-trips bytes.
+  fs.writeFileSync(path.join(workspace, 'board.md'),
+    "---\n\nkanban-plugin: board\n\n---\n\n## To do\n\n- [ ] Draft the outline\n- [ ] **Review** the brief\n\n\n## Doing\n\n- [ ] Wire the [[Board]] view\n\n\n## Done\n\n- [ ] Ship it\n\n\n\n\n%% kanban:settings\n```\n{\"kanban-plugin\":\"board\",\"list-collapse\":[false,false,false]}\n```\n%%");
   fs.writeFileSync(path.join(workspace, 'chart.png'), buildPng());
   fs.writeFileSync(path.join(workspace, 'report.pdf'), Buffer.from(
     '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n' +
