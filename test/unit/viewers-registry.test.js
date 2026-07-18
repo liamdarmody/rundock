@@ -135,7 +135,8 @@ describe('viewer mounts', () => {
     const el = pane();
     const handle = mountPdfViewer({ paneElement: el, path: 'docs/report.pdf' });
     const iframe = el.querySelector('iframe.viewer-frame');
-    assert.equal(iframe.getAttribute('src'), '/workspace-file?path=docs%2Freport.pdf');
+    // Opens with the pages/thumbnails panel collapsed (navpanes=0).
+    assert.equal(iframe.getAttribute('src'), '/workspace-file?path=docs%2Freport.pdf#navpanes=0');
     assert.equal(iframe.hasAttribute('srcdoc'), false);
     handle.destroy();
   });
