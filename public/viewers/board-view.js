@@ -29,6 +29,13 @@ function ensureStyles(doc) {
     .board-lane-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
     .board-lane-title { font-size: var(--body); font-weight: 600; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .board-lane-count { font-size: var(--caption); color: var(--text-2); font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; margin-left: auto; }
+    .board-lane-menu-btn { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 6px; color: var(--text-2); }
+    .board-lane-menu-btn:hover { color: var(--text-1); background: var(--elevated); }
+    .board-lane-rename { flex: 1; min-width: 0; background: var(--elevated); border: 1px solid var(--accent); border-radius: 6px; color: var(--text-1); font-size: var(--body); font-weight: 600; padding: 3px 8px; outline: none; }
+    .board-lane-popup { position: absolute; z-index: 10; min-width: 180px; padding: 4px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.25); display: flex; flex-direction: column; }
+    .board-lane-popup-item { text-align: left; padding: 7px 10px; border-radius: 6px; color: var(--text-1); font-size: var(--body); }
+    .board-lane-popup-item:hover { background: var(--elevated); }
+    .board-lane-popup-item.danger:hover { color: var(--danger, #E85A5A); }
     .board-lane-body { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; min-height: 8px; }
     .board-card { position: relative; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: var(--body); color: var(--text-1); line-height: 1.5; cursor: grab; }
     .board-card:hover { border-color: var(--text-2); }
@@ -148,8 +155,17 @@ export function mountBoardView({ paneElement, content }, Kanban) {
     const count = doc.createElement('span');
     count.className = 'board-lane-count';
     count.textContent = String(lane.items.length);
+    const menuBtn = doc.createElement('button');
+    menuBtn.type = 'button';
+    menuBtn.className = 'board-lane-menu-btn';
+    menuBtn.title = 'List actions';
+    menuBtn.appendChild(iconSvg(doc, ['M12 5.5a.6.6 0 100-1.2.6.6 0 000 1.2', 'M12 12.6a.6.6 0 100-1.2.6.6 0 000 1.2', 'M12 19.7a.6.6 0 100-1.2.6.6 0 000 1.2']));
+    menuBtn.addEventListener('click', (e) => { e.stopPropagation(); openLaneMenu(menuBtn, laneIndex); });
     head.appendChild(title);
     head.appendChild(count);
+    head.appendChild(menuBtn);
+    // Double-click the title to rename in place.
+    title.addEventListener('dblclick', () => renameLaneInline(head, title, laneIndex));
     el.appendChild(head);
 
     const body = doc.createElement('div');
@@ -311,21 +327,90 @@ export function mountBoardView({ paneElement, content }, Kanban) {
     ta.addEventListener('blur', () => finish(true)); // click-away saves
   }
 
-  function deleteCardWithUndo(laneIndex, itemIndex) {
+  // Lane (three-dot) menu: every column operation the serializer supports.
+  // Destructive ones (archive, delete) run through withUndo.
+  let openMenu = null;
+  function closeLaneMenu() { if (openMenu) { openMenu.remove(); openMenu = null; doc.removeEventListener('click', closeLaneMenu); } }
+
+  function openLaneMenu(anchor, laneIndex) {
+    closeLaneMenu();
     const lane = board.lanes[laneIndex];
     if (!lane) return;
-    const removed = lane.items[itemIndex];
-    Kanban.deleteItem(board, laneIndex, itemIndex);
+    const menu = doc.createElement('div');
+    menu.className = 'board-lane-popup';
+    const items = [
+      ['Rename list', () => renameLaneInline(anchor.closest('.board-lane-head'), anchor.closest('.board-lane-head').querySelector('.board-lane-title'), laneIndex)],
+      ['Insert list before', () => { Kanban.insertLane(board, laneIndex, 'New list'); onChange(); render(); }],
+      ['Insert list after', () => { Kanban.insertLane(board, laneIndex + 1, 'New list'); onChange(); render(); }],
+      ['Sort by card text', () => { Kanban.sortLane(board, laneIndex, 'text'); onChange(); render(); }],
+      ['Sort by tags', () => { Kanban.sortLane(board, laneIndex, 'tags'); onChange(); render(); }],
+      ['Archive all cards', () => withUndo('Cards archived', () => Kanban.archiveLaneCards(board, laneIndex))],
+      ['Archive list', () => withUndo('List archived', () => Kanban.archiveLane(board, laneIndex))],
+      ['Delete list', () => withUndo('List deleted', () => Kanban.deleteLane(board, laneIndex))],
+    ];
+    for (const [label, fn] of items) {
+      const row = doc.createElement('button');
+      row.type = 'button';
+      row.className = 'board-lane-popup-item' + (/^(Archive|Delete)/.test(label) ? ' danger' : '');
+      row.textContent = label;
+      row.addEventListener('click', (e) => { e.stopPropagation(); closeLaneMenu(); fn(); });
+      menu.appendChild(row);
+    }
+    const r = anchor.getBoundingClientRect();
+    const host = paneElement.getBoundingClientRect();
+    menu.style.top = (r.bottom - host.top + 4) + 'px';
+    menu.style.left = Math.max(4, r.right - host.left - 180) + 'px';
+    paneElement.appendChild(menu);
+    openMenu = menu;
+    // Close on the next document click (this click is still propagating, so
+    // defer the listener registration by a tick).
+    setTimeout(() => doc.addEventListener('click', closeLaneMenu), 0);
+  }
+
+  function renameLaneInline(head, titleEl, laneIndex) {
+    closeLaneMenu();
+    const lane = board.lanes[laneIndex];
+    if (!lane || head.querySelector('input.board-lane-rename')) return;
+    const input = doc.createElement('input');
+    input.className = 'board-lane-rename';
+    input.value = lane.maxItems ? `${lane.title} (${lane.maxItems})` : lane.title;
+    titleEl.replaceWith(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const finish = (commit) => {
+      if (done) return;
+      done = true;
+      const v = input.value.trim();
+      if (commit && v) { try { Kanban.renameLane(board, laneIndex, v); onChange(); } catch (e) {} }
+      render();
+    };
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+    input.addEventListener('blur', () => finish(true));
+  }
+
+  // Run a destructive mutation with a single-level, in-session undo. Undo
+  // restores a full snapshot of the board taken before the mutation, so it is
+  // correct for card and lane operations alike (the closure's board is
+  // reassigned; getContentForSave serializes whatever board currently is).
+  function withUndo(label, mutate) {
+    const snapshot = Kanban.serialize(board);
+    mutate();
     onChange();
     render();
-    showUndoToast('Card deleted', () => {
-      // Restore into the same position (clamped, in case the lane shrank).
-      const l = board.lanes[laneIndex];
-      if (!l) return;
-      l.items.splice(Math.min(itemIndex, l.items.length), 0, removed);
+    showUndoToast(label, () => {
+      board = Kanban.parse(snapshot);
       onChange();
       render();
     });
+  }
+
+  function deleteCardWithUndo(laneIndex, itemIndex) {
+    if (!board.lanes[laneIndex] || !board.lanes[laneIndex].items[itemIndex]) return;
+    withUndo('Card deleted', () => Kanban.deleteItem(board, laneIndex, itemIndex));
   }
 
   let undoTimer = null;
@@ -404,6 +489,8 @@ export function mountBoardView({ paneElement, content }, Kanban) {
       : () => Kanban.serialize(board),
     setOnChange(cb) { onChange = typeof cb === 'function' ? cb : (() => {}); },
     destroy() {
+      closeLaneMenu();
+      clearTimeout(undoTimer);
       paneElement.classList.remove('viewer-host', 'board-host');
       paneElement.innerHTML = '';
     },

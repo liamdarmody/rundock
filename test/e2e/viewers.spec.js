@@ -577,6 +577,33 @@ test('deleting a board card is undoable in-session', async ({ page }) => {
     .toContain('- [ ] Ship it');
 });
 
+test('the lane menu renames, inserts, and deletes lists with undo', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'board.md');
+  await expect(page.locator('.board-lane')).toHaveCount(3);
+
+  // Rename the first lane via the menu.
+  await page.locator('.board-lane').first().locator('.board-lane-menu-btn').click();
+  await page.locator('.board-lane-popup-item', { hasText: 'Rename list' }).click();
+  const rename = page.locator('input.board-lane-rename');
+  await expect(rename).toBeVisible();
+  await rename.fill('Icebox');
+  await rename.press('Enter');
+  await expect(page.locator('.board-lane-title', { hasText: 'Icebox' })).toBeVisible();
+  await expect.poll(async () => (await (await page.request.get('/api/file?path=board.md')).text()))
+    .toContain('## Icebox');
+
+  // Insert a list after the first, then delete it with undo.
+  await page.locator('.board-lane').first().locator('.board-lane-menu-btn').click();
+  await page.locator('.board-lane-popup-item', { hasText: 'Insert list after' }).click();
+  await expect(page.locator('.board-lane')).toHaveCount(4);
+  await page.locator('.board-lane').nth(1).locator('.board-lane-menu-btn').click();
+  await page.locator('.board-lane-popup-item', { hasText: 'Delete list' }).click();
+  await expect(page.locator('.board-lane')).toHaveCount(3);
+  await page.locator('.board-undo-btn').click();
+  await expect(page.locator('.board-lane')).toHaveCount(4);
+});
+
 test('markdown files still open in the rich editor after the registry shim', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'Roadmap-2026.md');
