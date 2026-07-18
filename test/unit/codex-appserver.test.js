@@ -534,6 +534,99 @@ test('interrupt failsafe: a lost interrupt response/turn-completed frees the slo
   }
 });
 
+test('zombie interrupt (Windows Finding 7): the released turn\'s late events are dropped and logged, never leaked into the next turn\'s subscription', async () => {
+  // Live evidence (codex-cli 0.144.4 on Windows ARM): turn/interrupt is
+  // accepted (empty response) but the CLI never emits turn/completed and the
+  // "cancelled" turn runs to completion in the background. When the next
+  // turn started on the SAME thread, the zombie's eventual item/completed
+  // agentMessage was attributed to the new turn's subscription and its full
+  // text leaked into the new reply. Turn-scoped events must route by turnId,
+  // never by threadId alone.
+  const ZOMBIE_TEXT = 'one two three four five six seven eight nine ten';
+  const dir = makeDir({
+    appServer: {
+      zombieInterrupt: { resumeDelayMs: 700 },
+      rules: [
+        { match: { promptIncludes: 'count slowly' }, deltas: ['one ', 'two '], text: ZOMBIE_TEXT },
+        // delayMs holds the new turn open past the zombie's resume, so the
+        // zombie's flood arrives MID new turn, the observed live shape.
+        { match: { promptIncludes: 'real question' }, deltas: ['The real '], text: 'The real answer.', delayMs: 1400 },
+      ],
+    },
+  });
+  const logs = [];
+  const server = makeServer(dir, { interruptFailsafeMs: 200, log: (l) => logs.push(l) });
+  try {
+    await server.start();
+    const { threadId } = await server.startThread({ cwd: dir });
+    const sub = server.startTurn(threadId, 'count slowly please');
+    const events1 = record(sub);
+    await nextEvent(sub, 'delta');
+    const { turnId: zombieTurnId } = await sub.started;
+    const doneP = nextEvent(sub, 'done');
+    // Accepted (the request resolves) but no turn/completed ever follows:
+    // the failsafe releases the slot locally.
+    await server.interruptTurn(threadId);
+    const done1 = await doneP;
+    assert.strictEqual(done1.status, 'interrupted', 'failsafe releases the slot');
+
+    // The slot is free: a new turn starts on the SAME thread while the
+    // zombie still runs in the background.
+    const sub2 = server.startTurn(threadId, 'real question please');
+    const events2 = record(sub2);
+    const done2 = await nextEvent(sub2, 'done', { timeout: 20000 });
+    assert.strictEqual(done2.status, 'completed');
+
+    // The new subscription received ONLY its own turn's events.
+    const texts2 = events2.filter(e => e.type === 'text').map(e => e.text);
+    assert.deepStrictEqual(texts2, ['The real answer.'], 'zombie item/completed text must not reach the new subscription');
+    const deltas2 = events2.filter(e => e.type === 'delta').map(e => e.text).join('');
+    assert.strictEqual(deltas2, 'The real ', 'zombie deltas must not reach the new subscription');
+    assert.strictEqual(events2.filter(e => e.type === 'done').length, 1, 'exactly one done on the new subscription');
+
+    // The zombie subscription stayed closed after its synthesised done.
+    const done1Index = events1.findIndex(e => e.type === 'done');
+    assert.strictEqual(events1.length, done1Index + 1, 'no events after done on the zombie subscription');
+
+    // The drops were logged with the offending turn and thread ids.
+    assert.ok(logs.some(l => l.includes(zombieTurnId) && l.includes(threadId)),
+      `expected a dropped-event log naming turn ${zombieTurnId} and thread ${threadId}; got: ${logs.join(' | ')}`);
+  } finally {
+    await server.shutdown();
+  }
+});
+
+test('interrupt retry: turn/interrupt is re-sent once at the (injectable) halfway point when no turn/completed arrives', async () => {
+  // Lost streams on the Windows VM meant a single interrupt could vanish in
+  // transit; one retry before the failsafe rescues that case and is benign
+  // when the first landed (interrupting an ended turn errors harmlessly).
+  const dir = makeDir({
+    appServer: {
+      zombieInterrupt: { resumeDelayMs: 5000 },
+      rules: [{ match: { promptIncludes: 'count slowly' }, deltas: ['one '], text: 'one two three' }],
+    },
+  });
+  const server = makeServer(dir, { interruptFailsafeMs: 400, interruptRetryMs: 100 });
+  try {
+    await server.start();
+    const { threadId } = await server.startThread({ cwd: dir });
+    const sub = server.startTurn(threadId, 'count slowly please');
+    await nextEvent(sub, 'delta');
+    const { turnId } = await sub.started;
+    const doneP = nextEvent(sub, 'done');
+    await server.interruptTurn(threadId);
+    const done = await doneP;
+    assert.strictEqual(done.status, 'interrupted');
+    // Exactly two interrupts reached the server (the original plus one
+    // retry), both naming the same turn.
+    const interrupts = readInvocations(dir).filter(e => e.method === 'turn/interrupt');
+    assert.strictEqual(interrupts.length, 2, 'one retry at the halfway point, not a storm');
+    assert.ok(interrupts.every(e => e.params.turnId === turnId), 'the retry names the original turn');
+  } finally {
+    await server.shutdown();
+  }
+});
+
 // ── Request-level failure modes ─────────────────────────────────────────────
 
 test('request timeout rejects when the server never answers', async () => {

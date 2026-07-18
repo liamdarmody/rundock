@@ -5349,6 +5349,7 @@ function getCodexAppServer() {
       // turn/completed never arrives (Finding 6 Mode 2); env-overridable
       // for tests, like the keepalive interval.
       interruptFailsafeMs: CODEX_INTERRUPT_FAILSAFE_MS,
+      interruptRetryMs: CODEX_INTERRUPT_RETRY_MS,
       log: (m) => console.log(`[CodexAppServer] ${m}`),
     });
     server.on('ready', ({ version }) => {
@@ -5602,6 +5603,9 @@ const CODEX_KEEPALIVE_MS = parseInt(process.env.RUNDOCK_CODEX_KEEPALIVE_MS || ''
 //   matches the observed flush behaviour: the rollout appears shortly after
 //   codex finishes wrapping up the interrupted turn.
 const CODEX_INTERRUPT_FAILSAFE_MS = parseInt(process.env.RUNDOCK_CODEX_INTERRUPT_FAILSAFE_MS || '', 10) || 10000;
+// One interrupt re-send before the failsafe (Windows Finding 7); the client
+// defaults to the halfway point of the failsafe window when unset.
+const CODEX_INTERRUPT_RETRY_MS = parseInt(process.env.RUNDOCK_CODEX_INTERRUPT_RETRY_MS || '', 10) || undefined;
 const CODEX_RESUME_RETRY_MS = parseInt(process.env.RUNDOCK_CODEX_RESUME_RETRY_MS || '', 10) || 2000;
 function startCodexTurnKeepalive(entry, convoId) {
   const timer = setInterval(() => {
@@ -5957,6 +5961,9 @@ function handleCodexDelegateEvent(entry, convoId, ev) {
       }
       return;
     case 'text':
+      // Belt and braces for Finding 7, same as the direct-chat handler:
+      // post-done text can only be a superseded turn's leakage.
+      if (entry.exited) return;
       entry.responseText = entry.responseText ? entry.responseText + '\n' + ev.text : ev.text;
       return;
     case 'usage':
@@ -6125,6 +6132,11 @@ function handleCodexChatEvent(entry, convoId, ev) {
       }
       return;
     case 'text':
+      // Belt and braces for Finding 7: the protocol client routes events by
+      // turnId and a finished subscription emits nothing, so text after this
+      // entry's done can only be leakage from a superseded turn. Never
+      // accumulate it into a turn that has already delivered its result.
+      if (entry.exited) return;
       // Authoritative full item text; items join with a blank-free newline,
       // matching the exec-era text-event behaviour.
       entry.responseText = entry.responseText ? entry.responseText + '\n' + ev.text : ev.text;
