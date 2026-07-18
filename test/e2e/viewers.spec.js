@@ -664,6 +664,19 @@ test('the lane menu moves a column right, reordering it in the file', async ({ p
   }).toBe(true);
 });
 
+test('frontmatter panel: wikilinks are inline links, rows have svg icons', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'briefing.md');
+  await expect(page.locator('#tiptap-properties.visible')).toBeVisible();
+  // The related wikilinks render as inline links, not pills.
+  await expect(page.locator('#tiptap-properties .prop-link-item')).toHaveCount(2);
+  await expect(page.locator('#tiptap-properties .prop-link-item a.prop-wikilink').first()).toBeVisible();
+  // Every row carries an svg type icon (not a unicode glyph).
+  const iconCount = await page.locator('#tiptap-properties .prop-icon svg').count();
+  expect(iconCount).toBeGreaterThanOrEqual(2);
+  await page.screenshot({ path: `${SHOTS}/frontmatter-parity.png` });
+});
+
 test('an open file persists across a view switch and is revealed in the tree', async ({ page }) => {
   await boot(page);
   await openFilesView(page);

@@ -9,15 +9,24 @@
 // 'object' | 'null'. The panel uses the type to pick an icon and a value
 // renderer; it never mutates the underlying data in v1.
 
-const TYPE_ICONS = {
-  string: 'T',
-  number: '#',
-  date:   '▦',
-  bool:   '◉',
-  list:   '⊟',
-  object: '{ }',
-  null:   '∅',
+// Per-type row icons as Lucide-style inline SVGs (24 viewBox, 1.8 stroke, round
+// caps), matching Obsidian's property-type icons far better than glyphs did.
+const TYPE_ICON_PATHS = {
+  string: ['M4 7V5h16v2', 'M9 19h6', 'M12 5v14'],                           // type
+  number: ['M4 9h16', 'M4 15h16', 'M10 3 8 21', 'M16 3l-2 18'],            // hash
+  date:   ['M8 2v4', 'M16 2v4', 'M3 10h18', 'M5 4h14a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z'], // calendar
+  bool:   ['m9 11 3 3L22 4', 'M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11'], // check-square
+  list:   ['M8 6h13', 'M8 12h13', 'M8 18h13', 'M3 6h.01', 'M3 12h.01', 'M3 18h.01'],       // list
+  object: ['M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1', 'M16 3h1a2 2 0 0 1 2 2v5a2 2 0 0 0 2 2 2 2 0 0 0-2 2v5a2 2 0 0 1-2 2h-1'], // braces
+  null:   ['M5 12h14'],                                                     // minus
 };
+
+function typeIconSvg(type) {
+  const paths = TYPE_ICON_PATHS[type] || TYPE_ICON_PATHS.string;
+  return '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" '
+    + 'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+    + paths.map((d) => `<path d="${d}"/>`).join('') + '</svg>';
+}
 
 function inferType(value) {
   if (value === null || value === undefined) return 'null';
@@ -76,7 +85,7 @@ function renderWikilinkValue(link, resolveWikilink) {
   return `<a class="prop-wikilink${dead ? ' dead' : ''}" tabindex="0" data-target="${escapeHtml(link.target)}"${dead ? ' title="No matching file in this workspace"' : ''}>${escapeHtml(display)}</a>`;
 }
 
-function renderValue(value, type, resolveWikilink) {
+function renderValue(value, type, resolveWikilink, editable) {
   if (type === 'null') return '<span class="prop-value empty">empty</span>';
   if (type === 'bool') {
     const on = value === true;
@@ -86,14 +95,21 @@ function renderValue(value, type, resolveWikilink) {
     return `<span class="prop-value date">${escapeHtml(dateString(value))}</span>`;
   }
   if (type === 'list') {
-    const chips = value
+    // Wikilink items render as inline links (Obsidian's grammar), keeping the
+    // remove affordance; plain items stay as tag-style pills.
+    const items = value
       .map((v, i) => {
         const link = parsePropWikilink(v);
-        const inner = link ? renderWikilinkValue(link, resolveWikilink) : escapeHtml(String(v));
-        return `<span class="prop-chip" data-item-index="${i}">${inner}<button type="button" class="prop-chip-remove" title="Remove">&times;</button></span>`;
+        const remove = '<button type="button" class="prop-chip-remove" title="Remove">&times;</button>';
+        return link
+          ? `<span class="prop-link-item" data-item-index="${i}">${renderWikilinkValue(link, resolveWikilink)}${remove}</span>`
+          : `<span class="prop-chip" data-item-index="${i}">${escapeHtml(String(v))}${remove}</span>`;
       })
       .join('');
-    return `<span class="prop-value list">${chips || '<span class="empty">empty</span>'}</span>`;
+    // Inline add affordance, always present (subtle) rather than a hover row,
+    // so adding reads like Obsidian.
+    const add = editable ? '<button type="button" class="prop-add" title="Add item">+</button>' : '';
+    return `<span class="prop-value list">${items || '<span class="empty">empty</span>'}${add}</span>`;
   }
   if (type === 'number') {
     return `<span class="prop-value number">${escapeHtml(String(value))}</span>`;
@@ -136,10 +152,9 @@ export function renderProperties(container, parsed, opts = {}) {
     const editable = onEditProperty && ['string', 'number', 'date', 'bool', 'list', 'null'].includes(type);
     rows.push(`
       <div class="prop-row${editable ? ' editable' : ''}" data-prop-key="${escapeHtml(key)}" data-prop-type="${escapeHtml(type)}">
-        <span class="prop-icon" title="${escapeHtml(type)}">${TYPE_ICONS[type] || 'T'}</span>
+        <span class="prop-icon" title="${escapeHtml(type)}">${typeIconSvg(type)}</span>
         <span class="prop-key">${escapeHtml(key)}</span>
-        ${renderValue(value, type, resolveWikilink)}
-        ${editable && type === 'list' ? '<button type="button" class="prop-add" title="Add item">+</button>' : ''}
+        ${renderValue(value, type, resolveWikilink, editable)}
       </div>
     `);
   }
@@ -217,7 +232,9 @@ function attachEditing(container, parsed, onEditProperty) {
     const input = doc.createElement('input');
     input.className = 'prop-edit-input prop-add-input';
     input.setAttribute('aria-label', `Add item to ${key}`);
-    valueEl.appendChild(input);
+    // Insert before the inline "+" so the field sits among the items.
+    const addBtn = valueEl.querySelector('.prop-add');
+    if (addBtn) valueEl.insertBefore(input, addBtn); else valueEl.appendChild(input);
     input.focus();
     let done = false;
     const finish = (commit) => {
@@ -252,7 +269,7 @@ function attachEditing(container, parsed, onEditProperty) {
     // untouched items keep their exact bytes (never re-parsed).
     const removeBtn = event.target.closest('.prop-chip-remove');
     if (removeBtn) {
-      const idx = Number(removeBtn.closest('.prop-chip').getAttribute('data-item-index'));
+      const idx = Number(removeBtn.closest('[data-item-index]').getAttribute('data-item-index'));
       onEditProperty(key, { list: { remove: idx } });
       return;
     }

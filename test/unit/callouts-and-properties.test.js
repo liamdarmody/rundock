@@ -115,6 +115,45 @@ describe('frontmatter wikilink properties', () => {
     assert.deepEqual(edits, [['tags', { list: { add: 'gamma' } }]], 'commit routes a byte-honest list add');
   });
 
+  test('wikilink list items render as inline links, not pills; plain items stay pills', () => {
+    const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
+    global.HTMLElement = dom.window.HTMLElement;
+    const container = dom.window.document.getElementById('p');
+    renderProperties(container, { related: ['[[A Note]]', 'plaintag'] }, {
+      onWikilinkClick: () => {}, resolveWikilink: () => true, onEditProperty: () => true,
+    });
+    const linkItems = container.querySelectorAll('.prop-link-item');
+    assert.equal(linkItems.length, 1, 'the wikilink item is a link item, not a pill');
+    assert.ok(linkItems[0].querySelector('a.prop-wikilink'), 'it contains the link');
+    assert.ok(linkItems[0].querySelector('.prop-chip-remove'), 'it keeps the remove affordance');
+    const chips = container.querySelectorAll('.prop-chip');
+    assert.equal(chips.length, 1, 'the plain tag stays a pill');
+    assert.equal(chips[0].textContent.replace(/×|×/g, '').trim(), 'plaintag');
+  });
+
+  test('removing a wikilink list item routes the correct index', () => {
+    const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
+    global.HTMLElement = dom.window.HTMLElement;
+    const container = dom.window.document.getElementById('p');
+    const edits = [];
+    renderProperties(container, { related: ['[[A]]', '[[B]]'] }, {
+      onWikilinkClick: () => {}, resolveWikilink: () => true,
+      onEditProperty: (k, v) => { edits.push([k, v]); return true; },
+    });
+    const second = container.querySelectorAll('.prop-link-item')[1];
+    second.querySelector('.prop-chip-remove').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    assert.deepEqual(edits, [['related', { list: { remove: 1 } }]]);
+  });
+
+  test('property rows use per-type SVG icons', () => {
+    const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
+    global.HTMLElement = dom.window.HTMLElement;
+    const container = dom.window.document.getElementById('p');
+    renderProperties(container, { title: 'x', tags: ['a'], done: true }, {});
+    const icons = container.querySelectorAll('.prop-icon svg');
+    assert.equal(icons.length, 3, 'every row has an svg icon, not a glyph');
+  });
+
   test('a malicious wikilink target cannot break out of the attribute (stored XSS regression)', () => {
     const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
     global.HTMLElement = dom.window.HTMLElement;

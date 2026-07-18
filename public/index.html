@@ -460,7 +460,8 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .tiptap-editor-pane .properties-body { padding: 4px 0 8px; }
 .tiptap-editor-pane .prop-row { display: grid; grid-template-columns: 32px 160px 1fr; align-items: center; gap: 8px; padding: 6px 12px; min-height: 32px; }
 .tiptap-editor-pane .prop-row:hover { background: rgba(232,122,90,0.04); border-radius: 6px; }
-.tiptap-editor-pane .prop-icon { width: 16px; color: var(--text-2); justify-self: center; font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 12px; text-align: center; }
+.tiptap-editor-pane .prop-icon { width: 16px; color: var(--text-2); justify-self: center; display: flex; align-items: center; justify-content: center; }
+.tiptap-editor-pane .prop-icon svg { width: 14px; height: 14px; }
 .tiptap-editor-pane .prop-key { font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 12px; color: var(--text-2); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tiptap-editor-pane .prop-value { font-size: var(--body); color: var(--text-1); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
 .tiptap-editor-pane .prop-value.empty { color: var(--text-2); font-style: italic; }
@@ -475,11 +476,15 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .props-editable .prop-row.editable .prop-value .bool { cursor: pointer; }
 .prop-edit-input { flex: 1; min-width: 120px; background: var(--card); border: 1px solid var(--accent); border-radius: 4px; color: var(--text-1); font-size: var(--body); font-family: inherit; padding: 2px 8px; outline: none; }
 .prop-chip-remove { display: none; background: none; border: none; color: var(--text-2); font-size: 12px; line-height: 1; padding: 0 0 0 4px; cursor: pointer; }
-.props-editable .prop-chip:hover .prop-chip-remove { display: inline; }
+.props-editable .prop-chip:hover .prop-chip-remove, .props-editable .prop-link-item:hover .prop-chip-remove { display: inline; }
 .prop-chip-remove:hover { color: var(--accent); }
-.prop-add { display: none; background: none; border: 1px solid var(--border); border-radius: 100px; color: var(--text-2); width: 20px; height: 20px; line-height: 1; cursor: pointer; font-size: 13px; }
-.props-editable .prop-row.editable:hover .prop-add { display: inline-flex; align-items: center; justify-content: center; }
-.prop-add:hover { color: var(--accent); border-color: var(--accent); }
+/* Wikilink list items render as inline links (not pills), keeping the x. */
+.tiptap-editor-pane .prop-link-item { display: inline-flex; align-items: center; }
+/* Inline add affordance: always present but subtle, brightening on hover, so
+   adding a tag/link reads like Obsidian rather than a hover-only button. */
+.prop-add { display: inline-flex; align-items: center; justify-content: center; background: none; border: 1px dashed var(--border); border-radius: 100px; color: var(--text-2); width: 20px; height: 20px; line-height: 1; cursor: pointer; font-size: 13px; opacity: 0.55; transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease; }
+.props-editable .prop-row.editable:hover .prop-add { opacity: 1; }
+.prop-add:hover { color: var(--accent); border-color: var(--accent); opacity: 1; }
 /* External-edit conflict banner: a visible choice, never a silent overwrite. */
 #external-edit-banner { display: flex; align-items: center; gap: 10px; padding: 10px 24px; background: rgba(232,168,76,0.10); border-bottom: 1px solid rgba(232,168,76,0.35); font-size: var(--body); color: var(--text-1); }
 #external-edit-banner .banner-text { flex: 1; }
