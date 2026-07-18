@@ -22,6 +22,18 @@
 //       "dropInterrupt": true,            // turn/interrupt ends the turn server-side but
 //                                         // neither the response nor turn/completed is
 //                                         // sent (lost-stream shape, Finding 6 Mode 2)
+//       "zombieInterrupt": {"resumeDelayMs": 400},
+//                                         // turn/interrupt is ACCEPTED (empty response)
+//                                         // but NO turn/completed follows and the turn
+//                                         // keeps running in the background: after
+//                                         // resumeDelayMs it emits its remaining deltas,
+//                                         // item/completed agentMessage (full text),
+//                                         // tokenUsage and turn/completed, potentially
+//                                         // AFTER a new turn has started on the same
+//                                         // thread (Windows Finding 7, codex-cli
+//                                         // 0.144.4 on Windows ARM). The server-side
+//                                         // slot frees, so a follow-up turn/start
+//                                         // succeeds, exactly as observed live.
 //       "rules": [ {
 //         "match": {"promptIncludes": "..."},
 //         "deltas": ["chunk1 ", "chunk2"],  // item/agentMessage/delta sequence
@@ -120,7 +132,10 @@ function runAppServer() {
   function finishTurn(t, status, error) {
     if (t.finished) return;
     t.finished = true;
-    activeTurns.delete(t.threadId);
+    // Guarded delete: a zombie turn (zombieInterrupt) was already evicted
+    // from the map at interrupt time, and the slot may now belong to a NEW
+    // turn on the same thread; never delete that one.
+    if (activeTurns.get(t.threadId) === t) activeTurns.delete(t.threadId);
     send(asfx.threadStatusChanged(t.threadId, 'idle'));
     send(asfx.turnCompleted(t.threadId, t.turnId, status, error || null));
   }
@@ -132,6 +147,12 @@ function runAppServer() {
   async function runTurn(t, prompt, rule) {
     const { threadId, turnId } = t;
     const shortId = turnId.slice(0, 8);
+    // zombieInterrupt: once the ignored interrupt lands, the turn pauses
+    // until its scripted resume time, then carries on to completion in the
+    // background (the live Windows Finding 7 shape).
+    const zombieGate = async () => {
+      while (t.zombieResumeAt && Date.now() < t.zombieResumeAt) await tick(10);
+    };
     send(asfx.threadStatusChanged(threadId, 'active'));
     send(asfx.turnStarted(threadId, turnId));
     await tick();
@@ -202,6 +223,7 @@ function runAppServer() {
     send(asfx.itemStartedAgentMessage(threadId, turnId, agentItemId));
     for (const d of rule.deltas || []) {
       await tick();
+      await zombieGate();
       if (t.finished) return;
       send(asfx.agentMessageDelta(threadId, turnId, agentItemId, d));
     }
@@ -210,6 +232,7 @@ function runAppServer() {
     if (rule.hangAfterDeltas) return; // only turn/interrupt completes it now
 
     await tick();
+    await zombieGate();
     if (t.finished) return;
     const finalText = text || (rule.deltas || []).join('');
     send(asfx.itemCompletedAgentMessage(threadId, turnId, agentItemId, finalText));
@@ -327,6 +350,21 @@ function runAppServer() {
       }
       case 'turn/interrupt': {
         const t = activeTurns.get(params && params.threadId);
+        // Zombie-interrupt simulation (Windows Finding 7, codex-cli 0.144.4
+        // on Windows ARM): the interrupt is ACCEPTED with an empty response,
+        // but NO turn/completed follows and the turn keeps running in the
+        // background. The server-side slot frees (a follow-up turn/start on
+        // the same thread succeeds); the zombie's remaining output arrives
+        // later, after its scripted resume delay. A retried interrupt for
+        // the already-evicted turn gets the same benign empty response.
+        if (cfg.zombieInterrupt) {
+          send(asfx.response(id, {}));
+          if (t && !t.finished && (!params.turnId || params.turnId === t.turnId)) {
+            activeTurns.delete(t.threadId);
+            t.zombieResumeAt = Date.now() + ((cfg.zombieInterrupt.resumeDelayMs | 0) || 0);
+          }
+          return;
+        }
         // Lost-stream simulation (Windows Finding 6 Mode 2): the interrupt
         // lands server-side (the turn really ends and the slot frees there),
         // but neither the interrupt RESPONSE nor the follow-up

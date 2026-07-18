@@ -121,6 +121,8 @@ Immediate response: `{"id":4,"result":{"turn":{"id":"<uuidv7>","items":[],"items
 ### Interrupt: `turn/interrupt`
 Params `{threadId, turnId}` (turnId comes from the `turn/start` response or `turn/started` notification). Response is `{}`; the turn then completes with `status:"interrupted"` in `turn/completed`. There is also `turn/steer` `{threadId, turnId?, input}` to append input to the active turn without interrupting; if the turn cannot accept it you get the `activeTurnNotSteerable` error.
 
+**Known issue (observed live, codex-cli 0.144.4 on Windows ARM):** `turn/interrupt` can be a complete no-op. The request is accepted (empty `{}` response) but no `turn/completed` ever follows and the "interrupted" turn RUNS TO COMPLETION in the background, emitting its remaining `item/*`, `thread/tokenUsage/updated` and `turn/completed` notifications later, potentially after a NEW turn has started on the same thread (the server accepts the follow-up `turn/start`). Clients must therefore route every turn-scoped notification by `turnId`, never by `threadId` alone, and drop stragglers from superseded turns; Rundock also re-sends the interrupt once before its slot-release failsafe. Upstream issue candidate against openai/codex.
+
 ### Housekeeping
 `thread/read {threadId, includeTurns}`, `thread/list`, `thread/fork`, `thread/archive` / `thread/unarchive`, `thread/delete`, `thread/name/set`, `thread/compact/start`, `thread/rollback`, `thread/unsubscribe` (per-connection unsubscribe; docs: after all connections unsubscribe, a 30-minute inactivity grace period runs before the thread unloads).
 
@@ -333,6 +335,7 @@ Unlike `codex exec` (which runs `approvalPolicy:"never"`), on-request mode makes
 - `turn/completed` carries no token counts; usage is a separate notification that arrives BEFORE `turn/completed`. Buffer it per `turnId`.
 - Expect unsolicited notifications immediately after handshake (`remoteControl/status/changed`, `account/rateLimits/updated`, `mcpServer/startupStatus/updated` per loaded thread). Ignore unknown methods.
 - One active turn per thread; queue inputs or use `turn/steer`.
+- `turn/interrupt` can be accepted yet ignored on some platforms (0.144.4 Windows ARM: no `turn/completed`, turn runs to completion in the background). Demultiplex turn-scoped notifications by `turnId`, not `threadId` alone. See the known issue under section 3.
 - `codex app-server` is officially experimental and the CLI moves fast (protocol churn observed across 0.1xx releases: full v1 to v2 method rename). Pin the CLI binary version in your deployment, vendor the generated JSON schema for that version, and diff-check on every CLI upgrade (`codex app-server generate-json-schema`).
 - The official `@openai/codex-sdk` (repo `sdk/typescript`) wraps CLI JSONL spawning with `startThread()` / `resumeThread(threadId)` / `runStreamed()`; it validates that thread ids and event vocabulary (`item.completed`, `turn.completed`) match what app-server exposes, and is a reasonable reference implementation, but it hides approval handling, so a direct app-server client is the right call for this rebuild.
 - Default model on this machine resolved to `gpt-5.6-sol` from user config; always set `model` explicitly per thread if the runtime needs determinism.
