@@ -719,6 +719,78 @@ test('frontmatter panel: wikilinks are inline links, rows have svg icons', async
   await page.screenshot({ path: `${SHOTS}/frontmatter-parity.png` });
 });
 
+test('the Files + menu creates a note, a board, and a folder', async ({ page }) => {
+  await boot(page);
+  await openFilesView(page);
+  // New note via the header + menu.
+  await page.locator('#files-add-btn').click();
+  // Each row carries its type icon.
+  await expect(page.locator('.files-menu-item svg')).toHaveCount(3);
+  await page.locator('.files-menu-item', { hasText: 'New note' }).click();
+  await page.locator('.files-menu-field input').fill('Fresh idea');
+  await page.locator('.files-menu-field input').press('Enter');
+  // It appears in the tree and opens in the editor.
+  await expect(page.locator('.file-item', { hasText: 'Fresh idea.md' })).toBeVisible();
+  await expect(page.locator('#editor-filename')).toHaveText('Fresh idea.md');
+
+  // New board opens in the board view.
+  await page.locator('#files-add-btn').click();
+  await page.locator('.files-menu-item', { hasText: 'New board' }).click();
+  await page.locator('.files-menu-field input').fill('Sprint');
+  await page.locator('.files-menu-field input').press('Enter');
+  await expect(page.locator('.file-item', { hasText: 'Sprint.md' })).toBeVisible();
+  await expect(page.locator('.board-host')).toBeVisible();
+
+  // New folder appears in the tree.
+  await page.locator('#files-add-btn').click();
+  await page.locator('.files-menu-item', { hasText: 'New folder' }).click();
+  await page.locator('.files-menu-field input').fill('Archive');
+  await page.locator('.files-menu-field input').press('Enter');
+  await expect(page.locator('.folder-item', { hasText: 'Archive' })).toBeVisible();
+});
+
+test('only one floating menu is open at a time and outside clicks close it', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'board.md'); // files view, board mounted in the pane
+  await expect(page.locator('.board-lane')).toHaveCount(3);
+  // Open the files "+" menu (lives in the files sidebar header).
+  await page.locator('#files-add-btn').click();
+  await expect(page.locator('.files-menu')).toBeVisible();
+  // Opening a board lane menu dismisses the files menu (single menu open).
+  await page.locator('.board-lane-menu-btn').first().click();
+  await expect(page.locator('.files-menu')).toHaveCount(0);
+  await expect(page.locator('.board-lane-popup')).toBeVisible();
+  // Clicking the collapse chevron (which stops propagation) still closes the menu.
+  await page.locator('.board-lane-collapse').first().click();
+  await expect(page.locator('.board-lane-popup')).toHaveCount(0);
+  // Reopen on a still-expanded lane (lane 0 is now collapsed, its button hidden)
+  // and confirm a plain outside click (sidebar label) closes it.
+  await page.locator('.board-lane-menu-btn').nth(1).click();
+  await expect(page.locator('.board-lane-popup')).toBeVisible();
+  await page.locator('#sidebar-files .sidebar-label').click();
+  await expect(page.locator('.board-lane-popup')).toHaveCount(0);
+});
+
+test('board files show the board icon in the tree, notes do not', async ({ page }) => {
+  await boot(page);
+  await openFilesView(page);
+  // The board icon includes a <rect> (kanban); the note icon does not.
+  await expect(page.locator('.file-item', { hasText: 'tagged-board.md' }).locator('svg rect')).toHaveCount(1);
+  await expect(page.locator('.file-item', { hasText: 'CLAUDE.md' }).locator('svg rect')).toHaveCount(0);
+});
+
+test('right-clicking a file row opens a context menu with create and clipboard actions', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'proposal.html');
+  await openFilesView(page);
+  await page.locator('.file-item', { hasText: 'proposal.html' }).click({ button: 'right' });
+  await expect(page.locator('.files-menu')).toBeVisible();
+  await expect(page.locator('.files-menu-item', { hasText: 'New note' })).toBeVisible();
+  await expect(page.locator('.files-menu-item', { hasText: 'Copy workspace path' })).toBeVisible();
+  await expect(page.locator('.files-menu-item', { hasText: 'Copy wikilink' })).toBeVisible();
+  await expect(page.locator('.files-menu-item', { hasText: 'Reveal in Finder' })).toBeVisible();
+});
+
 test('an open file persists across a view switch and is revealed in the tree', async ({ page }) => {
   await boot(page);
   await openFilesView(page);
