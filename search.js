@@ -32,7 +32,7 @@ const path = require('path');
 
 // Bumping this rebuilds every index on next open. That is the whole migration
 // story: rebuild, never migrate.
-const SCHEMA_VERSION = 2; // 2: review endmatter/CriticMarkup normalisation in file indexing
+const SCHEMA_VERSION = 3; // 3: HTML/SVG artifact content + frontmatter values in file indexing
 
 const MAX_QUERY_LENGTH = 256;
 const MAX_QUERY_TOKENS = 12;
@@ -201,7 +201,11 @@ function parseFrontmatterTags(content) {
 
 // Content-indexed extensions. json stays out: raw JSON is noise in a content
 // index (its filenames still surface via the in-memory title layer upstream).
-const INDEXED_EXTENSIONS = new Set(['.md', '.txt']);
+// html/svg join now that they are first-class viewable artifacts; their markup
+// is stripped to plain text before indexing (see stripHtml) so tag names,
+// class names, and attribute values never leak into snippets.
+const INDEXED_EXTENSIONS = new Set(['.md', '.txt', '.html', '.htm', '.svg']);
+const HTML_EXTENSIONS = new Set(['.html', '.htm', '.svg']);
 const MAX_FILE_BYTES = 2 * 1024 * 1024; // ignore pathological files
 
 function walkTextFiles(rootDir, prefix = '', out = []) {
@@ -498,15 +502,24 @@ class SearchIndex {
   _indexFile(rootDir, rel, st, upsert = null) {
     let content;
     try { content = fs.readFileSync(path.join(rootDir, rel), 'utf-8'); } catch (e) { return; }
+    const ext = path.extname(rel).toLowerCase();
     const title = path.basename(rel, path.extname(rel));
     const tags = parseFrontmatterTags(content);
+    // Frontmatter VALUES are lifted before the block is stripped so they stay
+    // searchable (keys never are); tags keep their own column.
+    const fmValues = frontmatterValues(content);
     // Review annotations first (see normaliseReviewContent: order matters),
-    // then the frontmatter block: tags live in their own column, and raw
-    // YAML in snippets reads as noise in results.
+    // then the frontmatter block: raw YAML in snippets reads as noise.
     content = normaliseReviewContent(content);
     if (content.startsWith('---')) {
       content = content.replace(/^---\r?\n[\s\S]*?\r?\n---(\r?\n|$)/, '');
     }
+    // HTML/SVG artifacts index their visible text only: markup is stripped so
+    // it never leaks into snippets, script/style contents are dropped.
+    if (HTML_EXTENSIONS.has(ext)) content = stripHtml(content);
+    // Prepend the frontmatter values so a value match surfaces the file; body
+    // text still outranks it for snippet selection (values are terse).
+    if (fmValues) content = content ? `${fmValues}\n${content}` : fmValues;
     // birthtime is unreliable (0 or =ctime) on some filesystems; store null
     // rather than a wrong date so created-at filters only apply where real.
     const created = st.birthtimeMs && st.birthtimeMs > 0 ? st.birthtimeMs : null;
@@ -798,6 +811,74 @@ function createSearchIndex(opts) {
  * with a lone --- line would otherwise have everything up to the
  * endmatter's introducing --- eaten by the frontmatter regex.
  */
+/**
+ * Strip an HTML/SVG document to its plain visible text for indexing. Script,
+ * style, noscript, and template contents are dropped entirely (never visible,
+ * often noise or code); comments and all tags are removed; common HTML
+ * entities are decoded; whitespace is collapsed. The result carries no markup,
+ * so a snippet built from it can never leak `<div class="...">` or an
+ * attribute value into results (the same "markup never leaks" discipline the
+ * review-annotation stripping enforces).
+ */
+function stripHtml(html) {
+  if (typeof html !== 'string') return '';
+  return html
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    // Drop script/style/noscript/template contents: closed pairs first, then
+    // any UNCLOSED opener through end-of-input (an unclosed <script> makes the
+    // rest of the document its raw text, exactly as a browser treats it).
+    .replace(/<(script|style|noscript|template)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
+    .replace(/<(script|style|noscript|template)\b[\s\S]*$/gi, ' ')
+    // Strip tags. The alternation consumes quoted attribute values whole, so a
+    // '>' inside an attribute (e.g. alt="a>b") cannot end the tag early and
+    // leak markup; the alternatives are disjoint on their first char, so there
+    // is no catastrophic backtracking.
+    .replace(/<(?:"[^"]*"|'[^']*'|[^>"'])*>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0*39;|&apos;/gi, "'")
+    .replace(/&#0*(\d+);/g, (_, n) => { try { return String.fromCodePoint(Number(n)); } catch (e) { return ' '; } })
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Extract frontmatter VALUES (not keys) for indexing. Now that properties are
+ * first-class editable, a search that matches a property's value
+ * (a status, an author, a related note) but not its key name reads as the
+ * right behaviour. Deliberately not a YAML parser: it lifts the right-hand
+ * side of each top-level `key: value` line plus block-list `- item` values and
+ * inline `[a, b]` arrays. Key names are never emitted, so searching for a bare
+ * key like "status" does not match on the key alone.
+ */
+function frontmatterValues(content) {
+  if (typeof content !== 'string' || !content.startsWith('---')) return '';
+  const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/);
+  if (!m) return '';
+  const out = [];
+  for (const line of m[1].split(/\r?\n/)) {
+    const kv = line.match(/^[^\s:][^:]*:\s*(.*)$/); // top-level key: value
+    if (kv) {
+      const inline = kv[1].trim();
+      if (!inline) continue; // block list follows on subsequent lines
+      for (const piece of inline.replace(/^\[|\]$/g, '').split(',')) {
+        const v = piece.trim().replace(/^["']|["']$/g, '');
+        if (v) out.push(v);
+      }
+      continue;
+    }
+    const item = line.match(/^\s*-\s+(.+)$/); // block-list value
+    if (item) {
+      const v = item[1].trim().replace(/^["']|["']$/g, '');
+      if (v) out.push(v);
+    }
+  }
+  return out.join(' ');
+}
+
 function normaliseReviewContent(content) {
   // Drop the review endmatter: the last --- line whose following line opens
   // a review section. Lightweight by design; indexing is not byte-critical.
@@ -822,7 +903,9 @@ module.exports = {
   sanitizeFtsQuery,
   fuzzyScore,
   parseFrontmatterTags,
+  frontmatterValues,
   normaliseReviewContent,
+  stripHtml,
   walkTextFiles,
   createSearchIndex,
 };
