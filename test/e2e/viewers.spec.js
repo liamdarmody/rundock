@@ -542,6 +542,41 @@ test('opening a board changes zero bytes; adding a card persists canonical markd
   expect(saved.endsWith('%%')).toBe(true); // no trailing newline: still canonical
 });
 
+test('a board card edits in place and persists byte-honest markdown', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'board.md');
+  await expect(page.locator('.board-lane')).toHaveCount(3);
+  const card = page.locator('.board-card-text', { hasText: 'Draft the outline' });
+  await card.click();
+  const editor = page.locator('textarea.board-card-edit');
+  await expect(editor).toBeVisible();
+  await editor.fill('Draft the **full** outline');
+  await editor.press('Enter'); // Enter saves
+  await expect(page.locator('.board-card-text strong', { hasText: 'full' })).toBeVisible();
+  // Only that card's line changed; the file stays canonical.
+  await expect.poll(async () => (await (await page.request.get('/api/file?path=board.md')).text()))
+    .toContain('- [ ] Draft the **full** outline');
+  const saved = await (await page.request.get('/api/file?path=board.md')).text();
+  expect(saved.endsWith('%%')).toBe(true);
+});
+
+test('deleting a board card is undoable in-session', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'board.md');
+  const target = page.locator('.board-card', { hasText: 'Ship it' });
+  await target.hover();
+  await target.locator('.board-card-ctl').click();
+  await expect(page.locator('.board-card', { hasText: 'Ship it' })).toHaveCount(0);
+  // Persisted removal...
+  await expect.poll(async () => (await (await page.request.get('/api/file?path=board.md')).text()))
+    .not.toContain('Ship it');
+  // ...but recoverable via the undo toast.
+  await page.locator('.board-undo-btn').click();
+  await expect(page.locator('.board-card', { hasText: 'Ship it' })).toHaveCount(1);
+  await expect.poll(async () => (await (await page.request.get('/api/file?path=board.md')).text()))
+    .toContain('- [ ] Ship it');
+});
+
 test('markdown files still open in the rich editor after the registry shim', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'Roadmap-2026.md');

@@ -30,9 +30,17 @@ function ensureStyles(doc) {
     .board-lane-title { font-size: var(--body); font-weight: 600; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .board-lane-count { font-size: var(--caption); color: var(--text-2); font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; margin-left: auto; }
     .board-lane-body { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; min-height: 8px; }
-    .board-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: var(--body); color: var(--text-1); line-height: 1.5; cursor: grab; }
+    .board-card { position: relative; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: var(--body); color: var(--text-1); line-height: 1.5; cursor: grab; }
     .board-card:hover { border-color: var(--text-2); }
     .board-card.dragging { opacity: 0.4; }
+    .board-card-controls { position: absolute; top: 6px; right: 6px; display: none; gap: 2px; }
+    .board-card:hover .board-card-controls { display: flex; }
+    .board-card-ctl { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 6px; color: var(--text-2); background: var(--surface); }
+    .board-card-ctl:hover { color: var(--danger, #E85A5A); background: var(--elevated); }
+    .board-card-edit { width: 100%; resize: none; background: var(--elevated); border: 1px solid var(--accent); border-radius: 6px; color: var(--text-1); font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 13px; line-height: 1.5; padding: 8px 10px; outline: none; }
+    .board-undo-toast { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 8; display: flex; align-items: center; gap: 12px; padding: 8px 12px 8px 16px; border-radius: 8px; background: var(--card); border: 1px solid var(--border); box-shadow: 0 4px 16px rgba(0,0,0,0.25); font-size: var(--body); color: var(--text-1); }
+    .board-undo-btn { color: var(--accent); font-weight: 600; padding: 4px 8px; border-radius: 6px; }
+    .board-undo-btn:hover { background: var(--accent-glow); }
     .board-card-row { display: flex; gap: 8px; align-items: flex-start; }
     .board-card-check { flex: 0 0 auto; margin-top: 2px; width: 15px; height: 15px; cursor: pointer; accent-color: var(--accent); }
     .board-card-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
@@ -56,6 +64,27 @@ function ensureStyles(doc) {
     .board-dropped-warn { margin: 8px 20px; padding: 10px 14px; border-radius: 8px; background: rgba(232,168,76,0.12); border: 1px solid rgba(232,168,76,0.35); color: var(--text-1); font-size: var(--caption); }
   `;
   doc.head.appendChild(style);
+}
+
+// Lucide-style inline SVG from a list of path `d` strings (24 viewBox, 1.8
+// stroke, round caps) — never a unicode glyph.
+function iconSvg(doc, paths) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = doc.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', '14');
+  svg.setAttribute('height', '14');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.8');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  for (const d of paths) {
+    const p = doc.createElementNS(NS, 'path');
+    p.setAttribute('d', d);
+    svg.appendChild(p);
+  }
+  return svg;
 }
 
 // icon: a small lucide-style plus, inline SVG (24 viewBox, stroke 1.8)
@@ -194,8 +223,26 @@ export function mountBoardView({ paneElement, content }, Kanban) {
     const text = doc.createElement('div');
     text.className = 'board-card-text' + (item.checked ? ' checked' : '');
     text.innerHTML = renderCardHtml(item.titleRaw);
+    // Click the card text to edit in place (a click on a wikilink does not
+    // edit; navigation is wired separately).
+    text.addEventListener('click', (e) => {
+      if (e.target.closest && e.target.closest('a.board-wikilink')) return;
+      enterCardEdit(card, laneIndex, itemIndex);
+    });
     row.appendChild(check);
     row.appendChild(text);
+
+    const controls = doc.createElement('div');
+    controls.className = 'board-card-controls';
+    const del = doc.createElement('button');
+    del.type = 'button';
+    del.className = 'board-card-ctl';
+    del.title = 'Delete card';
+    del.appendChild(iconSvg(doc, ['M3 6h18', 'M8 6V4h8v2', 'M19 6l-1 14H6L5 6', 'M10 11v6', 'M14 11v6']));
+    del.addEventListener('click', (e) => { e.stopPropagation(); deleteCardWithUndo(laneIndex, itemIndex); });
+    controls.appendChild(del);
+    card.appendChild(controls);
+
     card.appendChild(row);
 
     card.addEventListener('dragstart', (e) => {
@@ -226,6 +273,79 @@ export function mountBoardView({ paneElement, content }, Kanban) {
     drag = null;
     onChange();
     render();
+  }
+
+  // In-place card edit. The card's raw markdown opens in a textarea; Enter
+  // saves, Shift+Enter inserts a newline, Esc cancels, click-away saves. No
+  // hint text. The edited text feeds titleRaw straight through the byte-exact
+  // serializer.
+  function enterCardEdit(card, laneIndex, itemIndex) {
+    if (card.querySelector('textarea.board-card-edit')) return;
+    const item = board.lanes[laneIndex] && board.lanes[laneIndex].items[itemIndex];
+    if (!item) return;
+    const row = card.querySelector('.board-card-row');
+    const ta = doc.createElement('textarea');
+    ta.className = 'board-card-edit';
+    ta.value = item.titleRaw;
+    row.replaceWith(ta);
+    card.draggable = false;
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    const grow = () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; };
+    grow();
+    ta.addEventListener('input', grow);
+    let done = false;
+    const finish = (commit) => {
+      if (done) return;
+      done = true;
+      if (commit && ta.value.trim() !== item.titleRaw.trim()) {
+        Kanban.updateItem(board, laneIndex, itemIndex, ta.value);
+        onChange();
+      }
+      render();
+    };
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+    ta.addEventListener('blur', () => finish(true)); // click-away saves
+  }
+
+  function deleteCardWithUndo(laneIndex, itemIndex) {
+    const lane = board.lanes[laneIndex];
+    if (!lane) return;
+    const removed = lane.items[itemIndex];
+    Kanban.deleteItem(board, laneIndex, itemIndex);
+    onChange();
+    render();
+    showUndoToast('Card deleted', () => {
+      // Restore into the same position (clamped, in case the lane shrank).
+      const l = board.lanes[laneIndex];
+      if (!l) return;
+      l.items.splice(Math.min(itemIndex, l.items.length), 0, removed);
+      onChange();
+      render();
+    });
+  }
+
+  let undoTimer = null;
+  function showUndoToast(label, undoFn) {
+    const existing = paneElement.querySelector('.board-undo-toast');
+    if (existing) existing.remove();
+    clearTimeout(undoTimer);
+    const toast = doc.createElement('div');
+    toast.className = 'board-undo-toast';
+    const msg = doc.createElement('span');
+    msg.textContent = label;
+    const btn = doc.createElement('button');
+    btn.type = 'button';
+    btn.className = 'board-undo-btn';
+    btn.textContent = 'Undo';
+    btn.addEventListener('click', () => { clearTimeout(undoTimer); toast.remove(); undoFn(); });
+    toast.appendChild(msg);
+    toast.appendChild(btn);
+    paneElement.appendChild(toast);
+    undoTimer = setTimeout(() => toast.remove(), 6000);
   }
 
   function addComposer(laneIndex) {
