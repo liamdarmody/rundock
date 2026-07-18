@@ -208,6 +208,32 @@ function attachEditing(container, parsed, onEditProperty) {
     input.addEventListener('blur', () => finish(input.value.trim().length > 0));
   }
 
+  // Adding a list item appends the input INLINE after the existing chips
+  // (Obsidian's grammar) instead of replacing the whole value, so the tags
+  // already on the row stay visible while typing the new one.
+  function openListAddInput(row, key) {
+    const valueEl = row.querySelector('.prop-value');
+    if (!valueEl || valueEl.querySelector('input.prop-edit-input')) return;
+    const input = doc.createElement('input');
+    input.className = 'prop-edit-input prop-add-input';
+    input.setAttribute('aria-label', `Add item to ${key}`);
+    valueEl.appendChild(input);
+    input.focus();
+    let done = false;
+    const finish = (commit) => {
+      if (done) return;
+      done = true;
+      const t = input.value.trim();
+      if (commit && t) onEditProperty(key, { list: { add: t } });
+      else if (typeof container.__propsRerender === 'function') container.__propsRerender();
+    };
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+    input.addEventListener('blur', () => finish(input.value.trim().length > 0));
+  }
+
   container.addEventListener('click', (event) => {
     // A click on a wikilink value is navigation, not an edit: the wikilink
     // handler (a separate listener on this same container) owns it. Without
@@ -231,11 +257,7 @@ function attachEditing(container, parsed, onEditProperty) {
       return;
     }
     if (event.target.closest('.prop-add')) {
-      openInput(row, key, '', (text) => {
-        const t = text.trim();
-        if (t) onEditProperty(key, { list: { add: t } });
-        else if (typeof container.__propsRerender === 'function') container.__propsRerender();
-      });
+      openListAddInput(row, key);
       return;
     }
     // Bool toggles on click.

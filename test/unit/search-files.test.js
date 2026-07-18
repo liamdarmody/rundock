@@ -220,16 +220,24 @@ describe('files corpus', () => {
     assert.strictEqual(idx.searchFiles('quoll').length, 0, 'stale row for oversized file must be removed');
   });
 
-  test('frontmatter is not indexed as content (snippets stay clean)', () => {
+  test('frontmatter VALUES are indexed; keys and raw YAML are not (snippets stay clean)', () => {
+    // Frontmatter values are searchable now that properties are first-class
+    // editable. Values match; key names and raw `key:` syntax do not; snippets
+    // never leak the YAML block.
     idx = freshIndex();
-    write('fm.md', '---\nauthor: quibblefish\ntags: [pricing]\n---\nThe body discusses margins.\n');
+    write('fm.md', '---\nauthor: quibblefish\nstatus: draft\ntags: [pricing]\n---\nThe body discusses margins.\n');
     idx.reconcileFiles(workspace);
-    // Frontmatter-only words are not content matches...
-    assert.strictEqual(idx.searchFiles('quibblefish').length, 0);
-    // ...but tags still match (via the tags column) and body content matches
+    // A value match surfaces the file...
+    assert.strictEqual(idx.searchFiles('quibblefish').length, 1, 'frontmatter value is searchable');
+    assert.strictEqual(idx.searchFiles('draft').length, 1, 'scalar value is searchable');
+    // ...but a bare key name is not content (author/status appear only as keys)
+    assert.strictEqual(idx.searchFiles('author').length, 0, 'key name must not match');
+    assert.strictEqual(idx.searchFiles('status').length, 0, 'key name must not match');
+    // Tags still match via their own column and body content matches
     assert.strictEqual(idx.searchFiles('pricing').length, 1);
     const hit = idx.searchFiles('margins')[0];
-    assert.ok(!hit.snippet.includes('author:'), 'snippet must not leak frontmatter');
+    assert.ok(!hit.snippet.includes('author:'), 'snippet must not leak frontmatter keys');
+    assert.ok(!hit.snippet.includes('---'), 'snippet must not leak the YAML fence');
   });
 
   test('created-date range filters apply only where birthtime is real', () => {
@@ -286,5 +294,86 @@ describe('files corpus', () => {
     idx.reconcileFiles(workspace);
     assert.strictEqual(idx.searchFiles('café').length, 1);
     assert.strictEqual(idx.searchFiles('日本語').length, 1);
+  });
+});
+
+describe('HTML/SVG artifact content indexing', () => {
+  test('an unclosed script or style body is not indexed', () => {
+    // A browser treats an unclosed <script>/<style> as consuming the rest of
+    // the document as raw text (invisible), so text AFTER the opener is not
+    // content; text BEFORE it still renders and indexes.
+    idx = freshIndex();
+    write('unclosed.html', '<html><body>Alpha visibleword<script>const secretvar = 42;</body></html>');
+    write('unclosed2.html', '<html><body>Beta visibleword<style>.x{color:tomatored}</body></html>');
+    idx.reconcileFiles(workspace);
+    assert.strictEqual(idx.searchFiles('visibleword').length, 2, 'text before the unclosed element still indexes');
+    assert.strictEqual(idx.searchFiles('secretvar').length, 0, 'unclosed script body must not leak');
+    assert.strictEqual(idx.searchFiles('tomatored').length, 0, 'unclosed style body must not leak');
+  });
+
+  test('a > inside a quoted attribute does not leak markup', () => {
+    idx = freshIndex();
+    write('attr.html', '<html><body><img alt="a>bLeaked" data-x="c>dLeaked" src=x>Real caption words</body></html>');
+    idx.reconcileFiles(workspace);
+    assert.strictEqual(idx.searchFiles('caption').length, 1, 'visible text indexes');
+    assert.strictEqual(idx.searchFiles('bLeaked').length, 0, 'attribute value past a > must not leak');
+    assert.strictEqual(idx.searchFiles('dLeaked').length, 0);
+  });
+
+  test('HTML visible text is indexed; markup, classes, and attributes are not', () => {
+    idx = freshIndex();
+    write('report.html', '<!doctype html><html><head><title>Q3 numbers</title></head>'
+      + '<body><div class="chartwrapper" data-region="emea"><p>Revenue climbed sharply.</p></div></body></html>');
+    idx.reconcileFiles(workspace);
+    assert.strictEqual(idx.searchFiles('revenue').length, 1, 'body text is searchable');
+    assert.strictEqual(idx.searchFiles('sharply').length, 1);
+    // Tag names, class names, and attribute values must never become tokens.
+    assert.strictEqual(idx.searchFiles('chartwrapper').length, 0, 'class name must not leak');
+    assert.strictEqual(idx.searchFiles('emea').length, 0, 'attribute value must not leak');
+    assert.strictEqual(idx.searchFiles('doctype').length, 0, 'markup keyword must not leak');
+  });
+
+  test('script and style contents are dropped, not indexed', () => {
+    idx = freshIndex();
+    write('app.html', '<html><head><style>.x{color:tomatored}</style>'
+      + '<script>const secretvar = 42;</script></head><body>Visible heading text</body></html>');
+    idx.reconcileFiles(workspace);
+    assert.strictEqual(idx.searchFiles('visible').length, 1);
+    assert.strictEqual(idx.searchFiles('secretvar').length, 0, 'script contents must not be indexed');
+    assert.strictEqual(idx.searchFiles('tomatored').length, 0, 'style contents must not be indexed');
+  });
+
+  test('HTML snippets carry no angle-bracket markup', () => {
+    idx = freshIndex();
+    write('doc.html', '<html><body><h1>Findable heading</h1><p>Some findable paragraph body.</p></body></html>');
+    idx.reconcileFiles(workspace);
+    const hit = idx.searchFiles('findable')[0];
+    assert.ok(hit, 'the HTML file is a hit');
+    assert.ok(!hit.snippet.includes('<'), 'snippet must not contain markup open brackets');
+    assert.ok(!hit.snippet.includes('>'), 'snippet must not contain markup close brackets');
+  });
+
+  test('HTML entities are decoded before indexing', () => {
+    idx = freshIndex();
+    write('ent.html', '<html><body><p>Ben &amp; Jerry&#39;s caf&#233; menu</p></body></html>');
+    idx.reconcileFiles(workspace);
+    assert.strictEqual(idx.searchFiles('café').length, 1, 'numeric entity decodes to café');
+  });
+
+  test('SVG text content is indexed', () => {
+    idx = freshIndex();
+    write('diagram.svg', '<svg xmlns="http://www.w3.org/2000/svg"><text x="10" y="20">Milestone label</text>'
+      + '<path d="M0 0 L10 10"/></svg>');
+    idx.reconcileFiles(workspace);
+    assert.strictEqual(idx.searchFiles('milestone').length, 1, 'SVG <text> content is searchable');
+    assert.strictEqual(idx.searchFiles('path').length, 0, 'SVG element/attribute names must not leak');
+  });
+
+  test('HTML files carrying frontmatter index both values and stripped body', () => {
+    idx = freshIndex();
+    write('fronted.html', '---\nowner: octothorpe\n---\n<html><body><p>Rendered narwhal content</p></body></html>');
+    idx.reconcileFiles(workspace);
+    assert.strictEqual(idx.searchFiles('narwhal').length, 1, 'body still indexes after frontmatter strip');
+    assert.strictEqual(idx.searchFiles('octothorpe').length, 1, 'frontmatter value indexes for HTML too');
   });
 });

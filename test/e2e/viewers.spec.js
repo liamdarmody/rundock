@@ -447,6 +447,52 @@ test('normal editing never shows the conflict banner (zero false positives)', as
   await expect(page.locator('#external-edit-banner')).toHaveCount(0);
 });
 
+test('in-view find matches inside the sandboxed artifact preview', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'findable.html');
+  // Preview mode by default: the rendered body lives in the sandboxed iframe.
+  await expect(page.locator('iframe.viewer-frame')).toBeVisible();
+  await page.keyboard.press('ControlOrMeta+f');
+  await expect(page.locator('#find-bar')).toBeVisible();
+  await page.locator('#find-input').fill('needle');
+  // Three occurrences in the rendered body (markup/attributes never counted).
+  await expect(page.locator('#find-count')).toHaveText('1 of 3');
+  await page.locator('#find-next').click();
+  await expect(page.locator('#find-count')).toHaveText('2 of 3');
+  // A term that exists only in markup must not match.
+  await page.locator('#find-input').fill('doctype');
+  await expect(page.locator('#find-count')).toHaveText('No matches');
+  await page.screenshot({ path: `${SHOTS}/find-artifact.png` });
+});
+
+test('in-view find matches inside the HTML source-edit view', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'findable.html');
+  await page.locator('#toggle-edit').click();
+  await expect(page.locator('#editor-textarea')).toBeVisible();
+  await page.keyboard.press('ControlOrMeta+f');
+  await expect(page.locator('#find-bar')).toBeVisible();
+  await page.locator('#find-input').fill('needle');
+  // Same three body occurrences; the source view finds them in raw text.
+  await expect(page.locator('#find-count')).toHaveText('1 of 3');
+});
+
+test('in-view find covers the frontmatter properties panel', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'briefing.md');
+  await expect(page.locator('#tiptap-editor-pane')).toBeVisible();
+  await expect(page.locator('#tiptap-properties.visible')).toBeVisible();
+  await page.keyboard.press('ControlOrMeta+f');
+  await expect(page.locator('#find-bar')).toBeVisible();
+  // 'Briefing' appears only in the frontmatter title value, not the body
+  // (and is stable whether an earlier test left it Morning or Evening). The
+  // properties panel lives outside the ProseMirror doc, so this proves the
+  // find bar now reaches it.
+  await page.locator('#find-input').fill('Briefing');
+  await expect(page.locator('#find-count')).toHaveText('1 of 1');
+  await expect(page.locator('#tiptap-properties mark.find-match')).toHaveText('Briefing');
+});
+
 test('markdown files still open in the rich editor after the registry shim', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'Roadmap-2026.md');
