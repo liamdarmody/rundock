@@ -505,6 +505,165 @@ test('in-view find covers the frontmatter properties panel', async ({ page }) =>
   await expect(page.locator('#tiptap-properties mark.find-match')).toHaveText('Briefing');
 });
 
+test('a kanban board file opens as a column board and renders rich cards', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'board.md');
+  // Detected as a board (not the markdown editor) by its frontmatter key.
+  await expect(page.locator('.board-lane')).toHaveCount(3);
+  await expect(page.locator('#tiptap-editor-pane')).toBeHidden();
+  const lanes = page.locator('.board-lane-title');
+  await expect(lanes.nth(0)).toHaveText('To do');
+  await expect(lanes.nth(1)).toHaveText('Doing');
+  await expect(lanes.nth(2)).toHaveText('Done');
+  // Cards render styled markdown, not raw syntax.
+  await expect(page.locator('.board-card-text strong', { hasText: 'Review' })).toBeVisible();
+  await expect(page.locator('.board-card-text a.board-wikilink', { hasText: 'Board' })).toBeVisible();
+  await page.screenshot({ path: `${SHOTS}/board-view.png` });
+});
+
+test('opening a board changes zero bytes; adding a card persists canonical markdown', async ({ page }) => {
+  await boot(page);
+  const before = await (await page.request.get('/api/file?path=board.md')).text();
+  await openFromTree(page, 'board.md');
+  await expect(page.locator('.board-lane')).toHaveCount(3);
+  // Merely opening a board must not rewrite it.
+  const afterOpen = await (await page.request.get('/api/file?path=board.md')).text();
+  expect(afterOpen).toBe(before);
+  // Add a card to the first lane through the composer.
+  await page.locator('.board-lane').first().locator('.board-add-open').click();
+  await page.locator('.board-lane').first().locator('.board-add textarea').fill('A brand new card');
+  await page.locator('.board-lane').first().locator('.board-add textarea').press('Enter');
+  await expect(page.locator('.board-card-text', { hasText: 'A brand new card' })).toBeVisible();
+  // The new card persists as a canonical markdown line in the To do lane.
+  await expect.poll(async () => (await (await page.request.get('/api/file?path=board.md')).text()))
+    .toContain('- [ ] A brand new card');
+  const saved = await (await page.request.get('/api/file?path=board.md')).text();
+  expect(saved).toContain('## To do\n\n- [ ] Draft the outline\n- [ ] **Review** the brief\n- [ ] A brand new card');
+  expect(saved.endsWith('%%')).toBe(true); // no trailing newline: still canonical
+});
+
+test('a board card edits in place and persists byte-honest markdown', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'board.md');
+  await expect(page.locator('.board-lane')).toHaveCount(3);
+  const card = page.locator('.board-card-text', { hasText: 'Draft the outline' });
+  await card.click();
+  const editor = page.locator('textarea.board-card-edit');
+  await expect(editor).toBeVisible();
+  await editor.fill('Draft the **full** outline');
+  await editor.press('Enter'); // Enter saves
+  await expect(page.locator('.board-card-text strong', { hasText: 'full' })).toBeVisible();
+  // Only that card's line changed; the file stays canonical.
+  await expect.poll(async () => (await (await page.request.get('/api/file?path=board.md')).text()))
+    .toContain('- [ ] Draft the **full** outline');
+  const saved = await (await page.request.get('/api/file?path=board.md')).text();
+  expect(saved.endsWith('%%')).toBe(true);
+});
+
+test('deleting a board card is undoable in-session', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'board.md');
+  const target = page.locator('.board-card', { hasText: 'Ship it' });
+  await target.hover();
+  await target.locator('.board-card-ctl').click();
+  await expect(page.locator('.board-card', { hasText: 'Ship it' })).toHaveCount(0);
+  // Persisted removal...
+  await expect.poll(async () => (await (await page.request.get('/api/file?path=board.md')).text()))
+    .not.toContain('Ship it');
+  // ...but recoverable via the undo toast.
+  await page.locator('.board-undo-btn').click();
+  await expect(page.locator('.board-card', { hasText: 'Ship it' })).toHaveCount(1);
+  await expect.poll(async () => (await (await page.request.get('/api/file?path=board.md')).text()))
+    .toContain('- [ ] Ship it');
+});
+
+test('a later edit dismisses the undo, so undo never discards interim work', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'board.md');
+  // Delete a card: the undo toast appears.
+  const target = page.locator('.board-card', { hasText: 'Ship it' });
+  await target.hover();
+  await target.locator('.board-card-ctl').click();
+  await expect(page.locator('.board-undo-toast')).toBeVisible();
+  // Make an unrelated edit (on a card no other test mutates): the stale undo
+  // is dismissed, so it can never revert this edit away.
+  await page.locator('.board-card-text', { hasText: 'Wire the' }).click();
+  const editor = page.locator('textarea.board-card-edit');
+  await editor.fill('Wire the whole board');
+  await editor.press('Enter');
+  await expect(page.locator('.board-undo-toast')).toHaveCount(0);
+  await expect(page.locator('.board-card-text', { hasText: 'Wire the whole board' })).toBeVisible();
+});
+
+test('block-style frontmatter on a board survives a save', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'tagged-board.md');
+  await expect(page.locator('.board-lane')).toHaveCount(2);
+  // Toggle a checkbox (forces a save) and confirm the block tag list is intact.
+  await page.locator('.board-card-check').first().check();
+  await expect.poll(async () => (await (await page.request.get('/api/file?path=tagged-board.md')).text()))
+    .toContain('tags:\n  - project\n  - kanban');
+});
+
+test('a column collapses to a rail and the state persists to the board file', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'tagged-board.md');
+  const firstLane = page.locator('.board-lane').first();
+  await expect(firstLane).not.toHaveClass(/collapsed/);
+  await firstLane.locator('.board-lane-collapse').click();
+  await expect(firstLane).toHaveClass(/collapsed/);
+  // Persisted into list-collapse (first lane true).
+  await expect.poll(async () => (await (await page.request.get('/api/file?path=tagged-board.md')).text()))
+    .toContain('"list-collapse":[true,false]');
+  // Clicking the collapsed rail expands it again.
+  await firstLane.click();
+  await expect(page.locator('.board-lane').first()).not.toHaveClass(/collapsed/);
+});
+
+test('the lane menu renames, inserts, and deletes lists with undo', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'board.md');
+  await expect(page.locator('.board-lane')).toHaveCount(3);
+
+  // Rename the first lane via the menu.
+  await page.locator('.board-lane').first().locator('.board-lane-menu-btn').click();
+  await page.locator('.board-lane-popup-item', { hasText: 'Rename list' }).click();
+  const rename = page.locator('input.board-lane-rename');
+  await expect(rename).toBeVisible();
+  await rename.fill('Icebox');
+  await rename.press('Enter');
+  await expect(page.locator('.board-lane-title', { hasText: 'Icebox' })).toBeVisible();
+  await expect.poll(async () => (await (await page.request.get('/api/file?path=board.md')).text()))
+    .toContain('## Icebox');
+
+  // Insert a list after the first, then delete it with undo.
+  await page.locator('.board-lane').first().locator('.board-lane-menu-btn').click();
+  await page.locator('.board-lane-popup-item', { hasText: 'Insert list after' }).click();
+  await expect(page.locator('.board-lane')).toHaveCount(4);
+  await page.locator('.board-lane').nth(1).locator('.board-lane-menu-btn').click();
+  await page.locator('.board-lane-popup-item', { hasText: 'Delete list' }).click();
+  await expect(page.locator('.board-lane')).toHaveCount(3);
+  await page.locator('.board-undo-btn').click();
+  await expect(page.locator('.board-lane')).toHaveCount(4);
+});
+
+test('the lane menu moves a column right, reordering it in the file', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'reorder-board.md');
+  const titles = () => page.locator('.board-lane-title');
+  const first = (await titles().nth(0).textContent()) || '';
+  const second = (await titles().nth(1).textContent()) || '';
+  await page.locator('.board-lane').first().locator('.board-lane-menu-btn').click();
+  await page.locator('.board-lane-popup-item', { hasText: 'Move list right' }).click();
+  // Order swapped in the UI and in the file heading order.
+  await expect(titles().nth(0)).toHaveText(second);
+  await expect(titles().nth(1)).toHaveText(first);
+  await expect.poll(async () => {
+    const md = await (await page.request.get('/api/file?path=reorder-board.md')).text();
+    return md.indexOf('## ' + second) < md.indexOf('## ' + first);
+  }).toBe(true);
+});
+
 test('markdown files still open in the rich editor after the registry shim', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'Roadmap-2026.md');
