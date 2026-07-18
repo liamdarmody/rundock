@@ -475,6 +475,18 @@ test('in-view find matches inside the HTML source-edit view', async ({ page }) =
   await page.locator('#find-input').fill('needle');
   // Same three body occurrences; the source view finds them in raw text.
   await expect(page.locator('#find-count')).toHaveText('1 of 3');
+  // The matches are visibly highlighted by the overlay behind the textarea
+  // (a textarea cannot hold marks and an unfocused selection is not painted).
+  await expect(page.locator('.textarea-find-overlay mark.find-hl')).toHaveCount(3);
+  await expect(page.locator('.textarea-find-overlay mark.find-hl.current')).toHaveCount(1);
+  await page.locator('#find-next').click();
+  // Navigation moves the emphasised (current) highlight to the next match.
+  await expect(page.locator('#find-count')).toHaveText('2 of 3');
+  await expect(page.locator('.textarea-find-overlay mark.find-hl.current')).toHaveText('needle');
+  await page.screenshot({ path: `${SHOTS}/find-source-overlay.png` });
+  // Closing find removes the overlay entirely.
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.textarea-find-overlay')).toHaveCount(0);
 });
 
 test('in-view find covers the frontmatter properties panel', async ({ page }) => {
