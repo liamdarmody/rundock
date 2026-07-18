@@ -255,6 +255,78 @@ test('an anchor whose passage was edited away lists as orphaned, never dropped',
   await page.screenshot({ path: `${SHOTS}/artifact-orphan.png` });
 });
 
+test('a multi-paragraph comment is geometry-neutral: paragraph gaps unchanged', async ({ page }) => {
+  await boot(page);
+  // A dedicated artifact whose paragraphs are separated by real formatting
+  // whitespace (newline + indentation), as authored HTML always is.
+  await page.evaluate(() => new Promise((resolve) => {
+    ws.send(JSON.stringify({ type: 'save_file', path: 'gap-demo.html', content: [
+      '<html><body>',
+      '  <p id="p1">First paragraph of the proposal, long enough to select across.</p>',
+      '  <p id="p2">Second paragraph continues the argument in more detail.</p>',
+      '  <p id="p3">Third paragraph is a stable control below the selection.</p>',
+      '</body></html>',
+    ].join('\n') }));
+    setTimeout(resolve, 300);
+  }));
+  await openFilesView(page);
+  await page.evaluate(() => { ws.send(JSON.stringify({ type: 'read_file', path: 'gap-demo.html' })); });
+  await expect(page.locator('iframe.viewer-frame')).toBeVisible();
+  await page.waitForSelector('.artifact-comment-btn', { state: 'attached' });
+
+  // Bounding boxes are only trustworthy in a visible document (a hidden
+  // page can skip layout), so the measurement refuses to run otherwise.
+  const measure = () => page.evaluate(() => {
+    if (document.visibilityState !== 'visible') return null;
+    const doc = document.querySelector('iframe.viewer-frame').contentDocument;
+    const r = (id) => doc.getElementById(id).getBoundingClientRect();
+    const [a, b, c] = [r('p1'), r('p2'), r('p3')];
+    return { gap12: b.top - a.bottom, gap23: c.top - b.bottom };
+  });
+  const before = await measure();
+  expect(before).not.toBeNull();
+
+  // Select from inside p1 to inside p2: the range spans the inter-block
+  // whitespace text node between the paragraphs.
+  await page.evaluate(() => {
+    const doc = document.querySelector('iframe.viewer-frame').contentDocument;
+    const range = doc.createRange();
+    range.setStart(doc.getElementById('p1').firstChild, 6);
+    range.setEnd(doc.getElementById('p2').firstChild, 16);
+    const sel = doc.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  });
+  await page.locator('.artifact-comment-btn').dispatchEvent('mousedown');
+  await page.locator('.review-composer textarea').fill('multi-paragraph note');
+  await page.locator('.review-composer textarea').press('Enter');
+  await expect(page.locator('.review-card.comment')).toHaveCount(1);
+  const frame = page.frameLocator('iframe.viewer-frame');
+  // One mark per paragraph; the collapsible whitespace between blocks is
+  // never wrapped (a wrap there paints nothing but plants an element).
+  await expect(frame.locator('mark[data-rundock-review]')).toHaveCount(2);
+
+  const after = await measure();
+  expect(after).not.toBeNull();
+  // Geometry-neutral highlight: the vertical gaps between paragraphs are
+  // unchanged within 1px (regression: a padded mark wrapped around the
+  // inter-block whitespace once inserted a full line box between the
+  // commented paragraphs, visibly inflating their spacing).
+  expect(Math.abs(after.gap12 - before.gap12)).toBeLessThanOrEqual(1);
+  expect(Math.abs(after.gap23 - before.gap23)).toBeLessThanOrEqual(1);
+  // Structurally: nothing but the original whitespace text node sits
+  // between the commented paragraphs.
+  const betweenNodeTypes = await page.evaluate(() => {
+    const doc = document.querySelector('iframe.viewer-frame').contentDocument;
+    const kinds = [];
+    let n = doc.getElementById('p1').nextSibling;
+    while (n && n !== doc.getElementById('p2')) { kinds.push(n.nodeType); n = n.nextSibling; }
+    return kinds;
+  });
+  expect(betweenNodeTypes).toEqual([3]); // Node.TEXT_NODE only
+  await page.screenshot({ path: `${SHOTS}/artifact-multi-paragraph-gap.png` });
+});
+
 // ── FV2 phase 3: callouts + frontmatter wikilinks ────────────────────────────
 
 test('callouts render as admonition boxes with working fold; frontmatter wikilinks navigate', async ({ page }) => {
