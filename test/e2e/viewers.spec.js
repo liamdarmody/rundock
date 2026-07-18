@@ -176,6 +176,24 @@ test('comment on an artifact: select, comment, sidecar written, reload re-anchor
   await expect(card.locator('.review-quote')).toContainText('Three workstreams');
   const frame = page.frameLocator('iframe.viewer-frame');
   await expect(frame.locator('mark[data-rundock-review]')).toHaveText('Three workstreams');
+
+  // Panel layout parity with the editor pane (regression: .viewer-host's
+  // zero padding once left the panel flush to the top, 8px past the right
+  // edge, and scrolling the pane horizontally by those same 8px).
+  const layout = await page.evaluate(() => {
+    const pane = document.getElementById('editor-content');
+    const sidebarRect = pane.querySelector('.review-sidebar').getBoundingClientRect();
+    const paneRect = pane.getBoundingClientRect();
+    return {
+      topGap: sidebarRect.top - paneRect.top,
+      rightGap: paneRect.right - sidebarRect.right,
+      scrollWidth: pane.scrollWidth,
+      clientWidth: pane.clientWidth,
+    };
+  });
+  expect(layout.topGap).toBe(24); // same resting box as the markdown editor's panel
+  expect(layout.rightGap).toBe(24);
+  expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth); // no horizontal scroll
   await page.screenshot({ path: `${SHOTS}/artifact-comment.png` });
 
   // The sidecar is on disk, openly stored, discoverable by path.
