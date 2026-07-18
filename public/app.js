@@ -3249,6 +3249,7 @@ function renderEditorContent() {
 }
 
 function setEditorMode(mode) {
+  if (mode !== editorMode && findState.open) closeFindBar(); // find backend differs per mode
   if (mode === 'preview' && editorMode === 'edit') {
     // Switching from edit to preview: capture changes first
     rawFileContent = document.getElementById('editor-textarea').value;
@@ -4056,6 +4057,7 @@ function openFindBar() {
 
 function closeFindBar() {
   if (!findState.open) return;
+  removeTextareaOverlay(); // tear down the source-view highlight layer, if any
   clearFindMatches();
   findState.open = false;
   findState.backend = null;
@@ -4324,16 +4326,19 @@ function scrollArtifactMatch(idx) {
 }
 
 // ----- textarea backend: find in the HTML/text source-edit view.
-// A textarea cannot carry per-match marks, so matches are string
-// offsets; the current one is shown as the textarea's own selection and the
-// scroll is computed from its line (no focus stealing from the find input).
-const textareaFind = { el: null, positions: [] };
+// A textarea cannot carry per-match marks, and Chromium does not paint an
+// UNFOCUSED textarea's selection, so matches are painted by a highlight overlay
+// laid behind the textarea: a div that mirrors the textarea's exact text layout
+// and wraps each match in a <mark> whose background shows through the textarea's
+// transparent background. The overlay's marks use the class find-hl (not
+// find-match) so the generic find-clear pass never unwraps them.
+const textareaFind = { el: null, positions: [], overlay: null, prevParentPos: undefined };
 
 function runTextareaFind(query) {
   const ta = document.getElementById('editor-textarea');
   textareaFind.el = ta;
   textareaFind.positions = [];
-  if (!ta || !query) return;
+  if (!ta || !query) { updateTextareaOverlay(0); return; }
   const hay = ta.value.toLowerCase();
   const needle = query.toLowerCase();
   let pos = 0;
@@ -4344,20 +4349,83 @@ function runTextareaFind(query) {
     pos = i + needle.length;
   }
   findState.matches = textareaFind.positions.map(() => ({ textarea: true }));
+  updateTextareaOverlay(0);
+}
+
+function escapeOverlay(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Lay (or reuse) a layout-mirroring overlay behind the textarea and render the
+// matches into it, with the current match emphasised.
+function updateTextareaOverlay(currentIdx) {
+  const ta = textareaFind.el || document.getElementById('editor-textarea');
+  if (!ta) return;
+  if (!textareaFind.positions.length) { removeTextareaOverlay(); return; }
+  let overlay = textareaFind.overlay;
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.className = 'textarea-find-overlay';
+    ta.parentElement.insertBefore(overlay, ta); // behind the textarea in paint order
+    textareaFind.overlay = overlay;
+    textareaFind.prevParentPos = ta.parentElement.style.position;
+    if (getComputedStyle(ta.parentElement).position === 'static') ta.parentElement.style.position = 'relative';
+    ta.style.position = 'relative';
+    ta.style.zIndex = '1';
+    ta._overlaySync = () => { if (textareaFind.overlay) { textareaFind.overlay.scrollTop = ta.scrollTop; textareaFind.overlay.scrollLeft = ta.scrollLeft; } };
+    ta.addEventListener('scroll', ta._overlaySync);
+  }
+  // Mirror every style that affects where each character lands, and the box.
+  const cs = getComputedStyle(ta);
+  // wordBreak/overflowWrap are left to the overlay's own CSS (anywhere) so a
+  // long unbreakable line wraps like the textarea's soft wrap rather than
+  // overflowing; everything else that moves a glyph is mirrored.
+  const mirror = ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'lineHeight', 'letterSpacing',
+    'whiteSpace', 'tabSize', 'textAlign', 'textIndent',
+    'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+    'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth', 'boxSizing'];
+  for (const p of mirror) overlay.style[p] = cs[p];
+  overlay.style.top = ta.offsetTop + 'px';
+  overlay.style.left = ta.offsetLeft + 'px';
+  overlay.style.width = ta.offsetWidth + 'px';
+  overlay.style.height = ta.offsetHeight + 'px';
+
+  const text = ta.value;
+  let html = '';
+  let last = 0;
+  textareaFind.positions.forEach((p, i) => {
+    html += escapeOverlay(text.slice(last, p.start));
+    html += `<mark class="find-hl${i === currentIdx ? ' current' : ''}">` + escapeOverlay(text.slice(p.start, p.end)) + '</mark>';
+    last = p.end;
+  });
+  html += escapeOverlay(text.slice(last)) + '\n'; // trailing newline: match textarea's own extra line box
+  overlay.innerHTML = html;
+  overlay.scrollTop = ta.scrollTop;
+  overlay.scrollLeft = ta.scrollLeft;
+}
+
+function removeTextareaOverlay() {
+  const ta = textareaFind.el || document.getElementById('editor-textarea');
+  if (ta) {
+    if (ta._overlaySync) { ta.removeEventListener('scroll', ta._overlaySync); ta._overlaySync = null; }
+    ta.style.position = '';
+    ta.style.zIndex = '';
+    if (ta.parentElement && textareaFind.prevParentPos !== undefined) ta.parentElement.style.position = textareaFind.prevParentPos;
+  }
+  textareaFind.prevParentPos = undefined;
+  if (textareaFind.overlay) { textareaFind.overlay.remove(); textareaFind.overlay = null; }
 }
 
 function scrollTextareaMatch(idx) {
   const ta = textareaFind.el;
   const p = textareaFind.positions[idx];
   if (!ta || !p) return;
-  // Selection is visible even while the find input keeps focus (unfocused
-  // textareas render the selection greyed), so we set it without focusing.
-  try { ta.setSelectionRange(p.start, p.end); } catch (e) {}
   const before = ta.value.slice(0, p.start);
   const line = before.split('\n').length - 1;
   const cs = getComputedStyle(ta);
   const lh = parseFloat(cs.lineHeight) || (parseFloat(cs.fontSize) || 14) * 1.5;
   ta.scrollTop = Math.max(0, line * lh - ta.clientHeight / 2);
+  updateTextareaOverlay(idx); // re-emphasise the current match and re-sync scroll
 }
 
 function setCurrentFindMatch(idx) {

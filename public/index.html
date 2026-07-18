@@ -396,6 +396,13 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .editor-content { flex: 1; padding: 24px 32px; overflow-y: auto; font-size: var(--body); line-height: 1.7; outline: none; }
 .editor-content.source { white-space: pre-wrap; font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 13px; color: var(--text-2); }
 textarea.editor-content { resize: none; border: none; background: transparent; width: 100%; box-sizing: border-box; }
+/* In-view find highlight layer for the source-edit textarea: sits behind the
+   transparent textarea, mirrors its text layout, and paints match backgrounds
+   through it. Text is transparent (the textarea supplies the visible glyphs);
+   only the marks carry colour. */
+.textarea-find-overlay { position: absolute; z-index: 0; margin: 0; overflow: hidden; pointer-events: none; color: transparent; overflow-wrap: anywhere; }
+.textarea-find-overlay mark.find-hl { background: rgba(232,168,76,0.32); color: transparent; border-radius: 2px; }
+.textarea-find-overlay mark.find-hl.current { background: rgba(232,122,90,0.55); }
 .editor-content.formatted { white-space: normal; }
 .editor-content.formatted h1 { font-size: 24px; font-weight: 700; margin: 0 0 16px; }
 .editor-content.formatted h2 { font-size: var(--title); font-weight: 600; margin: 24px 0 8px; }
