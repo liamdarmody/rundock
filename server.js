@@ -4885,6 +4885,41 @@ wss.on('connection', (ws) => {
           ws.send(JSON.stringify({ type: 'file_saved', path: msg.path }));
         }
       }
+      // Create a note, board, or folder from the Files sidebar. Files must not
+      // clobber an existing path; folders are idempotent (mkdir -p). A fresh
+      // file tree is pushed so the sidebar updates without a manual reload.
+      if (msg.type === 'create_path') {
+        const rel = String(msg.path || '').replace(/^\/+/, '');
+        const full = path.resolve(WORKSPACE, rel);
+        if (!rel || !isInsideWorkspace(full)) {
+          ws.send(JSON.stringify({ type: 'create_error', path: rel, reason: 'invalid path' }));
+        } else if (msg.kind !== 'folder' && fs.existsSync(full)) {
+          ws.send(JSON.stringify({ type: 'create_error', path: rel, reason: 'already exists' }));
+        } else {
+          try {
+            if (msg.kind === 'folder') {
+              fs.mkdirSync(full, { recursive: true });
+            } else {
+              fs.mkdirSync(path.dirname(full), { recursive: true });
+              fs.writeFileSync(full, msg.content || '', 'utf-8');
+              invalidateFileListCache();
+              if (ensureSearchEngine()) { try { searchEngine.noteFileSaved(WORKSPACE, rel); } catch (e) {} }
+            }
+            ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) }));
+            ws.send(JSON.stringify({ type: 'path_created', path: rel, kind: msg.kind }));
+          } catch (e) {
+            ws.send(JSON.stringify({ type: 'create_error', path: rel, reason: String((e && e.message) || e) }));
+          }
+        }
+      }
+      // Reveal a workspace path in the OS file manager (macOS only; a no-op
+      // elsewhere). Guarded to the workspace and a fixed command.
+      if (msg.type === 'reveal_in_finder') {
+        const full = path.resolve(WORKSPACE, String(msg.path || ''));
+        if (isInsideWorkspace(full) && process.platform === 'darwin') {
+          try { require('child_process').spawn('open', ['-R', full], { stdio: 'ignore' }); } catch (e) {}
+        }
+      }
     } catch (e) {
       console.error('Error handling message:', e);
     }
@@ -5037,6 +5072,24 @@ const BINARY_FILE_TYPES = {
   '.pdf': 'application/pdf',
 };
 
+// Classify a file for its tree icon: a .md whose frontmatter carries the
+// kanban-plugin key is a board, other .md are notes, and the rest by extension.
+// The frontmatter read is a small head slice; failures fall back to 'note'.
+function fileKind(fullPath, name) {
+  if (/\.mdx?$/i.test(name)) {
+    try {
+      const head = fs.readFileSync(fullPath, 'utf-8').slice(0, 800);
+      const m = head.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+      if (m && /(^|\r?\n)\s*kanban-plugin\s*:/.test(m[1])) return 'board';
+    } catch (e) {}
+    return 'note';
+  }
+  if (/\.(html?|svg)$/i.test(name)) return 'artifact';
+  if (/\.pdf$/i.test(name)) return 'pdf';
+  if (/\.(png|jpe?g|gif|webp)$/i.test(name)) return 'image';
+  return 'file';
+}
+
 function getFileTree(dir, prefix = '') {
   const entries = [];
   try {
@@ -5052,7 +5105,7 @@ function getFileTree(dir, prefix = '') {
       if (item.isDirectory()) {
         entries.push({ type: 'folder', name: item.name, path: relativePath, children: getFileTree(path.join(dir, item.name), relativePath) });
       } else if (VIEWABLE_FILE_RE.test(item.name)) {
-        entries.push({ type: 'file', name: item.name, path: relativePath });
+        entries.push({ type: 'file', name: item.name, path: relativePath, kind: fileKind(path.join(dir, item.name), item.name) });
       }
     }
   } catch (e) {}
