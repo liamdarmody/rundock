@@ -235,3 +235,61 @@ describe('mode 2: cancelled turn whose interrupt response is lost', () => {
     assert.ok(followUpStarts.length >= 2, 'the follow-up turn/start reached the server and was rejected there');
   });
 });
+
+describe('finding 7: interrupt accepted but ignored (the cancelled turn runs to completion)', () => {
+  test('the zombie turn\'s late output never leaks into the follow-up\'s reply, and the follow-up gets exactly one done', async () => {
+    // Live repro (codex-cli 0.144.4 on Windows ARM): turn/interrupt is
+    // accepted (empty response) but no turn/completed follows and the
+    // "cancelled" turn runs to completion in the background. Observed
+    // result pre-fix: the follow-up's reply was the ENTIRE cancelled
+    // counting output with the real answer's fate decided by ordering, and
+    // only the real answer had ever streamed as deltas.
+    const convoId = h.freshConvoId('ccf');
+    h.clearInvocations();
+    const ZOMBIE_TEXT = 'one two three four five six seven eight nine ten eleven twelve';
+    h.writeCodexScenario(
+      [
+        { match: { promptIncludes: 'count for ages' }, deltas: ['one ', 'two '], text: ZOMBIE_TEXT },
+        // The scripted delay holds the follow-up turn open past the
+        // zombie's resume, so the zombie completes MID new turn.
+        { match: { promptIncludes: 'real follow-up' }, deltas: ['The real '], text: 'The real answer.', delayMs: 1600 },
+      ],
+      { zombieInterrupt: { resumeDelayMs: FAILSAFE_MS + 1000 } }
+    );
+
+    client.send({ type: 'chat', conversationId: convoId, agent: 'researcher', content: 'count for ages please' });
+    const { msg: init } = await client.waitForEvent('system', 'init', convoId);
+    const threadId = init._sessionId;
+    await client.waitFor(m => m.type === 'stream_event' && m._conversationId === convoId, { label: 'zombie delta' });
+
+    // Cancel: accepted cleanly, but the turn keeps running server-side.
+    let since = client.messages.length;
+    client.send({ type: 'cancel', conversationId: convoId });
+    await client.waitForEvent('system', 'cancelled', convoId, { since });
+    await client.waitForEvent('system', 'done', convoId, { since });
+
+    // Follow-up after the failsafe released the local slot; the zombie is
+    // still running and completes while this new turn is in flight.
+    await h.delay(FAILSAFE_MS + 300);
+    since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'researcher', content: 'real follow-up please', sessionId: threadId });
+    const { msg: result } = await client.waitFor(m => m.type === 'result' && m._conversationId === convoId, { since, timeout: 15000, label: 'follow-up result' });
+    assert.strictEqual(result.result, 'The real answer.', 'the reply contains ONLY the new answer, no leaked zombie text');
+    await client.waitForEvent('system', 'done', convoId, { since });
+
+    // Let any straggler zombie events surface before counting.
+    await h.delay(400);
+    const leaked = client.messages.slice(since).filter(m => m._conversationId === convoId
+      && JSON.stringify(m).includes(ZOMBIE_TEXT));
+    assert.deepStrictEqual(leaked, [], 'the cancelled turn\'s output never reaches the client');
+    const dones = client.messages.slice(since).filter(m => m.type === 'system'
+      && m.subtype === 'done' && m._conversationId === convoId);
+    assert.strictEqual(dones.length, 1, 'exactly one done for the follow-up turn');
+    assert.deepStrictEqual(errorCards(since, convoId), [], 'no error card');
+    assert.deepStrictEqual(infoPills(since, convoId), [], 'session id preserved');
+
+    // Both turns ran on the SAME thread.
+    const turnStarts = methodEntries('turn/start').filter(t => t.params.threadId === threadId);
+    assert.ok(turnStarts.length >= 2, 'the follow-up ran on the same thread');
+  });
+});
