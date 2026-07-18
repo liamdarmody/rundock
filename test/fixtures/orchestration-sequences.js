@@ -127,9 +127,46 @@ const cancelledMidStream = [
   done(ORCHESTRATOR, 'p1'),
 ];
 
+// Cancel then immediate follow-up (r10-phase2 defect): the user stops a
+// streaming turn mid-reply, then sends a new message straight away. The
+// cancelled turn's partial text must NOT leak into the follow-up's rendered
+// answer (the streaming accumulator previously survived `cancelled`, so the
+// next turn's deltas appended to the stale partial and the result rendered
+// old+new concatenated). These sequences are runtime-agnostic: the reducer
+// sees the same message shapes whether the Codex or Claude runtime is
+// driving the turn.
+const CANCELLED_PARTIAL_TEXT = 'This is number one... \n7';
+const FOLLOW_UP_TEXT = '8 times 9 is 72.';
+const cancelledTurnPrefix = [
+  processStarted(ORCHESTRATOR, 'p1'),
+  initMsg('sess-orch', ORCHESTRATOR, 'p1'),
+  relay(sj.contentBlockStartText(), ORCHESTRATOR, 'p1'),
+  relay(sj.textDelta(CANCELLED_PARTIAL_TEXT), ORCHESTRATOR, 'p1'),
+  cancelled(ORCHESTRATOR, 'p1'),
+  done(ORCHESTRATOR, 'p1'),
+];
+// Follow-up streams its answer via deltas as usual.
+const cancelThenFollowUpStreamed = [
+  ...cancelledTurnPrefix,
+  processStarted(ORCHESTRATOR, 'p2'),
+  initMsg('sess-orch-2', ORCHESTRATOR, 'p2'),
+  ...streamedTurn(FOLLOW_UP_TEXT, ORCHESTRATOR, 'p2'),
+  done(ORCHESTRATOR, 'p2'),
+];
+// Follow-up streams NO deltas; the result payload alone carries the text.
+const cancelThenFollowUpResultOnly = [
+  ...cancelledTurnPrefix,
+  processStarted(ORCHESTRATOR, 'p2'),
+  initMsg('sess-orch-2', ORCHESTRATOR, 'p2'),
+  resultMsg(FOLLOW_UP_TEXT, ORCHESTRATOR, 'p2'),
+  done(ORCHESTRATOR, 'p2'),
+];
+
 module.exports = {
   CONVO_ID, ORCHESTRATOR, SPECIALIST,
   PLAIN_TEXT, DELEGATE_TEXT, SPECIALIST_TEXT, RESUME_TEXT,
+  CANCELLED_PARTIAL_TEXT, FOLLOW_UP_TEXT,
   relay, initMsg, resultMsg, processStarted, done, agentSwitch, cancelled, streamedTurn,
   plainStreamedTurn, delegationRoundTrip, staleDoneAfterNewerProcess, silentPark, cancelledMidStream,
+  cancelThenFollowUpStreamed, cancelThenFollowUpResultOnly,
 };

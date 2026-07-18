@@ -169,12 +169,15 @@ const SEQUENCE_TABLE = [
       '0:remove-permission-cards',
       '1:set-session',
       '3:start-streaming-bubble', '3:render-stream-text',
-      '4:add-cancelled-badge', '4:notice',
+      '4:add-cancelled-badge', '4:clear-streaming-bubble', '4:notice',
       '5:finish-processing',
     ],
-    // No result ever arrived, so the raw text survives (matches app.js today:
-    // only result/agent_switch clear streamingRawText).
-    finalState: { streamingRawText: 'Let me work through th', hasStreamingBubble: false, isProcessing: false },
+    // The extraction originally pinned streamingRawText SURVIVING here (only
+    // result/agent_switch cleared it): that pin codified the r10-phase2
+    // cancel-then-follow-up defect, where the stale accumulator concatenated
+    // with the next turn's answer. `cancelled` now cuts the accumulators;
+    // the partial bubble stays in the DOM as the stopped reply.
+    finalState: { streamingRawText: '', latestText: '', hasStreamingBubble: false, isProcessing: false },
   },
 ];
 
@@ -241,6 +244,84 @@ test('cancelled: badge effect carries the turn tool calls and start time', () =>
   assert.strictEqual(badge.turnStartTime, 1700000000000);
   const notice = effects.find(e => e.type === 'notice');
   assert.strictEqual(notice.content, 'Agent stopped by user.');
+});
+
+// ── cancel then follow-up (r10-phase2 defect) ───────────────────────────────
+// Live-browser defect: cancel a streaming turn mid-reply, immediately send a
+// follow-up; the rendered answer was the cancelled turn's partial text
+// concatenated with the new answer. The reducer preserved streamingRawText /
+// latestText across `cancelled`, so the next process's deltas appended to the
+// stale accumulator and result-time resolution (streamingRawText || result)
+// rendered old+new. Runtime-agnostic: the same reducer path serves Codex and
+// Claude turns.
+
+// Effects emitted by messages at index >= from in the replayed sequence
+// (replay's log entries are `${messageIndex}:${effectType}`, parallel to
+// effects).
+function effectsFrom(replayed, from) {
+  return replayed.effects.filter((_, i) => Number(replayed.log[i].split(':')[0]) >= from);
+}
+
+test('cancel then follow-up (streamed): the new turn renders exactly the new answer with zero leaked text', () => {
+  const replayed = replay(seq.cancelThenFollowUpStreamed);
+  const fin = replayed.effects.find(e => e.type === 'finalize-agent-message');
+  assert.strictEqual(fin.text, seq.FOLLOW_UP_TEXT, 'finalised message must be the follow-up answer only');
+  const bubble = replayed.effects.find(e => e.type === 'finalize-stream-bubble');
+  assert.strictEqual(bubble.text, seq.FOLLOW_UP_TEXT, 'final bubble render must be the follow-up answer only');
+  // No effect emitted after the cancel (message index 4) may carry any of the
+  // cancelled turn's partial text.
+  for (const ef of effectsFrom(replayed, 5)) {
+    if (typeof ef.text === 'string') {
+      assert.ok(!ef.text.includes('number one') && !ef.text.includes('\n7'),
+        `leaked cancelled-turn text in ${ef.type}: ${JSON.stringify(ef.text)}`);
+    }
+  }
+  assert.strictEqual(replayed.state.streamingRawText, '');
+});
+
+test('cancel then follow-up (result-only): the result payload wins because no stale accumulator survives', () => {
+  const replayed = replay(seq.cancelThenFollowUpResultOnly);
+  const fin = replayed.effects.find(e => e.type === 'finalize-agent-message');
+  assert.strictEqual(fin.text, seq.FOLLOW_UP_TEXT, 'result text must not be shadowed by the cancelled turn\'s accumulator');
+  // No streaming happened in the follow-up turn: it renders as a fresh
+  // message, never a re-render of the cancelled turn's bubble.
+  const finals = effectsFrom(replayed, 6);
+  assert.ok(finals.some(e => e.type === 'append-final-message' && e.text === seq.FOLLOW_UP_TEXT));
+  assert.strictEqual(finals.find(e => e.type === 'finalize-stream-bubble'), undefined);
+});
+
+test('cancelled resets the streaming accumulators; the partial bubble is detached, not removed', () => {
+  const s = {
+    ...createState(),
+    activeProcessId: 'p1', isProcessing: true, hasStreamingBubble: true,
+    streamingRawText: 'partial reply tex', latestText: 'partial reply tex', latestAgentId: 'cos', afterToolUse: true,
+  };
+  const r = reduce(s, seq.cancelled('cos', 'p1'), {});
+  assert.strictEqual(r.state.streamingRawText, '');
+  assert.strictEqual(r.state.latestText, '');
+  assert.strictEqual(r.state.latestAgentId, null);
+  assert.strictEqual(r.state.hasStreamingBubble, false);
+  assert.strictEqual(r.state.afterToolUse, false);
+  // The already-rendered partial stays visible as the stopped reply: the
+  // bubble reference is cleared (clear-streaming-bubble) but no effect
+  // removes it from the DOM.
+  assert.deepStrictEqual(types(r.effects), ['add-cancelled-badge', 'clear-streaming-bubble', 'notice']);
+});
+
+test('process_started for a new process resets the streaming accumulators (belt and braces)', () => {
+  const s = {
+    ...createState(),
+    activeProcessId: 'p1', streamingRawText: 'stale partial', latestText: 'stale fallback',
+    latestAgentId: 'cos', afterToolUse: true, hasStreamingBubble: true,
+  };
+  const r = reduce(s, seq.processStarted('cos', 'p2'), {});
+  assert.strictEqual(r.state.streamingRawText, '', 'a fresh process can never legitimately inherit streamed text');
+  assert.strictEqual(r.state.latestText, '');
+  assert.strictEqual(r.state.latestAgentId, null);
+  assert.strictEqual(r.state.afterToolUse, false);
+  // The DOM bubble (if any) is glue-owned and may be re-used by the new
+  // process's stream: the boolean is carried through untouched.
+  assert.strictEqual(r.state.hasStreamingBubble, true);
 });
 
 // ── createState / isStale ───────────────────────────────────────────────────
