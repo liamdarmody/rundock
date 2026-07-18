@@ -93,6 +93,28 @@ describe('frontmatter wikilink properties', () => {
     assert.deepEqual(clicks, ['Live Note'], 'live link routes; dead link is inert');
   });
 
+  test('adding a list item keeps existing chips visible and adds inline', () => {
+    const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
+    global.HTMLElement = dom.window.HTMLElement;
+    const container = dom.window.document.getElementById('p');
+    const edits = [];
+    renderProperties(container, { tags: ['alpha', 'beta'] }, {
+      onEditProperty: (key, value) => { edits.push([key, value]); return true; },
+    });
+    assert.equal(container.querySelectorAll('.prop-chip').length, 2, 'starts with two chips');
+    const addBtn = container.querySelector('.prop-add');
+    assert.ok(addBtn, 'a list row carries an add button');
+    addBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    // The fix: existing chips stay visible while the inline input is open
+    // (previously the whole value was replaced by the input, hiding the tags).
+    assert.equal(container.querySelectorAll('.prop-chip').length, 2, 'existing chips remain visible');
+    const input = container.querySelector('input.prop-add-input');
+    assert.ok(input, 'the add input appears inline after the chips');
+    input.value = 'gamma';
+    input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    assert.deepEqual(edits, [['tags', { list: { add: 'gamma' } }]], 'commit routes a byte-honest list add');
+  });
+
   test('a malicious wikilink target cannot break out of the attribute (stored XSS regression)', () => {
     const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
     global.HTMLElement = dom.window.HTMLElement;

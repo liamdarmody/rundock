@@ -519,7 +519,7 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 /* Foldable callouts (+ open, - closed): native details/summary, disclosure caret on the header. */
 .tiptap-editor .ProseMirror .callout details.callout-fold > summary { cursor: pointer; list-style: none; }
 .tiptap-editor .ProseMirror .callout details.callout-fold > summary::-webkit-details-marker { display: none; }
-.tiptap-editor .ProseMirror .callout details.callout-fold > summary.callout-header::before { content: '\25B8'; color: var(--callout-color); font-size: 12px; transition: transform 0.15s ease; }
+.tiptap-editor .ProseMirror .callout details.callout-fold > summary.callout-header::before { content: '\25B8'; color: var(--callout-color); font-size: 15px; line-height: 1; transition: transform 0.15s ease; }
 .tiptap-editor .ProseMirror .callout details.callout-fold[open] > summary.callout-header::before { content: '\25BE'; }
 .tiptap-editor .ProseMirror .callout details.callout-fold > summary.callout-header { margin-bottom: 0; }
 .tiptap-editor .ProseMirror .callout details.callout-fold[open] > summary.callout-header { margin-bottom: 6px; }
