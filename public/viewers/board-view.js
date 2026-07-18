@@ -126,6 +126,17 @@ function plusIcon(doc) {
   return svg;
 }
 
+// Pure: the corrected insertion index for a card move (drop indices are
+// pre-removal positions), or -1 for a no-op (a card dropped back onto its own
+// position within the same lane). When moving down within a lane, the target
+// shifts left by one because the card is removed before it is re-inserted.
+export function reorderTargetIndex(fromLane, fromIndex, toLane, toIndex) {
+  let target = toIndex;
+  if (fromLane === toLane && fromIndex < toIndex) target -= 1;
+  if (fromLane === toLane && target === fromIndex) return -1;
+  return target;
+}
+
 export function mountBoardView({ paneElement, content, onWikilink }, Kanban) {
   const doc = paneElement.ownerDocument;
   ensureStyles(doc);
@@ -331,11 +342,10 @@ export function mountBoardView({ paneElement, content, onWikilink }, Kanban) {
   function commitMove(toLane, toIndex) {
     if (!drag) return;
     const { fromLane, fromIndex } = drag;
-    let target = toIndex;
-    if (fromLane === toLane && fromIndex < toIndex) target -= 1;
-    if (fromLane === toLane && target === fromIndex) { drag = null; return; }
-    Kanban.moveItem(board, fromLane, fromIndex, toLane, target);
+    const target = reorderTargetIndex(fromLane, fromIndex, toLane, toIndex);
     drag = null;
+    if (target < 0) return; // dropped back onto its own position: no-op
+    Kanban.moveItem(board, fromLane, fromIndex, toLane, target);
     onChange();
     render();
   }
@@ -379,10 +389,14 @@ export function mountBoardView({ paneElement, content, onWikilink }, Kanban) {
   // Lane (three-dot) menu: every column operation the serializer supports.
   // Destructive ones (archive, delete) run through withUndo.
   let openMenu = null;
-  function closeLaneMenu() { if (openMenu) { openMenu.remove(); openMenu = null; doc.removeEventListener('click', closeLaneMenu); } }
+  function closeLaneMenu() { if (openMenu) { openMenu.remove(); openMenu = null; } }
+  // The lane menu joins the shared close signal so opening any other menu (or
+  // this one again) dismisses it, and only one menu is ever open.
+  doc.addEventListener('rundock:closemenus', closeLaneMenu);
 
   function openLaneMenu(anchor, laneIndex) {
-    closeLaneMenu();
+    if (openMenu) { closeLaneMenu(); return; } // the button toggles
+    doc.dispatchEvent(new CustomEvent('rundock:closemenus')); // dismiss any other open menu
     const lane = board.lanes[laneIndex];
     if (!lane) return;
     const menu = doc.createElement('div');
@@ -432,7 +446,6 @@ export function mountBoardView({ paneElement, content, onWikilink }, Kanban) {
     openMenu = menu;
     // Close on the next document click (this click is still propagating, so
     // defer the listener registration by a tick).
-    setTimeout(() => doc.addEventListener('click', closeLaneMenu), 0);
   }
 
   function renameLaneInline(head, titleEl, laneIndex) {
@@ -558,6 +571,7 @@ export function mountBoardView({ paneElement, content, onWikilink }, Kanban) {
     setOnChange(cb) { onChange = typeof cb === 'function' ? cb : (() => {}); },
     destroy() {
       closeLaneMenu();
+      doc.removeEventListener('rundock:closemenus', closeLaneMenu);
       clearTimeout(undoTimer);
       paneElement.classList.remove('viewer-host', 'board-host');
       paneElement.innerHTML = '';
