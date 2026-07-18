@@ -16,6 +16,12 @@
 //       "dropMethods": ["thread/resume"], // requests logged but never answered
 //       "overload": {"method": "thread/start", "times": 2},  // first N get -32001
 //       "resumeFails": true,              // thread/resume -> -32600 "no rollout found"
+//       "resumeTransientFails": 2,        // first N thread/resume PER THREAD fail with
+//                                         // the live "rollout at ... is empty" wording
+//                                         // (Windows Finding 6 Mode 1), then succeed
+//       "dropInterrupt": true,            // turn/interrupt ends the turn server-side but
+//                                         // neither the response nor turn/completed is
+//                                         // sent (lost-stream shape, Finding 6 Mode 2)
 //       "rules": [ {
 //         "match": {"promptIncludes": "..."},
 //         "deltas": ["chunk1 ", "chunk2"],  // item/agentMessage/delta sequence
@@ -107,6 +113,7 @@ function runAppServer() {
   const pendingServerRequests = new Map();   // id -> resolve(decision)
   const activeTurns = new Map();             // threadId -> { turnId, threadId, finished }
   const overloadCounts = new Map();          // method -> requests already rejected
+  const resumeFailCounts = new Map();        // threadId -> transient resume failures served
 
   const tick = (ms = 2) => new Promise(r => setTimeout(r, ms));
 
@@ -281,6 +288,21 @@ function runAppServer() {
           send(asfx.errorResponse(id, -32600, `no rollout found for thread id ${threadId}`));
           return;
         }
+        // Transient read-race simulation (Windows Finding 6 Mode 1): an
+        // interrupted thread's rollout file can still be empty when the
+        // resume arrives (codex flushes it moments later). Wording captured
+        // live on Windows 11 / codex-cli 0.144.4; NOT -32600, which is the
+        // permanent no-rollout class. Per-thread counter so the (N+1)th
+        // resume of the same thread succeeds, like the real flush.
+        if (cfg.resumeTransientFails) {
+          const n = resumeFailCounts.get(threadId) || 0;
+          if (n < cfg.resumeTransientFails) {
+            resumeFailCounts.set(threadId, n + 1);
+            send(asfx.errorResponse(id, -32603,
+              `failed to read thread: thread-store internal error: failed to read session metadata /home/u/.codex/sessions/2026/07/16/rollout-2026-07-16T10-00-00-${threadId}.jsonl: rollout at /home/u/.codex/sessions/2026/07/16/rollout-2026-07-16T10-00-00-${threadId}.jsonl is empty`));
+            return;
+          }
+        }
         send(asfx.response(id, asfx.threadStartResult(threadId, params || {})));
         return;
       }
@@ -304,8 +326,21 @@ function runAppServer() {
         return;
       }
       case 'turn/interrupt': {
-        send(asfx.response(id, {}));
         const t = activeTurns.get(params && params.threadId);
+        // Lost-stream simulation (Windows Finding 6 Mode 2): the interrupt
+        // lands server-side (the turn really ends and the slot frees there),
+        // but neither the interrupt RESPONSE nor the follow-up
+        // turn/completed reaches the client, exactly the shape the VM's
+        // periodic network stream disconnects produced. The client must not
+        // hold its active-turn slot forever.
+        if (cfg.dropInterrupt) {
+          if (t && !t.finished && (!params.turnId || params.turnId === t.turnId)) {
+            t.finished = true;
+            activeTurns.delete(t.threadId);
+          }
+          return;
+        }
+        send(asfx.response(id, {}));
         if (t && !t.finished && (!params.turnId || params.turnId === t.turnId)) {
           finishTurn(t, 'interrupted');
         }

@@ -77,6 +77,39 @@ describe('detectCodex', () => {
     assert.strictEqual(d.installed, true);
     assert.strictEqual(d.version, null);
   });
+
+  test('every probe closes stdin (Windows Finding 4/5: codex --version hangs on an open piped stdin)', () => {
+    // Verified live on Windows 11 / codex-cli 0.144.4: `codex.exe --version`
+    // HANGS while stdin is an attached, never-closed pipe (execSync's
+    // default) and returns instantly with stdin closed, so every probe burnt
+    // its full 5s timeout and the first get_runtime_status blocked the event
+    // loop ~13s. The probes must pass stdio ['ignore', 'pipe', 'ignore'].
+    const calls = [];
+    const d = codex.detectCodex(fakeDeps({
+      execSync: (cmd, opts) => {
+        calls.push({ cmd, opts });
+        return cmd.includes('--version') ? 'codex-cli 0.48.0\n' : '/usr/local/bin/codex\n';
+      },
+    }));
+    assert.strictEqual(d.installed, true);
+    assert.ok(calls.length >= 2, 'lookup and version probes both ran');
+    for (const { cmd, opts } of calls) {
+      assert.deepStrictEqual(opts && opts.stdio, ['ignore', 'pipe', 'ignore'],
+        `probe must close stdin (cmd: ${cmd})`);
+    }
+  });
+
+  test('the second lookup probe (bare-command path) also closes stdin', () => {
+    const calls = [];
+    codex.detectCodex(fakeDeps({
+      execSync: (cmd, opts) => { calls.push({ cmd, opts }); throw new Error('not found'); },
+    }));
+    assert.ok(calls.length >= 1);
+    for (const { cmd, opts } of calls) {
+      assert.deepStrictEqual(opts && opts.stdio, ['ignore', 'pipe', 'ignore'],
+        `probe must close stdin (cmd: ${cmd})`);
+    }
+  });
 });
 
 describe('findCodexThreadFile', () => {
@@ -135,6 +168,16 @@ describe('resolveCodexBin', () => {
       execSync: () => { throw new Error('not found'); },
     });
     assert.strictEqual(bin, 'codex');
+  });
+
+  test('the lookup probe closes stdin (Windows Finding 4/5)', () => {
+    let seen = null;
+    codex.resolveCodexBin({
+      platform: 'win32',
+      execSync: (cmd, opts) => { seen = opts; return 'C:\\tools\\codex.exe\r\n'; },
+    });
+    assert.deepStrictEqual(seen && seen.stdio, ['ignore', 'pipe', 'ignore'],
+      'where.exe probe must close stdin');
   });
 });
 
