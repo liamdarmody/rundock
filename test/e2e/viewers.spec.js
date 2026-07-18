@@ -542,6 +542,20 @@ test('opening a board changes zero bytes; adding a card persists canonical markd
   expect(saved.endsWith('%%')).toBe(true); // no trailing newline: still canonical
 });
 
+test('board cards render tag chips and dates, and wikilinks navigate', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'rich-board.md');
+  await expect(page.locator('.board-lane')).toHaveCount(1);
+  // Tag chip and date span render (not raw text).
+  await expect(page.locator('.board-card-text .board-tag', { hasText: '#launch' })).toBeVisible();
+  await expect(page.locator('.board-card-text .board-date', { hasText: '2026-08-01' })).toBeVisible();
+  await page.screenshot({ path: `${SHOTS}/board-rich-card.png` });
+  // Clicking the wikilink navigates to the target file (does not open the card editor).
+  await page.locator('.board-card-text a.board-wikilink', { hasText: 'Roadmap-2026' }).click();
+  await expect(page.locator('#editor-filename')).toHaveText('Roadmap-2026.md');
+  await expect(page.locator('textarea.board-card-edit')).toHaveCount(0);
+});
+
 test('a board card edits in place and persists byte-honest markdown', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'board.md');

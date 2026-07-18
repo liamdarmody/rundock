@@ -54,6 +54,20 @@ describe('renderCardHtml', () => {
     assert.ok(!/onmouseover="pwn/.test(html), 'the injected handler is neutralised by escaping');
   });
 
+  test('tags render as chips and ISO dates as styled spans', () => {
+    const html = renderCardHtml('Ship #launch by 2026-08-01 #p1');
+    assert.ok(html.includes('<span class="board-tag">#launch</span>'), 'tag chip');
+    assert.ok(html.includes('<span class="board-tag">#p1</span>'), 'second tag chip');
+    assert.ok(html.includes('<span class="board-date">2026-08-01</span>'), 'date span');
+    assert.ok(!html.includes('#launch by'), 'raw tag text is replaced');
+  });
+
+  test('a hash inside inline code is not turned into a tag chip', () => {
+    const html = renderCardHtml('`#not-a-tag`');
+    assert.ok(html.includes('<code>#not-a-tag</code>'), 'code content stays literal');
+    assert.ok(!html.includes('board-tag'), 'no chip inside code');
+  });
+
   test('multi-line card text joins with line breaks', () => {
     assert.ok(renderCardHtml('line one\nline two').includes('line one<br>line two'));
   });

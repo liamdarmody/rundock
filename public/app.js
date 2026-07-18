@@ -3211,7 +3211,7 @@ function openBoardFile(path, content) {
   pane.className = 'editor-content';
   import('./viewers/board-view.js').then((mod) => {
     if (currentFilePath !== path) return; // stale
-    activeFileViewer = mod.mountBoardView({ paneElement: pane, path, content }, window.Kanban);
+    activeFileViewer = mod.mountBoardView({ paneElement: pane, path, content, onWikilink: (target) => openWikilink(target) }, window.Kanban);
     if (typeof activeFileViewer.setOnChange === 'function' && typeof activeFileViewer.getContentForSave === 'function') {
       activeFileViewer.setOnChange(() => {
         const md = activeFileViewer.getContentForSave();

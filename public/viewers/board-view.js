@@ -62,6 +62,8 @@ function ensureStyles(doc) {
     .board-card-text a { color: var(--accent); text-decoration: none; }
     .board-card-text a:hover { text-decoration: underline; }
     .board-card-text code { font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 12px; background: var(--elevated); padding: 1px 4px; border-radius: 4px; }
+    .board-card-text .board-tag { display: inline-block; padding: 0 7px; border-radius: 100px; background: var(--accent-glow, rgba(232,122,90,0.14)); color: var(--accent); font-size: 12px; font-weight: 500; white-space: nowrap; }
+    .board-card-text .board-date { color: var(--text-2); font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 12px; }
     .board-card-drop { height: 2px; margin: -5px 0; border-radius: 2px; background: transparent; }
     .board-card-drop.active { background: var(--accent); }
     /* Add-card composer: the standing small-input grammar (field is the input,
@@ -121,7 +123,7 @@ function plusIcon(doc) {
   return svg;
 }
 
-export function mountBoardView({ paneElement, content }, Kanban) {
+export function mountBoardView({ paneElement, content, onWikilink }, Kanban) {
   const doc = paneElement.ownerDocument;
   ensureStyles(doc);
   paneElement.innerHTML = '';
@@ -281,7 +283,8 @@ export function mountBoardView({ paneElement, content }, Kanban) {
     // Click the card text to edit in place (a click on a wikilink does not
     // edit; navigation is wired separately).
     text.addEventListener('click', (e) => {
-      if (e.target.closest && e.target.closest('a.board-wikilink')) return;
+      const wl = e.target.closest && e.target.closest('a.board-wikilink');
+      if (wl) { if (typeof onWikilink === 'function') onWikilink(wl.getAttribute('data-target') || ''); return; }
       enterCardEdit(card, laneIndex, itemIndex);
     });
     row.appendChild(check);
