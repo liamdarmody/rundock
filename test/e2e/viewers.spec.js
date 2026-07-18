@@ -106,7 +106,9 @@ test('PDF opens in a frame over the binary endpoint', async ({ page }) => {
   await openFromTree(page, 'report.pdf');
   const frame = page.locator('iframe.viewer-frame');
   await expect(frame).toBeVisible();
-  await expect(frame).toHaveAttribute('src', '/workspace-file?path=report.pdf');
+  // Opens with the pages/thumbnails panel collapsed so it does not steal
+  // reading width (navpanes=0).
+  await expect(frame).toHaveAttribute('src', '/workspace-file?path=report.pdf#navpanes=0');
   // The endpoint really serves the bytes with the pinned content type.
   const res = await page.request.get('/workspace-file?path=report.pdf');
   expect(res.status()).toBe(200);
@@ -375,7 +377,7 @@ test('a wikilink to an image or PDF in a conversation opens the real viewer', as
   await page.locator('.nav-item[data-nav="conversations"]').click();
   await page.locator('.convo-item', { hasText: 'Export handoff' }).click();
   await page.locator('.wikilink', { hasText: 'report.pdf' }).first().click();
-  await expect(page.locator('iframe.viewer-frame')).toHaveAttribute('src', '/workspace-file?path=report.pdf');
+  await expect(page.locator('iframe.viewer-frame')).toHaveAttribute('src', '/workspace-file?path=report.pdf#navpanes=0');
   await page.screenshot({ path: `${SHOTS}/conversation-wikilink-binary.png` });
 });
 

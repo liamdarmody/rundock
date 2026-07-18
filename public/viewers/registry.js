@@ -193,7 +193,10 @@ export function mountPdfViewer({ paneElement, path }) {
   const iframe = doc.createElement('iframe');
   iframe.className = 'viewer-frame';
   iframe.setAttribute('title', 'PDF viewer');
-  iframe.src = workspaceFileUrl(path);
+  // Open with the thumbnails/pages panel collapsed (navpanes=0): it steals
+  // reading width and makes no sense on a short document. The user can still
+  // open it from the viewer's own toolbar.
+  iframe.src = workspaceFileUrl(path) + '#navpanes=0';
   paneElement.appendChild(iframe);
   return makeHandle(paneElement);
 }
