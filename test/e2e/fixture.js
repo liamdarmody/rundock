@@ -125,6 +125,9 @@ function buildFixture() {
   // rendering + wikilink-navigation tests).
   fs.writeFileSync(path.join(workspace, 'rich-board.md'),
     "---\n\nkanban-plugin: board\n\n---\n\n## Todo\n\n- [ ] Review [[Roadmap-2026]] by 2026-08-01 #launch\n\n\n\n\n%% kanban:settings\n```\n{\"kanban-plugin\":\"board\",\"list-collapse\":[false]}\n```\n%%");
+  // A single-lane board for the in-column drag-reorder test.
+  fs.writeFileSync(path.join(workspace, 'dnd-board.md'),
+    "---\n\nkanban-plugin: board\n\n---\n\n## Queue\n\n- [ ] Card A\n- [ ] Card B\n- [ ] Card C\n\n\n\n\n%% kanban:settings\n```\n{\"kanban-plugin\":\"board\",\"list-collapse\":[false]}\n```\n%%");
   fs.writeFileSync(path.join(workspace, 'chart.png'), buildPng());
   fs.writeFileSync(path.join(workspace, 'report.pdf'), Buffer.from(
     '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n' +

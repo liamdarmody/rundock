@@ -25,7 +25,6 @@ function ensureStyles(doc) {
     .board-host { padding: 0 !important; display: flex; flex-direction: column; overflow: hidden; }
     .board-scroll { flex: 1; display: flex; gap: 16px; align-items: flex-start; padding: 20px; overflow-x: auto; overflow-y: hidden; }
     .board-lane { flex: 0 0 300px; max-height: 100%; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
-    .board-lane.drop-target { border-color: var(--accent); }
     .board-lane-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
     .board-lane-collapse { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; flex: 0 0 auto; border-radius: 6px; color: var(--text-2); }
     .board-lane-collapse:hover { color: var(--text-1); background: var(--elevated); }
@@ -43,7 +42,9 @@ function ensureStyles(doc) {
     .board-lane-popup-item { text-align: left; padding: 7px 10px; border-radius: 6px; color: var(--text-1); font-size: var(--body); }
     .board-lane-popup-item:hover { background: var(--elevated); }
     .board-lane-popup-item.danger:hover { color: var(--danger, #E85A5A); }
-    .board-lane-body { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; min-height: 8px; }
+    .board-lane-body { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; min-height: 24px; }
+    /* Insertion indicator: an accent line at the gap the card would drop into. */
+    .board-lane-body.insert-end { box-shadow: inset 0 -3px 0 -1px var(--accent); }
     .board-card { position: relative; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: var(--body); color: var(--text-1); line-height: 1.5; cursor: grab; }
     .board-card:hover { border-color: var(--text-2); }
     .board-card.dragging { opacity: 0.4; }
@@ -64,8 +65,9 @@ function ensureStyles(doc) {
     .board-card-text code { font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 12px; background: var(--elevated); padding: 1px 4px; border-radius: 4px; }
     .board-card-text .board-tag { display: inline-block; padding: 0 7px; border-radius: 100px; background: var(--accent-glow, rgba(232,122,90,0.14)); color: var(--accent); font-size: 12px; font-weight: 500; white-space: nowrap; }
     .board-card-text .board-date { color: var(--text-2); font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 12px; }
-    .board-card-drop { height: 2px; margin: -5px 0; border-radius: 2px; background: transparent; }
-    .board-card-drop.active { background: var(--accent); }
+    .board-card.insert-before::before, .board-card.insert-after::after { content: ''; position: absolute; left: 0; right: 0; height: 2px; border-radius: 2px; background: var(--accent); }
+    .board-card.insert-before::before { top: -5px; }
+    .board-card.insert-after::after { bottom: -5px; }
     /* Add-card composer: the standing small-input grammar (field is the input,
        accent border on focus, circular submit inside, faded when empty). */
     .board-add { margin: 8px; position: relative; }
@@ -134,7 +136,19 @@ export function mountBoardView({ paneElement, content, onWikilink }, Kanban) {
   // Drag state: {fromLane, fromIndex}. Re-renders are deferred past dragend so
   // macOS does not play the ~400ms snap-back ghost.
   let drag = null;
+  // The live insertion point while dragging: { lane, index }. Computed from the
+  // cursor's position relative to each card's midpoint, so a card can be
+  // dropped anywhere over another card (or the empty area) and it lands at the
+  // nearest gap, with a visible accent line at that gap.
+  let dropTarget = null;
   let onChange = () => {};
+
+  function clearDropMarkers() {
+    scroll.querySelectorAll('.board-card.insert-before, .board-card.insert-after')
+      .forEach((c) => c.classList.remove('insert-before', 'insert-after'));
+    scroll.querySelectorAll('.board-lane-body.insert-end')
+      .forEach((b) => b.classList.remove('insert-end'));
+  }
 
   const scroll = doc.createElement('div');
   scroll.className = 'board-scroll';
@@ -211,54 +225,30 @@ export function mountBoardView({ paneElement, content, onWikilink }, Kanban) {
 
     const body = doc.createElement('div');
     body.className = 'board-lane-body';
-    lane.items.forEach((item, itemIndex) => {
-      body.appendChild(dropZone(laneIndex, itemIndex));
-      body.appendChild(renderCard(item, laneIndex, itemIndex));
-    });
-    body.appendChild(dropZone(laneIndex, lane.items.length));
+    lane.items.forEach((item, itemIndex) => body.appendChild(renderCard(item, laneIndex, itemIndex)));
     el.appendChild(body);
 
     el.appendChild(addComposer(laneIndex));
 
-    // Lane is a drop target for the whole column (drops append to the end when
-    // not over a specific card gap).
-    el.addEventListener('dragover', (e) => {
+    // Dragging over the empty area of a lane (below the cards, or an empty
+    // lane) inserts at the end. Cards stop propagation for their own midpoint
+    // logic, so this only fires when the cursor is not over a card.
+    body.addEventListener('dragover', (e) => {
       if (!drag) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
-      el.classList.add('drop-target');
-    });
-    el.addEventListener('dragleave', (e) => {
-      if (!el.contains(e.relatedTarget)) el.classList.remove('drop-target');
+      clearDropMarkers();
+      body.classList.add('insert-end');
+      dropTarget = { lane: laneIndex, index: lane.items.length };
     });
     el.addEventListener('drop', (e) => {
-      if (!drag) return;
+      if (!drag || !dropTarget) return;
       e.preventDefault();
-      el.classList.remove('drop-target');
-      commitMove(laneIndex, lane.items.length);
+      const t = dropTarget;
+      clearDropMarkers();
+      commitMove(t.lane, t.index);
     });
     return el;
-  }
-
-  function dropZone(laneIndex, itemIndex) {
-    const z = doc.createElement('div');
-    z.className = 'board-card-drop';
-    z.addEventListener('dragover', (e) => {
-      if (!drag) return;
-      e.preventDefault();
-      e.stopPropagation();
-      e.dataTransfer.dropEffect = 'move';
-      z.classList.add('active');
-    });
-    z.addEventListener('dragleave', () => z.classList.remove('active'));
-    z.addEventListener('drop', (e) => {
-      if (!drag) return;
-      e.preventDefault();
-      e.stopPropagation();
-      z.classList.remove('active');
-      commitMove(laneIndex, itemIndex);
-    });
-    return z;
   }
 
   function renderCard(item, laneIndex, itemIndex) {
@@ -303,8 +293,22 @@ export function mountBoardView({ paneElement, content, onWikilink }, Kanban) {
 
     card.appendChild(row);
 
+    // Insert before or after this card based on which half the cursor is in.
+    card.addEventListener('dragover', (e) => {
+      if (!drag) return;
+      e.preventDefault();
+      e.stopPropagation(); // this card owns the insertion point, not the lane end
+      e.dataTransfer.dropEffect = 'move';
+      const rect = card.getBoundingClientRect();
+      const after = e.clientY > rect.top + rect.height / 2;
+      clearDropMarkers();
+      card.classList.add(after ? 'insert-after' : 'insert-before');
+      dropTarget = { lane: laneIndex, index: after ? itemIndex + 1 : itemIndex };
+    });
+
     card.addEventListener('dragstart', (e) => {
       drag = { fromLane: laneIndex, fromIndex: itemIndex };
+      dropTarget = null;
       card.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
       try { e.dataTransfer.setData('text/plain', ''); } catch (err) {}
@@ -312,6 +316,8 @@ export function mountBoardView({ paneElement, content, onWikilink }, Kanban) {
     card.addEventListener('dragend', () => {
       card.classList.remove('dragging');
       drag = null;
+      dropTarget = null;
+      clearDropMarkers();
       // Defer the re-render one frame past dragend so the drop animation
       // settles (avoids the snap-back ghost).
       requestAnimationFrame(() => render());

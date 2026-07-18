@@ -556,6 +556,31 @@ test('board cards render tag chips and dates, and wikilinks navigate', async ({ 
   await expect(page.locator('textarea.board-card-edit')).toHaveCount(0);
 });
 
+test('cards reorder within a column by dragging onto another card', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'dnd-board.md');
+  await expect(page.locator('.board-card')).toHaveCount(3);
+  // Drag Card A onto the bottom half of Card C (insert after) via DnD events.
+  await page.evaluate(() => {
+    const cards = document.querySelectorAll('.board-card');
+    const src = cards[0], tgt = cards[2];
+    const dt = new DataTransfer();
+    src.dispatchEvent(new DragEvent('dragstart', { dataTransfer: dt, bubbles: true }));
+    const r = tgt.getBoundingClientRect();
+    tgt.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, clientY: r.bottom - 2 }));
+    tgt.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
+    src.dispatchEvent(new DragEvent('dragend', { dataTransfer: dt, bubbles: true }));
+  });
+  // Order in the UI is now B, C, A...
+  const texts = await page.locator('.board-card-text').allInnerTexts();
+  expect(texts.map(t => t.trim())).toEqual(['Card B', 'Card C', 'Card A']);
+  // ...and persisted in that order in the file.
+  await expect.poll(async () => {
+    const md = await (await page.request.get('/api/file?path=dnd-board.md')).text();
+    return md.indexOf('Card B') < md.indexOf('Card C') && md.indexOf('Card C') < md.indexOf('Card A');
+  }).toBe(true);
+});
+
 test('a board card edits in place and persists byte-honest markdown', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'board.md');
