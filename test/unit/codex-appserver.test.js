@@ -495,6 +495,45 @@ test('second startTurn on a thread with an active turn fails fast client-side', 
   }
 });
 
+test('interrupt failsafe: a lost interrupt response/turn-completed frees the slot and a follow-up turn succeeds (Windows Finding 6 Mode 2)', async () => {
+  // Live evidence (Windows 11, codex-cli 0.144.4, periodic network stream
+  // disconnects): after a cancel whose interrupt response was lost, startTurn
+  // was rejected with "a turn is already active" at T+3s AND T+35s; only a
+  // probe minutes later succeeded, because the client releases the slot ONLY
+  // on the turn's done event. With the failsafe, an interrupt that never
+  // sees turn/completed within interruptFailsafeMs releases the slot locally
+  // and emits done {status:'interrupted'}.
+  const dir = makeDir({
+    appServer: {
+      dropInterrupt: true,
+      rules: [
+        { match: { promptIncludes: 'hang' }, deltas: ['working...'], hangAfterDeltas: true },
+        { match: { promptIncludes: 'follow-up' }, text: 'answered after the lost interrupt' },
+      ],
+    },
+  });
+  const server = makeServer(dir, { interruptFailsafeMs: 200, requestTimeoutMs: 1500 });
+  try {
+    await server.start();
+    const { threadId } = await server.startThread({ cwd: dir });
+    const sub = server.startTurn(threadId, 'hang forever');
+    await nextEvent(sub, 'delta');
+    const doneP = nextEvent(sub, 'done');
+    // The interrupt request itself never gets a response: its (bounded)
+    // rejection is expected and must not decide the outcome.
+    server.interruptTurn(threadId).catch(() => {});
+    const done = await doneP;
+    assert.strictEqual(done.status, 'interrupted', 'locally synthesised done after the failsafe window');
+    // The slot is free: a follow-up turn on the SAME thread starts and
+    // completes (the stub server freed its side when the interrupt landed).
+    const sub2 = server.startTurn(threadId, 'follow-up please');
+    const done2 = await nextEvent(sub2, 'done');
+    assert.strictEqual(done2.status, 'completed');
+  } finally {
+    await server.shutdown();
+  }
+});
+
 // ── Request-level failure modes ─────────────────────────────────────────────
 
 test('request timeout rejects when the server never answers', async () => {
