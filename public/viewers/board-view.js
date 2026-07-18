@@ -39,6 +39,7 @@ function ensureStyles(doc) {
     .board-lane-menu-btn:hover { color: var(--text-1); background: var(--elevated); }
     .board-lane-rename { flex: 1; min-width: 0; background: var(--elevated); border: 1px solid var(--accent); border-radius: 6px; color: var(--text-1); font-size: var(--body); font-weight: 600; padding: 3px 8px; outline: none; }
     .board-lane-popup { position: absolute; z-index: 10; min-width: 180px; padding: 4px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.25); display: flex; flex-direction: column; }
+    .board-lane-popup-divider { height: 1px; background: var(--border); margin: 4px 6px; }
     .board-lane-popup-item { text-align: left; padding: 7px 10px; border-radius: 6px; color: var(--text-1); font-size: var(--body); }
     .board-lane-popup-item:hover { background: var(--elevated); }
     .board-lane-popup-item.danger:hover { color: var(--danger, #E85A5A); }
@@ -386,26 +387,43 @@ export function mountBoardView({ paneElement, content, onWikilink }, Kanban) {
     if (!lane) return;
     const menu = doc.createElement('div');
     menu.className = 'board-lane-popup';
-    const items = [
-      ['Rename list', () => renameLaneInline(anchor.closest('.board-lane-head'), anchor.closest('.board-lane-head').querySelector('.board-lane-title'), laneIndex)],
-      ...(laneIndex > 0 ? [['Move list left', () => { Kanban.moveLane(board, laneIndex, laneIndex - 1); onChange(); render(); }]] : []),
-      ...(laneIndex < board.lanes.length - 1 ? [['Move list right', () => { Kanban.moveLane(board, laneIndex, laneIndex + 1); onChange(); render(); }]] : []),
-      ['Insert list before', () => { Kanban.insertLane(board, laneIndex, 'New list'); onChange(); render(); }],
-      ['Insert list after', () => { Kanban.insertLane(board, laneIndex + 1, 'New list'); onChange(); render(); }],
-      ['Sort by card text', () => { Kanban.sortLane(board, laneIndex, 'text'); onChange(); render(); }],
-      ['Sort by tags', () => { Kanban.sortLane(board, laneIndex, 'tags'); onChange(); render(); }],
-      ['Archive all cards', () => withUndo('Cards archived', () => Kanban.archiveLaneCards(board, laneIndex))],
-      ['Archive list', () => withUndo('List archived', () => Kanban.archiveLane(board, laneIndex))],
-      ['Delete list', () => withUndo('List deleted', () => Kanban.deleteLane(board, laneIndex))],
+    // Grouped by what the action affects, with the destructive group set apart
+    // by a divider so Delete never sits flush against a benign action.
+    const groups = [
+      [ // this list's identity and position
+        ['Rename list', () => renameLaneInline(anchor.closest('.board-lane-head'), anchor.closest('.board-lane-head').querySelector('.board-lane-title'), laneIndex)],
+        ...(laneIndex > 0 ? [['Move list left', () => { Kanban.moveLane(board, laneIndex, laneIndex - 1); onChange(); render(); }]] : []),
+        ...(laneIndex < board.lanes.length - 1 ? [['Move list right', () => { Kanban.moveLane(board, laneIndex, laneIndex + 1); onChange(); render(); }]] : []),
+      ],
+      [ // create adjacent lists
+        ['Insert list before', () => { Kanban.insertLane(board, laneIndex, 'New list'); onChange(); render(); }],
+        ['Insert list after', () => { Kanban.insertLane(board, laneIndex + 1, 'New list'); onChange(); render(); }],
+      ],
+      [ // reorder the cards inside
+        ['Sort by card text', () => { Kanban.sortLane(board, laneIndex, 'text'); onChange(); render(); }],
+        ['Sort by tags', () => { Kanban.sortLane(board, laneIndex, 'tags'); onChange(); render(); }],
+      ],
+      [ // destructive
+        ['Archive all cards', () => withUndo('Cards archived', () => Kanban.archiveLaneCards(board, laneIndex))],
+        ['Archive list', () => withUndo('List archived', () => Kanban.archiveLane(board, laneIndex))],
+        ['Delete list', () => withUndo('List deleted', () => Kanban.deleteLane(board, laneIndex))],
+      ],
     ];
-    for (const [label, fn] of items) {
-      const row = doc.createElement('button');
-      row.type = 'button';
-      row.className = 'board-lane-popup-item' + (/^(Archive|Delete)/.test(label) ? ' danger' : '');
-      row.textContent = label;
-      row.addEventListener('click', (e) => { e.stopPropagation(); closeLaneMenu(); fn(); });
-      menu.appendChild(row);
-    }
+    groups.forEach((group, gi) => {
+      if (gi > 0) {
+        const divider = doc.createElement('div');
+        divider.className = 'board-lane-popup-divider';
+        menu.appendChild(divider);
+      }
+      for (const [label, fn] of group) {
+        const row = doc.createElement('button');
+        row.type = 'button';
+        row.className = 'board-lane-popup-item' + (/^(Archive|Delete)/.test(label) ? ' danger' : '');
+        row.textContent = label;
+        row.addEventListener('click', (e) => { e.stopPropagation(); closeLaneMenu(); fn(); });
+        menu.appendChild(row);
+      }
+    });
     const r = anchor.getBoundingClientRect();
     const host = paneElement.getBoundingClientRect();
     menu.style.top = (r.bottom - host.top + 4) + 'px';

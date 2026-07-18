@@ -666,6 +666,9 @@ test('the lane menu renames, inserts, and deletes lists with undo', async ({ pag
 
   // Rename the first lane via the menu.
   await page.locator('.board-lane').first().locator('.board-lane-menu-btn').click();
+  // The menu groups its actions with dividers (identity/insert/sort/destructive).
+  await expect(page.locator('.board-lane-popup .board-lane-popup-divider')).toHaveCount(3);
+  await page.screenshot({ path: `${SHOTS}/lane-menu-grouped.png` });
   await page.locator('.board-lane-popup-item', { hasText: 'Rename list' }).click();
   const rename = page.locator('input.board-lane-rename');
   await expect(rename).toBeVisible();
