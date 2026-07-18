@@ -3999,8 +3999,9 @@ const findState = {
   query: '',
   matches: [],          // <mark> elements for DOM backends
   currentIndex: 0,
-  backend: null,        // 'conversation' | 'tiptap' | 'legacy-preview' | null
+  backend: null,        // 'conversation' | 'tiptap' | 'legacy-preview' | 'artifact' | 'textarea' | null
   inputTimer: null,
+  _propCount: 0,        // tiptap backend: leading matches that are properties-panel DOM marks
 };
 
 function isFindHotkey(e) {
@@ -4012,7 +4013,18 @@ function detectFindBackend() {
   // activate (e.g. workspace picker, settings, no file open).
   if (currentView === 'chat' && activeConversation) return 'conversation';
   if (currentView === 'editor' && activeTiptapEditor) return 'tiptap';
-  if (currentView === 'editor' && currentFilePath) return 'legacy-preview';
+  if (currentView === 'editor' && currentFilePath) {
+    // Artifact preview: the rendered HTML/SVG lives in the sandboxed iframe,
+    // which the host DOM walker cannot reach. Only the artifact viewer sets
+    // handle.iframe (the PDF viewer does not), so this gates on real preview.
+    if (typeof editorMode !== 'undefined' && editorMode === 'preview'
+        && activeFileViewer && activeFileViewer.iframe) return 'artifact';
+    // Source-edit view (Code toggle) puts the raw source in the textarea.
+    const ta = document.getElementById('editor-textarea');
+    if (typeof editorMode !== 'undefined' && editorMode === 'edit'
+        && ta && !ta.classList.contains('hidden')) return 'textarea';
+    return 'legacy-preview';
+  }
   return null;
 }
 
@@ -4032,6 +4044,7 @@ function openFindBar() {
   findState.open = true;
   findState.backend = backend;
   findState.matches = [];
+  findState._propCount = 0;
   findState.currentIndex = 0;
   findState.query = '';
   bar.classList.remove('hidden');
@@ -4059,11 +4072,11 @@ function closeFindBar() {
 }
 
 function clearFindMatches() {
-  if (findState.backend === 'conversation' || findState.backend === 'legacy-preview') {
-    // DOM backends: unwrap every <mark.find-match>, restoring original text
-    // nodes. Coalesce adjacent text nodes via normalize() so subsequent
-    // searches see a clean tree.
-    const marks = document.querySelectorAll('mark.find-match');
+  // Unwrap every <mark.find-match>, restoring original text nodes. Covers the
+  // conversation and legacy-preview backends AND the properties-panel marks
+  // that ride alongside the tiptap backend. Safe no-op when none exist.
+  const marks = document.querySelectorAll('mark.find-match');
+  if (marks.length) {
     const parents = new Set();
     marks.forEach(mark => {
       const parent = mark.parentNode;
@@ -4073,14 +4086,19 @@ function clearFindMatches() {
       parents.add(parent);
     });
     parents.forEach(p => p.normalize());
-  } else if (findState.backend === 'tiptap') {
+  }
+  if (findState.backend === 'tiptap') {
     // Tiptap backend: clear the find plugin's state, which empties the
     // decoration set. Document content is never touched.
     if (_tiptapEditorModuleResolved && activeTiptapEditor) {
       _tiptapEditorModuleResolved.clearFind(activeTiptapEditor);
     }
+  } else if (findState.backend === 'artifact') {
+    clearArtifactFind();
   }
+  // (textarea backend leaves the browser selection in place; nothing to unwrap)
   findState.matches = [];
+  findState._propCount = 0;
   findState.currentIndex = 0;
 }
 
@@ -4104,15 +4122,28 @@ function runFindSearch(query) {
     if (root && !root.classList.contains('hidden')) {
       searchDomSubtree(root, query, () => true);
     }
+  } else if (findState.backend === 'artifact') {
+    runArtifactFind(query);
+  } else if (findState.backend === 'textarea') {
+    runTextareaFind(query);
   } else if (findState.backend === 'tiptap') {
     if (_tiptapEditorModuleResolved && activeTiptapEditor) {
+      // The frontmatter properties panel lives OUTSIDE the ProseMirror doc,
+      // so the find plugin cannot see it. Search it as DOM marks first, then
+      // the body via the plugin, and present one unified ordered match list:
+      // [properties marks..., body matches...].
+      let propMarks = [];
+      const propRoot = document.getElementById('tiptap-properties');
+      if (propRoot && propRoot.classList.contains('visible')) {
+        searchDomSubtree(propRoot, query, () => true); // pushes <mark> into findState.matches
+        propMarks = findState.matches.slice();
+      }
       _tiptapEditorModuleResolved.setFindQuery(activeTiptapEditor, query);
       const tipState = _tiptapEditorModuleResolved.getFindState(activeTiptapEditor);
-      // Populate findState.matches with placeholders so the count UI and the
-      // navigation arithmetic both work without reaching back into the
-      // plugin every time. The real match positions live in the plugin.
-      findState.matches = tipState.matches.map(() => ({ tiptap: true }));
-      findState.currentIndex = tipState.currentIndex;
+      // Placeholders for body matches: the real positions live in the plugin.
+      findState.matches = propMarks.concat(tipState.matches.map(() => ({ tiptap: true })));
+      findState._propCount = propMarks.length;
+      findState.currentIndex = 0;
     }
   }
   if (findState.matches.length) {
@@ -4179,12 +4210,194 @@ function searchDomSubtree(root, query, predicate) {
   }
 }
 
+// ----- artifact-frame backend: find inside the sandboxed HTML/SVG preview.
+// The preview iframe carries sandbox="allow-same-origin"
+// with NO allow-scripts, so the host can read its contentDocument (the same
+// grant the review loop uses) but the artifact still cannot run code. Find
+// walks that document and paints matches with the CSS Custom Highlight API:
+// it never splits or wraps the content DOM (unlike <mark> highlighting), so it
+// never collides with the review loop's <mark> wraps and needs no re-index.
+// The only node added is one idempotent <style> in the frame head (the same
+// technique the review loop uses for its mark styles). No sandbox change is
+// made; the posture is identical to shipped code.
+const artifactFind = { win: null, doc: null, ranges: [] };
+const ARTIFACT_FIND_STYLE_ID = 'rundock-find-frame-style';
+
+function frameTextIndex(root) {
+  const doc = root.ownerDocument;
+  // Skip text inside script/style/etc: it is not visible, so matching it would
+  // inflate the count and scroll to a zero-rect target. (head is already out
+  // of scope: the walk is body-rooted.)
+  const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement;
+      if (parent && parent.closest('script, style, noscript, template')) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  const nodes = [];
+  let text = '';
+  let n;
+  while ((n = walker.nextNode())) { nodes.push({ node: n, start: text.length }); text += n.nodeValue; }
+  return { text, nodes };
+}
+
+function frameRangeFor(doc, index, start, end) {
+  const nodeAt = (offset, isEnd) => {
+    // The end boundary belongs to the node containing offset-1 so a span
+    // ending on a node border does not spill into the next node.
+    const probe = isEnd ? offset - 1 : offset;
+    let entry = index.nodes[0];
+    for (const e of index.nodes) { if (e.start > probe) break; entry = e; }
+    return { node: entry.node, offset: offset - entry.start };
+  };
+  const s = nodeAt(start, false);
+  const e = nodeAt(end, true);
+  const range = doc.createRange();
+  range.setStart(s.node, s.offset);
+  range.setEnd(e.node, e.offset);
+  return range;
+}
+
+function ensureArtifactFindStyle(doc) {
+  if (doc.getElementById(ARTIFACT_FIND_STYLE_ID)) return;
+  const style = doc.createElement('style');
+  style.id = ARTIFACT_FIND_STYLE_ID;
+  // Decoration only (no geometry), matching the review-mark discipline.
+  style.textContent =
+    '::highlight(rundock-find){background:rgba(232,168,76,0.30);}' +
+    '::highlight(rundock-find-current){background:rgba(232,122,90,0.55);color:#000;}';
+  doc.head.appendChild(style);
+}
+
+function runArtifactFind(query) {
+  const iframe = activeFileViewer && activeFileViewer.iframe;
+  const doc = iframe && iframe.contentDocument;
+  artifactFind.win = doc && doc.defaultView;
+  artifactFind.doc = doc;
+  artifactFind.ranges = [];
+  if (!doc || !doc.body || !query) return;
+  ensureArtifactFindStyle(doc);
+  const index = frameTextIndex(doc.body);
+  const hay = index.text.toLowerCase();
+  const needle = query.toLowerCase();
+  let pos = 0;
+  while (true) {
+    const i = hay.indexOf(needle, pos);
+    if (i === -1) break;
+    try { artifactFind.ranges.push(frameRangeFor(doc, index, i, i + needle.length)); } catch (e) {}
+    pos = i + needle.length;
+  }
+  findState.matches = artifactFind.ranges.map(() => ({ artifact: true }));
+}
+
+function paintArtifactHighlights(currentIdx) {
+  const win = artifactFind.win;
+  if (!win || !win.CSS || !win.CSS.highlights || typeof win.Highlight !== 'function') return;
+  win.CSS.highlights.delete('rundock-find');
+  win.CSS.highlights.delete('rundock-find-current');
+  const rest = [];
+  const cur = [];
+  artifactFind.ranges.forEach((r, i) => { (i === currentIdx ? cur : rest).push(r); });
+  if (rest.length) win.CSS.highlights.set('rundock-find', new win.Highlight(...rest));
+  if (cur.length) win.CSS.highlights.set('rundock-find-current', new win.Highlight(...cur));
+}
+
+function clearArtifactFind() {
+  const win = artifactFind.win;
+  if (win && win.CSS && win.CSS.highlights) {
+    win.CSS.highlights.delete('rundock-find');
+    win.CSS.highlights.delete('rundock-find-current');
+  }
+  artifactFind.ranges = [];
+}
+
+function scrollArtifactMatch(idx) {
+  const win = artifactFind.win;
+  const range = artifactFind.ranges[idx];
+  if (!win || !range) return;
+  try {
+    const rect = range.getBoundingClientRect();
+    const target = rect.top + (win.scrollY || 0) - (win.innerHeight || 0) / 2;
+    win.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+  } catch (e) {}
+}
+
+// ----- textarea backend: find in the HTML/text source-edit view.
+// A textarea cannot carry per-match marks, so matches are string
+// offsets; the current one is shown as the textarea's own selection and the
+// scroll is computed from its line (no focus stealing from the find input).
+const textareaFind = { el: null, positions: [] };
+
+function runTextareaFind(query) {
+  const ta = document.getElementById('editor-textarea');
+  textareaFind.el = ta;
+  textareaFind.positions = [];
+  if (!ta || !query) return;
+  const hay = ta.value.toLowerCase();
+  const needle = query.toLowerCase();
+  let pos = 0;
+  while (true) {
+    const i = hay.indexOf(needle, pos);
+    if (i === -1) break;
+    textareaFind.positions.push({ start: i, end: i + needle.length });
+    pos = i + needle.length;
+  }
+  findState.matches = textareaFind.positions.map(() => ({ textarea: true }));
+}
+
+function scrollTextareaMatch(idx) {
+  const ta = textareaFind.el;
+  const p = textareaFind.positions[idx];
+  if (!ta || !p) return;
+  // Selection is visible even while the find input keeps focus (unfocused
+  // textareas render the selection greyed), so we set it without focusing.
+  try { ta.setSelectionRange(p.start, p.end); } catch (e) {}
+  const before = ta.value.slice(0, p.start);
+  const line = before.split('\n').length - 1;
+  const cs = getComputedStyle(ta);
+  const lh = parseFloat(cs.lineHeight) || (parseFloat(cs.fontSize) || 14) * 1.5;
+  ta.scrollTop = Math.max(0, line * lh - ta.clientHeight / 2);
+}
+
 function setCurrentFindMatch(idx) {
   findState.currentIndex = idx;
+  if (findState.backend === 'artifact') {
+    paintArtifactHighlights(idx);
+    scrollArtifactMatch(idx);
+    updateFindCount();
+    return;
+  }
+  if (findState.backend === 'textarea') {
+    scrollTextareaMatch(idx);
+    updateFindCount();
+    return;
+  }
   if (findState.backend === 'tiptap') {
-    if (_tiptapEditorModuleResolved && activeTiptapEditor) {
-      // Plugin dispatches the index change, recomputes decorations, scrolls.
-      _tiptapEditorModuleResolved.setFindIndex(activeTiptapEditor, idx);
+    const propCount = findState._propCount || 0;
+    if (idx < propCount) {
+      // A properties-panel match is current: clear the body's current mark
+      // (the -1 sentinel keeps its other matches visible) and highlight the
+      // DOM mark directly.
+      if (_tiptapEditorModuleResolved && activeTiptapEditor) {
+        _tiptapEditorModuleResolved.setFindIndex(activeTiptapEditor, -1);
+      }
+      for (let i = 0; i < propCount; i++) {
+        const m = findState.matches[i];
+        if (m && m.classList) m.classList.toggle('current', i === idx);
+      }
+      const target = findState.matches[idx];
+      if (target && target.scrollIntoView) target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    } else {
+      // A body match is current: clear any properties current class and let
+      // the plugin dispatch the index change, recompute decorations, scroll.
+      for (let i = 0; i < propCount; i++) {
+        const m = findState.matches[i];
+        if (m && m.classList) m.classList.remove('current');
+      }
+      if (_tiptapEditorModuleResolved && activeTiptapEditor) {
+        _tiptapEditorModuleResolved.setFindIndex(activeTiptapEditor, idx - propCount);
+      }
     }
   } else {
     for (let i = 0; i < findState.matches.length; i++) {
@@ -4241,6 +4454,10 @@ function updateFindButtons() {
 function syncTiptapFindStateFromPlugin() {
   if (findState.backend !== 'tiptap' || !findState.open) return;
   if (!_tiptapEditorModuleResolved || !activeTiptapEditor) return;
+  // With frontmatter matches in play the two match sources must stay in sync;
+  // re-running the search is simplest and correct (rare: editing the body
+  // while find is open on a file whose frontmatter also matched).
+  if (findState._propCount) { runFindSearch(findState.query); return; }
   const tipState = _tiptapEditorModuleResolved.getFindState(activeTiptapEditor);
   findState.matches = tipState.matches.map(() => ({ tiptap: true }));
   findState.currentIndex = tipState.currentIndex;

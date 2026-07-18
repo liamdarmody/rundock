@@ -97,6 +97,18 @@ function buildFixture() {
     '<script>document.getElementById("headline").textContent="SCRIPT RAN";</script>',
     '</body></html>',
   ].join('\n'));
+  // In-view find fixture: 'needle' appears three times in the rendered body
+  // (for next/prev navigation) and never in markup, so an artifact-frame or
+  // source-edit find must report exactly 3.
+  fs.writeFileSync(path.join(workspace, 'findable.html'), [
+    '<!doctype html><html><head><title>Findable</title>',
+    '<style>body{padding:40px;font-family:sans-serif}</style></head><body>',
+    '<h1>Alpha heading</h1>',
+    '<p>The needle appears here, and the needle appears again.</p>',
+    '<div style="height:1200px"></div>',
+    '<p>A third needle sits far below for the scroll.</p>',
+    '</body></html>',
+  ].join('\n'));
   fs.writeFileSync(path.join(workspace, 'chart.png'), buildPng());
   fs.writeFileSync(path.join(workspace, 'report.pdf'), Buffer.from(
     '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n' +

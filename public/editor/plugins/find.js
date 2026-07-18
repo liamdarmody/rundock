@@ -73,7 +73,12 @@ function findPlugin() {
           }
           if (meta.type === 'setIndex') {
             if (!value.matches.length) return value;
-            const idx = Math.max(0, Math.min(value.matches.length - 1, meta.index | 0));
+            // -1 is the "none current" sentinel: the host uses it when the
+            // active find match lives outside the doc (the properties panel),
+            // so the body still shows all matches but highlights none.
+            const idx = meta.index === -1
+              ? -1
+              : Math.max(0, Math.min(value.matches.length - 1, meta.index | 0));
             return { ...value, currentIndex: idx };
           }
           if (meta.type === 'clear') {
