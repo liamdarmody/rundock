@@ -381,6 +381,31 @@ test('a wikilink to an image or PDF in a conversation opens the real viewer', as
 
 // ── FV2 phase 4: property editing + external-edit guard ─────────────────────
 
+test('editing frontmatter after switching files edits the current file, not a stale one', async ({ page }) => {
+  await boot(page);
+  // Open one frontmatter file, then switch to another. The properties panel is
+  // a single persistent node; opening the second file must not leave the
+  // first file's edit handlers bound to it.
+  await openFilesView(page);
+  await page.locator('.folder-item', { hasText: 'notes' }).click(); // expand notes/
+  await page.locator('.file-item', { hasText: 'pricing-strategy.md' }).click();
+  await expect(page.locator('#tiptap-properties.visible')).toBeVisible();
+  await openFromTree(page, 'briefing.md');
+  const titleRow = page.locator('.prop-row[data-prop-key="title"]');
+  await expect(titleRow).toBeVisible();
+  await titleRow.locator('.prop-value').click();
+  const input = titleRow.locator('input.prop-edit-input');
+  await expect(input).toBeVisible();
+  // The seed must be THIS file's value, never "undefined" read from the other
+  // file's frontmatter through a stale handler.
+  await expect(input).toHaveValue('Morning Briefing');
+  await input.press('Enter');
+  // The panel still reflects the file being edited: its related row survives
+  // and the other file's tags row never appears.
+  await expect(page.locator('.prop-row[data-prop-key="related"]')).toBeVisible();
+  await expect(page.locator('.prop-row[data-prop-key="tags"]')).toHaveCount(0);
+});
+
 test('editing a frontmatter property persists byte-honestly to the file', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'briefing.md');

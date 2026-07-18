@@ -132,6 +132,12 @@ function renderValue(value, type, resolveWikilink, editable) {
 export function renderProperties(container, parsed, opts = {}) {
   const { onWikilinkClick = null, resolveWikilink = null, onEditProperty = null } = opts;
   if (!container) return 0;
+  // The container is a single persistent node reused for every file. Store the
+  // current render's callbacks and data here; the delegated handlers (attached
+  // exactly once, below) read this at event time. Attaching per render instead
+  // would stack a new handler each file/edit, each bound to a stale file's
+  // data, so a click would fire several at once and edit the wrong file.
+  container.__propsState = { parsed, onWikilinkClick, resolveWikilink, onEditProperty };
   container.innerHTML = '';
   if (!parsed || typeof parsed !== 'object') {
     container.classList.remove('visible');
@@ -169,128 +175,145 @@ export function renderProperties(container, parsed, opts = {}) {
   container.classList.add('visible');
   container.classList.toggle('props-editable', typeof onEditProperty === 'function');
 
-  // One delegated click/keyboard handler per render (innerHTML assignment
-  // above dropped any previous one). Dead links are inert by design.
-  if (typeof onWikilinkClick === 'function') {
-    const activate = (event) => {
-      const el = event.target.closest && event.target.closest('a.prop-wikilink');
-      if (!el || el.classList.contains('dead')) return;
-      if (event.type === 'keydown' && event.key !== 'Enter') return;
-      event.preventDefault();
-      event.stopPropagation();
-      onWikilinkClick(el.getAttribute('data-target') || '');
-    };
-    container.addEventListener('click', activate);
-    container.addEventListener('keydown', activate);
-  }
-
-  if (typeof onEditProperty === 'function') {
-    attachEditing(container, parsed, onEditProperty);
-  }
+  // Delegated handlers attach once and read container.__propsState (refreshed
+  // above), so they always act on the file currently shown. Dead links inert.
+  wirePropsHandlers(container);
   return rows.length;
 }
 
 // ---------- inline editing ----------
 
+// Wires the delegated click/keyboard handlers ONCE per container. Because the
+// container node persists across files, attaching per render would accumulate
+// stale handlers (each bound to a previous file's data) that all fire on a
+// single click. Instead, one handler set reads container.__propsState, which
+// renderProperties refreshes every render, so edits always target the file
+// currently shown.
+function wirePropsHandlers(container) {
+  if (container.__propsWired) return;
+  container.__propsWired = true;
+
+  const activate = (event) => {
+    const st = container.__propsState;
+    if (!st || typeof st.onWikilinkClick !== 'function') return;
+    const el = event.target.closest && event.target.closest('a.prop-wikilink');
+    if (!el || el.classList.contains('dead')) return;
+    if (event.type === 'keydown' && event.key !== 'Enter') return;
+    event.preventDefault();
+    event.stopPropagation();
+    st.onWikilinkClick(el.getAttribute('data-target') || '');
+  };
+  container.addEventListener('click', activate);
+  container.addEventListener('keydown', activate);
+
+  container.addEventListener('click', (event) => {
+    const st = container.__propsState;
+    if (!st || typeof st.onEditProperty !== 'function') return;
+    handleEditClick(container, st, event);
+  });
+}
+
+function rerenderProps(container) {
+  if (typeof container.__propsRerender === 'function') container.__propsRerender();
+}
+
 // Commit rules: Enter commits, Escape cancels, blur commits when non-empty
 // (matching the review composer's grammar). onEditProperty returning false
 // (unlocatable key, would-corrupt) leaves the value as it was: the panel
 // re-renders from the file's truth after every commit, so a refused edit
-// simply snaps back.
-function attachEditing(container, parsed, onEditProperty) {
+// simply snaps back. onEditProperty is captured from the state read at the
+// moment editing begins, so one edit stays internally consistent even if the
+// file changes while the input is open.
+function openScalarInput(container, row, seed, apply) {
+  if (row.querySelector('input.prop-edit-input')) return;
   const doc = container.ownerDocument;
-
-  function openInput(row, key, seed, apply) {
-    if (row.querySelector('input.prop-edit-input')) return;
-    const valueEl = row.querySelector('.prop-value');
-    const input = doc.createElement('input');
-    input.className = 'prop-edit-input';
-    input.value = seed;
-    valueEl.replaceWith(input);
-    input.focus();
-    input.select();
-    let done = false;
-    const finish = (commit) => {
-      if (done) return;
-      done = true;
-      if (commit) apply(input.value);
-      else if (typeof container.__propsRerender === 'function') container.__propsRerender();
-    };
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
-      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
-    });
-    input.addEventListener('blur', () => finish(input.value.trim().length > 0));
-  }
-
-  // Adding a list item appends the input INLINE after the existing chips
-  // (Obsidian's grammar) instead of replacing the whole value, so the tags
-  // already on the row stay visible while typing the new one.
-  function openListAddInput(row, key) {
-    const valueEl = row.querySelector('.prop-value');
-    if (!valueEl || valueEl.querySelector('input.prop-edit-input')) return;
-    const input = doc.createElement('input');
-    input.className = 'prop-edit-input prop-add-input';
-    input.setAttribute('aria-label', `Add item to ${key}`);
-    // Insert before the inline "+" so the field sits among the items.
-    const addBtn = valueEl.querySelector('.prop-add');
-    if (addBtn) valueEl.insertBefore(input, addBtn); else valueEl.appendChild(input);
-    input.focus();
-    let done = false;
-    const finish = (commit) => {
-      if (done) return;
-      done = true;
-      const t = input.value.trim();
-      if (commit && t) onEditProperty(key, { list: { add: t } });
-      else if (typeof container.__propsRerender === 'function') container.__propsRerender();
-    };
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
-      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
-    });
-    input.addEventListener('blur', () => finish(input.value.trim().length > 0));
-  }
-
-  container.addEventListener('click', (event) => {
-    // A click on a wikilink value is navigation, not an edit: the wikilink
-    // handler (a separate listener on this same container) owns it. Without
-    // this bail, clicking a wikilink would ALSO open an inline editor over
-    // it, whose blur then fires a spurious write. (stopPropagation between
-    // sibling listeners on one node does not suppress this; an explicit
-    // check does.)
-    if (event.target.closest('.prop-wikilink')) return;
-    const row = event.target.closest && event.target.closest('.prop-row.editable');
-    if (!row) return;
-    const key = row.getAttribute('data-prop-key');
-    const type = row.getAttribute('data-prop-type');
-    const value = parsed[key];
-
-    // List item removal / addition go through index-based mutations so
-    // untouched items keep their exact bytes (never re-parsed).
-    const removeBtn = event.target.closest('.prop-chip-remove');
-    if (removeBtn) {
-      const idx = Number(removeBtn.closest('[data-item-index]').getAttribute('data-item-index'));
-      onEditProperty(key, { list: { remove: idx } });
-      return;
-    }
-    if (event.target.closest('.prop-add')) {
-      openListAddInput(row, key);
-      return;
-    }
-    // Bool toggles on click.
-    if (type === 'bool' && event.target.closest('.prop-value')) {
-      onEditProperty(key, !value);
-      return;
-    }
-    // Scalar values edit inline (wikilink navigation already consumed the
-    // event via stopPropagation above).
-    if (['string', 'number', 'date', 'null'].includes(type) && event.target.closest('.prop-value')) {
-      const seed = type === 'null' ? '' : (type === 'date' ? dateString(value) : String(value));
-      openInput(row, key, seed, (text) => {
-        const t = text.trim();
-        if (type === 'number' && /^-?\d+(\.\d+)?$/.test(t)) onEditProperty(key, Number(t));
-        else onEditProperty(key, t);
-      });
-    }
+  const valueEl = row.querySelector('.prop-value');
+  const input = doc.createElement('input');
+  input.className = 'prop-edit-input';
+  input.value = seed;
+  valueEl.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = (commit) => {
+    if (done) return;
+    done = true;
+    if (commit) apply(input.value);
+    else rerenderProps(container);
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
   });
+  input.addEventListener('blur', () => finish(input.value.trim().length > 0));
+}
+
+// Adding a list item appends the input INLINE after the existing chips
+// (Obsidian's grammar) instead of replacing the whole value, so the tags
+// already on the row stay visible while typing the new one.
+function openListAddInput(container, onEditProperty, row, key) {
+  const doc = container.ownerDocument;
+  const valueEl = row.querySelector('.prop-value');
+  if (!valueEl || valueEl.querySelector('input.prop-edit-input')) return;
+  const input = doc.createElement('input');
+  input.className = 'prop-edit-input prop-add-input';
+  input.setAttribute('aria-label', `Add item to ${key}`);
+  // Insert before the inline "+" so the field sits among the items.
+  const addBtn = valueEl.querySelector('.prop-add');
+  if (addBtn) valueEl.insertBefore(input, addBtn); else valueEl.appendChild(input);
+  input.focus();
+  let done = false;
+  const finish = (commit) => {
+    if (done) return;
+    done = true;
+    const t = input.value.trim();
+    if (commit && t) onEditProperty(key, { list: { add: t } });
+    else rerenderProps(container);
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener('blur', () => finish(input.value.trim().length > 0));
+}
+
+function handleEditClick(container, st, event) {
+  // A click on a wikilink value is navigation, not an edit: the wikilink
+  // handler (a separate listener on this same container) owns it. Without
+  // this bail, clicking a wikilink would ALSO open an inline editor over
+  // it, whose blur then fires a spurious write.
+  if (event.target.closest('.prop-wikilink')) return;
+  const row = event.target.closest && event.target.closest('.prop-row.editable');
+  if (!row) return;
+  const key = row.getAttribute('data-prop-key');
+  const type = row.getAttribute('data-prop-type');
+  const { parsed, onEditProperty } = st;
+  const value = parsed[key];
+
+  // List item removal / addition go through index-based mutations so
+  // untouched items keep their exact bytes (never re-parsed).
+  const removeBtn = event.target.closest('.prop-chip-remove');
+  if (removeBtn) {
+    const idx = Number(removeBtn.closest('[data-item-index]').getAttribute('data-item-index'));
+    onEditProperty(key, { list: { remove: idx } });
+    return;
+  }
+  if (event.target.closest('.prop-add')) {
+    openListAddInput(container, onEditProperty, row, key);
+    return;
+  }
+  // Bool toggles on click.
+  if (type === 'bool' && event.target.closest('.prop-value')) {
+    onEditProperty(key, !value);
+    return;
+  }
+  // Scalar values edit inline.
+  if (['string', 'number', 'date', 'null'].includes(type) && event.target.closest('.prop-value')) {
+    const seed = type === 'null' ? '' : (type === 'date' ? dateString(value) : String(value));
+    openScalarInput(container, row, seed, (text) => {
+      const t = text.trim();
+      if (type === 'number' && /^-?\d+(\.\d+)?$/.test(t)) onEditProperty(key, Number(t));
+      else onEditProperty(key, t);
+    });
+  }
 }
