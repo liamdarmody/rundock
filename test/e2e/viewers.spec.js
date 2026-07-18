@@ -605,6 +605,21 @@ test('block-style frontmatter on a board survives a save', async ({ page }) => {
     .toContain('tags:\n  - project\n  - kanban');
 });
 
+test('a column collapses to a rail and the state persists to the board file', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'tagged-board.md');
+  const firstLane = page.locator('.board-lane').first();
+  await expect(firstLane).not.toHaveClass(/collapsed/);
+  await firstLane.locator('.board-lane-collapse').click();
+  await expect(firstLane).toHaveClass(/collapsed/);
+  // Persisted into list-collapse (first lane true).
+  await expect.poll(async () => (await (await page.request.get('/api/file?path=tagged-board.md')).text()))
+    .toContain('"list-collapse":[true,false]');
+  // Clicking the collapsed rail expands it again.
+  await firstLane.click();
+  await expect(page.locator('.board-lane').first()).not.toHaveClass(/collapsed/);
+});
+
 test('the lane menu renames, inserts, and deletes lists with undo', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'board.md');

@@ -27,6 +27,13 @@ function ensureStyles(doc) {
     .board-lane { flex: 0 0 300px; max-height: 100%; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
     .board-lane.drop-target { border-color: var(--accent); }
     .board-lane-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+    .board-lane-collapse { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; flex: 0 0 auto; border-radius: 6px; color: var(--text-2); }
+    .board-lane-collapse:hover { color: var(--text-1); background: var(--elevated); }
+    .board-lane.collapsed { flex: 0 0 42px; cursor: pointer; }
+    .board-lane.collapsed .board-lane-head { flex-direction: column; height: 100%; padding: 12px 8px; gap: 12px; border-bottom: none; align-items: center; }
+    .board-lane.collapsed .board-lane-title { writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; overflow: visible; }
+    .board-lane.collapsed .board-lane-count { margin-left: 0; }
+    .board-lane.collapsed .board-lane-menu-btn { display: none; }
     .board-lane-title { font-size: var(--body); font-weight: 600; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .board-lane-count { font-size: var(--caption); color: var(--text-2); font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; margin-left: auto; }
     .board-lane-menu-btn { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 6px; color: var(--text-2); }
@@ -149,13 +156,31 @@ export function mountBoardView({ paneElement, content }, Kanban) {
     }
   }
 
+  function isCollapsed(laneIndex) {
+    const lc = board.settings && board.settings['list-collapse'];
+    return Array.isArray(lc) && lc[laneIndex] === true;
+  }
+
   function renderLane(lane, laneIndex) {
     const el = doc.createElement('div');
-    el.className = 'board-lane';
+    const collapsed = isCollapsed(laneIndex);
+    el.className = 'board-lane' + (collapsed ? ' collapsed' : '');
     el.dataset.lane = String(laneIndex);
 
     const head = doc.createElement('div');
     head.className = 'board-lane-head';
+    // Collapse/expand toggle (a chevron). Persists to list-collapse.
+    const collapseBtn = doc.createElement('button');
+    collapseBtn.type = 'button';
+    collapseBtn.className = 'board-lane-collapse';
+    collapseBtn.title = collapsed ? 'Expand list' : 'Collapse list';
+    collapseBtn.appendChild(iconSvg(doc, collapsed ? ['M9 6l6 6-6 6'] : ['M6 9l6 6 6-6']));
+    collapseBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      Kanban.toggleCollapse(board, laneIndex);
+      onChange();
+      render();
+    });
     const title = doc.createElement('span');
     title.className = 'board-lane-title';
     title.textContent = lane.title + (lane.maxItems ? ` (${lane.maxItems})` : '');
@@ -168,12 +193,19 @@ export function mountBoardView({ paneElement, content }, Kanban) {
     menuBtn.title = 'List actions';
     menuBtn.appendChild(iconSvg(doc, ['M12 5.5a.6.6 0 100-1.2.6.6 0 000 1.2', 'M12 12.6a.6.6 0 100-1.2.6.6 0 000 1.2', 'M12 19.7a.6.6 0 100-1.2.6.6 0 000 1.2']));
     menuBtn.addEventListener('click', (e) => { e.stopPropagation(); openLaneMenu(menuBtn, laneIndex); });
+    head.appendChild(collapseBtn);
     head.appendChild(title);
     head.appendChild(count);
     head.appendChild(menuBtn);
     // Double-click the title to rename in place.
     title.addEventListener('dblclick', () => renameLaneInline(head, title, laneIndex));
     el.appendChild(head);
+
+    // A collapsed lane is a narrow rail: just the head. Clicking it expands.
+    if (collapsed) {
+      el.addEventListener('click', () => { Kanban.toggleCollapse(board, laneIndex); onChange(); render(); });
+      return el;
+    }
 
     const body = doc.createElement('div');
     body.className = 'board-lane-body';
