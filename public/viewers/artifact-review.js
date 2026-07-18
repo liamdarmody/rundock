@@ -16,8 +16,13 @@ export { sidecarPathFor } from './sidecar-controller.js';
 
 const MARK_ATTR = 'data-rundock-review';
 
+// Geometry-neutral by construction: decoration only (background/outline),
+// never padding, margins, borders, or line-height on the wrapper. Padding
+// would shift text within lines AND give wrapped inter-block whitespace
+// nodes a full line box (an inline with non-zero padding stops an empty
+// line box collapsing to zero height), visibly inflating paragraph gaps.
 const FRAME_STYLES = `
-  mark.rundock-review-mark { background: rgba(232, 122, 90, 0.28); color: inherit; padding: 0 1px; border-radius: 2px; cursor: pointer; }
+  mark.rundock-review-mark { background: rgba(232, 122, 90, 0.28); color: inherit; border-radius: 2px; cursor: pointer; }
   mark.rundock-review-mark.rundock-flash { outline: 2px solid rgba(232, 122, 90, 0.85); }
   ::highlight(rundock-composing) { background: rgba(232, 122, 90, 0.35); }
 `;
@@ -69,6 +74,20 @@ export function attachArtifactReview({
     }
   }
 
+  // A text-node piece whose characters are all collapsible whitespace (the
+  // formatting newlines/indentation between block elements) must never be
+  // wrapped: the wrap would paint nothing yet plant an inline element
+  // between blocks. Preserved whitespace (pre / pre-wrap / pre-line /
+  // break-spaces) IS visible content and still gets its mark.
+  function isCollapsibleWhitespacePiece(node, from, to) {
+    if (/\S/.test(node.nodeValue.slice(from, to))) return false;
+    const parent = node.parentElement;
+    if (!parent) return true;
+    const cs = frameWin.getComputedStyle(parent);
+    const collapse = cs.whiteSpaceCollapse || cs.whiteSpace || 'normal';
+    return collapse === 'collapse' || collapse === 'normal' || collapse === 'nowrap';
+  }
+
   // Wrap [start, end) of the index in mark elements, one per intersected
   // text node. Tuples are collected first and applied in reverse so the
   // splits never invalidate positions still to be processed.
@@ -79,7 +98,9 @@ export function attachArtifactReview({
       const nodeEnd = entry.start + entry.node.nodeValue.length;
       const s = Math.max(start, entry.start);
       const e = Math.min(end, nodeEnd);
-      if (s < e) targets.push({ node: entry.node, from: s - entry.start, to: e - entry.start });
+      if (s < e && !isCollapsibleWhitespacePiece(entry.node, s - entry.start, e - entry.start)) {
+        targets.push({ node: entry.node, from: s - entry.start, to: e - entry.start });
+      }
     }
     for (const t of targets.reverse()) {
       let piece = t.node;
