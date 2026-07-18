@@ -29,6 +29,16 @@ const fs = require('node:fs');
 const os = require('node:os');
 const { execSync } = require('node:child_process');
 
+// Shared exec options for every version/which probe. Closed stdin is
+// REQUIRED, not an optimisation: verified live on Windows 11 (codex-cli
+// 0.144.4, Findings 4/5), `codex.exe --version` HANGS while stdin is an
+// attached, never-closed pipe (execSync's default) and returns instantly
+// with stdin closed. With the default stdio every probe burnt its full 5s
+// timeout and stacked, blocking the server's event loop ~13s on the first
+// runtime-status request. stdout stays 'pipe' (the output is parsed);
+// stderr is discarded.
+const PROBE_STDIO = ['ignore', 'pipe', 'ignore'];
+
 // ── Thread-id hygiene ──────────────────────────────────────────────────────
 
 // Client-supplied session ids ride the same rails as Claude session ids, so
@@ -56,7 +66,7 @@ function resolveCodexBin(deps = {}) {
   const isWindows = platform === 'win32';
   try {
     const lookupCmd = isWindows ? 'where.exe codex' : 'which codex';
-    const output = exec(lookupCmd, { timeout: 5000, encoding: 'utf-8' }).trim();
+    const output = exec(lookupCmd, { timeout: 5000, encoding: 'utf-8', stdio: PROBE_STDIO }).trim();
     if (!output) return 'codex';
     if (isWindows) {
       const candidates = output.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
@@ -92,7 +102,7 @@ function detectCodex(deps = {}) {
     // Bare command means lookup failed: not installed (or not on PATH).
     // A second probe distinguishes "on PATH but which failed" cheaply.
     try {
-      exec(platform === 'win32' ? 'where.exe codex' : 'which codex', { timeout: 5000, encoding: 'utf-8' });
+      exec(platform === 'win32' ? 'where.exe codex' : 'which codex', { timeout: 5000, encoding: 'utf-8', stdio: PROBE_STDIO });
     } catch (e) {
       return { installed: false, authenticated: false, version: null };
     }
@@ -100,10 +110,27 @@ function detectCodex(deps = {}) {
 
   let version = null;
   try {
-    const out = exec(`"${bin}" --version`, { timeout: 5000, encoding: 'utf-8' });
+    // PROBE_STDIO (closed stdin) is what makes this instant on Windows; see
+    // the constant's comment for the live Finding 4/5 evidence.
+    const out = exec(`"${bin}" --version`, { timeout: 5000, encoding: 'utf-8', stdio: PROBE_STDIO });
     const m = String(out).match(/(\d+\.\d+(?:\.\d+)?(?:-[A-Za-z0-9.]+)?)/);
     version = m ? m[1] : null;
   } catch (e) { /* installed but --version failed: keep version null */ }
+
+  return { installed: true, version, ...codexPresenceFields({ existsSync: exists, homedir, env, platform }) };
+}
+
+// The CHEAP half of detection: filesystem presence checks only, no shell-
+// outs. Split out so getRuntimeStatus can serve the expensive probe results
+// (installed/version, each a child process) from its cache while still
+// reporting sign-in and sandbox-config state live: `codex login` writing
+// auth.json must show up on the very next settings open (pinned by
+// runtime-status.test.js), and both checks cost a stat, not a process.
+function codexPresenceFields(deps = {}) {
+  const exists = deps.existsSync || fs.existsSync;
+  const homedir = deps.homedir || os.homedir;
+  const env = deps.env || process.env;
+  const platform = deps.platform || process.platform;
 
   const codexHome = env.CODEX_HOME || path.join(homedir(), '.codex');
   const authenticated = !!exists(path.join(codexHome, 'auth.json'));
@@ -111,13 +138,13 @@ function detectCodex(deps = {}) {
   // Windows only: whether the config declares a native sandbox (see
   // hasWindowsSandboxConfig). null off-Windows (not applicable). Honours
   // the RUNDOCK_TEST_PLATFORM seam for this field ONLY: binary resolution
-  // above must stay on the real platform or the probes break in CI.
+  // in detectCodex must stay on the real platform or the probes break in CI.
   const effectivePlatform = env.RUNDOCK_TEST_PLATFORM || platform;
   const windowsSandbox = effectivePlatform === 'win32'
     ? hasWindowsSandboxConfig({ homedir, env })
     : null;
 
-  return { installed: true, authenticated, version, windowsSandbox };
+  return { authenticated, windowsSandbox };
 }
 
 // Presence-only scan of the Codex config for a [windows] table declaring a
@@ -221,5 +248,5 @@ function findCodexThreadFile(threadId, deps = {}) {
 module.exports = {
   resolveCodexBin, detectCodex, isCodexQuotaError,
   classifyCodexError, isValidThreadId, hasWindowsSandboxConfig,
-  findCodexThreadFile,
+  findCodexThreadFile, PROBE_STDIO, codexPresenceFields,
 };
