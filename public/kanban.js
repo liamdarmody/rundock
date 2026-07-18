@@ -176,8 +176,14 @@
       settingsObj['kanban-plugin'] = kp[1];
     }
 
+    // Verbatim frontmatter body, with the legacy value migrated in place (the
+    // only edit the plugin makes besides js-yaml reformatting, which we do not
+    // replicate so nothing is lost).
+    const frontmatterBody = fm.body.replace(/^(\s*kanban-plugin:\s*)basic(\s*)$/m, '$1board$2');
+
     return {
       frontmatter: fmKeys,
+      frontmatterBody,
       lanes,
       archive,
       settings: settingsObj,
@@ -203,7 +209,13 @@
       const kv = t.match(/^([^:]+):\s*(.*)$/);
       if (kv) keys.push([kv[1].trim(), kv[2].trim()]);
     }
-    return { keys, end };
+    // Capture the YAML body verbatim (framing blank lines stripped; internal
+    // structure kept), so block-style YAML (multi-line tag/alias lists, nested
+    // maps, comments) survives on save. A flat key/value re-emit would silently
+    // destroy it. The plugin's canonical delimiter/blank template is re-applied
+    // on serialize, so a canonical board stays byte-identical.
+    const body = inner.replace(/^\n+/, '').replace(/\s+$/, '') + '\n';
+    return { keys, end, body };
   }
 
   function readSettingsBlock(src) {
@@ -270,7 +282,11 @@
   // ---------------------------------------------------------------------
 
   function serialize(board) {
-    let out = ['---', '', stringifyFrontmatter(board.frontmatter), '---', '', ''].join('\n');
+    // Re-emit the verbatim YAML body (preserving block-style YAML) inside the
+    // plugin's canonical delimiter/blank template. A board built without going
+    // through parse (no frontmatterBody) falls back to the flat key/value emit.
+    const fmInner = board.frontmatterBody != null ? board.frontmatterBody : stringifyFrontmatter(board.frontmatter);
+    let out = ['---', '', fmInner, '---', '', ''].join('\n');
     for (const lane of board.lanes) out += serializeLane(lane);
     out += serializeArchive(board.archive || []);
     out += serializeSettings(board.settings);

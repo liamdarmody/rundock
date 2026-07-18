@@ -401,4 +401,28 @@ describe('board creation and detection lifecycle', () => {
   test('the hoist is byte-neutral on canonical boards', () => {
     assert.strictEqual(Kanban.serialize(Kanban.parse(backlog.once)), backlog.once);
   });
+
+  test('block-style frontmatter (multi-line lists, nested maps) survives a round-trip', () => {
+    // A flat key/value re-emit would destroy these; the body is preserved verbatim.
+    const src = '---\n\nkanban-plugin: board\ntitle: My board\ntags:\n  - project\n  - kanban\naliases:\n  - "[[Other]]"\n\n---\n\n## To do\n\n- [ ] a card\n\n\n\n\n%% kanban:settings\n```\n{"kanban-plugin":"board","list-collapse":[false]}\n```\n%%';
+    const board = Kanban.parse(src);
+    const out = Kanban.serialize(board);
+    // The tag/alias lists and every frontmatter line survive intact.
+    assert.ok(out.includes('tags:\n  - project\n  - kanban'), 'block tag list preserved');
+    assert.ok(out.includes('aliases:\n  - "[[Other]]"'), 'block alias list preserved');
+    assert.ok(out.includes('title: My board'), 'scalar preserved');
+    // And it is a fixed point (idempotent) with a card edit staying byte-honest.
+    assert.strictEqual(Kanban.serialize(Kanban.parse(out)), out, 'idempotent');
+    assert.strictEqual(board.dropped.length, 0, 'nothing reported dropped');
+    Kanban.toggleItem(board, 0, 0);
+    const toggled = Kanban.serialize(board);
+    assert.ok(toggled.includes('tags:\n  - project\n  - kanban'), 'tags still intact after a card edit');
+  });
+
+  test('a fresh board built via newBoardContent still emits the canonical first-save shape', () => {
+    const fresh = Kanban.parse(Kanban.newBoardContent());
+    Kanban.insertLane(fresh, 0, 'To do');
+    assert.strictEqual(Kanban.serialize(fresh),
+      '---\n\nkanban-plugin: board\n\n---\n\n## To do\n\n\n\n\n\n%% kanban:settings\n```\n{"kanban-plugin":"board","list-collapse":[false]}\n```\n%%');
+  });
 });

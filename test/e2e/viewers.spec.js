@@ -577,6 +577,34 @@ test('deleting a board card is undoable in-session', async ({ page }) => {
     .toContain('- [ ] Ship it');
 });
 
+test('a later edit dismisses the undo, so undo never discards interim work', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'board.md');
+  // Delete a card: the undo toast appears.
+  const target = page.locator('.board-card', { hasText: 'Ship it' });
+  await target.hover();
+  await target.locator('.board-card-ctl').click();
+  await expect(page.locator('.board-undo-toast')).toBeVisible();
+  // Make an unrelated edit (on a card no other test mutates): the stale undo
+  // is dismissed, so it can never revert this edit away.
+  await page.locator('.board-card-text', { hasText: 'Wire the' }).click();
+  const editor = page.locator('textarea.board-card-edit');
+  await editor.fill('Wire the whole board');
+  await editor.press('Enter');
+  await expect(page.locator('.board-undo-toast')).toHaveCount(0);
+  await expect(page.locator('.board-card-text', { hasText: 'Wire the whole board' })).toBeVisible();
+});
+
+test('block-style frontmatter on a board survives a save', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'tagged-board.md');
+  await expect(page.locator('.board-lane')).toHaveCount(2);
+  // Toggle a checkbox (forces a save) and confirm the block tag list is intact.
+  await page.locator('.board-card-check').first().check();
+  await expect.poll(async () => (await (await page.request.get('/api/file?path=tagged-board.md')).text()))
+    .toContain('tags:\n  - project\n  - kanban');
+});
+
 test('the lane menu renames, inserts, and deletes lists with undo', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'board.md');

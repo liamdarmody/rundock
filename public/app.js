@@ -3131,6 +3131,7 @@ let editorMode='preview', rawFileContent='', fileFrontmatter='', fileBody='';
 function loadFileContent(path, content) {
   // Close any active find before swapping the editor content.
   if (currentFilePath !== path) closeFindBar();
+  flushBoardSave(); // never drop a board's last edit when switching files
   destroyActiveFileViewer();
   hideExternalEditConflict();
   currentFilePath = path;
@@ -3168,6 +3169,18 @@ function loadFileContent(path, content) {
 // read-only viewers, its getContentForSave is non-null (unless the board holds
 // content the grammar would drop, in which case saving is refused).
 let boardSaveTimer = null;
+let boardPendingSave = null; // { path, md } — the latest debounced board write
+// Flush a pending board save immediately. Called before opening any file so a
+// board's last edit is never dropped when switching away inside the debounce
+// window (the pending save carries its own path, so it writes the right file).
+function flushBoardSave() {
+  if (boardSaveTimer) { clearTimeout(boardSaveTimer); boardSaveTimer = null; }
+  if (boardPendingSave) {
+    const p = boardPendingSave;
+    boardPendingSave = null;
+    saveFileGuarded(p.path, p.md);
+  }
+}
 function openBoardFile(path, content) {
   destroyTiptapEditorIfActive();
   document.getElementById('tiptap-editor-pane').classList.add('hidden');
@@ -3186,8 +3199,9 @@ function openBoardFile(path, content) {
         if (md == null) return; // save refused (droppable content)
         const status = document.getElementById('editor-status');
         if (status) { status.textContent = 'Unsaved'; status.style.color = 'var(--attention)'; }
+        boardPendingSave = { path, md };
         clearTimeout(boardSaveTimer);
-        boardSaveTimer = setTimeout(() => saveFileGuarded(path, md), 500);
+        boardSaveTimer = setTimeout(flushBoardSave, 500);
       });
     }
   });

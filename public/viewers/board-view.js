@@ -132,8 +132,15 @@ export function mountBoardView({ paneElement, content }, Kanban) {
   paneElement.appendChild(scroll);
 
   function render() {
+    // Any board change dismisses a pending undo (withUndo re-shows its toast
+    // AFTER this render), so an Undo can only ever revert the immediately
+    // preceding destructive op, never silently discard later edits.
+    const staleToast = paneElement.querySelector('.board-undo-toast');
+    if (staleToast) staleToast.remove();
     scroll.innerHTML = '';
     board.lanes.forEach((lane, laneIndex) => scroll.appendChild(renderLane(lane, laneIndex)));
+    const oldWarn = paneElement.querySelector('.board-dropped-warn');
+    if (oldWarn) oldWarn.remove(); // never stack banners across renders
     if (board.dropped && board.dropped.length) {
       const warn = doc.createElement('div');
       warn.className = 'board-dropped-warn';

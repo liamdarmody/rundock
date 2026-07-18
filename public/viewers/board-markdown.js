@@ -60,6 +60,8 @@ function renderInline(escaped) {
 
 // Render a card's raw title text (possibly multi-line) to display HTML.
 export function renderCardHtml(raw) {
-  var lines = String(raw == null ? '' : raw).split('\n');
+  // Strip any NUL from the input so real card text can never collide with the
+  // inline-code placeholder sentinel (SENT).
+  var lines = String(raw == null ? '' : raw).replace(/\x00/g, '').split('\n');
   return lines.map(function (line) { return renderInline(escapeHtml(line)); }).join('<br>');
 }
