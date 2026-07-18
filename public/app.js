@@ -46,7 +46,7 @@ function loadTiptapEditorModule() {
 function isMarkdownPath(path) {
   return typeof path === 'string' && /\.(md|mdx)$/i.test(path);
 }
-// File-type registry (FV2): non-markdown views live in public/viewers/.
+// File-type registry: non-markdown views live in public/viewers/.
 // Loaded on demand, same pattern as the editor module above.
 let _viewersModule = null, _viewersModuleResolved = null, activeFileViewer = null;
 function loadViewersModule() {
@@ -57,7 +57,7 @@ function destroyActiveFileViewer() {
   destroyActiveArtifactReview();
   if (activeFileViewer) { try { activeFileViewer.destroy(); } catch {} activeFileViewer = null; }
 }
-// Artifact review (FV2 phase 2): sidecar-backed comments on the HTML
+// Artifact review: sidecar-backed comments on the HTML
 // preview. Detached before its pane is cleared so the header pill and the
 // frame listeners never leak.
 let activeArtifactReview = null;
@@ -174,7 +174,7 @@ function saveTiptapFile() {
   });
 }
 
-// ---- External-edit guard (FV2 phase 4) ----
+// ---- External-edit guard ----
 // Rundock and Obsidian edit the same vault interchangeably, so auto-save
 // must never silently overwrite an edit made outside Rundock. Baseline =
 // the bytes we believe are on disk (set at load and after each save we
@@ -2019,7 +2019,7 @@ function toggleConvoListMembership(convoId, listId) {
 }
 
 function renderConvoList() {
-  // WhatsApp-model list (SR1 UI alignment): pinned conversations always group
+  // Messaging-style ordering: pinned conversations always group
   // at the top, then everything else; BOTH groups sort by lastActiveAt desc.
   // Pinned-ness is conveyed by position plus the title-row pin glyph; the
   // left-border channel is reserved for the unread/working signal (green).
@@ -3298,8 +3298,8 @@ function loadFileContent(path, content) {
   document.getElementById('editor-empty').classList.add('hidden');
   updateEditorBackButton();
 
-  // The file-type registry decides the surface for EVERY path (the FV2
-  // swap: the old per-type if-chain is gone). markdown -> Tiptap editor,
+  // The file-type registry decides the surface for EVERY path (it replaced
+  // the old per-type if-chain). markdown -> Tiptap editor,
   // text -> legacy preview/edit pane, artifact -> sandboxed preview with
   // the legacy code view, image/pdf -> read-only viewers over the binary
   // endpoint, anything else -> the cannot-preview state. A new file type
@@ -5070,7 +5070,7 @@ function paletteOpenFile(filePath) {
 }
 
 // Conversation route: the existing openConversation, extended with the
-// message anchor (the one genuinely new deep-link mechanic in SR1).
+// message anchor (the one genuinely new deep-link mechanic here).
 function paletteOpenConversation(item) {
   if (item.snippet) {
     pendingMessageAnchor = {

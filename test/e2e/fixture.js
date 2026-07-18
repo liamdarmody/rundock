@@ -64,7 +64,7 @@ function buildFixture() {
     '# Roadmap 2026\n\nQuarterly targets and the mobile milestone.\n');
 
   // A briefing-style note: foldable + nested callouts and frontmatter
-  // wikilinks (the FV2 phase-3 story's acceptance surface).
+  // wikilinks.
   fs.writeFileSync(path.join(workspace, 'briefing.md'), [
     '---',
     'title: "Morning Briefing"',
@@ -85,7 +85,7 @@ function buildFixture() {
     '',
   ].join('\n'));
 
-  // FV2 viewer files: a styled HTML artifact whose script/external-image
+  // Viewer files: a styled HTML artifact whose script/external-image
   // must NOT run (sandbox + CSP proof), a real decodable 1x1 PNG (proves the
   // binary endpoint serves unmangled bytes), and a minimal PDF.
   fs.writeFileSync(path.join(workspace, 'proposal.html'), [
@@ -149,7 +149,7 @@ function buildFixture() {
   fs.writeFileSync(path.join(sessions, 's2.jsonl'),
     jsonlUser('What should the July content calendar prioritise?', '2026-07-02T09:00:00.000Z')
     + jsonlAssistant('Three hooks shortlisted for the agent-team essay.', '2026-07-02T09:00:30.000Z'));
-  // s3: an agent referencing binary outputs by wikilink (FV2: those links
+  // s3: an agent referencing binary outputs by wikilink (those links
   // must open the real viewers, not dead-end on a phantom .md).
   fs.writeFileSync(path.join(sessions, 's3.jsonl'),
     jsonlUser('Where did the export land?', '2026-06-20T09:00:00.000Z')

@@ -1,5 +1,5 @@
 'use strict';
-// E2E: the file-type registry's view surfaces (FV2 phase 1).
+// E2E: the file-type registry's view surfaces.
 //
 // Browser-driven proof for every rendering claim: the sandboxed HTML
 // artifact preview (script must NOT run), the Preview/Code toggle, the
@@ -130,7 +130,7 @@ test('unsupported binary types get the cannot-preview state, never raw bytes', a
   await page.screenshot({ path: `${SHOTS}/unsupported-fallback.png` });
 });
 
-// ── FV2 phase 2: sidecar comments on the artifact preview ────────────────────
+// ── Sidecar comments on the artifact preview ────────────────────
 
 async function selectInFrame(page, selector) {
   // The review loop attaches asynchronously (sidecar fetch + frame load);
@@ -327,7 +327,7 @@ test('a multi-paragraph comment is geometry-neutral: paragraph gaps unchanged', 
   await page.screenshot({ path: `${SHOTS}/artifact-multi-paragraph-gap.png` });
 });
 
-// ── FV2 phase 3: callouts + frontmatter wikilinks ────────────────────────────
+// ── Callouts + frontmatter wikilinks ────────────────────────────
 
 test('callouts render as admonition boxes with working fold; frontmatter wikilinks navigate', async ({ page }) => {
   await boot(page);
@@ -379,7 +379,7 @@ test('a wikilink to an image or PDF in a conversation opens the real viewer', as
   await page.screenshot({ path: `${SHOTS}/conversation-wikilink-binary.png` });
 });
 
-// ── FV2 phase 4: property editing + external-edit guard ─────────────────────
+// ── Property editing + external-edit guard ─────────────────────
 
 test('editing frontmatter after switching files edits the current file, not a stale one', async ({ page }) => {
   await boot(page);

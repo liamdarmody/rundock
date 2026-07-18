@@ -6,7 +6,7 @@
 // constructing the expected output through pure text surgery on the canonical
 // form.
 //
-// Fixtures (test/fixtures/kanban/) are copies of real boards. Format rules were
+// Fixtures (test/fixtures/kanban/) are synthetic sample boards. Format rules were
 // reverse-engineered from the installed plugin's compiled bundle.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');

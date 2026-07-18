@@ -41,7 +41,7 @@ const SIDEBAR_DEFAULT = 260;
 export function attachReviewPanel({ paneElement, editor = null, surface = null, controller, onRequestSave = null, author = null, agents = [], pillHostElement = null }) {
   // The surface owns everything document-specific (selection, decoration,
   // flash, scroll, change events). Passing an editor builds the ProseMirror
-  // surface, the FV1 behaviour; the artifact viewer passes its own surface.
+  // surface, the default behaviour; the artifact viewer passes its own surface.
   if (!surface && editor) surface = createEditorReviewSurface(editor);
   if (!paneElement || !surface || !controller) return { detach: () => {}, refresh: () => {}, openComposer: () => {} };
 

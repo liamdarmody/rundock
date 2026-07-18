@@ -151,7 +151,7 @@ A handful of specific things that go wrong silently with skill files.
 
 **Flat skill files are not discovered.** A file at `.claude/skills/my-skill.md` is invisible to Rundock. The discovery loop only walks subdirectories of `.claude/skills/` and `System/Playbooks/`, looking for `SKILL.md` and `PLAYBOOK.md` respectively. The skill must live at `.claude/skills/<slug>/SKILL.md` (or the Playbooks equivalent) to be picked up.
 
-**Same slug in both source locations.** Rundock scans `System/Playbooks/` first, then `.claude/skills/`. If both sources contain a folder with the same slug, both are loaded as separate skill records, with the same id and slug but different `source` and `filePath` fields. The UI will show two skills with identical names. Pick one location and stick to it. The convention going forward is `.claude/skills/`; the Playbooks path exists for legacy Personal-OS-style workspaces.
+**Same slug in both source locations.** Rundock scans `System/Playbooks/` first, then `.claude/skills/`. If both sources contain a folder with the same slug, both are loaded as separate skill records, with the same id and slug but different `source` and `filePath` fields. The UI will show two skills with identical names. Pick one location and stick to it. The convention going forward is `.claude/skills/`; the Playbooks path exists for older workspace layouts.
 
 **Frontmatter typos fail silently.** A misspelled `descripton` or `naem` is silently ignored. The skill loads with empty values for those fields and slugs back to title-cased defaults. If a skill looks generic or untriggerable in the org chart, check the field names against the table above.
 

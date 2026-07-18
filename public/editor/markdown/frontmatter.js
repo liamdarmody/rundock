@@ -3,7 +3,7 @@
 //  - Strip it before the editor sees the body, so the YAML stays opaque to
 //    ProseMirror and is rendered separately as a properties panel
 //  - Preserve the raw YAML block verbatim so save round-trips byte-for-byte
-//    until the user actually edits a property (Phase 2 adds editing)
+//    until the user actually edits a property
 //  - Parse it with js-yaml only for rendering the panel; the raw form stays
 //    the source of truth for serialisation
 //

@@ -1,5 +1,5 @@
 'use strict';
-// E2E smoke suite (SR1 client test coverage, stage 1).
+// E2E smoke suite for client test coverage.
 //
 // Ten browser-driven tests protecting the flows the Node suite cannot
 // observe. The first two exist because these exact bugs shipped through 338
@@ -77,7 +77,7 @@ test('anchor: a search-opened conversation scrolls to and flashes the matched me
   await expect(flashed).toBeInViewport();
 });
 
-test('anchor: the flash never replays when navigating away and back (SR1 escape #1)', async ({ page }) => {
+test('anchor: the flash never replays when navigating away and back', async ({ page }) => {
   await boot(page);
   await search(page, 'discount structure');
   await page.locator('.palette-item[data-type="conversation"]').first().click();
@@ -93,7 +93,7 @@ test('anchor: the flash never replays when navigating away and back (SR1 escape 
   await expect(page.locator('.msg.anchor-flash')).toHaveCount(0);
 });
 
-test('nav state: every result type from every origin view lands consistently (SR1 escape #2)', async ({ page }) => {
+test('nav state: every result type from every origin view lands consistently', async ({ page }) => {
   test.slow(); // 16 palette round-trips
   await boot(page);
   const origins = ['conversations', 'files', 'skills', 'team'];

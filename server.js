@@ -904,7 +904,7 @@ const AGENT_CACHE_TTL = 2000; // 2 seconds
 
 function invalidateAgentCache() { _agentCache = null; _agentCacheTime = 0; _skillCache = null; _skillCacheTime = 0; invalidateFileListCache(); }
 
-// Skill + file-list caches for the search hot path (SR1). discoverSkills
+// Skill + file-list caches for the search hot path. discoverSkills
 // re-reads every SKILL.md and agent body per call, and the palette queries
 // per debounced keystroke; both caches share the agent cache's TTL scale and
 // are cleared by invalidateAgentCache (already called on every agent/skill
@@ -4671,7 +4671,7 @@ wss.on('connection', (ws) => {
 
       // ── CONVERSATION SEARCH: search titles and transcript content ──
       if (msg.type === 'search_conversations') {
-        // Conversation-only search. No in-repo client sends this as of SR1
+        // Conversation-only search. No in-repo client sends this today
         // (the palette's search_universal replaced the sidebar search field);
         // retained deliberately as a stable WS surface for stale cached
         // clients and a possible sidebar-search reinstatement, and kept
@@ -4685,9 +4685,9 @@ wss.on('connection', (ws) => {
             return;
           }
           const convos = readConversations();
-          // Phase 1: title matches (instant)
+          // First pass: title matches (instant)
           const titleMatches = convos.filter(c => (c.title || '').toLowerCase().includes(query)).map(c => ({ ...c, matchType: 'title' }));
-          // Phase 2: content matches (FTS index, or the legacy jsonl grep)
+          // Second pass: content matches (FTS index, or the legacy jsonl grep)
           let contentResults = [];
           if (ensureSearchEngine()) {
             try {
@@ -4719,7 +4719,7 @@ wss.on('connection', (ws) => {
       }
 
       if (msg.type === 'search_universal') {
-        // Cmd+K universal palette (SR1): one query across files,
+        // Cmd+K universal palette: one query across files,
         // conversations, agents, and skills, grouped by type.
         runUniversalSearch(msg).then(({ groups, recent }) => {
           ws.send(JSON.stringify({ type: 'search_universal_results', query: (msg.query || '').trim(), reqId: msg.reqId, groups, recent }));
@@ -6372,7 +6372,7 @@ process.on('exit', () => {
   }
 });
 
-// ===== UNIVERSAL SEARCH (SR1) =====
+// ===== UNIVERSAL SEARCH =====
 // FTS5 engine over files + conversations when node:sqlite is available;
 // grep fallback otherwise. The engine is lazily (re)opened per workspace so
 // every entry point — WS handlers, hooks, tests driving _internal — heals
@@ -6869,7 +6869,7 @@ module.exports._internal = {
   agentAutoResumeCount, disconnectBuffer, connectedClients,
   convoTransitions,
   incrementAutoResume, resetAutoResume,
-  // universal search (SR1)
+  // universal search
   ensureSearchEngine, runUniversalSearch, conversationSessionsForSearch,
   titleLayerMatches, flattenFileTree, grepSearchFiles, grepSearchTranscripts,
   resolveSessionPathCached, _sessionPathMemo, noteSearchConversationActivity,

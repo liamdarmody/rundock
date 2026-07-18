@@ -1,4 +1,4 @@
-// YAML endmatter: the file-native store for review metadata (Roughdraft wire
+// YAML endmatter: the file-native store for review metadata (a CriticMarkup wire
 // format). A final `---` line introduces a YAML block that runs to the end
 // of the file:
 //

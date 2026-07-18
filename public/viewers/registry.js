@@ -1,7 +1,7 @@
 // File-type registry: decides which view surface owns a workspace path and
-// mounts it. Design of record: FV2 (file-type registry + sandboxed HTML
-// artifact viewer). Ordered; first match wins; 'unsupported' is the terminal
-// fallback so no path ever renders as raw corrupted bytes.
+// mounts it. A file-type registry with a sandboxed HTML artifact viewer.
+// Ordered; first match wins; 'unsupported' is the terminal fallback so no
+// path ever renders as raw corrupted bytes.
 //
 // Pre-sync-point shape: app.js keeps its markdown (Tiptap) and text (legacy
 // preview/edit pane) branches and consults this registry for everything else.

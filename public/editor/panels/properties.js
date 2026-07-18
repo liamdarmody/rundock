@@ -1,13 +1,13 @@
-// Properties panel: read-only renderer for YAML frontmatter.
+// Properties panel: renders and inline-edits YAML frontmatter.
 //
 // Renders a row per top-level scalar or array value. Nested objects are
-// hidden in v1 (preserved in the raw frontmatter and round-tripped on save,
-// but not exposed inline). Phase 2 adds editable inputs and an "Add property"
-// affordance.
+// hidden for now (preserved in the raw frontmatter and round-tripped on save,
+// but not exposed inline). Scalars edit in place, bools toggle, and list
+// items add and remove.
 //
 // inferType returns one of: 'string' | 'number' | 'date' | 'bool' | 'list' |
 // 'object' | 'null'. The panel uses the type to pick an icon and a value
-// renderer; it never mutates the underlying data in v1.
+// renderer; the renderer itself never mutates the underlying data.
 
 // Per-type row icons as Lucide-style inline SVGs (24 viewBox, 1.8 stroke, round
 // caps), matching Obsidian's property-type icons far better than glyphs did.
@@ -115,7 +115,7 @@ function renderValue(value, type, resolveWikilink, editable) {
     return `<span class="prop-value number">${escapeHtml(String(value))}</span>`;
   }
   if (type === 'object') {
-    return '<span class="prop-value empty">nested object (Phase 2)</span>';
+    return '<span class="prop-value empty">nested object (not editable)</span>';
   }
   const link = parsePropWikilink(value);
   if (link) return `<span class="prop-value string">${renderWikilinkValue(link, resolveWikilink)}</span>`;

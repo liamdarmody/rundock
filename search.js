@@ -1,6 +1,6 @@
 'use strict';
 // ─────────────────────────────────────────────────────────────────────────────
-// Universal search engine (SR1).
+// Universal search engine.
 //
 // Lexical search over four corpora: workspace files (markdown content),
 // conversations (Claude Code session transcripts), agents, and skills.
@@ -8,7 +8,7 @@
 // tiny corpora filtered in memory at query time by the server (no index, no
 // sync problem).
 //
-// Engine decision (SR1, 2026-07-12): the index runs on `node:sqlite`
+// Engine decision (2026-07-12): the index runs on `node:sqlite`
 // (DatabaseSync), NOT better-sqlite3 as the July spec drafted. Verified
 // empirically: node:sqlite ships FTS5 (including the trigram tokenizer)
 // unflagged on Node 22.16+ and on Electron 35's bundled Node, where server.js

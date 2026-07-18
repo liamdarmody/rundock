@@ -87,7 +87,7 @@ describe('list edits', () => {
   });
 });
 
-describe('byte-honesty (adversarial regressions)', () => {
+describe('byte-honesty (edge-case regressions)', () => {
   test('removing one block-list item leaves the others byte-identical (no requoting, no type change)', () => {
     const raw = '---\ntags:\n  - plain\n  - "quoted with spaces"\n  - 42\n---\n';
     // Remove the middle item -> the survivors keep their exact original lines.

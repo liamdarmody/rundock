@@ -20,7 +20,7 @@
  * is no need to revert main: the bump + tag stay, and CI publishes once it passes.
  *
  * No Apple/signing credentials are needed locally any more; those live in GitHub
- * Secrets (see 02_Areas/Rundock/CI-Release-Setup.md in the vault).
+ * Secrets are provided by the CI environment (see the repository CI settings).
  */
 
 const { execFileSync } = require('child_process');

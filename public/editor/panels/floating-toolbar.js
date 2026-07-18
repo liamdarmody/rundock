@@ -14,7 +14,7 @@ const LINK_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="non
 const COMMENT_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
 
 // Formatting buttons render as a row; the review Comment action renders as a
-// full-width bar beneath them (the pattern proven in Roughdraft: commenting
+// full-width bar beneath them (an established review-UI pattern: commenting
 // is the primary review gesture, so it gets primary prominence). Suggesting
 // was deliberately removed from the human toolbar (2026-07-13): a human in
 // an editable document just makes the edit; suggestions remain the AGENT's
