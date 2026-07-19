@@ -746,6 +746,29 @@ test('editing a board in Rundock does not raise a false external-change conflict
   await expect(page.locator('#external-edit-banner')).toHaveCount(0);
 });
 
+test('a card the rich editor cannot round-trip falls back to the plain editor, byte-exact', async ({ page }) => {
+  await boot(page);
+  const board = '---\n\nkanban-plugin: board\n\n---\n\n## To do\n\n- [ ] Simple inline card\n- [ ] Card with nested items\n\t- [ ] nested one\n\t- [x] nested two\n\n\n\n\n%% kanban:settings\n```\n{"kanban-plugin":"board","list-collapse":[false]}\n```\n%%';
+  await page.evaluate((content) => new Promise((resolve) => {
+    ws.send(JSON.stringify({ type: 'save_file', path: 'nested-board.md', content }));
+    setTimeout(resolve, 300);
+  }), board);
+  await openFilesView(page);
+  await page.evaluate(() => { ws.send(JSON.stringify({ type: 'read_file', path: 'nested-board.md' })); });
+  await expect(page.locator('.board-lane')).toHaveCount(1);
+  // The nested-checkbox card opens in the plain textarea (the rich editor would
+  // escape the checkboxes into "- \\[ \\]" and corrupt the board).
+  await page.locator('.board-card-text', { hasText: 'Card with nested items' }).click();
+  await expect(page.locator('textarea.board-card-edit')).toBeVisible();
+  await expect(page.locator('.board-card-editor')).toHaveCount(0);
+  await page.locator('textarea.board-card-edit').press('Enter'); // commit, no change
+  // The file stays byte-identical: no corruption from merely opening the card.
+  await expect.poll(async () => (await (await page.request.get('/api/file?path=nested-board.md')).text())).toBe(board);
+  // A simple inline card still gets the rich editor.
+  await page.locator('.board-card-text', { hasText: 'Simple inline card' }).click();
+  await expect(page.locator('.board-card-editor .ProseMirror')).toBeVisible();
+});
+
 test('the board card editor shows a selection toolbar with inline formatting only', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'board.md');

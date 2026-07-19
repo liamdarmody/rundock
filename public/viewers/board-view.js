@@ -57,6 +57,7 @@ function ensureStyles(doc) {
     .board-card-ctl { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 6px; color: var(--text-2); background: var(--surface); }
     .board-card-ctl:hover { color: var(--danger, #E85A5A); background: var(--elevated); }
     .board-card.editing { cursor: default; }
+    .board-card-edit { width: 100%; box-sizing: border-box; resize: none; background: var(--elevated); border: 1px solid var(--accent); border-radius: 6px; color: var(--text-1); font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 13px; line-height: 1.5; padding: 8px 10px; outline: none; cursor: text; }
     .board-card-editor { background: var(--elevated); border: 1px solid var(--accent); border-radius: 6px; padding: 6px 10px; cursor: text; }
     .board-card-editor .ProseMirror { cursor: text; }
     .board-card-editor .ProseMirror { outline: none; font-size: var(--body); line-height: 1.5; color: var(--text-1); min-height: 1.4em; overflow-wrap: anywhere; }
@@ -366,7 +367,7 @@ export function mountBoardView({ paneElement, content, onWikilink }, Kanban) {
   // the editor serializes back to markdown that feeds titleRaw straight through
   // the byte-exact board serializer (updateItem), so the round-trip is honest.
   function enterCardEdit(card, laneIndex, itemIndex) {
-    if (card.querySelector('.board-card-editor')) return;
+    if (card.querySelector('.board-card-editor, textarea.board-card-edit')) return;
     const item = board.lanes[laneIndex] && board.lanes[laneIndex].items[itemIndex];
     if (!item) return;
     const row = card.querySelector('.board-card-row');
@@ -376,6 +377,15 @@ export function mountBoardView({ paneElement, content, onWikilink }, Kanban) {
     card.draggable = false;
     card.classList.add('editing'); // swap the grab cursor for a text caret
     const editor = createEditorInstance({ element: host, initialBody: item.titleRaw });
+    // The rich editor is only safe where it represents the card faithfully.
+    // A card with constructs its serializer would reformat (nested checkboxes,
+    // code blocks) falls back to the plain textarea, so merely opening a card
+    // can never corrupt the byte-exact board markdown.
+    if (editor.storage.markdown.getMarkdown().replace(/\n+$/, '') !== item.titleRaw) {
+      try { editor.destroy(); } catch (e) { /* noop */ }
+      enterCardEditPlain(card, host, laneIndex, itemIndex, item);
+      return;
+    }
     editor.commands.focus('end');
     // Selection toolbar (bold/italic/code/link), viewport-anchored so it clears
     // the board's nested scroll. Removed with the editor. Clear any stray one
@@ -410,6 +420,36 @@ export function mountBoardView({ paneElement, content, onWikilink }, Kanban) {
       else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
     }, true);
     editor.on('blur', () => finish(true)); // click-away saves
+  }
+
+  // Plain-textarea editor: the byte-exact fallback for cards the rich editor
+  // cannot round-trip. Same grammar as the rich path (Enter saves, Shift+Enter
+  // a line, Esc cancels, click-away saves); the raw text feeds updateItem.
+  function enterCardEditPlain(card, host, laneIndex, itemIndex, item) {
+    const ta = doc.createElement('textarea');
+    ta.className = 'board-card-edit';
+    ta.value = item.titleRaw;
+    host.replaceWith(ta);
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    const grow = () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; };
+    grow();
+    ta.addEventListener('input', grow);
+    let done = false;
+    const finish = (commit) => {
+      if (done) return;
+      done = true;
+      if (commit && ta.value.trim() !== item.titleRaw.trim()) {
+        Kanban.updateItem(board, laneIndex, itemIndex, ta.value);
+        onChange();
+      }
+      render();
+    };
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+    ta.addEventListener('blur', () => finish(true));
   }
 
   // Lane (three-dot) menu: every column operation the serializer supports.
