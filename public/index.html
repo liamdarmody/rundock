@@ -565,6 +565,10 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .tiptap-editor .ProseMirror .callout-edit-btn:hover { opacity: 1; background: color-mix(in srgb, var(--callout-color) 16%, transparent); }
 .tiptap-editor .ProseMirror .callout.callout-editing { padding-top: 10px; }
 .tiptap-editor .ProseMirror .callout-edit { width: 100%; box-sizing: border-box; resize: none; background: var(--elevated); border: 1px solid var(--callout-color); border-radius: 6px; color: var(--text-1); font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 13px; line-height: 1.5; padding: 8px 10px; outline: none; }
+/* Rejected edit (an invalid callout head): a brief red flash instead of a
+   silent revert, so the typed text is kept and the reason is visible. */
+.tiptap-editor .ProseMirror .callout-edit.callout-edit-invalid { border-color: var(--danger, #d9534f); box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger, #d9534f) 30%, transparent); animation: callout-edit-shake 0.3s ease; }
+@keyframes callout-edit-shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-3px); } 75% { transform: translateX(3px); } }
 .floating-toolbar { position: absolute; display: none; gap: 2px; padding: 4px; background: var(--card); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.25); z-index: 50; left: 0; top: 0; }
 .floating-toolbar.visible { display: inline-flex; }
 .floating-toolbar .tb-btn { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 28px; padding: 0 8px; background: transparent; color: var(--text-2); border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 600; font-family: inherit; }

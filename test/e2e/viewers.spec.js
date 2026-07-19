@@ -481,6 +481,54 @@ test('opening and blurring a callout without an edit does not change the documen
   expect(after).toBe(before);
 });
 
+test('an invalid callout edit is flagged, not silently discarded (P2-4)', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'briefing.md');
+  const callout = page.locator('.callout.callout-abstract').first();
+  await expect(callout).toBeVisible();
+  await callout.locator('.callout-edit-btn').click();
+  const ta = callout.locator('textarea.callout-edit');
+  await expect(ta).toBeVisible();
+  // Type an invalid callout head (no [!type]) and try to commit by blurring.
+  await ta.fill('not a valid callout head\n> body');
+  await page.locator('#editor-filename').click();
+  // The editor stays open with the typed text preserved and a rejection signal.
+  await expect(ta).toBeVisible();
+  await expect(ta).toHaveClass(/callout-edit-invalid/);
+  await expect(ta).toHaveValue(/not a valid callout head/);
+  // Escape cancels cleanly, reverting to the rendered box.
+  await ta.press('Escape');
+  await expect(callout.locator('textarea')).toHaveCount(0);
+});
+
+test('an external change while a callout editor is open is not clobbered on blur (P2-5)', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'briefing.md');
+  const callout = page.locator('.callout.callout-abstract').first();
+  await expect(callout).toBeVisible();
+  await callout.locator('.callout-edit-btn').click();
+  const ta = callout.locator('textarea.callout-edit');
+  await expect(ta).toBeVisible();
+  await ta.fill('> [!abstract]+ Today at a glance\n> Stale edit from the textarea.');
+  // Simulate the node changing underneath the open editor (a live refresh).
+  await page.evaluate(() => {
+    const view = typeof activeTiptapEditor !== 'undefined' && activeTiptapEditor && activeTiptapEditor.view;
+    if (!view) return;
+    let calloutPos = null;
+    view.state.doc.descendants((node, pos) => { if (node.type.name === 'callout' && calloutPos === null) calloutPos = pos; });
+    if (calloutPos === null) return;
+    const node = view.state.doc.nodeAt(calloutPos);
+    view.dispatch(view.state.tr.setNodeMarkup(calloutPos, undefined, {
+      ...node.attrs, body: 'External update wins.', head: '> [!abstract]+ Today at a glance',
+    }));
+  });
+  // Blur the stale textarea: it must NOT overwrite the external update.
+  await page.locator('#editor-filename').click();
+  await expect(callout.locator('textarea')).toHaveCount(0);
+  await expect(callout).toContainText('External update wins.');
+  await expect(callout).not.toContainText('Stale edit from the textarea.');
+});
+
 test('callouts render as admonition boxes with working fold; frontmatter wikilinks navigate', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'briefing.md');

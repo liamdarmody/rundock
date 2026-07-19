@@ -342,6 +342,10 @@ export const Callout = Node.create({
       function openEditor() {
         if (editing) return;
         editing = true;
+        // Snapshot the attributes the edit started from. If the node changes
+        // underneath (a live external refresh, another edit) while the textarea
+        // is open, this stale editor must not clobber the newer content.
+        const openAttrs = current.attrs;
         // Keep the type class: the textarea border uses its --callout-color.
         dom.className = `callout callout-${current.attrs.type || 'note'} callout-editable callout-editing`;
         dom.innerHTML = '';
@@ -355,19 +359,30 @@ export const Callout = Node.create({
         let done = false;
         const finish = (save) => {
           if (done) return;
-          done = true;
-          editing = false;
           if (save) {
+            // The node changed underneath since the editor opened: abort the
+            // commit so this stale textarea cannot overwrite the newer content.
+            if (!calloutAttrsEqual(current.attrs, openAttrs)) { done = true; editing = false; paint(); return; }
             const attrs = rawToCalloutAttrs(ta.value);
+            if (!attrs) {
+              // Invalid callout head: do not silently discard the typed text.
+              // Flag the rejection and keep the editor open so the user can fix
+              // it or press Escape to cancel.
+              ta.classList.add('callout-edit-invalid');
+              requestAnimationFrame(() => ta.focus());
+              setTimeout(() => ta.classList.remove('callout-edit-invalid'), 600);
+              return;
+            }
             const pos = typeof getPos === 'function' ? getPos() : null;
-            // Only dispatch when the parse succeeded AND the attributes actually
-            // changed. A no-op commit (opened and blurred without an edit) would
-            // otherwise add an undo step and mark the document dirty, triggering
-            // a needless save and refresh.
-            if (attrs && typeof pos === 'number' && !calloutAttrsEqual(attrs, current.attrs)) {
+            // Only dispatch when the attributes actually changed. A no-op commit
+            // (opened and blurred without an edit) would otherwise add an undo
+            // step and mark the document dirty, triggering a needless save.
+            if (typeof pos === 'number' && !calloutAttrsEqual(attrs, current.attrs)) {
               editor.view.dispatch(editor.view.state.tr.setNodeMarkup(pos, undefined, attrs));
             }
           }
+          done = true;
+          editing = false;
           paint(); // repaint from current (updated by update() if the edit committed)
         };
         ta.addEventListener('keydown', (e) => {
