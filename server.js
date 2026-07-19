@@ -5128,13 +5128,30 @@ const BINARY_FILE_TYPES = {
 // Classify a file for its tree icon: a .md whose frontmatter carries the
 // kanban-plugin key is a board, other .md are notes, and the rest by extension.
 // The frontmatter read is a small head slice; failures fall back to 'note'.
+// Read at most maxBytes from the head of a file without loading the whole
+// thing. getFileTree calls this for every markdown file on every refresh, so
+// it must not scale with file size.
+function readFileHead(fullPath, maxBytes) {
+  let fd;
+  try {
+    fd = fs.openSync(fullPath, 'r');
+    const buf = Buffer.alloc(maxBytes);
+    const bytesRead = fs.readSync(fd, buf, 0, maxBytes, 0);
+    return buf.toString('utf-8', 0, bytesRead);
+  } catch (e) {
+    return '';
+  } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch (e) {} }
+  }
+}
+
 function fileKind(fullPath, name) {
   if (/\.mdx?$/i.test(name)) {
-    try {
-      const head = fs.readFileSync(fullPath, 'utf-8').slice(0, 800);
-      const m = head.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-      if (m && /(^|\r?\n)\s*kanban-plugin\s*:/.test(m[1])) return 'board';
-    } catch (e) {}
+    // Only the frontmatter head is needed to spot a board; a bounded read
+    // keeps this O(1) regardless of note size.
+    const head = readFileHead(fullPath, 1024);
+    const m = head.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    if (m && /(^|\r?\n)\s*kanban-plugin\s*:/.test(m[1])) return 'board';
     return 'note';
   }
   if (/\.(html?|svg)$/i.test(name)) return 'artifact';
@@ -6904,7 +6921,7 @@ module.exports._internal = {
   // workspace analysis / scaffolding
   detectWorkspaceMode, isEmptyWorkspace, analyzeWorkspace,
   scaffoldDefaults, scaffoldWorkspace, muteHooks, discoverWorkspaces,
-  readMcpServerNames, getFileTree, validateAgentSlug, isInsideWorkspace, isSafeCreatePath,
+  readMcpServerNames, getFileTree, fileKind, validateAgentSlug, isInsideWorkspace, isSafeCreatePath,
   // persistence
   readConversations, writeConversations, readState, writeState,
   readLists, writeLists, deleteListEverywhere,
