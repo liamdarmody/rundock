@@ -5,10 +5,10 @@ const { test, describe, before } = require('node:test');
 const assert = require('node:assert');
 
 // The node module is an ESM file; import it dynamically.
-let calloutAttrsToRaw, rawToCalloutAttrs;
+let calloutAttrsToRaw, rawToCalloutAttrs, calloutAttrsEqual;
 before(async () => {
   const mod = await import('../../public/editor/nodes/callout.js');
-  ({ calloutAttrsToRaw, rawToCalloutAttrs } = mod);
+  ({ calloutAttrsToRaw, rawToCalloutAttrs, calloutAttrsEqual } = mod);
 });
 
 describe('callout raw <-> attrs', () => {
@@ -48,5 +48,35 @@ describe('callout raw <-> attrs', () => {
     assert.strictEqual(
       calloutAttrsToRaw({ type: 'info', fold: '+', title: 'Hi', body: 'x' }),
       '> [!info]+ Hi\n> x');
+  });
+
+  test('a blank body line with trailing whitespace round-trips byte-for-byte (P1-4)', () => {
+    const raw = '> [!note] T\n> body\n> \n> more';
+    assert.strictEqual(calloutAttrsToRaw(rawToCalloutAttrs(raw)), raw);
+    // A blank body line that is a bare tab also survives.
+    const tab = '> [!note] T\n> body\n>\t\n> end';
+    assert.strictEqual(calloutAttrsToRaw(rawToCalloutAttrs(tab)), tab);
+  });
+
+  test('a bare blank line stays bare (no trailing space added)', () => {
+    const raw = '> [!note] T\n> a\n>\n> b';
+    assert.strictEqual(calloutAttrsToRaw(rawToCalloutAttrs(raw)), raw);
+  });
+});
+
+describe('calloutAttrsEqual (P1-2: skip a no-op commit)', () => {
+  test('equal when the callout-shaping attributes match', () => {
+    const a = { type: 'note', fold: '', title: 'T', body: 'x', head: '> [!note] T' };
+    const b = { type: 'note', fold: '', title: 'T', body: 'x', head: '> [!note] T' };
+    assert.strictEqual(calloutAttrsEqual(a, b), true);
+  });
+
+  test('differs when any shaping attribute changes', () => {
+    const base = { type: 'note', fold: '', title: 'T', body: 'x', head: '> [!note] T' };
+    assert.strictEqual(calloutAttrsEqual(base, { ...base, body: 'y' }), false);
+    assert.strictEqual(calloutAttrsEqual(base, { ...base, title: 'U' }), false);
+    assert.strictEqual(calloutAttrsEqual(base, { ...base, fold: '-' }), false);
+    assert.strictEqual(calloutAttrsEqual(base, { ...base, type: 'tip' }), false);
+    assert.strictEqual(calloutAttrsEqual(base, { ...base, head: '> [!note]  T' }), false);
   });
 });

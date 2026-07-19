@@ -25,6 +25,27 @@ function escapeHtmlAttr(s) {
 
 const CALLOUT_HEAD_RE = /^> \[!([a-zA-Z]+)\]([+-]?)[ \t]*([^\n]*)$/;
 
+// Strip a body line's `>` marker. One leading space/tab after `>` is the
+// conventional separator and is removed, but ONLY when body content follows.
+// A whitespace-only line (`>`, `> `, `>\t`) keeps its exact bytes so a blank
+// line with a trailing space round-trips instead of collapsing to a bare `>`.
+function stripBodyMarker(lineText) {
+  let s = lineText.slice(1);
+  if (/\S/.test(s)) {
+    const c = s.charCodeAt(0);
+    if (c === 0x20 || c === 0x09) s = s.slice(1);
+  }
+  return s;
+}
+
+// Re-emit a stored body line with its `>` marker. Content lines get the
+// conventional `> ` separator; whitespace-only lines get a bare `>` prefix so
+// their own bytes (empty, one space, a tab) are what follows the marker. This
+// is the exact inverse of stripBodyMarker.
+function bodyLineToRaw(line) {
+  return /\S/.test(line) ? `> ${line}` : `>${line}`;
+}
+
 // Convert a ProseMirror-style render spec (['tag', {attrs}, ...children]) into
 // real DOM. Used by the node view to build the same visible callout that
 // renderHTML describes, so display and editing share one structure.
@@ -73,11 +94,7 @@ function calloutTokenize(state, startLine, endLine, silent) {
     const lineText  = state.src.slice(lineStart, lineMax);
     if (lineText.length === 0) break;
     if (lineText.charCodeAt(0) !== 0x3E /* > */) break;
-    let bodyLine = lineText.slice(1);
-    if (bodyLine.charCodeAt(0) === 0x20 /* space */ || bodyLine.charCodeAt(0) === 0x09 /* tab */) {
-      bodyLine = bodyLine.slice(1);
-    }
-    bodyLines.push(bodyLine);
+    bodyLines.push(stripBodyMarker(lineText));
     nextLine += 1;
   }
 
@@ -124,8 +141,16 @@ function calloutRender(tokens, idx) {
 export function calloutAttrsToRaw({ type = 'note', fold = '', title = '', body = '', head = '' }) {
   const titlePart = title ? ` ${title}` : '';
   const headLine = head || `> [!${type}]${fold}${titlePart}`;
-  const bodyLines = body ? body.split('\n').map(l => (l.length ? `> ${l}` : '>')) : [];
+  const bodyLines = body ? body.split('\n').map(bodyLineToRaw) : [];
   return [headLine, ...bodyLines].join('\n');
+}
+
+// The callout-shaping attributes, compared for equality. Used to skip a no-op
+// commit (an edit that opened and closed without changing anything), which
+// would otherwise add an undo step and mark the document dirty.
+export function calloutAttrsEqual(a, b) {
+  if (!a || !b) return false;
+  return ['type', 'fold', 'title', 'body', 'head'].every((k) => (a[k] || '') === (b[k] || ''));
 }
 
 // Parse edited raw callout markdown back into attributes. Returns null when the
@@ -140,13 +165,8 @@ export function rawToCalloutAttrs(raw) {
   if (!m) return null;
   const bodyLines = [];
   for (let i = 1; i < lines.length; i++) {
-    let line = lines[i];
-    if (line.charCodeAt(0) === 0x3E /* > */) {
-      line = line.slice(1);
-      const c = line.charCodeAt(0);
-      if (c === 0x20 || c === 0x09) line = line.slice(1);
-    }
-    bodyLines.push(line);
+    const line = lines[i];
+    bodyLines.push(line.charCodeAt(0) === 0x3E /* > */ ? stripBodyMarker(line) : line);
   }
   return {
     type: m[1].toLowerCase(),
@@ -177,10 +197,7 @@ export function parseCalloutBody(body) {
       const inner = [];
       let j = i + 1;
       while (j < lines.length && lines[j].charCodeAt(0) === 0x3E /* > */) {
-        let bodyLine = lines[j].slice(1);
-        const c = bodyLine.charCodeAt(0);
-        if (c === 0x20 || c === 0x09) bodyLine = bodyLine.slice(1);
-        inner.push(bodyLine);
+        inner.push(stripBodyMarker(lines[j]));
         j += 1;
       }
       segments.push({ kind: 'callout', type: m[1].toLowerCase(), fold: m[2] || '', title: (m[3] || '').trim(), body: inner.join('\n') });
@@ -210,7 +227,7 @@ function calloutChildrenSpec({ type, fold, title, body }) {
         { class: `callout callout-${seg.type} callout-nested` },
         ...calloutChildrenSpec(seg),
       ]);
-    } else if (seg.text.length === 0) {
+    } else if (seg.text.trim().length === 0) {
       bodyChildren.push(['div', { class: 'callout-line empty' }, ' ']);
     } else {
       bodyChildren.push(['div', { class: 'callout-line' }, seg.text]);
@@ -343,7 +360,11 @@ export const Callout = Node.create({
           if (save) {
             const attrs = rawToCalloutAttrs(ta.value);
             const pos = typeof getPos === 'function' ? getPos() : null;
-            if (attrs && typeof pos === 'number') {
+            // Only dispatch when the parse succeeded AND the attributes actually
+            // changed. A no-op commit (opened and blurred without an edit) would
+            // otherwise add an undo step and mark the document dirty, triggering
+            // a needless save and refresh.
+            if (attrs && typeof pos === 'number' && !calloutAttrsEqual(attrs, current.attrs)) {
               editor.view.dispatch(editor.view.state.tr.setNodeMarkup(pos, undefined, attrs));
             }
           }

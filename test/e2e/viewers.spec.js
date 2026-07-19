@@ -458,6 +458,29 @@ test('a callout edits in place and saves byte-honestly', async ({ page }) => {
   ).toContain('> Three meetings now.');
 });
 
+test('opening and blurring a callout without an edit does not change the document', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'briefing.md');
+  const callout = page.locator('.callout.callout-abstract').first();
+  await expect(callout).toBeVisible();
+  // Content-agnostic: capture whatever the file and callout currently hold, so
+  // this test does not depend on other tests that edit the shared fixture.
+  const before = await (await page.request.get('/api/file?path=briefing.md')).text();
+  const calloutTextBefore = await callout.textContent();
+  // Open the in-place editor, then blur without typing (a no-op commit).
+  await callout.locator('.callout-edit-btn').click();
+  const ta = callout.locator('textarea.callout-edit');
+  await expect(ta).toBeVisible();
+  await expect(ta).toBeFocused();
+  await page.locator('#editor-filename').click();
+  await expect(callout.locator('textarea')).toHaveCount(0);
+  await expect(callout).toHaveText(calloutTextBefore);
+  // No no-op write: the file is byte-identical.
+  await page.waitForTimeout(300);
+  const after = await (await page.request.get('/api/file?path=briefing.md')).text();
+  expect(after).toBe(before);
+});
+
 test('callouts render as admonition boxes with working fold; frontmatter wikilinks navigate', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'briefing.md');
