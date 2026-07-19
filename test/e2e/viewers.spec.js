@@ -735,6 +735,24 @@ test('cards reorder within a column by dragging onto another card', async ({ pag
   }).toBe(true);
 });
 
+test('a clean file with non-idempotent markdown live-refreshes without a false conflict', async ({ page }) => {
+  await boot(page);
+  // Body uses constructs the rich editor re-serializes differently (`*` bullets),
+  // so a content comparison would misread this clean file as dirty.
+  const v1 = '---\ntitle: T\n---\n\n* one\n* two\n';
+  await page.evaluate((c) => new Promise((r) => {
+    ws.send(JSON.stringify({ type: 'save_file', path: 'nonidem.md', content: c })); setTimeout(r, 300);
+  }), v1);
+  await openFilesView(page);
+  await page.evaluate(() => { ws.send(JSON.stringify({ type: 'read_file', path: 'nonidem.md' })); });
+  await expect(page.locator('#tiptap-editor-pane')).toBeVisible();
+  // No user edits. An external change must reload seamlessly, not conflict.
+  await page.evaluate((c) => { ws.send(JSON.stringify({ type: 'save_file', path: 'nonidem.md', content: c })); },
+    '---\ntitle: T\n---\n\n* one\n* two\n* three\n');
+  await expect(page.locator('#tiptap-editor-pane')).toContainText('three'); // reloaded
+  await expect(page.locator('#external-edit-banner')).toHaveCount(0);        // no false conflict
+});
+
 test('editing a board in Rundock does not raise a false external-change conflict', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'watch-board.md');

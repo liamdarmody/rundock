@@ -158,6 +158,7 @@ async function initTiptapEditor(path, content) {
 }
 function onTiptapEditorUpdate() {
   if (!currentFilePath || !activeTiptapEditor) return;
+  editorDirty = true;
   const statusEl = document.getElementById('editor-status');
   if (statusEl) {
     statusEl.textContent = 'Unsaved';
@@ -185,6 +186,13 @@ function saveTiptapFile() {
 // false-positive; a disk state identical to what we are writing is not a
 // conflict either.
 const diskBaselines = new Map();
+// True when the open file has unsaved user edits. This, not a comparison of
+// re-serialized content, decides whether a live external change reloads
+// seamlessly or prompts a conflict: the rich editor's markdown serializer is
+// not byte-idempotent (e.g. it normalises emphasis and list markers), so a
+// clean, unedited file would otherwise look "dirty" and false-conflict. Set on
+// edit in each surface, cleared on load and on our own save.
+let editorDirty = false;
 
 async function saveFileGuarded(path, content) {
   let disk = null;
@@ -204,7 +212,7 @@ async function saveFileGuarded(path, content) {
     // this, a surface whose live content falls back to rawFileContent (the
     // board) looks stale when the file-watcher echoes our own save back, and
     // the echo is misread as an external change.
-    if (path === currentFilePath) rawFileContent = content;
+    if (path === currentFilePath) { rawFileContent = content; editorDirty = false; }
   }
   const statusEl = document.getElementById('editor-status');
   if (statusEl) {
@@ -277,11 +285,11 @@ function currentLiveContent() {
 function handleExternalFileChange(path, diskContent) {
   if (path !== currentFilePath) return;
   const action = ExternalRefresh.externalChangeAction({
-    current: currentLiveContent(),
-    baseline: diskBaselines.get(path),
     disk: diskContent,
+    baseline: diskBaselines.get(path),
+    dirty: editorDirty,
   });
-  if (action === 'noop') return;
+  if (action === 'noop') return; // our own save echoed back, or nothing new
   if (action === 'reload') {
     loadFileContent(path, diskContent); // re-renders the surface and moves the baseline
     const s = document.getElementById('editor-status');
@@ -3334,6 +3342,7 @@ function loadFileContent(path, content) {
   hideExternalEditConflict();
   currentFilePath = path;
   rawFileContent = content;
+  editorDirty = false; // freshly loaded: no unsaved edits
   // What we believe is on disk: the external-edit guard compares against
   // this before every save.
   diskBaselines.set(path, content);
@@ -3398,6 +3407,7 @@ function openBoardFile(path, content) {
         if (md == null) return; // save refused (droppable content)
         const status = document.getElementById('editor-status');
         if (status) { status.textContent = 'Unsaved'; status.style.color = 'var(--attention)'; }
+        editorDirty = true;
         boardPendingSave = { path, md };
         clearTimeout(boardSaveTimer);
         boardSaveTimer = setTimeout(flushBoardSave, 500);
@@ -4228,7 +4238,7 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
 
 // Editor save
 let saveTimer=null;
-document.addEventListener('input',e=>{if((e.target.id==='editor-content'||e.target.id==='editor-textarea')&&currentFilePath&&editorMode==='edit'){document.getElementById('editor-status').textContent='Unsaved';document.getElementById('editor-status').style.color='var(--attention)';clearTimeout(saveTimer);saveTimer=setTimeout(()=>{saveFileGuarded(currentFilePath,getFileContentForSave());},1500);}});
+document.addEventListener('input',e=>{if((e.target.id==='editor-content'||e.target.id==='editor-textarea')&&currentFilePath&&editorMode==='edit'){editorDirty=true;document.getElementById('editor-status').textContent='Unsaved';document.getElementById('editor-status').style.color='var(--attention)';clearTimeout(saveTimer);saveTimer=setTimeout(()=>{saveFileGuarded(currentFilePath,getFileContentForSave());},1500);}});
 const msgInput = document.getElementById('msg-input');
 msgInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}});
 msgInput.addEventListener('input',()=>{

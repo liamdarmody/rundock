@@ -5,26 +5,28 @@ const assert = require('node:assert');
 const { externalChangeAction } = require('../../public/external-refresh-model.js');
 
 describe('externalChangeAction', () => {
-  test('disk matches current content: no-op (our own save echoed back)', () => {
+  test('disk equals baseline: no-op (our own save echoed back, or nothing new)', () => {
     assert.strictEqual(
-      externalChangeAction({ current: 'a\n', baseline: 'a\n', disk: 'a\n' }), 'noop');
-    // Even mid-edit, if disk happens to equal what we have, nothing to do.
+      externalChangeAction({ disk: 'a\n', baseline: 'a\n', dirty: false }), 'noop');
+    // Even mid-edit, if disk equals what we last knew, there is nothing to do.
     assert.strictEqual(
-      externalChangeAction({ current: 'edited\n', baseline: 'orig\n', disk: 'edited\n' }), 'noop');
+      externalChangeAction({ disk: 'a\n', baseline: 'a\n', dirty: true }), 'noop');
   });
 
-  test('read-only surface (null current): always reload the newer bytes', () => {
+  test('disk moved and the editor is clean: reload seamlessly', () => {
     assert.strictEqual(
-      externalChangeAction({ current: null, baseline: 'a\n', disk: 'b\n' }), 'reload');
+      externalChangeAction({ disk: 'b\n', baseline: 'a\n', dirty: false }), 'reload');
   });
 
-  test('clean editor (current equals baseline): reload seamlessly', () => {
+  test('disk moved and there are unsaved edits: conflict', () => {
     assert.strictEqual(
-      externalChangeAction({ current: 'a\n', baseline: 'a\n', disk: 'b\n' }), 'reload');
+      externalChangeAction({ disk: 'their edit\n', baseline: 'a\n', dirty: true }), 'conflict');
   });
 
-  test('unsaved local edits differ from disk: conflict', () => {
+  test('a clean file whose serialization would differ still reloads (no false conflict)', () => {
+    // The decision does not depend on re-serialized content, only on the dirty
+    // flag, so a non-idempotent editor never causes a false conflict.
     assert.strictEqual(
-      externalChangeAction({ current: 'my edit\n', baseline: 'a\n', disk: 'their edit\n' }), 'conflict');
+      externalChangeAction({ disk: '- item\n', baseline: '* item\n', dirty: false }), 'reload');
   });
 });
