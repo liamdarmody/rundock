@@ -18,7 +18,7 @@ import { attachFloatingToolbar } from './panels/floating-toolbar.js';
 import { attachReviewPanel } from './panels/review.js';
 import { createReviewController } from './review/controller.js';
 import { renderProperties } from './panels/properties.js';
-import { replaceProperty, editListItem } from './markdown/frontmatter-edit.js';
+import { replaceProperty, editListItem, onlyEditedKeyChanged } from './markdown/frontmatter-edit.js';
 import { extractFrontmatter } from './markdown/frontmatter.js';
 import { setFindQuery, findNext, findPrev, setFindIndex, clearFind, getFindState } from './plugins/find.js';
 
@@ -97,6 +97,11 @@ export function createEditor({
       if (!res.changed) { renderPanel(); return false; }
       const check = extractFrontmatter(res.raw);
       if (!check.parsed || typeof check.parsed !== 'object') { renderPanel(); return false; }
+      // Byte-honesty backstop: a valid-but-wrong transform (one that parses
+      // fine yet altered or invented a different key) is refused here even if
+      // the surgical edit slipped past its own guards. The panel snaps back
+      // to the file's truth.
+      if (!onlyEditedKeyChanged(parts.raw, res.raw, key)) { renderPanel(); return false; }
       parts.raw = res.raw;
       parts.parsed = check.parsed;
       renderPanel();

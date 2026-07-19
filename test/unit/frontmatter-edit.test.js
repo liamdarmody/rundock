@@ -3,7 +3,7 @@
 // quoted, unlocatable keys refused.
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { replaceProperty, editListItem } from '../../public/editor/markdown/frontmatter-edit.js';
+import { replaceProperty, editListItem, onlyEditedKeyChanged } from '../../public/editor/markdown/frontmatter-edit.js';
 
 const RAW = [
   '---',
@@ -172,5 +172,62 @@ describe('refusals (never a guess)', () => {
   test('round-trip stability: replacing a value with itself changes only that line, byte-stably', () => {
     const once = replaceProperty(RAW, 'title', 'Morning Briefing').raw;
     assert.equal(once, RAW, 'same value -> identical bytes');
+  });
+});
+
+describe('unindented multi-line quoted scalar (P0-2)', () => {
+  // A double-quoted scalar whose value continues on an unindented line at
+  // column 0. locateKey used to miss the continuation, so editing the key
+  // truncated the value and promoted the continuation to a spurious top-level
+  // key while still parsing as valid YAML.
+  const RAW_MULTILINE = '---\ndesc: "first\nsecond: nope"\ntitle: hi\n---\n';
+
+  test('editing the multi-line quoted key is refused, not truncated', () => {
+    const res = replaceProperty(RAW_MULTILINE, 'desc', 'X');
+    assert.equal(res.changed, false);
+    assert.equal(res.raw, RAW_MULTILINE);
+  });
+
+  test('a single-line double-quoted scalar still edits normally', () => {
+    const raw = '---\ndesc: "hello"\ntitle: hi\n---\n';
+    const res = replaceProperty(raw, 'desc', 'bye');
+    assert.equal(res.changed, true);
+    assert.ok(res.raw.includes('desc: "bye"'));
+    assert.ok(res.raw.includes('title: hi'));
+  });
+
+  test('editing a later key does not disturb the multi-line quoted scalar above it', () => {
+    const res = replaceProperty(RAW_MULTILINE, 'title', 'bye');
+    // title has no continuation, so it edits; desc must stay byte-identical.
+    assert.equal(res.changed, true);
+    assert.ok(res.raw.includes('desc: "first\nsecond: nope"'));
+  });
+});
+
+describe('byte-honesty backstop: onlyEditedKeyChanged', () => {
+  const BEFORE = '---\ndesc: "first\nsecond: nope"\ntitle: hi\n---\n';
+
+  test('rejects a transform that invents or drops a non-edited key', () => {
+    // Simulates the truncating transform: desc shortened, spurious `second`.
+    const bad = '---\ndesc: X\nsecond: nope"\ntitle: hi\n---\n';
+    assert.equal(onlyEditedKeyChanged(BEFORE, bad, 'desc'), false);
+  });
+
+  test('rejects a transform that alters a non-edited key value', () => {
+    const before = '---\na: 1\nb: 2\n---\n';
+    const bad = '---\na: 9\nb: 9\n---\n';
+    assert.equal(onlyEditedKeyChanged(before, bad, 'a'), false);
+  });
+
+  test('accepts a transform that changes only the edited key', () => {
+    const before = '---\na: 1\nb: 2\n---\n';
+    const good = '---\na: 9\nb: 2\n---\n';
+    assert.equal(onlyEditedKeyChanged(before, good, 'a'), true);
+  });
+
+  test('accepts a list-item edit under the edited key', () => {
+    const before = '---\ntags:\n  - a\n  - b\nkeep: yes\n---\n';
+    const good = '---\ntags:\n  - a\nkeep: yes\n---\n';
+    assert.equal(onlyEditedKeyChanged(before, good, 'tags'), true);
   });
 });
