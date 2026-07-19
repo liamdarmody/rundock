@@ -13922,6 +13922,36 @@ function getChangedRanges(transform) {
   });
   return simplifyChangedRanges(changes);
 }
+function getMarksBetween(from2, to, doc3) {
+  const marks = [];
+  if (from2 === to) {
+    doc3.resolve(from2).marks().forEach((mark) => {
+      const $pos = doc3.resolve(from2);
+      const range = getMarkRange($pos, mark.type);
+      if (!range) {
+        return;
+      }
+      marks.push({
+        mark,
+        ...range
+      });
+    });
+  } else {
+    doc3.nodesBetween(from2, to, (node, pos) => {
+      if (!node || (node == null ? void 0 : node.nodeSize) === void 0) {
+        return;
+      }
+      marks.push(
+        ...node.marks.map((mark) => ({
+          from: pos,
+          to: pos + node.nodeSize,
+          mark
+        }))
+      );
+    });
+  }
+  return marks;
+}
 var getNodeAtPosition = (state, typeOrName, pos, maxDepth = 20) => {
   const $pos = state.doc.resolve(pos);
   let currentDepth = maxDepth;
@@ -14120,6 +14150,9 @@ function isNodeEmpty(node, {
     return isContentEmpty;
   }
   return false;
+}
+function isNodeSelection(value) {
+  return value instanceof NodeSelection;
 }
 var MappablePosition = class _MappablePosition {
   constructor(position) {
@@ -15123,6 +15156,12 @@ var Mark2 = class _Mark extends Extendable {
 function isNumber(value) {
   return typeof value === "number";
 }
+var PasteRule = class {
+  constructor(config2) {
+    this.find = config2.find;
+    this.handler = config2.handler;
+  }
+};
 var pasteRuleMatcherHandler = (text2, find2, event) => {
   if (isRegExp(find2)) {
     return [...text2.matchAll(find2)];
@@ -16887,6 +16926,71 @@ var Editor = class extends EventEmitter {
     return this.$pos(0);
   }
 };
+function markInputRule(config2) {
+  return new InputRule({
+    find: config2.find,
+    handler: ({ state, range, match: match2 }) => {
+      const attributes = callOrReturn(config2.getAttributes, void 0, match2);
+      if (attributes === false || attributes === null) {
+        return null;
+      }
+      const { tr: tr2 } = state;
+      const captureGroup = match2[match2.length - 1];
+      const fullMatch = match2[0];
+      if (captureGroup) {
+        const startSpaces = fullMatch.search(/\S/);
+        const textStart = range.from + fullMatch.indexOf(captureGroup);
+        const textEnd = textStart + captureGroup.length;
+        const excludedMarks = getMarksBetween(range.from, range.to, state.doc).filter((item) => {
+          const excluded = item.mark.type.excluded;
+          return excluded.find((type2) => type2 === config2.type && type2 !== item.mark.type);
+        }).filter((item) => item.to > textStart);
+        if (excludedMarks.length) {
+          return null;
+        }
+        if (textEnd < range.to) {
+          tr2.delete(textEnd, range.to);
+        }
+        if (textStart > range.from) {
+          tr2.delete(range.from + startSpaces, textStart);
+        }
+        const markEnd = range.from + startSpaces + captureGroup.length;
+        tr2.addMark(range.from + startSpaces, markEnd, config2.type.create(attributes || {}));
+        tr2.removeStoredMark(config2.type);
+      }
+    },
+    undoable: config2.undoable
+  });
+}
+function nodeInputRule(config2) {
+  return new InputRule({
+    find: config2.find,
+    handler: ({ state, range, match: match2 }) => {
+      const attributes = callOrReturn(config2.getAttributes, void 0, match2) || {};
+      const { tr: tr2 } = state;
+      const start = range.from;
+      let end = range.to;
+      const newNode = config2.type.create(attributes);
+      if (match2[1]) {
+        const offset = match2[0].lastIndexOf(match2[1]);
+        let matchStart = start + offset;
+        if (matchStart > end) {
+          matchStart = end;
+        } else {
+          end = matchStart + match2[1].length;
+        }
+        const lastChar = match2[0][match2[0].length - 1];
+        tr2.insertText(lastChar, start + match2[0].length - 1);
+        tr2.replaceWith(matchStart, end, newNode);
+      } else if (match2[0]) {
+        const insertionStart = config2.type.isInline ? start : start - 1;
+        tr2.insert(insertionStart, config2.type.create(attributes)).delete(tr2.mapping.map(start), tr2.mapping.map(end));
+      }
+      tr2.scrollIntoView();
+    },
+    undoable: config2.undoable
+  });
+}
 function wrappingInputRule(config2) {
   return new InputRule({
     find: config2.find,
@@ -16920,6 +17024,26 @@ function wrappingInputRule(config2) {
     },
     undoable: config2.undoable
   });
+}
+function canInsertNode(state, nodeType) {
+  const { selection } = state;
+  const { $from } = selection;
+  if (selection instanceof NodeSelection) {
+    const index = $from.index();
+    const parent = $from.parent;
+    return parent.canReplaceWith(index, index + 1, nodeType);
+  }
+  let depth = $from.depth;
+  while (depth >= 0) {
+    const index = $from.index(depth);
+    const parent = $from.node(depth);
+    const match2 = parent.contentMatchAt(index);
+    if (match2.matchType(nodeType)) {
+      return true;
+    }
+    depth -= 1;
+  }
+  return false;
 }
 var markdown_exports = {};
 __export2(markdown_exports, {
@@ -17019,9 +17143,9 @@ function createAtomBlockMarkdownSpec(options) {
     return filtered;
   };
   return {
-    parseMarkdown: (token, h2) => {
+    parseMarkdown: (token, h22) => {
       const attrs2 = { ...defaultAttributes, ...token.attributes };
-      return h2.createNode(nodeName, attrs2, []);
+      return h22.createNode(nodeName, attrs2, []);
     },
     markdownTokenizer: {
       name: nodeName,
@@ -17084,18 +17208,18 @@ function createBlockMarkdownSpec(options) {
     return filtered;
   };
   return {
-    parseMarkdown: (token, h2) => {
+    parseMarkdown: (token, h22) => {
       let nodeContent;
       if (getContent) {
         const contentResult = getContent(token);
         nodeContent = typeof contentResult === "string" ? [{ type: "text", text: contentResult }] : contentResult;
       } else if (content === "block") {
-        nodeContent = h2.parseChildren(token.tokens || []);
+        nodeContent = h22.parseChildren(token.tokens || []);
       } else {
-        nodeContent = h2.parseInline(token.tokens || []);
+        nodeContent = h22.parseInline(token.tokens || []);
       }
       const attrs2 = { ...defaultAttributes, ...token.attributes };
-      return h2.createNode(nodeName, attrs2, nodeContent);
+      return h22.createNode(nodeName, attrs2, nodeContent);
     },
     markdownTokenizer: {
       name: nodeName,
@@ -17173,11 +17297,11 @@ function createBlockMarkdownSpec(options) {
         return void 0;
       }
     },
-    renderMarkdown: (node, h2) => {
+    renderMarkdown: (node, h22) => {
       const filteredAttrs = filterAttributes(node.attrs || {});
       const attrs2 = serializeAttributes22(filteredAttrs);
       const attrString = attrs2 ? ` {${attrs2}}` : "";
-      const renderedContent = h2.renderChildren(node.content || [], "\n\n");
+      const renderedContent = h22.renderChildren(node.content || [], "\n\n");
       return `:::${blockName}${attrString}
 
 ${renderedContent}
@@ -17235,16 +17359,16 @@ function createInlineMarkdownSpec(options) {
   };
   const escapedShortcode = shortcode.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return {
-    parseMarkdown: (token, h2) => {
+    parseMarkdown: (token, h22) => {
       const attrs2 = { ...defaultAttributes, ...token.attributes };
       if (selfClosing) {
-        return h2.createNode(nodeName, attrs2);
+        return h22.createNode(nodeName, attrs2);
       }
       const content = getContent ? getContent(token) : token.content || "";
       if (content) {
-        return h2.createNode(nodeName, attrs2, [h2.createTextNode(content)]);
+        return h22.createNode(nodeName, attrs2, [h22.createTextNode(content)]);
       }
-      return h2.createNode(nodeName, attrs2, []);
+      return h22.createNode(nodeName, attrs2, []);
     },
     markdownTokenizer: {
       name: nodeName,
@@ -17377,20 +17501,20 @@ function parseIndentedBlocks(src, config2, lexer) {
     raw: totalRaw
   };
 }
-function renderNestedMarkdownContent(node, h2, prefixOrGenerator, ctx) {
+function renderNestedMarkdownContent(node, h22, prefixOrGenerator, ctx) {
   if (!node || !Array.isArray(node.content)) {
     return "";
   }
   const prefix = typeof prefixOrGenerator === "function" ? prefixOrGenerator(ctx) : prefixOrGenerator;
   const [content, ...children] = node.content;
-  const mainContent = h2.renderChildren([content]);
+  const mainContent = h22.renderChildren([content]);
   let output = `${prefix}${mainContent}`;
   if (children && children.length > 0) {
     children.forEach((child, index) => {
       var _a2, _b;
-      const childContent = (_b = (_a2 = h2.renderChild) == null ? void 0 : _a2.call(h2, child, index + 1)) != null ? _b : h2.renderChildren([child]);
+      const childContent = (_b = (_a2 = h22.renderChild) == null ? void 0 : _a2.call(h22, child, index + 1)) != null ? _b : h22.renderChildren([child]);
       if (childContent !== void 0 && childContent !== null) {
-        const indentedChild = childContent.split("\n").map((line) => line ? h2.indent(line) : h2.indent("")).join("\n");
+        const indentedChild = childContent.split("\n").map((line) => line ? h22.indent(line) : h22.indent("")).join("\n");
         output += child.type === "paragraph" ? `
 
 ${indentedChild}` : `
@@ -17457,6 +17581,45 @@ var Node3 = class _Node extends Extendable {
     return super.extend(resolvedConfig);
   }
 };
+function markPasteRule(config2) {
+  return new PasteRule({
+    find: config2.find,
+    handler: ({ state, range, match: match2, pasteEvent }) => {
+      const attributes = callOrReturn(config2.getAttributes, void 0, match2, pasteEvent);
+      if (attributes === false || attributes === null) {
+        return null;
+      }
+      const { tr: tr2 } = state;
+      const captureGroup = match2[match2.length - 1];
+      const fullMatch = match2[0];
+      let markEnd = range.to;
+      if (captureGroup) {
+        const startSpaces = fullMatch.search(/\S/);
+        const textStart = range.from + fullMatch.indexOf(captureGroup);
+        const textEnd = textStart + captureGroup.length;
+        const excludedMarks = getMarksBetween(range.from, range.to, state.doc).filter((item) => {
+          const excluded = item.mark.type.excluded;
+          return excluded.find((type2) => type2 === config2.type && type2 !== item.mark.type);
+        }).filter((item) => item.to > textStart);
+        if (excludedMarks.length) {
+          return null;
+        }
+        if (textEnd < range.to) {
+          tr2.delete(textEnd, range.to);
+        }
+        if (textStart > range.from) {
+          tr2.delete(range.from + startSpaces, textStart);
+        }
+        markEnd = range.from + startSpaces + captureGroup.length;
+        tr2.addMark(range.from + startSpaces, markEnd, config2.type.create(attributes || {}));
+        const isMatchAtEndOfText = match2.index !== void 0 && match2.input !== void 0 && match2.index + match2[0].length >= match2.input.length;
+        if (!isMatchAtEndOfText) {
+          tr2.removeStoredMark(config2.type);
+        }
+      }
+    }
+  });
+}
 
 // node_modules/@tiptap/starter-kit/node_modules/@tiptap/core/dist/index.js
 var __defProp3 = Object.defineProperty;
@@ -19119,7 +19282,7 @@ function getChangedRanges2(transform) {
   });
   return simplifyChangedRanges2(changes);
 }
-function getMarksBetween(from2, to, doc3) {
+function getMarksBetween2(from2, to, doc3) {
   const marks = [];
   if (from2 === to) {
     doc3.resolve(from2).marks().forEach((mark) => {
@@ -19335,7 +19498,7 @@ function isNodeEmpty2(node, {
   }
   return false;
 }
-function isNodeSelection(value) {
+function isNodeSelection2(value) {
   return value instanceof NodeSelection;
 }
 function canSetMark2(state, tr2, newMarkType) {
@@ -20272,7 +20435,7 @@ var Mark3 = class _Mark2 extends Extendable2 {
 function isNumber2(value) {
   return typeof value === "number";
 }
-var PasteRule = class {
+var PasteRule2 = class {
   constructor(config2) {
     this.find = config2.find;
     this.handler = config2.handler;
@@ -21259,7 +21422,7 @@ var TextDirection2 = Extension2.create({
     ];
   }
 });
-function markInputRule(config2) {
+function markInputRule2(config2) {
   return new InputRule2({
     find: config2.find,
     handler: ({ state, range, match: match2 }) => {
@@ -21274,7 +21437,7 @@ function markInputRule(config2) {
         const startSpaces = fullMatch.search(/\S/);
         const textStart = range.from + fullMatch.indexOf(captureGroup);
         const textEnd = textStart + captureGroup.length;
-        const excludedMarks = getMarksBetween(range.from, range.to, state.doc).filter((item) => {
+        const excludedMarks = getMarksBetween2(range.from, range.to, state.doc).filter((item) => {
           const excluded = item.mark.type.excluded;
           return excluded.find((type2) => type2 === config2.type && type2 !== item.mark.type);
         }).filter((item) => item.to > textStart);
@@ -21291,35 +21454,6 @@ function markInputRule(config2) {
         tr2.addMark(range.from + startSpaces, markEnd, config2.type.create(attributes || {}));
         tr2.removeStoredMark(config2.type);
       }
-    },
-    undoable: config2.undoable
-  });
-}
-function nodeInputRule(config2) {
-  return new InputRule2({
-    find: config2.find,
-    handler: ({ state, range, match: match2 }) => {
-      const attributes = callOrReturn2(config2.getAttributes, void 0, match2) || {};
-      const { tr: tr2 } = state;
-      const start = range.from;
-      let end = range.to;
-      const newNode = config2.type.create(attributes);
-      if (match2[1]) {
-        const offset = match2[0].lastIndexOf(match2[1]);
-        let matchStart = start + offset;
-        if (matchStart > end) {
-          matchStart = end;
-        } else {
-          end = matchStart + match2[1].length;
-        }
-        const lastChar = match2[0][match2[0].length - 1];
-        tr2.insertText(lastChar, start + match2[0].length - 1);
-        tr2.replaceWith(matchStart, end, newNode);
-      } else if (match2[0]) {
-        const insertionStart = config2.type.isInline ? start : start - 1;
-        tr2.insert(insertionStart, config2.type.create(attributes)).delete(tr2.mapping.map(start), tr2.mapping.map(end));
-      }
-      tr2.scrollIntoView();
     },
     undoable: config2.undoable
   });
@@ -21371,26 +21505,6 @@ function wrappingInputRule2(config2) {
     },
     undoable: config2.undoable
   });
-}
-function canInsertNode(state, nodeType) {
-  const { selection } = state;
-  const { $from } = selection;
-  if (selection instanceof NodeSelection) {
-    const index = $from.index();
-    const parent = $from.parent;
-    return parent.canReplaceWith(index, index + 1, nodeType);
-  }
-  let depth = $from.depth;
-  while (depth >= 0) {
-    const index = $from.index(depth);
-    const parent = $from.node(depth);
-    const match2 = parent.contentMatchAt(index);
-    if (match2.matchType(nodeType)) {
-      return true;
-    }
-    depth -= 1;
-  }
-  return false;
 }
 var markdown_exports2 = {};
 __export3(markdown_exports2, {
@@ -21490,9 +21604,9 @@ function createAtomBlockMarkdownSpec2(options) {
     return filtered;
   };
   return {
-    parseMarkdown: (token, h2) => {
+    parseMarkdown: (token, h22) => {
       const attrs2 = { ...defaultAttributes, ...token.attributes };
-      return h2.createNode(nodeName, attrs2, []);
+      return h22.createNode(nodeName, attrs2, []);
     },
     markdownTokenizer: {
       name: nodeName,
@@ -21555,18 +21669,18 @@ function createBlockMarkdownSpec2(options) {
     return filtered;
   };
   return {
-    parseMarkdown: (token, h2) => {
+    parseMarkdown: (token, h22) => {
       let nodeContent;
       if (getContent) {
         const contentResult = getContent(token);
         nodeContent = typeof contentResult === "string" ? [{ type: "text", text: contentResult }] : contentResult;
       } else if (content === "block") {
-        nodeContent = h2.parseChildren(token.tokens || []);
+        nodeContent = h22.parseChildren(token.tokens || []);
       } else {
-        nodeContent = h2.parseInline(token.tokens || []);
+        nodeContent = h22.parseInline(token.tokens || []);
       }
       const attrs2 = { ...defaultAttributes, ...token.attributes };
-      return h2.createNode(nodeName, attrs2, nodeContent);
+      return h22.createNode(nodeName, attrs2, nodeContent);
     },
     markdownTokenizer: {
       name: nodeName,
@@ -21644,11 +21758,11 @@ function createBlockMarkdownSpec2(options) {
         return void 0;
       }
     },
-    renderMarkdown: (node, h2) => {
+    renderMarkdown: (node, h22) => {
       const filteredAttrs = filterAttributes(node.attrs || {});
       const attrs2 = serializeAttributes22(filteredAttrs);
       const attrString = attrs2 ? ` {${attrs2}}` : "";
-      const renderedContent = h2.renderChildren(node.content || [], "\n\n");
+      const renderedContent = h22.renderChildren(node.content || [], "\n\n");
       return `:::${blockName}${attrString}
 
 ${renderedContent}
@@ -21706,16 +21820,16 @@ function createInlineMarkdownSpec2(options) {
   };
   const escapedShortcode = shortcode.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return {
-    parseMarkdown: (token, h2) => {
+    parseMarkdown: (token, h22) => {
       const attrs2 = { ...defaultAttributes, ...token.attributes };
       if (selfClosing) {
-        return h2.createNode(nodeName, attrs2);
+        return h22.createNode(nodeName, attrs2);
       }
       const content = getContent ? getContent(token) : token.content || "";
       if (content) {
-        return h2.createNode(nodeName, attrs2, [h2.createTextNode(content)]);
+        return h22.createNode(nodeName, attrs2, [h22.createTextNode(content)]);
       }
-      return h2.createNode(nodeName, attrs2, []);
+      return h22.createNode(nodeName, attrs2, []);
     },
     markdownTokenizer: {
       name: nodeName,
@@ -21848,20 +21962,20 @@ function parseIndentedBlocks2(src, config2, lexer) {
     raw: totalRaw
   };
 }
-function renderNestedMarkdownContent2(node, h2, prefixOrGenerator, ctx) {
+function renderNestedMarkdownContent2(node, h22, prefixOrGenerator, ctx) {
   if (!node || !Array.isArray(node.content)) {
     return "";
   }
   const prefix = typeof prefixOrGenerator === "function" ? prefixOrGenerator(ctx) : prefixOrGenerator;
   const [content, ...children] = node.content;
-  const mainContent = h2.renderChildren([content]);
+  const mainContent = h22.renderChildren([content]);
   let output = `${prefix}${mainContent}`;
   if (children && children.length > 0) {
     children.forEach((child, index) => {
       var _a2, _b;
-      const childContent = (_b = (_a2 = h2.renderChild) == null ? void 0 : _a2.call(h2, child, index + 1)) != null ? _b : h2.renderChildren([child]);
+      const childContent = (_b = (_a2 = h22.renderChild) == null ? void 0 : _a2.call(h22, child, index + 1)) != null ? _b : h22.renderChildren([child]);
       if (childContent !== void 0 && childContent !== null) {
-        const indentedChild = childContent.split("\n").map((line) => line ? h2.indent(line) : h2.indent("")).join("\n");
+        const indentedChild = childContent.split("\n").map((line) => line ? h22.indent(line) : h22.indent("")).join("\n");
         output += child.type === "paragraph" ? `
 
 ${indentedChild}` : `
@@ -21928,8 +22042,8 @@ var Node32 = class _Node2 extends Extendable2 {
     return super.extend(resolvedConfig);
   }
 };
-function markPasteRule(config2) {
-  return new PasteRule({
+function markPasteRule2(config2) {
+  return new PasteRule2({
     find: config2.find,
     handler: ({ state, range, match: match2, pasteEvent }) => {
       const attributes = callOrReturn2(config2.getAttributes, void 0, match2, pasteEvent);
@@ -21944,7 +22058,7 @@ function markPasteRule(config2) {
         const startSpaces = fullMatch.search(/\S/);
         const textStart = range.from + fullMatch.indexOf(captureGroup);
         const textEnd = textStart + captureGroup.length;
-        const excludedMarks = getMarksBetween(range.from, range.to, state.doc).filter((item) => {
+        const excludedMarks = getMarksBetween2(range.from, range.to, state.doc).filter((item) => {
           const excluded = item.mark.type.excluded;
           return excluded.find((type2) => type2 === config2.type && type2 !== item.mark.type);
         }).filter((item) => item.to > textStart);
@@ -22006,7 +22120,7 @@ var Blockquote = Node32.create({
     const parseBlockChildren = (_a2 = helpers.parseBlockChildren) != null ? _a2 : helpers.parseChildren;
     return helpers.createNode("blockquote", void 0, parseBlockChildren(token.tokens || []));
   },
-  renderMarkdown: (node, h2) => {
+  renderMarkdown: (node, h3) => {
     if (!node.content) {
       return "";
     }
@@ -22014,7 +22128,7 @@ var Blockquote = Node32.create({
     const result = [];
     node.content.forEach((child, index) => {
       var _a2, _b;
-      const childContent = (_b = (_a2 = h2.renderChild) == null ? void 0 : _a2.call(h2, child, index)) != null ? _b : h2.renderChildren([child]);
+      const childContent = (_b = (_a2 = h3.renderChild) == null ? void 0 : _a2.call(h3, child, index)) != null ? _b : h3.renderChildren([child]);
       const lines = childContent.split("\n");
       const linesWithPrefix = lines.map((line) => {
         if (line.trim() === "") {
@@ -22056,12 +22170,27 @@ ${prefix}
   }
 });
 
-// node_modules/@tiptap/starter-kit/node_modules/@tiptap/extension-bold/dist/index.js
+// node_modules/@tiptap/core/dist/jsx-runtime/jsx-runtime.js
+var h2 = (tag, attributes) => {
+  if (tag === "slot") {
+    return 0;
+  }
+  if (tag instanceof Function) {
+    return tag(attributes);
+  }
+  const { children, ...rest } = attributes != null ? attributes : {};
+  if (tag === "svg") {
+    throw new Error("SVG elements are not supported in the JSX syntax, use the array syntax instead");
+  }
+  return [tag, rest, children];
+};
+
+// node_modules/@tiptap/extension-bold/dist/index.js
 var starInputRegex = /(?:^|\s)(\*\*(?!\s+\*\*)((?:[^*]+))\*\*(?!\s+\*\*))$/;
 var starPasteRegex = /(?:^|\s)(\*\*(?!\s+\*\*)((?:[^*]+))\*\*(?!\s+\*\*))/g;
 var underscoreInputRegex = /(?:^|\s)(__(?!\s+__)((?:[^_]+))__(?!\s+__))$/;
 var underscorePasteRegex = /(?:^|\s)(__(?!\s+__)((?:[^_]+))__(?!\s+__))/g;
-var Bold = Mark3.create({
+var Bold = Mark2.create({
   name: "bold",
   addOptions() {
     return {
@@ -22088,7 +22217,7 @@ var Bold = Mark3.create({
     ];
   },
   renderHTML({ HTMLAttributes }) {
-    return /* @__PURE__ */ h("strong", { ...mergeAttributes2(this.options.HTMLAttributes, HTMLAttributes), children: /* @__PURE__ */ h("slot", {}) });
+    return /* @__PURE__ */ h2("strong", { ...mergeAttributes(this.options.HTMLAttributes, HTMLAttributes), children: /* @__PURE__ */ h2("slot", {}) });
   },
   markdownTokenName: "strong",
   parseMarkdown: (token, helpers) => {
@@ -22100,8 +22229,8 @@ var Bold = Mark3.create({
       close: "</strong>"
     }
   },
-  renderMarkdown: (node, h2) => {
-    return `**${h2.renderChildren(node)}**`;
+  renderMarkdown: (node, h3) => {
+    return `**${h3.renderChildren(node)}**`;
   },
   addCommands() {
     return {
@@ -22171,11 +22300,11 @@ var Code = Mark3.create({
   parseMarkdown: (token, helpers) => {
     return helpers.applyMark("code", [{ type: "text", text: token.text || "" }]);
   },
-  renderMarkdown: (node, h2) => {
+  renderMarkdown: (node, h3) => {
     if (!node.content) {
       return "";
     }
-    return `\`${h2.renderChildren(node.content)}\``;
+    return `\`${h3.renderChildren(node.content)}\``;
   },
   addCommands() {
     return {
@@ -22197,7 +22326,7 @@ var Code = Mark3.create({
   },
   addInputRules() {
     return [
-      markInputRule({
+      markInputRule2({
         find: inputRegex2,
         type: this.type
       })
@@ -22205,7 +22334,7 @@ var Code = Mark3.create({
   },
   addPasteRules() {
     return [
-      markPasteRule({
+      markPasteRule2({
         find: pasteRegex,
         type: this.type
       })
@@ -22290,7 +22419,7 @@ var CodeBlock = Node32.create({
       token.text ? [helpers.createTextNode(token.text)] : []
     );
   },
-  renderMarkdown: (node, h2) => {
+  renderMarkdown: (node, h3) => {
     var _a2;
     let output = "";
     const language = ((_a2 = node.attrs) == null ? void 0 : _a2.language) || "";
@@ -22299,7 +22428,7 @@ var CodeBlock = Node32.create({
 
 \`\`\``;
     } else {
-      const lines = [`\`\`\`${language}`, h2.renderChildren(node.content), "```"];
+      const lines = [`\`\`\`${language}`, h3.renderChildren(node.content), "```"];
       output = lines.join("\n");
     }
     return output;
@@ -22529,11 +22658,11 @@ var Document = Node32.create({
   name: "doc",
   topNode: true,
   content: "block+",
-  renderMarkdown: (node, h2) => {
+  renderMarkdown: (node, h3) => {
     if (!node.content) {
       return "";
     }
-    return h2.renderChildren(node.content, "\n\n");
+    return h3.renderChildren(node.content, "\n\n");
   }
 });
 
@@ -22635,14 +22764,14 @@ var Heading = Node32.create({
   parseMarkdown: (token, helpers) => {
     return helpers.createNode("heading", { level: token.depth || 1 }, helpers.parseInline(token.tokens || []));
   },
-  renderMarkdown: (node, h2) => {
+  renderMarkdown: (node, h3) => {
     var _a2;
     const level = ((_a2 = node.attrs) == null ? void 0 : _a2.level) ? parseInt(node.attrs.level, 10) : 1;
     const headingChars = "#".repeat(level);
     if (!node.content) {
       return "";
     }
-    return `${headingChars} ${h2.renderChildren(node.content)}`;
+    return `${headingChars} ${h3.renderChildren(node.content)}`;
   },
   addCommands() {
     return {
@@ -22684,8 +22813,8 @@ var Heading = Node32.create({
   }
 });
 
-// node_modules/@tiptap/starter-kit/node_modules/@tiptap/extension-horizontal-rule/dist/index.js
-var HorizontalRule = Node32.create({
+// node_modules/@tiptap/extension-horizontal-rule/dist/index.js
+var HorizontalRule = Node3.create({
   name: "horizontalRule",
   addOptions() {
     return {
@@ -22698,7 +22827,7 @@ var HorizontalRule = Node32.create({
     return [{ tag: "hr" }];
   },
   renderHTML({ HTMLAttributes }) {
-    return ["hr", mergeAttributes2(this.options.HTMLAttributes, HTMLAttributes)];
+    return ["hr", mergeAttributes(this.options.HTMLAttributes, HTMLAttributes)];
   },
   markdownTokenName: "hr",
   parseMarkdown: (token, helpers) => {
@@ -22760,12 +22889,12 @@ var HorizontalRule = Node32.create({
   }
 });
 
-// node_modules/@tiptap/starter-kit/node_modules/@tiptap/extension-italic/dist/index.js
+// node_modules/@tiptap/extension-italic/dist/index.js
 var starInputRegex2 = /(?:^|\s)(\*(?!\s+\*)((?:[^*]+))\*(?!\s+\*))$/;
 var starPasteRegex2 = /(?:^|\s)(\*(?!\s+\*)((?:[^*]+))\*(?!\s+\*))/g;
 var underscoreInputRegex2 = /(?:^|\s)(_(?!\s+_)((?:[^_]+))_(?!\s+_))$/;
 var underscorePasteRegex2 = /(?:^|\s)(_(?!\s+_)((?:[^_]+))_(?!\s+_))/g;
-var Italic = Mark3.create({
+var Italic = Mark2.create({
   name: "italic",
   addOptions() {
     return {
@@ -22791,7 +22920,7 @@ var Italic = Mark3.create({
     ];
   },
   renderHTML({ HTMLAttributes }) {
-    return ["em", mergeAttributes2(this.options.HTMLAttributes, HTMLAttributes), 0];
+    return ["em", mergeAttributes(this.options.HTMLAttributes, HTMLAttributes), 0];
   },
   addCommands() {
     return {
@@ -22816,8 +22945,8 @@ var Italic = Mark3.create({
       close: "</em>"
     }
   },
-  renderMarkdown: (node, h2) => {
-    return `*${h2.renderChildren(node)}*`;
+  renderMarkdown: (node, h3) => {
+    return `*${h3.renderChildren(node)}*`;
   },
   addKeyboardShortcuts() {
     return {
@@ -24068,7 +24197,7 @@ function autolink(options) {
             }
             return !newState.doc.rangeHasMark(link2.from, link2.to, newState.schema.marks.code);
           }).filter((link2) => options.validate(link2.value)).filter((link2) => options.shouldAutoLink(link2.value)).forEach((link2) => {
-            if (getMarksBetween(link2.from, link2.to, newState.doc).some((item) => item.mark.type === options.type)) {
+            if (getMarksBetween2(link2.from, link2.to, newState.doc).some((item) => item.mark.type === options.type)) {
               return;
             }
             tr2.addMark(
@@ -24297,11 +24426,11 @@ var Link = Mark3.create({
       title: token.title || null
     });
   },
-  renderMarkdown: (node, h2) => {
+  renderMarkdown: (node, h3) => {
     var _a2, _b, _c, _d;
     const href = (_b = (_a2 = node.attrs) == null ? void 0 : _a2.href) != null ? _b : "";
     const title = (_d = (_c = node.attrs) == null ? void 0 : _c.title) != null ? _d : "";
-    const text2 = h2.renderChildren(node);
+    const text2 = h3.renderChildren(node);
     return title ? `[${text2}](${href} "${title}")` : `[${text2}](${href})`;
   },
   addCommands() {
@@ -24335,7 +24464,7 @@ var Link = Mark3.create({
   },
   addPasteRules() {
     return [
-      markPasteRule({
+      markPasteRule2({
         find: (text2) => {
           const foundLinks = [];
           if (text2) {
@@ -24452,11 +24581,11 @@ var BulletList = Node32.create({
       content: token.items ? helpers.parseChildren(token.items) : []
     };
   },
-  renderMarkdown: (node, h2) => {
+  renderMarkdown: (node, h3) => {
     if (!node.content) {
       return "";
     }
-    return h2.renderChildren(node.content, "\n");
+    return h3.renderChildren(node.content, "\n");
   },
   markdownOptions: {
     indentsContent: true
@@ -24592,10 +24721,10 @@ var ListItem = Node32.create({
       content
     };
   },
-  renderMarkdown: (node, h2, ctx) => {
+  renderMarkdown: (node, h3, ctx) => {
     return renderNestedMarkdownContent2(
       node,
-      h2,
+      h3,
       (context) => {
         var _a2, _b;
         if (context.parentType === "bulletList") {
@@ -25083,11 +25212,11 @@ var OrderedList = Node32.create({
       content
     };
   },
-  renderMarkdown: (node, h2) => {
+  renderMarkdown: (node, h3) => {
     if (!node.content) {
       return "";
     }
-    return h2.renderChildren(node.content, "\n");
+    return h3.renderChildren(node.content, "\n");
   },
   markdownTokenizer: {
     name: "orderedList",
@@ -25215,26 +25344,26 @@ var TaskItem = Node32.create({
       ["div", 0]
     ];
   },
-  parseMarkdown: (token, h2) => {
+  parseMarkdown: (token, h3) => {
     const content = [];
     if (token.tokens && token.tokens.length > 0) {
-      content.push(h2.createNode("paragraph", {}, h2.parseInline(token.tokens)));
+      content.push(h3.createNode("paragraph", {}, h3.parseInline(token.tokens)));
     } else if (token.text) {
-      content.push(h2.createNode("paragraph", {}, [h2.createNode("text", { text: token.text })]));
+      content.push(h3.createNode("paragraph", {}, [h3.createNode("text", { text: token.text })]));
     } else {
-      content.push(h2.createNode("paragraph", {}, []));
+      content.push(h3.createNode("paragraph", {}, []));
     }
     if (token.nestedTokens && token.nestedTokens.length > 0) {
-      const nestedContent = h2.parseChildren(token.nestedTokens);
+      const nestedContent = h3.parseChildren(token.nestedTokens);
       content.push(...nestedContent);
     }
-    return h2.createNode("taskItem", { checked: token.checked || false }, content);
+    return h3.createNode("taskItem", { checked: token.checked || false }, content);
   },
-  renderMarkdown: (node, h2) => {
+  renderMarkdown: (node, h3) => {
     var _a2;
     const checkedChar = ((_a2 = node.attrs) == null ? void 0 : _a2.checked) ? "x" : " ";
     const prefix = `- [${checkedChar}] `;
-    return renderNestedMarkdownContent2(node, h2, prefix);
+    return renderNestedMarkdownContent2(node, h3, prefix);
   },
   addKeyboardShortcuts() {
     const shortcuts = {
@@ -25376,14 +25505,14 @@ var TaskList = Node32.create({
   renderHTML({ HTMLAttributes }) {
     return ["ul", mergeAttributes2(this.options.HTMLAttributes, HTMLAttributes, { "data-type": this.name }), 0];
   },
-  parseMarkdown: (token, h2) => {
-    return h2.createNode("taskList", {}, h2.parseChildren(token.items || []));
+  parseMarkdown: (token, h3) => {
+    return h3.createNode("taskList", {}, h3.parseChildren(token.items || []));
   },
-  renderMarkdown: (node, h2) => {
+  renderMarkdown: (node, h3) => {
     if (!node.content) {
       return "";
     }
-    return h2.renderChildren(node.content, "\n");
+    return h3.renderChildren(node.content, "\n");
   },
   markdownTokenizer: {
     name: "taskList",
@@ -25537,7 +25666,7 @@ var Paragraph = Node32.create({
     }
     return helpers.createNode("paragraph", void 0, content);
   },
-  renderMarkdown: (node, h2, ctx) => {
+  renderMarkdown: (node, h3, ctx) => {
     var _a2, _b;
     if (!node) {
       return "";
@@ -25548,7 +25677,7 @@ var Paragraph = Node32.create({
       const previousNodeIsEmptyParagraph = ((_b = ctx == null ? void 0 : ctx.previousNode) == null ? void 0 : _b.type) === "paragraph" && previousContent.length === 0;
       return previousNodeIsEmptyParagraph ? EMPTY_PARAGRAPH_MARKDOWN : "";
     }
-    return h2.renderChildren(content);
+    return h3.renderChildren(content);
   },
   addCommands() {
     return {
@@ -25599,8 +25728,8 @@ var Strike = Mark3.create({
   parseMarkdown: (token, helpers) => {
     return helpers.applyMark("strike", helpers.parseInline(token.tokens || []));
   },
-  renderMarkdown: (node, h2) => {
-    return `~~${h2.renderChildren(node)}~~`;
+  renderMarkdown: (node, h3) => {
+    return `~~${h3.renderChildren(node)}~~`;
   },
   addCommands() {
     return {
@@ -25622,7 +25751,7 @@ var Strike = Mark3.create({
   },
   addInputRules() {
     return [
-      markInputRule({
+      markInputRule2({
         find: inputRegex4,
         type: this.type
       })
@@ -25630,7 +25759,7 @@ var Strike = Mark3.create({
   },
   addPasteRules() {
     return [
-      markPasteRule({
+      markPasteRule2({
         find: pasteRegex2,
         type: this.type
       })
@@ -25638,8 +25767,8 @@ var Strike = Mark3.create({
   }
 });
 
-// node_modules/@tiptap/starter-kit/node_modules/@tiptap/extension-text/dist/index.js
-var Text2 = Node32.create({
+// node_modules/@tiptap/extension-text/dist/index.js
+var Text2 = Node3.create({
   name: "text",
   group: "inline",
   parseMarkdown: (token) => {
@@ -27049,7 +27178,7 @@ var Selection2 = Extension2.create({
         key: new PluginKey("selection"),
         props: {
           decorations(state) {
-            if (state.selection.empty || editor.isFocused || !editor.isEditable || isNodeSelection(state.selection) || editor.view.dragging) {
+            if (state.selection.empty || editor.isFocused || !editor.isEditable || isNodeSelection2(state.selection) || editor.view.dragging) {
               return null;
             }
             return DecorationSet.create(state.doc, [
@@ -27265,11 +27394,11 @@ var BulletList2 = Node3.create({
       content: token.items ? helpers.parseChildren(token.items) : []
     };
   },
-  renderMarkdown: (node, h2) => {
+  renderMarkdown: (node, h3) => {
     if (!node.content) {
       return "";
     }
-    return h2.renderChildren(node.content, "\n");
+    return h3.renderChildren(node.content, "\n");
   },
   markdownOptions: {
     indentsContent: true
@@ -27375,10 +27504,10 @@ var ListItem2 = Node3.create({
       content
     };
   },
-  renderMarkdown: (node, h2, ctx) => {
+  renderMarkdown: (node, h3, ctx) => {
     return renderNestedMarkdownContent(
       node,
-      h2,
+      h3,
       (context) => {
         var _a2, _b;
         if (context.parentType === "bulletList") {
@@ -27866,11 +27995,11 @@ var OrderedList2 = Node3.create({
       content
     };
   },
-  renderMarkdown: (node, h2) => {
+  renderMarkdown: (node, h3) => {
     if (!node.content) {
       return "";
     }
-    return h2.renderChildren(node.content, "\n");
+    return h3.renderChildren(node.content, "\n");
   },
   markdownTokenizer: {
     name: "orderedList",
@@ -27998,26 +28127,26 @@ var TaskItem2 = Node3.create({
       ["div", 0]
     ];
   },
-  parseMarkdown: (token, h2) => {
+  parseMarkdown: (token, h3) => {
     const content = [];
     if (token.tokens && token.tokens.length > 0) {
-      content.push(h2.createNode("paragraph", {}, h2.parseInline(token.tokens)));
+      content.push(h3.createNode("paragraph", {}, h3.parseInline(token.tokens)));
     } else if (token.text) {
-      content.push(h2.createNode("paragraph", {}, [h2.createNode("text", { text: token.text })]));
+      content.push(h3.createNode("paragraph", {}, [h3.createNode("text", { text: token.text })]));
     } else {
-      content.push(h2.createNode("paragraph", {}, []));
+      content.push(h3.createNode("paragraph", {}, []));
     }
     if (token.nestedTokens && token.nestedTokens.length > 0) {
-      const nestedContent = h2.parseChildren(token.nestedTokens);
+      const nestedContent = h3.parseChildren(token.nestedTokens);
       content.push(...nestedContent);
     }
-    return h2.createNode("taskItem", { checked: token.checked || false }, content);
+    return h3.createNode("taskItem", { checked: token.checked || false }, content);
   },
-  renderMarkdown: (node, h2) => {
+  renderMarkdown: (node, h3) => {
     var _a2;
     const checkedChar = ((_a2 = node.attrs) == null ? void 0 : _a2.checked) ? "x" : " ";
     const prefix = `- [${checkedChar}] `;
-    return renderNestedMarkdownContent(node, h2, prefix);
+    return renderNestedMarkdownContent(node, h3, prefix);
   },
   addKeyboardShortcuts() {
     const shortcuts = {
@@ -28159,14 +28288,14 @@ var TaskList2 = Node3.create({
   renderHTML({ HTMLAttributes }) {
     return ["ul", mergeAttributes(this.options.HTMLAttributes, HTMLAttributes, { "data-type": this.name }), 0];
   },
-  parseMarkdown: (token, h2) => {
-    return h2.createNode("taskList", {}, h2.parseChildren(token.items || []));
+  parseMarkdown: (token, h3) => {
+    return h3.createNode("taskList", {}, h3.parseChildren(token.items || []));
   },
-  renderMarkdown: (node, h2) => {
+  renderMarkdown: (node, h3) => {
     if (!node.content) {
       return "";
     }
-    return h2.renderChildren(node.content, "\n");
+    return h3.renderChildren(node.content, "\n");
   },
   markdownTokenizer: {
     name: "taskList",
@@ -28407,16 +28536,16 @@ function computeMap(table2) {
       if (i == rowNode.childCount) break;
       const cellNode = rowNode.child(i);
       const { colspan, rowspan, colwidth } = cellNode.attrs;
-      for (let h2 = 0; h2 < rowspan; h2++) {
-        if (h2 + row >= height) {
+      for (let h3 = 0; h3 < rowspan; h3++) {
+        if (h3 + row >= height) {
           (problems || (problems = [])).push({
             type: "overlong_rowspan",
             pos,
-            n: rowspan - h2
+            n: rowspan - h3
           });
           break;
         }
-        const start = mapPos + h2 * width;
+        const start = mapPos + h3 * width;
         for (let w = 0; w < colspan; w++) {
           if (map4[start + w] == 0) map4[start + w] = pos;
           else (problems || (problems = [])).push({
@@ -30323,7 +30452,7 @@ var DEFAULT_CELL_LINE_SEPARATOR = "";
 function collapseWhitespace(s) {
   return (s || "").replace(/\s+/g, " ").trim();
 }
-function renderTableToMarkdown(node, h2, options = {}) {
+function renderTableToMarkdown(node, h3, options = {}) {
   var _a2;
   const cellSep = (_a2 = options.cellLineSeparator) != null ? _a2 : DEFAULT_CELL_LINE_SEPARATOR;
   if (!node || !node.content || node.content.length === 0) {
@@ -30336,10 +30465,10 @@ function renderTableToMarkdown(node, h2, options = {}) {
       rowNode.content.forEach((cellNode) => {
         let raw = "";
         if (cellNode.content && Array.isArray(cellNode.content) && cellNode.content.length > 1) {
-          const parts = cellNode.content.map((child) => h2.renderChildren(child));
+          const parts = cellNode.content.map((child) => h3.renderChildren(child));
           raw = parts.join(cellSep);
         } else {
-          raw = cellNode.content ? h2.renderChildren(cellNode.content) : "";
+          raw = cellNode.content ? h3.renderChildren(cellNode.content) : "";
         }
         const text2 = collapseWhitespace(raw);
         const isHeader = cellNode.type === "tableHeader";
@@ -30448,7 +30577,7 @@ var Table = Node3.create({
     ];
     return this.options.renderWrapper ? ["div", { class: "tableWrapper" }, table2] : table2;
   },
-  parseMarkdown: (token, h2) => {
+  parseMarkdown: (token, h3) => {
     const rows = [];
     const alignments = Array.isArray(token.align) ? token.align : [];
     if (token.header) {
@@ -30458,10 +30587,10 @@ var Table = Node3.create({
         const align = normalizeTableCellAlign((_a2 = alignments[index]) != null ? _a2 : cell.align);
         const attrs2 = align ? { align } : {};
         headerCells.push(
-          h2.createNode("tableHeader", attrs2, [{ type: "paragraph", content: h2.parseInline(cell.tokens) }])
+          h3.createNode("tableHeader", attrs2, [{ type: "paragraph", content: h3.parseInline(cell.tokens) }])
         );
       });
-      rows.push(h2.createNode("tableRow", {}, headerCells));
+      rows.push(h3.createNode("tableRow", {}, headerCells));
     }
     if (token.rows) {
       token.rows.forEach((row) => {
@@ -30470,15 +30599,15 @@ var Table = Node3.create({
           var _a2;
           const align = normalizeTableCellAlign((_a2 = alignments[index]) != null ? _a2 : cell.align);
           const attrs2 = align ? { align } : {};
-          bodyCells.push(h2.createNode("tableCell", attrs2, [{ type: "paragraph", content: h2.parseInline(cell.tokens) }]));
+          bodyCells.push(h3.createNode("tableCell", attrs2, [{ type: "paragraph", content: h3.parseInline(cell.tokens) }]));
         });
-        rows.push(h2.createNode("tableRow", {}, bodyCells));
+        rows.push(h3.createNode("tableRow", {}, bodyCells));
       });
     }
-    return h2.createNode("table", void 0, rows);
+    return h3.createNode("table", void 0, rows);
   },
-  renderMarkdown: (node, h2) => {
-    return markdown_default(node, h2);
+  renderMarkdown: (node, h3) => {
+    return markdown_default(node, h3);
   },
   addCommands() {
     return {
@@ -40558,12 +40687,16 @@ var jsYaml = {
 };
 var js_yaml_default = jsYaml;
 export {
+  Bold,
+  BulletList2 as BulletList,
   Decoration,
   DecorationSet,
   Editor,
   Extension,
   index_default as HardBreak,
+  HorizontalRule,
   InputRule,
+  Italic,
   Mark2 as Mark,
   Markdown,
   Node3 as Node,
@@ -40575,6 +40708,9 @@ export {
   TableCell,
   TableHeader,
   TableRow,
+  TaskItem2 as TaskItem,
+  TaskList2 as TaskList,
+  Text2 as Text,
   mergeAttributes,
   js_yaml_exports as yaml
 };

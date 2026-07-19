@@ -29,14 +29,11 @@ const files = fs.readdirSync(CORPUS_DIR).filter((f) => f.endsWith('.md')).sort()
 // fail, then move the family out of this map.
 const KNOWN_CORRUPTING = {
   'blockquotes.md': 'nested blockquote reflows: `> > inner` gains a bare `>` line and moves',
-  'emphasis-extended.md': 'nested strikethrough+bold mangles: ~~struck **bold**~~ -> broken mark nesting',
   'escapes.md': 'escaped non-CommonMark syntax loses its backslash: \\== becomes a live highlight',
-  'footnotes.md': '[^1] references and definitions gain escapes: \\[^1\\] (breaks Obsidian footnotes)',
-  'horizontal-rules.md': '*** normalises to --- (marker style not preserved)',
   'inline-html.md': 'inline/block HTML entity-escapes: <sup> becomes &lt;sup&gt;',
   'line-breaks.md': 'trailing-two-space and backslash hard breaks are deleted (lines merge in Obsidian)',
   'links-and-images.md': 'markdown images ![alt](url) are dropped entirely (image node absent from schema)',
-  'lists.md': 'task lists escape to - \\[ \\] (breaks Obsidian checkboxes); tab indents become spaces',
+  'lists.md': 'tab-indented nested list items reflow to two-space indents (checkbox escaping is fixed)',
 };
 
 describe('OFM parity corpus: byte-exact round-trip for every construct family', () => {

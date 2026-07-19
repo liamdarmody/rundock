@@ -49,3 +49,57 @@ describe('editor round-trip: existing constructs (harness smoke)', () => {
     assert.equal(await roundTrip(src), src);
   });
 });
+
+describe('editor round-trip: serializer fidelity corpus', () => {
+  // These constructs previously drifted on every save because the serializer
+  // normalised source markers or over-escaped punctuation. Autosave writes the
+  // serialized body, so any drift silently rewrote released notes. Each case
+  // must reproduce the input byte-for-byte.
+
+  test('task lists round-trip as real checkboxes, not escaped brackets', async () => {
+    for (const src of ['- [ ] todo', '- [x] done', '- [ ] a\n- [x] b']) {
+      assert.equal(await roundTrip(src), src);
+    }
+  });
+
+  test('nested task lists stay tight (no injected blank line)', async () => {
+    const src = '- [ ] parent\n  - [ ] child';
+    assert.equal(await roundTrip(src), src);
+  });
+
+  test('a task list nested under a bullet round-trips', async () => {
+    const src = '- parent\n  - [ ] child';
+    assert.equal(await roundTrip(src), src);
+  });
+
+  test('emphasis delimiter is preserved (underscore vs asterisk)', async () => {
+    assert.equal(await roundTrip('_italic_'), '_italic_');
+    assert.equal(await roundTrip('*italic*'), '*italic*');
+    assert.equal(await roundTrip('a _one_ and *two* here'), 'a _one_ and *two* here');
+  });
+
+  test('strong delimiter is preserved (double underscore vs double asterisk)', async () => {
+    assert.equal(await roundTrip('__bold__'), '__bold__');
+    assert.equal(await roundTrip('**bold**'), '**bold**');
+  });
+
+  test('bullet-list markers are preserved (*, +, -)', async () => {
+    assert.equal(await roundTrip('* one\n* two'), '* one\n* two');
+    assert.equal(await roundTrip('+ one\n+ two'), '+ one\n+ two');
+    assert.equal(await roundTrip('- one\n- two'), '- one\n- two');
+  });
+
+  test('thematic-break style is preserved (***, ___, ---)', async () => {
+    assert.equal(await roundTrip('***'), '***');
+    assert.equal(await roundTrip('___'), '___');
+    assert.equal(await roundTrip('---\n'), '---\n');
+  });
+
+  test('literal brackets in prose are not over-escaped', async () => {
+    assert.equal(await roundTrip('text [ ] more'), 'text [ ] more');
+  });
+
+  test('already-escaped punctuation is preserved verbatim', async () => {
+    assert.equal(await roundTrip('1\\. not a list'), '1\\. not a list');
+  });
+});

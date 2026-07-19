@@ -11,11 +11,12 @@
 // The returned editor is owned by the caller; call editor.destroy() through
 // the destroyEditor public API to release the instance and detach listeners.
 
-import { Editor, StarterKit, Markdown } from '../vendor/tiptap-bundle.mjs';
+import { Editor, StarterKit, Markdown, TaskItem } from '../vendor/tiptap-bundle.mjs';
 import { Wikilink } from './nodes/wikilink.js';
 import { Callout } from './nodes/callout.js';
 import { SoftHardBreak } from './nodes/soft-hard-break.js';
 import { SoftOrderedList } from './nodes/soft-ordered-list.js';
+import { SourceItalic, SourceBold, SourceBulletList, SourceHorizontalRule, SourceTaskList, SourceText } from './nodes/source-markers.js';
 import { tableExtensions, tableDirtyKey } from './nodes/table.js';
 import { criticExtensions } from './nodes/critic-marks.js';
 import { mathExtensions } from './nodes/math.js';
@@ -37,6 +38,18 @@ export function createEditorInstance({ element, initialBody, onUpdate, onSelecti
         // Disable StarterKit's OrderedList; SoftOrderedList below replaces it
         // with an unpadded-number serialiser (Obsidian parity for 10+ items).
         orderedList: false,
+        // Disable StarterKit's Bold/Italic/BulletList/HorizontalRule; the
+        // Source* extensions below replace them with serialisers that preserve
+        // the source marker (_ vs *, + vs -, *** vs ---) instead of normalising
+        // it, so notes are not silently reformatted on save.
+        bold: false,
+        italic: false,
+        bulletList: false,
+        horizontalRule: false,
+        // Disable StarterKit's Text; SourceText below escapes square brackets
+        // only when they could form a link, so literal brackets in prose are
+        // not backslash-escaped on save.
+        text: false,
         link: {
           // Plain click opens. Matches always-editable consumer apps like
           // Notion and Apple Notes; wikilinks already open on plain click via
@@ -52,6 +65,19 @@ export function createEditorInstance({ element, initialBody, onUpdate, onSelecti
       }),
       SoftHardBreak,
       SoftOrderedList,
+      SourceText,
+      SourceItalic,
+      SourceBold,
+      SourceBulletList,
+      SourceHorizontalRule,
+      // TaskList/TaskItem give "- [ ]"/"- [x]" real checkbox nodes. Without
+      // them a checkbox line parses as a bullet whose literal "[ ]" text the
+      // serialiser then escapes to "- \[ \]", silently corrupting the file on
+      // save. tiptap-markdown supplies the parse (markdown-it-task-lists) and
+      // serialize for the taskList/taskItem node names automatically. nested
+      // lets a task item hold a child task list so nested checkboxes survive.
+      SourceTaskList,
+      TaskItem.configure({ nested: true }),
       Wikilink,
       Callout,
       ...tableExtensions,
