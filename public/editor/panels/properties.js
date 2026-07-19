@@ -234,10 +234,17 @@ function openScalarInput(container, row, seed, apply) {
   valueEl.replaceWith(input);
   input.focus();
   input.select();
+  // Identity of the render this input was opened against. If the panel
+  // re-renders (a file switch, or a live external refresh) __propsState is
+  // replaced, so a later commit from this now-orphaned input would write to
+  // the previous file. Abort instead. renderProperties refreshes __propsState
+  // every render.
+  const openState = container.__propsState;
   let done = false;
   const finish = (commit) => {
     if (done) return;
     done = true;
+    if (container.__propsState !== openState) return;
     if (commit) apply(input.value);
     else rerenderProps(container);
   };
@@ -262,10 +269,14 @@ function openListAddInput(container, onEditProperty, row, key) {
   const addBtn = valueEl.querySelector('.prop-add');
   if (addBtn) valueEl.insertBefore(input, addBtn); else valueEl.appendChild(input);
   input.focus();
+  // See openScalarInput: abort a commit if the panel re-rendered (file switch)
+  // while this add input was open, so it never writes to the previous file.
+  const openState = container.__propsState;
   let done = false;
   const finish = (commit) => {
     if (done) return;
     done = true;
+    if (container.__propsState !== openState) return;
     const t = input.value.trim();
     if (commit && t) onEditProperty(key, { list: { add: t } });
     else rerenderProps(container);

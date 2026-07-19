@@ -169,4 +169,30 @@ describe('frontmatter wikilink properties', () => {
     // The whole hostile string lives inside data-target as inert text.
     assert.ok(link.getAttribute('data-target').includes('onmouseover'));
   });
+
+  test('an open scalar input does not write to the previous file after a file switch (P0-4)', () => {
+    const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
+    global.HTMLElement = dom.window.HTMLElement;
+    const container = dom.window.document.getElementById('p');
+    const editsA = [];
+    const editsB = [];
+    // File A render.
+    renderProperties(container, { title: 'A title' }, {
+      onEditProperty: (k, v) => { editsA.push([k, v]); return true; },
+    });
+    // Open the scalar input on file A's title.
+    const valueEl = container.querySelector('.prop-row.editable .prop-value');
+    valueEl.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    const input = container.querySelector('input.prop-edit-input');
+    assert.ok(input, 'the scalar input is open');
+    input.value = 'edited while file A was showing';
+    // Switch to file B: the panel re-renders with new data and callbacks.
+    renderProperties(container, { title: 'B title' }, {
+      onEditProperty: (k, v) => { editsB.push([k, v]); return true; },
+    });
+    // The orphaned input blurs (commit path). It must NOT write to either file.
+    input.dispatchEvent(new dom.window.FocusEvent('blur'));
+    assert.deepEqual(editsA, [], 'no write to the previous file');
+    assert.deepEqual(editsB, [], 'no write to the new file from a stale input');
+  });
 });
