@@ -101,18 +101,8 @@ function buildPdf(lines) {
 fs.rmSync(TARGET, { recursive: true, force: true });
 fs.mkdirSync(TARGET, { recursive: true });
 
-// A minimal but valid team so the workspace opens with an agent.
-write('.claude/agents/guide.md', [
-  '---',
-  'name: Guide',
-  'description: A friendly guide for exploring this demo workspace.',
-  'model: sonnet',
-  '---',
-  '',
-  'You are Guide. Help the user explore this demo workspace and explain what',
-  'each file type looks like in the Rundock viewer.',
-  '',
-].join('\n'));
+// No agents are scaffolded here: Rundock adds Doc (the platform guide) on
+// open, and the demo is a good place to have Doc build a team from scratch.
 
 write('CLAUDE.md', [
   '# Demo Workspace',
