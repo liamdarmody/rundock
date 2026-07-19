@@ -618,8 +618,16 @@ test('interrupt retry: turn/interrupt is re-sent once at the (injectable) halfwa
     const done = await doneP;
     assert.strictEqual(done.status, 'interrupted');
     // Exactly two interrupts reached the server (the original plus one
-    // retry), both naming the same turn.
-    const interrupts = readInvocations(dir).filter(e => e.method === 'turn/interrupt');
+    // retry), both naming the same turn. The retry's request is recorded
+    // asynchronously by the stub, and the retry fires (100ms) well before the
+    // failsafe that emits `done` (400ms), so poll until both have landed
+    // rather than racing the log write (which only lags under heavy CI load).
+    const deadline = Date.now() + 2000;
+    let interrupts = readInvocations(dir).filter(e => e.method === 'turn/interrupt');
+    while (interrupts.length < 2 && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 10));
+      interrupts = readInvocations(dir).filter(e => e.method === 'turn/interrupt');
+    }
     assert.strictEqual(interrupts.length, 2, 'one retry at the halfway point, not a storm');
     assert.ok(interrupts.every(e => e.params.turnId === turnId), 'the retry names the original turn');
   } finally {
