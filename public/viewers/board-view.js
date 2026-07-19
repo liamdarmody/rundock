@@ -54,7 +54,9 @@ function ensureStyles(doc) {
     .board-card:hover .board-card-controls { display: flex; }
     .board-card-ctl { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 6px; color: var(--text-2); background: var(--surface); }
     .board-card-ctl:hover { color: var(--danger, #E85A5A); background: var(--elevated); }
-    .board-card-editor { background: var(--elevated); border: 1px solid var(--accent); border-radius: 6px; padding: 6px 10px; }
+    .board-card.editing { cursor: default; }
+    .board-card-editor { background: var(--elevated); border: 1px solid var(--accent); border-radius: 6px; padding: 6px 10px; cursor: text; }
+    .board-card-editor .ProseMirror { cursor: text; }
     .board-card-editor .ProseMirror { outline: none; font-size: var(--body); line-height: 1.5; color: var(--text-1); min-height: 1.4em; overflow-wrap: anywhere; }
     .board-card-editor .ProseMirror p { margin: 0; }
     .board-card-editor .ProseMirror p + p { margin-top: 4px; }
@@ -370,6 +372,7 @@ export function mountBoardView({ paneElement, content, onWikilink }, Kanban) {
     host.className = 'board-card-editor';
     row.replaceWith(host);
     card.draggable = false;
+    card.classList.add('editing'); // swap the grab cursor for a text caret
     const editor = createEditorInstance({ element: host, initialBody: item.titleRaw });
     editor.commands.focus('end');
     let done = false;
