@@ -1816,8 +1816,10 @@ function setupChat(convo) {
   statusEl.querySelector('.state-label').textContent = isArchivedSet ? 'Archived' : 'Active';
   statusEl.querySelector('.action-label').textContent = isArchivedSet ? '↺ Unarchive' : '→ Archive';
   statusEl.className = `chat-convo-status ${isArchivedSet ? 'archived-convo' : 'active-convo'}`;
-  // Set input state based on this conversation's processing state
-  msgInput.disabled = state.isProcessing;
+  // The input stays enabled even while the agent is processing, so the user can
+  // draft their next message. The Stop button is the only way to interrupt; a
+  // draft is sent by stopping first, then Send.
+  msgInput.disabled = false;
   const sendBtn = document.getElementById('send-btn');
   if (state.isProcessing) {
     sendBtn.disabled = false;
@@ -1829,6 +1831,8 @@ function setupChat(convo) {
   } else {
     sendBtn.disabled = false;
     sendBtn.classList.remove('cancel');
+    // Reflect any draft already in the field so Send reads as ready.
+    sendBtn.classList.toggle('active', !!msgInput.value.trim());
     sendBtn.onclick = sendMessage;
     sendBtn.title = 'Send message';
     sendBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
@@ -2318,7 +2322,7 @@ function openConversation(id, withAnchor) {
     sb.disabled = false; sb.classList.add('cancel'); sb.classList.remove('active');
     sb.onclick = cancelProcessing; sb.title = 'Stop agent';
     sb.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
-    document.getElementById('msg-input').disabled=true;
+    // Input stays enabled during processing so a next message can be drafted.
     const a=agents.find(x => x.id === state.activeAgentId) || c.agent;
     const m2=document.getElementById('messages');
     // Render any response text accumulated on the server before we reconnected
@@ -2450,7 +2454,7 @@ function startProcessing(convoId) {
     sendBtn.onclick = cancelProcessing;
     sendBtn.title = 'Stop agent';
     sendBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
-    document.getElementById('msg-input').disabled=true;
+    // Input stays enabled during processing so a next message can be drafted.
     // Use the active delegate agent during delegation, otherwise the conversation agent
     const activeId = state.activeAgentId || convo?.agentId;
     const a = (activeId && agents.find(x => x.id === activeId)) || convo?.agent || agents[0];
@@ -2501,8 +2505,12 @@ function finishProcessing(convoId) {
     sendBtn.title = 'Send message';
     sendBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
     sendBtn.style.opacity = '';
-    document.getElementById('msg-input').disabled=false;
-    document.getElementById('msg-input').focus();
+    const draftInput = document.getElementById('msg-input');
+    draftInput.disabled = false;
+    // A message drafted while the agent was responding is now ready to send, so
+    // reflect its presence on the Send button.
+    sendBtn.classList.toggle('active', !!draftInput.value.trim());
+    draftInput.focus();
   }
   if(convo) {
     // Clear working status on the active agent (delegate or conversation agent)
@@ -4265,7 +4273,15 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
 let saveTimer=null;
 document.addEventListener('input',e=>{if((e.target.id==='editor-content'||e.target.id==='editor-textarea')&&currentFilePath&&editorMode==='edit'){editorDirty=true;document.getElementById('editor-status').textContent='Unsaved';document.getElementById('editor-status').style.color='var(--attention)';clearTimeout(saveTimer);saveTimer=setTimeout(()=>{saveFileGuarded(currentFilePath,getFileContentForSave());},1500);}});
 const msgInput = document.getElementById('msg-input');
-msgInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}});
+msgInput.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&!e.shiftKey){
+    // While the agent is responding, Enter inserts a newline (draft mode). To
+    // send, stop the agent first; then Enter sends as usual.
+    if(activeConversation && getConvoState(activeConversation.id).isProcessing) return;
+    e.preventDefault();
+    sendMessage();
+  }
+});
 msgInput.addEventListener('input',()=>{
   msgInput.style.height='auto'; msgInput.style.height=Math.min(msgInput.scrollHeight, 200)+'px';
   const btn=document.getElementById('send-btn');
