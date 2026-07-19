@@ -511,6 +511,14 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .tiptap-editor-pane .prop-value .bool .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .tiptap-editor-pane .prop-chip { display: inline-flex; align-items: center; padding: 2px 10px; background: transparent; border: 1px solid var(--accent); border-radius: 100px; font-size: 12px; color: var(--accent); transition: background 0.15s ease; }
 .tiptap-editor-pane .prop-chip:hover { background: var(--accent-glow); }
+/* A nested (map/list) property item: readable but not editable, so it reads as
+   muted rather than an actionable pill. */
+.tiptap-editor-pane .prop-chip.non-editable { border-color: var(--border); color: var(--text-2); cursor: default; }
+.tiptap-editor-pane .prop-chip.non-editable:hover { background: transparent; }
+/* Edit affordance for a pure-wikilink value (which otherwise only navigates). */
+.prop-wikilink-edit { display: none; align-items: center; justify-content: center; background: none; border: none; color: var(--text-2); cursor: pointer; padding: 0 0 0 6px; line-height: 1; }
+.props-editable .prop-row.editable:hover .prop-wikilink-edit { display: inline-flex; }
+.prop-wikilink-edit:hover { color: var(--accent); }
 .tiptap-editor { font-size: var(--body); line-height: 1.7; outline: none; }
 .tiptap-editor .ProseMirror { outline: none; min-height: 200px; }
 .tiptap-editor .ProseMirror p { margin: 0 0 12px 0; line-height: 1.7; }

@@ -112,9 +112,15 @@ function renderValue(value, type, resolveWikilink, editable) {
   }
   if (type === 'list') {
     // Wikilink items render as inline links (Obsidian's grammar), keeping the
-    // remove affordance; plain items stay as tag-style pills.
+    // remove affordance; plain items stay as tag-style pills. A map or nested
+    // list item renders its content readably and is marked non-editable: it has
+    // no remove control, because removing a multi-line block item by index
+    // could corrupt the neighbouring bytes.
     const items = value
       .map((v, i) => {
+        if (v !== null && typeof v === 'object') {
+          return `<span class="prop-chip non-editable" title="Nested value (not editable)">${escapeHtml(compactValue(v))}</span>`;
+        }
         const link = parsePropWikilink(v);
         const remove = '<button type="button" class="prop-chip-remove" title="Remove">&times;</button>';
         return link
@@ -134,9 +140,28 @@ function renderValue(value, type, resolveWikilink, editable) {
     return '<span class="prop-value empty">nested object (not editable)</span>';
   }
   const link = parsePropWikilink(value);
-  if (link) return `<span class="prop-value string">${renderWikilinkValue(link, resolveWikilink)}</span>`;
+  if (link) {
+    // A value that IS a pure wikilink navigates on click, so it needs its own
+    // edit affordance; without one it could never be edited inline.
+    const edit = editable ? '<button type="button" class="prop-wikilink-edit" title="Edit value">' + PENCIL_SVG + '</button>' : '';
+    return `<span class="prop-value string">${renderWikilinkValue(link, resolveWikilink)}${edit}</span>`;
+  }
   return `<span class="prop-value string">${escapeHtml(String(value))}</span>`;
 }
+
+// Compact, readable one-line rendering of a non-scalar list item (a map or
+// nested list) so it never shows as [object Object].
+function compactValue(v) {
+  if (Array.isArray(v)) return v.map(compactValue).join(', ');
+  if (v !== null && typeof v === 'object') {
+    return Object.entries(v).map(([k, val]) => `${k}: ${compactValue(val)}`).join(', ');
+  }
+  return String(v);
+}
+
+const PENCIL_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" '
+  + 'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/>'
+  + '<path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
 
 // Renders the panel into the given container element. Returns the count of
 // rows rendered so the caller can decide whether to show the panel at all.
@@ -265,7 +290,9 @@ function openScalarInput(container, row, seed, apply) {
     else rerenderProps(container);
   };
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    // Enter refuses an empty value, matching blur: the two commit rules stay
+    // consistent (an empty input never writes "").
+    if (e.key === 'Enter') { e.preventDefault(); finish(input.value.trim().length > 0); }
     else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
   });
   input.addEventListener('blur', () => finish(input.value.trim().length > 0));
@@ -305,17 +332,27 @@ function openListAddInput(container, onEditProperty, row, key) {
 }
 
 function handleEditClick(container, st, event) {
-  // A click on a wikilink value is navigation, not an edit: the wikilink
-  // handler (a separate listener on this same container) owns it. Without
-  // this bail, clicking a wikilink would ALSO open an inline editor over
-  // it, whose blur then fires a spurious write.
-  if (event.target.closest('.prop-wikilink')) return;
   const row = event.target.closest && event.target.closest('.prop-row.editable');
   if (!row) return;
   const key = row.getAttribute('data-prop-key');
   const type = row.getAttribute('data-prop-type');
   const { parsed, onEditProperty } = st;
   const value = parsed[key];
+
+  // The explicit edit control on a pure-wikilink value opens the inline editor
+  // seeded with the raw wikilink text. Checked before the navigation bail below.
+  if (event.target.closest('.prop-wikilink-edit')) {
+    openScalarInput(container, row, String(value), (text) => {
+      const t = text.trim();
+      onEditProperty(key, t);
+    });
+    return;
+  }
+  // A click on a wikilink value is navigation, not an edit: the wikilink
+  // handler (a separate listener on this same container) owns it. Without
+  // this bail, clicking a wikilink would ALSO open an inline editor over
+  // it, whose blur then fires a spurious write.
+  if (event.target.closest('.prop-wikilink')) return;
 
   // List item removal / addition go through index-based mutations so
   // untouched items keep their exact bytes (never re-parsed).

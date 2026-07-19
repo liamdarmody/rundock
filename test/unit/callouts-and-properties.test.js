@@ -198,6 +198,57 @@ describe('frontmatter wikilink properties', () => {
   });
 });
 
+describe('frontmatter polish (P2-1, P2-2, P2-3)', () => {
+  test('P2-1: a map list item renders readable content, not [object Object], and has no remove control', () => {
+    const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
+    global.HTMLElement = dom.window.HTMLElement;
+    const container = dom.window.document.getElementById('p');
+    renderProperties(container, { events: [{ when: '2026-07-19', who: 'Sam' }, 'plain'] }, {
+      onEditProperty: () => true,
+    });
+    assert.ok(!container.innerHTML.includes('[object Object]'), 'no [object Object]');
+    assert.ok(container.textContent.includes('when: 2026-07-19'), 'shows the map content');
+    const mapChip = container.querySelector('.prop-chip.non-editable');
+    assert.ok(mapChip, 'the map item is a non-editable chip');
+    assert.strictEqual(mapChip.querySelector('.prop-chip-remove'), null, 'no remove control on a map item');
+  });
+
+  test('P2-2: pressing Enter on an emptied input refuses the commit, matching blur', () => {
+    const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
+    global.HTMLElement = dom.window.HTMLElement;
+    const container = dom.window.document.getElementById('p');
+    const edits = [];
+    renderProperties(container, { title: 'Hello' }, {
+      onEditProperty: (k, v) => { edits.push([k, v]); return true; },
+    });
+    container.querySelector('.prop-row.editable .prop-value').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    const input = container.querySelector('input.prop-edit-input');
+    input.value = '';
+    input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    assert.deepEqual(edits, [], 'an empty Enter does not commit');
+  });
+
+  test('P2-3: a pure-wikilink value is editable via an edit control', () => {
+    const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
+    global.HTMLElement = dom.window.HTMLElement;
+    const container = dom.window.document.getElementById('p');
+    const edits = [];
+    renderProperties(container, { ref: '[[Target]]' }, {
+      onWikilinkClick: () => {}, resolveWikilink: () => true,
+      onEditProperty: (k, v) => { edits.push([k, v]); return true; },
+    });
+    const editBtn = container.querySelector('.prop-wikilink-edit');
+    assert.ok(editBtn, 'an edit control sits next to the wikilink value');
+    editBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    const input = container.querySelector('input.prop-edit-input');
+    assert.ok(input, 'clicking edit opens an inline input');
+    assert.strictEqual(input.value, '[[Target]]', 'seeded with the raw wikilink');
+    input.value = '[[Other]]';
+    input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    assert.deepEqual(edits, [['ref', '[[Other]]']]);
+  });
+});
+
 describe('frontmatter datetime with timezone (P1-5)', () => {
   test('a datetime with an offset is preserved verbatim, not shifted to another UTC day', () => {
     const { parsed } = extractFrontmatter('---\ndue: 2026-07-19T22:00:00-05:00\n---\n');
