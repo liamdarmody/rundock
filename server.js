@@ -1911,6 +1911,7 @@ function scaffoldWorkspace(dir, opts = {}) {
     fs.mkdirSync(path.join(dir, '.claude', 'agents'), { recursive: true });
 
     // Sync Rundock-owned agents and skills from scaffold sources
+    let wroteManagedFile = false;
     for (const entry of RUNDOCK_MANAGED_FILES) {
       const sourceContent = fs.readFileSync(path.join(__dirname, 'scaffold', entry.source), 'utf-8');
       const targetPath = path.join(dir, entry.target);
@@ -1926,9 +1927,16 @@ function scaffoldWorkspace(dir, opts = {}) {
 
       if (action) {
         fs.writeFileSync(targetPath, sourceContent, 'utf-8');
+        wroteManagedFile = true;
         console.log(`  [Scaffold] ${action}: ${entry.target}`);
       }
     }
+    // Writing a managed agent or skill (Doc, the platform skills) changes what
+    // discovery would return, so drop the agent and skill caches. Without this,
+    // a caller that primed the cache before this sync (the workspace-open path
+    // does exactly that) would keep reading stale agents and the platform
+    // skills would show as unassigned until a reload.
+    if (wroteManagedFile) invalidateAgentCache();
 
     // Create .rundock/ directory for session persistence
     const rundockPath = path.join(dir, '.rundock');
