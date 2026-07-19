@@ -15,15 +15,23 @@ import { createSidecarController } from './sidecar-controller.js';
 export { sidecarPathFor } from './sidecar-controller.js';
 
 const MARK_ATTR = 'data-rundock-review';
+const SVG_NS = 'http://www.w3.org/2000/svg';
 
 // Geometry-neutral by construction: decoration only (background/outline),
 // never padding, margins, borders, or line-height on the wrapper. Padding
 // would shift text within lines AND give wrapped inter-block whitespace
 // nodes a full line box (an inline with non-zero padding stops an empty
 // line box collapsing to zero height), visibly inflating paragraph gaps.
+//
+// SVG text cannot hold an HTML <mark> (foreign content is not laid out inside
+// <text>, so the run vanishes) and SVG has no CSS background, so a comment on
+// SVG text is wrapped in a <tspan> and marked with a coloured underline, which
+// SVG text does support. Both wrappers carry the same class and review attr.
 const FRAME_STYLES = `
   mark.rundock-review-mark { background: rgba(232, 122, 90, 0.28); color: inherit; border-radius: 2px; cursor: pointer; }
   mark.rundock-review-mark.rundock-flash { outline: 2px solid rgba(232, 122, 90, 0.85); }
+  tspan.rundock-review-mark { text-decoration: underline; text-decoration-color: rgba(232, 122, 90, 0.95); text-decoration-thickness: 2px; text-underline-offset: 2px; cursor: pointer; }
+  tspan.rundock-review-mark.rundock-flash { text-decoration-thickness: 3px; }
   ::highlight(rundock-composing) { background: rgba(232, 122, 90, 0.35); }
 `;
 
@@ -66,7 +74,7 @@ export function attachArtifactReview({
   // ----- marks (render-only wraps inside the frame) -----
 
   function clearMarks() {
-    for (const m of Array.from(doc.querySelectorAll(`mark[${MARK_ATTR}]`))) {
+    for (const m of Array.from(doc.querySelectorAll(`[${MARK_ATTR}]`))) {
       const parent = m.parentNode;
       while (m.firstChild) parent.insertBefore(m.firstChild, m);
       parent.removeChild(m);
@@ -106,8 +114,11 @@ export function attachArtifactReview({
       let piece = t.node;
       if (t.from > 0) piece = piece.splitText(t.from);
       if (t.to - t.from < piece.nodeValue.length) piece.splitText(t.to - t.from);
-      const mark = doc.createElement('mark');
-      mark.className = 'rundock-review-mark';
+      // SVG text runs get a <tspan> wrapper (a <mark> would not render inside
+      // <text>); everything else gets a <mark>. Both carry the same class/attr.
+      const inSvg = piece.parentNode && piece.parentNode.namespaceURI === SVG_NS;
+      const mark = inSvg ? doc.createElementNS(SVG_NS, 'tspan') : doc.createElement('mark');
+      mark.setAttribute('class', 'rundock-review-mark');
       mark.setAttribute(MARK_ATTR, id);
       piece.parentNode.insertBefore(mark, piece);
       mark.appendChild(piece);
@@ -189,7 +200,7 @@ export function attachArtifactReview({
     flashApplied() { /* cards depart visibly; the document does not change */ },
 
     scrollToItem(item) {
-      const mark = doc.querySelector(`mark[${MARK_ATTR}="${item.id}"]`);
+      const mark = doc.querySelector(`[${MARK_ATTR}="${item.id}"]`);
       if (!mark) return;
       mark.scrollIntoView({ block: 'center', behavior: 'smooth' });
       mark.classList.add('rundock-flash');
@@ -218,7 +229,7 @@ export function attachArtifactReview({
   // ----- in-frame interactions -----
 
   const onFrameClick = (event) => {
-    const mark = event.target && event.target.closest && event.target.closest(`mark[${MARK_ATTR}]`);
+    const mark = event.target && event.target.closest && event.target.closest(`[${MARK_ATTR}]`);
     if (!mark || !activateCardCb) return;
     const item = controller.listItems().find((i) => i.id === mark.getAttribute(MARK_ATTR));
     if (item) activateCardCb(item);

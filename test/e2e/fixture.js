@@ -109,6 +109,14 @@ function buildFixture() {
     '<p>A third needle sits far below for the scroll.</p>',
     '</body></html>',
   ].join('\n'));
+  // An SVG artifact with a text label: commenting on SVG text must keep it
+  // visible (it is wrapped in a <tspan>, not a <mark> that SVG cannot render).
+  fs.writeFileSync(path.join(workspace, 'diagram.svg'), [
+    '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="120" viewBox="0 0 320 120">',
+    '  <rect width="320" height="120" fill="#0f172a"/>',
+    '  <text id="label" x="20" y="64" fill="#ffffff" font-size="18">Architecture diagram label</text>',
+    '</svg>',
+  ].join('\n'));
   // A canonical Kanban board (frontmatter carries the kanban-plugin key), used
   // to prove the board registry view renders columns and round-trips bytes.
   fs.writeFileSync(path.join(workspace, 'board.md'),

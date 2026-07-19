@@ -147,6 +147,14 @@ export function attachFloatingToolbar({ toolbarElement, hostElement, editor, onR
       toolbarElement.classList.remove('visible');
       return;
     }
+    // An atom node selection (e.g. clicking a callout) is not inline-formattable,
+    // so the formatting toolbar has nothing to act on: keep it hidden. Callouts
+    // are edited through their own in-place editor, not these marks.
+    const sel = editor.state.selection;
+    if (sel.node && sel.node.type && sel.node.type.isAtom) {
+      toolbarElement.classList.remove('visible');
+      return;
+    }
     const view = editor.view;
     let startCoords;
     let endCoords;

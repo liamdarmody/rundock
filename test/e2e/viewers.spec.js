@@ -153,6 +153,26 @@ async function selectInFrame(page, selector) {
   }, selector);
 }
 
+test('commenting on SVG text keeps the text visible (tspan wrap, not a mark)', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'diagram.svg');
+  await expect(page.locator('iframe.viewer-frame')).toBeVisible();
+  await selectInFrame(page, '#label');
+  await expect(page.locator('.artifact-comment-btn')).toBeVisible();
+  await page.locator('.artifact-comment-btn').dispatchEvent('mousedown');
+  const composer = page.locator('.review-composer');
+  await expect(composer).toBeVisible();
+  await composer.locator('textarea').fill('Rename this label');
+  await composer.locator('textarea').press('Enter');
+  await expect(page.locator('.review-card.comment')).toHaveCount(1);
+  const frame = page.frameLocator('iframe.viewer-frame');
+  // The commented run is wrapped in a <tspan> (SVG renders it) with the text
+  // still present, never a <mark> (which would make SVG text vanish).
+  await expect(frame.locator('tspan[data-rundock-review]')).toHaveText('Architecture diagram label');
+  await expect(frame.locator('mark[data-rundock-review]')).toHaveCount(0);
+  await expect(frame.locator('text#label')).toBeVisible();
+});
+
 test('comment on an artifact: select, comment, sidecar written, reload re-anchors, resolve hands back', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'proposal.html');
@@ -330,6 +350,18 @@ test('a multi-paragraph comment is geometry-neutral: paragraph gaps unchanged', 
 });
 
 // ── Callouts + frontmatter wikilinks ────────────────────────────
+
+test('clicking a callout does not show the inline formatting toolbar', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'briefing.md');
+  const callout = page.locator('.callout.callout-abstract').first();
+  await expect(callout).toBeVisible();
+  // Clicking a callout selects the atom node; the inline toolbar cannot format
+  // it, so it must stay hidden (editing is via the callout's own editor).
+  await callout.locator('.callout-line').first().click();
+  await page.waitForTimeout(200);
+  await expect(page.locator('#tiptap-toolbar')).not.toHaveClass(/\bvisible\b/);
+});
 
 test('a callout edits in place and saves byte-honestly', async ({ page }) => {
   await boot(page);
