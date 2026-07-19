@@ -101,6 +101,47 @@ test('image opens as a real decoded image over the binary endpoint; toggles hidd
   await page.screenshot({ path: `${SHOTS}/image-viewer.png` });
 });
 
+test('Cmd+F is a no-op on read-only binary viewers (P2-7)', async ({ page }) => {
+  await boot(page);
+  for (const name of ['chart.png', 'report.pdf']) {
+    await openFromTree(page, name);
+    await page.keyboard.press('ControlOrMeta+f');
+    // No find bar opens: there is nothing searchable in an image or PDF viewer.
+    await expect(page.locator('#find-bar')).toBeHidden();
+    const backend = await page.evaluate(() => detectFindBackend());
+    expect(backend).toBeNull();
+  }
+});
+
+test('opening a file resets the Preview/Code mode so a stale edit mode cannot leak (P2-9)', async ({ page }) => {
+  await boot(page);
+  // Force a stale 'edit' mode, then open a file: loadFileContent must reset it.
+  await openFromTree(page, 'chart.png');
+  await expect(page.locator('.viewer-image-wrap img')).toBeVisible();
+  await page.evaluate(() => { editorMode = 'edit'; });
+  await openFromTree(page, 'report.pdf');
+  // Wait for the open to complete (loadFileContent has run) before asserting.
+  await expect(page.locator('iframe.viewer-frame')).toBeVisible();
+  expect(await page.evaluate(() => editorMode)).toBe('preview');
+});
+
+test('Reveal in Finder shows only on macOS (P2-6)', async ({ page }) => {
+  await boot(page);
+  await page.locator('.nav-item[data-nav="files"]').click();
+  const fileRow = page.locator('.file-item', { hasText: 'briefing.md' }).first();
+  await expect(fileRow).toBeVisible();
+  // Off macOS: the row is hidden rather than a dead action.
+  await page.evaluate(() => { serverPlatform = 'linux'; });
+  await fileRow.click({ button: 'right' });
+  await expect(page.locator('.files-menu')).toBeVisible();
+  await expect(page.locator('.files-menu')).not.toContainText('Reveal in Finder');
+  await page.keyboard.press('Escape');
+  // On macOS: the row is present.
+  await page.evaluate(() => { serverPlatform = 'darwin'; });
+  await fileRow.click({ button: 'right' });
+  await expect(page.locator('.files-menu')).toContainText('Reveal in Finder');
+});
+
 test('PDF opens in a frame over the binary endpoint', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'report.pdf');

@@ -152,6 +152,18 @@ describe('viewer mounts', () => {
     assert.equal(el.classList.contains('viewer-host'), false, 'host class removed');
   });
 
+  test('artifact preview: an oversized artifact shows a notice instead of building a huge srcdoc', () => {
+    const el = pane();
+    const huge = '<p>' + 'x'.repeat(5 * 1024 * 1024) + '</p>';
+    const handle = mountArtifactPreview({ paneElement: el, content: huge });
+    assert.equal(el.querySelector('iframe'), null, 'no iframe for an oversized artifact');
+    const notice = el.querySelector('.viewer-unsupported');
+    assert.ok(notice, 'a notice is shown');
+    assert.match(notice.textContent, /too large/i);
+    assert.equal(handle.getContentForSave, null, 'still read-only');
+    handle.destroy();
+  });
+
   test('image viewer: <img> over the binary endpoint, encoded path', () => {
     const el = pane();
     const handle = mountImageViewer({ paneElement: el, path: 'shots/final render.png' });

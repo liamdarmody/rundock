@@ -3668,7 +3668,7 @@ wss.on('connection', (ws) => {
     active.push({ conversationId: convoId, processId: entry.processId, agentId: entry.agentId, idle: !!entry.idle, responseText: entry.responseText || '', delegation: entry.delegation ? { originalAgentId: entry.delegation.originalAgentId } : null });
   }
   ws.send(JSON.stringify({ type: 'active_processes', processes: active }));
-  ws.send(JSON.stringify({ type: 'server_info', version: PKG_VERSION }));
+  ws.send(JSON.stringify({ type: 'server_info', version: PKG_VERSION, platform: process.platform }));
 
   // Re-send pending permission requests so permission cards reappear after reconnect
   for (const [requestId, pending] of pendingPermissionRequests) {

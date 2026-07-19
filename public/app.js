@@ -39,6 +39,9 @@ let activeTiptapEditor = null;
 let _tiptapEditorModule = null;
 let _tiptapEditorModuleResolved = null;
 let _tiptapSaveTimer = null;
+// The server's OS, learned from the server_info handshake. Gates OS-specific
+// affordances (e.g. Reveal in Finder) so a dead row never shows off macOS.
+let serverPlatform = null;
 function loadTiptapEditorModule() {
   if (!_tiptapEditorModule) _tiptapEditorModule = import('./editor/index.js');
   return _tiptapEditorModule;
@@ -635,6 +638,7 @@ function handle(d) {
       break;
     case 'server_info':
       if (d.version) window._rundockVersion = d.version;
+      if (d.platform) serverPlatform = d.platform;
       break;
     case 'control_request': {
       const targetConvo = convoId || activeConversation?.id;
@@ -3336,7 +3340,11 @@ function openRowContextMenu(e, targetPath, targetKind) {
   rows.push(null);
   rows.push(['Copy workspace path', () => { try { navigator.clipboard.writeText(targetPath); } catch (err) {} }, FilesMenuModel.ICONS.copy]);
   rows.push(['Copy wikilink', () => { try { navigator.clipboard.writeText(FilesMenuModel.wikilinkFor(targetPath)); } catch (err) {} }, FilesMenuModel.ICONS.link]);
-  rows.push(['Reveal in Finder', () => ws.send(JSON.stringify({ type: 'reveal_in_finder', path: targetPath })), FilesMenuModel.ICONS.reveal]);
+  // Reveal in Finder only works on macOS (the server no-ops elsewhere), so the
+  // row is hidden off darwin rather than shown as a dead action.
+  if (serverPlatform === 'darwin') {
+    rows.push(['Reveal in Finder', () => ws.send(JSON.stringify({ type: 'reveal_in_finder', path: targetPath })), FilesMenuModel.ICONS.reveal]);
+  }
   buildFloatingMenu(e.clientX, e.clientY, rows);
 }
 
@@ -3352,6 +3360,11 @@ function loadFileContent(path, content) {
   currentFilePath = path;
   rawFileContent = content;
   editorDirty = false; // freshly loaded: no unsaved edits
+  // Reset the Preview/Code mode on every open. Only the legacy text surface
+  // used to reset it, so a stale 'edit' left over from a previous text file
+  // could leak into a markdown, board, or read-only viewer and make find or
+  // currentLiveContent misbehave.
+  editorMode = 'preview';
   // What we believe is on disk: the external-edit guard compares against
   // this before every save.
   diskBaselines.set(path, content);
@@ -4320,6 +4333,10 @@ function detectFindBackend() {
     const ta = document.getElementById('editor-textarea');
     if (typeof editorMode !== 'undefined' && editorMode === 'edit'
         && ta && !ta.classList.contains('hidden')) return 'textarea';
+    // A read-only binary viewer (image, PDF, unsupported) has no searchable
+    // text: it is a mounted viewer with no source-save path and no artifact
+    // iframe. Make Cmd+F a no-op instead of stale-routing to legacy-preview.
+    if (activeFileViewer && !activeFileViewer.iframe && activeFileViewer.getContentForSave == null) return null;
     return 'legacy-preview';
   }
   return null;

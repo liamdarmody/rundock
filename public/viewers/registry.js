@@ -165,11 +165,29 @@ function makeHandle(paneElement, cleanup) {
 // The injected CSP additionally blocks external fetches. Adding
 // allow-scripts alongside allow-same-origin would give artifact code the
 // app's origin: never combine them.
+// Upper bound on artifact source before we build a srcdoc. A multi-megabyte
+// string handed to srcdoc can lock up the renderer; past this size we show a
+// notice instead. Generous enough for any real self-contained artifact.
+export const MAX_ARTIFACT_BYTES = 4 * 1024 * 1024;
+
 export function mountArtifactPreview({ paneElement, content }) {
   const doc = paneElement.ownerDocument;
   ensureStyles(doc);
   paneElement.innerHTML = '';
   paneElement.classList.add('viewer-host');
+  if (typeof content === 'string' && content.length > MAX_ARTIFACT_BYTES) {
+    const notice = doc.createElement('div');
+    notice.className = 'viewer-unsupported';
+    const title = doc.createElement('div');
+    title.className = 'viewer-unsupported-title';
+    title.textContent = 'Artifact too large to preview';
+    const detail = doc.createElement('div');
+    detail.textContent = 'Open the Code view to read its source.';
+    notice.appendChild(title);
+    notice.appendChild(detail);
+    paneElement.appendChild(notice);
+    return makeHandle(paneElement);
+  }
   const iframe = doc.createElement('iframe');
   iframe.className = 'viewer-frame';
   iframe.setAttribute('sandbox', 'allow-same-origin');
