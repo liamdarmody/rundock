@@ -331,6 +331,29 @@ test('a multi-paragraph comment is geometry-neutral: paragraph gaps unchanged', 
 
 // ── Callouts + frontmatter wikilinks ────────────────────────────
 
+test('a callout edits in place and saves byte-honestly', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'briefing.md');
+  const callout = page.locator('.callout.callout-abstract').first();
+  await expect(callout).toBeVisible();
+  await expect(callout).toContainText('Two meetings, one deadline');
+  // Open the in-place editor: the raw callout markdown appears in a textarea.
+  await callout.locator('.callout-edit-btn').click();
+  const ta = callout.locator('textarea.callout-edit');
+  await expect(ta).toBeVisible();
+  await expect(ta).toHaveValue(/\[!abstract\]\+ Today at a glance/);
+  // Edit the body and commit.
+  await ta.fill('> [!abstract]+ Today at a glance\n> Three meetings now.');
+  await ta.press('ControlOrMeta+Enter');
+  await expect(callout.locator('textarea')).toHaveCount(0);
+  await expect(callout).toContainText('Three meetings now');
+  await expect(callout).not.toContainText('Two meetings');
+  // The edit persists to the file as callout markdown (byte-honest).
+  await expect.poll(async () =>
+    (await (await page.request.get('/api/file?path=briefing.md')).text())
+  ).toContain('> Three meetings now.');
+});
+
 test('callouts render as admonition boxes with working fold; frontmatter wikilinks navigate', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'briefing.md');

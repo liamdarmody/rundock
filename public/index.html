@@ -550,6 +550,13 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .tiptap-editor .ProseMirror .callout details.callout-fold[open] > summary.callout-header { margin-bottom: 6px; }
 /* Nested callouts render as real boxes inside the parent body. */
 .tiptap-editor .ProseMirror .callout .callout-nested { border: 1px solid rgba(122,162,232,0.20); border-radius: 8px; padding: 10px 14px; margin: 8px 0; }
+/* In-place editing: an edit control that reveals on hover, and the raw-markdown textarea. */
+.tiptap-editor .ProseMirror .callout-editable .callout-header { position: relative; }
+.tiptap-editor .ProseMirror .callout-edit-btn { margin-left: auto; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 6px; color: var(--callout-color); opacity: 0; transition: opacity 0.12s ease, background 0.12s ease; cursor: pointer; }
+.tiptap-editor .ProseMirror .callout-editable:hover .callout-edit-btn { opacity: 0.75; }
+.tiptap-editor .ProseMirror .callout-edit-btn:hover { opacity: 1; background: color-mix(in srgb, var(--callout-color) 16%, transparent); }
+.tiptap-editor .ProseMirror .callout.callout-editing { padding-top: 10px; }
+.tiptap-editor .ProseMirror .callout-edit { width: 100%; box-sizing: border-box; resize: none; background: var(--elevated); border: 1px solid var(--callout-color); border-radius: 6px; color: var(--text-1); font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 13px; line-height: 1.5; padding: 8px 10px; outline: none; }
 .floating-toolbar { position: absolute; display: none; gap: 2px; padding: 4px; background: var(--card); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.25); z-index: 50; left: 0; top: 0; }
 .floating-toolbar.visible { display: inline-flex; }
 .floating-toolbar .tb-btn { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 28px; padding: 0 8px; background: transparent; color: var(--text-2); border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 600; font-family: inherit; }

@@ -25,6 +25,27 @@ function escapeHtmlAttr(s) {
 
 const CALLOUT_HEAD_RE = /^> \[!([a-zA-Z]+)\]([+-]?)[ \t]*([^\n]*)$/;
 
+// Convert a ProseMirror-style render spec (['tag', {attrs}, ...children]) into
+// real DOM. Used by the node view to build the same visible callout that
+// renderHTML describes, so display and editing share one structure.
+function specToDom(doc, spec) {
+  if (typeof spec === 'string') return doc.createTextNode(spec);
+  const [tag, attrs, ...children] = spec;
+  const el = doc.createElement(tag);
+  let rest = children;
+  if (attrs && typeof attrs === 'object' && !Array.isArray(attrs)) {
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  } else if (attrs != null) {
+    rest = [attrs, ...children];
+  }
+  for (const child of rest) if (child != null) el.appendChild(specToDom(doc, child));
+  return el;
+}
+
+const PENCIL_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" '
+  + 'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+  + '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+
 // markdown-it block rule. Matches `> [!type] title` (with Obsidian's
 // optional +/- fold marker) on the start line, then consumes contiguous
 // `> body` lines (including bare `>` as blank body lines). Inserts before
@@ -92,6 +113,48 @@ function calloutRender(tokens, idx) {
   // children) via renderHTML. The bare div here exists so the parseHTML rule
   // on the Tiptap node can match the attributes and reconstruct the node.
   return `<div class="callout" data-callout-type="${escapeHtmlAttr(type)}"${foldAttr}${titleAttr}${bodyAttr}${headAttr}></div>\n`;
+}
+
+// Reconstruct a callout's raw markdown (the `> [!type] title` head line plus
+// `> `-prefixed body lines) from its attributes. The captured source head line
+// re-emits verbatim so an untouched callout round-trips byte-for-byte; the
+// reconstruction is the fallback for callouts created in-editor. This is the
+// text shown when a callout is edited in place, and the serializer's line
+// source, so the two never diverge.
+export function calloutAttrsToRaw({ type = 'note', fold = '', title = '', body = '', head = '' }) {
+  const titlePart = title ? ` ${title}` : '';
+  const headLine = head || `> [!${type}]${fold}${titlePart}`;
+  const bodyLines = body ? body.split('\n').map(l => (l.length ? `> ${l}` : '>')) : [];
+  return [headLine, ...bodyLines].join('\n');
+}
+
+// Parse edited raw callout markdown back into attributes. Returns null when the
+// first line is not a valid callout head (an invalid edit is rejected, leaving
+// the callout unchanged). The edited head line is captured verbatim so it
+// re-emits exactly. Body lines missing their `>` marker are still accepted as
+// body text, so editing stays forgiving.
+export function rawToCalloutAttrs(raw) {
+  const lines = String(raw).replace(/\r\n/g, '\n').split('\n');
+  const head = lines[0] || '';
+  const m = head.match(CALLOUT_HEAD_RE);
+  if (!m) return null;
+  const bodyLines = [];
+  for (let i = 1; i < lines.length; i++) {
+    let line = lines[i];
+    if (line.charCodeAt(0) === 0x3E /* > */) {
+      line = line.slice(1);
+      const c = line.charCodeAt(0);
+      if (c === 0x20 || c === 0x09) line = line.slice(1);
+    }
+    bodyLines.push(line);
+  }
+  return {
+    type: m[1].toLowerCase(),
+    fold: m[2] || '',
+    title: (m[3] || '').trim(),
+    body: bodyLines.join('\n'),
+    head,
+  };
 }
 
 export function registerCalloutMarkdownIt(md) {
@@ -225,20 +288,100 @@ export const Callout = Node.create({
     ];
   },
 
+  // In-place editing: the callout renders as its admonition box, with a small
+  // edit control in the header. Clicking it swaps the box for a textarea of the
+  // callout's raw markdown (head + `> ` body). On commit the raw is parsed back
+  // to attributes and the node is updated, keeping the byte-exact round-trip;
+  // an invalid head is refused and the callout is left unchanged.
+  addNodeView() {
+    return ({ node, getPos, editor }) => {
+      let current = node;
+      let editing = false;
+      const dom = document.createElement('div');
+
+      function paint() {
+        const { type = 'note', fold = '', title = '', body = '' } = current.attrs;
+        dom.className = `callout callout-${type} callout-editable`;
+        dom.setAttribute('data-callout-type', type);
+        dom.innerHTML = '';
+        for (const spec of calloutChildrenSpec({ type, fold, title, body })) {
+          dom.appendChild(specToDom(document, spec));
+        }
+        const header = dom.querySelector('.callout-header');
+        if (header) {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'callout-edit-btn';
+          btn.title = 'Edit callout';
+          btn.setAttribute('contenteditable', 'false');
+          btn.innerHTML = PENCIL_SVG;
+          // mousedown, not click: pre-empt ProseMirror's selection and the
+          // native <details> summary toggle before either acts.
+          btn.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); openEditor(); });
+          header.appendChild(btn);
+        }
+      }
+
+      function openEditor() {
+        if (editing) return;
+        editing = true;
+        // Keep the type class: the textarea border uses its --callout-color.
+        dom.className = `callout callout-${current.attrs.type || 'note'} callout-editable callout-editing`;
+        dom.innerHTML = '';
+        const ta = document.createElement('textarea');
+        ta.className = 'callout-edit';
+        ta.value = calloutAttrsToRaw(current.attrs);
+        dom.appendChild(ta);
+        const grow = () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; };
+        ta.addEventListener('input', grow);
+        requestAnimationFrame(() => { grow(); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); });
+        let done = false;
+        const finish = (save) => {
+          if (done) return;
+          done = true;
+          editing = false;
+          if (save) {
+            const attrs = rawToCalloutAttrs(ta.value);
+            const pos = typeof getPos === 'function' ? getPos() : null;
+            if (attrs && typeof pos === 'number') {
+              editor.view.dispatch(editor.view.state.tr.setNodeMarkup(pos, undefined, attrs));
+            }
+          }
+          paint(); // repaint from current (updated by update() if the edit committed)
+        };
+        ta.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); finish(true); }
+          else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+        });
+        ta.addEventListener('blur', () => finish(true));
+      }
+
+      paint();
+
+      return {
+        dom,
+        update(updated) {
+          if (updated.type !== current.type) return false;
+          current = updated;
+          if (!editing) paint();
+          return true;
+        },
+        stopEvent: () => editing, // while editing, the textarea owns its events
+        ignoreMutation: () => true,
+        selectNode() { dom.classList.add('ProseMirror-selectednode'); },
+        deselectNode() { dom.classList.remove('ProseMirror-selectednode'); },
+      };
+    };
+  },
+
   addStorage() {
     return {
       markdown: {
         serialize(state, node) {
-          const type  = node.attrs.type || 'note';
-          const fold  = node.attrs.fold || '';
-          const title = node.attrs.title || '';
-          const body  = node.attrs.body  || '';
           // The captured source head line re-emits verbatim (exact spacing,
-          // fold marker). Reconstruction is the fallback for nodes created
-          // in-editor with no source line.
-          const titlePart = title ? ` ${title}` : '';
-          const headLine = node.attrs.head || `> [!${type}]${fold}${titlePart}`;
-          const lines = [headLine, ...(body ? body.split('\n').map(l => l.length ? `> ${l}` : '>') : [])];
+          // fold marker); reconstruction is the fallback for nodes created
+          // in-editor. Shared with in-place editing so the two never diverge.
+          const lines = calloutAttrsToRaw(node.attrs).split('\n');
           for (let i = 0; i < lines.length; i++) {
             state.write(lines[i]);
             // No newline after the last line: closeBlock owns the separation
