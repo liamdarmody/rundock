@@ -22,6 +22,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Fast, dependency-free guard: no internal run codenames, review-round or
+  # priority labels, or private workspace paths leak into the public source.
+  hygiene:
+    name: Hygiene (no internal references)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Check for internal references
+        run: node scripts/check-internal-refs.js
+
   test:
     name: Test (Node ${{ matrix.node }})
     runs-on: ubuntu-latest

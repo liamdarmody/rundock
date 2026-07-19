@@ -1,0 +1,8 @@
+#!/bin/sh
+# Optional local guard against internal-reference leaks. Install with:
+#   git config core.hooksPath scripts/hooks
+# CI enforces the same check (the Hygiene job), so installing this is optional.
+node scripts/check-internal-refs.js || {
+  echo "commit blocked: reword the internal references above, then commit again." >&2
+  exit 1
+}
