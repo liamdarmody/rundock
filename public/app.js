@@ -247,6 +247,45 @@ function showExternalEditConflict(path, diskContent, myContent) {
   });
   header.insertAdjacentElement('afterend', banner);
 }
+
+// The live content of whatever surface is open, for the external-refresh
+// clean/dirty decision. Each surface holds its live edits differently: a
+// board's freshest bytes are its pending debounced write, the rich editor's
+// are the live ProseMirror serialization, the source view's are the textarea,
+// and a read-only viewer has none (null -> always safe to take newer bytes).
+function currentLiveContent() {
+  if (boardPendingSave && boardPendingSave.path === currentFilePath) return boardPendingSave.md;
+  if (activeTiptapEditor && _tiptapEditorModuleResolved) {
+    try { return _tiptapEditorModuleResolved.getMarkdown(activeTiptapEditor); } catch (e) { /* fall through */ }
+  }
+  if (editorMode === 'edit') {
+    const ta = document.getElementById('editor-textarea');
+    if (ta) return ta.value;
+  }
+  return rawFileContent;
+}
+
+// Live external refresh: the server pushes file_changed when the open file
+// changes on disk. Reload seamlessly when the editor is clean; if there are
+// unsaved local edits, fall back to the same reload-theirs / keep-mine choice
+// the save-time guard already uses, so no edit is ever silently overwritten.
+function handleExternalFileChange(path, diskContent) {
+  if (path !== currentFilePath) return;
+  const action = ExternalRefresh.externalChangeAction({
+    current: currentLiveContent(),
+    baseline: diskBaselines.get(path),
+    disk: diskContent,
+  });
+  if (action === 'noop') return;
+  if (action === 'reload') {
+    loadFileContent(path, diskContent); // re-renders the surface and moves the baseline
+    const s = document.getElementById('editor-status');
+    if (s) { s.style.color = 'var(--text-2)'; s.textContent = 'Updated from disk'; }
+    return;
+  }
+  showExternalEditConflict(path, diskContent, currentLiveContent());
+}
+
 function destroyTiptapEditorIfActive() {
   // Capture the current instance and clear the global ref synchronously so a
   // subsequent initTiptapEditor sees a clean slate even if the module's
@@ -542,6 +581,7 @@ function handle(d) {
       break;
     case 'file_tree': cachedFileTree = d.tree; renderFileTree(d.tree); break;
     case 'file_content': loadFileContent(d.path, d.content); break;
+    case 'file_changed': handleExternalFileChange(d.path, d.content); break;
     case 'file_saved': document.getElementById('editor-status').textContent='Saved'; break;
     case 'path_created':
       // The tree was refreshed by the preceding file_tree push; open a new

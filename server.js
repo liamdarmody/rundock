@@ -1127,6 +1127,43 @@ function readNormalisedFile(filePath) {
   return fs.readFileSync(filePath, 'utf-8').replace(/\r\n/g, '\n');
 }
 
+// Live external refresh: watch the file a client currently has open and push
+// its new content when it changes on disk (Obsidian, an agent, another window).
+// We poll the file's stats with fs.watchFile rather than fs.watch: polling is
+// deterministic and never drops events (fs.watch misses changes under load and
+// varies by platform), and it naturally handles atomic saves (write-temp-then-
+// rename). Identical content is never re-sent, so Rundock's own saves do not
+// echo into a needless refresh. One watch per connection; it is replaced when
+// the client opens another file and cleared on disconnect. Up-to-interval
+// latency is an acceptable trade for reliability on an external-edit refresh.
+function closeOpenFileWatcher(ws) {
+  if (ws._openFileWatch) {
+    try { fs.unwatchFile(ws._openFileWatch.path, ws._openFileWatch.listener); } catch (e) { /* already gone */ }
+    ws._openFileWatch = null;
+  }
+}
+
+function watchOpenFile(ws, relPath, fullPath) {
+  closeOpenFileWatcher(ws);
+  let lastPushed = null;
+  try { lastPushed = readNormalisedFile(fullPath); } catch (e) { /* unreadable now; still watch */ }
+  const listener = () => {
+    if (ws.readyState !== 1) return;
+    let content;
+    try {
+      if (!fs.existsSync(fullPath)) return; // deletion: leave the open view intact
+      content = readNormalisedFile(fullPath);
+    } catch (e) { return; } // mid-write read error: the next poll settles it
+    if (content === lastPushed) return; // no real change (or our own save)
+    lastPushed = content;
+    ws.send(JSON.stringify({ type: 'file_changed', path: relPath, content }));
+  };
+  try {
+    fs.watchFile(fullPath, { interval: 700 }, listener);
+    ws._openFileWatch = { path: fullPath, listener };
+  } catch (e) { /* unwatchable path: live refresh is simply unavailable here */ }
+}
+
 function extractFrontmatterText(content) {
   const match = content.match(/^---\n([\s\S]*?)\n---/);
   return match ? match[1] : '';
@@ -4503,6 +4540,9 @@ wss.on('connection', (ws) => {
         const fullPath = path.resolve(WORKSPACE, msg.path);
         if (isInsideWorkspace(fullPath) && fs.existsSync(fullPath)) {
           ws.send(JSON.stringify({ type: 'file_content', path: msg.path, content: readNormalisedFile(fullPath) }));
+          // Watch the now-open file so a change made outside Rundock (Obsidian,
+          // an agent, another tool) pushes a live refresh to this client.
+          watchOpenFile(ws, msg.path, fullPath);
         }
       }
 
@@ -4928,6 +4968,7 @@ wss.on('connection', (ws) => {
   ws.on('close', () => {
     console.log('Client disconnected');
     connectedClients.delete(ws);
+    closeOpenFileWatcher(ws); // stop watching this client's open file
     // Don't kill processes: they survive reconnects.
     // If no clients remain, safeSend will buffer output until the next connection.
   });
