@@ -125,6 +125,10 @@ function buildFixture() {
   // rendering + wikilink-navigation tests).
   fs.writeFileSync(path.join(workspace, 'rich-board.md'),
     "---\n\nkanban-plugin: board\n\n---\n\n## Todo\n\n- [ ] Review [[Roadmap-2026]] by 2026-08-01 #launch\n\n\n\n\n%% kanban:settings\n```\n{\"kanban-plugin\":\"board\",\"list-collapse\":[false]}\n```\n%%");
+  // A dedicated board for the live-refresh conflict test (isolated so its own
+  // save/watcher echo cannot race another board test sharing the file).
+  fs.writeFileSync(path.join(workspace, 'watch-board.md'),
+    "---\n\nkanban-plugin: board\n\n---\n\n## To do\n\n- [ ] Watch me\n\n\n## Done\n\n- [ ] Already done\n\n\n\n\n%% kanban:settings\n```\n{\"kanban-plugin\":\"board\",\"list-collapse\":[false,false]}\n```\n%%");
   // A single-lane board for the in-column drag-reorder test.
   fs.writeFileSync(path.join(workspace, 'dnd-board.md'),
     "---\n\nkanban-plugin: board\n\n---\n\n## Queue\n\n- [ ] Card A\n- [ ] Card B\n- [ ] Card C\n\n\n\n\n%% kanban:settings\n```\n{\"kanban-plugin\":\"board\",\"list-collapse\":[false]}\n```\n%%");

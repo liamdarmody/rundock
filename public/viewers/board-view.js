@@ -53,6 +53,7 @@ function ensureStyles(doc) {
     .board-card.dragging { opacity: 0.4; }
     .board-card-controls { position: absolute; top: 6px; right: 6px; display: none; gap: 2px; }
     .board-card:hover .board-card-controls { display: flex; }
+    .board-card.editing .board-card-controls { display: none; }
     .board-card-ctl { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 6px; color: var(--text-2); background: var(--surface); }
     .board-card-ctl:hover { color: var(--danger, #E85A5A); background: var(--elevated); }
     .board-card.editing { cursor: default; }

@@ -200,6 +200,11 @@ async function saveFileGuarded(path, content) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'save_file', path, content }));
     diskBaselines.set(path, content);
+    // Track what we just wrote as the current bytes for the open file. Without
+    // this, a surface whose live content falls back to rawFileContent (the
+    // board) looks stale when the file-watcher echoes our own save back, and
+    // the echo is misread as an external change.
+    if (path === currentFilePath) rawFileContent = content;
   }
   const statusEl = document.getElementById('editor-status');
   if (statusEl) {

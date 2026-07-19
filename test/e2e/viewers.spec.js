@@ -631,6 +631,17 @@ test('cards reorder within a column by dragging onto another card', async ({ pag
   }).toBe(true);
 });
 
+test('editing a board in Rundock does not raise a false external-change conflict', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'watch-board.md');
+  await expect(page.locator('.board-lane')).toHaveCount(2);
+  // A Rundock edit writes the file; the server watches it and echoes the change
+  // back. That echo is our own save and must not be read as an external edit.
+  await page.locator('.board-card-check').first().click();
+  await page.waitForTimeout(2000); // past the board save + watcher poll interval
+  await expect(page.locator('#external-edit-banner')).toHaveCount(0);
+});
+
 test('the board card editor shows a selection toolbar with inline formatting only', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'board.md');
@@ -638,6 +649,9 @@ test('the board card editor shows a selection toolbar with inline formatting onl
   await page.locator('.board-card-text', { hasText: 'Draft the outline' }).click();
   const editor = page.locator('.board-card-editor .ProseMirror');
   await expect(editor).toBeVisible();
+  // The delete control is hidden while editing, even when the card is hovered.
+  await page.locator('.board-card.editing').hover();
+  await expect(page.locator('.board-card.editing .board-card-controls')).toBeHidden();
   await editor.click();
   await page.keyboard.press('ControlOrMeta+A'); // select the card text
   const toolbar = page.locator('.floating-toolbar.board-card-toolbar.visible');
