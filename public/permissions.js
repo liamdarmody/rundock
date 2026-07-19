@@ -184,6 +184,12 @@
   //   { action: 'allow', reason: 'low-risk' }        read-only auto-approve policy
   //   { action: 'card' }                             ask the human
   function decidePermission(risk, key, alwaysAllowedSet) {
+    // A high-risk (destructive) command is always carded, ahead of any standing
+    // allow. The allow-key is coarse (the leading command), so a standing allow
+    // granted for a benign command must never auto-approve a destructive one
+    // that shares the key. High-risk requests never offer "Always allow"
+    // either (offersAlwaysAllow), so nothing legitimate depends on this path.
+    if (risk === 'high') return { action: 'card' };
     if (alwaysAllowedSet && alwaysAllowedSet.has(key)) return { action: 'allow', reason: 'always-allowed' };
     if (risk === 'low') return { action: 'allow', reason: 'low-risk' };
     return { action: 'card' };

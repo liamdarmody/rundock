@@ -194,9 +194,17 @@ describe('toolAllowKey', () => {
 // ── decidePermission: the auto-allow decision path ──────────────────────────
 
 describe('decidePermission', () => {
-  test('a standing always-allow wins regardless of risk', () => {
+  test('a standing always-allow never overrides a high-risk command', () => {
+    // The allow-key is coarse (the leading command), so a standing allow
+    // granted for a benign command (e.g. "git status" -> Bash:git) must not
+    // auto-approve a destructive one that shares the key (e.g. "git push").
     const allowed = new Set(['Bash:git']);
-    assert.deepStrictEqual(P.decidePermission('high', 'Bash:git', allowed), { action: 'allow', reason: 'always-allowed' });
+    assert.deepStrictEqual(P.decidePermission('high', 'Bash:git', allowed), { action: 'card' });
+  });
+
+  test('a standing always-allow still auto-approves a medium-risk command', () => {
+    const allowed = new Set(['Bash:npm']);
+    assert.deepStrictEqual(P.decidePermission('medium', 'Bash:npm', allowed), { action: 'allow', reason: 'always-allowed' });
   });
 
   test('low risk auto-allows without a card', () => {
