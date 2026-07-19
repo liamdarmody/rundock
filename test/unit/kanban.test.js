@@ -59,9 +59,14 @@ function canonical(file) {
 
 const backlog = canonical('backlog.md');
 const roadmap = canonical('roadmap.md');
+// A single board packing many constructs at once (WIP limit, Complete marker,
+// nested checkboxes, block id, <br> lane title, block-style frontmatter,
+// archive, and cards with wikilinks/links/dates/tags/code): proves byte-exact
+// round-trip holds when constructs coexist, not just in isolation.
+const combined = canonical('combined.md');
 
 describe('round-trip idempotence and canonicalisation drift', () => {
-  for (const [label, fx] of [['backlog', backlog], ['roadmap', roadmap]]) {
+  for (const [label, fx] of [['backlog', backlog], ['roadmap', roadmap], ['combined', combined]]) {
     test(`${label}: serialize is idempotent (canonical form is a fixed point)`, () => {
       const twice = Kanban.serialize(Kanban.parse(fx.once));
       assert.strictEqual(fx.once, twice, lineDiff(fx.once, twice).join('\n'));
