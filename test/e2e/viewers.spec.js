@@ -1131,6 +1131,10 @@ test('right-clicking a file row opens a context menu with create and clipboard a
   await boot(page);
   await openFromTree(page, 'proposal.html');
   await openFilesView(page);
+  // Force macOS so the Reveal in Finder row is present regardless of the CI
+  // platform (it is hidden off darwin; its platform gating is covered by the
+  // dedicated "Reveal in Finder shows only on macOS" test).
+  await page.evaluate(() => { serverPlatform = 'darwin'; });
   await page.locator('.file-item', { hasText: 'proposal.html' }).click({ button: 'right' });
   await expect(page.locator('.files-menu')).toBeVisible();
   await expect(page.locator('.files-menu-item', { hasText: 'New note' })).toBeVisible();
