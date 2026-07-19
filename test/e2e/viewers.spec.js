@@ -244,6 +244,78 @@ test('comment on an artifact: select, comment, sidecar written, reload re-anchor
   }).toBe(true);
 });
 
+test('a comment survives a Preview/Code toggle and re-anchors on remount', async ({ page }) => {
+  await boot(page);
+  // Dedicated artifact so its sidecar cannot accumulate across tests.
+  await page.evaluate(() => new Promise((resolve) => {
+    ws.send(JSON.stringify({ type: 'save_file', path: 'toggle-art.html', content: '<html><body><p class="stat">Three workstreams</p></body></html>' }));
+    setTimeout(resolve, 300);
+  }));
+  await openFilesView(page);
+  await page.evaluate(() => { ws.send(JSON.stringify({ type: 'read_file', path: 'toggle-art.html' })); });
+  await expect(page.locator('iframe.viewer-frame')).toBeVisible();
+  await selectInFrame(page, '.stat');
+  await page.locator('.artifact-comment-btn').dispatchEvent('mousedown');
+  await page.locator('.review-composer textarea').fill('toggle note');
+  await page.locator('.review-composer textarea').press('Enter');
+  await expect(page.locator('.review-card.comment')).toHaveCount(1);
+  await expect(page.frameLocator('iframe.viewer-frame').locator('mark[data-rundock-review]')).toHaveText('Three workstreams');
+  // Toggle to Code and back to Preview: the review must re-attach and re-anchor.
+  await page.locator('#toggle-edit').click();
+  await expect(page.locator('#editor-textarea')).toBeVisible();
+  await page.locator('#toggle-preview').click();
+  await expect(page.locator('iframe.viewer-frame')).toBeVisible();
+  await expect(page.locator('.review-card.comment')).toHaveCount(1);
+  await expect(page.frameLocator('iframe.viewer-frame').locator('mark[data-rundock-review]')).toHaveText('Three workstreams');
+});
+
+test('two comments on one artifact both render and mark independently', async ({ page }) => {
+  await boot(page);
+  await page.evaluate(() => new Promise((resolve) => {
+    ws.send(JSON.stringify({ type: 'save_file', path: 'multi-art.html', content: '<html><body><p id="a">Alpha passage</p><p id="b">Beta passage</p></body></html>' }));
+    setTimeout(resolve, 300);
+  }));
+  await openFilesView(page);
+  await page.evaluate(() => { ws.send(JSON.stringify({ type: 'read_file', path: 'multi-art.html' })); });
+  await expect(page.locator('iframe.viewer-frame')).toBeVisible();
+  await selectInFrame(page, '#a');
+  await page.locator('.artifact-comment-btn').dispatchEvent('mousedown');
+  await page.locator('.review-composer textarea').fill('first');
+  await page.locator('.review-composer textarea').press('Enter');
+  await expect(page.locator('.review-card.comment')).toHaveCount(1);
+  await selectInFrame(page, '#b');
+  await page.locator('.artifact-comment-btn').dispatchEvent('mousedown');
+  await page.locator('.review-composer textarea').fill('second');
+  await page.locator('.review-composer textarea').press('Enter');
+  await expect(page.locator('.review-card.comment')).toHaveCount(2);
+  await expect(page.frameLocator('iframe.viewer-frame').locator('mark[data-rundock-review]')).toHaveCount(2);
+});
+
+test('a comment re-anchors when a live external change keeps the quoted passage', async ({ page }) => {
+  await boot(page);
+  // Dedicated artifact so the live change cannot disturb other tests.
+  await page.evaluate(() => new Promise((resolve) => {
+    ws.send(JSON.stringify({ type: 'save_file', path: 'live-artifact.html', content: '<html><body><p id="p">Keep this exact passage here.</p><p>filler</p></body></html>' }));
+    setTimeout(resolve, 300);
+  }));
+  await openFilesView(page);
+  await page.evaluate(() => { ws.send(JSON.stringify({ type: 'read_file', path: 'live-artifact.html' })); });
+  await expect(page.locator('iframe.viewer-frame')).toBeVisible();
+  await selectInFrame(page, '#p');
+  await page.locator('.artifact-comment-btn').dispatchEvent('mousedown');
+  await page.locator('.review-composer textarea').fill('live note');
+  await page.locator('.review-composer textarea').press('Enter');
+  await expect(page.locator('.review-card.comment')).toHaveCount(1);
+  // An external tool changes the file but keeps the quoted passage. The live
+  // watcher pushes the change; the comment must re-anchor, not vanish.
+  await page.evaluate(() => {
+    ws.send(JSON.stringify({ type: 'save_file', path: 'live-artifact.html', content: '<html><body><h1>New heading</h1><p id="p">Keep this exact passage here.</p></body></html>' }));
+  });
+  await expect(page.frameLocator('iframe.viewer-frame').locator('h1')).toHaveText('New heading'); // refreshed
+  await expect(page.locator('.review-card.comment')).toHaveCount(1);
+  await expect(page.frameLocator('iframe.viewer-frame').locator('mark[data-rundock-review]')).toHaveText('Keep this exact passage here.');
+});
+
 test('an anchor whose passage was edited away lists as orphaned, never dropped', async ({ page }) => {
   await boot(page);
   // A dedicated artifact so this test cannot interfere with the flow above.
