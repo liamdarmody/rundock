@@ -15,6 +15,7 @@
 
 import { renderCardHtml } from './board-markdown.js';
 import { createEditorInstance } from '../editor/factory.js';
+import { attachFloatingToolbar } from '../editor/panels/floating-toolbar.js';
 
 let stylesInjected = false;
 function ensureStyles(doc) {
@@ -375,11 +376,24 @@ export function mountBoardView({ paneElement, content, onWikilink }, Kanban) {
     card.classList.add('editing'); // swap the grab cursor for a text caret
     const editor = createEditorInstance({ element: host, initialBody: item.titleRaw });
     editor.commands.focus('end');
+    // Selection toolbar (bold/italic/code/link), viewport-anchored so it clears
+    // the board's nested scroll. Removed with the editor. Clear any stray one
+    // first (e.g. if a prior edit was interrupted by a view switch).
+    doc.querySelectorAll('.board-card-toolbar').forEach((t) => t.remove());
+    const toolbar = doc.createElement('div');
+    toolbar.className = 'floating-toolbar board-card-toolbar';
+    doc.body.appendChild(toolbar);
+    const detachToolbar = attachFloatingToolbar({
+      toolbarElement: toolbar, editor,
+      buttonIds: ['bold', 'italic', 'code', 'link'], fixed: true,
+    });
     let done = false;
     const finish = (commit) => {
       if (done) return;
       done = true;
       const next = commit ? editor.storage.markdown.getMarkdown().replace(/\n+$/, '') : null;
+      try { detachToolbar(); } catch (e) { /* noop */ }
+      toolbar.remove();
       try { editor.destroy(); } catch (e) { /* already torn down */ }
       if (commit && next != null && next.trim() !== item.titleRaw.trim()) {
         Kanban.updateItem(board, laneIndex, itemIndex, next);

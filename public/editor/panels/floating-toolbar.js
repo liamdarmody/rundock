@@ -52,8 +52,9 @@ function normaliseLinkHref(url) {
   return url;
 }
 
-function renderToolbarHTML(withComment) {
-  const buttons = BUTTON_DEFS
+function renderToolbarHTML(withComment, buttonIds = null) {
+  const defs = buttonIds ? BUTTON_DEFS.filter(b => buttonIds.includes(b.id)) : BUTTON_DEFS;
+  const buttons = defs
     .map(b => {
       const styled = b.styled ? ` data-style="${b.styled}"` : '';
       // SVG icons are hardcoded above and trusted; text labels are escaped.
@@ -108,11 +109,15 @@ function updateActiveStates(editor, toolbar) {
 
 // Attach the toolbar to an editor instance. Returns a teardown function so
 // the editor module can clean up when the editor is destroyed.
-export function attachFloatingToolbar({ toolbarElement, hostElement, editor, onReviewAction = null }) {
+export function attachFloatingToolbar({ toolbarElement, hostElement, editor, onReviewAction = null, buttonIds = null, fixed = false }) {
   if (!toolbarElement || !editor) return () => {};
+  // fixed: anchor to the viewport (position: fixed) instead of a scrolling host
+  // container. Used where the editor lives inside a nested-scroll layout (board
+  // cards) and there is no single positioned host to measure against.
 
-  toolbarElement.innerHTML = renderToolbarHTML(typeof onReviewAction === 'function');
+  toolbarElement.innerHTML = renderToolbarHTML(typeof onReviewAction === 'function', buttonIds);
   toolbarElement.classList.remove('visible');
+  if (fixed) toolbarElement.style.position = 'fixed';
 
   const onClick = (event) => {
     const btn = event.target.closest('.tb-btn, .tb-comment');
@@ -159,9 +164,20 @@ export function attachFloatingToolbar({ toolbarElement, hostElement, editor, onR
     // subtracting the host's viewport offset and ADDING its scrollTop /
     // scrollLeft so the toolbar tracks the selection correctly at any scroll
     // position.
-    const hostRect = hostElement.getBoundingClientRect();
     toolbarElement.classList.add('visible');
     const tbRect = toolbarElement.getBoundingClientRect();
+    if (fixed) {
+      // Viewport coordinates, straight from coordsAtPos (no host math).
+      const midX = (startCoords.left + endCoords.left) / 2;
+      const above = startCoords.top - tbRect.height - 8;
+      const top = above >= 8 ? above : endCoords.bottom + 8;
+      const left = Math.max(8, Math.min(window.innerWidth - tbRect.width - 8, midX - tbRect.width / 2));
+      toolbarElement.style.left = left + 'px';
+      toolbarElement.style.top  = top + 'px';
+      updateActiveStates(editor, toolbarElement);
+      return;
+    }
+    const hostRect = hostElement.getBoundingClientRect();
     const scrollTop  = hostElement.scrollTop  || 0;
     const scrollLeft = hostElement.scrollLeft || 0;
     const midX = (startCoords.left + endCoords.left) / 2 - hostRect.left + scrollLeft;

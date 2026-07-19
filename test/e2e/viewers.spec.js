@@ -631,6 +631,27 @@ test('cards reorder within a column by dragging onto another card', async ({ pag
   }).toBe(true);
 });
 
+test('the board card editor shows a selection toolbar with inline formatting only', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'board.md');
+  await expect(page.locator('.board-lane')).toHaveCount(3);
+  await page.locator('.board-card-text', { hasText: 'Draft the outline' }).click();
+  const editor = page.locator('.board-card-editor .ProseMirror');
+  await expect(editor).toBeVisible();
+  await editor.click();
+  await page.keyboard.press('ControlOrMeta+A'); // select the card text
+  const toolbar = page.locator('.floating-toolbar.board-card-toolbar.visible');
+  await expect(toolbar).toBeVisible();
+  // Exactly the inline set: bold, italic, code, link. No headings, no comment.
+  await expect(toolbar.locator('.tb-btn')).toHaveCount(4);
+  await expect(toolbar.locator('.tb-comment')).toHaveCount(0);
+  // Bold via the toolbar formats the selection and persists on save.
+  await toolbar.locator('.tb-btn[data-cmd="bold"]').click();
+  await expect(editor.locator('strong')).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.board-card-text strong', { hasText: 'Draft the outline' })).toBeVisible();
+});
+
 test('a board card edits in place and persists byte-honest markdown', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'board.md');
