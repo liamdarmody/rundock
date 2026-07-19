@@ -7,7 +7,7 @@
 //
 // Two lists:
 //  - PASSING families assert byte-exact round-trip (regressions fail here).
-//  - KNOWN_CORRUPTING families are the audit's open findings, each carded
+//  - KNOWN_CORRUPTING families are the open findings, each carded
 //    in the backlog. Their tests assert the corruption STILL EXISTS, so
 //    fixing one fails its test loudly and the family graduates to the
 //    passing list. Silence never means safety.
@@ -24,7 +24,7 @@ import { roundTrip } from '../helpers/editor-harness.js';
 const CORPUS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'ofm');
 const files = fs.readdirSync(CORPUS_DIR).filter((f) => f.endsWith('.md')).sort();
 
-// The audit's open corruption findings (2026-07-17), by family -> defect.
+// Known corruption findings, by family -> defect.
 // Every entry has a backlog card; fix the serialization, watch its test
 // fail, then move the family out of this map.
 const KNOWN_CORRUPTING = {

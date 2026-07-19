@@ -85,11 +85,11 @@ describe('analyzeWorkspace: Seven Signals', () => {
 
   test('Signal 5 user profile: detects and reports populated fields', () => {
     const { analysis } = analyze({
-      files: { 'user-profile.yaml': 'name: Liam\nrole: Product Leader\ncompany: Rundock\nemail: l@x.com\n' },
+      files: { 'user-profile.yaml': 'name: Alex\nrole: Product Leader\ncompany: Rundock\nemail: a@x.com\n' },
     });
     assert.strictEqual(analysis.userProfile.exists, true);
     assert.strictEqual(analysis.userProfile.populated, true);
-    assert.strictEqual(analysis.userProfile.fields.name, 'Liam');
+    assert.strictEqual(analysis.userProfile.fields.name, 'Alex');
     assert.strictEqual(analysis.userProfile.fields.role, 'Product Leader');
   });
 

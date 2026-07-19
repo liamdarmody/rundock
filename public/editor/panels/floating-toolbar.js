@@ -16,7 +16,7 @@ const COMMENT_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="
 // Formatting buttons render as a row; the review Comment action renders as a
 // full-width bar beneath them (an established review-UI pattern: commenting
 // is the primary review gesture, so it gets primary prominence). Suggesting
-// was deliberately removed from the human toolbar (2026-07-13): a human in
+// was deliberately removed from the human toolbar: a human in
 // an editable document just makes the edit; suggestions remain the AGENT's
 // authoring direction, decided via the sidebar's Accept/Reject.
 const BUTTON_DEFS = [

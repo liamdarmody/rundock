@@ -700,7 +700,7 @@ function findDirectReportMatch(agentId, toolInput) {
 // runtime, no disclosure). For runtime: codex agents that silently bypasses
 // the user's runtime choice. Returns the off-roster workspace agent, or null.
 //
-// Explicit path ONLY (decision, Liam 2026-07-13): prompt-text mentions of
+// Explicit path ONLY (by design): prompt-text mentions of
 // off-roster agents ("review what Cody wrote") are common and legitimate, so
 // the prompt word-scan stays direct-reports-only. Call this AFTER
 // findDirectReportMatch returns null; direct reports are excluded here too
@@ -6820,7 +6820,7 @@ async function runUniversalSearch(msg) {
     (t, h) => { t.snippet = h.snippet; t.sessionId = h.sessionId; t.seq = h.seq; }, limit);
 
   // ── Agents + skills: tiny corpora, in-memory only, name > description ──
-  // (scope addendum: do NOT index these; a query-time filter is always fresh)
+  // (do NOT index these; a query-time filter is always fresh)
   if (!filtersActive) {
     let agents = [];
     try { agents = discoverAgents().filter(a => a.status === 'onTeam'); } catch (e) {}

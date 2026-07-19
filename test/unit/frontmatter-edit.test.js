@@ -113,7 +113,7 @@ describe('byte-honesty (edge-case regressions)', () => {
   });
 });
 
-describe('editListItem: index-based, byte-honest (round-2 regressions)', () => {
+describe('editListItem: index-based, byte-honest', () => {
   test('removing an item never re-parses survivors: ~, comments, and quote-twins are untouched', () => {
     // Remove "alpha" (index 0); every other item's LINE must be byte-identical,
     // including the null sigil and the comment-bearing item.

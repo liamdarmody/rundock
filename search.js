@@ -8,7 +8,7 @@
 // tiny corpora filtered in memory at query time by the server (no index, no
 // sync problem).
 //
-// Engine decision (2026-07-12): the index runs on `node:sqlite`
+// Engine choice: the index runs on `node:sqlite`
 // (DatabaseSync), NOT better-sqlite3 as the July spec drafted. Verified
 // empirically: node:sqlite ships FTS5 (including the trigram tokenizer)
 // unflagged on Node 22.16+ and on Electron 35's bundled Node, where server.js
@@ -97,7 +97,7 @@ function sanitizeFtsQuery(raw, { prefix = false } = {}) {
  * Fzf-style subsequence scorer for the title/name layer (file names,
  * conversation titles, agent/skill names — all small in-memory corpora).
  * Content-level search stays lexical in FTS5; fuzziness applies to titles
- * only (scope addendum 2026-07-12).
+ * only (titles only).
  *
  * Returns a numeric score (higher = better) or null when `needle` is not an
  * in-order subsequence of `haystack`. Scoring favours: consecutive runs,

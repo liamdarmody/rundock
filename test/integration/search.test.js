@@ -197,7 +197,7 @@ describe('search_conversations (sidebar, upgraded internals)', () => {
     // The sidebar fires at >=3 chars mid-word; the pre-index grep matched
     // substrings, so "structur" must keep finding "structure" in message
     // content (query chosen to miss every title so the content phase is
-    // what's exercised). (Review R1 P1-1)
+    // what's exercised).
     const since = client.messages.length;
     client.send({ type: 'search_conversations', query: 'structur' });
     const { msg: reply } = await client.waitFor(m => m.type === 'search_results', { since, label: 'search_results' });
@@ -206,10 +206,10 @@ describe('search_conversations (sidebar, upgraded internals)', () => {
   });
 });
 
-describe('review round 1 regressions (server-side)', () => {
+describe('server-side regressions', () => {
   test('missing session files are not re-resolved on every call (negative memo)', () => {
     // A pruned session jsonl must not trigger a ~/.claude/projects directory
-    // scan per keystroke. (Review R1 P2-1)
+    // scan per keystroke.
     const internal = h.internal;
     internal._sessionPathMemo.clear();
     const rundockDir = path.join(h.workspaceDir, '.rundock');
@@ -237,7 +237,6 @@ describe('review round 1 regressions (server-side)', () => {
   });
 
   test('conversations sharing a session id do not fight over the marks (first wins)', () => {
-    // (Review R1 P2-4)
     const internal = h.internal;
     const rundockDir = path.join(h.workspaceDir, '.rundock');
     const original = fs.readFileSync(path.join(rundockDir, 'conversations.json'), 'utf-8');
@@ -255,7 +254,7 @@ describe('review round 1 regressions (server-side)', () => {
   });
 
   test('a newly saved skill is searchable immediately (cache invalidation)', async () => {
-    // discoverSkills gains a TTL cache (Review R1 P2-3); saving a skill must
+    // discoverSkills gains a TTL cache; saving a skill must
     // still surface it in the palette without waiting out the TTL.
     const since = client.messages.length;
     client.send({ type: 'save_skill', name: 'flash-skill', content: '---\nname: Flash Skill\ndescription: Instant cache invalidation check.\n---\nBody.' });
@@ -272,7 +271,7 @@ describe('review round 1 regressions (server-side)', () => {
     assert.ok(reply.groups.files.find(f => f.path === 'cachecheck-note.md' && f.matchType === 'title'), 'fresh file found by title despite file list cache');
   });
 
-  test('the live-turn hook busts a stale negative session memo (R2 P2-1)', () => {
+  test('the live-turn hook busts a stale negative session memo', () => {
     // Opening the palette can seed a negative memo entry for a brand-new
     // conversation before Claude Code has created its jsonl; the turn-end
     // hook is the authoritative "the jsonl exists now" signal and must not
@@ -300,7 +299,7 @@ describe('review round 1 regressions (server-side)', () => {
     }
   });
 
-  test('a workspace switch retries a failed engine open (R2 P2-2)', async () => {
+  test('a workspace switch retries a failed engine open', async () => {
     const internal = h.internal;
     assert.ok(internal.ensureSearchEngine(), 'engine healthy to start');
     internal._searchTestHooks.simulateOpenFailure();
@@ -312,7 +311,7 @@ describe('review round 1 regressions (server-side)', () => {
     assert.ok(internal.ensureSearchEngine(), 'engine retries after workspace switch');
   });
 
-  test('universal conversation hits ship the declared contract, nothing more (R3 P2-2)', async () => {
+  test('universal conversation hits ship the declared contract, nothing more', async () => {
     // Guard against payload drift: the V1 client renders id/title/agentId/
     // snippet/matchCount; sessionId+seq are the declared future-anchor
     // contract. Engine-internal fields (neighbour, message role/agent, ts)
@@ -325,7 +324,7 @@ describe('review round 1 regressions (server-side)', () => {
     }
   });
 
-  test('a mid-query FTS failure falls back to grep in search_conversations (R3 P2-3)', async () => {
+  test('a mid-query FTS failure falls back to grep in search_conversations', async () => {
     const engine = h.internal.getSearchEngine();
     assert.ok(engine, 'engine active');
     const orig = engine.searchMessages;
@@ -343,7 +342,6 @@ describe('review round 1 regressions (server-side)', () => {
   });
 
   test('archived conversations stay out of the empty-query recents', async () => {
-    // (Review R1 P3-9)
     const rundockDir = path.join(h.workspaceDir, '.rundock');
     const original = fs.readFileSync(path.join(rundockDir, 'conversations.json'), 'utf-8');
     const convos = JSON.parse(original);

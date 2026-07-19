@@ -208,7 +208,7 @@ describe('files corpus', () => {
   });
 
   test('a file that grows past the size cap drops out of the index', () => {
-    // (Review R1 P3-1) Previously the oversized branch skipped the row but
+    // Previously the oversized branch skipped the row but
     // left the stale content searchable forever.
     idx = freshIndex();
     const full = write('grows.md', 'small quoll content', 1_700_000_000);
