@@ -603,7 +603,7 @@ test('board cards render tag chips and dates, and wikilinks navigate', async ({ 
   // Clicking the wikilink navigates to the target file (does not open the card editor).
   await page.locator('.board-card-text a.board-wikilink', { hasText: 'Roadmap-2026' }).click();
   await expect(page.locator('#editor-filename')).toHaveText('Roadmap-2026.md');
-  await expect(page.locator('textarea.board-card-edit')).toHaveCount(0);
+  await expect(page.locator('.board-card-editor')).toHaveCount(0);
 });
 
 test('cards reorder within a column by dragging onto another card', async ({ page }) => {
@@ -637,10 +637,14 @@ test('a board card edits in place and persists byte-honest markdown', async ({ p
   await expect(page.locator('.board-lane')).toHaveCount(3);
   const card = page.locator('.board-card-text', { hasText: 'Draft the outline' });
   await card.click();
-  const editor = page.locator('textarea.board-card-edit');
+  // The card opens in a rich editor (formatting renders as you type).
+  const editor = page.locator('.board-card-editor .ProseMirror');
   await expect(editor).toBeVisible();
-  await editor.fill('Draft the **full** outline');
-  await editor.press('Enter'); // Enter saves
+  await editor.click();
+  await page.keyboard.press('ControlOrMeta+A');
+  await page.keyboard.type('Draft the **full** outline'); // input rule bolds "full"
+  await expect(editor.locator('strong', { hasText: 'full' })).toBeVisible();
+  await page.keyboard.press('Enter'); // Enter saves
   await expect(page.locator('.board-card-text strong', { hasText: 'full' })).toBeVisible();
   // Only that card's line changed; the file stays canonical.
   await expect.poll(async () => (await (await page.request.get('/api/file?path=board.md')).text()))
@@ -677,9 +681,11 @@ test('a later edit dismisses the undo, so undo never discards interim work', asy
   // Make an unrelated edit (on a card no other test mutates): the stale undo
   // is dismissed, so it can never revert this edit away.
   await page.locator('.board-card-text', { hasText: 'Wire the' }).click();
-  const editor = page.locator('textarea.board-card-edit');
-  await editor.fill('Wire the whole board');
-  await editor.press('Enter');
+  const editor = page.locator('.board-card-editor .ProseMirror');
+  await editor.click();
+  await page.keyboard.press('ControlOrMeta+A');
+  await page.keyboard.type('Wire the whole board');
+  await page.keyboard.press('Enter');
   await expect(page.locator('.board-undo-toast')).toHaveCount(0);
   await expect(page.locator('.board-card-text', { hasText: 'Wire the whole board' })).toBeVisible();
 });

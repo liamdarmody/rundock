@@ -14,6 +14,7 @@
 // build on this model in follow-ups.
 
 import { renderCardHtml } from './board-markdown.js';
+import { createEditorInstance } from '../editor/factory.js';
 
 let stylesInjected = false;
 function ensureStyles(doc) {
@@ -53,7 +54,12 @@ function ensureStyles(doc) {
     .board-card:hover .board-card-controls { display: flex; }
     .board-card-ctl { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 6px; color: var(--text-2); background: var(--surface); }
     .board-card-ctl:hover { color: var(--danger, #E85A5A); background: var(--elevated); }
-    .board-card-edit { width: 100%; resize: none; background: var(--elevated); border: 1px solid var(--accent); border-radius: 6px; color: var(--text-1); font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 13px; line-height: 1.5; padding: 8px 10px; outline: none; }
+    .board-card-editor { background: var(--elevated); border: 1px solid var(--accent); border-radius: 6px; padding: 6px 10px; }
+    .board-card-editor .ProseMirror { outline: none; font-size: var(--body); line-height: 1.5; color: var(--text-1); min-height: 1.4em; overflow-wrap: anywhere; }
+    .board-card-editor .ProseMirror p { margin: 0; }
+    .board-card-editor .ProseMirror p + p { margin-top: 4px; }
+    .board-card-editor .ProseMirror a { color: var(--accent); text-decoration: none; }
+    .board-card-editor .ProseMirror code { font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 12px; background: var(--card); padding: 1px 4px; border-radius: 4px; }
     .board-undo-toast { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 8; display: flex; align-items: center; gap: 12px; padding: 8px 12px 8px 16px; border-radius: 8px; background: var(--card); border: 1px solid var(--border); box-shadow: 0 4px 16px rgba(0,0,0,0.25); font-size: var(--body); color: var(--text-1); }
     .board-undo-btn { color: var(--accent); font-weight: 600; padding: 4px 8px; border-radius: 6px; }
     .board-undo-btn:hover { background: var(--accent-glow); }
@@ -350,40 +356,42 @@ export function mountBoardView({ paneElement, content, onWikilink }, Kanban) {
     render();
   }
 
-  // In-place card edit. The card's raw markdown opens in a textarea; Enter
-  // saves, Shift+Enter inserts a newline, Esc cancels, click-away saves. No
-  // hint text. The edited text feeds titleRaw straight through the byte-exact
-  // serializer.
+  // In-place card edit. The card's markdown opens in a rich editor: formatting
+  // (bold, links, wikilinks) renders as you type instead of raw syntax. Enter
+  // saves, Shift+Enter inserts a line, Esc cancels, click-away saves. On save
+  // the editor serializes back to markdown that feeds titleRaw straight through
+  // the byte-exact board serializer (updateItem), so the round-trip is honest.
   function enterCardEdit(card, laneIndex, itemIndex) {
-    if (card.querySelector('textarea.board-card-edit')) return;
+    if (card.querySelector('.board-card-editor')) return;
     const item = board.lanes[laneIndex] && board.lanes[laneIndex].items[itemIndex];
     if (!item) return;
     const row = card.querySelector('.board-card-row');
-    const ta = doc.createElement('textarea');
-    ta.className = 'board-card-edit';
-    ta.value = item.titleRaw;
-    row.replaceWith(ta);
+    const host = doc.createElement('div');
+    host.className = 'board-card-editor';
+    row.replaceWith(host);
     card.draggable = false;
-    ta.focus();
-    ta.setSelectionRange(ta.value.length, ta.value.length);
-    const grow = () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; };
-    grow();
-    ta.addEventListener('input', grow);
+    const editor = createEditorInstance({ element: host, initialBody: item.titleRaw });
+    editor.commands.focus('end');
     let done = false;
     const finish = (commit) => {
       if (done) return;
       done = true;
-      if (commit && ta.value.trim() !== item.titleRaw.trim()) {
-        Kanban.updateItem(board, laneIndex, itemIndex, ta.value);
+      const next = commit ? editor.storage.markdown.getMarkdown().replace(/\n+$/, '') : null;
+      try { editor.destroy(); } catch (e) { /* already torn down */ }
+      if (commit && next != null && next.trim() !== item.titleRaw.trim()) {
+        Kanban.updateItem(board, laneIndex, itemIndex, next);
         onChange();
       }
       render();
     };
-    ta.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); finish(true); }
-      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
-    });
-    ta.addEventListener('blur', () => finish(true)); // click-away saves
+    // Preserve the card grammar over the editor's own keymap: a capture-phase
+    // listener pre-empts the editor so Enter commits (Shift+Enter still inserts
+    // a line) and Esc cancels.
+    host.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); e.stopPropagation(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
+    }, true);
+    editor.on('blur', () => finish(true)); // click-away saves
   }
 
   // Lane (three-dot) menu: every column operation the serializer supports.
