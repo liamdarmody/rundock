@@ -410,7 +410,7 @@ function countSessionMessagesSync(sessionId) {
     // by the typeof === 'string' guard.
     if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
       const text = obj.message.content;
-      // Skip Rundock-injected priming messages — these aren't user-visible bubbles.
+      // Skip Rundock-injected priming messages: these aren't user-visible bubbles.
       if (text.startsWith('CONVERSATION SO FAR:') ||
           text.startsWith('[SYSTEM:') ||
           text.startsWith('[DELEGATION BRIEF]')) continue;
@@ -599,7 +599,7 @@ function buildTeamRoster(leaderId, scopedToDirectReports = false) {
 // Extract the first non-heading paragraph from an agent's instructions body.
 // This is the agent's self-description, used when injecting peers into a plain
 // specialist's system prompt. Fallback chain: first-non-heading-paragraph ->
-// description -> capabilities.does -> ''. Empty return is safe — the caller
+// description -> capabilities.does -> ''. Empty return is safe: the caller
 // renders the header line alone if no description is available.
 function extractSelfDescription(agentData) {
   const body = (agentData && agentData.instructions) || '';
@@ -797,7 +797,7 @@ function buildSystemPrompt(agentData) {
         '- Do NOT ask the user clarifying questions before delegating. Let the specialist ask their own questions.',
         '- Do NOT list the specialist\'s questions, team, or expertise in your own response. That is impersonation, not delegation.',
         '- Handle it yourself only when no specialist fits, or when coordinating across multiple specialists.',
-        '- Platform operations (creating or editing agents, skills, or workspace config) MUST be delegated to Doc by calling the Agent tool with subagent_type=rundock-guide. Do NOT route these to specialists — they cannot edit .claude/ files.',
+        '- Platform operations (creating or editing agents, skills, or workspace config) MUST be delegated to Doc by calling the Agent tool with subagent_type=rundock-guide. Do NOT route these to specialists: they cannot edit .claude/ files.',
         '- When a specialist returns because the user asked for something outside their scope, pick up that request immediately. Do not ask the user to repeat themselves.',
         '- When a specialist returns control to you (for any reason), do not delegate back to the same specialist on your next turn. Either delegate to a different specialist, handle the request yourself, or present results to the user.',
         '- Only delegate to agents listed in YOUR TEAM below. Never invent, assume, or reference agent names that do not appear in the roster. If no listed specialist fits, handle the request yourself.',
@@ -810,7 +810,7 @@ function buildSystemPrompt(agentData) {
   } else if (hasDirectReports) {
     delegationSection = [
       'DELEGATION:',
-      'You have a support team. You do substantive work yourself in your core domain. When a task matches a team member\'s speciality, you delegate. When you delegate, you are a router for that hop: invoke the Agent tool and let the team member take over. The full brief, context, and instructions go INSIDE the Agent tool call — not in a visible chat turn.',
+      'You have a support team. You do substantive work yourself in your core domain. When a task matches a team member\'s speciality, you delegate. When you delegate, you are a router for that hop: invoke the Agent tool and let the team member take over. The full brief, context, and instructions go INSIDE the Agent tool call: not in a visible chat turn.',
       '',
       'RULES:',
       '- Delegate when a task matches a team member\'s speciality. Do it yourself only for tasks in YOUR core domain.',
@@ -1476,8 +1476,9 @@ function analyzeWorkspace(dir, existingAgents) {
   const claude = sources.find(s => s.file === 'CLAUDE.md');
   const pkg = sources.find(s => s.file === 'package.json');
   if (readme?.heading) {
-    // Extract name and tagline from heading like "Dex by Dave — Your AI Chief of Staff"
-    const parts = readme.heading.split(/[—–:|]+/).map(s => s.trim());
+    // Split a "Name <separator> Tagline" heading into name and tagline. The
+    // char class keeps em and en dashes so a dash-separated heading splits too.
+    const parts = readme.heading.split(/[—–:|]+/).map(s => s.trim()); // internal-refs-allow
     suggestedName = parts[0]?.split(/\s+/)[0]; // First word of first part
     suggestedTagline = parts[1] || readme.summary;
     suggestedRole = parts[1] || null;
@@ -2724,7 +2725,7 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
                   // so agent_switch (and the specialist's process_started, also sent
                   // inside handleDelegation) reach the client first. By then
                   // activeProcessId points at the specialist, so the orchestrator's
-                  // 'done' fails the process-id match in finishProcessing — exactly
+                  // 'done' fails the process-id match in finishProcessing: exactly
                   // what we want: the orchestrator's working indicator clears via
                   // agent_switch, not via 'done'.
                   handleDelegation({
@@ -3964,7 +3965,7 @@ wss.on('connection', (ws) => {
             '--verbose', '--include-partial-messages', '--permission-mode', legacyPermMode,
             '--allowed-tools', getAllowedToolsLegacy(),
             ...(legacyDisallowed ? ['--disallowed-tools', legacyDisallowed] : []),
-            '--append-system-prompt', 'FORMATTING RULES (mandatory, apply to all output):\n- NEVER use em dashes (—) or en dashes (–) anywhere. This includes lists, headers, separators, and inline text. Wrong: "AI — your assistant". Right: "AI: your assistant". Use colons, full stops, commas, or restructure instead.\n- Use UK spelling throughout.\n\nPLATFORM RULES:\nRundock is a knowledge management platform. You can create and edit markdown, YAML, JSON, and text files. Executable code files (.js, .ts, .py, .sh, etc.) are outside the supported file types. Destructive commands (rm, sudo, chmod) are not supported. If a user asks you to do something outside these capabilities, explain that Rundock is designed for knowledge work and suggest an alternative approach using supported file types.'];
+            '--append-system-prompt', 'FORMATTING RULES (mandatory, apply to all output):\n- NEVER use em dashes (—) or en dashes (–) anywhere. This includes lists, headers, separators, and inline text. Wrong: "AI — your assistant". Right: "AI: your assistant". Use colons, full stops, commas, or restructure instead.\n- Use UK spelling throughout.\n\nPLATFORM RULES:\nRundock is a knowledge management platform. You can create and edit markdown, YAML, JSON, and text files. Executable code files (.js, .ts, .py, .sh, etc.) are outside the supported file types. Destructive commands (rm, sudo, chmod) are not supported. If a user asks you to do something outside these capabilities, explain that Rundock is designed for knowledge work and suggest an alternative approach using supported file types.']; // internal-refs-allow
 
           if (msg.sessionId) {
             args.push('--resume', msg.sessionId);
@@ -4380,7 +4381,7 @@ wss.on('connection', (ws) => {
         // Enrich each conversation for sidebar/profile display. Two passes:
         //   1. messageCount: sum of user/assistant chat-bubble turns across
         //      every Claude Code session JSONL the conversation touches. This
-        //      is the canonical source — Rundock's own transcript only covers
+        //      is the canonical source: Rundock's own transcript only covers
         //      messages emitted after appendTranscript started running and is
         //      partial or missing for older conversations.
         //   2. lastAgentId / lastMessagePreview: still sourced from the
@@ -6445,7 +6446,7 @@ process.on('exit', () => {
 // ===== UNIVERSAL SEARCH =====
 // FTS5 engine over files + conversations when node:sqlite is available;
 // grep fallback otherwise. The engine is lazily (re)opened per workspace so
-// every entry point — WS handlers, hooks, tests driving _internal — heals
+// every entry point: WS handlers, hooks, tests driving _internal: heals
 // itself after a workspace switch.
 
 let searchEngine = null;            // SearchIndex instance or null (fallback active)

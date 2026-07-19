@@ -40,6 +40,10 @@ const RULES = [
   { label: 'vault / private workspace path', re: /02_Areas|01_Projects|Liam-Agent-Workspace|Obsidian Vaults?/ },
   { label: 'internal process phrase', re: /adversarial (sweep|review round)|handoff file per run|completion report per run/i },
   { label: 'owner-attributed decision note', re: /\(Liam[ ,]|Liam 20[0-9]{2}|decision,? Liam/ },
+  // Style rule: no em or en dashes anywhere. Use a colon, comma, full stop, or
+  // restructure. Genuinely intentional dashes (a splitter char class, the
+  // prompt that defines the rule) carry an inline internal-refs-allow marker.
+  { label: 'em or en dash (use a colon, comma, or full stop)', re: /[—–]/ },
 ];
 
 function trackedFiles() {

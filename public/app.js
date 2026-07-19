@@ -2548,8 +2548,8 @@ function handleActiveProcesses(active) {
   const activeConvoIds = new Set(active.map(p => p.conversationId));
 
   // Restore state for conversations with live processes on the server.
-  // Non-idle: actively generating output — restore thinking indicator.
-  // Idle: specialist waiting for input — record agent identity so
+  // Non-idle: actively generating output: restore thinking indicator.
+  // Idle: specialist waiting for input: record agent identity so
   // header/placeholder reflect the correct recipient, but no indicator.
   for (const proc of active) {
     const convo = conversations.find(c => c.id === proc.conversationId);
@@ -2751,7 +2751,7 @@ function renderSessionHistory(d) {
     // Skip hidden system messages (workspace analysis blocks, setup instructions)
     if (msg.content && msg.content.includes('[WORKSPACE_ANALYSIS]')) continue;
     // Routing entries: orchestrator immediate-routing turns (no prose). Don't
-    // render a chat bubble — the agent-change divider on the next message
+    // render a chat bubble: the agent-change divider on the next message
     // carries the visible handoff. Update lastAgentId so the divider triggers.
     if (msg.type === 'routing') {
       lastAgentId = msg.agentId || lastAgentId;
@@ -3407,7 +3407,7 @@ function loadFileContent(path, content) {
 // read-only viewers, its getContentForSave is non-null (unless the board holds
 // content the grammar would drop, in which case saving is refused).
 let boardSaveTimer = null;
-let boardPendingSave = null; // { path, md } — the latest debounced board write
+let boardPendingSave = null; // { path, md }: the latest debounced board write
 // Flush a pending board save immediately. Called before opening any file so a
 // board's last edit is never dropped when switching away inside the debounce
 // window (the pending save carries its own path, so it writes the right file).
@@ -4931,7 +4931,7 @@ let paletteSel = 0;
 let paletteLoading = false;
 let palettePendingSkill = null;
 let paletteReqId = 0;         // stale-reply guard (query text alone can't distinguish filter/fuzzy toggles)
-var pendingMessageAnchor = null; // {convoId, text, fragment} — var: openConversation clears it and runs before this section during load-order-sensitive paths
+var pendingMessageAnchor = null; // {convoId, text, fragment}: var: openConversation clears it and runs before this section during load-order-sensitive paths
 
 // Group order/labels/limit live in palette-model.js (unit-tested).
 const PALETTE_GROUP_LIMIT = RundockPalette.GROUP_LIMIT;

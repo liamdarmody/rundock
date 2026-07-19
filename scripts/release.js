@@ -204,4 +204,4 @@ log('done', `Tagged v${version}. GitHub Actions is now building, signing, notari
 log('done', `Watch the build:   https://github.com/${REPO}/actions`);
 log('done', `Review + publish:  https://github.com/${REPO}/releases`);
 log('done', `Then bump the Rundock Site download links to v${version}.`);
-log('done', `If CI fails (e.g. expired Apple agreement): fix it and re-run the workflow on tag v${version} — no need to revert main.`);
+log('done', `If CI fails (e.g. expired Apple agreement): fix it and re-run the workflow on tag v${version}: no need to revert main.`);

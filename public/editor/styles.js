@@ -219,7 +219,7 @@ const CSS = `
    instant signal. Hovering the handle (after a 300ms intent delay, the
    sash convention) brightens the panel's OWN edge border to a neutral
    (--text-2): the edge wakes up rather than a second line appearing, so
-   nothing can double or clip. Dragging turns the same edge accent —
+   nothing can double or clip. Dragging turns the same edge accent:
    orange means action-in-progress, and it only ever appears under a
    held mouse button. Leaving un-highlights immediately. */
 .review-resize-handle {
@@ -330,7 +330,7 @@ const CSS = `
 }
 .review-reply .review-by { margin-left: 0; flex-shrink: 0; }
 .review-reply .review-by::after { content: ':'; }
-/* Review text entry: the conversations-input grammar at card scale — a
+/* Review text entry: the conversations-input grammar at card scale: a
    growing textarea with an embedded circular send button that activates
    when there is text. No button row, so narrow panels keep full input
    width; an empty reply input dismisses itself on blur. */

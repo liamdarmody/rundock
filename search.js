@@ -15,14 +15,14 @@
 // runs in-process (electron/main.js requires server.js directly, so a native
 // module would have needed Electron's ABI). node:sqlite is compiled into Node
 // itself with platform-uniform build flags, so Windows carries zero
-// native-binary risk — this removes the spec's #1 risk (native prebuilds)
+// native-binary risk: this removes the spec's #1 risk (native prebuilds)
 // wholesale, with the same synchronous API surface. Runtimes without
 // node:sqlite (Node 20/21/early 22) degrade to the legacy grep path behind
 // the capability probe below; search never hard-fails on a platform.
 //
 // The index is a DERIVED ARTIFACT at <workspace>/.rundock/search-index.db:
 // deleting it loses nothing; it rebuilds from the source files. There are no
-// schema migrations, ever — a schema version bump or a corrupt file deletes
+// schema migrations, ever: a schema version bump or a corrupt file deletes
 // the db and rebuilds (spec "Never" boundary). No embeddings, no vectors, no
 // user-facing configuration.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -95,7 +95,7 @@ function sanitizeFtsQuery(raw, { prefix = false } = {}) {
 
 /**
  * Fzf-style subsequence scorer for the title/name layer (file names,
- * conversation titles, agent/skill names — all small in-memory corpora).
+ * conversation titles, agent/skill names: all small in-memory corpora).
  * Content-level search stays lexical in FTS5; fuzziness applies to titles
  * only (titles only).
  *
@@ -302,7 +302,7 @@ CREATE TABLE IF NOT EXISTS session_marks (
  * Extract indexable messages from one parsed Claude Code jsonl line.
  * Mirrors parseSessionHistory's display semantics: user messages with string
  * content, and assistant text blocks (trim-filtered). Tool calls and tool
- * results are excluded in v1 — they are the main source of grep noise the
+ * results are excluded in v1: they are the main source of grep noise the
  * spec calls out.
  * Returns {role, text, tsMs} or null.
  */
@@ -578,7 +578,7 @@ Object.assign(SearchIndex.prototype, {
   /**
    * Bring the message index in line with the given conversations' session
    * jsonl files. `convos` is [{conversationId, sessions: [{sessionId,
-   * agentId, filePath}]}] — the server resolves paths (they live in
+   * agentId, filePath}]}]: the server resolves paths (they live in
    * ~/.claude/projects, outside the workspace).
    *
    * High-water mark is a byte offset per session file. The jsonl is
@@ -629,7 +629,7 @@ Object.assign(SearchIndex.prototype, {
         // ownership handover), the message inserts, and the mark upsert land
         // together or not at all. Without this, a crash between them leaves
         // the mark behind the rows, and the next reconcile re-reads from the
-        // old offset and duplicates every message — with nothing ever
+        // old offset and duplicates every message: with nothing ever
         // cleaning it up (the schema version hasn't changed, so no rebuild
         // fires). A failed session rolls back and is skipped; the next
         // reconcile retries it from the same mark. BEGIN sits inside the try
@@ -727,7 +727,7 @@ Object.assign(SearchIndex.prototype, {
    * context, a highlighted snippet, and one neighbouring message (the
    * previous message in the same session, or the next when the hit opens
    * the session) so results are recognisable. `collapse: true` (default)
-   * keeps only the best-ranked hit per conversation with a matchCount —
+   * keeps only the best-ranked hit per conversation with a matchCount:
    * the palette lists conversations, not raw messages.
    */
   searchMessages(rawQuery, opts = {}) {

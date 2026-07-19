@@ -97,7 +97,7 @@ function ensureStyles(doc) {
 }
 
 // Lucide-style inline SVG from a list of path `d` strings (24 viewBox, 1.8
-// stroke, round caps) — never a unicode glyph.
+// stroke, round caps): never a unicode glyph.
 function iconSvg(doc, paths) {
   const NS = 'http://www.w3.org/2000/svg';
   const svg = doc.createElementNS(NS, 'svg');

@@ -109,7 +109,7 @@ export function attachReviewPanel({ paneElement, editor = null, surface = null, 
   // the workspace user to "Me", known agents to their roster display name,
   // and everything else to the title-cased handle (by: penn renders as
   // Penn even when penn is not in this workspace's roster). Absent
-  // metadata renders as "Unattributed" — never a guessed name. One visual
+  // metadata renders as "Unattributed": never a guessed name. One visual
   // treatment for every author: identity is information, not decoration.
   function titleCaseHandle(handle) {
     return handle.split(' ').map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(' ');
@@ -141,7 +141,7 @@ export function attachReviewPanel({ paneElement, editor = null, surface = null, 
   // conversations message input: a growing textarea with an embedded
   // circular send button that activates when there is text. Enter sends,
   // Shift+Enter breaks the line, Cmd/Ctrl+Enter also sends, Escape cancels.
-  // With autoCollapse, an empty input dismisses itself on blur — that IS
+  // With autoCollapse, an empty input dismisses itself on blur: that IS
   // the cancel affordance, so no button row eats the narrow panel width.
   const SEND_ARROW_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
 
@@ -498,10 +498,10 @@ export function attachReviewPanel({ paneElement, editor = null, surface = null, 
   }
 
   // Re-render when the document changes (constructs decided inline, undo,
-  // typing near constructs) — cheap enough at sidebar scale.
+  // typing near constructs): cheap enough at sidebar scale.
   const offDocChange = surface.onDocChange(render);
 
-  // Clicking an inline mark opens the panel and lights up its card —
+  // Clicking an inline mark opens the panel and lights up its card:
   // the mirror of the card's scroll-to-mark.
   const onConstructClick = (event) => {
     const target = event.target.closest && event.target.closest('.critic');

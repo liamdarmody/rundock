@@ -76,7 +76,7 @@ export function extractEndmatter(text) {
   // A '---' inside an unclosed code fence is fence content, not endmatter.
   // Fences pair by marker character and length (a fence closes only on the
   // same character, at least the opening length, with nothing after it),
-  // and may be indented up to three spaces — parity counting cannot model
+  // and may be indented up to three spaces: parity counting cannot model
   // that (a 4-backtick fence documenting ``` lines would miscount).
   if (insideUnclosedFence(text.slice(0, idx))) return none;
 

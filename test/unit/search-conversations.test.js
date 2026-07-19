@@ -380,7 +380,7 @@ describe('conversations corpus', () => {
     assert.strictEqual(idx.searchMessages('tapir', { collapse: false })[0].conversationId, 'cA');
     // A new conversation entry (unshifted to the head of conversations.json)
     // presents the same session; the mark's owner is still alive, so the
-    // delta stays attributed to cA — no flip, no split.
+    // delta stays attributed to cA: no flip, no split.
     fs.appendFileSync(p, jsonlAssistant('more tapir detail', '2026-07-01T10:01:00.000Z'));
     idx.reconcileConversations([convo('cB', 'cos', [{ sessionId: 's1', agentId: 'cos', filePath: p }])],
       { validConversationIds: ['cA', 'cB'] });
@@ -403,7 +403,7 @@ describe('conversations corpus', () => {
     idx.reconcileConversations([convo('cB', 'cos', [{ sessionId: 's1', agentId: 'cos', filePath: p }])],
       { validConversationIds: ['cB'] });
     const hits = idx.searchMessages('bilby', { collapse: false });
-    assert.strictEqual(hits.length, 2, 'exactly once — no duplicate rows through the ownership seam');
+    assert.strictEqual(hits.length, 2, 'exactly once: no duplicate rows through the ownership seam');
     assert.deepStrictEqual([...new Set(hits.map(h => h.conversationId))], ['cB']);
   });
 
