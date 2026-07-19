@@ -58,8 +58,24 @@ function escapeHtml(s) {
     .replace(/'/g, '&#39;');
 }
 
-function dateString(value) {
-  if (value instanceof Date) return value.toISOString().slice(0, 10);
+export function dateString(value) {
+  // Frontmatter dates arrive as their authored string (the parser keeps
+  // timestamps verbatim), so a string renders as-is: the day and any time and
+  // offset survive exactly.
+  if (typeof value === 'string') return value;
+  if (value instanceof Date) {
+    // Defensive: if a Date does reach here, render a stable calendar day. A
+    // pure UTC midnight is a date-only value, so use its UTC day (timezone
+    // independent); anything with a time uses the local calendar day rather
+    // than toISOString(), which would push an evening value to the next day.
+    const utcMidnight = value.getUTCHours() === 0 && value.getUTCMinutes() === 0
+      && value.getUTCSeconds() === 0 && value.getUTCMilliseconds() === 0;
+    if (utcMidnight) return value.toISOString().slice(0, 10);
+    const y = value.getFullYear();
+    const m = String(value.getMonth() + 1).padStart(2, '0');
+    const d = String(value.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
   if (value && typeof value === 'object' && value.__type === 'date') return String(value.value);
   return String(value);
 }

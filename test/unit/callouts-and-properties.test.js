@@ -7,7 +7,8 @@ import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import { bootEditorEnv } from '../helpers/editor-harness.js';
 import { parseCalloutBody } from '../../public/editor/nodes/callout.js';
-import { renderProperties, parsePropWikilink } from '../../public/editor/panels/properties.js';
+import { renderProperties, parsePropWikilink, dateString } from '../../public/editor/panels/properties.js';
+import { extractFrontmatter } from '../../public/editor/markdown/frontmatter.js';
 
 async function renderedHtml(src) {
   const env = await bootEditorEnv();
@@ -194,5 +195,30 @@ describe('frontmatter wikilink properties', () => {
     input.dispatchEvent(new dom.window.FocusEvent('blur'));
     assert.deepEqual(editsA, [], 'no write to the previous file');
     assert.deepEqual(editsB, [], 'no write to the new file from a stale input');
+  });
+});
+
+describe('frontmatter datetime with timezone (P1-5)', () => {
+  test('a datetime with an offset is preserved verbatim, not shifted to another UTC day', () => {
+    const { parsed } = extractFrontmatter('---\ndue: 2026-07-19T22:00:00-05:00\n---\n');
+    // Kept as the authored string: the day (19) and the time survive, instead
+    // of parsing to a Date that toISOString() would push to 2026-07-20.
+    assert.strictEqual(parsed.due, '2026-07-19T22:00:00-05:00');
+  });
+
+  test('date-only values stay strings and numbers/booleans keep their types', () => {
+    const { parsed } = extractFrontmatter('---\nday: 2026-07-19\ncount: 3\nflag: true\n---\n');
+    assert.strictEqual(parsed.day, '2026-07-19');
+    assert.strictEqual(parsed.count, 3);
+    assert.strictEqual(parsed.flag, true);
+  });
+
+  test('dateString renders a string date verbatim and does not shift a datetime', () => {
+    assert.strictEqual(dateString('2026-07-19'), '2026-07-19');
+    assert.strictEqual(dateString('2026-07-19T22:00:00-05:00'), '2026-07-19T22:00:00-05:00');
+  });
+
+  test('dateString on a UTC-midnight Date renders its calendar day, timezone-stable', () => {
+    assert.strictEqual(dateString(new Date('2026-07-19T00:00:00Z')), '2026-07-19');
   });
 });
