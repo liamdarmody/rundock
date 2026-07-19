@@ -29,7 +29,14 @@
   // (path separators are collapsed so creation can never escape the folder)
   // and joining it under the folder. Returns '' for an empty name.
   function creatablePath(folder, name, ext) {
-    const clean = String(name == null ? '' : name).trim().replace(/[\\/]+/g, '-');
+    // Collapse path separators so creation can never escape the folder, then
+    // strip leading dots from the basename: a dotfile is hidden by the tree
+    // filter (the new file would be invisible) and '.'/'..' are traversal.
+    // A name that is nothing but dots sanitises to empty and is refused.
+    const clean = String(name == null ? '' : name)
+      .trim()
+      .replace(/[\\/]+/g, '-')
+      .replace(/^\.+/, '');
     if (!clean) return '';
     const dir = String(folder || '').replace(/^\/+|\/+$/g, '');
     return (dir ? dir + '/' : '') + clean + (ext || '');

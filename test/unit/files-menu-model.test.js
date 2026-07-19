@@ -19,9 +19,23 @@ describe('files-menu-model', () => {
   });
 
   test('creatablePath never lets a name escape the folder', () => {
-    assert.strictEqual(M.creatablePath('notes', '../secret', '.md'), 'notes/..-secret.md');
+    // Separators collapse to '-' and leading dots are stripped, so a traversal
+    // attempt becomes a plain visible basename inside the folder.
+    assert.strictEqual(M.creatablePath('notes', '../secret', '.md'), 'notes/-secret.md');
     assert.strictEqual(M.creatablePath('', 'a/b/c', '.md'), 'a-b-c.md');
     assert.strictEqual(M.creatablePath('notes/', 'x', '.md'), 'notes/x.md');
+  });
+
+  test('creatablePath strips leading dots so a new file is never hidden', () => {
+    assert.strictEqual(M.creatablePath('', '.secret', '.md'), 'secret.md');
+    assert.strictEqual(M.creatablePath('notes', '.env', ''), 'notes/env');
+    assert.strictEqual(M.creatablePath('', '..hidden', '.md'), 'hidden.md');
+  });
+
+  test('creatablePath refuses a name that is only dots', () => {
+    assert.strictEqual(M.creatablePath('', '.', ''), '');
+    assert.strictEqual(M.creatablePath('notes', '..', ''), '');
+    assert.strictEqual(M.creatablePath('', '...', '.md'), '');
   });
 
   test('creatablePath returns empty for a blank name', () => {

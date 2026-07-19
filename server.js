@@ -33,6 +33,18 @@ function isInsideWorkspace(targetPath) {
   return resolved === root || resolved.startsWith(root + path.sep);
 }
 
+// Is a workspace-relative path safe for the Files sidebar to create? Rejects
+// any path with a dot-leading component: a leading-dot basename is filtered
+// out of the file tree (so the new file would be invisible), and '.'/'..'
+// segments are traversal. Independent of isInsideWorkspace so a '..' that
+// happens to resolve back inside the workspace is still refused.
+function isSafeCreatePath(rel) {
+  if (typeof rel !== 'string' || !rel) return false;
+  const segments = rel.split('/').filter(Boolean);
+  if (!segments.length) return false;
+  return !segments.some((seg) => seg.startsWith('.'));
+}
+
 // Shared constants to avoid repetition across process spawn sites
 const DISALLOWED_TOOLS_KNOWLEDGE = 'Write(*.js),Write(*.jsx),Write(*.ts),Write(*.tsx),Write(*.py),Write(*.sh),Write(*.bash),Write(*.rb),Write(*.pl),Write(*.exe),Write(*.dll),Write(*.so),Edit(*.js),Edit(*.jsx),Edit(*.ts),Edit(*.tsx),Edit(*.py),Edit(*.sh),Edit(*.bash),Edit(*.rb),Edit(*.pl),Edit(*.exe)';
 // Backward compat: DISALLOWED_TOOLS used by existing code paths
@@ -4931,7 +4943,7 @@ wss.on('connection', (ws) => {
       if (msg.type === 'create_path') {
         const rel = String(msg.path || '').replace(/^\/+/, '');
         const full = path.resolve(WORKSPACE, rel);
-        if (!rel || !isInsideWorkspace(full)) {
+        if (!rel || !isInsideWorkspace(full) || !isSafeCreatePath(rel)) {
           ws.send(JSON.stringify({ type: 'create_error', path: rel, reason: 'invalid path' }));
         } else if (msg.kind !== 'folder' && fs.existsSync(full)) {
           ws.send(JSON.stringify({ type: 'create_error', path: rel, reason: 'already exists' }));
@@ -6892,7 +6904,7 @@ module.exports._internal = {
   // workspace analysis / scaffolding
   detectWorkspaceMode, isEmptyWorkspace, analyzeWorkspace,
   scaffoldDefaults, scaffoldWorkspace, muteHooks, discoverWorkspaces,
-  readMcpServerNames, getFileTree, validateAgentSlug, isInsideWorkspace,
+  readMcpServerNames, getFileTree, validateAgentSlug, isInsideWorkspace, isSafeCreatePath,
   // persistence
   readConversations, writeConversations, readState, writeState,
   readLists, writeLists, deleteListEverywhere,
