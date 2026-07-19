@@ -1419,7 +1419,11 @@ window.addEventListener('resize', () => {
 // ===== 7. AGENT PROFILE =====
 
 function showProfile(agentId) {
-  const a=agents.find(x=>x.id===agentId); if(!a) return;
+  const a=agents.find(x=>x.id===agentId);
+  // Missing target (a search hit whose agent is absent from the client list,
+  // server/client desync): land in the Team section consistently instead of
+  // leaving the rail on its previous section with no matching pane.
+  if(!a) { switchNav('team'); return; }
   // Agent profiles belong to the Team section (the profile's back link goes
   // there); sync the rail and sidebar for callers arriving from elsewhere,
   // e.g. the search palette or a skill page's agent chips.
@@ -2230,6 +2234,12 @@ function discardIfEmpty() {
 }
 
 function openConversation(id, withAnchor) {
+  const c=conversations.find(x=>x.id===id);
+  // Missing target (a search hit whose conversation is absent from the client
+  // list, server/client desync): land in the Conversations section
+  // consistently instead of switching the rail while the origin pane stays
+  // shown (half-navigated).
+  if(!c) { switchNav('conversations'); return; }
   // Opening a conversation IS a navigation to the Conversations section,
   // wherever it started (sidebar click, search palette, an agent profile's
   // conversation list); the rail and sidebar must follow.
@@ -2240,7 +2250,6 @@ function openConversation(id, withAnchor) {
   // Close any active find before swapping the DOM out from under it.
   if (activeConversation && activeConversation.id !== id) closeFindBar();
   if (activeConversation && activeConversation.id !== id) discardIfEmpty();
-  const c=conversations.find(x=>x.id===id); if(!c) return;
   activeConversation=c;
   persistLastActiveConversation(id);
   unreadConvos.delete(id);
@@ -3575,8 +3584,11 @@ function highlightFileInSidebar(filePath) {
     if (node.classList && node.classList.contains('file-children') && node.classList.contains('collapsed')) {
       node.classList.remove('collapsed');
       const folder = node.previousElementSibling;
-      const ic = folder && folder.classList.contains('folder-item') ? folder.querySelector('.folder-icon') : null;
-      if (ic) ic.innerHTML = '&#x25BC;';
+      // Swap the folder's icon to the open-folder SVG, matching the manual
+      // click-expand path. The earlier selector (.folder-icon) matched nothing
+      // and injected a text chevron into an <svg>, so the icon stayed closed.
+      const svg = folder && folder.classList.contains('folder-item') ? folder.querySelector('svg.file-item-icon') : null;
+      if (svg) svg.innerHTML = TREE_ICONS.folderOpen;
     }
     node = node.parentElement;
   }

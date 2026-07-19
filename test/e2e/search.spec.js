@@ -113,6 +113,50 @@ test('nav state: every result type from every origin view lands consistently', a
   }
 });
 
+test('nav state: opening a missing conversation or agent lands consistently, not half-navigated', async ({ page }) => {
+  await boot(page);
+  // Start on Files so a failed open would otherwise leave the rail switched
+  // while the editor pane stays shown (the half-navigated bug).
+  await page.locator('.nav-item[data-nav="files"]').click();
+  // A search hit whose conversation id is absent from the client list.
+  await page.evaluate(() => openConversation('does-not-exist'));
+  await expectSection(page, 'conversations', 'chat');
+  await expect(page.locator('.nav-item.active')).toHaveCount(1);
+
+  await page.locator('.nav-item[data-nav="files"]').click();
+  await page.evaluate(() => showProfile('no-such-agent'));
+  await expectSection(page, 'team', 'home');
+  await expect(page.locator('.nav-item.active')).toHaveCount(1);
+});
+
+test('reveal: opening a file in a collapsed folder shows the open-folder icon', async ({ page }) => {
+  await boot(page);
+  await page.locator('.nav-item[data-nav="files"]').click();
+  // Collapse a folder that contains a file, then reveal the file inside it.
+  const revealed = await page.evaluate(() => {
+    const folder = document.querySelector('.folder-item');
+    if (!folder) return null;
+    const children = folder.nextElementSibling;
+    const fileItem = children && children.querySelector('.file-item[data-path]');
+    if (!fileItem) return null;
+    children.classList.add('collapsed');
+    const svg = folder.querySelector('svg.file-item-icon');
+    if (svg) svg.innerHTML = '';
+    highlightFileInSidebar(fileItem.dataset.path);
+    const openPath = folder.querySelector('svg.file-item-icon path');
+    return {
+      collapsed: children.classList.contains('collapsed'),
+      d: openPath ? openPath.getAttribute('d') : null,
+      expected: TREE_ICONS.folderOpen.match(/d="([^"]+)"/)[1],
+    };
+  });
+  expect(revealed).not.toBeNull();
+  // The folder expanded and its icon is the open-folder SVG (a real path, not a
+  // text chevron injected into the svg).
+  expect(revealed.collapsed).toBe(false);
+  expect(revealed.d).toBe(revealed.expected);
+});
+
 // ── search icon active state ────────────────────────────────────────────────
 
 test('nav rail: the search icon activates while the palette is open and the origin view dims', async ({ page }) => {
