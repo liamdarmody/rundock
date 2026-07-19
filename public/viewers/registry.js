@@ -66,11 +66,18 @@ const CSP_META = `<meta http-equiv="Content-Security-Policy" content="${ARTIFACT
 // the meta through. The CSP meta this module injects uses
 // http-equiv=Content-Security-Policy and is added afterwards, so it is never a
 // target here.
+// Pass 1 tokenizes attribute values, so a `>` hidden inside a quoted value
+// cannot end the tag early. It assumes balanced quotes, so an unmatched quote
+// in the tag defeats it; pass 2 covers that by scanning to the first `>`. Only
+// a tag with BOTH a quoted `>` AND an unmatched quote escapes both, which no
+// browser would reliably honour as a meta refresh anyway.
 const META_REFRESH_RE =
   /<meta\b(?:[^>"']|"[^"]*"|'[^']*')*?\bhttp-equiv\s*=\s*("refresh"|'refresh'|refresh)(?:[^>"']|"[^"]*"|'[^']*')*>/gi;
+const META_REFRESH_SIMPLE_RE =
+  /<meta\b[^>]*?\bhttp-equiv\s*=\s*("refresh"|'refresh'|refresh)\b[^>]*?>/gi;
 
 function stripMetaRefresh(html) {
-  return html.replace(META_REFRESH_RE, '');
+  return html.replace(META_REFRESH_RE, '').replace(META_REFRESH_SIMPLE_RE, '');
 }
 
 export function buildSrcdoc(content) {

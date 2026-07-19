@@ -117,6 +117,18 @@ describe('buildSrcdoc: CSP injection', () => {
     }
   });
 
+  test('meta refresh is stripped even with an unmatched quote in the tag', () => {
+    for (const meta of [
+      '<meta http-equiv=refresh content="0;url=https://evil.example/track" \'>',
+      '<meta http-equiv=refresh content="0;url=https://evil.example/track" x=y\'>',
+      '<meta content=x\' http-equiv=refresh>',
+    ]) {
+      const out = buildSrcdoc(`<html><head>${meta}</head><body></body></html>`);
+      assert.ok(!/http-equiv\s*=\s*["']?\s*refresh/i.test(out), `stripped: ${meta}`);
+      assert.ok(!out.includes('evil.example'), `external URL gone: ${meta}`);
+    }
+  });
+
   test('a non-refresh meta (e.g. charset, viewport) is preserved', () => {
     const src = '<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head><body></body></html>';
     const out = buildSrcdoc(src);
