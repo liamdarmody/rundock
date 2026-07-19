@@ -92,6 +92,37 @@ describe('buildSrcdoc: CSP injection', () => {
     assert.match(out, /^<!doctype html><meta http-equiv="Content-Security-Policy"/i);
     assert.ok(out.indexOf('Content-Security-Policy') < out.indexOf('<img'));
   });
+
+  // Security: a meta refresh can navigate the sandboxed frame to an external
+  // URL and phone home; CSP has no directive that governs navigation. Strip
+  // any http-equiv=refresh meta before it reaches srcdoc.
+  test('a meta refresh to an external URL is stripped', () => {
+    const evil = '<!doctype html><html><head><meta http-equiv="refresh" content="0;url=https://evil.example/track"></head><body>x</body></html>';
+    const out = buildSrcdoc(evil);
+    assert.ok(!/http-equiv\s*=\s*["']?refresh/i.test(out), 'no refresh meta survives');
+    assert.ok(!out.includes('evil.example'), 'the external URL is gone');
+    // The CSP meta itself (http-equiv=Content-Security-Policy) must remain.
+    assert.ok(out.includes('Content-Security-Policy'));
+  });
+
+  test('meta refresh is stripped regardless of case, quoting, and attribute order', () => {
+    for (const meta of [
+      '<META HTTP-EQUIV=REFRESH CONTENT="2">',
+      "<meta content='5; url=https://x/y' http-equiv='refresh'>",
+      '<meta   http-equiv = "refresh"   content="0">',
+      '<meta content="0;url=https://x?a>b" http-equiv="refresh">',
+    ]) {
+      const out = buildSrcdoc(`<html><head>${meta}</head><body></body></html>`);
+      assert.ok(!/http-equiv\s*=\s*["']?refresh/i.test(out), `stripped: ${meta}`);
+    }
+  });
+
+  test('a non-refresh meta (e.g. charset, viewport) is preserved', () => {
+    const src = '<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head><body></body></html>';
+    const out = buildSrcdoc(src);
+    assert.ok(out.includes('charset="utf-8"'));
+    assert.ok(out.includes('name="viewport"'));
+  });
 });
 
 // ---------- mount contract under jsdom ----------

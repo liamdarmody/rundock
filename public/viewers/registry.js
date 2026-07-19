@@ -58,8 +58,23 @@ const CSP_META = `<meta http-equiv="Content-Security-Policy" content="${ARTIFACT
 // the implied head and commits the policy before any element is processed.
 // A leading <!doctype> is preserved (the meta goes right after it, still
 // ahead of every element, avoiding quirks mode).
+// A <meta http-equiv="refresh"> can navigate the sandboxed frame to an
+// external URL and issue an outbound request; CSP has no directive that
+// governs navigation, so the no-phone-home guarantee needs this. The attribute
+// tokenizer ((?:[^>"']|"[^"]*"|'[^']*')*) skips over quoted attribute values,
+// so a `>` hidden inside a quoted attribute cannot end the tag early and slip
+// the meta through. The CSP meta this module injects uses
+// http-equiv=Content-Security-Policy and is added afterwards, so it is never a
+// target here.
+const META_REFRESH_RE =
+  /<meta\b(?:[^>"']|"[^"]*"|'[^']*')*?\bhttp-equiv\s*=\s*("refresh"|'refresh'|refresh)(?:[^>"']|"[^"]*"|'[^']*')*>/gi;
+
+function stripMetaRefresh(html) {
+  return html.replace(META_REFRESH_RE, '');
+}
+
 export function buildSrcdoc(content) {
-  const src = String(content == null ? '' : content);
+  const src = stripMetaRefresh(String(content == null ? '' : content));
   const doctypeMatch = src.match(/^\s*<!doctype[^>]*>/i);
   if (doctypeMatch) {
     const at = doctypeMatch[0].length;
