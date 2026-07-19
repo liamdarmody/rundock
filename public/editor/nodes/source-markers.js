@@ -15,10 +15,20 @@
 // the editor carries no marker attribute and serializes with the conventional
 // default (`*`, `**`, `-`, `---`), matching prior behaviour.
 
-import { Bold, Italic, BulletList, HorizontalRule, TaskList, Text } from '../../vendor/tiptap-bundle.mjs';
+import { BulletList, HorizontalRule, TaskList, Text } from '../../vendor/tiptap-bundle.mjs';
 
+// Emphasis and strong markers are deliberately NOT preserved here. Doing it
+// through the mark serializer required function-valued open/close delimiters,
+// and tiptap-markdown's inline-trim path treats the delimiter as a string and
+// reads its length from the function arity, which silently deleted a
+// single-character emphasis span flanked by other text (`a _b_ c` -> `a c`).
+// The em/strong marks therefore use tiptap-markdown's default string
+// serializers (a `_`/`__` source normalises to `*`/`**` on save, a cosmetic
+// change that never loses content). Bullet, thematic-break, and task-list
+// markers are node-level and do not go through that path, so they are safe to
+// preserve below.
 const SRC_ATTR = 'data-src-marker';
-const TOKEN_TYPES = new Set(['em_open', 'strong_open', 'bullet_list_open', 'hr']);
+const TOKEN_TYPES = new Set(['bullet_list_open', 'hr']);
 
 // Registers a markdown-it core rule (once per instance) that stamps each
 // marker-bearing token with its source marker. The default renderer emits
@@ -98,46 +108,6 @@ export const SourceText = Text.extend({
         parse: {
           // handled by markdown-it
         },
-      },
-    };
-  },
-});
-
-// Emphasis: `_x_` or `*x*`. Preserve whichever delimiter the source used.
-export const SourceItalic = Italic.extend({
-  addAttributes() {
-    return { ...this.parent?.(), srcMarker: markerAttribute() };
-  },
-  addStorage() {
-    return {
-      markdown: {
-        serialize: {
-          open: (_state, mark) => mark.attrs.srcMarker || '*',
-          close: (_state, mark) => mark.attrs.srcMarker || '*',
-          mixable: true,
-          expelEnclosingWhitespace: true,
-        },
-        parse: setupParse,
-      },
-    };
-  },
-});
-
-// Strong: `__x__` or `**x**`. Preserve whichever delimiter the source used.
-export const SourceBold = Bold.extend({
-  addAttributes() {
-    return { ...this.parent?.(), srcMarker: markerAttribute() };
-  },
-  addStorage() {
-    return {
-      markdown: {
-        serialize: {
-          open: (_state, mark) => mark.attrs.srcMarker || '**',
-          close: (_state, mark) => mark.attrs.srcMarker || '**',
-          mixable: true,
-          expelEnclosingWhitespace: true,
-        },
-        parse: setupParse,
       },
     };
   },
