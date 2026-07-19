@@ -50,7 +50,7 @@ describe('callout raw <-> attrs', () => {
       '> [!info]+ Hi\n> x');
   });
 
-  test('a blank body line with trailing whitespace round-trips byte-for-byte (P1-4)', () => {
+  test('a blank body line with trailing whitespace round-trips byte-for-byte', () => {
     const raw = '> [!note] T\n> body\n> \n> more';
     assert.strictEqual(calloutAttrsToRaw(rawToCalloutAttrs(raw)), raw);
     // A blank body line that is a bare tab also survives.
@@ -64,7 +64,7 @@ describe('callout raw <-> attrs', () => {
   });
 });
 
-describe('calloutAttrsEqual (P1-2: skip a no-op commit)', () => {
+describe('calloutAttrsEqual: skip a no-op commit', () => {
   test('equal when the callout-shaping attributes match', () => {
     const a = { type: 'note', fold: '', title: 'T', body: 'x', head: '> [!note] T' };
     const b = { type: 'note', fold: '', title: 'T', body: 'x', head: '> [!note] T' };

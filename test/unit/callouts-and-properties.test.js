@@ -171,7 +171,7 @@ describe('frontmatter wikilink properties', () => {
     assert.ok(link.getAttribute('data-target').includes('onmouseover'));
   });
 
-  test('an open scalar input does not write to the previous file after a file switch (P0-4)', () => {
+  test('an open scalar input does not write to the previous file after a file switch', () => {
     const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
     global.HTMLElement = dom.window.HTMLElement;
     const container = dom.window.document.getElementById('p');
@@ -198,8 +198,8 @@ describe('frontmatter wikilink properties', () => {
   });
 });
 
-describe('frontmatter polish (P2-1, P2-2, P2-3)', () => {
-  test('P2-1: a map list item renders readable content, not [object Object], and has no remove control', () => {
+describe('frontmatter property editing polish', () => {
+  test('a map list item renders readable content, not [object Object], and has no remove control', () => {
     const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
     global.HTMLElement = dom.window.HTMLElement;
     const container = dom.window.document.getElementById('p');
@@ -213,7 +213,7 @@ describe('frontmatter polish (P2-1, P2-2, P2-3)', () => {
     assert.strictEqual(mapChip.querySelector('.prop-chip-remove'), null, 'no remove control on a map item');
   });
 
-  test('P2-2: pressing Enter on an emptied input refuses the commit, matching blur', () => {
+  test('pressing Enter on an emptied input refuses the commit, matching blur', () => {
     const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
     global.HTMLElement = dom.window.HTMLElement;
     const container = dom.window.document.getElementById('p');
@@ -228,7 +228,7 @@ describe('frontmatter polish (P2-1, P2-2, P2-3)', () => {
     assert.deepEqual(edits, [], 'an empty Enter does not commit');
   });
 
-  test('P2-3: a pure-wikilink value is editable via an edit control', () => {
+  test('a pure-wikilink value is editable via an edit control', () => {
     const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
     global.HTMLElement = dom.window.HTMLElement;
     const container = dom.window.document.getElementById('p');
@@ -249,7 +249,7 @@ describe('frontmatter polish (P2-1, P2-2, P2-3)', () => {
   });
 });
 
-describe('frontmatter datetime with timezone (P1-5)', () => {
+describe('frontmatter datetime with timezone', () => {
   test('a datetime with an offset is preserved verbatim, not shifted to another UTC day', () => {
     const { parsed } = extractFrontmatter('---\ndue: 2026-07-19T22:00:00-05:00\n---\n');
     // Kept as the authored string: the day (19) and the time survive, instead

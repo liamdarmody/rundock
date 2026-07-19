@@ -101,7 +101,7 @@ test('image opens as a real decoded image over the binary endpoint; toggles hidd
   await page.screenshot({ path: `${SHOTS}/image-viewer.png` });
 });
 
-test('Cmd+F is a no-op on read-only binary viewers (P2-7)', async ({ page }) => {
+test('Cmd+F is a no-op on read-only binary viewers', async ({ page }) => {
   await boot(page);
   for (const name of ['chart.png', 'report.pdf']) {
     await openFromTree(page, name);
@@ -113,7 +113,7 @@ test('Cmd+F is a no-op on read-only binary viewers (P2-7)', async ({ page }) => 
   }
 });
 
-test('opening a file resets the Preview/Code mode so a stale edit mode cannot leak (P2-9)', async ({ page }) => {
+test('opening a file resets the Preview/Code mode so a stale edit mode cannot leak', async ({ page }) => {
   await boot(page);
   // Force a stale 'edit' mode, then open a file: loadFileContent must reset it.
   await openFromTree(page, 'chart.png');
@@ -125,7 +125,7 @@ test('opening a file resets the Preview/Code mode so a stale edit mode cannot le
   expect(await page.evaluate(() => editorMode)).toBe('preview');
 });
 
-test('Reveal in Finder shows only on macOS (P2-6)', async ({ page }) => {
+test('Reveal in Finder shows only on macOS', async ({ page }) => {
   await boot(page);
   await page.locator('.nav-item[data-nav="files"]').click();
   const fileRow = page.locator('.file-item', { hasText: 'briefing.md' }).first();
@@ -522,7 +522,7 @@ test('opening and blurring a callout without an edit does not change the documen
   expect(after).toBe(before);
 });
 
-test('an invalid callout edit is flagged, not silently discarded (P2-4)', async ({ page }) => {
+test('an invalid callout edit is flagged, not silently discarded', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'briefing.md');
   const callout = page.locator('.callout.callout-abstract').first();
@@ -542,7 +542,7 @@ test('an invalid callout edit is flagged, not silently discarded (P2-4)', async 
   await expect(callout.locator('textarea')).toHaveCount(0);
 });
 
-test('an external change while a callout editor is open is not clobbered on blur (P2-5)', async ({ page }) => {
+test('an external change while a callout editor is open is not clobbered on blur', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'briefing.md');
   const callout = page.locator('.callout.callout-abstract').first();

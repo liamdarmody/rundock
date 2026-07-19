@@ -175,7 +175,7 @@ describe('refusals (never a guess)', () => {
   });
 });
 
-describe('unindented multi-line quoted scalar (P0-2)', () => {
+describe('unindented multi-line quoted scalar', () => {
   // A double-quoted scalar whose value continues on an unindented line at
   // column 0. locateKey used to miss the continuation, so editing the key
   // truncated the value and promoted the continuation to a spurious top-level
