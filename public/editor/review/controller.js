@@ -85,7 +85,7 @@ export function createReviewController({ editor, endmatter, author = 'me', now =
   }
 
   // Operations accept either an anchor id ('s1') or a position locator for
-  // id-less constructs — sidebar items always carry pos, type, and text.
+  // id-less constructs: sidebar items always carry pos, type, and text.
   // Position locators verify IDENTITY, not just position: every operation
   // shifts positions, so a stale locator (double-fired handler, cached
   // listItems snapshot) must refuse rather than hit whichever construct
@@ -340,7 +340,7 @@ export function createReviewController({ editor, endmatter, author = 'me', now =
   // Undo restores constructs but not endmatter mutations, so decision fields
   // whose construct is back (verdict/decidedAt on suggestions; resolved/
   // resolvedAt, plus the resolution-captured body, on root comments) are
-  // stale and must not serialize — otherwise Cmd+Z after a verdict hands
+  // stale and must not serialize: otherwise Cmd+Z after a verdict hands
   // agents a file that says both "undecided" and "accepted".
   function reconciledData() {
     const out = structuredClone(data);

@@ -9,6 +9,8 @@
 // bool) and lists (block `- item` style or flow `[a, b]` style). Nested
 // objects are not editable (the panel hides them).
 
+import { extractFrontmatter } from './frontmatter.js';
+
 // A bare YAML scalar would misparse for these shapes: quote them.
 function needsQuoting(s) {
   if (s === '') return true;
@@ -34,6 +36,35 @@ function isTopLevelKeyLine(line) {
   return /^[^\s#-][^:\n]*:/.test(line);
 }
 
+// If `valueText` (everything after the `key:`) opens a quoted scalar, return
+// the quote character; otherwise null. A quote that also closes on the same
+// line is a single-line scalar and returns null (no continuation to track).
+function opensUnclosedQuote(valueText) {
+  const trimmed = valueText.replace(/^[ \t]*/, '');
+  const quote = trimmed[0];
+  if (quote !== '"' && quote !== "'") return null;
+  return quoteCloses(trimmed, quote, 1) ? null : quote;
+}
+
+// Does a closing `quote` occur in `text` at or after `from`? Honours YAML
+// escaping: backslash escapes inside double quotes, doubled quotes inside
+// single quotes.
+function quoteCloses(text, quote, from) {
+  for (let i = from; i < text.length; i++) {
+    const ch = text[i];
+    if (quote === '"') {
+      if (ch === '\\') { i++; continue; }
+      if (ch === '"') return true;
+    } else {
+      if (ch === "'") {
+        if (text[i + 1] === "'") { i++; continue; }
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 // The scalar value of a `- item` line, unquoted, for matching survivors
 // against the panel's new string array (which are always strings).
 function parseItemScalar(line) {
@@ -57,6 +88,20 @@ function locateKey(lines, key) {
   for (let i = 1; i < close; i++) {
     const m = lines[i].match(/^([^\s#-][^:\n]*):/);
     if (!m || m[1].trim() !== key) continue;
+    // A double/single-quoted scalar can continue on UNINDENTED lines at
+    // column 0 until its closing quote. locateKey used to miss that, so the
+    // continuation (which may itself look like `other: key`) was left behind
+    // and promoted to a spurious top-level key on edit. Consume those lines
+    // first so the multi-line refusal below fires.
+    const valueText = lines[i].slice(lines[i].indexOf(':') + 1);
+    const openQuote = opensUnclosedQuote(valueText);
+    if (openQuote) {
+      let end = i + 1;
+      while (end < close && !quoteCloses(lines[end], openQuote, 0)) end++;
+      // The line that closes the quote is part of the value; include it.
+      if (end < close) end++;
+      return { keyLine: i, valueStart: i + 1, valueEnd: end, close };
+    }
     // Continuation lines: indented (nested map / indented list / wrapped
     // scalar), a zero-indent `- ` block-list item (Obsidian writes lists at
     // column 0), or a blank line followed by more of either.
@@ -139,6 +184,30 @@ export function replaceProperty(raw, key, newValue) {
   // whole remainder deliberately (documented behaviour).
   lines[loc.keyLine] = `${keyPart}${spacing}${formatScalar(newValue, after.trim())}`;
   return { raw: lines.join('\n'), changed: true };
+}
+
+// General byte-honesty backstop. Given the frontmatter block before and after
+// an edit to `key`, confirm the edit touched nothing else: the set of
+// top-level keys is unchanged, and every key other than `key` keeps its exact
+// parsed value. Catches any valid-but-wrong transform (a truncation that
+// invents a key, a collateral value change) that still parses as a valid
+// object. Returns true when the edit is honest, false otherwise. On a parse
+// failure it returns false (refuse rather than guess).
+export function onlyEditedKeyChanged(beforeRaw, afterRaw, key) {
+  const before = extractFrontmatter(beforeRaw);
+  const after = extractFrontmatter(afterRaw);
+  if (!before.parsed || typeof before.parsed !== 'object') return false;
+  if (!after.parsed || typeof after.parsed !== 'object') return false;
+  const beforeKeys = Object.keys(before.parsed);
+  const afterKeys = Object.keys(after.parsed);
+  if (beforeKeys.length !== afterKeys.length) return false;
+  const afterSet = new Set(afterKeys);
+  for (const k of beforeKeys) {
+    if (!afterSet.has(k)) return false;
+    if (k === key) continue;
+    if (JSON.stringify(before.parsed[k]) !== JSON.stringify(after.parsed[k])) return false;
+  }
+  return true;
 }
 
 // Byte-honest single-item list edit. mutation is { remove: index } or

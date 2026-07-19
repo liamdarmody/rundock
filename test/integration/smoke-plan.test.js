@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================================
-// PROPOSAL-FIRST SMOKE TEST PLAN — 12 scenarios automated against the harness
+// PROPOSAL-FIRST SMOKE TEST PLAN: 12 scenarios automated against the harness
 // ============================================================================
 // Scenarios T1-T12 mirror the product's proposal-first smoke-test plan.
 //

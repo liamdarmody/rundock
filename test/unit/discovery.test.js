@@ -283,6 +283,24 @@ describe('parseSkillFile / discoverSkills', () => {
     assert.deepStrictEqual(bySlug['rundock-agents'].assignedAgents.map(a => a.id), ['rundock-guide']);
     assert.deepStrictEqual(bySlug['hook-generator'].assignedAgents.map(a => a.id), ['content-lead']);
   });
+
+  test('a Doc scaffolded after the cache was primed still owns the platform skills', () => {
+    // Regression: on opening a workspace that needs Doc scaffolded in,
+    // discoverAgents was called (and cached) before scaffoldWorkspace created
+    // Doc, and nothing invalidated the cache afterwards. discoverSkills then
+    // read stale agents without Doc, so the rundock-* platform skills showed
+    // as "Available to all agents" instead of owned by Doc until a reload.
+    const dir = useWorkspace({ agents: {} });
+    srv.discoverAgents();          // primes the cache with no Doc present
+    srv.scaffoldWorkspace(dir);    // writes the real Doc and rundock-* skills
+    const skills = srv.discoverSkills();
+    const bySlug = Object.fromEntries(skills.map(s => [s.slug, s]));
+    for (const slug of ['rundock-agents', 'rundock-skills', 'rundock-workspace']) {
+      assert.ok(bySlug[slug], `${slug} discovered`);
+      assert.strictEqual(bySlug[slug].status, 'assigned', `${slug} is assigned, not left to all agents`);
+      assert.deepStrictEqual(bySlug[slug].assignedAgents.map(a => a.name), ['Doc'], `${slug} owned by Doc`);
+    }
+  });
 });
 
 describe('rosters and system prompt', () => {

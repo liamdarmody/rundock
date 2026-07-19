@@ -16,9 +16,8 @@
 #
 # This script is interim. It exists to get non-developer Windows users
 # into Rundock without a real terminal session, before the proper
-# Windows installer ships. It will be retired when the NSIS installer
-# tracked in the Rundock backlog ("Ship a Windows installer and add
-# Windows to the release pipeline") lands.
+# Windows installer ships. It will be retired when the proper NSIS-based
+# Windows installer and release-pipeline support land.
 #
 
 $ErrorActionPreference = 'Stop'

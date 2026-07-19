@@ -34,7 +34,7 @@ function jsonlToolUse(ts) {
   return JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'x', name: 'Bash', input: { command: 'TOOLNOISE ls' } }] }, timestamp: ts }) + '\n';
 }
 
-// Codex rollout fixtures, mirroring real rollout files (verified 2026-07-14):
+// Codex rollout fixtures, mirroring real rollout files:
 // response_item events with role-tagged content; developer role carries
 // instructions; the CLI injects <environment_context> user blocks; Rundock's
 // identity/platform prompt travels as a user message containing the
@@ -294,7 +294,7 @@ describe('conversations corpus', () => {
   });
 
   test('a failing insert mid-delta is atomic: no partial rows, no mark, clean re-run', () => {
-    // Simulates a crash mid-reconcile (Review R1 P2-2). Without a per-session
+    // Simulates a crash mid-reconcile. Without a per-session
     // transaction, the first insert survives while the mark is never written,
     // so the next reconcile re-reads from offset 0 and duplicates messages.
     const p = writeSession('s1',
@@ -327,7 +327,6 @@ describe('conversations corpus', () => {
   });
 
   test('removeOrphanedConversations sweeps rows for conversations no longer known', () => {
-    // (Review R1 P3-5)
     const p1 = writeSession('s1', jsonlUser('kept numbat content', '2026-07-01T10:00:00.000Z'));
     const p2 = writeSession('s2', jsonlUser('orphan numbat content', '2026-07-01T10:00:00.000Z'));
     idx.reconcileConversations([
@@ -344,7 +343,7 @@ describe('conversations corpus', () => {
     assert.strictEqual(r.indexed, 1);
   });
 
-  test('a failed transaction on the shrink path restores the wiped rows (R2 P3-1)', () => {
+  test('a failed transaction on the shrink path restores the wiped rows', () => {
     // The shrink-branch DELETE must live inside the per-session transaction:
     // if the reindex then fails, rollback restores the old rows instead of
     // leaving the index empty with a stale mark.
@@ -374,14 +373,14 @@ describe('conversations corpus', () => {
     assert.strictEqual(idx.searchMessages('emu', { collapse: false }).length, 1);
   });
 
-  test('an existing mark keeps session ownership regardless of batch order (R2 P3-2)', () => {
+  test('an existing mark keeps session ownership regardless of batch order', () => {
     const p = writeSession('s1', jsonlUser('owned tapir content', '2026-07-01T10:00:00.000Z'));
     idx.reconcileConversations([convo('cA', 'cos', [{ sessionId: 's1', agentId: 'cos', filePath: p }])],
       { validConversationIds: ['cA'] });
     assert.strictEqual(idx.searchMessages('tapir', { collapse: false })[0].conversationId, 'cA');
     // A new conversation entry (unshifted to the head of conversations.json)
     // presents the same session; the mark's owner is still alive, so the
-    // delta stays attributed to cA — no flip, no split.
+    // delta stays attributed to cA: no flip, no split.
     fs.appendFileSync(p, jsonlAssistant('more tapir detail', '2026-07-01T10:01:00.000Z'));
     idx.reconcileConversations([convo('cB', 'cos', [{ sessionId: 's1', agentId: 'cos', filePath: p }])],
       { validConversationIds: ['cA', 'cB'] });
@@ -390,7 +389,7 @@ describe('conversations corpus', () => {
     assert.deepStrictEqual([...new Set(hits.map(h => h.conversationId))], ['cA'], 'mark owner keeps the session');
   });
 
-  test('a dead owner hands the session over cleanly, without duplicates (R2 P3-2)', () => {
+  test('a dead owner hands the session over cleanly, without duplicates', () => {
     const p = writeSession('s1',
       jsonlUser('handover bilby one', '2026-07-01T10:00:00.000Z') +
       jsonlAssistant('handover bilby two', '2026-07-01T10:00:10.000Z')
@@ -404,11 +403,11 @@ describe('conversations corpus', () => {
     idx.reconcileConversations([convo('cB', 'cos', [{ sessionId: 's1', agentId: 'cos', filePath: p }])],
       { validConversationIds: ['cB'] });
     const hits = idx.searchMessages('bilby', { collapse: false });
-    assert.strictEqual(hits.length, 2, 'exactly once — no duplicate rows through the ownership seam');
+    assert.strictEqual(hits.length, 2, 'exactly once: no duplicate rows through the ownership seam');
     assert.deepStrictEqual([...new Set(hits.map(h => h.conversationId))], ['cB']);
   });
 
-  test('an owner missing from the valid set (external edit) hands over without duplicates (R2 P3-2)', () => {
+  test('an owner missing from the valid set (external edit) hands over without duplicates', () => {
     const p = writeSession('s1', jsonlUser('external kakapo content', '2026-07-01T10:00:00.000Z'));
     idx.reconcileConversations([convo('cA', 'cos', [{ sessionId: 's1', agentId: 'cos', filePath: p }])],
       { validConversationIds: ['cA'] });

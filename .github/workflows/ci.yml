@@ -22,6 +22,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Fast, dependency-free guard: no internal run codenames, review-round or
+  # priority labels, or private workspace paths leak into the public source.
+  hygiene:
+    name: Hygiene (no internal references)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Check for internal references
+        run: node scripts/check-internal-refs.js
+
   test:
     name: Test (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
@@ -51,7 +62,7 @@ jobs:
         run: npm test
 
   # E2E smoke suite (browser-driven, Playwright). Protects the client layer
-  # the Node suite cannot observe: named regression tests for the two SR1
+  # the Node suite cannot observe: named regression tests for the two
   # escaped bugs (anchor re-flash, nav-state desync) plus palette golden
   # paths, and it measures public/app.js line coverage via V8.
   #

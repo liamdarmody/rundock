@@ -1,5 +1,5 @@
 /**
- * kanban.js — parser/serializer for Obsidian Kanban plugin board files.
+ * kanban.js: parser/serializer for Obsidian Kanban plugin board files.
  *
  * Byte-compatibility target: obsidian-kanban v2.0.51. Every rule here was
  * extracted from the plugin's compiled main.js (functions W_/LB/U_/PB/vk on

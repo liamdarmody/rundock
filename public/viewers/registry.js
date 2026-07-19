@@ -1,7 +1,7 @@
 // File-type registry: decides which view surface owns a workspace path and
-// mounts it. Design of record: FV2 (file-type registry + sandboxed HTML
-// artifact viewer). Ordered; first match wins; 'unsupported' is the terminal
-// fallback so no path ever renders as raw corrupted bytes.
+// mounts it. A file-type registry with a sandboxed HTML artifact viewer.
+// Ordered; first match wins; 'unsupported' is the terminal fallback so no
+// path ever renders as raw corrupted bytes.
 //
 // Pre-sync-point shape: app.js keeps its markdown (Tiptap) and text (legacy
 // preview/edit pane) branches and consults this registry for everything else.
@@ -58,8 +58,30 @@ const CSP_META = `<meta http-equiv="Content-Security-Policy" content="${ARTIFACT
 // the implied head and commits the policy before any element is processed.
 // A leading <!doctype> is preserved (the meta goes right after it, still
 // ahead of every element, avoiding quirks mode).
+// A <meta http-equiv="refresh"> can navigate the sandboxed frame to an
+// external URL and issue an outbound request; CSP has no directive that
+// governs navigation, so the no-phone-home guarantee needs this. The attribute
+// tokenizer ((?:[^>"']|"[^"]*"|'[^']*')*) skips over quoted attribute values,
+// so a `>` hidden inside a quoted attribute cannot end the tag early and slip
+// the meta through. The CSP meta this module injects uses
+// http-equiv=Content-Security-Policy and is added afterwards, so it is never a
+// target here.
+// Pass 1 tokenizes attribute values, so a `>` hidden inside a quoted value
+// cannot end the tag early. It assumes balanced quotes, so an unmatched quote
+// in the tag defeats it; pass 2 covers that by scanning to the first `>`. Only
+// a tag with BOTH a quoted `>` AND an unmatched quote escapes both, which no
+// browser would reliably honour as a meta refresh anyway.
+const META_REFRESH_RE =
+  /<meta\b(?:[^>"']|"[^"]*"|'[^']*')*?\bhttp-equiv\s*=\s*("refresh"|'refresh'|refresh)(?:[^>"']|"[^"]*"|'[^']*')*>/gi;
+const META_REFRESH_SIMPLE_RE =
+  /<meta\b[^>]*?\bhttp-equiv\s*=\s*("refresh"|'refresh'|refresh)\b[^>]*?>/gi;
+
+function stripMetaRefresh(html) {
+  return html.replace(META_REFRESH_RE, '').replace(META_REFRESH_SIMPLE_RE, '');
+}
+
 export function buildSrcdoc(content) {
-  const src = String(content == null ? '' : content);
+  const src = stripMetaRefresh(String(content == null ? '' : content));
   const doctypeMatch = src.match(/^\s*<!doctype[^>]*>/i);
   if (doctypeMatch) {
     const at = doctypeMatch[0].length;
@@ -150,11 +172,29 @@ function makeHandle(paneElement, cleanup) {
 // The injected CSP additionally blocks external fetches. Adding
 // allow-scripts alongside allow-same-origin would give artifact code the
 // app's origin: never combine them.
+// Upper bound on artifact source before we build a srcdoc. A multi-megabyte
+// string handed to srcdoc can lock up the renderer; past this size we show a
+// notice instead. Generous enough for any real self-contained artifact.
+export const MAX_ARTIFACT_BYTES = 4 * 1024 * 1024;
+
 export function mountArtifactPreview({ paneElement, content }) {
   const doc = paneElement.ownerDocument;
   ensureStyles(doc);
   paneElement.innerHTML = '';
   paneElement.classList.add('viewer-host');
+  if (typeof content === 'string' && content.length > MAX_ARTIFACT_BYTES) {
+    const notice = doc.createElement('div');
+    notice.className = 'viewer-unsupported';
+    const title = doc.createElement('div');
+    title.className = 'viewer-unsupported-title';
+    title.textContent = 'Artifact too large to preview';
+    const detail = doc.createElement('div');
+    detail.textContent = 'Open the Code view to read its source.';
+    notice.appendChild(title);
+    notice.appendChild(detail);
+    paneElement.appendChild(notice);
+    return makeHandle(paneElement);
+  }
   const iframe = doc.createElement('iframe');
   iframe.className = 'viewer-frame';
   iframe.setAttribute('sandbox', 'allow-same-origin');
@@ -193,7 +233,10 @@ export function mountPdfViewer({ paneElement, path }) {
   const iframe = doc.createElement('iframe');
   iframe.className = 'viewer-frame';
   iframe.setAttribute('title', 'PDF viewer');
-  iframe.src = workspaceFileUrl(path);
+  // Open with the thumbnails/pages panel collapsed (navpanes=0): it steals
+  // reading width and makes no sense on a short document. The user can still
+  // open it from the viewer's own toolbar.
+  iframe.src = workspaceFileUrl(path) + '#navpanes=0';
   paneElement.appendChild(iframe);
   return makeHandle(paneElement);
 }

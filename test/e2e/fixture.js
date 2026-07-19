@@ -64,7 +64,7 @@ function buildFixture() {
     '# Roadmap 2026\n\nQuarterly targets and the mobile milestone.\n');
 
   // A briefing-style note: foldable + nested callouts and frontmatter
-  // wikilinks (the FV2 phase-3 story's acceptance surface).
+  // wikilinks.
   fs.writeFileSync(path.join(workspace, 'briefing.md'), [
     '---',
     'title: "Morning Briefing"',
@@ -85,7 +85,7 @@ function buildFixture() {
     '',
   ].join('\n'));
 
-  // FV2 viewer files: a styled HTML artifact whose script/external-image
+  // Viewer files: a styled HTML artifact whose script/external-image
   // must NOT run (sandbox + CSP proof), a real decodable 1x1 PNG (proves the
   // binary endpoint serves unmangled bytes), and a minimal PDF.
   fs.writeFileSync(path.join(workspace, 'proposal.html'), [
@@ -109,6 +109,14 @@ function buildFixture() {
     '<p>A third needle sits far below for the scroll.</p>',
     '</body></html>',
   ].join('\n'));
+  // An SVG artifact with a text label: commenting on SVG text must keep it
+  // visible (it is wrapped in a <tspan>, not a <mark> that SVG cannot render).
+  fs.writeFileSync(path.join(workspace, 'diagram.svg'), [
+    '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="120" viewBox="0 0 320 120">',
+    '  <rect width="320" height="120" fill="#0f172a"/>',
+    '  <text id="label" x="20" y="64" fill="#ffffff" font-size="18">Architecture diagram label</text>',
+    '</svg>',
+  ].join('\n'));
   // A canonical Kanban board (frontmatter carries the kanban-plugin key), used
   // to prove the board registry view renders columns and round-trips bytes.
   fs.writeFileSync(path.join(workspace, 'board.md'),
@@ -121,6 +129,17 @@ function buildFixture() {
   // tests cannot shift its lane order).
   fs.writeFileSync(path.join(workspace, 'reorder-board.md'),
     "---\n\nkanban-plugin: board\n\n---\n\n## Alpha\n\n- [ ] a1\n\n\n## Beta\n\n- [ ] b1\n\n\n## Gamma\n\n- [ ] g1\n\n\n\n\n%% kanban:settings\n```\n{\"kanban-plugin\":\"board\",\"list-collapse\":[false,false,false]}\n```\n%%");
+  // A board with a card carrying a wikilink, a date, and a tag (for the card
+  // rendering + wikilink-navigation tests).
+  fs.writeFileSync(path.join(workspace, 'rich-board.md'),
+    "---\n\nkanban-plugin: board\n\n---\n\n## Todo\n\n- [ ] Review [[Roadmap-2026]] by 2026-08-01 #launch\n\n\n\n\n%% kanban:settings\n```\n{\"kanban-plugin\":\"board\",\"list-collapse\":[false]}\n```\n%%");
+  // A dedicated board for the live-refresh conflict test (isolated so its own
+  // save/watcher echo cannot race another board test sharing the file).
+  fs.writeFileSync(path.join(workspace, 'watch-board.md'),
+    "---\n\nkanban-plugin: board\n\n---\n\n## To do\n\n- [ ] Watch me\n\n\n## Done\n\n- [ ] Already done\n\n\n\n\n%% kanban:settings\n```\n{\"kanban-plugin\":\"board\",\"list-collapse\":[false,false]}\n```\n%%");
+  // A single-lane board for the in-column drag-reorder test.
+  fs.writeFileSync(path.join(workspace, 'dnd-board.md'),
+    "---\n\nkanban-plugin: board\n\n---\n\n## Queue\n\n- [ ] Card A\n- [ ] Card B\n- [ ] Card C\n\n\n\n\n%% kanban:settings\n```\n{\"kanban-plugin\":\"board\",\"list-collapse\":[false]}\n```\n%%");
   fs.writeFileSync(path.join(workspace, 'chart.png'), buildPng());
   fs.writeFileSync(path.join(workspace, 'report.pdf'), Buffer.from(
     '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n' +
@@ -142,7 +161,7 @@ function buildFixture() {
   fs.writeFileSync(path.join(sessions, 's2.jsonl'),
     jsonlUser('What should the July content calendar prioritise?', '2026-07-02T09:00:00.000Z')
     + jsonlAssistant('Three hooks shortlisted for the agent-team essay.', '2026-07-02T09:00:30.000Z'));
-  // s3: an agent referencing binary outputs by wikilink (FV2: those links
+  // s3: an agent referencing binary outputs by wikilink (those links
   // must open the real viewers, not dead-end on a phantom .md).
   fs.writeFileSync(path.join(sessions, 's3.jsonl'),
     jsonlUser('Where did the export land?', '2026-06-20T09:00:00.000Z')

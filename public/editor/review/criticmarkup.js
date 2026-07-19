@@ -1,7 +1,7 @@
 // CriticMarkup parser and serializer. DOM-free on purpose: imported by Node
 // tests directly and by the review mark extensions in the browser.
 //
-// Wire format (Roughdraft-flavoured CriticMarkup):
+// Wire format (CriticMarkup):
 //
 //   {>>comment<<}   {++insert++}   {--delete--}   {~~old~>new~~}   {==highlight==}
 //
@@ -104,9 +104,9 @@ export function serializeInline(segments) {
 }
 
 // Groups parsed segments into review-model units:
-//   { type: 'anchored-comment', highlight, comment }  — {==x==}{>>y<<}{#c1}
-//   { type: 'comment', comment }                      — standalone comment
-//   { type: 'suggestion', segment }                   — insert/delete/substitution
+//   { type: 'anchored-comment', highlight, comment }: {==x==}{>>y<<}{#c1}
+//   { type: 'comment', comment }: standalone comment
+//   { type: 'suggestion', segment }: insert/delete/substitution
 //   { type: 'text', segment }
 export function groupAnnotations(segments) {
   const groups = [];

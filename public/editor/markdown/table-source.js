@@ -60,7 +60,7 @@ export function splitRow(rawLine) {
 // Parses a table's raw source slice into rows with exact spans.
 // Returns { lines, headerIdx: 0, delimiterIdx: 1, rows, cols } where rows is
 // indexed by SOURCE ROW index (header = 0, first body row = 1, ...) and each
-// entry is { line, cells } — the delimiter line is excluded from rows and
+// entry is { line, cells }: the delimiter line is excluded from rows and
 // kept as `delimiter`.
 export function parseTableSource(src) {
   if (typeof src !== 'string' || !src.length) return null;
@@ -118,7 +118,7 @@ export function canonicalTable(headerContents, bodyRows, alignments = []) {
 // where content is only consulted for changed cells (and for all cells of
 // rows with srcIdx null). Returns the table text, or null when per-span
 // reconstruction is impossible (the column count changed, detected on the
-// header row) — callers then fall back to canonicalTable. Ragged source
+// header row): callers then fall back to canonicalTable. Ragged source
 // rows (fewer or more cells than the header) are handled per-row.
 export function rebuildTable(source, grid) {
   const parsed = typeof source === 'string' ? parseTableSource(source) : source;

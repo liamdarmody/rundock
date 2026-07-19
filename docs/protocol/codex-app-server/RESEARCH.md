@@ -1,4 +1,4 @@
-# Codex CLI app-server protocol research (R10 Phase 0)
+# Codex CLI app-server protocol research
 
 **Researched:** 2026-07-17
 **CLI tested:** `codex-cli 0.144.3` (arm64 Mach-O at `/Users/liamdarmody/.local/bin/codex`)

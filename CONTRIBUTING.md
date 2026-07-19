@@ -58,6 +58,7 @@ Before opening a PR:
 - **Vanilla JS only.** No frameworks, no TypeScript. The codebase is readable without tooling.
 - **Commit messages:** Start with a verb in imperative mood. Keep the first line under 72 characters. Examples: `fix permission card timeout race condition`, `add workspace mode toggle to settings panel`.
 - **UK spelling** in user-facing strings, comments, and documentation.
+- **No internal references.** Comments, tests, and docs should read as plain descriptive language to any external contributor. Do not leave in run codenames, review-round or priority labels (e.g. `P0-1`, `Review R1`, `KAN2`, `HARDEN1`), private workspace paths, or owner-attributed decision notes. `npm run check:refs` scans the repo for these and runs in CI as the `Hygiene` job; it must pass before merge. If a match is a false positive, reword the line, or as a last resort add an inline `internal-refs-allow` marker. To catch these before you commit, install the optional local hook: `git config core.hooksPath scripts/hooks`.
 
 ### Changelog entry standards
 

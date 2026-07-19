@@ -92,6 +92,49 @@ describe('buildSrcdoc: CSP injection', () => {
     assert.match(out, /^<!doctype html><meta http-equiv="Content-Security-Policy"/i);
     assert.ok(out.indexOf('Content-Security-Policy') < out.indexOf('<img'));
   });
+
+  // Security: a meta refresh can navigate the sandboxed frame to an external
+  // URL and phone home; CSP has no directive that governs navigation. Strip
+  // any http-equiv=refresh meta before it reaches srcdoc.
+  test('a meta refresh to an external URL is stripped', () => {
+    const evil = '<!doctype html><html><head><meta http-equiv="refresh" content="0;url=https://evil.example/track"></head><body>x</body></html>';
+    const out = buildSrcdoc(evil);
+    assert.ok(!/http-equiv\s*=\s*["']?refresh/i.test(out), 'no refresh meta survives');
+    assert.ok(!out.includes('evil.example'), 'the external URL is gone');
+    // The CSP meta itself (http-equiv=Content-Security-Policy) must remain.
+    assert.ok(out.includes('Content-Security-Policy'));
+  });
+
+  test('meta refresh is stripped regardless of case, quoting, and attribute order', () => {
+    for (const meta of [
+      '<META HTTP-EQUIV=REFRESH CONTENT="2">',
+      "<meta content='5; url=https://x/y' http-equiv='refresh'>",
+      '<meta   http-equiv = "refresh"   content="0">',
+      '<meta content="0;url=https://x?a>b" http-equiv="refresh">',
+    ]) {
+      const out = buildSrcdoc(`<html><head>${meta}</head><body></body></html>`);
+      assert.ok(!/http-equiv\s*=\s*["']?refresh/i.test(out), `stripped: ${meta}`);
+    }
+  });
+
+  test('meta refresh is stripped even with an unmatched quote in the tag', () => {
+    for (const meta of [
+      '<meta http-equiv=refresh content="0;url=https://evil.example/track" \'>',
+      '<meta http-equiv=refresh content="0;url=https://evil.example/track" x=y\'>',
+      '<meta content=x\' http-equiv=refresh>',
+    ]) {
+      const out = buildSrcdoc(`<html><head>${meta}</head><body></body></html>`);
+      assert.ok(!/http-equiv\s*=\s*["']?\s*refresh/i.test(out), `stripped: ${meta}`);
+      assert.ok(!out.includes('evil.example'), `external URL gone: ${meta}`);
+    }
+  });
+
+  test('a non-refresh meta (e.g. charset, viewport) is preserved', () => {
+    const src = '<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head><body></body></html>';
+    const out = buildSrcdoc(src);
+    assert.ok(out.includes('charset="utf-8"'));
+    assert.ok(out.includes('name="viewport"'));
+  });
 });
 
 // ---------- mount contract under jsdom ----------
@@ -121,6 +164,18 @@ describe('viewer mounts', () => {
     assert.equal(el.classList.contains('viewer-host'), false, 'host class removed');
   });
 
+  test('artifact preview: an oversized artifact shows a notice instead of building a huge srcdoc', () => {
+    const el = pane();
+    const huge = '<p>' + 'x'.repeat(5 * 1024 * 1024) + '</p>';
+    const handle = mountArtifactPreview({ paneElement: el, content: huge });
+    assert.equal(el.querySelector('iframe'), null, 'no iframe for an oversized artifact');
+    const notice = el.querySelector('.viewer-unsupported');
+    assert.ok(notice, 'a notice is shown');
+    assert.match(notice.textContent, /too large/i);
+    assert.equal(handle.getContentForSave, null, 'still read-only');
+    handle.destroy();
+  });
+
   test('image viewer: <img> over the binary endpoint, encoded path', () => {
     const el = pane();
     const handle = mountImageViewer({ paneElement: el, path: 'shots/final render.png' });
@@ -135,7 +190,8 @@ describe('viewer mounts', () => {
     const el = pane();
     const handle = mountPdfViewer({ paneElement: el, path: 'docs/report.pdf' });
     const iframe = el.querySelector('iframe.viewer-frame');
-    assert.equal(iframe.getAttribute('src'), '/workspace-file?path=docs%2Freport.pdf');
+    // Opens with the pages/thumbnails panel collapsed (navpanes=0).
+    assert.equal(iframe.getAttribute('src'), '/workspace-file?path=docs%2Freport.pdf#navpanes=0');
     assert.equal(iframe.hasAttribute('srcdoc'), false);
     handle.destroy();
   });

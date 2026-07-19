@@ -1,5 +1,5 @@
 'use strict';
-// E2E: the file-type registry's view surfaces (FV2 phase 1).
+// E2E: the file-type registry's view surfaces.
 //
 // Browser-driven proof for every rendering claim: the sandboxed HTML
 // artifact preview (script must NOT run), the Preview/Code toggle, the
@@ -101,12 +101,55 @@ test('image opens as a real decoded image over the binary endpoint; toggles hidd
   await page.screenshot({ path: `${SHOTS}/image-viewer.png` });
 });
 
+test('Cmd+F is a no-op on read-only binary viewers', async ({ page }) => {
+  await boot(page);
+  for (const name of ['chart.png', 'report.pdf']) {
+    await openFromTree(page, name);
+    await page.keyboard.press('ControlOrMeta+f');
+    // No find bar opens: there is nothing searchable in an image or PDF viewer.
+    await expect(page.locator('#find-bar')).toBeHidden();
+    const backend = await page.evaluate(() => detectFindBackend());
+    expect(backend).toBeNull();
+  }
+});
+
+test('opening a file resets the Preview/Code mode so a stale edit mode cannot leak', async ({ page }) => {
+  await boot(page);
+  // Force a stale 'edit' mode, then open a file: loadFileContent must reset it.
+  await openFromTree(page, 'chart.png');
+  await expect(page.locator('.viewer-image-wrap img')).toBeVisible();
+  await page.evaluate(() => { editorMode = 'edit'; });
+  await openFromTree(page, 'report.pdf');
+  // Wait for the open to complete (loadFileContent has run) before asserting.
+  await expect(page.locator('iframe.viewer-frame')).toBeVisible();
+  expect(await page.evaluate(() => editorMode)).toBe('preview');
+});
+
+test('Reveal in Finder shows only on macOS', async ({ page }) => {
+  await boot(page);
+  await page.locator('.nav-item[data-nav="files"]').click();
+  const fileRow = page.locator('.file-item', { hasText: 'briefing.md' }).first();
+  await expect(fileRow).toBeVisible();
+  // Off macOS: the row is hidden rather than a dead action.
+  await page.evaluate(() => { serverPlatform = 'linux'; });
+  await fileRow.click({ button: 'right' });
+  await expect(page.locator('.files-menu')).toBeVisible();
+  await expect(page.locator('.files-menu')).not.toContainText('Reveal in Finder');
+  await page.keyboard.press('Escape');
+  // On macOS: the row is present.
+  await page.evaluate(() => { serverPlatform = 'darwin'; });
+  await fileRow.click({ button: 'right' });
+  await expect(page.locator('.files-menu')).toContainText('Reveal in Finder');
+});
+
 test('PDF opens in a frame over the binary endpoint', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'report.pdf');
   const frame = page.locator('iframe.viewer-frame');
   await expect(frame).toBeVisible();
-  await expect(frame).toHaveAttribute('src', '/workspace-file?path=report.pdf');
+  // Opens with the pages/thumbnails panel collapsed so it does not steal
+  // reading width (navpanes=0).
+  await expect(frame).toHaveAttribute('src', '/workspace-file?path=report.pdf#navpanes=0');
   // The endpoint really serves the bytes with the pinned content type.
   const res = await page.request.get('/workspace-file?path=report.pdf');
   expect(res.status()).toBe(200);
@@ -130,7 +173,7 @@ test('unsupported binary types get the cannot-preview state, never raw bytes', a
   await page.screenshot({ path: `${SHOTS}/unsupported-fallback.png` });
 });
 
-// ── FV2 phase 2: sidecar comments on the artifact preview ────────────────────
+// ── Sidecar comments on the artifact preview ────────────────────
 
 async function selectInFrame(page, selector) {
   // The review loop attaches asynchronously (sidecar fetch + frame load);
@@ -150,6 +193,26 @@ async function selectInFrame(page, selector) {
     selection.addRange(range);
   }, selector);
 }
+
+test('commenting on SVG text keeps the text visible (tspan wrap, not a mark)', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'diagram.svg');
+  await expect(page.locator('iframe.viewer-frame')).toBeVisible();
+  await selectInFrame(page, '#label');
+  await expect(page.locator('.artifact-comment-btn')).toBeVisible();
+  await page.locator('.artifact-comment-btn').dispatchEvent('mousedown');
+  const composer = page.locator('.review-composer');
+  await expect(composer).toBeVisible();
+  await composer.locator('textarea').fill('Rename this label');
+  await composer.locator('textarea').press('Enter');
+  await expect(page.locator('.review-card.comment')).toHaveCount(1);
+  const frame = page.frameLocator('iframe.viewer-frame');
+  // The commented run is wrapped in a <tspan> (SVG renders it) with the text
+  // still present, never a <mark> (which would make SVG text vanish).
+  await expect(frame.locator('tspan[data-rundock-review]')).toHaveText('Architecture diagram label');
+  await expect(frame.locator('mark[data-rundock-review]')).toHaveCount(0);
+  await expect(frame.locator('text#label')).toBeVisible();
+});
 
 test('comment on an artifact: select, comment, sidecar written, reload re-anchors, resolve hands back', async ({ page }) => {
   await boot(page);
@@ -220,6 +283,78 @@ test('comment on an artifact: select, comment, sidecar written, reload re-anchor
     const r = await page.request.get('/api/file?path=' + encodeURIComponent(sidecarPath));
     return JSON.parse(await r.text()).comments.c1.resolved;
   }).toBe(true);
+});
+
+test('a comment survives a Preview/Code toggle and re-anchors on remount', async ({ page }) => {
+  await boot(page);
+  // Dedicated artifact so its sidecar cannot accumulate across tests.
+  await page.evaluate(() => new Promise((resolve) => {
+    ws.send(JSON.stringify({ type: 'save_file', path: 'toggle-art.html', content: '<html><body><p class="stat">Three workstreams</p></body></html>' }));
+    setTimeout(resolve, 300);
+  }));
+  await openFilesView(page);
+  await page.evaluate(() => { ws.send(JSON.stringify({ type: 'read_file', path: 'toggle-art.html' })); });
+  await expect(page.locator('iframe.viewer-frame')).toBeVisible();
+  await selectInFrame(page, '.stat');
+  await page.locator('.artifact-comment-btn').dispatchEvent('mousedown');
+  await page.locator('.review-composer textarea').fill('toggle note');
+  await page.locator('.review-composer textarea').press('Enter');
+  await expect(page.locator('.review-card.comment')).toHaveCount(1);
+  await expect(page.frameLocator('iframe.viewer-frame').locator('mark[data-rundock-review]')).toHaveText('Three workstreams');
+  // Toggle to Code and back to Preview: the review must re-attach and re-anchor.
+  await page.locator('#toggle-edit').click();
+  await expect(page.locator('#editor-textarea')).toBeVisible();
+  await page.locator('#toggle-preview').click();
+  await expect(page.locator('iframe.viewer-frame')).toBeVisible();
+  await expect(page.locator('.review-card.comment')).toHaveCount(1);
+  await expect(page.frameLocator('iframe.viewer-frame').locator('mark[data-rundock-review]')).toHaveText('Three workstreams');
+});
+
+test('two comments on one artifact both render and mark independently', async ({ page }) => {
+  await boot(page);
+  await page.evaluate(() => new Promise((resolve) => {
+    ws.send(JSON.stringify({ type: 'save_file', path: 'multi-art.html', content: '<html><body><p id="a">Alpha passage</p><p id="b">Beta passage</p></body></html>' }));
+    setTimeout(resolve, 300);
+  }));
+  await openFilesView(page);
+  await page.evaluate(() => { ws.send(JSON.stringify({ type: 'read_file', path: 'multi-art.html' })); });
+  await expect(page.locator('iframe.viewer-frame')).toBeVisible();
+  await selectInFrame(page, '#a');
+  await page.locator('.artifact-comment-btn').dispatchEvent('mousedown');
+  await page.locator('.review-composer textarea').fill('first');
+  await page.locator('.review-composer textarea').press('Enter');
+  await expect(page.locator('.review-card.comment')).toHaveCount(1);
+  await selectInFrame(page, '#b');
+  await page.locator('.artifact-comment-btn').dispatchEvent('mousedown');
+  await page.locator('.review-composer textarea').fill('second');
+  await page.locator('.review-composer textarea').press('Enter');
+  await expect(page.locator('.review-card.comment')).toHaveCount(2);
+  await expect(page.frameLocator('iframe.viewer-frame').locator('mark[data-rundock-review]')).toHaveCount(2);
+});
+
+test('a comment re-anchors when a live external change keeps the quoted passage', async ({ page }) => {
+  await boot(page);
+  // Dedicated artifact so the live change cannot disturb other tests.
+  await page.evaluate(() => new Promise((resolve) => {
+    ws.send(JSON.stringify({ type: 'save_file', path: 'live-artifact.html', content: '<html><body><p id="p">Keep this exact passage here.</p><p>filler</p></body></html>' }));
+    setTimeout(resolve, 300);
+  }));
+  await openFilesView(page);
+  await page.evaluate(() => { ws.send(JSON.stringify({ type: 'read_file', path: 'live-artifact.html' })); });
+  await expect(page.locator('iframe.viewer-frame')).toBeVisible();
+  await selectInFrame(page, '#p');
+  await page.locator('.artifact-comment-btn').dispatchEvent('mousedown');
+  await page.locator('.review-composer textarea').fill('live note');
+  await page.locator('.review-composer textarea').press('Enter');
+  await expect(page.locator('.review-card.comment')).toHaveCount(1);
+  // An external tool changes the file but keeps the quoted passage. The live
+  // watcher pushes the change; the comment must re-anchor, not vanish.
+  await page.evaluate(() => {
+    ws.send(JSON.stringify({ type: 'save_file', path: 'live-artifact.html', content: '<html><body><h1>New heading</h1><p id="p">Keep this exact passage here.</p></body></html>' }));
+  });
+  await expect(page.frameLocator('iframe.viewer-frame').locator('h1')).toHaveText('New heading'); // refreshed
+  await expect(page.locator('.review-card.comment')).toHaveCount(1);
+  await expect(page.frameLocator('iframe.viewer-frame').locator('mark[data-rundock-review]')).toHaveText('Keep this exact passage here.');
 });
 
 test('an anchor whose passage was edited away lists as orphaned, never dropped', async ({ page }) => {
@@ -327,7 +462,113 @@ test('a multi-paragraph comment is geometry-neutral: paragraph gaps unchanged', 
   await page.screenshot({ path: `${SHOTS}/artifact-multi-paragraph-gap.png` });
 });
 
-// ── FV2 phase 3: callouts + frontmatter wikilinks ────────────────────────────
+// ── Callouts + frontmatter wikilinks ────────────────────────────
+
+test('clicking a callout does not show the inline formatting toolbar', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'briefing.md');
+  const callout = page.locator('.callout.callout-abstract').first();
+  await expect(callout).toBeVisible();
+  // Clicking a callout selects the atom node; the inline toolbar cannot format
+  // it, so it must stay hidden (editing is via the callout's own editor).
+  await callout.locator('.callout-line').first().click();
+  await page.waitForTimeout(200);
+  await expect(page.locator('#tiptap-toolbar')).not.toHaveClass(/\bvisible\b/);
+});
+
+test('a callout edits in place and saves byte-honestly', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'briefing.md');
+  const callout = page.locator('.callout.callout-abstract').first();
+  await expect(callout).toBeVisible();
+  await expect(callout).toContainText('Two meetings, one deadline');
+  // Open the in-place editor: the raw callout markdown appears in a textarea.
+  await callout.locator('.callout-edit-btn').click();
+  const ta = callout.locator('textarea.callout-edit');
+  await expect(ta).toBeVisible();
+  await expect(ta).toHaveValue(/\[!abstract\]\+ Today at a glance/);
+  // Edit the body and commit.
+  await ta.fill('> [!abstract]+ Today at a glance\n> Three meetings now.');
+  await ta.press('ControlOrMeta+Enter');
+  await expect(callout.locator('textarea')).toHaveCount(0);
+  await expect(callout).toContainText('Three meetings now');
+  await expect(callout).not.toContainText('Two meetings');
+  // The edit persists to the file as callout markdown (byte-honest).
+  await expect.poll(async () =>
+    (await (await page.request.get('/api/file?path=briefing.md')).text())
+  ).toContain('> Three meetings now.');
+});
+
+test('opening and blurring a callout without an edit does not change the document', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'briefing.md');
+  const callout = page.locator('.callout.callout-abstract').first();
+  await expect(callout).toBeVisible();
+  // Content-agnostic: capture whatever the file and callout currently hold, so
+  // this test does not depend on other tests that edit the shared fixture.
+  const before = await (await page.request.get('/api/file?path=briefing.md')).text();
+  const calloutTextBefore = await callout.textContent();
+  // Open the in-place editor, then blur without typing (a no-op commit).
+  await callout.locator('.callout-edit-btn').click();
+  const ta = callout.locator('textarea.callout-edit');
+  await expect(ta).toBeVisible();
+  await expect(ta).toBeFocused();
+  await page.locator('#editor-filename').click();
+  await expect(callout.locator('textarea')).toHaveCount(0);
+  await expect(callout).toHaveText(calloutTextBefore);
+  // No no-op write: the file is byte-identical.
+  await page.waitForTimeout(300);
+  const after = await (await page.request.get('/api/file?path=briefing.md')).text();
+  expect(after).toBe(before);
+});
+
+test('an invalid callout edit is flagged, not silently discarded', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'briefing.md');
+  const callout = page.locator('.callout.callout-abstract').first();
+  await expect(callout).toBeVisible();
+  await callout.locator('.callout-edit-btn').click();
+  const ta = callout.locator('textarea.callout-edit');
+  await expect(ta).toBeVisible();
+  // Type an invalid callout head (no [!type]) and try to commit by blurring.
+  await ta.fill('not a valid callout head\n> body');
+  await page.locator('#editor-filename').click();
+  // The editor stays open with the typed text preserved and a rejection signal.
+  await expect(ta).toBeVisible();
+  await expect(ta).toHaveClass(/callout-edit-invalid/);
+  await expect(ta).toHaveValue(/not a valid callout head/);
+  // Escape cancels cleanly, reverting to the rendered box.
+  await ta.press('Escape');
+  await expect(callout.locator('textarea')).toHaveCount(0);
+});
+
+test('an external change while a callout editor is open is not clobbered on blur', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'briefing.md');
+  const callout = page.locator('.callout.callout-abstract').first();
+  await expect(callout).toBeVisible();
+  await callout.locator('.callout-edit-btn').click();
+  const ta = callout.locator('textarea.callout-edit');
+  await expect(ta).toBeVisible();
+  await ta.fill('> [!abstract]+ Today at a glance\n> Stale edit from the textarea.');
+  // Simulate the node changing underneath the open editor (a live refresh).
+  await page.evaluate(() => {
+    const view = typeof activeTiptapEditor !== 'undefined' && activeTiptapEditor && activeTiptapEditor.view;
+    if (!view) return;
+    let calloutPos = null;
+    view.state.doc.descendants((node, pos) => { if (node.type.name === 'callout' && calloutPos === null) calloutPos = pos; });
+    if (calloutPos === null) return;
+    const node = view.state.doc.nodeAt(calloutPos);
+    view.dispatch(view.state.tr.setNodeMarkup(calloutPos, undefined, {
+      ...node.attrs, body: 'External update wins.', head: '> [!abstract]+ Today at a glance',
+    }));
+  });
+  // Blur the stale textarea: it must NOT overwrite the external update.
+  await page.locator('#editor-filename').click();
+  await expect(callout.locator('textarea')).toHaveCount(0);
+  await expect(callout).toContainText('External update wins.');
+  await expect(callout).not.toContainText('Stale edit from the textarea.');
+});
 
 test('callouts render as admonition boxes with working fold; frontmatter wikilinks navigate', async ({ page }) => {
   await boot(page);
@@ -375,11 +616,36 @@ test('a wikilink to an image or PDF in a conversation opens the real viewer', as
   await page.locator('.nav-item[data-nav="conversations"]').click();
   await page.locator('.convo-item', { hasText: 'Export handoff' }).click();
   await page.locator('.wikilink', { hasText: 'report.pdf' }).first().click();
-  await expect(page.locator('iframe.viewer-frame')).toHaveAttribute('src', '/workspace-file?path=report.pdf');
+  await expect(page.locator('iframe.viewer-frame')).toHaveAttribute('src', '/workspace-file?path=report.pdf#navpanes=0');
   await page.screenshot({ path: `${SHOTS}/conversation-wikilink-binary.png` });
 });
 
-// ── FV2 phase 4: property editing + external-edit guard ─────────────────────
+// ── Property editing + external-edit guard ─────────────────────
+
+test('editing frontmatter after switching files edits the current file, not a stale one', async ({ page }) => {
+  await boot(page);
+  // Open one frontmatter file, then switch to another. The properties panel is
+  // a single persistent node; opening the second file must not leave the
+  // first file's edit handlers bound to it.
+  await openFilesView(page);
+  await page.locator('.folder-item', { hasText: 'notes' }).click(); // expand notes/
+  await page.locator('.file-item', { hasText: 'pricing-strategy.md' }).click();
+  await expect(page.locator('#tiptap-properties.visible')).toBeVisible();
+  await openFromTree(page, 'briefing.md');
+  const titleRow = page.locator('.prop-row[data-prop-key="title"]');
+  await expect(titleRow).toBeVisible();
+  await titleRow.locator('.prop-value').click();
+  const input = titleRow.locator('input.prop-edit-input');
+  await expect(input).toBeVisible();
+  // The seed must be THIS file's value, never "undefined" read from the other
+  // file's frontmatter through a stale handler.
+  await expect(input).toHaveValue('Morning Briefing');
+  await input.press('Enter');
+  // The panel still reflects the file being edited: its related row survives
+  // and the other file's tags row never appears.
+  await expect(page.locator('.prop-row[data-prop-key="related"]')).toBeVisible();
+  await expect(page.locator('.prop-row[data-prop-key="tags"]')).toHaveCount(0);
+});
 
 test('editing a frontmatter property persists byte-honestly to the file', async ({ page }) => {
   await boot(page);
@@ -542,16 +808,135 @@ test('opening a board changes zero bytes; adding a card persists canonical markd
   expect(saved.endsWith('%%')).toBe(true); // no trailing newline: still canonical
 });
 
+test('board cards render tag chips and dates, and wikilinks navigate', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'rich-board.md');
+  await expect(page.locator('.board-lane')).toHaveCount(1);
+  // Tag chip and date span render (not raw text).
+  await expect(page.locator('.board-card-text .board-tag', { hasText: '#launch' })).toBeVisible();
+  await expect(page.locator('.board-card-text .board-date', { hasText: '2026-08-01' })).toBeVisible();
+  await page.screenshot({ path: `${SHOTS}/board-rich-card.png` });
+  // Clicking the wikilink navigates to the target file (does not open the card editor).
+  await page.locator('.board-card-text a.board-wikilink', { hasText: 'Roadmap-2026' }).click();
+  await expect(page.locator('#editor-filename')).toHaveText('Roadmap-2026.md');
+  await expect(page.locator('.board-card-editor')).toHaveCount(0);
+});
+
+test('cards reorder within a column by dragging onto another card', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'dnd-board.md');
+  await expect(page.locator('.board-card')).toHaveCount(3);
+  // Drag Card A onto the bottom half of Card C (insert after) via DnD events.
+  await page.evaluate(() => {
+    const cards = document.querySelectorAll('.board-card');
+    const src = cards[0], tgt = cards[2];
+    const dt = new DataTransfer();
+    src.dispatchEvent(new DragEvent('dragstart', { dataTransfer: dt, bubbles: true }));
+    const r = tgt.getBoundingClientRect();
+    tgt.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, clientY: r.bottom - 2 }));
+    tgt.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
+    src.dispatchEvent(new DragEvent('dragend', { dataTransfer: dt, bubbles: true }));
+  });
+  // Order in the UI is now B, C, A...
+  const texts = await page.locator('.board-card-text').allInnerTexts();
+  expect(texts.map(t => t.trim())).toEqual(['Card B', 'Card C', 'Card A']);
+  // ...and persisted in that order in the file.
+  await expect.poll(async () => {
+    const md = await (await page.request.get('/api/file?path=dnd-board.md')).text();
+    return md.indexOf('Card B') < md.indexOf('Card C') && md.indexOf('Card C') < md.indexOf('Card A');
+  }).toBe(true);
+});
+
+test('a clean file with non-idempotent markdown live-refreshes without a false conflict', async ({ page }) => {
+  await boot(page);
+  // Body uses constructs the rich editor re-serializes differently (`*` bullets),
+  // so a content comparison would misread this clean file as dirty.
+  const v1 = '---\ntitle: T\n---\n\n* one\n* two\n';
+  await page.evaluate((c) => new Promise((r) => {
+    ws.send(JSON.stringify({ type: 'save_file', path: 'nonidem.md', content: c })); setTimeout(r, 300);
+  }), v1);
+  await openFilesView(page);
+  await page.evaluate(() => { ws.send(JSON.stringify({ type: 'read_file', path: 'nonidem.md' })); });
+  await expect(page.locator('#tiptap-editor-pane')).toBeVisible();
+  // No user edits. An external change must reload seamlessly, not conflict.
+  await page.evaluate((c) => { ws.send(JSON.stringify({ type: 'save_file', path: 'nonidem.md', content: c })); },
+    '---\ntitle: T\n---\n\n* one\n* two\n* three\n');
+  await expect(page.locator('#tiptap-editor-pane')).toContainText('three'); // reloaded
+  await expect(page.locator('#external-edit-banner')).toHaveCount(0);        // no false conflict
+});
+
+test('editing a board in Rundock does not raise a false external-change conflict', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'watch-board.md');
+  await expect(page.locator('.board-lane')).toHaveCount(2);
+  // A Rundock edit writes the file; the server watches it and echoes the change
+  // back. That echo is our own save and must not be read as an external edit.
+  await page.locator('.board-card-check').first().click();
+  await page.waitForTimeout(2000); // past the board save + watcher poll interval
+  await expect(page.locator('#external-edit-banner')).toHaveCount(0);
+});
+
+test('a card the rich editor cannot round-trip falls back to the plain editor, byte-exact', async ({ page }) => {
+  await boot(page);
+  const board = '---\n\nkanban-plugin: board\n\n---\n\n## To do\n\n- [ ] Simple inline card\n- [ ] Card with nested items\n\t- [ ] nested one\n\t- [x] nested two\n\n\n\n\n%% kanban:settings\n```\n{"kanban-plugin":"board","list-collapse":[false]}\n```\n%%';
+  await page.evaluate((content) => new Promise((resolve) => {
+    ws.send(JSON.stringify({ type: 'save_file', path: 'nested-board.md', content }));
+    setTimeout(resolve, 300);
+  }), board);
+  await openFilesView(page);
+  await page.evaluate(() => { ws.send(JSON.stringify({ type: 'read_file', path: 'nested-board.md' })); });
+  await expect(page.locator('.board-lane')).toHaveCount(1);
+  // The nested-checkbox card opens in the plain textarea (the rich editor would
+  // escape the checkboxes into "- \\[ \\]" and corrupt the board).
+  await page.locator('.board-card-text', { hasText: 'Card with nested items' }).click();
+  await expect(page.locator('textarea.board-card-edit')).toBeVisible();
+  await expect(page.locator('.board-card-editor')).toHaveCount(0);
+  await page.locator('textarea.board-card-edit').press('Enter'); // commit, no change
+  // The file stays byte-identical: no corruption from merely opening the card.
+  await expect.poll(async () => (await (await page.request.get('/api/file?path=nested-board.md')).text())).toBe(board);
+  // A simple inline card still gets the rich editor.
+  await page.locator('.board-card-text', { hasText: 'Simple inline card' }).click();
+  await expect(page.locator('.board-card-editor .ProseMirror')).toBeVisible();
+});
+
+test('the board card editor shows a selection toolbar with inline formatting only', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'board.md');
+  await expect(page.locator('.board-lane')).toHaveCount(3);
+  await page.locator('.board-card-text', { hasText: 'Draft the outline' }).click();
+  const editor = page.locator('.board-card-editor .ProseMirror');
+  await expect(editor).toBeVisible();
+  // The delete control is hidden while editing, even when the card is hovered.
+  await page.locator('.board-card.editing').hover();
+  await expect(page.locator('.board-card.editing .board-card-controls')).toBeHidden();
+  await editor.click();
+  await page.keyboard.press('ControlOrMeta+A'); // select the card text
+  const toolbar = page.locator('.floating-toolbar.board-card-toolbar.visible');
+  await expect(toolbar).toBeVisible();
+  // Exactly the inline set: bold, italic, code, link. No headings, no comment.
+  await expect(toolbar.locator('.tb-btn')).toHaveCount(4);
+  await expect(toolbar.locator('.tb-comment')).toHaveCount(0);
+  // Bold via the toolbar formats the selection and persists on save.
+  await toolbar.locator('.tb-btn[data-cmd="bold"]').click();
+  await expect(editor.locator('strong')).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.board-card-text strong', { hasText: 'Draft the outline' })).toBeVisible();
+});
+
 test('a board card edits in place and persists byte-honest markdown', async ({ page }) => {
   await boot(page);
   await openFromTree(page, 'board.md');
   await expect(page.locator('.board-lane')).toHaveCount(3);
   const card = page.locator('.board-card-text', { hasText: 'Draft the outline' });
   await card.click();
-  const editor = page.locator('textarea.board-card-edit');
+  // The card opens in a rich editor (formatting renders as you type).
+  const editor = page.locator('.board-card-editor .ProseMirror');
   await expect(editor).toBeVisible();
-  await editor.fill('Draft the **full** outline');
-  await editor.press('Enter'); // Enter saves
+  await editor.click();
+  await page.keyboard.press('ControlOrMeta+A');
+  await page.keyboard.type('Draft the **full** outline'); // input rule bolds "full"
+  await expect(editor.locator('strong', { hasText: 'full' })).toBeVisible();
+  await page.keyboard.press('Enter'); // Enter saves
   await expect(page.locator('.board-card-text strong', { hasText: 'full' })).toBeVisible();
   // Only that card's line changed; the file stays canonical.
   await expect.poll(async () => (await (await page.request.get('/api/file?path=board.md')).text()))
@@ -588,9 +973,11 @@ test('a later edit dismisses the undo, so undo never discards interim work', asy
   // Make an unrelated edit (on a card no other test mutates): the stale undo
   // is dismissed, so it can never revert this edit away.
   await page.locator('.board-card-text', { hasText: 'Wire the' }).click();
-  const editor = page.locator('textarea.board-card-edit');
-  await editor.fill('Wire the whole board');
-  await editor.press('Enter');
+  const editor = page.locator('.board-card-editor .ProseMirror');
+  await editor.click();
+  await page.keyboard.press('ControlOrMeta+A');
+  await page.keyboard.type('Wire the whole board');
+  await page.keyboard.press('Enter');
   await expect(page.locator('.board-undo-toast')).toHaveCount(0);
   await expect(page.locator('.board-card-text', { hasText: 'Wire the whole board' })).toBeVisible();
 });
@@ -627,6 +1014,9 @@ test('the lane menu renames, inserts, and deletes lists with undo', async ({ pag
 
   // Rename the first lane via the menu.
   await page.locator('.board-lane').first().locator('.board-lane-menu-btn').click();
+  // The menu groups its actions with dividers (identity/insert/sort/destructive).
+  await expect(page.locator('.board-lane-popup .board-lane-popup-divider')).toHaveCount(3);
+  await page.screenshot({ path: `${SHOTS}/lane-menu-grouped.png` });
   await page.locator('.board-lane-popup-item', { hasText: 'Rename list' }).click();
   const rename = page.locator('input.board-lane-rename');
   await expect(rename).toBeVisible();
@@ -662,6 +1052,95 @@ test('the lane menu moves a column right, reordering it in the file', async ({ p
     const md = await (await page.request.get('/api/file?path=reorder-board.md')).text();
     return md.indexOf('## ' + second) < md.indexOf('## ' + first);
   }).toBe(true);
+});
+
+test('frontmatter panel: wikilinks are inline links, rows have svg icons', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'briefing.md');
+  await expect(page.locator('#tiptap-properties.visible')).toBeVisible();
+  // The related wikilinks render as inline links, not pills.
+  await expect(page.locator('#tiptap-properties .prop-link-item')).toHaveCount(2);
+  await expect(page.locator('#tiptap-properties .prop-link-item a.prop-wikilink').first()).toBeVisible();
+  // Every row carries an svg type icon (not a unicode glyph).
+  const iconCount = await page.locator('#tiptap-properties .prop-icon svg').count();
+  expect(iconCount).toBeGreaterThanOrEqual(2);
+  await page.screenshot({ path: `${SHOTS}/frontmatter-parity.png` });
+});
+
+test('the Files + menu creates a note, a board, and a folder', async ({ page }) => {
+  await boot(page);
+  await openFilesView(page);
+  // New note via the header + menu.
+  await page.locator('#files-add-btn').click();
+  // Each row carries its type icon.
+  await expect(page.locator('.files-menu-item svg')).toHaveCount(3);
+  await page.locator('.files-menu-item', { hasText: 'New note' }).click();
+  await page.locator('.files-menu-field input').fill('Fresh idea');
+  await page.locator('.files-menu-field input').press('Enter');
+  // It appears in the tree and opens in the editor.
+  await expect(page.locator('.file-item', { hasText: 'Fresh idea.md' })).toBeVisible();
+  await expect(page.locator('#editor-filename')).toHaveText('Fresh idea.md');
+
+  // New board opens in the board view.
+  await page.locator('#files-add-btn').click();
+  await page.locator('.files-menu-item', { hasText: 'New board' }).click();
+  await page.locator('.files-menu-field input').fill('Sprint');
+  await page.locator('.files-menu-field input').press('Enter');
+  await expect(page.locator('.file-item', { hasText: 'Sprint.md' })).toBeVisible();
+  await expect(page.locator('.board-host')).toBeVisible();
+
+  // New folder appears in the tree.
+  await page.locator('#files-add-btn').click();
+  await page.locator('.files-menu-item', { hasText: 'New folder' }).click();
+  await page.locator('.files-menu-field input').fill('Archive');
+  await page.locator('.files-menu-field input').press('Enter');
+  await expect(page.locator('.folder-item', { hasText: 'Archive' })).toBeVisible();
+});
+
+test('only one floating menu is open at a time and outside clicks close it', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'board.md'); // files view, board mounted in the pane
+  await expect(page.locator('.board-lane')).toHaveCount(3);
+  // Open the files "+" menu (lives in the files sidebar header).
+  await page.locator('#files-add-btn').click();
+  await expect(page.locator('.files-menu')).toBeVisible();
+  // Opening a board lane menu dismisses the files menu (single menu open).
+  await page.locator('.board-lane-menu-btn').first().click();
+  await expect(page.locator('.files-menu')).toHaveCount(0);
+  await expect(page.locator('.board-lane-popup')).toBeVisible();
+  // Clicking the collapse chevron (which stops propagation) still closes the menu.
+  await page.locator('.board-lane-collapse').first().click();
+  await expect(page.locator('.board-lane-popup')).toHaveCount(0);
+  // Reopen on a still-expanded lane (lane 0 is now collapsed, its button hidden)
+  // and confirm a plain outside click (sidebar label) closes it.
+  await page.locator('.board-lane-menu-btn').nth(1).click();
+  await expect(page.locator('.board-lane-popup')).toBeVisible();
+  await page.locator('#sidebar-files .sidebar-label').click();
+  await expect(page.locator('.board-lane-popup')).toHaveCount(0);
+});
+
+test('board files show the board icon in the tree, notes do not', async ({ page }) => {
+  await boot(page);
+  await openFilesView(page);
+  // The board icon includes a <rect> (kanban); the note icon does not.
+  await expect(page.locator('.file-item', { hasText: 'tagged-board.md' }).locator('svg rect')).toHaveCount(1);
+  await expect(page.locator('.file-item', { hasText: 'CLAUDE.md' }).locator('svg rect')).toHaveCount(0);
+});
+
+test('right-clicking a file row opens a context menu with create and clipboard actions', async ({ page }) => {
+  await boot(page);
+  await openFromTree(page, 'proposal.html');
+  await openFilesView(page);
+  // Force macOS so the Reveal in Finder row is present regardless of the CI
+  // platform (it is hidden off darwin; its platform gating is covered by the
+  // dedicated "Reveal in Finder shows only on macOS" test).
+  await page.evaluate(() => { serverPlatform = 'darwin'; });
+  await page.locator('.file-item', { hasText: 'proposal.html' }).click({ button: 'right' });
+  await expect(page.locator('.files-menu')).toBeVisible();
+  await expect(page.locator('.files-menu-item', { hasText: 'New note' })).toBeVisible();
+  await expect(page.locator('.files-menu-item', { hasText: 'Copy workspace path' })).toBeVisible();
+  await expect(page.locator('.files-menu-item', { hasText: 'Copy wikilink' })).toBeVisible();
+  await expect(page.locator('.files-menu-item', { hasText: 'Reveal in Finder' })).toBeVisible();
 });
 
 test('an open file persists across a view switch and is revealed in the tree', async ({ page }) => {

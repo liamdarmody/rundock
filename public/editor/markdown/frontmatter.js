@@ -3,7 +3,7 @@
 //  - Strip it before the editor sees the body, so the YAML stays opaque to
 //    ProseMirror and is rendered separately as a properties panel
 //  - Preserve the raw YAML block verbatim so save round-trips byte-for-byte
-//    until the user actually edits a property (Phase 2 adds editing)
+//    until the user actually edits a property
 //  - Parse it with js-yaml only for rendering the panel; the raw form stays
 //    the source of truth for serialisation
 //
@@ -35,7 +35,11 @@ export function extractFrontmatter(rawMarkdown) {
   }
   let parsed = null;
   try {
-    parsed = yaml.load(yamlBody);
+    // CORE_SCHEMA keeps timestamps as their authored strings (DEFAULT_SCHEMA
+    // parses them to Date objects, which then render and save in UTC, shifting
+    // an evening value with a timezone offset to the next calendar day and
+    // dropping the time). Numbers and booleans are still typed.
+    parsed = yaml.load(yamlBody, { schema: yaml.CORE_SCHEMA });
     if (parsed === undefined) parsed = null;
   } catch (err) {
     // Malformed YAML: keep the raw block so save round-trips, but render

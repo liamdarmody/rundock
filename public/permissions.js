@@ -34,18 +34,39 @@
 
   function bashBin(cmd) { return cmd.split(/\s+/)[0].replace(/^.*\//, ''); }
 
+  // Risk of a shell command, judged across EVERY segment of a compound command
+  // (split on &&, ||, ;, |, &), not just the first token. This stops a
+  // read-only prefix from smuggling a destructive command past the gate
+  // ("ls && rm x" is high, not low) and stops a harmless leading cd from
+  // forcing an all-read-only chain to look risky ("cd dir && ls" is low, so
+  // ordinary exploration is not carded). A destructive flag or a
+  // download-piped-to-a-shell anywhere in the command is high regardless of
+  // segmenting. Naive splitting can over-flag an operator inside a quoted
+  // string, which only ever errs toward showing a card (safe for a gate).
+  function classifyBashRisk(cmd) {
+    if (!cmd) return 'low';
+    if (/--force|--hard|-rf\b/.test(cmd)) return 'high';
+    if (/git\s+(push|reset|clean|checkout\s+\.)/.test(cmd)) return 'high';
+    if (/\b(curl|wget)\b[\s\S]*\|\s*(sh|bash|zsh|dash)\b/.test(cmd)) return 'high';
+    const DESTRUCTIVE = /^(rm|sudo|chmod|chown|kill|mkfs|dd)/;
+    const READ_ONLY = /^(ls|cat|head|tail|echo|pwd|whoami|which|grep|rg|find|wc|sort|uniq|diff|file|stat|date|env|printenv|node\s+-e|python3?\s+-c)/;
+    const NEUTRAL = /^(cd|pushd|popd|true)(\s|$)/;
+    const segments = cmd.split(/\s*(?:&&|\|\||[;|&])\s*/).map(function (s) { return s.trim(); }).filter(Boolean);
+    var anyHigh = false, allSafe = true;
+    for (var i = 0; i < segments.length; i++) {
+      var seg = segments[i];
+      if (DESTRUCTIVE.test(seg)) anyHigh = true;
+      else if (READ_ONLY.test(seg) || NEUTRAL.test(seg)) continue;
+      else allSafe = false;
+    }
+    if (anyHigh) return 'high';
+    if (allSafe) return 'low';
+    return 'medium';
+  }
+
   // Classify risk level of a tool request.
   function classifyRisk(toolName, input) {
-    if (toolName === 'Bash') {
-      const cmd = (input.command || '').trim();
-      const highRisk = /^(rm|sudo|chmod|chown|kill|mkfs|dd|curl\s.*\|\s*sh|wget\s.*\|\s*sh)/.test(cmd)
-        || /--force|--hard|-rf\b/.test(cmd)
-        || /git\s+(push|reset|clean|checkout\s+\.)/.test(cmd);
-      if (highRisk) return 'high';
-      const lowRisk = /^(ls|cat|head|tail|echo|pwd|whoami|which|grep|rg|find|wc|sort|uniq|diff|file|stat|date|env|printenv|node\s+-e|python3?\s+-c)/.test(cmd);
-      if (lowRisk) return 'low';
-      return 'medium';
-    }
+    if (toolName === 'Bash') return classifyBashRisk((input.command || '').trim());
     if (toolName === 'PowerShell') {
       // Windows shell tool. Same input shape as Bash (a `command` field).
       // Destructive checks run first so a read that also deletes can't be low.
@@ -163,6 +184,12 @@
   //   { action: 'allow', reason: 'low-risk' }        read-only auto-approve policy
   //   { action: 'card' }                             ask the human
   function decidePermission(risk, key, alwaysAllowedSet) {
+    // A high-risk (destructive) command is always carded, ahead of any standing
+    // allow. The allow-key is coarse (the leading command), so a standing allow
+    // granted for a benign command must never auto-approve a destructive one
+    // that shares the key. High-risk requests never offer "Always allow"
+    // either (offersAlwaysAllow), so nothing legitimate depends on this path.
+    if (risk === 'high') return { action: 'card' };
     if (alwaysAllowedSet && alwaysAllowedSet.has(key)) return { action: 'allow', reason: 'always-allowed' };
     if (risk === 'low') return { action: 'allow', reason: 'low-risk' };
     return { action: 'card' };

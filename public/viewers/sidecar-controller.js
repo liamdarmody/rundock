@@ -5,7 +5,7 @@
 // shape the markdown loop ships, so inline, batch, and future workspace
 // review all speak one language.
 //
-// Differences, by design (Review-And-Feedback-Loop-Spec phase 3):
+// Differences, by design:
 //  - Storage is a sidecar JSON in .rundock/reviews/ (the artifact file
 //    stays clean and valid), not inline constructs + YAML endmatter.
 //  - Anchoring is quote + context (text-anchor.js), not document positions.

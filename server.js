@@ -33,6 +33,18 @@ function isInsideWorkspace(targetPath) {
   return resolved === root || resolved.startsWith(root + path.sep);
 }
 
+// Is a workspace-relative path safe for the Files sidebar to create? Rejects
+// any path with a dot-leading component: a leading-dot basename is filtered
+// out of the file tree (so the new file would be invisible), and '.'/'..'
+// segments are traversal. Independent of isInsideWorkspace so a '..' that
+// happens to resolve back inside the workspace is still refused.
+function isSafeCreatePath(rel) {
+  if (typeof rel !== 'string' || !rel) return false;
+  const segments = rel.split('/').filter(Boolean);
+  if (!segments.length) return false;
+  return !segments.some((seg) => seg.startsWith('.'));
+}
+
 // Shared constants to avoid repetition across process spawn sites
 const DISALLOWED_TOOLS_KNOWLEDGE = 'Write(*.js),Write(*.jsx),Write(*.ts),Write(*.tsx),Write(*.py),Write(*.sh),Write(*.bash),Write(*.rb),Write(*.pl),Write(*.exe),Write(*.dll),Write(*.so),Edit(*.js),Edit(*.jsx),Edit(*.ts),Edit(*.tsx),Edit(*.py),Edit(*.sh),Edit(*.bash),Edit(*.rb),Edit(*.pl),Edit(*.exe)';
 // Backward compat: DISALLOWED_TOOLS used by existing code paths
@@ -398,7 +410,7 @@ function countSessionMessagesSync(sessionId) {
     // by the typeof === 'string' guard.
     if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
       const text = obj.message.content;
-      // Skip Rundock-injected priming messages — these aren't user-visible bubbles.
+      // Skip Rundock-injected priming messages: these aren't user-visible bubbles.
       if (text.startsWith('CONVERSATION SO FAR:') ||
           text.startsWith('[SYSTEM:') ||
           text.startsWith('[DELEGATION BRIEF]')) continue;
@@ -587,7 +599,7 @@ function buildTeamRoster(leaderId, scopedToDirectReports = false) {
 // Extract the first non-heading paragraph from an agent's instructions body.
 // This is the agent's self-description, used when injecting peers into a plain
 // specialist's system prompt. Fallback chain: first-non-heading-paragraph ->
-// description -> capabilities.does -> ''. Empty return is safe — the caller
+// description -> capabilities.does -> ''. Empty return is safe: the caller
 // renders the header line alone if no description is available.
 function extractSelfDescription(agentData) {
   const body = (agentData && agentData.instructions) || '';
@@ -688,7 +700,7 @@ function findDirectReportMatch(agentId, toolInput) {
 // runtime, no disclosure). For runtime: codex agents that silently bypasses
 // the user's runtime choice. Returns the off-roster workspace agent, or null.
 //
-// Explicit path ONLY (decision, Liam 2026-07-13): prompt-text mentions of
+// Explicit path ONLY (by design): prompt-text mentions of
 // off-roster agents ("review what Cody wrote") are common and legitimate, so
 // the prompt word-scan stays direct-reports-only. Call this AFTER
 // findDirectReportMatch returns null; direct reports are excluded here too
@@ -785,7 +797,7 @@ function buildSystemPrompt(agentData) {
         '- Do NOT ask the user clarifying questions before delegating. Let the specialist ask their own questions.',
         '- Do NOT list the specialist\'s questions, team, or expertise in your own response. That is impersonation, not delegation.',
         '- Handle it yourself only when no specialist fits, or when coordinating across multiple specialists.',
-        '- Platform operations (creating or editing agents, skills, or workspace config) MUST be delegated to Doc by calling the Agent tool with subagent_type=rundock-guide. Do NOT route these to specialists — they cannot edit .claude/ files.',
+        '- Platform operations (creating or editing agents, skills, or workspace config) MUST be delegated to Doc by calling the Agent tool with subagent_type=rundock-guide. Do NOT route these to specialists: they cannot edit .claude/ files.',
         '- When a specialist returns because the user asked for something outside their scope, pick up that request immediately. Do not ask the user to repeat themselves.',
         '- When a specialist returns control to you (for any reason), do not delegate back to the same specialist on your next turn. Either delegate to a different specialist, handle the request yourself, or present results to the user.',
         '- Only delegate to agents listed in YOUR TEAM below. Never invent, assume, or reference agent names that do not appear in the roster. If no listed specialist fits, handle the request yourself.',
@@ -798,7 +810,7 @@ function buildSystemPrompt(agentData) {
   } else if (hasDirectReports) {
     delegationSection = [
       'DELEGATION:',
-      'You have a support team. You do substantive work yourself in your core domain. When a task matches a team member\'s speciality, you delegate. When you delegate, you are a router for that hop: invoke the Agent tool and let the team member take over. The full brief, context, and instructions go INSIDE the Agent tool call — not in a visible chat turn.',
+      'You have a support team. You do substantive work yourself in your core domain. When a task matches a team member\'s speciality, you delegate. When you delegate, you are a router for that hop: invoke the Agent tool and let the team member take over. The full brief, context, and instructions go INSIDE the Agent tool call: not in a visible chat turn.',
       '',
       'RULES:',
       '- Delegate when a task matches a team member\'s speciality. Do it yourself only for tasks in YOUR core domain.',
@@ -904,7 +916,7 @@ const AGENT_CACHE_TTL = 2000; // 2 seconds
 
 function invalidateAgentCache() { _agentCache = null; _agentCacheTime = 0; _skillCache = null; _skillCacheTime = 0; invalidateFileListCache(); }
 
-// Skill + file-list caches for the search hot path (SR1). discoverSkills
+// Skill + file-list caches for the search hot path. discoverSkills
 // re-reads every SKILL.md and agent body per call, and the palette queries
 // per debounced keystroke; both caches share the agent cache's TTL scale and
 // are cleared by invalidateAgentCache (already called on every agent/skill
@@ -1125,6 +1137,43 @@ function discoverAgents() {
  */
 function readNormalisedFile(filePath) {
   return fs.readFileSync(filePath, 'utf-8').replace(/\r\n/g, '\n');
+}
+
+// Live external refresh: watch the file a client currently has open and push
+// its new content when it changes on disk (Obsidian, an agent, another window).
+// We poll the file's stats with fs.watchFile rather than fs.watch: polling is
+// deterministic and never drops events (fs.watch misses changes under load and
+// varies by platform), and it naturally handles atomic saves (write-temp-then-
+// rename). Identical content is never re-sent, so Rundock's own saves do not
+// echo into a needless refresh. One watch per connection; it is replaced when
+// the client opens another file and cleared on disconnect. Up-to-interval
+// latency is an acceptable trade for reliability on an external-edit refresh.
+function closeOpenFileWatcher(ws) {
+  if (ws._openFileWatch) {
+    try { fs.unwatchFile(ws._openFileWatch.path, ws._openFileWatch.listener); } catch (e) { /* already gone */ }
+    ws._openFileWatch = null;
+  }
+}
+
+function watchOpenFile(ws, relPath, fullPath) {
+  closeOpenFileWatcher(ws);
+  let lastPushed = null;
+  try { lastPushed = readNormalisedFile(fullPath); } catch (e) { /* unreadable now; still watch */ }
+  const listener = () => {
+    if (ws.readyState !== 1) return;
+    let content;
+    try {
+      if (!fs.existsSync(fullPath)) return; // deletion: leave the open view intact
+      content = readNormalisedFile(fullPath);
+    } catch (e) { return; } // mid-write read error: the next poll settles it
+    if (content === lastPushed) return; // no real change (or our own save)
+    lastPushed = content;
+    ws.send(JSON.stringify({ type: 'file_changed', path: relPath, content }));
+  };
+  try {
+    fs.watchFile(fullPath, { interval: 700 }, listener);
+    ws._openFileWatch = { path: fullPath, listener };
+  } catch (e) { /* unwatchable path: live refresh is simply unavailable here */ }
 }
 
 function extractFrontmatterText(content) {
@@ -1427,8 +1476,9 @@ function analyzeWorkspace(dir, existingAgents) {
   const claude = sources.find(s => s.file === 'CLAUDE.md');
   const pkg = sources.find(s => s.file === 'package.json');
   if (readme?.heading) {
-    // Extract name and tagline from heading like "Dex by Dave — Your AI Chief of Staff"
-    const parts = readme.heading.split(/[—–:|]+/).map(s => s.trim());
+    // Split a "Name <separator> Tagline" heading into name and tagline. The
+    // char class keeps em and en dashes so a dash-separated heading splits too.
+    const parts = readme.heading.split(/[—–:|]+/).map(s => s.trim()); // internal-refs-allow
     suggestedName = parts[0]?.split(/\s+/)[0]; // First word of first part
     suggestedTagline = parts[1] || readme.summary;
     suggestedRole = parts[1] || null;
@@ -1861,6 +1911,7 @@ function scaffoldWorkspace(dir, opts = {}) {
     fs.mkdirSync(path.join(dir, '.claude', 'agents'), { recursive: true });
 
     // Sync Rundock-owned agents and skills from scaffold sources
+    let wroteManagedFile = false;
     for (const entry of RUNDOCK_MANAGED_FILES) {
       const sourceContent = fs.readFileSync(path.join(__dirname, 'scaffold', entry.source), 'utf-8');
       const targetPath = path.join(dir, entry.target);
@@ -1876,9 +1927,16 @@ function scaffoldWorkspace(dir, opts = {}) {
 
       if (action) {
         fs.writeFileSync(targetPath, sourceContent, 'utf-8');
+        wroteManagedFile = true;
         console.log(`  [Scaffold] ${action}: ${entry.target}`);
       }
     }
+    // Writing a managed agent or skill (Doc, the platform skills) changes what
+    // discovery would return, so drop the agent and skill caches. Without this,
+    // a caller that primed the cache before this sync (the workspace-open path
+    // does exactly that) would keep reading stale agents and the platform
+    // skills would show as unassigned until a reload.
+    if (wroteManagedFile) invalidateAgentCache();
 
     // Create .rundock/ directory for session persistence
     const rundockPath = path.join(dir, '.rundock');
@@ -2675,7 +2733,7 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
                   // so agent_switch (and the specialist's process_started, also sent
                   // inside handleDelegation) reach the client first. By then
                   // activeProcessId points at the specialist, so the orchestrator's
-                  // 'done' fails the process-id match in finishProcessing — exactly
+                  // 'done' fails the process-id match in finishProcessing: exactly
                   // what we want: the orchestrator's working indicator clears via
                   // agent_switch, not via 'done'.
                   handleDelegation({
@@ -3619,7 +3677,7 @@ wss.on('connection', (ws) => {
     active.push({ conversationId: convoId, processId: entry.processId, agentId: entry.agentId, idle: !!entry.idle, responseText: entry.responseText || '', delegation: entry.delegation ? { originalAgentId: entry.delegation.originalAgentId } : null });
   }
   ws.send(JSON.stringify({ type: 'active_processes', processes: active }));
-  ws.send(JSON.stringify({ type: 'server_info', version: PKG_VERSION }));
+  ws.send(JSON.stringify({ type: 'server_info', version: PKG_VERSION, platform: process.platform }));
 
   // Re-send pending permission requests so permission cards reappear after reconnect
   for (const [requestId, pending] of pendingPermissionRequests) {
@@ -3915,7 +3973,7 @@ wss.on('connection', (ws) => {
             '--verbose', '--include-partial-messages', '--permission-mode', legacyPermMode,
             '--allowed-tools', getAllowedToolsLegacy(),
             ...(legacyDisallowed ? ['--disallowed-tools', legacyDisallowed] : []),
-            '--append-system-prompt', 'FORMATTING RULES (mandatory, apply to all output):\n- NEVER use em dashes (—) or en dashes (–) anywhere. This includes lists, headers, separators, and inline text. Wrong: "AI — your assistant". Right: "AI: your assistant". Use colons, full stops, commas, or restructure instead.\n- Use UK spelling throughout.\n\nPLATFORM RULES:\nRundock is a knowledge management platform. You can create and edit markdown, YAML, JSON, and text files. Executable code files (.js, .ts, .py, .sh, etc.) are outside the supported file types. Destructive commands (rm, sudo, chmod) are not supported. If a user asks you to do something outside these capabilities, explain that Rundock is designed for knowledge work and suggest an alternative approach using supported file types.'];
+            '--append-system-prompt', 'FORMATTING RULES (mandatory, apply to all output):\n- NEVER use em dashes (—) or en dashes (–) anywhere. This includes lists, headers, separators, and inline text. Wrong: "AI — your assistant". Right: "AI: your assistant". Use colons, full stops, commas, or restructure instead.\n- Use UK spelling throughout.\n\nPLATFORM RULES:\nRundock is a knowledge management platform. You can create and edit markdown, YAML, JSON, and text files. Executable code files (.js, .ts, .py, .sh, etc.) are outside the supported file types. Destructive commands (rm, sudo, chmod) are not supported. If a user asks you to do something outside these capabilities, explain that Rundock is designed for knowledge work and suggest an alternative approach using supported file types.']; // internal-refs-allow
 
           if (msg.sessionId) {
             args.push('--resume', msg.sessionId);
@@ -4331,7 +4389,7 @@ wss.on('connection', (ws) => {
         // Enrich each conversation for sidebar/profile display. Two passes:
         //   1. messageCount: sum of user/assistant chat-bubble turns across
         //      every Claude Code session JSONL the conversation touches. This
-        //      is the canonical source — Rundock's own transcript only covers
+        //      is the canonical source: Rundock's own transcript only covers
         //      messages emitted after appendTranscript started running and is
         //      partial or missing for older conversations.
         //   2. lastAgentId / lastMessagePreview: still sourced from the
@@ -4503,6 +4561,9 @@ wss.on('connection', (ws) => {
         const fullPath = path.resolve(WORKSPACE, msg.path);
         if (isInsideWorkspace(fullPath) && fs.existsSync(fullPath)) {
           ws.send(JSON.stringify({ type: 'file_content', path: msg.path, content: readNormalisedFile(fullPath) }));
+          // Watch the now-open file so a change made outside Rundock (Obsidian,
+          // an agent, another tool) pushes a live refresh to this client.
+          watchOpenFile(ws, msg.path, fullPath);
         }
       }
 
@@ -4671,7 +4732,7 @@ wss.on('connection', (ws) => {
 
       // ── CONVERSATION SEARCH: search titles and transcript content ──
       if (msg.type === 'search_conversations') {
-        // Conversation-only search. No in-repo client sends this as of SR1
+        // Conversation-only search. No in-repo client sends this today
         // (the palette's search_universal replaced the sidebar search field);
         // retained deliberately as a stable WS surface for stale cached
         // clients and a possible sidebar-search reinstatement, and kept
@@ -4685,9 +4746,9 @@ wss.on('connection', (ws) => {
             return;
           }
           const convos = readConversations();
-          // Phase 1: title matches (instant)
+          // First pass: title matches (instant)
           const titleMatches = convos.filter(c => (c.title || '').toLowerCase().includes(query)).map(c => ({ ...c, matchType: 'title' }));
-          // Phase 2: content matches (FTS index, or the legacy jsonl grep)
+          // Second pass: content matches (FTS index, or the legacy jsonl grep)
           let contentResults = [];
           if (ensureSearchEngine()) {
             try {
@@ -4719,7 +4780,7 @@ wss.on('connection', (ws) => {
       }
 
       if (msg.type === 'search_universal') {
-        // Cmd+K universal palette (SR1): one query across files,
+        // Cmd+K universal palette: one query across files,
         // conversations, agents, and skills, grouped by type.
         runUniversalSearch(msg).then(({ groups, recent }) => {
           ws.send(JSON.stringify({ type: 'search_universal_results', query: (msg.query || '').trim(), reqId: msg.reqId, groups, recent }));
@@ -4885,6 +4946,41 @@ wss.on('connection', (ws) => {
           ws.send(JSON.stringify({ type: 'file_saved', path: msg.path }));
         }
       }
+      // Create a note, board, or folder from the Files sidebar. Files must not
+      // clobber an existing path; folders are idempotent (mkdir -p). A fresh
+      // file tree is pushed so the sidebar updates without a manual reload.
+      if (msg.type === 'create_path') {
+        const rel = String(msg.path || '').replace(/^\/+/, '');
+        const full = path.resolve(WORKSPACE, rel);
+        if (!rel || !isInsideWorkspace(full) || !isSafeCreatePath(rel)) {
+          ws.send(JSON.stringify({ type: 'create_error', path: rel, reason: 'invalid path' }));
+        } else if (msg.kind !== 'folder' && fs.existsSync(full)) {
+          ws.send(JSON.stringify({ type: 'create_error', path: rel, reason: 'already exists' }));
+        } else {
+          try {
+            if (msg.kind === 'folder') {
+              fs.mkdirSync(full, { recursive: true });
+            } else {
+              fs.mkdirSync(path.dirname(full), { recursive: true });
+              fs.writeFileSync(full, msg.content || '', 'utf-8');
+              invalidateFileListCache();
+              if (ensureSearchEngine()) { try { searchEngine.noteFileSaved(WORKSPACE, rel); } catch (e) {} }
+            }
+            ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) }));
+            ws.send(JSON.stringify({ type: 'path_created', path: rel, kind: msg.kind }));
+          } catch (e) {
+            ws.send(JSON.stringify({ type: 'create_error', path: rel, reason: String((e && e.message) || e) }));
+          }
+        }
+      }
+      // Reveal a workspace path in the OS file manager (macOS only; a no-op
+      // elsewhere). Guarded to the workspace and a fixed command.
+      if (msg.type === 'reveal_in_finder') {
+        const full = path.resolve(WORKSPACE, String(msg.path || ''));
+        if (isInsideWorkspace(full) && process.platform === 'darwin') {
+          try { require('child_process').spawn('open', ['-R', full], { stdio: 'ignore' }); } catch (e) {}
+        }
+      }
     } catch (e) {
       console.error('Error handling message:', e);
     }
@@ -4893,6 +4989,7 @@ wss.on('connection', (ws) => {
   ws.on('close', () => {
     console.log('Client disconnected');
     connectedClients.delete(ws);
+    closeOpenFileWatcher(ws); // stop watching this client's open file
     // Don't kill processes: they survive reconnects.
     // If no clients remain, safeSend will buffer output until the next connection.
   });
@@ -5037,6 +5134,41 @@ const BINARY_FILE_TYPES = {
   '.pdf': 'application/pdf',
 };
 
+// Classify a file for its tree icon: a .md whose frontmatter carries the
+// kanban-plugin key is a board, other .md are notes, and the rest by extension.
+// The frontmatter read is a small head slice; failures fall back to 'note'.
+// Read at most maxBytes from the head of a file without loading the whole
+// thing. getFileTree calls this for every markdown file on every refresh, so
+// it must not scale with file size.
+function readFileHead(fullPath, maxBytes) {
+  let fd;
+  try {
+    fd = fs.openSync(fullPath, 'r');
+    const buf = Buffer.alloc(maxBytes);
+    const bytesRead = fs.readSync(fd, buf, 0, maxBytes, 0);
+    return buf.toString('utf-8', 0, bytesRead);
+  } catch (e) {
+    return '';
+  } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch (e) {} }
+  }
+}
+
+function fileKind(fullPath, name) {
+  if (/\.mdx?$/i.test(name)) {
+    // Only the frontmatter head is needed to spot a board; a bounded read
+    // keeps this O(1) regardless of note size.
+    const head = readFileHead(fullPath, 1024);
+    const m = head.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    if (m && /(^|\r?\n)\s*kanban-plugin\s*:/.test(m[1])) return 'board';
+    return 'note';
+  }
+  if (/\.(html?|svg)$/i.test(name)) return 'artifact';
+  if (/\.pdf$/i.test(name)) return 'pdf';
+  if (/\.(png|jpe?g|gif|webp)$/i.test(name)) return 'image';
+  return 'file';
+}
+
 function getFileTree(dir, prefix = '') {
   const entries = [];
   try {
@@ -5052,7 +5184,7 @@ function getFileTree(dir, prefix = '') {
       if (item.isDirectory()) {
         entries.push({ type: 'folder', name: item.name, path: relativePath, children: getFileTree(path.join(dir, item.name), relativePath) });
       } else if (VIEWABLE_FILE_RE.test(item.name)) {
-        entries.push({ type: 'file', name: item.name, path: relativePath });
+        entries.push({ type: 'file', name: item.name, path: relativePath, kind: fileKind(path.join(dir, item.name), item.name) });
       }
     }
   } catch (e) {}
@@ -6319,10 +6451,10 @@ process.on('exit', () => {
   }
 });
 
-// ===== UNIVERSAL SEARCH (SR1) =====
+// ===== UNIVERSAL SEARCH =====
 // FTS5 engine over files + conversations when node:sqlite is available;
 // grep fallback otherwise. The engine is lazily (re)opened per workspace so
-// every entry point — WS handlers, hooks, tests driving _internal — heals
+// every entry point: WS handlers, hooks, tests driving _internal: heals
 // itself after a workspace switch.
 
 let searchEngine = null;            // SearchIndex instance or null (fallback active)
@@ -6697,7 +6829,7 @@ async function runUniversalSearch(msg) {
     (t, h) => { t.snippet = h.snippet; t.sessionId = h.sessionId; t.seq = h.seq; }, limit);
 
   // ── Agents + skills: tiny corpora, in-memory only, name > description ──
-  // (scope addendum: do NOT index these; a query-time filter is always fresh)
+  // (do NOT index these; a query-time filter is always fresh)
   if (!filtersActive) {
     let agents = [];
     try { agents = discoverAgents().filter(a => a.status === 'onTeam'); } catch (e) {}
@@ -6798,7 +6930,7 @@ module.exports._internal = {
   // workspace analysis / scaffolding
   detectWorkspaceMode, isEmptyWorkspace, analyzeWorkspace,
   scaffoldDefaults, scaffoldWorkspace, muteHooks, discoverWorkspaces,
-  readMcpServerNames, getFileTree, validateAgentSlug, isInsideWorkspace,
+  readMcpServerNames, getFileTree, fileKind, validateAgentSlug, isInsideWorkspace, isSafeCreatePath,
   // persistence
   readConversations, writeConversations, readState, writeState,
   readLists, writeLists, deleteListEverywhere,
@@ -6816,7 +6948,7 @@ module.exports._internal = {
   agentAutoResumeCount, disconnectBuffer, connectedClients,
   convoTransitions,
   incrementAutoResume, resetAutoResume,
-  // universal search (SR1)
+  // universal search
   ensureSearchEngine, runUniversalSearch, conversationSessionsForSearch,
   titleLayerMatches, flattenFileTree, grepSearchFiles, grepSearchTranscripts,
   resolveSessionPathCached, _sessionPathMemo, noteSearchConversationActivity,

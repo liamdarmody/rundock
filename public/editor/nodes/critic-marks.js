@@ -1,6 +1,6 @@
 // CriticMarkup constructs as inline atom nodes on the free Tiptap core.
 //
-// Five constructs (Roughdraft wire format, see review/criticmarkup.js):
+// Five constructs (CriticMarkup wire format, see review/criticmarkup.js):
 //   {>>comment<<}{#c1}  {++insert++}{#s1}  {--delete--}  {~~old~>new~~}  {==highlight==}
 //
 // Design decisions:
@@ -16,7 +16,7 @@
 //  - Construct content renders as plain text (no nested markdown rendering
 //    inside constructs); constructs do not nest.
 //  - Constructs spanning multiple blocks (a blank line inside) do not parse
-//    as constructs; they stay literal text, matching Roughdraft practice.
+//    as constructs; they stay literal text, matching common CriticMarkup practice.
 //  - No paid extensions: this file plus review/* is the whole review layer.
 //
 // The markdown-it inline rule consumes constructs at `{` (a markdown-it

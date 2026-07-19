@@ -14,6 +14,13 @@ export { Editor, Node, Mark, Extension, mergeAttributes, InputRule } from '@tipt
 export { default as StarterKit } from '@tiptap/starter-kit';
 export { default as HardBreak } from '@tiptap/extension-hard-break';
 export { OrderedList } from '@tiptap/extension-ordered-list';
+export { BulletList } from '@tiptap/extension-bullet-list';
+export { HorizontalRule } from '@tiptap/extension-horizontal-rule';
+export { Bold } from '@tiptap/extension-bold';
+export { Italic } from '@tiptap/extension-italic';
+export { Text } from '@tiptap/extension-text';
+export { TaskList } from '@tiptap/extension-task-list';
+export { TaskItem } from '@tiptap/extension-task-item';
 export { Table, TableRow, TableHeader, TableCell } from '@tiptap/extension-table';
 export { Markdown } from 'tiptap-markdown';
 export { Plugin, PluginKey } from '@tiptap/pm/state';

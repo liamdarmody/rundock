@@ -7,7 +7,8 @@ import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import { bootEditorEnv } from '../helpers/editor-harness.js';
 import { parseCalloutBody } from '../../public/editor/nodes/callout.js';
-import { renderProperties, parsePropWikilink } from '../../public/editor/panels/properties.js';
+import { renderProperties, parsePropWikilink, dateString } from '../../public/editor/panels/properties.js';
+import { extractFrontmatter } from '../../public/editor/markdown/frontmatter.js';
 
 async function renderedHtml(src) {
   const env = await bootEditorEnv();
@@ -115,6 +116,45 @@ describe('frontmatter wikilink properties', () => {
     assert.deepEqual(edits, [['tags', { list: { add: 'gamma' } }]], 'commit routes a byte-honest list add');
   });
 
+  test('wikilink list items render as inline links, not pills; plain items stay pills', () => {
+    const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
+    global.HTMLElement = dom.window.HTMLElement;
+    const container = dom.window.document.getElementById('p');
+    renderProperties(container, { related: ['[[A Note]]', 'plaintag'] }, {
+      onWikilinkClick: () => {}, resolveWikilink: () => true, onEditProperty: () => true,
+    });
+    const linkItems = container.querySelectorAll('.prop-link-item');
+    assert.equal(linkItems.length, 1, 'the wikilink item is a link item, not a pill');
+    assert.ok(linkItems[0].querySelector('a.prop-wikilink'), 'it contains the link');
+    assert.ok(linkItems[0].querySelector('.prop-chip-remove'), 'it keeps the remove affordance');
+    const chips = container.querySelectorAll('.prop-chip');
+    assert.equal(chips.length, 1, 'the plain tag stays a pill');
+    assert.equal(chips[0].textContent.replace(/×|×/g, '').trim(), 'plaintag');
+  });
+
+  test('removing a wikilink list item routes the correct index', () => {
+    const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
+    global.HTMLElement = dom.window.HTMLElement;
+    const container = dom.window.document.getElementById('p');
+    const edits = [];
+    renderProperties(container, { related: ['[[A]]', '[[B]]'] }, {
+      onWikilinkClick: () => {}, resolveWikilink: () => true,
+      onEditProperty: (k, v) => { edits.push([k, v]); return true; },
+    });
+    const second = container.querySelectorAll('.prop-link-item')[1];
+    second.querySelector('.prop-chip-remove').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    assert.deepEqual(edits, [['related', { list: { remove: 1 } }]]);
+  });
+
+  test('property rows use per-type SVG icons', () => {
+    const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
+    global.HTMLElement = dom.window.HTMLElement;
+    const container = dom.window.document.getElementById('p');
+    renderProperties(container, { title: 'x', tags: ['a'], done: true }, {});
+    const icons = container.querySelectorAll('.prop-icon svg');
+    assert.equal(icons.length, 3, 'every row has an svg icon, not a glyph');
+  });
+
   test('a malicious wikilink target cannot break out of the attribute (stored XSS regression)', () => {
     const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
     global.HTMLElement = dom.window.HTMLElement;
@@ -129,5 +169,107 @@ describe('frontmatter wikilink properties', () => {
     assert.ok(container.innerHTML.includes('&quot;'), 'the quote is entity-escaped');
     // The whole hostile string lives inside data-target as inert text.
     assert.ok(link.getAttribute('data-target').includes('onmouseover'));
+  });
+
+  test('an open scalar input does not write to the previous file after a file switch', () => {
+    const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
+    global.HTMLElement = dom.window.HTMLElement;
+    const container = dom.window.document.getElementById('p');
+    const editsA = [];
+    const editsB = [];
+    // File A render.
+    renderProperties(container, { title: 'A title' }, {
+      onEditProperty: (k, v) => { editsA.push([k, v]); return true; },
+    });
+    // Open the scalar input on file A's title.
+    const valueEl = container.querySelector('.prop-row.editable .prop-value');
+    valueEl.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    const input = container.querySelector('input.prop-edit-input');
+    assert.ok(input, 'the scalar input is open');
+    input.value = 'edited while file A was showing';
+    // Switch to file B: the panel re-renders with new data and callbacks.
+    renderProperties(container, { title: 'B title' }, {
+      onEditProperty: (k, v) => { editsB.push([k, v]); return true; },
+    });
+    // The orphaned input blurs (commit path). It must NOT write to either file.
+    input.dispatchEvent(new dom.window.FocusEvent('blur'));
+    assert.deepEqual(editsA, [], 'no write to the previous file');
+    assert.deepEqual(editsB, [], 'no write to the new file from a stale input');
+  });
+});
+
+describe('frontmatter property editing polish', () => {
+  test('a map list item renders readable content, not [object Object], and has no remove control', () => {
+    const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
+    global.HTMLElement = dom.window.HTMLElement;
+    const container = dom.window.document.getElementById('p');
+    renderProperties(container, { events: [{ when: '2026-07-19', who: 'Sam' }, 'plain'] }, {
+      onEditProperty: () => true,
+    });
+    assert.ok(!container.innerHTML.includes('[object Object]'), 'no [object Object]');
+    assert.ok(container.textContent.includes('when: 2026-07-19'), 'shows the map content');
+    const mapChip = container.querySelector('.prop-chip.non-editable');
+    assert.ok(mapChip, 'the map item is a non-editable chip');
+    assert.strictEqual(mapChip.querySelector('.prop-chip-remove'), null, 'no remove control on a map item');
+  });
+
+  test('pressing Enter on an emptied input refuses the commit, matching blur', () => {
+    const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
+    global.HTMLElement = dom.window.HTMLElement;
+    const container = dom.window.document.getElementById('p');
+    const edits = [];
+    renderProperties(container, { title: 'Hello' }, {
+      onEditProperty: (k, v) => { edits.push([k, v]); return true; },
+    });
+    container.querySelector('.prop-row.editable .prop-value').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    const input = container.querySelector('input.prop-edit-input');
+    input.value = '';
+    input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    assert.deepEqual(edits, [], 'an empty Enter does not commit');
+  });
+
+  test('a pure-wikilink value is editable via an edit control', () => {
+    const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
+    global.HTMLElement = dom.window.HTMLElement;
+    const container = dom.window.document.getElementById('p');
+    const edits = [];
+    renderProperties(container, { ref: '[[Target]]' }, {
+      onWikilinkClick: () => {}, resolveWikilink: () => true,
+      onEditProperty: (k, v) => { edits.push([k, v]); return true; },
+    });
+    const editBtn = container.querySelector('.prop-wikilink-edit');
+    assert.ok(editBtn, 'an edit control sits next to the wikilink value');
+    editBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    const input = container.querySelector('input.prop-edit-input');
+    assert.ok(input, 'clicking edit opens an inline input');
+    assert.strictEqual(input.value, '[[Target]]', 'seeded with the raw wikilink');
+    input.value = '[[Other]]';
+    input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    assert.deepEqual(edits, [['ref', '[[Other]]']]);
+  });
+});
+
+describe('frontmatter datetime with timezone', () => {
+  test('a datetime with an offset is preserved verbatim, not shifted to another UTC day', () => {
+    const { parsed } = extractFrontmatter('---\ndue: 2026-07-19T22:00:00-05:00\n---\n');
+    // Kept as the authored string: the day (19) and the time survive, instead
+    // of parsing to a Date that toISOString() would push to 2026-07-20.
+    assert.strictEqual(parsed.due, '2026-07-19T22:00:00-05:00');
+  });
+
+  test('date-only values stay strings and numbers/booleans keep their types', () => {
+    const { parsed } = extractFrontmatter('---\nday: 2026-07-19\ncount: 3\nflag: true\n---\n');
+    assert.strictEqual(parsed.day, '2026-07-19');
+    assert.strictEqual(parsed.count, 3);
+    assert.strictEqual(parsed.flag, true);
+  });
+
+  test('dateString renders a string date verbatim and does not shift a datetime', () => {
+    assert.strictEqual(dateString('2026-07-19'), '2026-07-19');
+    assert.strictEqual(dateString('2026-07-19T22:00:00-05:00'), '2026-07-19T22:00:00-05:00');
+  });
+
+  test('dateString on a UTC-midnight Date renders its calendar day, timezone-stable', () => {
+    assert.strictEqual(dateString(new Date('2026-07-19T00:00:00Z')), '2026-07-19');
   });
 });

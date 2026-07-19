@@ -16,6 +16,8 @@
 <script src="/permissions.js"></script>
 <script src="/conversation-list.js"></script>
 <script src="/palette-model.js"></script>
+<script src="/files-menu-model.js"></script>
+<script src="/external-refresh-model.js"></script>
 <script src="/conversation-state.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -68,7 +70,18 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .sidebar-resize-handle.edge-hover { border-right-color: var(--text-2); }
 .sidebar-resize-handle.dragging { border-right-color: var(--accent); }
 .sidebar > div { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
-.sidebar-header { padding: 24px 16px 8px; }
+.sidebar-header { padding: 24px 16px 8px; position: relative; }
+.files-add-btn { position: absolute; top: 18px; right: 10px; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 6px; color: var(--text-2); }
+.files-add-btn:hover { color: var(--text-1); background: var(--elevated); }
+.files-menu { position: fixed; z-index: 200; min-width: 180px; padding: 4px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.25); display: flex; flex-direction: column; }
+.files-menu-item { display: flex; align-items: center; gap: 9px; text-align: left; padding: 7px 10px; border-radius: 6px; color: var(--text-1); font-size: var(--body); }
+.files-menu-item svg { flex: 0 0 auto; color: var(--text-2); }
+.files-menu-item:hover { background: var(--elevated); }
+.files-menu-item:hover svg { color: var(--text-1); }
+.files-menu-item.danger:hover { color: var(--danger, #E85A5A); }
+.files-menu-divider { height: 1px; background: var(--border); margin: 4px 6px; }
+.files-menu-field { padding: 2px; }
+.files-menu-field input { width: 100%; background: var(--elevated); border: 1px solid var(--accent); border-radius: 6px; color: var(--text-1); font-size: var(--body); padding: 6px 8px; outline: none; }
 .sidebar-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); }
 
 /* Compact agent status list */
@@ -130,7 +143,7 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .convo-menu-check { width: 14px; flex-shrink: 0; color: var(--accent); }
 /* Small-input composer pattern (matches .review-input in the editor's review
    panel): the container is the field, border goes accent on focus-within, and
-   the circular submit button lives INSIDE the field — faded while empty,
+   the circular submit button lives INSIDE the field: faded while empty,
    accent-filled once there is text. */
 .convo-menu-input { display: flex; align-items: center; gap: 4px; margin: 4px; padding: 2px 2px 2px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
 .convo-menu-input:focus-within { border-color: var(--accent); }
@@ -460,7 +473,8 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .tiptap-editor-pane .properties-body { padding: 4px 0 8px; }
 .tiptap-editor-pane .prop-row { display: grid; grid-template-columns: 32px 160px 1fr; align-items: center; gap: 8px; padding: 6px 12px; min-height: 32px; }
 .tiptap-editor-pane .prop-row:hover { background: rgba(232,122,90,0.04); border-radius: 6px; }
-.tiptap-editor-pane .prop-icon { width: 16px; color: var(--text-2); justify-self: center; font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 12px; text-align: center; }
+.tiptap-editor-pane .prop-icon { width: 16px; color: var(--text-2); justify-self: center; display: flex; align-items: center; justify-content: center; }
+.tiptap-editor-pane .prop-icon svg { width: 14px; height: 14px; }
 .tiptap-editor-pane .prop-key { font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 12px; color: var(--text-2); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tiptap-editor-pane .prop-value { font-size: var(--body); color: var(--text-1); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
 .tiptap-editor-pane .prop-value.empty { color: var(--text-2); font-style: italic; }
@@ -475,11 +489,15 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .props-editable .prop-row.editable .prop-value .bool { cursor: pointer; }
 .prop-edit-input { flex: 1; min-width: 120px; background: var(--card); border: 1px solid var(--accent); border-radius: 4px; color: var(--text-1); font-size: var(--body); font-family: inherit; padding: 2px 8px; outline: none; }
 .prop-chip-remove { display: none; background: none; border: none; color: var(--text-2); font-size: 12px; line-height: 1; padding: 0 0 0 4px; cursor: pointer; }
-.props-editable .prop-chip:hover .prop-chip-remove { display: inline; }
+.props-editable .prop-chip:hover .prop-chip-remove, .props-editable .prop-link-item:hover .prop-chip-remove { display: inline; }
 .prop-chip-remove:hover { color: var(--accent); }
-.prop-add { display: none; background: none; border: 1px solid var(--border); border-radius: 100px; color: var(--text-2); width: 20px; height: 20px; line-height: 1; cursor: pointer; font-size: 13px; }
-.props-editable .prop-row.editable:hover .prop-add { display: inline-flex; align-items: center; justify-content: center; }
-.prop-add:hover { color: var(--accent); border-color: var(--accent); }
+/* Wikilink list items render as inline links (not pills), keeping the x. */
+.tiptap-editor-pane .prop-link-item { display: inline-flex; align-items: center; }
+/* Inline add affordance: always present but subtle, brightening on hover, so
+   adding a tag/link reads like Obsidian rather than a hover-only button. */
+.prop-add { display: inline-flex; align-items: center; justify-content: center; background: none; border: 1px dashed var(--border); border-radius: 100px; color: var(--text-2); width: 20px; height: 20px; line-height: 1; cursor: pointer; font-size: 13px; opacity: 0.55; transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease; }
+.props-editable .prop-row.editable:hover .prop-add { opacity: 1; }
+.prop-add:hover { color: var(--accent); border-color: var(--accent); opacity: 1; }
 /* External-edit conflict banner: a visible choice, never a silent overwrite. */
 #external-edit-banner { display: flex; align-items: center; gap: 10px; padding: 10px 24px; background: rgba(232,168,76,0.10); border-bottom: 1px solid rgba(232,168,76,0.35); font-size: var(--body); color: var(--text-1); }
 #external-edit-banner .banner-text { flex: 1; }
@@ -493,6 +511,14 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .tiptap-editor-pane .prop-value .bool .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .tiptap-editor-pane .prop-chip { display: inline-flex; align-items: center; padding: 2px 10px; background: transparent; border: 1px solid var(--accent); border-radius: 100px; font-size: 12px; color: var(--accent); transition: background 0.15s ease; }
 .tiptap-editor-pane .prop-chip:hover { background: var(--accent-glow); }
+/* A nested (map/list) property item: readable but not editable, so it reads as
+   muted rather than an actionable pill. */
+.tiptap-editor-pane .prop-chip.non-editable { border-color: var(--border); color: var(--text-2); cursor: default; }
+.tiptap-editor-pane .prop-chip.non-editable:hover { background: transparent; }
+/* Edit affordance for a pure-wikilink value (which otherwise only navigates). */
+.prop-wikilink-edit { display: none; align-items: center; justify-content: center; background: none; border: none; color: var(--text-2); cursor: pointer; padding: 0 0 0 6px; line-height: 1; }
+.props-editable .prop-row.editable:hover .prop-wikilink-edit { display: inline-flex; }
+.prop-wikilink-edit:hover { color: var(--accent); }
 .tiptap-editor { font-size: var(--body); line-height: 1.7; outline: none; }
 .tiptap-editor .ProseMirror { outline: none; min-height: 200px; }
 .tiptap-editor .ProseMirror p { margin: 0 0 12px 0; line-height: 1.7; }
@@ -532,6 +558,17 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .tiptap-editor .ProseMirror .callout details.callout-fold[open] > summary.callout-header { margin-bottom: 6px; }
 /* Nested callouts render as real boxes inside the parent body. */
 .tiptap-editor .ProseMirror .callout .callout-nested { border: 1px solid rgba(122,162,232,0.20); border-radius: 8px; padding: 10px 14px; margin: 8px 0; }
+/* In-place editing: an edit control that reveals on hover, and the raw-markdown textarea. */
+.tiptap-editor .ProseMirror .callout-editable .callout-header { position: relative; }
+.tiptap-editor .ProseMirror .callout-edit-btn { margin-left: auto; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 6px; color: var(--callout-color); opacity: 0; transition: opacity 0.12s ease, background 0.12s ease; cursor: pointer; }
+.tiptap-editor .ProseMirror .callout-editable:hover .callout-edit-btn { opacity: 0.75; }
+.tiptap-editor .ProseMirror .callout-edit-btn:hover { opacity: 1; background: color-mix(in srgb, var(--callout-color) 16%, transparent); }
+.tiptap-editor .ProseMirror .callout.callout-editing { padding-top: 10px; }
+.tiptap-editor .ProseMirror .callout-edit { width: 100%; box-sizing: border-box; resize: none; background: var(--elevated); border: 1px solid var(--callout-color); border-radius: 6px; color: var(--text-1); font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 13px; line-height: 1.5; padding: 8px 10px; outline: none; }
+/* Rejected edit (an invalid callout head): a brief red flash instead of a
+   silent revert, so the typed text is kept and the reason is visible. */
+.tiptap-editor .ProseMirror .callout-edit.callout-edit-invalid { border-color: var(--danger, #d9534f); box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger, #d9534f) 30%, transparent); animation: callout-edit-shake 0.3s ease; }
+@keyframes callout-edit-shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-3px); } 75% { transform: translateX(3px); } }
 .floating-toolbar { position: absolute; display: none; gap: 2px; padding: 4px; background: var(--card); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.25); z-index: 50; left: 0; top: 0; }
 .floating-toolbar.visible { display: inline-flex; }
 .floating-toolbar .tb-btn { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 28px; padding: 0 8px; background: transparent; color: var(--text-2); border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 600; font-family: inherit; }
@@ -735,7 +772,7 @@ mark.find-match.current,
 
 /* Hallmark · component: command-palette · genre: modern-minimal (inherits app) · theme: Rundock tokens
  * states: default · hover · focus · active/selected · disabled(n/a) · loading · error · empty/recent
- * tokens: consumes existing :root vars only — no new palette colours; the
+ * tokens: consumes existing :root vars only: no new palette colours; the
  * overlay scrim and shadows use rgba per the codebase's existing convention
  */
 /* ===== Universal search palette (Cmd+K) ===== */
@@ -840,7 +877,7 @@ mark.find-match.current,
       <div class="skills-sidebar-list" id="skills-sidebar-list"></div>
     </div>
     <div id="sidebar-files" class="hidden">
-      <div class="sidebar-header"><span class="sidebar-label">Files</span></div>
+      <div class="sidebar-header"><span class="sidebar-label">Files</span><button class="files-add-btn" id="files-add-btn" title="New…" onclick="openCreateMenu(this, '')"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg></button></div>
       <div class="file-tree" id="file-tree"></div>
     </div>
     <div id="sidebar-settings" class="hidden">

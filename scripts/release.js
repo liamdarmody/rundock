@@ -20,7 +20,7 @@
  * is no need to revert main: the bump + tag stay, and CI publishes once it passes.
  *
  * No Apple/signing credentials are needed locally any more; those live in GitHub
- * Secrets (see 02_Areas/Rundock/CI-Release-Setup.md in the vault).
+ * Secrets are provided by the CI environment (see the repository CI settings).
  */
 
 const { execFileSync } = require('child_process');
@@ -204,4 +204,4 @@ log('done', `Tagged v${version}. GitHub Actions is now building, signing, notari
 log('done', `Watch the build:   https://github.com/${REPO}/actions`);
 log('done', `Review + publish:  https://github.com/${REPO}/releases`);
 log('done', `Then bump the Rundock Site download links to v${version}.`);
-log('done', `If CI fails (e.g. expired Apple agreement): fix it and re-run the workflow on tag v${version} — no need to revert main.`);
+log('done', `If CI fails (e.g. expired Apple agreement): fix it and re-run the workflow on tag v${version}: no need to revert main.`);

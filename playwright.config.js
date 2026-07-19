@@ -1,5 +1,5 @@
 'use strict';
-// E2E configuration (SR1 client test coverage, stage 1).
+// E2E configuration for client test coverage.
 // One worker, no parallelism: the tests share one stateful server + seeded
 // workspace, and several assert cross-view navigation state on that shared
 // app instance.

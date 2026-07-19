@@ -39,6 +39,9 @@ let activeTiptapEditor = null;
 let _tiptapEditorModule = null;
 let _tiptapEditorModuleResolved = null;
 let _tiptapSaveTimer = null;
+// The server's OS, learned from the server_info handshake. Gates OS-specific
+// affordances (e.g. Reveal in Finder) so a dead row never shows off macOS.
+let serverPlatform = null;
 function loadTiptapEditorModule() {
   if (!_tiptapEditorModule) _tiptapEditorModule = import('./editor/index.js');
   return _tiptapEditorModule;
@@ -46,7 +49,7 @@ function loadTiptapEditorModule() {
 function isMarkdownPath(path) {
   return typeof path === 'string' && /\.(md|mdx)$/i.test(path);
 }
-// File-type registry (FV2): non-markdown views live in public/viewers/.
+// File-type registry: non-markdown views live in public/viewers/.
 // Loaded on demand, same pattern as the editor module above.
 let _viewersModule = null, _viewersModuleResolved = null, activeFileViewer = null;
 function loadViewersModule() {
@@ -57,7 +60,7 @@ function destroyActiveFileViewer() {
   destroyActiveArtifactReview();
   if (activeFileViewer) { try { activeFileViewer.destroy(); } catch {} activeFileViewer = null; }
 }
-// Artifact review (FV2 phase 2): sidecar-backed comments on the HTML
+// Artifact review: sidecar-backed comments on the HTML
 // preview. Detached before its pane is cleared so the header pill and the
 // frame listeners never leak.
 let activeArtifactReview = null;
@@ -158,6 +161,7 @@ async function initTiptapEditor(path, content) {
 }
 function onTiptapEditorUpdate() {
   if (!currentFilePath || !activeTiptapEditor) return;
+  editorDirty = true;
   const statusEl = document.getElementById('editor-status');
   if (statusEl) {
     statusEl.textContent = 'Unsaved';
@@ -174,7 +178,7 @@ function saveTiptapFile() {
   });
 }
 
-// ---- External-edit guard (FV2 phase 4) ----
+// ---- External-edit guard ----
 // Rundock and Obsidian edit the same vault interchangeably, so auto-save
 // must never silently overwrite an edit made outside Rundock. Baseline =
 // the bytes we believe are on disk (set at load and after each save we
@@ -185,6 +189,13 @@ function saveTiptapFile() {
 // false-positive; a disk state identical to what we are writing is not a
 // conflict either.
 const diskBaselines = new Map();
+// True when the open file has unsaved user edits. This, not a comparison of
+// re-serialized content, decides whether a live external change reloads
+// seamlessly or prompts a conflict: the rich editor's markdown serializer is
+// not byte-idempotent (e.g. it normalises emphasis and list markers), so a
+// clean, unedited file would otherwise look "dirty" and false-conflict. Set on
+// edit in each surface, cleared on load and on our own save.
+let editorDirty = false;
 
 async function saveFileGuarded(path, content) {
   let disk = null;
@@ -200,6 +211,11 @@ async function saveFileGuarded(path, content) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'save_file', path, content }));
     diskBaselines.set(path, content);
+    // Track what we just wrote as the current bytes for the open file. Without
+    // this, a surface whose live content falls back to rawFileContent (the
+    // board) looks stale when the file-watcher echoes our own save back, and
+    // the echo is misread as an external change.
+    if (path === currentFilePath) { rawFileContent = content; editorDirty = false; }
   }
   const statusEl = document.getElementById('editor-status');
   if (statusEl) {
@@ -247,6 +263,45 @@ function showExternalEditConflict(path, diskContent, myContent) {
   });
   header.insertAdjacentElement('afterend', banner);
 }
+
+// The live content of whatever surface is open, for the external-refresh
+// clean/dirty decision. Each surface holds its live edits differently: a
+// board's freshest bytes are its pending debounced write, the rich editor's
+// are the live ProseMirror serialization, the source view's are the textarea,
+// and a read-only viewer has none (null -> always safe to take newer bytes).
+function currentLiveContent() {
+  if (boardPendingSave && boardPendingSave.path === currentFilePath) return boardPendingSave.md;
+  if (activeTiptapEditor && _tiptapEditorModuleResolved) {
+    try { return _tiptapEditorModuleResolved.getMarkdown(activeTiptapEditor); } catch (e) { /* fall through */ }
+  }
+  if (editorMode === 'edit') {
+    const ta = document.getElementById('editor-textarea');
+    if (ta) return ta.value;
+  }
+  return rawFileContent;
+}
+
+// Live external refresh: the server pushes file_changed when the open file
+// changes on disk. Reload seamlessly when the editor is clean; if there are
+// unsaved local edits, fall back to the same reload-theirs / keep-mine choice
+// the save-time guard already uses, so no edit is ever silently overwritten.
+function handleExternalFileChange(path, diskContent) {
+  if (path !== currentFilePath) return;
+  const action = ExternalRefresh.externalChangeAction({
+    disk: diskContent,
+    baseline: diskBaselines.get(path),
+    dirty: editorDirty,
+  });
+  if (action === 'noop') return; // our own save echoed back, or nothing new
+  if (action === 'reload') {
+    loadFileContent(path, diskContent); // re-renders the surface and moves the baseline
+    const s = document.getElementById('editor-status');
+    if (s) { s.style.color = 'var(--text-2)'; s.textContent = 'Updated from disk'; }
+    return;
+  }
+  showExternalEditConflict(path, diskContent, currentLiveContent());
+}
+
 function destroyTiptapEditorIfActive() {
   // Capture the current instance and clear the global ref synchronously so a
   // subsequent initTiptapEditor sees a clean slate even if the module's
@@ -542,7 +597,17 @@ function handle(d) {
       break;
     case 'file_tree': cachedFileTree = d.tree; renderFileTree(d.tree); break;
     case 'file_content': loadFileContent(d.path, d.content); break;
+    case 'file_changed': handleExternalFileChange(d.path, d.content); break;
     case 'file_saved': document.getElementById('editor-status').textContent='Saved'; break;
+    case 'path_created':
+      // The tree was refreshed by the preceding file_tree push; open a new
+      // note/board in the editor and reveal it. A new folder just appears.
+      if (d.kind !== 'folder') { ws.send(JSON.stringify({ type: 'read_file', path: d.path })); }
+      setTimeout(() => highlightFileInSidebar(d.path), 0);
+      break;
+    case 'create_error':
+      alert('Could not create "' + d.path + '": ' + d.reason);
+      break;
     case 'agent_saved':
       if (!d.updated) setupComplete = true;
       // Non-default runtimes are worth calling out on the confirmation pill.
@@ -573,6 +638,7 @@ function handle(d) {
       break;
     case 'server_info':
       if (d.version) window._rundockVersion = d.version;
+      if (d.platform) serverPlatform = d.platform;
       break;
     case 'control_request': {
       const targetConvo = convoId || activeConversation?.id;
@@ -1357,7 +1423,11 @@ window.addEventListener('resize', () => {
 // ===== 7. AGENT PROFILE =====
 
 function showProfile(agentId) {
-  const a=agents.find(x=>x.id===agentId); if(!a) return;
+  const a=agents.find(x=>x.id===agentId);
+  // Missing target (a search hit whose agent is absent from the client list,
+  // server/client desync): land in the Team section consistently instead of
+  // leaving the rail on its previous section with no matching pane.
+  if(!a) { switchNav('team'); return; }
   // Agent profiles belong to the Team section (the profile's back link goes
   // there); sync the rail and sidebar for callers arriving from elsewhere,
   // e.g. the search palette or a skill page's agent chips.
@@ -1746,8 +1816,10 @@ function setupChat(convo) {
   statusEl.querySelector('.state-label').textContent = isArchivedSet ? 'Archived' : 'Active';
   statusEl.querySelector('.action-label').textContent = isArchivedSet ? '↺ Unarchive' : '→ Archive';
   statusEl.className = `chat-convo-status ${isArchivedSet ? 'archived-convo' : 'active-convo'}`;
-  // Set input state based on this conversation's processing state
-  msgInput.disabled = state.isProcessing;
+  // The input stays enabled even while the agent is processing, so the user can
+  // draft their next message. The Stop button is the only way to interrupt; a
+  // draft is sent by stopping first, then Send.
+  msgInput.disabled = false;
   const sendBtn = document.getElementById('send-btn');
   if (state.isProcessing) {
     sendBtn.disabled = false;
@@ -1759,6 +1831,8 @@ function setupChat(convo) {
   } else {
     sendBtn.disabled = false;
     sendBtn.classList.remove('cancel');
+    // Reflect any draft already in the field so Send reads as ready.
+    sendBtn.classList.toggle('active', !!msgInput.value.trim());
     sendBtn.onclick = sendMessage;
     sendBtn.title = 'Send message';
     sendBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
@@ -2010,7 +2084,7 @@ function toggleConvoListMembership(convoId, listId) {
 }
 
 function renderConvoList() {
-  // WhatsApp-model list (SR1 UI alignment): pinned conversations always group
+  // Messaging-style ordering: pinned conversations always group
   // at the top, then everything else; BOTH groups sort by lastActiveAt desc.
   // Pinned-ness is conveyed by position plus the title-row pin glyph; the
   // left-border channel is reserved for the unread/working signal (green).
@@ -2168,6 +2242,12 @@ function discardIfEmpty() {
 }
 
 function openConversation(id, withAnchor) {
+  const c=conversations.find(x=>x.id===id);
+  // Missing target (a search hit whose conversation is absent from the client
+  // list, server/client desync): land in the Conversations section
+  // consistently instead of switching the rail while the origin pane stays
+  // shown (half-navigated).
+  if(!c) { switchNav('conversations'); return; }
   // Opening a conversation IS a navigation to the Conversations section,
   // wherever it started (sidebar click, search palette, an agent profile's
   // conversation list); the rail and sidebar must follow.
@@ -2178,7 +2258,6 @@ function openConversation(id, withAnchor) {
   // Close any active find before swapping the DOM out from under it.
   if (activeConversation && activeConversation.id !== id) closeFindBar();
   if (activeConversation && activeConversation.id !== id) discardIfEmpty();
-  const c=conversations.find(x=>x.id===id); if(!c) return;
   activeConversation=c;
   persistLastActiveConversation(id);
   unreadConvos.delete(id);
@@ -2243,7 +2322,7 @@ function openConversation(id, withAnchor) {
     sb.disabled = false; sb.classList.add('cancel'); sb.classList.remove('active');
     sb.onclick = cancelProcessing; sb.title = 'Stop agent';
     sb.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
-    document.getElementById('msg-input').disabled=true;
+    // Input stays enabled during processing so a next message can be drafted.
     const a=agents.find(x => x.id === state.activeAgentId) || c.agent;
     const m2=document.getElementById('messages');
     // Render any response text accumulated on the server before we reconnected
@@ -2375,7 +2454,7 @@ function startProcessing(convoId) {
     sendBtn.onclick = cancelProcessing;
     sendBtn.title = 'Stop agent';
     sendBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
-    document.getElementById('msg-input').disabled=true;
+    // Input stays enabled during processing so a next message can be drafted.
     // Use the active delegate agent during delegation, otherwise the conversation agent
     const activeId = state.activeAgentId || convo?.agentId;
     const a = (activeId && agents.find(x => x.id === activeId)) || convo?.agent || agents[0];
@@ -2426,8 +2505,12 @@ function finishProcessing(convoId) {
     sendBtn.title = 'Send message';
     sendBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
     sendBtn.style.opacity = '';
-    document.getElementById('msg-input').disabled=false;
-    document.getElementById('msg-input').focus();
+    const draftInput = document.getElementById('msg-input');
+    draftInput.disabled = false;
+    // A message drafted while the agent was responding is now ready to send, so
+    // reflect its presence on the Send button.
+    sendBtn.classList.toggle('active', !!draftInput.value.trim());
+    draftInput.focus();
   }
   if(convo) {
     // Clear working status on the active agent (delegate or conversation agent)
@@ -2465,8 +2548,8 @@ function handleActiveProcesses(active) {
   const activeConvoIds = new Set(active.map(p => p.conversationId));
 
   // Restore state for conversations with live processes on the server.
-  // Non-idle: actively generating output — restore thinking indicator.
-  // Idle: specialist waiting for input — record agent identity so
+  // Non-idle: actively generating output: restore thinking indicator.
+  // Idle: specialist waiting for input: record agent identity so
   // header/placeholder reflect the correct recipient, but no indicator.
   for (const proc of active) {
     const convo = conversations.find(c => c.id === proc.conversationId);
@@ -2668,7 +2751,7 @@ function renderSessionHistory(d) {
     // Skip hidden system messages (workspace analysis blocks, setup instructions)
     if (msg.content && msg.content.includes('[WORKSPACE_ANALYSIS]')) continue;
     // Routing entries: orchestrator immediate-routing turns (no prose). Don't
-    // render a chat bubble — the agent-change divider on the next message
+    // render a chat bubble: the agent-change divider on the next message
     // carries the visible handoff. Update lastAgentId so the divider triggers.
     if (msg.type === 'routing') {
       lastAgentId = msg.agentId || lastAgentId;
@@ -3126,21 +3209,151 @@ function renderFileTree(tree) {
     <span style="color:var(--text-2);font-size:var(--body)">Select a file from the sidebar</span>`;
   buildTree(tree,c);
 }
+// Tree icons keyed by the server-provided file kind, matching the creation
+// menu's entity icons (a board file shows the kanban icon, a note the note
+// icon), so the tree and the "+" menu speak the same visual language.
+const TREE_ICONS = {
+  folder:     '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  folderOpen: '<path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>',
+  note:  FilesMenuModel.ICONS.note,
+  board: FilesMenuModel.ICONS.board,
+  artifact: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="m10 13-2 2 2 2"/><path d="m14 13 2 2-2 2"/>',
+  pdf:   '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 12h4"/><path d="M10 16h2"/>',
+  image: '<rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"/>',
+  file:  '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+};
+function treeIconSvg(inner) {
+  return '<svg class="file-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + inner + '</svg>';
+}
 function buildTree(items,container) {
   for(const item of items) {
     if(item.type==='folder') {
-      const f=document.createElement('div'); f.className='folder-item'; f.innerHTML=`<span class="folder-icon">&#x25B6;</span> ${esc(item.name)}`;
-      f.onclick=()=>{const ch=f.nextElementSibling,ic=f.querySelector('.folder-icon');ch.classList.toggle('collapsed');ic.innerHTML=ch.classList.contains('collapsed')?'&#x25B6;':'&#x25BC;';};
+      const f=document.createElement('div'); f.className='folder-item'; f.innerHTML=`${treeIconSvg(TREE_ICONS.folder)} ${esc(item.name)}`;
+      f.onclick=()=>{const ch=f.nextElementSibling,svg=f.querySelector('svg.file-item-icon');const collapsed=ch.classList.toggle('collapsed');if(svg)svg.innerHTML=collapsed?TREE_ICONS.folder:TREE_ICONS.folderOpen;};
+      f.oncontextmenu=(e)=>{e.preventDefault();openRowContextMenu(e,item.path,'folder');};
       container.appendChild(f);
       const ch=document.createElement('div'); ch.className='file-children collapsed'; buildTree(item.children,ch); container.appendChild(ch);
     } else {
       const fi=document.createElement('div'); fi.className='file-item';
-      fi.innerHTML=`<svg class="file-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> ${esc(item.name)}`;
+      fi.innerHTML=`${treeIconSvg(TREE_ICONS[item.kind]||TREE_ICONS.file)} ${esc(item.name)}`;
       fi.dataset.path = item.path;
       fi.onclick=()=>{document.querySelectorAll('.file-item').forEach(x=>x.classList.remove('active'));fi.classList.add('active');editorReturnView='editor';fileHistory=[];ws.send(JSON.stringify({type:'read_file',path:item.path}));showView('editor');};
+      fi.oncontextmenu=(e)=>{e.preventDefault();openRowContextMenu(e,item.path,'file');};
       container.appendChild(fi);
     }
   }
+}
+
+// ---- Files-sidebar creation menu ("+" header button and row context menu) ----
+// Creatable types and path helpers live in files-menu-model.js (unit-tested);
+// this is the DOM menu that consumes them.
+const CREATABLE_TYPES = FilesMenuModel.CREATABLE_TYPES;
+function contentForKind(kind) {
+  return kind === 'board' && window.Kanban ? window.Kanban.newBoardContent() : '';
+}
+function menuIconSvg(inner) {
+  return '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" '
+    + 'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + inner + '</svg>';
+}
+
+let _filesMenu = null;
+function closeFilesMenu() {
+  if (_filesMenu) { _filesMenu.remove(); _filesMenu = null; }
+}
+// Any floating menu (files or the board's lane menu) closes when this fires, so
+// opening one always dismisses the others and only one is ever open.
+document.addEventListener('rundock:closemenus', closeFilesMenu);
+// Outside-click close in the CAPTURE phase, so a board control's
+// stopPropagation (e.g. the column collapse chevron) cannot stop it. A click
+// INSIDE an open menu lets that item's handler act (it closes itself); a click
+// on a menu TRIGGER lets the trigger toggle itself; anything else closes.
+document.addEventListener('click', (e) => {
+  if (!document.querySelector('.files-menu, .board-lane-popup')) return;
+  if (e.target.closest && e.target.closest('.files-menu, .board-lane-popup, #files-add-btn, .board-lane-menu-btn')) return;
+  document.dispatchEvent(new CustomEvent('rundock:closemenus'));
+}, true);
+
+// A small floating menu at (x, y) built from [label, fn, icon, danger] rows
+// (falsy row = a divider). Returns the menu element.
+function buildFloatingMenu(x, y, rows) {
+  document.dispatchEvent(new CustomEvent('rundock:closemenus')); // dismiss any other open menu first
+  const menu = document.createElement('div');
+  menu.className = 'files-menu';
+  for (const row of rows) {
+    if (!row) { const d = document.createElement('div'); d.className = 'files-menu-divider'; menu.appendChild(d); continue; }
+    const [label, fn, icon, danger] = row;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'files-menu-item' + (danger ? ' danger' : '');
+    btn.innerHTML = (icon ? menuIconSvg(icon) : '') + '<span>' + esc(label) + '</span>';
+    btn.addEventListener('click', (e) => { e.stopPropagation(); closeFilesMenu(); fn(); });
+    menu.appendChild(btn);
+  }
+  document.body.appendChild(menu);
+  const w = menu.offsetWidth, h = menu.offsetHeight;
+  menu.style.left = Math.min(x, window.innerWidth - w - 8) + 'px';
+  menu.style.top = Math.min(y, window.innerHeight - h - 8) + 'px';
+  _filesMenu = menu;
+  return menu;
+}
+
+// Replace the menu's contents with an inline name input (the standing small-
+// input composer grammar): Enter creates, Escape cancels.
+function promptCreate(menu, type, folder) {
+  menu.innerHTML = '';
+  const field = document.createElement('div');
+  field.className = 'files-menu-field';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = type.kind === 'folder' ? 'Folder name' : type.label.replace('New ', '') + ' name';
+  field.appendChild(input);
+  menu.appendChild(field);
+  input.focus();
+  const submit = () => {
+    const rel = FilesMenuModel.creatablePath(folder, input.value, type.ext);
+    if (!rel) { closeFilesMenu(); return; }
+    ws.send(JSON.stringify({ type: 'create_path', kind: type.kind, path: rel, content: contentForKind(type.kind) }));
+    closeFilesMenu();
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); submit(); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeFilesMenu(); }
+  });
+  // Keep the menu open while the field is focused.
+}
+
+// A creation row: opens an inline name field (keeping the chosen type's icon).
+function creationRow(t, x, y, folder) {
+  return [t.label, () => {
+    const m = buildFloatingMenu(x, y, [[t.label, () => {}, t.icon]]);
+    promptCreate(m, t, folder);
+  }, t.icon];
+}
+
+// The "+" header menu: creation rows only, creating at workspace root. The
+// button toggles: clicking it while the menu is open closes it (the button's
+// own click fires before the outside-click handler, so without this it would
+// close and immediately reopen).
+function openCreateMenu(anchor, folder) {
+  if (_filesMenu) { closeFilesMenu(); return; }
+  const r = anchor.getBoundingClientRect();
+  buildFloatingMenu(r.left, r.bottom + 4, CREATABLE_TYPES.map((t) => creationRow(t, r.left, r.bottom + 4, folder)));
+}
+
+// Right-click on a row: the same creation rows (creating IN the folder, or the
+// file's parent), plus clipboard and reveal actions.
+function openRowContextMenu(e, targetPath, targetKind) {
+  const folder = FilesMenuModel.parentFolder(targetPath, targetKind === 'folder');
+  const rows = CREATABLE_TYPES.map((t) => creationRow(t, e.clientX, e.clientY, folder));
+  rows.push(null);
+  rows.push(['Copy workspace path', () => { try { navigator.clipboard.writeText(targetPath); } catch (err) {} }, FilesMenuModel.ICONS.copy]);
+  rows.push(['Copy wikilink', () => { try { navigator.clipboard.writeText(FilesMenuModel.wikilinkFor(targetPath)); } catch (err) {} }, FilesMenuModel.ICONS.link]);
+  // Reveal in Finder only works on macOS (the server no-ops elsewhere), so the
+  // row is hidden off darwin rather than shown as a dead action.
+  if (serverPlatform === 'darwin') {
+    rows.push(['Reveal in Finder', () => ws.send(JSON.stringify({ type: 'reveal_in_finder', path: targetPath })), FilesMenuModel.ICONS.reveal]);
+  }
+  buildFloatingMenu(e.clientX, e.clientY, rows);
 }
 
 // Editor
@@ -3154,6 +3367,12 @@ function loadFileContent(path, content) {
   hideExternalEditConflict();
   currentFilePath = path;
   rawFileContent = content;
+  editorDirty = false; // freshly loaded: no unsaved edits
+  // Reset the Preview/Code mode on every open. Only the legacy text surface
+  // used to reset it, so a stale 'edit' left over from a previous text file
+  // could leak into a markdown, board, or read-only viewer and make find or
+  // currentLiveContent misbehave.
+  editorMode = 'preview';
   // What we believe is on disk: the external-edit guard compares against
   // this before every save.
   diskBaselines.set(path, content);
@@ -3163,8 +3382,8 @@ function loadFileContent(path, content) {
   document.getElementById('editor-empty').classList.add('hidden');
   updateEditorBackButton();
 
-  // The file-type registry decides the surface for EVERY path (the FV2
-  // swap: the old per-type if-chain is gone). markdown -> Tiptap editor,
+  // The file-type registry decides the surface for EVERY path (it replaced
+  // the old per-type if-chain). markdown -> Tiptap editor,
   // text -> legacy preview/edit pane, artifact -> sandboxed preview with
   // the legacy code view, image/pdf -> read-only viewers over the binary
   // endpoint, anything else -> the cannot-preview state. A new file type
@@ -3188,7 +3407,7 @@ function loadFileContent(path, content) {
 // read-only viewers, its getContentForSave is non-null (unless the board holds
 // content the grammar would drop, in which case saving is refused).
 let boardSaveTimer = null;
-let boardPendingSave = null; // { path, md } — the latest debounced board write
+let boardPendingSave = null; // { path, md }: the latest debounced board write
 // Flush a pending board save immediately. Called before opening any file so a
 // board's last edit is never dropped when switching away inside the debounce
 // window (the pending save carries its own path, so it writes the right file).
@@ -3211,13 +3430,14 @@ function openBoardFile(path, content) {
   pane.className = 'editor-content';
   import('./viewers/board-view.js').then((mod) => {
     if (currentFilePath !== path) return; // stale
-    activeFileViewer = mod.mountBoardView({ paneElement: pane, path, content }, window.Kanban);
+    activeFileViewer = mod.mountBoardView({ paneElement: pane, path, content, onWikilink: (target) => openWikilink(target) }, window.Kanban);
     if (typeof activeFileViewer.setOnChange === 'function' && typeof activeFileViewer.getContentForSave === 'function') {
       activeFileViewer.setOnChange(() => {
         const md = activeFileViewer.getContentForSave();
         if (md == null) return; // save refused (droppable content)
         const status = document.getElementById('editor-status');
         if (status) { status.textContent = 'Unsaved'; status.style.color = 'var(--attention)'; }
+        editorDirty = true;
         boardPendingSave = { path, md };
         clearTimeout(boardSaveTimer);
         boardSaveTimer = setTimeout(flushBoardSave, 500);
@@ -3385,8 +3605,11 @@ function highlightFileInSidebar(filePath) {
     if (node.classList && node.classList.contains('file-children') && node.classList.contains('collapsed')) {
       node.classList.remove('collapsed');
       const folder = node.previousElementSibling;
-      const ic = folder && folder.classList.contains('folder-item') ? folder.querySelector('.folder-icon') : null;
-      if (ic) ic.innerHTML = '&#x25BC;';
+      // Swap the folder's icon to the open-folder SVG, matching the manual
+      // click-expand path. The earlier selector (.folder-icon) matched nothing
+      // and injected a text chevron into an <svg>, so the icon stayed closed.
+      const svg = folder && folder.classList.contains('folder-item') ? folder.querySelector('svg.file-item-icon') : null;
+      if (svg) svg.innerHTML = TREE_ICONS.folderOpen;
     }
     node = node.parentElement;
   }
@@ -4048,9 +4271,17 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
 
 // Editor save
 let saveTimer=null;
-document.addEventListener('input',e=>{if((e.target.id==='editor-content'||e.target.id==='editor-textarea')&&currentFilePath&&editorMode==='edit'){document.getElementById('editor-status').textContent='Unsaved';document.getElementById('editor-status').style.color='var(--attention)';clearTimeout(saveTimer);saveTimer=setTimeout(()=>{saveFileGuarded(currentFilePath,getFileContentForSave());},1500);}});
+document.addEventListener('input',e=>{if((e.target.id==='editor-content'||e.target.id==='editor-textarea')&&currentFilePath&&editorMode==='edit'){editorDirty=true;document.getElementById('editor-status').textContent='Unsaved';document.getElementById('editor-status').style.color='var(--attention)';clearTimeout(saveTimer);saveTimer=setTimeout(()=>{saveFileGuarded(currentFilePath,getFileContentForSave());},1500);}});
 const msgInput = document.getElementById('msg-input');
-msgInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}});
+msgInput.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&!e.shiftKey){
+    // While the agent is responding, Enter inserts a newline (draft mode). To
+    // send, stop the agent first; then Enter sends as usual.
+    if(activeConversation && getConvoState(activeConversation.id).isProcessing) return;
+    e.preventDefault();
+    sendMessage();
+  }
+});
 msgInput.addEventListener('input',()=>{
   msgInput.style.height='auto'; msgInput.style.height=Math.min(msgInput.scrollHeight, 200)+'px';
   const btn=document.getElementById('send-btn');
@@ -4118,6 +4349,10 @@ function detectFindBackend() {
     const ta = document.getElementById('editor-textarea');
     if (typeof editorMode !== 'undefined' && editorMode === 'edit'
         && ta && !ta.classList.contains('hidden')) return 'textarea';
+    // A read-only binary viewer (image, PDF, unsupported) has no searchable
+    // text: it is a mounted viewer with no source-save path and no artifact
+    // iframe. Make Cmd+F a no-op instead of stale-routing to legacy-preview.
+    if (activeFileViewer && !activeFileViewer.iframe && activeFileViewer.getContentForSave == null) return null;
     return 'legacy-preview';
   }
   return null;
@@ -4696,12 +4931,13 @@ let paletteSel = 0;
 let paletteLoading = false;
 let palettePendingSkill = null;
 let paletteReqId = 0;         // stale-reply guard (query text alone can't distinguish filter/fuzzy toggles)
-var pendingMessageAnchor = null; // {convoId, text, fragment} — var: openConversation clears it and runs before this section during load-order-sensitive paths
+var pendingMessageAnchor = null; // {convoId, text, fragment}: var: openConversation clears it and runs before this section during load-order-sensitive paths
 
 // Group order/labels/limit live in palette-model.js (unit-tested).
 const PALETTE_GROUP_LIMIT = RundockPalette.GROUP_LIMIT;
 const IS_MAC = /Mac/i.test(navigator.platform);
 let paletteReturnFocus = null; // element to restore focus to on close
+let palettePrevNav = null;     // nav we came from, restored on cancel (destination wins on navigate)
 
 // The nav rail tooltip teaches the shortcut with the right modifier per
 // platform (the Windows and Linux builds have no Cmd key).
@@ -4711,6 +4947,15 @@ function openPalette() {
   if (currentView === 'workspace' || !currentWorkspacePath) return; // no workspace yet
   const overlay = document.getElementById('palette-overlay');
   if (!overlay) return;
+  if (!paletteOpen) {
+    // Search is now the active surface: light the search icon and clear the
+    // origin view's highlight so it does not show through the overlay. Capture
+    // the origin once (guard against a re-entrant open losing the return nav).
+    const prevActive = document.querySelector('.nav-item[data-nav].active');
+    palettePrevNav = prevActive ? prevActive.getAttribute('data-nav') : null;
+    prevActive?.classList.remove('active');
+    document.getElementById('nav-search-btn')?.classList.add('active');
+  }
   paletteOpen = true;
   paletteReturnFocus = document.activeElement;
   overlay.classList.remove('hidden');
@@ -4734,6 +4979,14 @@ function closePalette(opts = {}) {
   // (browsers silently drop it to <body>; an explicit blur is deterministic).
   try { document.activeElement?.blur?.(); } catch (e) {}
   document.getElementById('palette-overlay')?.classList.add('hidden');
+  // Clear the search icon regardless of how we close. On cancel (restoreFocus)
+  // return the highlight to the origin view; on navigate the destination's own
+  // routing sets the active nav, so leave it alone (destination wins).
+  document.getElementById('nav-search-btn')?.classList.remove('active');
+  if (restoreFocus && palettePrevNav) {
+    document.querySelector(`.nav-item[data-nav="${palettePrevNav}"]`)?.classList.add('active');
+  }
+  palettePrevNav = null;
   if (restoreFocus && paletteReturnFocus && document.contains(paletteReturnFocus)) {
     try { paletteReturnFocus.focus(); } catch (e) {}
   }
@@ -4917,7 +5170,7 @@ function paletteOpenFile(filePath) {
 }
 
 // Conversation route: the existing openConversation, extended with the
-// message anchor (the one genuinely new deep-link mechanic in SR1).
+// message anchor (the one genuinely new deep-link mechanic here).
 function paletteOpenConversation(item) {
   if (item.snippet) {
     pendingMessageAnchor = {

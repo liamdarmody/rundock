@@ -49,3 +49,66 @@ describe('editor round-trip: existing constructs (harness smoke)', () => {
     assert.equal(await roundTrip(src), src);
   });
 });
+
+describe('editor round-trip: serializer fidelity corpus', () => {
+  // These constructs previously drifted on every save because the serializer
+  // normalised source markers or over-escaped punctuation. Autosave writes the
+  // serialized body, so any drift silently rewrote released notes. Each case
+  // must reproduce the input byte-for-byte.
+
+  test('task lists round-trip as real checkboxes, not escaped brackets', async () => {
+    for (const src of ['- [ ] todo', '- [x] done', '- [ ] a\n- [x] b']) {
+      assert.equal(await roundTrip(src), src);
+    }
+  });
+
+  test('nested task lists stay tight (no injected blank line)', async () => {
+    const src = '- [ ] parent\n  - [ ] child';
+    assert.equal(await roundTrip(src), src);
+  });
+
+  test('a task list nested under a bullet round-trips', async () => {
+    const src = '- parent\n  - [ ] child';
+    assert.equal(await roundTrip(src), src);
+  });
+
+  test('emphasis content survives regardless of delimiter (no single-char deletion)', async () => {
+    // Regression: a dynamic emphasis delimiter broke tiptap-markdown's inline
+    // trim and deleted a single-character emphasis span flanked by other text
+    // ("a _b_ c" -> "a c"). Content must never be lost. The `_`/`*` delimiter
+    // itself is normalised to `*` on save (a documented cosmetic change), so
+    // these assert content preservation, not the exact delimiter.
+    assert.equal(await roundTrip('a *b* c'), 'a *b* c');
+    assert.equal(await roundTrip('the variable *n* here'), 'the variable *n* here');
+    assert.equal(await roundTrip('*a* *b*'), '*a* *b*');
+    // Underscore emphasis keeps its content; the delimiter normalises to `*`.
+    assert.equal(await roundTrip('a _b_ c'), 'a *b* c');
+    assert.equal(await roundTrip('the variable _n_ here'), 'the variable *n* here');
+  });
+
+  test('strong content survives; delimiter normalises to **', async () => {
+    assert.equal(await roundTrip('**bold**'), '**bold**');
+    assert.equal(await roundTrip('__bold__'), '**bold**');
+    assert.equal(await roundTrip('a **b** c'), 'a **b** c');
+  });
+
+  test('bullet-list markers are preserved (*, +, -)', async () => {
+    assert.equal(await roundTrip('* one\n* two'), '* one\n* two');
+    assert.equal(await roundTrip('+ one\n+ two'), '+ one\n+ two');
+    assert.equal(await roundTrip('- one\n- two'), '- one\n- two');
+  });
+
+  test('thematic-break style is preserved (***, ___, ---)', async () => {
+    assert.equal(await roundTrip('***'), '***');
+    assert.equal(await roundTrip('___'), '___');
+    assert.equal(await roundTrip('---\n'), '---\n');
+  });
+
+  test('literal brackets in prose are not over-escaped', async () => {
+    assert.equal(await roundTrip('text [ ] more'), 'text [ ] more');
+  });
+
+  test('already-escaped punctuation is preserved verbatim', async () => {
+    assert.equal(await roundTrip('1\\. not a list'), '1\\. not a list');
+  });
+});

@@ -42,10 +42,16 @@ function renderInline(escaped) {
   });
 
   // Wikilinks [[target]] or [[target|alias]] render as links (navigation wired
-  // by the host later); display the alias when present.
+  // by the host); display the alias when present.
   s = s.replace(/\[\[([^\[\]\|]+?)(?:\|([^\[\]\|]+?))?\]\]/g, function (m, target, alias) {
     return '<a class="board-wikilink" data-target="' + target.trim() + '">' + (alias || target).trim() + '</a>';
   });
+
+  // Tags (#tag) render as chips and ISO dates as styled spans, like the
+  // Obsidian Kanban card. Done on plain escaped text before emphasis so the
+  // spans they emit are never re-parsed.
+  s = s.replace(/(^|\s)#([A-Za-z][\w/-]*)/g, '$1<span class="board-tag">#$2</span>');
+  s = s.replace(/(^|[^\d>])(\d{4}-\d{2}-\d{2})(?![\d-])/g, '$1<span class="board-date">$2</span>');
 
   s = s.replace(/~~([^~]+)~~/g, '<del>$1</del>');
   s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');

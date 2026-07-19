@@ -1,6 +1,6 @@
 // CriticMarkup parser/serializer contract.
 //
-// Wire format (Roughdraft-flavoured, live-proven): five constructs
+// Wire format (CriticMarkup-based, live-proven): five constructs
 //   {>>comment<<}  {++insert++}  {--delete--}  {~~old~>new~~}  {==highlight==}
 // each optionally anchored with an id suffix {#c1} / {#s1}.
 //

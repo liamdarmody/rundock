@@ -36,6 +36,20 @@ describe('classifyRisk Bash', () => {
       assert.strictEqual(risk(cmd), 'medium', cmd);
     }
   });
+
+  test('a compound command is classified by every segment, not just the first', () => {
+    // A read-only prefix must not smuggle a destructive command past the gate.
+    assert.strictEqual(risk('ls && rm secret.txt'), 'high', 'read then rm');
+    assert.strictEqual(risk('cat a.md; rm a.md'), 'high', 'read then rm via ;');
+    assert.strictEqual(risk('echo done && sudo reboot'), 'high', 'read then sudo');
+    // A leading cd (or an all-read-only chain) is still low: no false card for
+    // ordinary exploration like Doc running `cd <workspace> && ls; cat ...`.
+    assert.strictEqual(risk('cd "/some dir" && ls -la; cat README.md'), 'low', 'cd then reads');
+    assert.strictEqual(risk('cd x && ls'), 'low', 'cd then ls');
+    assert.strictEqual(risk('grep foo x | sort | uniq'), 'low', 'read-only pipe');
+    // A non-read-only step after cd is medium (carded), never auto-approved.
+    assert.strictEqual(risk('cd x && npm install'), 'medium', 'cd then npm');
+  });
 });
 
 // ── classifyRisk: PowerShell ────────────────────────────────────────────────
@@ -180,9 +194,17 @@ describe('toolAllowKey', () => {
 // ── decidePermission: the auto-allow decision path ──────────────────────────
 
 describe('decidePermission', () => {
-  test('a standing always-allow wins regardless of risk', () => {
+  test('a standing always-allow never overrides a high-risk command', () => {
+    // The allow-key is coarse (the leading command), so a standing allow
+    // granted for a benign command (e.g. "git status" -> Bash:git) must not
+    // auto-approve a destructive one that shares the key (e.g. "git push").
     const allowed = new Set(['Bash:git']);
-    assert.deepStrictEqual(P.decidePermission('high', 'Bash:git', allowed), { action: 'allow', reason: 'always-allowed' });
+    assert.deepStrictEqual(P.decidePermission('high', 'Bash:git', allowed), { action: 'card' });
+  });
+
+  test('a standing always-allow still auto-approves a medium-risk command', () => {
+    const allowed = new Set(['Bash:npm']);
+    assert.deepStrictEqual(P.decidePermission('medium', 'Bash:npm', allowed), { action: 'allow', reason: 'always-allowed' });
   });
 
   test('low risk auto-allows without a card', () => {
