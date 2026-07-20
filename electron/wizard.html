@@ -67,6 +67,10 @@
     .step-icon.pending { color: #9A9590; }
     .step-icon.active { color: #E87A5A; }
     .step-icon.done { color: #6BC67E; }
+    /* Action-needed (e.g. Claude Code not installed yet): the current step,
+       numbered and accented, but never a spinner. */
+    .step.attention { border-color: #E87A5A; }
+    .step-icon.attention { color: #E87A5A; }
     .step-text {
       flex: 1;
       font-size: 14px;
@@ -167,21 +171,28 @@
   <script>
     let polling = null;
 
-    // On Windows, show the recommended native-installer command (PowerShell) with
-    // WinGet as a secondary option. Mac/Linux keep the installation-guide link.
+    // Show the platform's install command for Claude Code on every OS, and make
+    // clear it is the command-line tool, not the Claude desktop app. This is the
+    // common first-run stumble: the desktop app does not put `claude` on PATH,
+    // so a user who has "Claude" installed still needs to install Claude Code.
     (function () {
       const plat = (window.electronAPI && window.electronAPI.platform) || '';
-      if (plat !== 'win32') return;
-      const code = 'background:#333;padding:2px 5px;border-radius:3px;font-size:12px';
+      // no-drag so the command is actually selectable: the window body is a drag
+      // region, which would otherwise swallow the click and block select/copy.
+      const code = 'background:#333;padding:2px 6px;border-radius:3px;font-size:12px;-webkit-app-region:no-drag;-webkit-user-select:all;user-select:all';
       const hint = document.getElementById('install-hint');
-      if (hint) {
-        hint.innerHTML =
-          'In PowerShell: <code style="' + code + '">irm https://claude.ai/install.ps1 | iex</code>'
-          + '<br>Or WinGet: <code style="' + code + '">winget install Anthropic.ClaudeCode</code>'
-          + '<br><a href="https://docs.anthropic.com/en/docs/claude-code/overview" target="_blank">Installation guide</a>';
-      }
+      if (!hint) return;
+      const isWin = plat === 'win32';
+      const where = isWin ? 'In PowerShell' : 'In Terminal';
+      const cmd = isWin ? 'irm https://claude.ai/install.ps1 | iex' : 'curl -fsSL https://claude.ai/install.sh | bash';
+      hint.innerHTML =
+        'Claude Code is a command-line tool, different from the Claude desktop app. Install it and this screen continues automatically.'
+        + '<br>' + where + ': <code style="' + code + '">' + cmd + '</code>'
+        + (isWin ? '<br>Or WinGet: <code style="' + code + '">winget install Anthropic.ClaudeCode</code>' : '')
+        + '<br><a href="https://code.claude.com/docs/en/overview" target="_blank">Installation guide</a>';
     })();
 
+    const STEP_NUMBERS = { install: '1', auth: '2', codex: '3' };
     function updateStep(id, state) {
       const step = document.getElementById('step-' + id);
       const icon = document.getElementById('icon-' + id);
@@ -191,6 +202,10 @@
         icon.innerHTML = '&#10003;';
       } else if (state === 'active') {
         icon.innerHTML = '<div class="spinner"></div>';
+      } else {
+        // pending / attention: show the step number, never a spinner, so a
+        // not-yet-installed step never reads as endlessly "checking".
+        icon.textContent = STEP_NUMBERS[id] || '';
       }
     }
 
@@ -250,7 +265,9 @@
         (codex.installed && result.status !== 'ready') ? CODEX_SUBTITLE : BASE_SUBTITLE;
 
       if (result.status === 'not-installed') {
-        updateStep('install', 'active');
+        // Action needed, not in progress: numbered attention state, never the
+        // spinner, so it does not read as "checking" forever before install.
+        updateStep('install', 'attention');
         updateStep('auth', 'pending');
         renderCodexStep(codex, false);
         // Install step: Check again is the primary action.
@@ -341,12 +358,28 @@
       checkStatus();
     }
 
+    // Poll for install/auth, but do not poll forever: after ~60s still stuck on
+    // the install step, stop and nudge instead of spinning silently.
+    let pollCount = 0;
     async function checkNow() {
+      pollCount = 0;
       const ready = await checkStatus();
-      if (!ready && !polling) {
-        // Start polling every 3 seconds
-        polling = setInterval(checkStatus, 3000);
-      }
+      if (ready || polling) return;
+      polling = setInterval(async () => {
+        const done = await checkStatus();
+        if (done) { clearInterval(polling); polling = null; return; }
+        // Once Claude Code is detected the install step leaves the attention
+        // state (it moves to sign-in); stop this install-detection poll there.
+        if (!document.getElementById('step-install').classList.contains('attention')) {
+          clearInterval(polling); polling = null; return;
+        }
+        if (++pollCount >= 20) {
+          clearInterval(polling); polling = null;
+          const hint = document.getElementById('install-hint');
+          if (hint) hint.insertAdjacentHTML('beforeend',
+            '<br><span style="color:#E8A84C">Still not detecting Claude Code. Make sure you ran the install command in the terminal (not the desktop app), then click Check again.</span>');
+        }
+      }, 3000);
     }
 
     function skipAndQuit() {
