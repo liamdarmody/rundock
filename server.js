@@ -913,6 +913,10 @@ function detectCodexCached() {
 let _agentCache = null;
 let _agentCacheTime = 0;
 const AGENT_CACHE_TTL = 2000; // 2 seconds
+// Cap on the instructions shown in the profile panel. Generous so a real agent
+// file (or CLAUDE.md) is never silently cut off, which used to look like "my
+// edit vanished"; the panel scrolls, so the length is not a layout problem.
+const AGENT_INSTRUCTIONS_MAX = 20000;
 
 function invalidateAgentCache() { _agentCache = null; _agentCacheTime = 0; _skillCache = null; _skillCacheTime = 0; invalidateFileListCache(); }
 
@@ -976,7 +980,7 @@ function discoverAgents() {
 
         // If this is the default agent, merge instructions from CLAUDE.md
         if (isDefault && fs.existsSync(claudeMdPath)) {
-          instructions = readNormalisedFile(claudeMdPath).substring(0, 2000);
+          instructions = readNormalisedFile(claudeMdPath).substring(0, AGENT_INSTRUCTIONS_MAX);
         }
 
         const caps = parseCapabilities(fmText);
@@ -1028,7 +1032,7 @@ function discoverAgents() {
           model: ((meta.type !== 'orchestrator' && meta.type !== 'platform') && String(meta.runtime || '').toLowerCase() === 'codex') ? (meta.model || null) : (meta.model || DEFAULT_MODEL),
           order: orderNum,
           reportsTo: meta.reportsTo || null,
-          instructions: instructions.substring(0, 2000),
+          instructions: instructions.substring(0, AGENT_INSTRUCTIONS_MAX),
           isDefault,
           colour: meta.colour || colours[colourIdx % colours.length],
           icon: meta.icon || icons[colourIdx % icons.length],

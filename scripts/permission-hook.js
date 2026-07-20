@@ -15,6 +15,8 @@
  */
 
 const http = require('http');
+const os = require('os');
+const path = require('path');
 
 // MCP read/write classification. Read-style MCP tools auto-approve; writes,
 // destructive actions, and anything unrecognised get a permission card.
@@ -36,6 +38,29 @@ function isMcpReadTool(toolName) {
   return false;
 }
 
+// Deny a direct file edit to the GLOBAL Claude Code agent/skill config
+// (~/.claude/agents, ~/.claude/skills). Rundock never reads the global folder,
+// so such an edit would silently succeed somewhere invisible to the app: the
+// reported bug where an agent "updated" and nothing changed, surviving a
+// restart. Workspace .claude edits are deliberately NOT blocked (the workspace
+// is the agent's own domain, and those land in the file the app reads); the
+// SAVE_AGENT / SAVE_SKILL markers remain the way to get a live UI refresh.
+const CLAUDE_EDIT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+function isProtectedClaudeEdit(toolName, toolInput) {
+  if (!CLAUDE_EDIT_TOOLS.has(toolName)) return false;
+  const ti = toolInput || {};
+  const target = ti.file_path || ti.notebook_path || ti.path;
+  if (typeof target !== 'string') return false;
+  const resolved = path.resolve(target);
+  const under = (root) => resolved === root || resolved.startsWith(root + path.sep);
+  return under(path.join(os.homedir(), '.claude', 'agents'))
+      || under(path.join(os.homedir(), '.claude', 'skills'));
+}
+
+module.exports = { isProtectedClaudeEdit, isMcpReadTool };
+
+if (require.main === module) main();
+function main() {
 let input = '';
 process.stdin.on('data', chunk => { input += chunk; });
 process.stdin.on('end', () => {
@@ -76,6 +101,26 @@ process.stdin.on('end', () => {
         hookEventName: 'PreToolUse',
         permissionDecision: 'allow',
         permissionDecisionReason: 'Auto-approved: MCP read'
+      }
+    }));
+    process.exit(0);
+  }
+
+  // Agents and skills are managed ONLY through the RUNDOCK:SAVE_AGENT /
+  // RUNDOCK:SAVE_SKILL markers, which write into THIS workspace's .claude folder
+  // and refresh the UI. Deterministically deny any direct file edit to a
+  // .claude/agents or .claude/skills path, in the workspace OR the global
+  // ~/.claude (Claude Code's native default). Without this, a direct edit
+  // silently succeeds in the wrong place: an edit to the global agents folder
+  // that Rundock never reads, leaving the user told "done" while the workspace
+  // file, and the profile panel, never changed. This is enforcement, not a
+  // prompt: the wrong path can no longer look like a success.
+  if (isProtectedClaudeEdit(data.tool_name, data.tool_input)) {
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: "This edits the global ~/.claude agent or skill config, which Rundock does not use. Manage this workspace's agents and skills through the RUNDOCK:SAVE_AGENT / RUNDOCK:SAVE_SKILL markers (which write into this workspace and refresh the app), or edit the workspace's own .claude file."
       }
     }));
     process.exit(0);
@@ -161,3 +206,4 @@ process.stdin.on('end', () => {
   req.write(payload);
   req.end();
 });
+}
