@@ -58,9 +58,16 @@ const CSP_META = `<meta http-equiv="Content-Security-Policy" content="${ARTIFACT
 // the implied head and commits the policy before any element is processed.
 // A leading <!doctype> is preserved (the meta goes right after it, still
 // ahead of every element, avoiding quirks mode).
-// A <meta http-equiv="refresh"> can navigate the sandboxed frame to an
-// external URL and issue an outbound request; CSP has no directive that
-// governs navigation, so the no-phone-home guarantee needs this. The attribute
+// A <meta http-equiv="refresh"> can navigate a frame to an external URL and
+// issue an outbound request, and CSP has no directive that governs navigation.
+// The primary control against this is the sandbox posture: a frame with
+// allow-same-origin but NO allow-scripts does not honour meta refresh at all
+// (verified in Chromium), so the no-phone-home guarantee holds even if a
+// refresh tag survives. This strip is defense-in-depth on top of that: it also
+// removes the tag from the source so a future sandbox change cannot silently
+// reopen the vector. It is best-effort (see the two-pass note below) precisely
+// because the sandbox, not the regex, is what the guarantee rests on. The
+// attribute
 // tokenizer ((?:[^>"']|"[^"]*"|'[^']*')*) skips over quoted attribute values,
 // so a `>` hidden inside a quoted attribute cannot end the tag early and slip
 // the meta through. The CSP meta this module injects uses

@@ -35,23 +35,37 @@
   function bashBin(cmd) { return cmd.split(/\s+/)[0].replace(/^.*\//, ''); }
 
   // Risk of a shell command, judged across EVERY segment of a compound command
-  // (split on &&, ||, ;, |, &), not just the first token. This stops a
-  // read-only prefix from smuggling a destructive command past the gate
+  // (split on &&, ||, ;, |, &, and newlines), not just the first token. This
+  // stops a read-only prefix from smuggling a destructive command past the gate
   // ("ls && rm x" is high, not low) and stops a harmless leading cd from
   // forcing an all-read-only chain to look risky ("cd dir && ls" is low, so
-  // ordinary exploration is not carded). A destructive flag or a
-  // download-piped-to-a-shell anywhere in the command is high regardless of
-  // segmenting. Naive splitting can over-flag an operator inside a quoted
-  // string, which only ever errs toward showing a card (safe for a gate).
+  // ordinary exploration is not carded). A destructive flag, a
+  // download-piped-to-a-shell, or a find that runs/deletes anywhere in the
+  // command is high regardless of segmenting. Structure the segmenter cannot
+  // see into (command/process substitution, backticks) never earns the low
+  // auto-allow verdict, so a destructive command hidden inside it still cards.
+  // Naive splitting can over-flag an operator inside a quoted string, which
+  // only ever errs toward showing a card (safe for a gate).
   function classifyBashRisk(cmd) {
     if (!cmd) return 'low';
     if (/--force|--hard|-rf\b/.test(cmd)) return 'high';
     if (/git\s+(push|reset|clean|checkout\s+\.)/.test(cmd)) return 'high';
     if (/\b(curl|wget)\b[\s\S]*\|\s*(sh|bash|zsh|dash)\b/.test(cmd)) return 'high';
+    // find is read-only until it runs a command or deletes: -exec/-execdir/-ok
+    // spawn an arbitrary command per match and -delete removes files, so a bare
+    // find leading segment must not shield these.
+    if (/\bfind\b[\s\S]*-(exec(dir)?|delete|ok(dir)?)\b/.test(cmd)) return 'high';
     const DESTRUCTIVE = /^(rm|sudo|chmod|chown|kill|mkfs|dd)/;
     const READ_ONLY = /^(ls|cat|head|tail|echo|pwd|whoami|which|grep|rg|find|wc|sort|uniq|diff|file|stat|date|env|printenv|node\s+-e|python3?\s+-c)/;
     const NEUTRAL = /^(cd|pushd|popd|true)(\s|$)/;
-    const segments = cmd.split(/\s*(?:&&|\|\||[;|&])\s*/).map(function (s) { return s.trim(); }).filter(Boolean);
+    // Command/process substitution and backticks run an inner command the
+    // segmenter cannot see (`ls $(rm x)`), so their presence disqualifies the
+    // low (auto-allow) verdict: the command falls to at least a card.
+    const HIDES_SUBCOMMAND = /\$\(|`|<\(|>\(/;
+    // Split on newlines as well as shell operators: bash runs each newline as a
+    // separate command, so a read-only first line must not shield a destructive
+    // one below it.
+    const segments = cmd.split(/\s*(?:&&|\|\||[;|&\n\r])\s*/).map(function (s) { return s.trim(); }).filter(Boolean);
     var anyHigh = false, allSafe = true;
     for (var i = 0; i < segments.length; i++) {
       var seg = segments[i];
@@ -60,7 +74,7 @@
       else allSafe = false;
     }
     if (anyHigh) return 'high';
-    if (allSafe) return 'low';
+    if (allSafe && !HIDES_SUBCOMMAND.test(cmd)) return 'low';
     return 'medium';
   }
 
