@@ -50,6 +50,44 @@ describe('classifyRisk Bash', () => {
     // A non-read-only step after cd is medium (carded), never auto-approved.
     assert.strictEqual(risk('cd x && npm install'), 'medium', 'cd then npm');
   });
+
+  test('a destructive command hidden in command/process substitution never auto-allows', () => {
+    // The segmenter splits on shell operators only, so a read-only outer
+    // command can hide a destructive inner one. Substitution disqualifies the
+    // low (auto-allow) verdict, so these all card instead of running silently.
+    for (const cmd of [
+      'ls $(rm ~/.ssh/id_rsa)',
+      'ls `rm secret`',
+      'echo $(sudo reboot)',
+      'cat file $(rm -r foo)',
+      'echo hi > $(rm foo)',
+      'diff <(rm a) <(cat b)',
+    ]) {
+      assert.notStrictEqual(risk(cmd), 'low', cmd);
+      assert.strictEqual(P.decidePermission(risk(cmd), 'Bash:ls', new Set()).action, 'card', cmd);
+    }
+  });
+
+  test('a newline separates commands, so a leading read must not shield a destructive line', () => {
+    assert.strictEqual(risk('ls\nrm ~/important'), 'high', 'read then rm on next line');
+    assert.strictEqual(risk('echo hi\nsudo reboot'), 'high', 'read then sudo on next line');
+    // An all-read-only multi-line block stays low: no false card.
+    assert.strictEqual(risk('ls\ncat README.md'), 'low', 'read then read');
+  });
+
+  test('find that runs or deletes is high despite find being read-only', () => {
+    for (const cmd of [
+      'find . -exec rm {} +',
+      'find . -exec rm {} \\;',
+      'find . -delete',
+      'find /tmp -execdir rm {} +',
+      'find . -ok rm {} \\;',
+    ]) {
+      assert.strictEqual(risk(cmd), 'high', cmd);
+    }
+    // Plain find with no run/delete action stays low.
+    assert.strictEqual(risk('find . -name "*.md"'), 'low', 'plain find');
+  });
 });
 
 // ── classifyRisk: PowerShell ────────────────────────────────────────────────
