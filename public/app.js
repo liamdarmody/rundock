@@ -1246,7 +1246,12 @@ function renderOrgChart() {
     const nodeW = isCompact ? 220 : 280;
     const nodeH = isCompact ? 160 : 190;
     const hierarchy = d3.hierarchy(treeRoot);
-    d3.tree().nodeSize([nodeW, nodeH])(hierarchy);
+    // Uniform separation so a lead with one report takes the same width as a
+    // childless lead (it centres over its single report); a lead only widens
+    // when it has two or more reports, spanning them exactly as the top row
+    // spreads its own children. The d3 default (2x between different-parent
+    // nodes) doubled the gap between two adjacent leads that each had a report.
+    d3.tree().nodeSize([nodeW, nodeH]).separation(() => 1)(hierarchy);
 
     const cardW = (n) => Math.min(n.data.type === 'orchestrator' ? P.leader.w : P[preset].w, 320);
     const cardH = (n) => n.data.type === 'orchestrator' ? P.leader.h : P[preset].h;
