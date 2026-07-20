@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Frame</title>
+<style>
+  /* Framing wrapper. Playwright sets the body classes (theme-* + treatment-*),
+     the --shot-w / --pad / --radius variables, the image, and the title, then
+     screenshots #stage. All framing is pure CSS, so no image library is needed
+     for the premium look (the Linear / Vercel / Apple treatment). */
+  :root { --shot-w: 1440px; --pad: 120px; --radius: 12px; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { background: transparent; }
+  body { font-family: -apple-system, "Inter", system-ui, sans-serif; }
+
+  /* #stage shrinks to its content, so an element screenshot of it is exactly
+     the framed image plus its gradient padding, with nothing extra. */
+  #stage { display: inline-block; padding: var(--pad); }
+  body.theme-light #stage { background: linear-gradient(145deg, #f7f7f9 0%, #e9e9ee 100%); }
+  body.theme-dark  #stage { background: linear-gradient(145deg, #232327 0%, #0b0b0d 100%); }
+
+  #window { width: var(--shot-w); border-radius: var(--radius); overflow: hidden; }
+  body.theme-light #window { box-shadow: 0 40px 80px -24px rgba(0,0,0,0.30), 0 16px 32px -16px rgba(0,0,0,0.18); }
+  body.theme-dark  #window { box-shadow: 0 40px 90px -24px rgba(0,0,0,0.70), 0 16px 32px -16px rgba(0,0,0,0.55); }
+  body.theme-dark  #window { outline: 1px solid rgba(255,255,255,0.06); outline-offset: -1px; }
+
+  /* Hero chrome: a macOS-style title bar with the three traffic lights. Shown
+     only for the treatment-hero images. */
+  #titlebar { display: none; height: 40px; align-items: center; padding: 0 16px; gap: 9px; position: relative; }
+  body.treatment-hero #titlebar { display: flex; }
+  body.theme-light #titlebar { background: #ededf0; border-bottom: 1px solid rgba(0,0,0,0.06); }
+  body.theme-dark  #titlebar { background: #2b2b30; border-bottom: 1px solid rgba(255,255,255,0.06); }
+  .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .dot.r { background: #ff5f57; } .dot.y { background: #febc2e; } .dot.g { background: #28c840; }
+  #title { position: absolute; left: 0; right: 0; text-align: center; font-size: 13px; font-weight: 500; pointer-events: none; }
+  body.theme-light #title { color: #6b6b72; }
+  body.theme-dark  #title { color: #9a9aa2; }
+
+  #shot { display: block; width: var(--shot-w); height: auto; }
+</style>
+</head>
+<body class="theme-light treatment-hero">
+  <div id="stage">
+    <div id="window">
+      <div id="titlebar">
+        <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+        <span id="title">Rundock</span>
+      </div>
+      <img id="shot" alt="">
+    </div>
+  </div>
+</body>
+</html>

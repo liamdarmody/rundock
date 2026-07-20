@@ -13,3 +13,8 @@ coverage.lcov
 # Playwright E2E artefacts
 test-results/
 playwright-report/
+
+# Marketing screenshot pipeline output (binaries, regenerated each run)
+screenshots-out/
+# Local, private banned-token overrides for the sanitization gate (never committed)
+scripts/screenshots/.banned-tokens.json
