@@ -208,7 +208,7 @@ function writeManifest(rows, { built, gate, webpOk }) {
     '- `hero/` the three chrome-framed hero images (full plus a README-width derivation), light and dark.',
     '- `stills/flat/` flat clean @2x masters and element-scoped crops (`-tile`), for the Site and Docs to frame in their own containers.',
     '- `stills/framed/` self-framed variants (and README-width derivations) for plain-markdown placements.',
-    '- `motion/` the six looping GIFs, light and dark.',
+    '- `motion/` the five looping GIFs, light and dark.',
     '- `content-and-copy-gaps.md` the release content and copy gap analysis (proposal only).',
     '',
     '## Sanitization',

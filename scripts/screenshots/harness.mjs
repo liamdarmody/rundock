@@ -196,27 +196,68 @@ export async function pushChunk(page, { convoId, agentId, text, pid = 'p-stream'
 
 // Injects a synthetic pointer cursor, since Playwright video renders none. The
 // pointer-driven clips (a drag, a click) then read as an actual hand moving.
+// Three shapes are available via cursorKind(): the default arrow, an open
+// "grab" hand (hovering a draggable), and a closed "grabbing" hand (mid-drag).
+// Each is positioned by its own hotspot, so swapping shape never shifts the
+// point the cursor is aiming at.
 export async function installCursor(page) {
   await page.evaluate(() => {
     if (document.getElementById('__mkcursor')) return;
     const c = document.createElement('div');
     c.id = '__mkcursor';
-    c.innerHTML = '<svg width="26" height="26" viewBox="0 0 24 24" fill="none"><path d="M5 3l14 7-5.6 1.6L10.5 18 5 3z" fill="#131313" stroke="#fff" stroke-width="1.3" stroke-linejoin="round"/></svg>';
     Object.assign(c.style, {
       position: 'fixed', left: '0', top: '0', zIndex: '2147483647', pointerEvents: 'none',
-      transform: 'translate(-120px,-120px)', filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.35))',
+      transform: 'translate(-140px,-140px)', filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.35))',
     });
     document.body.appendChild(c);
-    window.__cursorAt = (x, y, ms) => {
-      c.style.transition = `transform ${ms || 550}ms cubic-bezier(.4,0,.2,1)`;
-      c.style.transform = `translate(${x}px, ${y}px)`;
+
+    const ARROW = '<svg width="26" height="26" viewBox="0 0 24 24" fill="none"><path d="M5 3l14 7-5.6 1.6L10.5 18 5 3z" fill="#131313" stroke="#fff" stroke-width="1.3" stroke-linejoin="round"/></svg>';
+    // Hand cursors are stroke shapes, so give each a white halo under a dark
+    // core: legible on both light and dark UI, matching the arrow's contrast.
+    const handSvg = (paths) => {
+      const layer = (stroke, w) => `<g fill="none" stroke="${stroke}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${paths.map((d) => `<path d="${d}"/>`).join('')}</g>`;
+      return `<svg width="28" height="28" viewBox="0 0 24 24" style="overflow:visible">${layer('#fff', 3.6)}${layer('#131313', 1.6)}</svg>`;
     };
+    const HAND_OPEN = [
+      'M18 11V6a2 2 0 0 0-4 0',
+      'M14 10V4a2 2 0 0 0-4 0v2',
+      'M10 10.5V6a2 2 0 0 0-4 0v8',
+      'M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-6-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L9 13',
+    ];
+    const HAND_GRAB = [
+      'M8 13.5V9a2 2 0 0 1 4 0v1',
+      'M12 10.5V8.6a2 2 0 0 1 4 0V11',
+      'M16 11v-.4a2 2 0 0 1 4 0V15a6 6 0 0 1-6 6h-1.5a6 6 0 0 1-5-2.7l-2-3a2 2 0 0 1 3.1-2.5L12 15',
+    ];
+    const KINDS = {
+      arrow: { hx: 4, hy: 3, svg: ARROW },
+      grab: { hx: 13, hy: 6, svg: handSvg(HAND_OPEN) },
+      grabbing: { hx: 13, hy: 8, svg: handSvg(HAND_GRAB) },
+    };
+    let hx = 4, hy = 3, px = -140, py = -140;
+    window.__cursorKind = (kind) => {
+      const k = KINDS[kind] || KINDS.arrow;
+      hx = k.hx; hy = k.hy; c.innerHTML = k.svg;
+      c.style.transition = 'none';
+      c.style.transform = `translate(${px - hx}px, ${py - hy}px)`;
+    };
+    window.__cursorAt = (x, y, ms) => {
+      px = x; py = y;
+      c.style.transition = `transform ${ms || 550}ms cubic-bezier(.4,0,.2,1)`;
+      c.style.transform = `translate(${x - hx}px, ${y - hy}px)`;
+    };
+    window.__cursorKind('arrow');
   });
 }
 
 // Moves the synthetic cursor to a point over `ms` milliseconds.
 export async function cursorTo(page, x, y, ms = 550) {
   await page.evaluate(({ x, y, ms }) => window.__cursorAt && window.__cursorAt(x, y, ms), { x, y, ms });
+}
+
+// Swaps the cursor shape: 'arrow', 'grab' (open hand), or 'grabbing' (closed).
+export async function cursorKind(page, kind) {
+  await page.evaluate((k) => window.__cursorKind && window.__cursorKind(k), kind);
 }
 
 // Waits for web fonts and a short settle before a screenshot.

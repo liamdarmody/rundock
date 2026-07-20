@@ -30,7 +30,7 @@ Re-runnable: the folder is rebuilt from scratch each time, deterministically.
 5. **Frame** the three hero shots in window chrome and every feature shot as a
    flat clean master plus a self-framed variant, on a neutral theme-aware
    gradient, and derive README-width sizes.
-6. **Motion**: record six scripted interactions and convert each to an optimized,
+6. **Motion**: record five scripted interactions and convert each to an optimized,
    palette-based looping GIF.
 7. Write **`MANIFEST.md`** mapping every asset to its intended target repo, path,
    feature, theme, and rationale, and copy in the content and copy gap analysis.
@@ -63,7 +63,7 @@ Re-runnable: the folder is rebuilt from scratch each time, deterministically.
 - `harness.mjs` shared Playwright helpers: fixed clock, themes, seeding.
 - `capture.mjs` the still shot list and capture loop.
 - `frame.mjs` + `frame.html` the framing wrapper and per-target derivations.
-- `motion.mjs` the six clips and ffmpeg conversion.
+- `motion.mjs` the five clips and ffmpeg conversion.
 - `run.mjs` the orchestrator behind `npm run screenshots`.
 - `content-and-copy-gaps.md` the release content and copy gap analysis (a
   proposal; copied into the output folder each run).
