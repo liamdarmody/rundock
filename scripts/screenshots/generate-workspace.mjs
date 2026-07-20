@@ -36,7 +36,9 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..');
 // Locked roster (from the spec's "Demo workspace roster and skills"). Names,
 // roles, order and reportsTo are verbatim; colour and icon are fixed here for
 // deterministic, pleasant avatars rather than relying on the server's rotating
-// defaults (which depend on directory read order).
+// defaults (which depend on directory read order). Ana and Cody carry hues that
+// are deliberately distinct from their leads (Cleo, Dev), so the two most
+// closely related pairs never read as the same colour on the org chart.
 // ---------------------------------------------------------------------------
 export const ROSTER = [
   { id: 'cos',   displayName: 'Cos',   role: 'Chief of Staff',      type: 'orchestrator', order: 0, reportsTo: null,   colour: '#E87A5A', icon: '◆',
@@ -53,34 +55,51 @@ export const ROSTER = [
     description: 'Glen owns acquisition experiments and the growth funnel end to end.' },
   { id: 'rea',   displayName: 'Rea',   role: 'Executive Assistant', type: 'specialist',   order: 6, reportsTo: 'cos',  colour: '#5BCFC4', icon: '△',
     description: 'Rea keeps the calendar, meeting notes, and daily communications in order.' },
-  { id: 'ana',   displayName: 'Ana',   role: 'Content Analyst',     type: 'specialist',   order: 7, reportsTo: 'cleo', colour: '#7AB8E8', icon: '▦',
+  { id: 'ana',   displayName: 'Ana',   role: 'Content Analyst',     type: 'specialist',   order: 7, reportsTo: 'cleo', colour: '#6C74C4', icon: '▦',
     description: 'Ana measures what content works and pre-checks ideas against past performance.' },
-  { id: 'cody',  displayName: 'Cody',  role: 'Code Reviewer',       type: 'specialist',   order: 8, reportsTo: 'dev',  colour: '#8FCF7E', icon: '⬢',
+  { id: 'cody',  displayName: 'Cody',  role: 'Code Reviewer',       type: 'specialist',   order: 8, reportsTo: 'dev',  colour: '#B07E4E', icon: '⬢',
     description: 'Cody reviews changes for correctness, clarity, and safety before they merge.' },
 ];
 
 // ---------------------------------------------------------------------------
-// Locked skills (~12, generic, mapped onto the roster). Each becomes a
-// .claude/skills/<slug>/SKILL.md with name + description frontmatter and a
-// short generic body, and is referenced by its owning agent's frontmatter so
-// it renders as "assigned" on the org, profile and skills views.
+// Skills (~14, generic). Each becomes a .claude/skills/<slug>/SKILL.md with
+// name + description frontmatter and a short generic body. Assignment to agents
+// is via AGENT_SKILLS below (an agent's frontmatter skills list), so a skill can
+// belong to more than one agent, exactly as real skills are shared across a
+// team.
 // ---------------------------------------------------------------------------
 export const SKILLS = [
-  { slug: 'post-drafter',    owner: 'cleo',  name: 'Post Drafter',      description: 'Turns an approved angle into a publish-ready first draft.' },
-  { slug: 'hook-generator',  owner: 'cleo',  name: 'Hook Generator',    description: 'Generates and ranks opening lines for a piece of content.' },
-  { slug: 'content-planner', owner: 'cleo',  name: 'Content Planner',   description: 'Plans a week of content against goals and gaps.' },
-  { slug: 'post-auditor',    owner: 'ana',   name: 'Post Auditor',      description: 'Scores a draft for clarity and strength before it ships.' },
-  { slug: 'spec-writer',     owner: 'dev',   name: 'Spec Writer',       description: 'Writes a short spec before any non-trivial change.' },
-  { slug: 'code-reviewer',   owner: 'cody',  name: 'Code Reviewer',     description: 'Reviews a change across correctness, clarity, and safety.' },
-  { slug: 'test-generator',  owner: 'cody',  name: 'Test Generator',    description: 'Proposes tests that pin the behaviour a change relies on.' },
-  { slug: 'design-brief',    owner: 'des',   name: 'Design Brief',      description: 'Translates a request into an execution-ready design brief.' },
-  { slug: 'slide-builder',   owner: 'des',   name: 'Slide Builder',     description: 'Builds a clean slide deck from an outline.' },
-  { slug: 'weekly-digest',   owner: 'reese', name: 'Weekly Digest',     description: 'Summarises the week in the market into a short brief.' },
-  { slug: 'competitor-scan', owner: 'reese', name: 'Competitor Scan',   description: 'Tracks what comparable products are shipping and saying.' },
-  { slug: 'meeting-notes',   owner: 'rea',   name: 'Meeting Notes',     description: 'Captures decisions and actions from a meeting.' },
-  { slug: 'message-drafter', owner: 'rea',   name: 'Message Drafter',   description: 'Drafts a reply in the right tone for the channel.' },
-  { slug: 'workspace-lint',  owner: 'cos',   name: 'Workspace Lint',    description: 'Checks the workspace for stale links and missing metadata.' },
+  { slug: 'post-drafter',    name: 'Post Drafter',      description: 'Turns an approved angle into a publish-ready first draft.' },
+  { slug: 'hook-generator',  name: 'Hook Generator',    description: 'Generates and ranks opening lines for a piece of content.' },
+  { slug: 'content-planner', name: 'Content Planner',   description: 'Plans a week of content against goals and gaps.' },
+  { slug: 'post-auditor',    name: 'Post Auditor',      description: 'Scores a draft for clarity and strength before it ships.' },
+  { slug: 'spec-writer',     name: 'Spec Writer',       description: 'Writes a short spec before any non-trivial change.' },
+  { slug: 'code-reviewer',   name: 'Code Reviewer',     description: 'Reviews a change across correctness, clarity, and safety.' },
+  { slug: 'test-generator',  name: 'Test Generator',    description: 'Proposes tests that pin the behaviour a change relies on.' },
+  { slug: 'design-brief',    name: 'Design Brief',      description: 'Translates a request into an execution-ready design brief.' },
+  { slug: 'slide-builder',   name: 'Slide Builder',     description: 'Builds a clean slide deck from an outline.' },
+  { slug: 'weekly-digest',   name: 'Weekly Digest',     description: 'Summarises the week in the market into a short brief.' },
+  { slug: 'competitor-scan', name: 'Competitor Scan',   description: 'Tracks what comparable products are shipping and saying.' },
+  { slug: 'meeting-notes',   name: 'Meeting Notes',     description: 'Captures decisions and actions from a meeting.' },
+  { slug: 'message-drafter', name: 'Message Drafter',   description: 'Drafts a reply in the right tone for the channel.' },
+  { slug: 'workspace-lint',  name: 'Workspace Lint',    description: 'Checks the workspace for stale links and missing metadata.' },
 ];
+
+// Which skills each agent carries. Every lead owns two or three; a report never
+// carries more than its lead (Dev owns three, Cody two). Sharing is realistic:
+// content-planner sits with both Cleo and Ana, competitor-scan with Reese and
+// Glen, the engineering skills with both Dev and Cody.
+const AGENT_SKILLS = {
+  cos:   ['workspace-lint'],
+  cleo:  ['post-drafter', 'hook-generator', 'content-planner'],
+  dev:   ['spec-writer', 'code-reviewer', 'test-generator'],
+  des:   ['design-brief', 'slide-builder'],
+  reese: ['weekly-digest', 'competitor-scan'],
+  glen:  ['hook-generator', 'competitor-scan'],
+  rea:   ['meeting-notes', 'message-drafter'],
+  ana:   ['post-auditor', 'content-planner'],
+  cody:  ['code-reviewer', 'test-generator'],
+};
 
 // Routines seeded onto a few agents (parsed from agent frontmatter by the
 // server). Schedules use the "every <weekday> at HH:MM" grammar the scheduler
@@ -223,8 +242,8 @@ function agentFile(a) {
     `type: ${a.type}`, `order: ${a.order}`];
   if (a.reportsTo) lines.push(`reportsTo: ${a.reportsTo}`);
   lines.push(`colour: ${a.colour}`, `icon: ${a.icon}`, `description: ${a.description}`);
-  const mySkills = SKILLS.filter((s) => s.owner === a.id);
-  if (mySkills.length) { lines.push('skills:'); mySkills.forEach((s) => lines.push(`  - ${s.slug}`)); }
+  const mySkills = AGENT_SKILLS[a.id] || [];
+  if (mySkills.length) { lines.push('skills:'); mySkills.forEach((slug) => lines.push(`  - ${slug}`)); }
   const myRoutines = ROUTINES[a.id];
   if (myRoutines) {
     lines.push('routines:');
@@ -269,7 +288,7 @@ export function buildWorkspace(opts = {}) {
 
   // --- CLAUDE.md (workspace charter, generic) -------------------------------
   write('CLAUDE.md', [
-    '# Northwind Studio', '',
+    '# Fernwick Studio', '',
     'A small studio running its whole operation through an AI team. Cos routes',
     'the work; the leads own content, engineering, design, research, growth, and',
     'operations. This workspace holds the notes, boards, and files the team works',
@@ -279,21 +298,29 @@ export function buildWorkspace(opts = {}) {
   // --- Notes (frontmatter, callouts, wikilinks) -----------------------------
   write('Welcome.md', [
     '---', 'title: Welcome', 'status: active', 'tags: [demo, getting-started]',
-    'related: "[[Product Board]]"', 'updated: 2026-07-18', '---', '',
+    'related: "[[Backlog]]"', 'updated: 2026-07-18', '---', '',
     '# Welcome to the studio workspace', '',
     'This note shows how a file renders: frontmatter appears in the properties',
     'panel above, with tags as chips and `related` as a live link.', '',
-    '> [!note] Callout', '> Callouts render inline. Open the [[Product Board]] to see the board view,',
+    '> [!note] Callout', '> Callouts render inline. Open the [[Backlog]] board to see the columns,',
     '> or browse the `Assets` folder for images and a document.', '',
     '## What to try', '',
-    '- Open **Product Board.md** for the columns', '- Open **Artifacts/Launch Page.html** for a sandboxed preview',
+    '- Open **Backlog.md** and **Roadmap.md** for the boards', '- Open **Artifacts/Launch Page.html** for a sandboxed preview',
     '- Open **Assets/Cover.png**, **Photo.jpg**, and **Spec.pdf**', '',
     'See also: [[Roadmap]] and [[Notes/Weekly Plan]].', '',
   ].join('\n'));
 
+  // Roadmap is a second Kanban board (Now / Next / Later). It lives in the tree
+  // for realism; the Backlog board is the one opened in captures.
   write('Roadmap.md', [
-    '---', 'title: Roadmap', 'tags: [planning]', 'updated: 2026-07-18', '---', '',
-    '# Roadmap', '', '1. Ship the launch page', '2. Tidy the onboarding flow', '3. Gather early feedback', '',
+    '---', '', 'kanban-plugin: board', '', '---', '',
+    '## Now', '',
+    '- [ ] Ship the launch page #launch 2026-08-05', '- [ ] Tidy the onboarding flow #product', '',
+    '## Next', '',
+    '- [ ] Gather early feedback', '- [ ] Plan the follow-up release', '',
+    '## Later', '',
+    '- [ ] Explore a mobile companion', '',
+    '%% kanban:settings', '```', '{"kanban-plugin":"board"}', '```', '%%', '',
   ].join('\n'));
 
   // A briefing-style note with foldable and nested callouts plus frontmatter
@@ -308,12 +335,13 @@ export function buildWorkspace(opts = {}) {
 
   write('Notes/Weekly Plan.md', [
     '---', 'title: Weekly Plan', 'tags: [planning]', 'date: 2026-07-18', '---', '',
-    '# Weekly Plan', '', 'Focus for the week is the launch page. Actions live on the [[Product Board]].', '',
+    '# Weekly Plan', '', 'Focus for the week is the launch page. Actions live on the [[Backlog]].', '',
     '> [!todo] Follow-up', '> Confirm the launch date before Friday.', '',
   ].join('\n'));
 
-  // --- Kanban board (varied columns and cards, wikilink + tag + date) -------
-  write('Product Board.md', [
+  // --- Kanban board (varied columns and cards, wikilink + tag + date). This is
+  // the board opened in the kanban still and the drag clip. -------------------
+  write('Backlog.md', [
     '---', '', 'kanban-plugin: board', '', '---', '',
     '## Backlog', '',
     '- [ ] Draft the **launch note** #content 2026-08-05', '- [ ] Review [[Roadmap]] with the team',
@@ -333,15 +361,14 @@ export function buildWorkspace(opts = {}) {
     '  .hero h1 { font-size: 40px; margin: 0 0 12px; }',
     '  .hero p { font-size: 18px; opacity: 0.9; margin: 0; }',
     '  .body { padding: 40px 48px; max-width: 640px; }',
-    '  .stat { display: inline-block; margin-right: 32px; font-weight: 600; }',
-    '  .stat span { display: block; font-size: 28px; color: #3b6ea5; }',
+    '  .body .lead { font-size: 20px; font-weight: 600; margin: 0 0 16px; color: #22314f; }',
+    '  .body p { font-size: 16px; line-height: 1.5; margin: 0 0 12px; }',
     '</style></head>', '<body>',
     '  <div class="hero"><h1 id="headline">Run your studio from one place</h1>',
-    '  <p>A self-contained page, rendered in a locked-down preview.</p></div>',
+    '  <p>Your team, your files, and your work in one place you own.</p></div>',
     '  <div class="body">',
-    '    <p class="stat"><span>3x</span> faster reviews</p>',
-    '    <p class="stat"><span>100%</span> in your workspace</p>',
-    '    <p>This page ships its own styles. Scripts never run in the preview.</p>',
+    '    <p class="lead">Every draft, board, and review sits beside the agent that made it.</p>',
+    '    <p>This page ships its own styles, and scripts never run in the preview.</p>',
     '  </div>', '</body></html>', '',
   ].join('\n');
   write('Artifacts/Launch Page.html', launchHtml);
@@ -376,13 +403,15 @@ export function buildWorkspace(opts = {}) {
       { stdio: 'ignore' });
   } catch (e) { console.warn('  sips unavailable; skipped JPEG generation:', e.message); }
 
-  // Canonicalise the board so it is byte-stable from first open (no phantom
+  // Canonicalise both boards so they are byte-stable from first open (no phantom
   // "modified" state), exactly as build-demo-workspace.js does.
   try {
     const kanban = require(path.join(REPO_ROOT, 'public', 'kanban.js'));
-    const boardPath = path.join(workspace, 'Product Board.md');
-    fs.writeFileSync(boardPath, kanban.serialize(kanban.parse(fs.readFileSync(boardPath, 'utf8'))), 'utf8');
-  } catch (e) { console.warn('  Could not normalise the board:', e.message); }
+    for (const board of ['Backlog.md', 'Roadmap.md']) {
+      const boardPath = path.join(workspace, board);
+      fs.writeFileSync(boardPath, kanban.serialize(kanban.parse(fs.readFileSync(boardPath, 'utf8'))), 'utf8');
+    }
+  } catch (e) { console.warn('  Could not normalise the boards:', e.message); }
 
   // --- Review sidecar: anchored comments on the HTML artifact ---------------
   // Quotes are exact substrings of the artifact's RENDERED text (not markup),
@@ -399,9 +428,9 @@ export function buildWorkspace(opts = {}) {
       c2: { by: 'Des', at: '2026-07-18T10:12:00.000Z', re: 'c1',
         body: 'On it. I will mock a two-line and a one-line version.' },
       c3: { by: 'Ana', at: '2026-07-18T10:20:00.000Z',
-        quote: '3x',
-        prefix: '', suffix: ' faster reviews',
-        body: 'Do we have a source for this figure before it goes live?' },
+        quote: 'one place you own',
+        prefix: 'in ', suffix: '.',
+        body: 'The "you own" line is our strongest angle. Worth pulling into the headline?' },
     },
     suggestions: {},
     review: {},
@@ -419,13 +448,25 @@ export function buildWorkspace(opts = {}) {
   const sessions = path.join(home, '.claude', 'projects', projectHash);
   fs.mkdirSync(sessions, { recursive: true });
 
-  // s1: planning thread (long enough to fill the pane), pinned, on the leader.
-  let s1 = jsonlUser('What should we focus on this week?', '2026-07-18T09:00:00.000Z')
-    + jsonlAssistant('The launch page is the one thing that matters. Everything else waits behind it.', '2026-07-18T09:00:30.000Z');
-  for (let i = 2; i < 14; i++) {
-    s1 += jsonlUser(`Follow-up ${i}: anything blocking the launch page?`, `2026-07-18T09:${String(i).padStart(2, '0')}:00.000Z`);
-    s1 += jsonlAssistant(`Nothing blocking. Item ${i} handled; the plan holds.`, `2026-07-18T09:${String(i).padStart(2, '0')}:30.000Z`);
-  }
+  // s1: a real planning thread, pinned, on the leader. Varied, substantive
+  // turns (priority, status, deadline, tradeoff, delegation, scheduling) that
+  // fill the pane through content rather than a repeated line.
+  const s1 = [
+    jsonlUser('What should we focus on this week?', '2026-07-18T09:00:00.000Z'),
+    jsonlAssistant('The launch page is the one thing that moves the needle. I would hold everything else behind it until it ships.', '2026-07-18T09:00:40.000Z'),
+    jsonlUser('Agreed. What is the state of it right now?', '2026-07-18T09:02:00.000Z'),
+    jsonlAssistant('Cleo has a draft of the copy and Ana is auditing it. Des is on the layout. The one open risk is the headline: we are testing a shorter variant against the current one.', '2026-07-18T09:02:45.000Z'),
+    jsonlUser('Can we still hit Friday?', '2026-07-18T09:05:00.000Z'),
+    jsonlAssistant('Yes, if we lock the headline by Wednesday. If the shorter variant tests better we take it; if it is a wash we keep the current one and stop debating it.', '2026-07-18T09:05:50.000Z'),
+    jsonlUser('Good. Does the onboarding flow slip if we do that?', '2026-07-18T09:08:00.000Z'),
+    jsonlAssistant('It slips a week, and that is the right call. Splitting Dev across both would put the launch date at risk for a flow no one sees until after they sign up.', '2026-07-18T09:08:40.000Z'),
+    jsonlUser('Fine by me. Anything you need from me this week?', '2026-07-18T09:11:00.000Z'),
+    jsonlAssistant('Just the headline decision on Wednesday. I will put both variants and Ana\'s read in front of you by Tuesday night.', '2026-07-18T09:11:35.000Z'),
+    jsonlUser('One more thing: are we happy with the tone of the copy?', '2026-07-18T09:14:00.000Z'),
+    jsonlAssistant('It reads calm and direct, which is right for us. Ana flagged one line as slightly salesy and Cleo has already softened it.', '2026-07-18T09:14:40.000Z'),
+    jsonlUser('Great. Book the review for Wednesday morning.', '2026-07-18T09:16:00.000Z'),
+    jsonlAssistant('Booked for 9am Wednesday with Cleo, Des and Ana. I have added the follow-up release to the roadmap under Next so it does not get lost.', '2026-07-18T09:16:40.000Z'),
+  ].join('');
   fs.writeFileSync(path.join(sessions, 's1.jsonl'), s1);
 
   // s2: content thread (Cleo).

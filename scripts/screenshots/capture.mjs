@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   newContext, gotoWorkspace, setTheme, settle, openFile,
-  seedWorking, seedLastActive, beginStream, pushChunk,
+  seedWorking, seedLastActive, beginStream, pushChunk, fitOrgChart,
   ORG_WORKING, ORG_LAST_ACTIVE,
 } from './harness.mjs';
 
@@ -28,6 +28,7 @@ export const SHOTS = [
       await page.waitForSelector('.org-card', { timeout: 10000 });
       await seedWorking(page, ORG_WORKING);
       await seedLastActive(page, ORG_LAST_ACTIVE);
+      await fitOrgChart(page);
       await page.waitForTimeout(200);
     },
   },
@@ -100,7 +101,7 @@ export const SHOTS = [
     name: 'kanban-board', feature: 'Kanban board',
     crop: '.board-card',
     async setup(page) {
-      await openFile(page, 'Product Board.md');
+      await openFile(page, 'Backlog.md');
       await page.waitForSelector('.board-lane', { timeout: 10000 });
       await page.waitForTimeout(400);
     },
@@ -176,7 +177,7 @@ export async function captureStills({ browser, url, stagingDir, log = () => {} }
   const produced = [];
 
   for (const theme of THEMES) {
-    const ctx = await newContext(browser, { motion: false });
+    const ctx = await newContext(browser, { motion: false, theme });
     for (const shot of SHOTS) {
       const page = await ctx.newPage();
       try {

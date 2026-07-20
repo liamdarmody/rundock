@@ -92,7 +92,11 @@ async function main() {
   const server = await startRundock({ workspace: built.workspace, home: built.home });
   log(`      ${server.url}`);
 
-  const browser = await chromium.launch();
+  // Prefer system Chrome (bundles PDFium, so the PDF viewer renders); fall back
+  // to the bundled Chromium where Chrome is not installed.
+  let browser;
+  try { browser = await chromium.launch({ channel: 'chrome' }); }
+  catch { browser = await chromium.launch(); }
   const manifest = [];
   const staging = path.join(OUT, '.staging');
 
@@ -196,7 +200,7 @@ function writeManifest(rows, { built, gate, webpOk }) {
     '- **Master:** 1440x900 logical at deviceScaleFactor 2, so every flat master is 2880x1800 @2x. Per-target sizes are derived down from the master, never upscaled.',
     '- **Themes:** every still and every GIF captured in both light and dark.',
     '- **Determinism:** fixed data and a frozen clock (2026-07-18, UTC), animations disabled for stills, scrollbars and caret hidden, the connection toast suppressed, web fonts awaited before capture.',
-    '- **Framing:** window chrome on the three hero images only; feature shots ship as a flat clean master (for destinations that CSS-frame) plus a self-framed variant (rounded corners + soft shadow + neutral padding, for plain-markdown placements). Neutral, theme-aware gradient.',
+    '- **Framing:** transparent-background PNGs, so one framed image drops onto any page background (light or dark). Window chrome on the three hero images only; feature shots ship as a flat clean master (for destinations that CSS-frame) plus a self-framed variant (rounded corners, soft drop shadow, and a neutral hairline ring that holds the edge on dark backgrounds). Tight padding.',
     '- **Motion:** palette-optimized looping GIFs, ~1280px wide, 15fps, roughly 5-6s.',
     '',
     '## Folder layout',
@@ -215,7 +219,7 @@ function writeManifest(rows, { built, gate, webpOk }) {
     '## Notes',
     '',
     `- **WebP:** ${webpOk ? 'produced for hero flats via sips.' : 'this macOS build’s sips cannot write WebP, so WebP derivations were skipped; the PNG masters serve as the source, and the Site can generate WebP at deploy time.'}`,
-    '- **PDF viewer:** headless Chromium may render the PDF pane blank; recapture in a headed run if the PDF shot is needed.',
+    '- **Rendering:** captured through system Chrome (bundles PDFium) so the PDF viewer renders; falls back to bundled Chromium where Chrome is absent (the PDF pane may then be blank).',
     '- Re-run any time with `npm run screenshots`; the output folder is rebuilt from scratch and is gitignored.',
     '',
     `## Stills (${stills.length})`,

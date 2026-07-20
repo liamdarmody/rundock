@@ -38,7 +38,8 @@ export function pngDims(file) {
 export async function frameImage(page, { masterPath, outPath, theme, treatment, title = 'Rundock' }) {
   const { width } = pngDims(masterPath);
   const shotWCss = Math.round(width / DEVICE_SCALE);
-  const pad = Math.round(shotWCss * (treatment === 'hero' ? 0.085 : 0.032));
+  // Tight padding, floored so the soft drop shadow is never clipped.
+  const pad = Math.max(44, Math.round(shotWCss * (treatment === 'hero' ? 0.05 : 0.035)));
   const dataUri = 'data:image/png;base64,' + fs.readFileSync(masterPath).toString('base64');
 
   await page.evaluate(async ({ theme, treatment, shotWCss, pad, title, dataUri }) => {
@@ -56,7 +57,9 @@ export async function frameImage(page, { masterPath, outPath, theme, treatment, 
   await page.waitForTimeout(60);
   const stage = await page.$('#stage');
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
-  await stage.screenshot({ path: outPath });
+  // omitBackground keeps the padding transparent, so the frame drops onto any
+  // page background.
+  await stage.screenshot({ path: outPath, omitBackground: true });
   return outPath;
 }
 

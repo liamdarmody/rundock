@@ -46,8 +46,10 @@ export const MOTION_CSS = `
 `;
 
 // Creates a deterministic context. `motion:true` keeps animations and can
-// record video to `recordVideoDir`.
-export async function newContext(browser, { motion = false, recordVideoDir = null } = {}) {
+// record video to `recordVideoDir`. `theme` boots the app already in light or
+// dark (the client reads localStorage on load), so a clip never flips theme
+// mid-recording.
+export async function newContext(browser, { motion = false, recordVideoDir = null, theme = 'dark' } = {}) {
   const ctx = await browser.newContext({
     viewport: VIEWPORT,
     deviceScaleFactor: DEVICE_SCALE,
@@ -56,6 +58,7 @@ export async function newContext(browser, { motion = false, recordVideoDir = nul
     ...(recordVideoDir ? { recordVideo: { dir: recordVideoDir, size: VIEWPORT } } : {}),
   });
   await ctx.addInitScript(clockScript, FIXED_EPOCH);
+  await ctx.addInitScript((t) => { try { localStorage.setItem('rundock-theme', t); } catch { /* ignore */ } }, theme);
   const css = motion ? MOTION_CSS : STILL_CSS;
   await ctx.addInitScript((c) => {
     const apply = () => {
@@ -124,6 +127,31 @@ export async function seedLastActive(page, entries) {
   }, entries);
 }
 
+// Zooms the org chart up until the tree nearly fills the panel, so the hero
+// does not sit in a third of the frame. The app auto-fits only downward (scale
+// capped at 1), so a small team renders small; this bumps orgZoomOffset until
+// one more step would overflow, then backs off. Deterministic for a fixed
+// roster. Call after the chart has rendered.
+export async function fitOrgChart(page, { fill = 0.94 } = {}) {
+  await page.evaluate((fill) => {
+    const chart = document.getElementById('org-chart');
+    if (!chart || typeof renderOrgChart !== 'function') return;
+    const layout = () => chart.querySelector('.org-layout');
+    const overflows = () => {
+      const l = layout();
+      if (!l) return true;
+      return l.offsetWidth > (chart.clientWidth * fill) || l.offsetHeight > (chart.clientHeight * fill);
+    };
+    // eslint-disable-next-line no-global-assign
+    if (typeof orgZoomOffset === 'undefined') return;
+    for (let i = 0; i < 40; i++) {
+      if (overflows()) { orgZoomOffset -= 0.08; renderOrgChart(); break; }
+      orgZoomOffset += 0.08; renderOrgChart();
+    }
+  }, fill);
+  await page.waitForTimeout(120);
+}
+
 // Opens a workspace file by relative path through the same read_file path the
 // tree row uses, then waits for the editor surface to mount.
 export async function openFile(page, relPath) {
@@ -157,6 +185,31 @@ export async function pushChunk(page, { convoId, agentId, text, pid = 'p-stream'
       event: { type: 'content_block_delta', delta: { type: 'text_delta', text } },
     });
   }, { convoId, agentId, text, pid });
+}
+
+// Injects a synthetic pointer cursor, since Playwright video renders none. The
+// pointer-driven clips (a drag, a click) then read as an actual hand moving.
+export async function installCursor(page) {
+  await page.evaluate(() => {
+    if (document.getElementById('__mkcursor')) return;
+    const c = document.createElement('div');
+    c.id = '__mkcursor';
+    c.innerHTML = '<svg width="26" height="26" viewBox="0 0 24 24" fill="none"><path d="M5 3l14 7-5.6 1.6L10.5 18 5 3z" fill="#131313" stroke="#fff" stroke-width="1.3" stroke-linejoin="round"/></svg>';
+    Object.assign(c.style, {
+      position: 'fixed', left: '0', top: '0', zIndex: '2147483647', pointerEvents: 'none',
+      transform: 'translate(-120px,-120px)', filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.35))',
+    });
+    document.body.appendChild(c);
+    window.__cursorAt = (x, y, ms) => {
+      c.style.transition = `transform ${ms || 550}ms cubic-bezier(.4,0,.2,1)`;
+      c.style.transform = `translate(${x}px, ${y}px)`;
+    };
+  });
+}
+
+// Moves the synthetic cursor to a point over `ms` milliseconds.
+export async function cursorTo(page, x, y, ms = 550) {
+  await page.evaluate(({ x, y, ms }) => window.__cursorAt && window.__cursorAt(x, y, ms), { x, y, ms });
 }
 
 // Waits for web fonts and a short settle before a screenshot.
