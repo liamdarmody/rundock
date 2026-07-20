@@ -105,6 +105,13 @@ test('Cmd+F is a no-op on read-only binary viewers', async ({ page }) => {
   await boot(page);
   for (const name of ['chart.png', 'report.pdf']) {
     await openFromTree(page, name);
+    // Wait for the binary viewer to finish mounting before probing. The tree
+    // click returns before loadFileContent swaps surfaces, so a premature
+    // Cmd+F reads the previous surface's find backend and the probe flakes.
+    const surface = name.endsWith('.png')
+      ? page.locator('.viewer-image-wrap img')
+      : page.locator('iframe.viewer-frame');
+    await expect(surface).toBeVisible();
     await page.keyboard.press('ControlOrMeta+f');
     // No find bar opens: there is nothing searchable in an image or PDF viewer.
     await expect(page.locator('#find-bar')).toBeHidden();
