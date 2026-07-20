@@ -15,8 +15,9 @@ import path from 'node:path';
 import { chromium } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
 
-import { buildWorkspace, checkSanitization } from './generate-workspace.mjs';
+import { buildWorkspace, checkSanitization, hasProjectBannedTokens } from './generate-workspace.mjs';
 import { startRundock } from './serve.mjs';
+import { assertAppContract } from './harness.mjs';
 import { captureStills, SHOTS } from './capture.mjs';
 import { frameImage, FRAME_HTML_URL, resizeTo, toWebp, pngDims } from './frame.mjs';
 import { captureMotion, ffmpegAvailable, CLIPS, MOTION_THEMES } from './motion.mjs';
@@ -75,17 +76,24 @@ async function main() {
   };
   Object.values(dirs).forEach((d) => fs.mkdirSync(d, { recursive: true }));
 
-  // 1. Generate + sanitize (hard gate).
+  // 1. Generate + sanitize (hard gate). The gate scans the whole build root, so
+  // the fake $HOME Claude Code transcripts (whose text is rendered into the
+  // conversation shots and the streaming clip) are covered too, not just the
+  // vault tree.
   log('\n[1/6] Generating sanitized demo workspace...');
   const built = buildWorkspace();
-  const gate = checkSanitization(built.workspace);
+  if (!hasProjectBannedTokens()) {
+    log('      ! no project-specific banned tokens configured (RUNDOCK_BANNED_TOKENS or');
+    log('        scripts/screenshots/.banned-tokens.json); gate is on built-in defaults only.');
+  }
+  const gate = checkSanitization(built.root);
   if (!gate.ok) {
     console.error('SANITIZATION FAILED. Aborting before any capture:');
     for (const h of gate.hits) console.error(`  ${h.file}: "${h.token}"`);
     process.exit(1);
   }
   log(`      workspace: ${built.workspace}`);
-  log('      sanitization gate: PASS');
+  log('      sanitization gate: PASS (workspace + fake $HOME scanned)');
 
   // 2. Boot the real server against it.
   log('[2/6] Booting Rundock server...');
@@ -94,13 +102,22 @@ async function main() {
 
   // Prefer system Chrome (bundles PDFium, so the PDF viewer renders); fall back
   // to the bundled Chromium where Chrome is not installed.
-  let browser;
+  let browser, browserChannel = 'chrome (system)';
   try { browser = await chromium.launch({ channel: 'chrome' }); }
-  catch { browser = await chromium.launch(); }
+  catch { browser = await chromium.launch(); browserChannel = 'chromium (bundled)'; }
+  log(`      browser: ${browserChannel}`);
+  if (browserChannel.startsWith('chromium')) {
+    log('      ! system Chrome not found; the pdf-viewer shot may render blank (bundled Chromium lacks PDFium).');
+  }
   const manifest = [];
   const staging = path.join(OUT, '.staging');
 
   try {
+    // Preflight: fail fast (naming the missing symbol) if this Rundock build has
+    // moved any global, function, or effect executor the clips/shots depend on,
+    // rather than quietly capturing broken assets.
+    await assertAppContract(browser, server.url, log);
+
     // 3. Capture flat @2x masters + crops, both themes.
     log('[3/6] Capturing stills (light + dark, @2x)...');
     const shots = await captureStills({ browser, url: server.url, stagingDir: staging, log });
@@ -156,6 +173,16 @@ async function main() {
     log('[5/6] Recording motion and converting to GIFs...');
     if (ffmpegAvailable()) {
       const clips = await captureMotion({ browser, url: server.url, workspace: built.workspace, outDir: dirs.motion, log });
+      // A clip that throws is logged and omitted rather than failing the run, so
+      // assert the full set landed; a short count means a clip broke (e.g. an
+      // app rename slipped past the contract) and needs a look before publishing.
+      const expectedGifs = CLIPS.length * MOTION_THEMES.length;
+      if (clips.length < expectedGifs) {
+        const got = new Set(clips.map((c) => `${c.name}.${c.theme}`));
+        const missing = [];
+        for (const cl of CLIPS) for (const th of MOTION_THEMES) if (!got.has(`${cl.name}.${th}`)) missing.push(`${cl.name}.${th}`);
+        log(`      ! MOTION INCOMPLETE: expected ${expectedGifs} GIFs, got ${clips.length}. Missing: ${missing.join(', ')}`);
+      }
       for (const c of clips) {
         const target = TARGETS[c.name] || { repo: 'Rundock Site', path: '(to place)', note: c.feature };
         manifest.push({ file: rel(c.file), repo: target.repo, path: target.path, feature: c.feature, theme: c.theme, variant: `gif (${mb(c.bytes)})`, note: `${c.feature}: web-optimized looping GIF.` });

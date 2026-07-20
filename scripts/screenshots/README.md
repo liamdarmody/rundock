@@ -15,15 +15,24 @@ npm run screenshots
 ```
 
 Output lands in the gitignored `screenshots-out/` folder at the repo root.
-Re-runnable: the folder is rebuilt from scratch each time, deterministically.
+Re-runnable: the folder is rebuilt from scratch each time. Stills are
+deterministic (fixed clock, seeded data, animations disabled), so re-running
+reproduces them byte for byte. GIFs are re-encoded from fresh Playwright video
+capture, so their bytes vary run to run even when the content is identical:
+regenerate them intentionally, not as a side effect of a still refresh, and do
+not expect a clean git diff to tell you whether a GIF actually changed.
 
 ## What it does
 
 1. **Generate** a sanitized demo workspace (invented nine-agent team, ~14 skills,
    conversations, routines, and a rich file tree) plus a fake `$HOME` of Claude
    Code transcripts, all with fixed dates.
-2. **Sanitization gate** greps the built tree for banned tokens and aborts before
-   any capture if a real name or private term slips in.
+2. **Sanitization gate** greps the whole build root, both the demo workspace and
+   the fake `$HOME` transcripts (whose text is rendered into the conversation
+   shots), for banned tokens, and aborts before any capture if a real name or
+   private term slips in. Binary files (images, PDFs) are trusted, not scanned.
+   The gate warns if no project-specific token source is configured (see
+   Configuration); the built-in defaults only cover the owner's own markers.
 3. **Boot** the real `server.js` against that workspace on a dedicated port.
 4. **Capture** the full still shot list in light and dark at deviceScaleFactor 2
    (2880x1800 @2x masters), plus element-scoped crops.

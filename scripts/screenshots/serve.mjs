@@ -33,8 +33,9 @@ async function waitForReady(url, { timeoutMs = 20000, intervalMs = 150 } = {}) {
   throw new Error(`Rundock server did not become ready at ${url} within ${timeoutMs}ms`);
 }
 
-// Boots the server. `workspace` and `home` come from the generator.
-export async function startRundock({ workspace, home, port = CAPTURE_PORT, quiet = true } = {}) {
+// One boot attempt on a specific port. Throws if the port is taken or the
+// server does not come up.
+async function spawnAttempt({ workspace, home, port, quiet }) {
   const bootScript = `require(${JSON.stringify(SERVER)}).startServer({ port: ${port} })`;
   const child = spawn(process.execPath, ['-e', bootScript], {
     cwd: REPO_ROOT,
@@ -63,6 +64,12 @@ export async function startRundock({ workspace, home, port = CAPTURE_PORT, quiet
     throw err;
   }
 
+  // Ready. The `exited` promise is still live: if the child crashes mid-capture
+  // (before stop() detaches the listener) it would reject with no awaiter. Mark
+  // it handled; the crash then surfaces as the next Playwright call failing
+  // against a dead server, with its own clear error.
+  exited.catch(() => { /* handled */ });
+
   return {
     url,
     port,
@@ -77,4 +84,22 @@ export async function startRundock({ workspace, home, port = CAPTURE_PORT, quiet
       });
     },
   };
+}
+
+// Boots the server, retrying on nearby ports if the preferred one is busy (a
+// stray process or a concurrent run should not fail the whole pipeline).
+// `workspace` and `home` come from the generator.
+export async function startRundock({ workspace, home, port = CAPTURE_PORT, quiet = true } = {}) {
+  const candidates = [port, port + 1, port + 2, port + 5, port + 11];
+  let lastErr;
+  for (const p of candidates) {
+    try {
+      return await spawnAttempt({ workspace, home, port: p, quiet });
+    } catch (err) {
+      lastErr = err;
+      // Retry only on a bind/startup failure; rethrow anything unexpected.
+      if (!/exited early|EADDRINUSE|did not become ready/i.test(String(err && err.message))) throw err;
+    }
+  }
+  throw new Error(`Rundock server could not start on any candidate port (${candidates.join(', ')}). Last error:\n${lastErr && lastErr.message}`);
 }

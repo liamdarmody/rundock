@@ -61,6 +61,14 @@ export const ROSTER = [
     description: 'Cody reviews changes for correctness, clarity, and safety before they merge.' },
 ];
 
+// Single source of truth for the fixture ids the motion clips also reference,
+// so a demo conversation or agent cannot be renamed here and silently desync a
+// clip. The conversations array below uses these; motion.mjs imports them.
+export const DEMO_IDS = {
+  agents: Object.fromEntries(ROSTER.map((a) => [a.id, a.id])),
+  convos: { planWeek: 'c1', reworkHook: 'c5', draftNote: 'c2', exportHandoff: 'c3', marketScan: 'c4' },
+};
+
 // ---------------------------------------------------------------------------
 // Skills (~14, generic). Each becomes a .claude/skills/<slug>/SKILL.md with
 // name + description frontmatter and a short generic body. Assignment to agents
@@ -128,18 +136,30 @@ const ROUTINE_STATE = {
 // RUNDOCK_BANNED_TOKENS env (comma-separated) or a gitignored
 // scripts/screenshots/.banned-tokens.json, and are merged in at run time.
 export const DEFAULT_BANNED_TOKENS = [
-  'liamdarmody', 'darmody', 'obsidian vault', 'agent-workspace',
+  'liamdarmody', 'darmody', 'liam darmody',
+  'obsidian vault', 'obsidian vaults',
+  'agent-workspace', 'agent workspace', 'liam-agent-workspace',
+  'personal os',
 ];
+
+// Path to the gitignored, project-specific override list.
+export const LOCAL_BANNED_TOKENS_FILE = path.join(__dirname, '.banned-tokens.json');
+
+// True when a project-specific token source (env or local file) is configured.
+// The defaults alone catch the owner's own markers; private team names, client
+// names, and connected-tool names are expected to come from one of these.
+export function hasProjectBannedTokens() {
+  return Boolean(process.env.RUNDOCK_BANNED_TOKENS) || fs.existsSync(LOCAL_BANNED_TOKENS_FILE);
+}
 
 export function loadBannedTokens() {
   const tokens = [...DEFAULT_BANNED_TOKENS];
   if (process.env.RUNDOCK_BANNED_TOKENS) {
     tokens.push(...process.env.RUNDOCK_BANNED_TOKENS.split(',').map((s) => s.trim()).filter(Boolean));
   }
-  const localFile = path.join(__dirname, '.banned-tokens.json');
   try {
-    if (fs.existsSync(localFile)) {
-      const extra = JSON.parse(fs.readFileSync(localFile, 'utf8'));
+    if (fs.existsSync(LOCAL_BANNED_TOKENS_FILE)) {
+      const extra = JSON.parse(fs.readFileSync(LOCAL_BANNED_TOKENS_FILE, 'utf8'));
       if (Array.isArray(extra)) tokens.push(...extra.filter((t) => typeof t === 'string'));
     }
   } catch { /* ignore a malformed local override */ }
@@ -507,11 +527,11 @@ export function buildWorkspace(opts = {}) {
   // grouping is visible. A couple carry a listId so the Lists pills populate.
   fs.mkdirSync(path.join(workspace, '.rundock'), { recursive: true });
   fs.writeFileSync(path.join(workspace, '.rundock', 'conversations.json'), JSON.stringify([
-    { id: 'c1', agentId: 'default', sessionId: 's1', sessionIds: [], title: 'Plan the week', status: 'active', pinned: true, pinnedAt: '2026-07-18T09:05:00.000Z', listIds: ['launch'], createdAt: '2026-07-18T08:59:00.000Z', lastActiveAt: '2026-07-18T09:30:00.000Z' },
-    { id: 'c5', agentId: 'cleo', sessionId: 's5', sessionIds: [], title: 'Rework the landing hook', status: 'active', listIds: ['launch'], createdAt: '2026-07-18T10:59:00.000Z', lastActiveAt: '2026-07-18T11:01:00.000Z' },
-    { id: 'c2', agentId: 'cleo', sessionId: 's2', sessionIds: [], title: 'Draft the launch note', status: 'active', listIds: ['launch'], createdAt: '2026-07-17T13:59:00.000Z', lastActiveAt: '2026-07-17T14:06:00.000Z' },
-    { id: 'c3', agentId: 'dev', sessionId: 's3', sessionIds: [], title: 'Export handoff', status: 'active', createdAt: '2026-07-16T10:59:00.000Z', lastActiveAt: '2026-07-16T11:01:00.000Z' },
-    { id: 'c4', agentId: 'reese', sessionId: 's4', sessionIds: [], title: 'Weekly market scan', status: 'active', createdAt: '2026-07-13T09:04:00.000Z', lastActiveAt: '2026-07-13T09:06:00.000Z' },
+    { id: DEMO_IDS.convos.planWeek, agentId: 'default', sessionId: 's1', sessionIds: [], title: 'Plan the week', status: 'active', pinned: true, pinnedAt: '2026-07-18T09:05:00.000Z', listIds: ['launch'], createdAt: '2026-07-18T08:59:00.000Z', lastActiveAt: '2026-07-18T09:30:00.000Z' },
+    { id: DEMO_IDS.convos.reworkHook, agentId: 'cleo', sessionId: 's5', sessionIds: [], title: 'Rework the landing hook', status: 'active', listIds: ['launch'], createdAt: '2026-07-18T10:59:00.000Z', lastActiveAt: '2026-07-18T11:01:00.000Z' },
+    { id: DEMO_IDS.convos.draftNote, agentId: 'cleo', sessionId: 's2', sessionIds: [], title: 'Draft the launch note', status: 'active', listIds: ['launch'], createdAt: '2026-07-17T13:59:00.000Z', lastActiveAt: '2026-07-17T14:06:00.000Z' },
+    { id: DEMO_IDS.convos.exportHandoff, agentId: 'dev', sessionId: 's3', sessionIds: [], title: 'Export handoff', status: 'active', createdAt: '2026-07-16T10:59:00.000Z', lastActiveAt: '2026-07-16T11:01:00.000Z' },
+    { id: DEMO_IDS.convos.marketScan, agentId: 'reese', sessionId: 's4', sessionIds: [], title: 'Weekly market scan', status: 'active', createdAt: '2026-07-13T09:04:00.000Z', lastActiveAt: '2026-07-13T09:06:00.000Z' },
   ], null, 2));
 
   // Named lists so the Lists pills render beside All and Unread.
@@ -525,14 +545,21 @@ export function buildWorkspace(opts = {}) {
 // ===========================================================================
 // Sanitization gate
 // ===========================================================================
-export function checkSanitization(workspace) {
+// Scans a whole build root (which holds BOTH `workspace/` and `home/`, so the
+// fake Claude Code transcripts under home, whose text is rendered into the
+// conversation stills and streaming clip, are covered too). Binaries are
+// trusted, not scanned. Returns { ok, hits }.
+export function checkSanitization(root) {
   const hits = [];
-  // Whole-token matching (word boundaries), so a short three-letter token
-  // cannot false-positive inside ordinary words such as "leads" or "release".
-  // Multi-word tokens (e.g. "acme corp") match with a flexible internal space.
+  // Whole-token matching. Boundaries exclude only alphanumerics, so a token is
+  // still caught when it sits against a hyphen, underscore, slash, or space (as
+  // in a hyphenated folder name inside a real path), while a short token cannot
+  // false-positive inside a longer word (e.g. "lea" will not hit "leads").
+  // Internal separators in a multi-part token match any run of space/-/_.
   const patterns = loadBannedTokens().map((token) => {
-    const body = token.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
-    return { token, re: new RegExp(`(?<![\\w-])${body}(?![\\w-])`, 'i') };
+    const escaped = token.trim().toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const body = escaped.replace(/[\s_-]+/g, '[\\s_-]+');
+    return { token, re: new RegExp(`(?<![a-z0-9])${body}(?![a-z0-9])`, 'i') };
   });
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -543,11 +570,11 @@ export function checkSanitization(workspace) {
       let text;
       try { text = fs.readFileSync(full, 'utf8'); } catch { continue; }
       for (const { token, re } of patterns) {
-        if (re.test(text)) hits.push({ file: path.relative(workspace, full), token });
+        if (re.test(text)) hits.push({ file: path.relative(root, full), token });
       }
     }
   };
-  walk(workspace);
+  walk(root);
   return { ok: hits.length === 0, hits };
 }
 
@@ -555,7 +582,7 @@ export function checkSanitization(workspace) {
 // and runs the gate, printing where it landed.
 if (import.meta.url === `file://${process.argv[1]}`) {
   const built = buildWorkspace({ root: process.argv[2] });
-  const gate = checkSanitization(built.workspace);
+  const gate = checkSanitization(built.root);
   console.log('Workspace built at:', built.workspace);
   console.log('Home built at:', built.home);
   if (!gate.ok) {

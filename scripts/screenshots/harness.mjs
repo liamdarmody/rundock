@@ -171,29 +171,57 @@ export async function openFile(page, relPath) {
   await page.waitForTimeout(150);
 }
 
-// Opens a conversation and puts it into a live "streaming a reply" state by
-// driving the same client entry points the WebSocket path uses. Leaves the
-// conversation processing (no result frame), so the streaming bubble persists
-// for a still or grows chunk by chunk for a clip.
-export async function beginStream(page, { convoId, agentId, pid = 'p-stream' }) {
-  await page.evaluate(({ convoId, pid }) => {
-    if (typeof openConversation === 'function') openConversation(convoId);
-    startProcessing(convoId);
-    const st = getConvoState(convoId);
-    st.activeProcessId = pid;
-  }, { convoId, agentId, pid });
-  await page.waitForTimeout(400);
-}
+// The app symbols the pipeline drives. Asserted once at startup so a future
+// Rundock rename fails fast with a named missing symbol, instead of a clip
+// quietly producing a broken GIF (an unknown effect type only warns in the app)
+// or a shot capturing the wrong thing. Extend these lists when a clip/shot
+// starts depending on a new global function or effect executor.
+export const APP_CONTRACT = {
+  functions: [
+    'switchNav', 'openConversation', 'addUserMsg', 'executeEffects', 'openPalette',
+    'renderOrgChart', 'renderAgentList', 'highlightFileInSidebar', 'showProfile', 'getConvoState',
+  ],
+  globals: ['ws', 'convoState'],
+  effects: [
+    'start-streaming-bubble', 'render-stream-text', 'promote-handoff-message',
+    'clear-streaming-bubble', 'show-delegation-divider', 'update-chat-header',
+  ],
+};
 
-// Pushes one streaming text delta into the open conversation, exactly as a
-// 'stream_event' WebSocket frame would.
-export async function pushChunk(page, { convoId, agentId, text, pid = 'p-stream' }) {
-  await page.evaluate(({ convoId, agentId, text, pid }) => {
-    handle({
-      type: 'stream_event', _conversationId: convoId, _processId: pid, _agent: agentId,
-      event: { type: 'content_block_delta', delta: { type: 'text_delta', text } },
-    });
-  }, { convoId, agentId, text, pid });
+// Boots a throwaway page and verifies the app exposes everything in APP_CONTRACT.
+// Throws (naming exactly what is missing) so the run aborts before capturing
+// broken assets. `typeof` is used throughout so an absent symbol never throws.
+export async function assertAppContract(browser, url, log = () => {}) {
+  const ctx = await newContext(browser, { theme: 'dark' });
+  try {
+    const page = await ctx.newPage();
+    await gotoWorkspace(page, url);
+    const missing = await page.evaluate((c) => {
+      const out = { functions: [], globals: [], effects: [] };
+      for (const n of c.functions) if (typeof window[n] !== 'function') out.functions.push(n);
+      if (typeof ws === 'undefined') out.globals.push('ws');
+      if (typeof convoState === 'undefined') out.globals.push('convoState');
+      const ex = (typeof EFFECT_EXECUTORS !== 'undefined') ? EFFECT_EXECUTORS : null;
+      for (const e of c.effects) if (!ex || !ex[e]) out.effects.push(e);
+      return out;
+    }, APP_CONTRACT);
+    const problems = [
+      ...missing.functions.map((n) => `function ${n}()`),
+      ...missing.globals.map((n) => `global ${n}`),
+      ...missing.effects.map((e) => `effect "${e}"`),
+    ];
+    if (problems.length) {
+      throw new Error(
+        'App contract check failed. This Rundock build is missing symbols the '
+        + 'screenshot pipeline depends on:\n  - ' + problems.join('\n  - ')
+        + '\nUpdate the clips/shots (or APP_CONTRACT in harness.mjs) to match the '
+        + 'current app before capturing.',
+      );
+    }
+    log(`      app contract: OK (${APP_CONTRACT.functions.length} functions, ${APP_CONTRACT.effects.length} effects)`);
+  } finally {
+    await ctx.close();
+  }
 }
 
 // Injects a synthetic pointer cursor, since Playwright video renders none. The

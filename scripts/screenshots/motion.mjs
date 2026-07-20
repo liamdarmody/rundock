@@ -17,6 +17,7 @@ import {
   seedWorking, seedLastActive, fitOrgChart, installCursor, cursorTo, cursorKind,
   ORG_WORKING, ORG_LAST_ACTIVE,
 } from './harness.mjs';
+import { DEMO_IDS } from './generate-workspace.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -194,39 +195,44 @@ async function clipSearch(page, { mark }) {
 // show-delegation-divider via buildDelegationDivider, render-stream-text) so
 // the handoff renders exactly as a live delegation would.
 async function clipStreamingHandoff(page, { mark }) {
+  // Ids come from the shared DEMO_IDS source so this clip cannot drift from the
+  // generated fixtures. Threaded into each evaluate rather than inlined.
+  const CONVO = DEMO_IDS.convos.planWeek;
+  const COS = DEMO_IDS.agents.cos;
+  const CLEO = DEMO_IDS.agents.cleo;
   await page.evaluate(() => switchNav('conversations'));
-  await page.evaluate(() => openConversation('c1'));
+  await page.evaluate((id) => openConversation(id), CONVO);
   await page.waitForTimeout(500);
   await page.evaluate(() => addUserMsg('Can you make the landing hook shorter and punchier?'));
   await page.waitForTimeout(600);
   mark();
   // 1) Orchestrator (Cos) acknowledges and routes.
-  await page.evaluate(() => executeEffects('c1', [{ type: 'start-streaming-bubble', agentId: 'cos' }]));
-  let cos = '';
+  await page.evaluate(({ id, cos }) => executeEffects(id, [{ type: 'start-streaming-bubble', agentId: cos }]), { id: CONVO, cos: COS });
+  let cosText = '';
   for (const c of ['That is Cleo’s wheelhouse. ', 'Handing it to her with the brief now.']) {
-    cos += c;
-    await page.evaluate((t) => executeEffects('c1', [{ type: 'render-stream-text', text: t }]), cos);
+    cosText += c;
+    await page.evaluate(({ id, t }) => executeEffects(id, [{ type: 'render-stream-text', text: t }]), { id: CONVO, t: cosText });
     await page.waitForTimeout(520);
   }
   await page.waitForTimeout(450);
-  await page.evaluate((t) => executeEffects('c1', [
-    { type: 'promote-handoff-message', agentId: 'cos', text: t },
+  await page.evaluate(({ id, cos, t }) => executeEffects(id, [
+    { type: 'promote-handoff-message', agentId: cos, text: t },
     { type: 'clear-streaming-bubble' },
-  ]), cos);
+  ]), { id: CONVO, cos: COS, t: cosText });
   // 2) Delegation divider Cos -> Cleo, header follows the active agent.
-  await page.evaluate(() => executeEffects('c1', [
-    { type: 'show-delegation-divider', toAgentId: 'cleo', fromAgentId: 'cos', isReturn: false },
-    { type: 'update-chat-header', toAgentId: 'cleo' },
-  ]));
+  await page.evaluate(({ id, cos, cleo }) => executeEffects(id, [
+    { type: 'show-delegation-divider', toAgentId: cleo, fromAgentId: cos, isReturn: false },
+    { type: 'update-chat-header', toAgentId: cleo },
+  ]), { id: CONVO, cos: COS, cleo: CLEO });
   await page.waitForTimeout(700);
   // 3) The specialist (Cleo) streams the actual rework.
-  await page.evaluate(() => executeEffects('c1', [{ type: 'start-streaming-bubble', agentId: 'cleo' }]));
-  let cleo = '';
+  await page.evaluate(({ id, cleo }) => executeEffects(id, [{ type: 'start-streaming-bubble', agentId: cleo }]), { id: CONVO, cleo: CLEO });
+  let cleoText = '';
   for (const c of ['On it. ', 'Shorter is better here: ', 'lead with the reader, ',
     'name the outcome in six words, ', 'then let the proof carry the rest. ',
     'Drafting two options and marking my pick.']) {
-    cleo += c;
-    await page.evaluate((t) => executeEffects('c1', [{ type: 'render-stream-text', text: t }]), cleo);
+    cleoText += c;
+    await page.evaluate(({ id, t }) => executeEffects(id, [{ type: 'render-stream-text', text: t }]), { id: CONVO, t: cleoText });
     await page.waitForTimeout(430);
   }
   await page.waitForTimeout(1100);
