@@ -37,6 +37,9 @@ export const SHOTS = [
     async setup(page) {
       await page.evaluate(() => { showProfile('dev'); if (typeof showView === 'function') showView('profile'); });
       await page.waitForSelector('#profile-content', { state: 'visible', timeout: 10000 });
+      // Expand the instructions so the profile pane carries real content.
+      await page.evaluate(() => document.getElementById('agent-instructions')?.classList.remove('hidden'));
+      await page.waitForTimeout(250);
     },
   },
   {
@@ -45,8 +48,12 @@ export const SHOTS = [
     async setup(page) {
       await page.evaluate(() => switchNav('skills'));
       await page.waitForSelector('#skills-sidebar-list', { timeout: 10000 });
-      await page.evaluate(() => { if (typeof selectSkill === 'function') selectSkill('spec-writer'); });
-      await page.waitForTimeout(400);
+      // Pick a skill shared by two agents (Dev + Cody) and expand its
+      // instructions, so the detail pane is inhabited rather than empty.
+      await page.evaluate(() => { if (typeof selectSkill === 'function') selectSkill('code-reviewer'); });
+      await page.waitForTimeout(300);
+      await page.evaluate(() => document.getElementById('skill-instructions-code-reviewer')?.classList.remove('hidden'));
+      await page.waitForTimeout(300);
     },
   },
   {
@@ -58,18 +65,6 @@ export const SHOTS = [
       await page.evaluate(() => { if (typeof openConversation === 'function') openConversation('c1'); });
       await page.waitForSelector('#messages .msg', { timeout: 10000 });
       await page.waitForTimeout(300);
-    },
-  },
-  {
-    name: 'streaming', feature: 'Streaming reply',
-    async setup(page) {
-      await page.evaluate(() => switchNav('conversations'));
-      await beginStream(page, { convoId: 'c5', agentId: 'cleo' });
-      const chunks = ['Shorter is better here. ', 'Lead with the reader, ',
-        'name the outcome in six words, ', 'then let the proof points carry the rest.'];
-      for (const c of chunks) { await pushChunk(page, { convoId: 'c5', agentId: 'cleo', text: c }); await page.waitForTimeout(120); }
-      await page.waitForSelector('.streaming-text', { timeout: 8000 });
-      await page.waitForTimeout(200);
     },
   },
   {
@@ -158,14 +153,6 @@ export const SHOTS = [
       await page.waitForSelector('#find-bar', { state: 'visible', timeout: 8000 });
       await page.fill('#find-input', 'workspace');
       await page.waitForTimeout(500);
-    },
-  },
-  {
-    name: 'settings', feature: 'Settings / runtimes',
-    async setup(page) {
-      await page.evaluate(() => switchNav('settings'));
-      await page.waitForSelector('#settings-content', { state: 'visible', timeout: 8000 });
-      await page.waitForTimeout(400);
     },
   },
 ];

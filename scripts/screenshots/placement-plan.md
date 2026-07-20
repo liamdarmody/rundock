@@ -57,20 +57,24 @@ one GIF is wanted, `org-chart-status` is the most on-brand.
 
 ## rundock-docs (Mintlify MDX)
 
-The workhorse: this is where the long tail belongs, one or two images per
-concept page, tied to explanatory copy. Docs frame in their own containers, so
-prefer **flat** masters; use **self-framed** only on any raw-markdown page.
+**One image per concept page.** An earlier draft of this plan padded
+`files.mdx` with eight images plus two GIFs, which was a dumping ground, not
+curation. A concept page needs a single image that anchors the idea. Docs frame
+in their own containers, so use the **flat** masters.
 
-| Page | Asset(s) | Notes |
+| Page | Asset | Why |
 |---|---|---|
-| `introduction.mdx` (hero) | `conversations` (hero, chrome) | Product-in-use hero. |
-| `concepts/files.mdx` (new) | `files`, `markdown-note`, `callouts`, `kanban-board`, `artifact-review`, `image-viewer`, `pdf-viewer`; `live-refresh` GIF; `kanban-drag` GIF | The largest hole (gap analysis Docs gap 1). One image per subsection: editor, properties, any-file, boards, review, sync. |
-| `concepts/search.mdx` (new) | `search`, `find` | New page (gap analysis Docs gap 2). |
-| `concepts/agents.mdx` | `agent-profile`, `org-chart` | Role, skills, routines on a profile; the hierarchy. |
-| `concepts/skills.mdx` | `skills` + `skills-tile` | List plus a detail. |
-| `concepts/conversations.mdx` | `conversations`, `streaming` GIF | Also fixes the Pinned-pill error and adds Lists (gap analysis Docs gap 3). |
-| `concepts/routines.mdx` | `org-chart` (routines panel visible) | The scheduled-work panel. |
-| `concepts/runtimes.mdx` | `settings` | Runtimes surface. |
+| `introduction.mdx` (hero) | `org-chart` hero | The team model, up front. |
+| `concepts/files.mdx` (new) | `markdown-note` | Files render richly (properties, callouts, wikilinks); boards and review get their own coverage rather than a pile here. |
+| `concepts/agents.mdx` | `agent-profile` | How an agent is actually configured. |
+| `concepts/skills.mdx` | `skills` | List plus a populated detail. |
+| `concepts/conversations.mdx` | `conversations` | The daily surface; also fixes the Pinned-pill error and adds Lists (gap analysis Docs gap 3). |
+| `concepts/search.mdx` (new) | `search` | Cmd+K, one shot. |
+
+Boards and review already appear on the Site and README; in Docs, add them to
+`files.mdx` inline only if a section genuinely needs them, and use a GIF only
+where the motion is the point. No dedicated `find`, `settings`, `pdf-viewer`, or
+`image-viewer` pages: those are reference states, not concept anchors.
 
 ## Copy that placement needs
 
@@ -81,22 +85,31 @@ prefer **flat** masters; use **self-framed** only on any raw-markdown page.
   under each image and alt text on every image.
 - **README:** a one-line caption under each of the three feature images.
 
-## What to drop
+## Cut from the shortlist (they earn no place)
 
-Not every shot earns a home. `find`, `image-viewer`, `pdf-viewer`, and the
-`settings` still are reference-only: keep them for the Docs `files`/`runtimes`
-pages if useful, but they are not Site or README material. The `review-comment`
-GIF overlaps the `artifact-review` still; pick one per surface (still for the
-Site section, GIF only if a page wants the motion).
+Honest curation means some shots are used nowhere:
+- **`streaming` still** and **`settings` still**: dropped from the pipeline (the
+  first was a buggy capture, the second leaked a build path). Streaming lives as
+  a GIF; runtimes are text, not a hero.
+- **`pdf-viewer`, `image-viewer`, `find`**: placeholder-file and
+  duplicate-of-search shots. "Any file opens inline" is proven once inside
+  `files.mdx`; it does not need dedicated shots of a synthetic PDF and a gradient
+  image, and `find` overlaps `search`.
+- **`callouts` and the `-tile` crops** as standalone assets: fold into their
+  parents (`markdown-note`, `skills`).
+
+The set that actually carries each surface:
+- **Site (new user):** `org-chart` hero, `artifact-review`, and the `search` and
+  `kanban-drag` GIFs. Four assets do the pitch.
+- **Docs (existing user):** `agent-profile`, `conversations`, `markdown-note`,
+  with `kanban-board` and `artifact-review` where a page needs them.
 
 ## Open composition note
 
-The `org-chart` still leaves vertical breathing room: the tree is wide and short,
-so it fits the panel width at a small scale and cannot zoom up without
-overflowing. It reads as a balanced, centred composition rather than the old
-top-third dead canvas, but it is not edge-to-edge. Two ways to tighten it if you
-want a denser hero: (a) a content-aware crop that trims the empty lower-right of
-the main panel, or (b) hide the left sidebar for the hero so the tree fills the
-full width (this also removes the tree/sidebar name duplication the review
-flagged, at the cost of the routines-panel context). Flagged for a decision, not
-yet applied.
+The `org-chart` still leaves vertical breathing room: the tree is wide and
+short, so it fits the panel width at a small scale and cannot zoom up. It now
+reads as balanced and centred rather than top-third dead canvas, but it is not
+edge-to-edge, the platform "Doc" node sits low, and the sidebar duplicates every
+name. The strongest fix, endorsed by both design reviews: hide the left sidebar
+for the hero so the tree fills the width and the duplication disappears. Flagged
+for a decision, not yet applied.

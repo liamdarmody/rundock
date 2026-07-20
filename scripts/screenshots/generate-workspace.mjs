@@ -341,14 +341,23 @@ export function buildWorkspace(opts = {}) {
 
   // --- Kanban board (varied columns and cards, wikilink + tag + date). This is
   // the board opened in the kanban still and the drag clip. -------------------
+  // Three columns so all lanes fit the frame without clipping, each with a few
+  // cards so the board reads as a full, busy surface.
   write('Backlog.md', [
     '---', '', 'kanban-plugin: board', '', '---', '',
     '## Backlog', '',
-    '- [ ] Draft the **launch note** #content 2026-08-05', '- [ ] Review [[Roadmap]] with the team',
-    '- [ ] Collect assets for the `Assets` folder', '',
-    '## In Progress', '', '- [ ] Build the launch page #design', '- [ ] Wire up the [[Welcome]] walkthrough 2026-07-28', '',
-    '## In Review', '', '- [ ] Onboarding copy pass #content', '',
-    '## Done', '', '- [x] Set up the workspace', '- [x] Add the board', '',
+    '- [ ] Draft the **launch note** #content 2026-08-05',
+    '- [ ] Review [[Roadmap]] with the team',
+    '- [ ] Collect assets for the `Assets` folder',
+    '- [ ] Draft the onboarding copy #content', '',
+    '## In Progress', '',
+    '- [ ] Build the launch page #design',
+    '- [ ] Wire up the [[Welcome]] walkthrough 2026-07-28',
+    '- [ ] Tighten the hero headline #content', '',
+    '## Done', '',
+    '- [x] Set up the workspace',
+    '- [x] Add the board',
+    '- [x] Agree the launch date', '',
     '%% kanban:settings', '```', '{"kanban-plugin":"board"}', '```', '%%', '',
   ].join('\n'));
 
@@ -368,6 +377,8 @@ export function buildWorkspace(opts = {}) {
     '  <p>Your team, your files, and your work in one place you own.</p></div>',
     '  <div class="body">',
     '    <p class="lead">Every draft, board, and review sits beside the agent that made it.</p>',
+    '    <p>Open a note, a board, an image, or a page like this one in the same window, in a workspace that stays on your machine.</p>',
+    '    <p>Review what an agent produces where it lives: select a line, leave a comment, and it acts on your feedback in place.</p>',
     '    <p>This page ships its own styles, and scripts never run in the preview.</p>',
     '  </div>', '</body></html>', '',
   ].join('\n');

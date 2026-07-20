@@ -160,6 +160,13 @@ export async function openFile(page, relPath) {
     ws.send(JSON.stringify({ type: 'read_file', path: p }));
   }, relPath);
   await page.waitForTimeout(700);
+  // Re-assert the real "reveal and highlight in the tree" behaviour after the
+  // tree has finished any re-render, so the open file shows selected (a bare
+  // read_file can race the tree render and lose the highlight).
+  await page.evaluate((p) => {
+    if (typeof highlightFileInSidebar === 'function') highlightFileInSidebar(p);
+  }, relPath);
+  await page.waitForTimeout(150);
 }
 
 // Opens a conversation and puts it into a live "streaming a reply" state by
