@@ -837,11 +837,16 @@ mark.find-match.current,
         <svg class="icon-filled" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
       </button>
       <!-- Universal search: opens the palette overlay rather than switching
-           views, so it carries no data-nav and never takes the active state.
-           The tooltip doubles as the shortcut teacher; app.js fills it in
-           with the platform's modifier (Cmd on macOS, Ctrl elsewhere). -->
+           views, so it carries no data-nav. It DOES take the active state while
+           the palette is open, so it has both an outline and a filled magnifier
+           and swaps to the filled one on active, consistent with every other
+           nav icon (a thin outline washes out behind the palette blur; a filled
+           accent glyph reads in both themes). The tooltip doubles as the
+           shortcut teacher; app.js fills it in with the platform's modifier
+           (Cmd on macOS, Ctrl elsewhere). -->
       <button class="nav-item" id="nav-search-btn" onclick="openPalette()" aria-label="Search workspace">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <svg class="icon-filled" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
       </button>
     </div>
     <div class="nav-bottom">
