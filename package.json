@@ -14,7 +14,8 @@
     "dist": "node scripts/build.js",
     "release": "node scripts/release.js",
     "test:e2e": "playwright test",
-    "check:refs": "node scripts/check-internal-refs.js"
+    "check:refs": "node scripts/check-internal-refs.js",
+    "screenshots": "node scripts/screenshots/run.mjs"
   },
   "dependencies": {
     "electron-updater": "^6.6.0",
@@ -26,6 +27,7 @@
     "@playwright/test": "^1.61.1",
     "electron": "^42.7.0",
     "electron-builder": "^26.0.0",
+    "ffmpeg-static": "^5.2.0",
     "jsdom": "^29.1.1",
     "v8-to-istanbul": "^9.3.0"
   },
@@ -43,6 +45,7 @@
       "public/**/*",
       "scaffold/**/*",
       "scripts/**/*",
+      "!scripts/screenshots/**",
       "node_modules/**/*",
       "electron/**/*",
       "package.json"
