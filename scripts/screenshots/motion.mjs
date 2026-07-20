@@ -68,14 +68,12 @@ async function clipKanbanDrag(page, { mark }) {
     const r = document.querySelector('.board-lane .board-card').getBoundingClientRect();
     return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
   });
+  // hand1 (open grab hand) for the whole board interaction: hover, lift, drag,
+  // and drop. It never switches while the pointer is over the board.
+  await cursorKind(page, 'hand1');
   await cursorTo(page, start.x, start.y, 450);
-  await page.waitForTimeout(300);
-  // Open hand over the card, then clutch it as the lift begins.
-  await cursorKind(page, 'grab');
-  await page.waitForTimeout(400);
+  await page.waitForTimeout(500);
   mark();
-  await cursorKind(page, 'grabbing');
-  await page.waitForTimeout(120);
   // Animate a lifted clone (and the cursor) gliding from the first Backlog card
   // to the In Progress lane, then dispatch the real HTML5 drag-and-drop so the
   // board model actually moves the card and re-renders it in the target lane.
@@ -113,8 +111,8 @@ async function clipKanbanDrag(page, { mark }) {
     fire(card, 'dragend', tr.left + tr.width / 2, tr.top + 20);
     if (window.__dragClone) window.__dragClone.remove();
   });
-  // Release: hand relaxes back to the arrow now the card has landed.
-  await cursorKind(page, 'arrow');
+  // hand1 stays: the pointer never leaves the board, so the cursor does not
+  // switch back on drop.
   await page.waitForTimeout(1100);
 }
 
@@ -133,6 +131,8 @@ async function clipArtifactComment(page, { mark }) {
     const er = el.getBoundingClientRect();
     return { x: fr.left + er.left + er.width / 2, y: fr.top + er.top + er.height / 2 };
   });
+  // I-beam over the text you are about to select.
+  await cursorKind(page, 'text');
   if (at) { await cursorTo(page, at.x, at.y, 500); await page.waitForTimeout(450); }
   mark();
   // Select the lead line inside the sandboxed preview and raise the Comment
@@ -154,12 +154,21 @@ async function clipArtifactComment(page, { mark }) {
   const btn = await page.$('.artifact-comment-btn.visible, .artifact-comment-btn');
   if (btn) {
     const bb = await btn.boundingBox();
-    if (bb) { await cursorTo(page, bb.x + bb.width / 2, bb.y + bb.height / 2, 400); await page.waitForTimeout(320); }
+    if (bb) {
+      // hand2 (pointing hand) to hover and click the Comment button.
+      await cursorKind(page, 'hand2');
+      await cursorTo(page, bb.x + bb.width / 2, bb.y + bb.height / 2, 400); await page.waitForTimeout(320);
+    }
     await btn.click().catch(() => {}); await page.waitForTimeout(700);
   }
   // Type into the comment composer if it opened.
   const composer = await page.$('.review-comment-input, textarea.review-input, .review-sidebar textarea');
-  if (composer) { await composer.type('Agreed, let us pull this line up.', { delay: 35 }); await page.waitForTimeout(700); }
+  if (composer) {
+    // I-beam over the comment box as you type into it.
+    const cb = await composer.boundingBox();
+    if (cb) { await cursorKind(page, 'text'); await cursorTo(page, cb.x + Math.min(60, cb.width / 2), cb.y + cb.height / 2, 380); await page.waitForTimeout(250); }
+    await composer.type('Agreed, let us pull this line up.', { delay: 35 }); await page.waitForTimeout(700);
+  }
   await page.waitForTimeout(700);
 }
 
