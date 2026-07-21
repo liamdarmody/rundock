@@ -2916,6 +2916,10 @@ function handlePermissionRequest(d, convoId) {
 function renderPermissionCard(d, convoId) {
   const req = d.request || {};
   const requestId = d.request_id || '';
+  // A WS reconnect re-sends control_request for every pending request, but the
+  // DOM (and any existing card) survive the reconnect, so guard against a
+  // duplicate card, exactly as renderPendingPermissionCards does.
+  if (requestId && document.getElementById('perm-' + requestId)) return;
   const toolName = req.tool_name || 'Unknown';
   const input = req.input || {};
   const risk = classifyRisk(toolName, input);
