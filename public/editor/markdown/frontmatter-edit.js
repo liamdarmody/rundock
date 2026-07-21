@@ -179,9 +179,14 @@ export function replaceProperty(raw, key, newValue) {
   // snaps back to the file's truth.
   if (loc.valueEnd > loc.valueStart) return { raw, changed: false };
   const spacing = after.match(/^[ \t]*/)[0] || ' ';
-  // Preserve a trailing comment if one sits after the value? YAML comments
-  // in property lines are rare in this vault; a value edit replaces the
-  // whole remainder deliberately (documented behaviour).
+  // A trailing comment, or a YAML anchor/alias/tag on the value, cannot be
+  // preserved by a scalar re-emit (formatScalar reformats only the value), so
+  // refuse rather than silently strip it. The panel snaps back to the file's
+  // truth. Quoted spans are removed first so a '#' inside quotes is not read as
+  // a comment.
+  const valueRaw = after.trim();
+  const unquoted = valueRaw.replace(/"(?:[^"\\]|\\.)*"|'(?:[^']|'')*'/g, '');
+  if (/(?:^|\s)#/.test(unquoted) || /^[&*!]/.test(valueRaw)) return { raw, changed: false };
   lines[loc.keyLine] = `${keyPart}${spacing}${formatScalar(newValue, after.trim())}`;
   return { raw: lines.join('\n'), changed: true };
 }
@@ -230,6 +235,9 @@ export function editListItem(raw, key, mutation) {
   // Flow lists ([a, b]) have no per-item bytes to preserve (single line);
   // parse, mutate, re-emit. Block lists are edited by line, byte-honestly.
   if (flow) {
+    // Content after the closing ] (a trailing comment) cannot be preserved by
+    // the flow re-emit and would land inside the brackets, so refuse.
+    if (!/\]$/.test(after.trim())) return { raw, changed: false };
     const inner = after.trim().replace(/^\[/, '').replace(/\]\s*$/, '').trim();
     const items = inner ? inner.match(/(?:"[^"]*"|'[^']*'|[^,])+/g).map((s) => s.trim()) : [];
     if (mutation.remove != null) {
