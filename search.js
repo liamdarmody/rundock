@@ -880,9 +880,12 @@ function frontmatterValues(content) {
 }
 
 function normaliseReviewContent(content) {
-  // Drop the review endmatter: the last --- line whose following line opens
-  // a review section. Lightweight by design; indexing is not byte-critical.
-  const em = content.search(/(?:^|\r?\n)---\r?\n(?=(?:comments|suggestions|review):)/);
+  // Drop the review endmatter: a --- line whose following line opens a review
+  // section. The endmatter always follows body, so require a preceding newline:
+  // this keeps the opening frontmatter delimiter at offset 0 (a note whose first
+  // property is comments/review/suggestions) from being read as endmatter and
+  // truncating the whole body. Lightweight by design; indexing is not byte-critical.
+  const em = content.search(/\r?\n---\r?\n(?=(?:comments|suggestions|review):)/);
   if (em !== -1) content = content.slice(0, em);
   return content
     .replace(/\}\{(?=[>+=~#-])/g, '} {') // adjacent constructs keep a word boundary
