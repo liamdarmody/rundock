@@ -1,6 +1,6 @@
-// Motion layer: records the six scripted interactions with Playwright video,
+// Motion layer: records the five scripted interactions with Playwright video,
 // then converts each to a web-optimized, palette-optimized, infinitely looping
-// GIF with ffmpeg (palettegen/paletteuse). Clips are short (roughly 4-6s),
+// GIF with ffmpeg (palettegen/paletteuse). Clips are short (roughly 4-8s),
 // silent, and loopable.
 //
 // ffmpeg is resolved in priority order: FFMPEG_PATH env, a system ffmpeg on
@@ -13,10 +13,11 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import {
-  newContext, gotoWorkspace, openFile, beginStream, pushChunk,
-  seedWorking, seedLastActive, fitOrgChart, installCursor, cursorTo,
+  newContext, gotoWorkspace, openFile,
+  seedWorking, seedLastActive, fitOrgChart, installCursor, cursorTo, cursorKind,
   ORG_WORKING, ORG_LAST_ACTIVE,
 } from './harness.mjs';
+import { DEMO_IDS } from './generate-workspace.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -68,8 +69,11 @@ async function clipKanbanDrag(page, { mark }) {
     const r = document.querySelector('.board-lane .board-card').getBoundingClientRect();
     return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
   });
+  // hand1 (open grab hand) for the whole board interaction: hover, lift, drag,
+  // and drop. It never switches while the pointer is over the board.
+  await cursorKind(page, 'hand1');
   await cursorTo(page, start.x, start.y, 450);
-  await page.waitForTimeout(450);
+  await page.waitForTimeout(500);
   mark();
   // Animate a lifted clone (and the cursor) gliding from the first Backlog card
   // to the In Progress lane, then dispatch the real HTML5 drag-and-drop so the
@@ -108,22 +112,9 @@ async function clipKanbanDrag(page, { mark }) {
     fire(card, 'dragend', tr.left + tr.width / 2, tr.top + 20);
     if (window.__dragClone) window.__dragClone.remove();
   });
+  // hand1 stays: the pointer never leaves the board, so the cursor does not
+  // switch back on drop.
   await page.waitForTimeout(1100);
-}
-
-async function clipLiveRefresh(page, { workspace, mark }) {
-  await openFile(page, 'Notes/Weekly Plan.md');
-  await page.waitForTimeout(1200);
-  mark();
-  // Change the note on disk, as an agent or another window would. The open file
-  // updates in place.
-  const target = path.join(workspace, 'Notes', 'Weekly Plan.md');
-  const updated = ['---', 'title: Weekly Plan', 'tags: [planning]', 'date: 2026-07-18', '---', '',
-    '# Weekly Plan', '', 'Focus for the week is the launch page. Actions live on the [[Backlog]].', '',
-    'The headline review is booked for Wednesday at 9am.', '',
-    '> [!todo] Follow-up', '> Confirm the launch date before Friday.', ''].join('\n');
-  fs.writeFileSync(target, updated);
-  await page.waitForTimeout(2200);
 }
 
 async function clipArtifactComment(page, { mark }) {
@@ -141,6 +132,8 @@ async function clipArtifactComment(page, { mark }) {
     const er = el.getBoundingClientRect();
     return { x: fr.left + er.left + er.width / 2, y: fr.top + er.top + er.height / 2 };
   });
+  // I-beam over the text you are about to select.
+  await cursorKind(page, 'text');
   if (at) { await cursorTo(page, at.x, at.y, 500); await page.waitForTimeout(450); }
   mark();
   // Select the lead line inside the sandboxed preview and raise the Comment
@@ -162,12 +155,21 @@ async function clipArtifactComment(page, { mark }) {
   const btn = await page.$('.artifact-comment-btn.visible, .artifact-comment-btn');
   if (btn) {
     const bb = await btn.boundingBox();
-    if (bb) { await cursorTo(page, bb.x + bb.width / 2, bb.y + bb.height / 2, 400); await page.waitForTimeout(320); }
+    if (bb) {
+      // hand2 (pointing hand) to hover and click the Comment button.
+      await cursorKind(page, 'hand2');
+      await cursorTo(page, bb.x + bb.width / 2, bb.y + bb.height / 2, 400); await page.waitForTimeout(320);
+    }
     await btn.click().catch(() => {}); await page.waitForTimeout(700);
   }
   // Type into the comment composer if it opened.
   const composer = await page.$('.review-comment-input, textarea.review-input, .review-sidebar textarea');
-  if (composer) { await composer.type('Agreed, let us pull this line up.', { delay: 35 }); await page.waitForTimeout(700); }
+  if (composer) {
+    // I-beam over the comment box as you type into it.
+    const cb = await composer.boundingBox();
+    if (cb) { await cursorKind(page, 'text'); await cursorTo(page, cb.x + Math.min(60, cb.width / 2), cb.y + cb.height / 2, 380); await page.waitForTimeout(250); }
+    await composer.type('Agreed, let us pull this line up.', { delay: 35 }); await page.waitForTimeout(700);
+  }
   await page.waitForTimeout(700);
 }
 
@@ -180,17 +182,60 @@ async function clipSearch(page, { mark }) {
   await page.waitForSelector('#palette-input', { state: 'visible', timeout: 8000 });
   await page.waitForTimeout(400);
   await page.type('#palette-input', 'launch', { delay: 150 });
-  await page.waitForTimeout(1700);
+  await page.waitForTimeout(1300);
+  // Open the top result (the Launch Page file) to show how a search lands you
+  // straight on the thing you were looking for.
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('iframe.viewer-frame, .editor-surface, #editor', { timeout: 6000 }).catch(() => {});
+  await page.waitForTimeout(2000);
 }
 
-async function clipStreaming(page, { mark }) {
+// Orchestrator answers, then routes the task to a specialist who streams the
+// real work. Uses the app's own effect executors (start-streaming-bubble,
+// show-delegation-divider via buildDelegationDivider, render-stream-text) so
+// the handoff renders exactly as a live delegation would.
+async function clipStreamingHandoff(page, { mark }) {
+  // Ids come from the shared DEMO_IDS source so this clip cannot drift from the
+  // generated fixtures. Threaded into each evaluate rather than inlined.
+  const CONVO = DEMO_IDS.convos.planWeek;
+  const COS = DEMO_IDS.agents.cos;
+  const CLEO = DEMO_IDS.agents.cleo;
   await page.evaluate(() => switchNav('conversations'));
-  await beginStream(page, { convoId: 'c5', agentId: 'cleo' });
+  await page.evaluate((id) => openConversation(id), CONVO);
+  await page.waitForTimeout(500);
+  await page.evaluate(() => addUserMsg('Can you make the landing hook shorter and punchier?'));
+  await page.waitForTimeout(600);
   mark();
-  const chunks = ['Shorter is better here. ', 'Lead with the reader, ', 'name the outcome in six words, ',
-    'then let the proof points carry the rest. ', 'I will draft two options and mark my pick.'];
-  for (const c of chunks) { await pushChunk(page, { convoId: 'c5', agentId: 'cleo', text: c }); await page.waitForTimeout(650); }
-  await page.waitForTimeout(1000);
+  // 1) Orchestrator (Cos) acknowledges and routes.
+  await page.evaluate(({ id, cos }) => executeEffects(id, [{ type: 'start-streaming-bubble', agentId: cos }]), { id: CONVO, cos: COS });
+  let cosText = '';
+  for (const c of ['That is Cleo’s wheelhouse. ', 'Handing it to her with the brief now.']) {
+    cosText += c;
+    await page.evaluate(({ id, t }) => executeEffects(id, [{ type: 'render-stream-text', text: t }]), { id: CONVO, t: cosText });
+    await page.waitForTimeout(520);
+  }
+  await page.waitForTimeout(450);
+  await page.evaluate(({ id, cos, t }) => executeEffects(id, [
+    { type: 'promote-handoff-message', agentId: cos, text: t },
+    { type: 'clear-streaming-bubble' },
+  ]), { id: CONVO, cos: COS, t: cosText });
+  // 2) Delegation divider Cos -> Cleo, header follows the active agent.
+  await page.evaluate(({ id, cos, cleo }) => executeEffects(id, [
+    { type: 'show-delegation-divider', toAgentId: cleo, fromAgentId: cos, isReturn: false },
+    { type: 'update-chat-header', toAgentId: cleo },
+  ]), { id: CONVO, cos: COS, cleo: CLEO });
+  await page.waitForTimeout(700);
+  // 3) The specialist (Cleo) streams the actual rework.
+  await page.evaluate(({ id, cleo }) => executeEffects(id, [{ type: 'start-streaming-bubble', agentId: cleo }]), { id: CONVO, cleo: CLEO });
+  let cleoText = '';
+  for (const c of ['On it. ', 'Shorter is better here: ', 'lead with the reader, ',
+    'name the outcome in six words, ', 'then let the proof carry the rest. ',
+    'Drafting two options and marking my pick.']) {
+    cleoText += c;
+    await page.evaluate(({ id, t }) => executeEffects(id, [{ type: 'render-stream-text', text: t }]), { id: CONVO, t: cleoText });
+    await page.waitForTimeout(430);
+  }
+  await page.waitForTimeout(1100);
 }
 
 async function clipOrgStatus(page, { mark }) {
@@ -199,9 +244,14 @@ async function clipOrgStatus(page, { mark }) {
   await seedWorking(page, ORG_WORKING);
   await seedLastActive(page, ORG_LAST_ACTIVE);
   await fitOrgChart(page);
+  // Settle fully on the org chart before marking. Paired with ssBuffer:0 in the
+  // registry, this keeps any earlier view out of the trimmed clip, so the loop
+  // never flashes the conversation view at the wrap point.
+  await page.waitForTimeout(600);
   mark();
-  // Let the CSS pulse (orgPulse, 2s loop) run for a couple of cycles.
-  await page.waitForTimeout(4200);
+  // Let the CSS pulse (orgPulse, 2s loop) run for a couple of cycles, and end on
+  // a whole number of loops so the wrap is seamless.
+  await page.waitForTimeout(4000);
 }
 
 // Clip registry. `themes` is which themes to record (theme reads in all of
@@ -212,13 +262,13 @@ async function clipOrgStatus(page, { mark }) {
 // a selection highlight plus type-in).
 export const CLIPS = [
   { name: 'kanban-drag', feature: 'Kanban card drag between columns', run: clipKanbanDrag },
-  { name: 'live-refresh', feature: 'Live external refresh updating the open file', run: clipLiveRefresh },
   { name: 'review-comment', feature: 'Adding a comment on an artifact', run: clipArtifactComment, gif: { width: 1152 } },
-  { name: 'search', feature: 'Cmd+K universal search', run: clipSearch },
-  // Streaming has continuous type-in (high entropy); trim width and fps to stay
-  // inside the size budget.
-  { name: 'streaming', feature: 'Streaming reply typing in', run: clipStreaming, gif: { fps: 12, width: 1100 } },
-  { name: 'org-chart-status', feature: 'Org chart live status', run: clipOrgStatus },
+  { name: 'search', feature: 'Cmd+K universal search, then opening the result', run: clipSearch },
+  // Streaming plus a handoff has continuous type-in over a longer clip (high
+  // entropy); trim width and fps to stay inside the size budget.
+  { name: 'streaming', feature: 'Orchestrator routes to a specialist, whose reply streams in', run: clipStreamingHandoff, gif: { fps: 12, width: 1080 } },
+  // ssBuffer:0 keeps the pre-mark navigation frames out of the trimmed clip.
+  { name: 'org-chart-status', feature: 'Org chart live status', run: clipOrgStatus, ssBuffer: 0 },
 ];
 
 export const MOTION_THEMES = ['light', 'dark'];
@@ -249,7 +299,8 @@ export async function captureMotion({ browser, url, workspace, outDir, log = () 
         const webm = await video.path();
         await ctx.close(); ctx = null;
 
-        const ss = actionAt ? Math.max(0, (actionAt - recStart) / 1000 - 0.4) : 0;
+        const buffer = clip.ssBuffer ?? 0.4;
+        const ss = actionAt ? Math.max(0, (actionAt - recStart) / 1000 - buffer) : 0;
         const gif = path.join(outDir, `${clip.name}.${theme}.gif`);
         gifFromWebm(webm, gif, { fps: clip.gif?.fps ?? 15, width: clip.gif?.width ?? 1280, ss });
         const bytes = fs.statSync(gif).size;

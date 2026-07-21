@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   newContext, gotoWorkspace, setTheme, settle, openFile,
-  seedWorking, seedLastActive, beginStream, pushChunk, fitOrgChart,
+  seedWorking, seedLastActive, fitOrgChart,
   ORG_WORKING, ORG_LAST_ACTIVE,
 } from './harness.mjs';
 
