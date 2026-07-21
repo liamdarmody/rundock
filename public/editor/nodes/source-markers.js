@@ -62,10 +62,11 @@ function markerAttribute() {
 const setupParse = { setup(md) { installMarkerRule(md); } };
 
 // tiptap-markdown mirrors prosemirror-markdown's Text serializer, which escapes
-// `<` and `>` to HTML entities before writing.
-function escapeHTML(value) {
-  return value == null ? value : value.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
+// `<` and `>` to HTML entities before writing. That silently rewrote inline and
+// block HTML in a note (`<sup>` -> `&lt;sup&gt;`) on save. A ProseMirror text
+// node is inert (always rendered as text, never parsed as HTML), so the angle
+// brackets are safe to write literally; with the markdown extension's
+// html:false they re-parse as text, so the note round-trips byte-for-byte.
 
 // A text node needs its square brackets escaped only when the text could form a
 // markdown link, image, or reference on re-parse. Those all contain `](`
@@ -87,7 +88,7 @@ export const SourceText = Text.extend({
     return {
       markdown: {
         serialize(state, node) {
-          const value = escapeHTML(node.text);
+          const value = node.text;
           if (textCanFormLink(node.text)) {
             state.text(value);
             return;
