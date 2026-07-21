@@ -10,6 +10,7 @@
 import { attachReviewPanel } from '../editor/panels/review.js';
 import { injectEditorStyles } from '../editor/styles.js';
 import { buildTextIndex, captureSelector, rangeToOffsets, locateSelector } from './text-anchor.js';
+import { resolveArtifactLink } from './artifact-links.js';
 import { createSidecarController } from './sidecar-controller.js';
 
 export { sidecarPathFor } from './sidecar-controller.js';
@@ -38,7 +39,7 @@ const FRAME_STYLES = `
 export function attachArtifactReview({
   iframe, paneElement, path, sidecarContent = null,
   author = 'me', agents = [], onSaveSidecar = null, pillHostElement = null,
-  allowSave = true,
+  allowSave = true, onOpenInternalLink = null,
 }) {
   const doc = iframe && iframe.contentDocument;
   if (!doc || !doc.body) return { detach: () => {}, refresh: () => {}, controller: null };
@@ -229,16 +230,18 @@ export function attachArtifactReview({
   // ----- in-frame interactions -----
 
   const onFrameClick = (event) => {
-    // External links open in the default browser instead of navigating the
-    // sandboxed preview in place (which would break the review overlay and pull
-    // in remote content). Electron's window-open handler routes these through
-    // shell.openExternal.
+    // Links inside the artifact: an external URL opens in the default browser
+    // (not the sandboxed preview, which would break the overlay and pull in
+    // remote content); a link to another workspace file opens inside Rundock;
+    // an in-page anchor is left to the frame. Electron's window-open handler
+    // routes external URLs through shell.openExternal.
     const anchor = event.target && event.target.closest && event.target.closest('a[href]');
     if (anchor) {
-      const href = anchor.getAttribute('href') || '';
-      if (/^(?:https?:|mailto:)/i.test(href)) {
+      const link = resolveArtifactLink(anchor.getAttribute('href'), path);
+      if (link) {
         event.preventDefault();
-        try { window.open(href, '_blank', 'noopener'); } catch { /* ignore */ }
+        if (link.kind === 'external') { try { window.open(link.value, '_blank', 'noopener'); } catch { /* ignore */ } }
+        else if (typeof onOpenInternalLink === 'function') onOpenInternalLink(link);
         return;
       }
     }
