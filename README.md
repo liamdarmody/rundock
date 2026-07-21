@@ -12,7 +12,21 @@ Built by [Liam Darmody](https://www.linkedin.com/in/liamdarmody/). Learn more at
 
 > **Star this repo** if Rundock is useful to you. It is the simplest way to support the project and helps other people running their own businesses find it. [Add a star ->](https://github.com/liamdarmody/rundock)
 
-![Rundock app: an AI agent team org chart with the orchestrator at the top, six specialists, and a routines panel showing scheduled automations](docs/rundock-app-hero.png)
+![Rundock showing an example agent team as an org chart: a Chief of Staff at the top with the team reporting in below, a Rundock Guide agent, live team status in the sidebar, and scheduled routines](docs/rundock-hero-org-chart.png)
+
+## A look inside
+
+**Review your agent's work where it lives.** Select any passage in a file an agent produced and leave a comment. It proposes an inline edit you accept or reject, stored in the file as plain text you can read in any editor.
+
+![Rundock review panel: a rendered HTML page with anchored review comment threads beside it and reply and resolve controls](docs/rundock-review.png)
+
+**Find anything with one shortcut.** Press Cmd+K to search file contents, conversation messages, and agent and skill names at once, then open the result at the right place.
+
+![Rundock universal search palette showing grouped, highlighted results across files and conversations](docs/rundock-search.png)
+
+**Your boards open as real columns.** An Obsidian Kanban board opens as a column board you drag cards across, and writes back the same markdown so it stays interchangeable with Obsidian.
+
+![Rundock Kanban board with columns and rich cards, Obsidian-compatible](docs/rundock-boards.png)
 
 ## How Rundock fits
 
