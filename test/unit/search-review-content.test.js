@@ -44,6 +44,17 @@ describe('normaliseReviewContent', () => {
     assert.ok(!out.includes('comments:'));
   });
 
+  test('a first frontmatter key of comments/review/suggestions is not read as endmatter', () => {
+    // The review endmatter is always preceded by body, so the opening
+    // frontmatter delimiter at offset 0 must never be mistaken for it. A note
+    // whose first property is comments/review/suggestions keeps its whole body.
+    for (const key of ['comments', 'review', 'suggestions']) {
+      const src = `---\n${key}: draft notes\nstatus: active\n---\n\nThe searchable body.`;
+      const out = normaliseReviewContent(src);
+      assert.ok(out.includes('The searchable body.'), `${key}: body retained`);
+    }
+  });
+
   test('a thematic break followed by prose is not endmatter', () => {
     const src = 'Intro.\n\n---\n\nMore prose after a horizontal rule.';
     assert.equal(normaliseReviewContent(src), src);

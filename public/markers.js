@@ -55,13 +55,18 @@
       actions.push({ kind: 'save_skill', name: match[1], content: stripCosmeticFence(match[2]) });
     }
 
-    // DELETE markers (name only).
+    // DELETE markers (name only). Scanned over the text with SAVE block spans
+    // masked out, so a DELETE marker quoted inside a save body (documentation,
+    // an echoed template) is not executed as a live delete.
+    const deleteScanText = t
+      .replace(/<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:(?:SAVE|CREATE)_AGENT -->/g, '')
+      .replace(/<!-- RUNDOCK:SAVE_SKILL name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:SAVE_SKILL -->/g, '');
     const deleteSkillPattern = /<!-- RUNDOCK:DELETE_SKILL name=([\w-]+) -->/g;
-    while ((match = deleteSkillPattern.exec(t)) !== null) {
+    while ((match = deleteSkillPattern.exec(deleteScanText)) !== null) {
       actions.push({ kind: 'delete_skill', name: match[1] });
     }
     const deleteAgentPattern = /<!-- RUNDOCK:DELETE_AGENT name=([\w-]+) -->/g;
-    while ((match = deleteAgentPattern.exec(t)) !== null) {
+    while ((match = deleteAgentPattern.exec(deleteScanText)) !== null) {
       actions.push({ kind: 'delete_agent', name: match[1] });
     }
 

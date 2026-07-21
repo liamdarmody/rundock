@@ -13,6 +13,7 @@
 
 import { Editor, StarterKit, Markdown, TaskItem } from '../vendor/tiptap-bundle.mjs';
 import { Wikilink } from './nodes/wikilink.js';
+import { Image } from './nodes/image.js';
 import { Callout } from './nodes/callout.js';
 import { SoftHardBreak } from './nodes/soft-hard-break.js';
 import { SoftOrderedList } from './nodes/soft-ordered-list.js';
@@ -83,6 +84,7 @@ export function createEditorInstance({ element, initialBody, onUpdate, onSelecti
       SourceTaskList,
       TaskItem.configure({ nested: true }),
       Wikilink,
+      Image,
       Callout,
       ...tableExtensions,
       ...criticExtensions,

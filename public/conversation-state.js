@@ -189,6 +189,11 @@
     return {
       state: next,
       effects: [
+        // Withdraw any open permission card for this conversation: the request
+        // is denied server-side on stop, so a lingering card must not stay
+        // interactive (clicking "Always allow" on it would create a standing
+        // grant off a cancelled action).
+        { type: 'remove-permission-cards' },
         {
           type: 'add-cancelled-badge',
           toolCalls: message._toolCalls || [],

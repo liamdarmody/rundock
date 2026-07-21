@@ -48,7 +48,9 @@
   }
 
   function parse(text) {
-    const src = String(text);
+    // Normalise CRLF to LF: the structural parsing is LF-only, so a CRLF board
+    // would otherwise drop every line and render empty. Save then emits LF.
+    const src = String(text).replace(/\r\n/g, '\n');
     const fm = readFrontmatter(src); // { keys: [[k, v]], end: index-after-closing-delimiter }
     const settings = readSettingsBlock(src); // { json, start } or null
 
@@ -188,6 +190,9 @@
       archive,
       settings: settingsObj,
       settingsRaw: settings ? settings.raw : null,
+      // Settings JSON was present but did not parse: keep the raw block verbatim
+      // on serialize rather than resetting settings to a bare default.
+      settingsParseFailed: !!(settings && settings.json === null && settings.raw),
       dropped,
     };
   }
@@ -221,7 +226,14 @@
   function readSettingsBlock(src) {
     // Plugin's AB: scan from EOF for the last fenced code block, JSON.parse it.
     // Serialized form: '\n\n%% kanban:settings\n```\n{json}\n```\n%%' at EOF.
-    const marker = src.lastIndexOf('%% kanban:settings');
+    // The real marker starts a line. Card text that merely contains the literal
+    // '%% kanban:settings' must not be taken for it, or the board is truncated
+    // (and the truncation is written to disk on the next save). Require a line
+    // start; take the last such occurrence.
+    let marker = -1;
+    for (let i = src.lastIndexOf('%% kanban:settings'); i >= 0; i = src.lastIndexOf('%% kanban:settings', i - 1)) {
+      if (i === 0 || src[i - 1] === '\n') { marker = i; break; }
+    }
     if (marker < 0) return null;
     const fenceOpen = src.indexOf('```', marker);
     if (fenceOpen < 0) return null;
@@ -289,7 +301,7 @@
     let out = ['---', '', fmInner, '---', '', ''].join('\n');
     for (const lane of board.lanes) out += serializeLane(lane);
     out += serializeArchive(board.archive || []);
-    out += serializeSettings(board.settings);
+    out += serializeSettings(board.settings, board.settingsRaw, board.settingsParseFailed);
     return out;
   }
 
@@ -335,10 +347,13 @@
     return t.join('\n');
   }
 
-  function serializeSettings(settings) {
+  function serializeSettings(settings, raw, parseFailed) {
     // vk: file ends '%%' with NO trailing newline
     if (!settings) return '';
-    return ['', '', '%% kanban:settings', '```', JSON.stringify(settings), '```', '%%'].join('\n');
+    // If the original settings JSON did not parse, re-emit it verbatim rather
+    // than silently discarding the user's settings for a bare default.
+    const payload = (parseFailed && raw != null) ? raw : JSON.stringify(settings);
+    return ['', '', '%% kanban:settings', '```', payload, '```', '%%'].join('\n');
   }
 
   // ---------------------------------------------------------------------

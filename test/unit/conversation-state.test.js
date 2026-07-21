@@ -169,7 +169,7 @@ const SEQUENCE_TABLE = [
       '0:remove-permission-cards',
       '1:set-session',
       '3:start-streaming-bubble', '3:render-stream-text',
-      '4:add-cancelled-badge', '4:clear-streaming-bubble', '4:notice',
+      '4:remove-permission-cards', '4:add-cancelled-badge', '4:clear-streaming-bubble', '4:notice',
       '5:finish-processing',
     ],
     // The extraction originally pinned streamingRawText SURVIVING here (only
@@ -305,7 +305,7 @@ test('cancelled resets the streaming accumulators; the partial bubble is detache
   // The already-rendered partial stays visible as the stopped reply: the
   // bubble reference is cleared (clear-streaming-bubble) but no effect
   // removes it from the DOM.
-  assert.deepStrictEqual(types(r.effects), ['add-cancelled-badge', 'clear-streaming-bubble', 'notice']);
+  assert.deepStrictEqual(types(r.effects), ['remove-permission-cards', 'add-cancelled-badge', 'clear-streaming-bubble', 'notice']);
 });
 
 test('process_started for a new process resets the streaming accumulators (belt and braces)', () => {

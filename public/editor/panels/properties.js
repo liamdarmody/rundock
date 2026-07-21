@@ -290,12 +290,14 @@ function openScalarInput(container, row, seed, apply) {
     else rerenderProps(container);
   };
   input.addEventListener('keydown', (e) => {
-    // Enter refuses an empty value, matching blur: the two commit rules stay
-    // consistent (an empty input never writes "").
-    if (e.key === 'Enter') { e.preventDefault(); finish(input.value.trim().length > 0); }
+    // Enter and blur share one commit rule: write only a non-empty value that
+    // actually changed. Merely opening then closing a property (an unchanged
+    // value) never re-serialises the line, which would otherwise strip a
+    // trailing comment, anchor, or whitespace.
+    if (e.key === 'Enter') { e.preventDefault(); finish(input.value.trim().length > 0 && input.value !== seed); }
     else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
   });
-  input.addEventListener('blur', () => finish(input.value.trim().length > 0));
+  input.addEventListener('blur', () => finish(input.value.trim().length > 0 && input.value !== seed));
 }
 
 // Adding a list item appends the input INLINE after the existing chips
@@ -328,7 +330,7 @@ function openListAddInput(container, onEditProperty, row, key) {
     if (e.key === 'Enter') { e.preventDefault(); finish(true); }
     else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
   });
-  input.addEventListener('blur', () => finish(input.value.trim().length > 0));
+  input.addEventListener('blur', () => finish(input.value.trim().length > 0 && input.value !== seed));
 }
 
 function handleEditClick(container, st, event) {

@@ -148,3 +148,21 @@ test('stripDelegateTail removes the marker and everything after it', () => {
   const stripped = stripDelegateTail(text).trim();
   assert.strictEqual(stripped, 'I will hand this to Dev.');
 });
+
+test('a DELETE marker inside a SAVE block body is not executed as a live delete', () => {
+  const text = [
+    '<!-- RUNDOCK:SAVE_AGENT name=docs-agent -->',
+    'Here is how deletion works, for example:',
+    '<!-- RUNDOCK:DELETE_SKILL name=important-skill -->',
+    '<!-- /RUNDOCK:SAVE_AGENT -->',
+  ].join('\n');
+  const { actions } = scanMarkers(text);
+  assert.ok(actions.some(a => a.kind === 'save_agent' && a.name === 'docs-agent'), 'the save still runs');
+  assert.ok(!actions.some(a => a.kind === 'delete_skill'), 'a DELETE quoted inside a save body is not a live delete');
+});
+
+test('a DELETE marker outside any SAVE block still fires', () => {
+  const text = 'Removing the old skill.\n<!-- RUNDOCK:DELETE_SKILL name=old-skill -->';
+  const { actions } = scanMarkers(text);
+  assert.ok(actions.some(a => a.kind === 'delete_skill' && a.name === 'old-skill'), 'a real delete still fires');
+});

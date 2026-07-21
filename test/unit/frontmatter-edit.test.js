@@ -231,3 +231,36 @@ describe('byte-honesty backstop: onlyEditedKeyChanged', () => {
     assert.equal(onlyEditedKeyChanged(before, good, 'tags'), true);
   });
 });
+
+describe('refuses edits that would silently drop a comment, anchor, or corrupt a flow list', () => {
+  test('a scalar with a trailing comment is refused, not stripped', () => {
+    const raw = ['---', 'title: value # keep this note', 'status: draft', '---'].join('\n');
+    const r = replaceProperty(raw, 'title', 'newval');
+    assert.equal(r.changed, false);
+    assert.equal(r.raw, raw);
+  });
+
+  test('a scalar carrying a YAML anchor is refused', () => {
+    const raw = ['---', 'foo: &a hello', 'bar: draft', '---'].join('\n');
+    assert.equal(replaceProperty(raw, 'foo', 'world').changed, false);
+  });
+
+  test('a plain scalar (no comment or anchor) still edits', () => {
+    const raw = ['---', 'status: draft', '---'].join('\n');
+    assert.ok(replaceProperty(raw, 'status', 'final').raw.includes('status: final'));
+  });
+
+  test('a flow list with a trailing comment is refused, not corrupted', () => {
+    const raw = ['---', 'tags: [a, b] # note', '---'].join('\n');
+    const r = editListItem(raw, 'tags', { add: 'c' });
+    assert.equal(r.changed, false);
+    assert.equal(r.raw, raw);
+  });
+
+  test('a normal flow list add still works', () => {
+    const raw = ['---', 'tags: [a, b]', '---'].join('\n');
+    const r = editListItem(raw, 'tags', { add: 'c' });
+    assert.equal(r.changed, true);
+    assert.ok(r.raw.includes('[a, b, c]'));
+  });
+});

@@ -93,6 +93,12 @@ async function attachArtifactReviewForCurrentFile(paneEl) {
         : 'me',
       agents: Array.isArray(agents) ? agents.map(a => ({ name: a.name, displayName: a.displayName })) : [],
       pillHostElement: document.getElementById('editor-header'),
+      // A link inside the artifact to another workspace file opens in Rundock
+      // (any supported type), not in the sandboxed frame or the browser.
+      onOpenInternalLink: (link) => {
+        if (link.kind === 'wikilink') openWikilink(link.value);
+        else if (link.kind === 'path') openWorkspaceFilePath(link.value);
+      },
       // Data-safety gate: never overwrite a sidecar we could not read
       // cleanly (a fetch/5xx failure) or one that parsed as corrupt: either
       // could destroy existing comments. Saving is disabled for this mount;
@@ -2916,6 +2922,10 @@ function handlePermissionRequest(d, convoId) {
 function renderPermissionCard(d, convoId) {
   const req = d.request || {};
   const requestId = d.request_id || '';
+  // A WS reconnect re-sends control_request for every pending request, but the
+  // DOM (and any existing card) survive the reconnect, so guard against a
+  // duplicate card, exactly as renderPendingPermissionCards does.
+  if (requestId && document.getElementById('perm-' + requestId)) return;
   const toolName = req.tool_name || 'Unknown';
   const input = req.input || {};
   const risk = classifyRisk(toolName, input);
@@ -3596,6 +3606,19 @@ function openWikilink(name) {
     showView('editor');
     highlightFileInSidebar(searchName);
   }
+}
+
+// Open a workspace file by its exact path. read_file routes it to the right
+// viewer by extension (markdown, HTML/SVG artifact, image, PDF), like a
+// file-tree click. Used by internal links clicked inside an artifact.
+function openWorkspaceFilePath(path) {
+  if (!path || !ws) return;
+  editorReturnView = 'editor';
+  if (currentFilePath) { fileHistory.push(currentFilePath); if (fileHistory.length > 20) fileHistory.shift(); }
+  switchNav('files');
+  ws.send(JSON.stringify({ type: 'read_file', path }));
+  showView('editor');
+  highlightFileInSidebar(path);
 }
 
 function highlightFileInSidebar(filePath) {

@@ -135,6 +135,16 @@ export const Wikilink = Node.create({
         handler: ({ state, range, match }) => {
           const $pos = state.doc.resolve(range.from);
           if ($pos.parent.type.spec.code) return; // inside a code block
+          // Only fire on literal typed text. Tiptap also runs input rules on
+          // Enter, reconstructing the block's text with each leaf node's
+          // renderText, so an EXISTING wikilink atom re-serialises to
+          // `[[target]]` and this rule matches its own output. The matched
+          // range then spans that atom (1 position rendering as many chars),
+          // and replacing it deletes the surrounding text and sibling atoms.
+          // Requiring the doc text under the range to equal the literal match
+          // means an atom in the range (which contributes no text) fails the
+          // check, so only genuinely typed `[[...]]` is ever replaced.
+          if (state.doc.textBetween(range.from, range.to) !== match[0]) return;
           const target = (match[1] || '').trim();
           const alias  = match[2] ? match[2].trim() : null;
           if (!target) return;
