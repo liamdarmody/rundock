@@ -63,6 +63,13 @@ function buildFixture() {
   fs.writeFileSync(path.join(workspace, 'Roadmap-2026.md'),
     '# Roadmap 2026\n\nQuarterly targets and the mobile milestone.\n');
 
+  // A note whose body paragraph carries two inline wikilinks. Pressing Enter
+  // at the end of this line must split the block cleanly and keep every
+  // wikilink and its surrounding text (a contenteditable + inline-atom
+  // corruption that only reproduces in a real browser, never in jsdom).
+  fs.writeFileSync(path.join(workspace, 'wikilink-line.md'),
+    '# Links\n\nSee also: [[Roadmap-2026]] and [[Missing Note]].\n');
+
   // A briefing-style note: foldable + nested callouts and frontmatter
   // wikilinks.
   fs.writeFileSync(path.join(workspace, 'briefing.md'), [
