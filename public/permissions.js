@@ -56,7 +56,10 @@
     // find leading segment must not shield these.
     if (/\bfind\b[\s\S]*-(exec(dir)?|delete|ok(dir)?)\b/.test(cmd)) return 'high';
     const DESTRUCTIVE = /^(rm|sudo|chmod|chown|kill|mkfs|dd)/;
-    const READ_ONLY = /^(ls|cat|head|tail|echo|pwd|whoami|which|grep|rg|find|wc|sort|uniq|diff|file|stat|date|env|printenv|node\s+-e|python3?\s+-c)/;
+    // Note: `node -e`/`python -c` are deliberately NOT here. They are arbitrary
+    // code execution, not reads (a fs.rmSync or fetch payload would auto-run with
+    // no card), so they fall through to a permission card like `node script.js`.
+    const READ_ONLY = /^(ls|cat|head|tail|echo|pwd|whoami|which|grep|rg|find|wc|sort|uniq|diff|file|stat|date|env|printenv)/;
     const NEUTRAL = /^(cd|pushd|popd|true)(\s|$)/;
     // Command/process substitution and backticks run an inner command the
     // segmenter cannot see (`ls $(rm x)`), so their presence disqualifies the
