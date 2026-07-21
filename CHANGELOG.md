@@ -4,9 +4,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## Unreleased
-
-**Name:** Files, Boards & Streaming (proposed)
+## 0.11.0: Files, Boards & Streaming (proposed) (2026-07-21)
 
 ### Added
 
