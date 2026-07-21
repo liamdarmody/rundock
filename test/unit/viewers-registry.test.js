@@ -9,6 +9,12 @@ import {
   mountArtifactPreview, mountImageViewer, mountPdfViewer, mountUnsupportedViewer, mountViewer,
 } from '../../public/viewers/registry.js';
 
+describe('ARTIFACT_CSP', () => {
+  test("pins base-uri 'none' (base-uri does not fall back to default-src)", () => {
+    assert.match(ARTIFACT_CSP, /base-uri 'none'/);
+  });
+});
+
 describe('classify', () => {
   test('routes each extension family to its kind, case-insensitive', () => {
     assert.equal(classify('notes/plan.md'), 'markdown');

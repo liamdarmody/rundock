@@ -44,7 +44,7 @@ export function workspaceFileUrl(path) {
 // phone home via <img src="https://..."> or @import. Inline styles and
 // data:/blob: images keep self-contained artifacts (design-export) faithful.
 export const ARTIFACT_CSP =
-  "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:;";
+  "default-src 'none'; base-uri 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:;";
 
 const CSP_META = `<meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}">`;
 

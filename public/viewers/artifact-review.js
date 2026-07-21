@@ -229,6 +229,19 @@ export function attachArtifactReview({
   // ----- in-frame interactions -----
 
   const onFrameClick = (event) => {
+    // External links open in the default browser instead of navigating the
+    // sandboxed preview in place (which would break the review overlay and pull
+    // in remote content). Electron's window-open handler routes these through
+    // shell.openExternal.
+    const anchor = event.target && event.target.closest && event.target.closest('a[href]');
+    if (anchor) {
+      const href = anchor.getAttribute('href') || '';
+      if (/^(?:https?:|mailto:)/i.test(href)) {
+        event.preventDefault();
+        try { window.open(href, '_blank', 'noopener'); } catch { /* ignore */ }
+        return;
+      }
+    }
     const mark = event.target && event.target.closest && event.target.closest(`[${MARK_ATTR}]`);
     if (!mark || !activateCardCb) return;
     const item = controller.listItems().find((i) => i.id === mark.getAttribute(MARK_ATTR));
