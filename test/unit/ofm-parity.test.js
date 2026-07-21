@@ -33,7 +33,6 @@ const KNOWN_CORRUPTING = {
   'escapes.md': 'escaped non-CommonMark syntax loses its backslash: \\== becomes a live highlight',
   'inline-html.md': 'inline/block HTML entity-escapes: <sup> becomes &lt;sup&gt;',
   'line-breaks.md': 'trailing-two-space and backslash hard breaks are deleted (lines merge in Obsidian)',
-  'links-and-images.md': 'markdown images ![alt](url) are dropped entirely (image node absent from schema)',
   'lists.md': 'tab-indented nested list items reflow to two-space indents (checkbox escaping is fixed)',
 };
 
