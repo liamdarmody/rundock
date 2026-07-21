@@ -31,7 +31,6 @@ const KNOWN_CORRUPTING = {
   'blockquotes.md': 'nested blockquote reflows: `> > inner` gains a bare `>` line and moves',
   'emphasis-extended.md': 'nested strikethrough+bold mangles: ~~struck **bold**~~ -> broken mark nesting',
   'escapes.md': 'escaped non-CommonMark syntax loses its backslash: \\== becomes a live highlight',
-  'lists.md': 'tab-indented nested list items reflow to two-space indents (checkbox escaping is fixed)',
 };
 
 describe('OFM parity corpus: byte-exact round-trip for every construct family', () => {

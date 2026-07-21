@@ -59,7 +59,33 @@ function markerAttribute() {
   };
 }
 
-const setupParse = { setup(md) { installMarkerRule(md); } };
+// Records the indent used to nest a child list, so tab-indented nesting is not
+// normalised to two spaces on save. For each list, finds the smallest indent
+// deeper than the list's own items among the source lines in its range and
+// stamps it as an attribute the bullet-list serializer reads back.
+const LIST_INDENT_ATTR = 'data-list-indent';
+const LIST_MARKER_RE = /^([ \t]*)(?:[-*+]|\d+[.)])[ \t]/;
+function installListIndentRule(md) {
+  if (!md || !md.core || md.core.__rundockListIndent) return;
+  md.core.__rundockListIndent = true;
+  md.core.ruler.push('rundock_list_indent', (state) => {
+    const lines = state.src.split('\n');
+    for (const tok of state.tokens) {
+      if ((tok.type !== 'bullet_list_open' && tok.type !== 'ordered_list_open') || !tok.map) continue;
+      const [s, e] = tok.map;
+      let own = null, nest = null;
+      for (let i = s; i < e && i < lines.length; i++) {
+        const m = lines[i].match(LIST_MARKER_RE);
+        if (!m) continue;
+        if (own === null) { own = m[1]; continue; }
+        if (m[1].length > own.length && (nest === null || m[1].length < nest.length)) nest = m[1];
+      }
+      if (nest != null) tok.attrSet(LIST_INDENT_ATTR, nest);
+    }
+  });
+}
+
+const setupParse = { setup(md) { installMarkerRule(md); installListIndentRule(md); } };
 
 // tiptap-markdown mirrors prosemirror-markdown's Text serializer, which escapes
 // `<` and `>` to HTML entities before writing. That silently rewrote inline and
@@ -119,7 +145,15 @@ export const SourceText = Text.extend({
 // tiptap-markdown's default bullet serializer.
 export const SourceBulletList = BulletList.extend({
   addAttributes() {
-    return { ...this.parent?.(), srcMarker: markerAttribute() };
+    return {
+      ...this.parent?.(),
+      srcMarker: markerAttribute(),
+      listIndent: {
+        default: null,
+        parseHTML: (element) => element.getAttribute(LIST_INDENT_ATTR),
+        renderHTML: () => ({}),
+      },
+    };
   },
   addStorage() {
     const options = this.editor?.storage?.markdown?.options;
@@ -128,7 +162,8 @@ export const SourceBulletList = BulletList.extend({
         serialize(state, node) {
           const fallback = (options && options.bulletListMarker) || '-';
           const marker = node.attrs.srcMarker || fallback;
-          return state.renderList(node, '  ', () => marker + ' ');
+          const indent = node.attrs.listIndent || '  ';
+          return state.renderList(node, indent, () => marker + ' ');
         },
         parse: setupParse,
       },
