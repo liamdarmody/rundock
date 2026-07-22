@@ -37,7 +37,18 @@
   // block: that appears on the first save, because parse hoists
   // kanban-plugin into settings (mirrored below).
   function newBoardContent() {
-    return ['---', '', 'kanban-plugin: board', '', '---', '', ''].join('\n');
+    // Rundock seeds a new board with three standard columns so it opens ready
+    // to use rather than blank. (Obsidian's new board is frontmatter-only,
+    // which in Rundock rendered as an empty board with no way to add the first
+    // column.) Building it through parse + serialize yields the exact canonical
+    // bytes the serialiser produces, so the very first save never reformats it.
+    const template = [
+      '---', '', 'kanban-plugin: board', '', '---', '',
+      '## To Do', '', '',
+      '## In Progress', '', '',
+      '## Done', '', '',
+    ].join('\n');
+    return serialize(parse(template));
   }
 
   // Board detection, mirroring hasFrontmatterKeyRaw: any file whose

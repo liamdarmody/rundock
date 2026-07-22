@@ -320,6 +320,30 @@ function destroyTiptapEditorIfActive() {
     });
   }
 }
+
+// Fully close whatever file is open and reset all file-scoped state. Used when
+// switching to a DIFFERENT workspace: the previous workspace's file must never
+// be left mounted in the editor/viewer. (Switching VIEWS within a workspace
+// deliberately keeps the file open via currentFilePath; this runs only on a
+// workspace switch.) Pending debounced writes are CANCELLED, never flushed: by
+// the time this runs the server's WORKSPACE has already changed, so a flush
+// would resolve the old relative path against the new workspace and could
+// overwrite a same-named file there with stale content.
+function closeOpenFile() {
+  clearTimeout(_tiptapSaveTimer);
+  clearTimeout(saveTimer);
+  if (boardSaveTimer) { clearTimeout(boardSaveTimer); boardSaveTimer = null; }
+  boardPendingSave = null;
+  destroyActiveFileViewer();      // artifact review + iframe/board viewer
+  destroyTiptapEditorIfActive();  // tiptap editor
+  currentFilePath = null;
+  rawFileContent = ''; fileFrontmatter = ''; fileBody = '';
+  editorMode = 'preview';
+  editorDirty = false;
+  fileHistory = [];
+  closeFindBar();
+  document.querySelectorAll('.file-item.active').forEach((el) => el.classList.remove('active'));
+}
 // Session continuity: the conversation that was last opened in this workspace.
 // Seeded from the server-persisted value on workspace load, updated on every
 // openConversation call. Used by pickDefaultConversation to land the user back
@@ -3320,10 +3344,16 @@ function promptCreate(menu, type, folder) {
   field.className = 'files-menu-field';
   const input = document.createElement('input');
   input.type = 'text';
-  input.placeholder = type.kind === 'folder' ? 'Folder name' : type.label.replace('New ', '') + ' name';
+  // Note, board, and folder all behave identically. The default name is the
+  // single source of truth: pre-filled and selected so the user types over it
+  // or accepts it with Enter. The placeholder is a plain fallback for the rare
+  // cleared-field state (the type is already obvious from the menu item).
+  input.value = type.label;
+  input.placeholder = 'Name';
   field.appendChild(input);
   menu.appendChild(field);
   input.focus();
+  input.select();
   const submit = () => {
     const rel = FilesMenuModel.creatablePath(folder, input.value, type.ext);
     if (!rel) { closeFilesMenu(); return; }
@@ -4254,6 +4284,10 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   }
 
   // Different workspace: reset everything
+  // Close any open file so the previous workspace's note/board/artifact does
+  // not leak into this one (the keep-your-place behaviour is intentional across
+  // view switches within a workspace, but not across workspace switches).
+  closeOpenFile();
   conversations = [];
   conversationsLoaded = false;
   activeSidebarPill = 'all';

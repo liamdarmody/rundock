@@ -63,6 +63,12 @@ function buildFixture() {
   fs.writeFileSync(path.join(workspace, 'Roadmap-2026.md'),
     '# Roadmap 2026\n\nQuarterly targets and the mobile milestone.\n');
 
+  // A tall note that overflows the editor viewport, so the floating toolbar's
+  // dropdown can be exercised near the foot of the visible area (where the menu
+  // must flip to open upward rather than spilling past the bottom).
+  fs.writeFileSync(path.join(workspace, 'long-note.md'),
+    '# Long Note\n\n' + Array.from({ length: 60 }, (_, i) => `Paragraph ${i + 1} of the long note body.`).join('\n\n') + '\n\nFinal line at the very bottom of the file.\n');
+
   // A note whose body paragraph carries two inline wikilinks. Pressing Enter
   // at the end of this line must split the block cleanly and keep every
   // wikilink and its surrounding text (a contenteditable + inline-atom
@@ -128,6 +134,10 @@ function buildFixture() {
   // to prove the board registry view renders columns and round-trips bytes.
   fs.writeFileSync(path.join(workspace, 'board.md'),
     "---\n\nkanban-plugin: board\n\n---\n\n## To do\n\n- [ ] Draft the outline\n- [ ] **Review** the brief\n\n\n## Doing\n\n- [ ] Wire the [[Board]] view\n\n\n## Done\n\n- [ ] Ship it\n\n\n\n\n%% kanban:settings\n```\n{\"kanban-plugin\":\"board\",\"list-collapse\":[false,false,false]}\n```\n%%");
+  // A frontmatter-only board (zero columns): opens as a board, and must offer
+  // the "Add your first list" affordance so an empty board is never a dead end.
+  fs.writeFileSync(path.join(workspace, 'empty-board.md'),
+    "---\n\nkanban-plugin: board\n\n---\n\n");
   // A board with block-style frontmatter (a multi-line tag list): a save must
   // preserve it verbatim rather than flattening it away.
   fs.writeFileSync(path.join(workspace, 'tagged-board.md'),
