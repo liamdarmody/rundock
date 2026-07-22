@@ -368,8 +368,9 @@ describe('lane operations (column parity byte discipline, backlog)', () => {
 });
 
 describe('board creation and detection lifecycle', () => {
-  test('newBoardContent is byte-exact to the plugin basicFrontmatter', () => {
-    assert.strictEqual(Kanban.newBoardContent(), '---\n\nkanban-plugin: board\n\n---\n\n');
+  test('newBoardContent seeds three standard columns (byte-exact spec in kanban-new-board.test.js)', () => {
+    assert.deepStrictEqual(Kanban.parse(Kanban.newBoardContent()).lanes.map((l) => l.title),
+      ['To Do', 'In Progress', 'Done']);
   });
 
   test('isBoardFile mirrors hasFrontmatterKeyRaw', () => {
@@ -379,15 +380,15 @@ describe('board creation and detection lifecycle', () => {
     assert.strictEqual(Kanban.isBoardFile('# Just markdown\n'), false);
   });
 
-  test('fresh board: zero lanes, settings hoisted from frontmatter', () => {
-    const fresh = Kanban.parse(Kanban.newBoardContent());
+  test('a frontmatter-only board parses to zero lanes with settings hoisted from frontmatter', () => {
+    const fresh = Kanban.parse('---\n\nkanban-plugin: board\n\n---\n\n');
     assert.strictEqual(fresh.lanes.length, 0);
     assert.strictEqual(fresh.dropped.length, 0);
     assert.deepStrictEqual(fresh.settings, { 'kanban-plugin': 'board' });
   });
 
   test('first save adds the settings block in the plugin first-save shape; idempotent', () => {
-    const fresh = Kanban.parse(Kanban.newBoardContent());
+    const fresh = Kanban.parse('---\n\nkanban-plugin: board\n\n---\n\n');
     Kanban.insertLane(fresh, 0, 'To do');
     const firstSave = Kanban.serialize(fresh);
     assert.strictEqual(firstSave,
@@ -422,12 +423,5 @@ describe('board creation and detection lifecycle', () => {
     Kanban.toggleItem(board, 0, 0);
     const toggled = Kanban.serialize(board);
     assert.ok(toggled.includes('tags:\n  - project\n  - kanban'), 'tags still intact after a card edit');
-  });
-
-  test('a fresh board built via newBoardContent still emits the canonical first-save shape', () => {
-    const fresh = Kanban.parse(Kanban.newBoardContent());
-    Kanban.insertLane(fresh, 0, 'To do');
-    assert.strictEqual(Kanban.serialize(fresh),
-      '---\n\nkanban-plugin: board\n\n---\n\n## To do\n\n\n\n\n\n%% kanban:settings\n```\n{"kanban-plugin":"board","list-collapse":[false]}\n```\n%%');
   });
 });

@@ -128,6 +128,10 @@ function buildFixture() {
   // to prove the board registry view renders columns and round-trips bytes.
   fs.writeFileSync(path.join(workspace, 'board.md'),
     "---\n\nkanban-plugin: board\n\n---\n\n## To do\n\n- [ ] Draft the outline\n- [ ] **Review** the brief\n\n\n## Doing\n\n- [ ] Wire the [[Board]] view\n\n\n## Done\n\n- [ ] Ship it\n\n\n\n\n%% kanban:settings\n```\n{\"kanban-plugin\":\"board\",\"list-collapse\":[false,false,false]}\n```\n%%");
+  // A frontmatter-only board (zero columns): opens as a board, and must offer
+  // the "Add your first list" affordance so an empty board is never a dead end.
+  fs.writeFileSync(path.join(workspace, 'empty-board.md'),
+    "---\n\nkanban-plugin: board\n\n---\n\n");
   // A board with block-style frontmatter (a multi-line tag list): a save must
   // preserve it verbatim rather than flattening it away.
   fs.writeFileSync(path.join(workspace, 'tagged-board.md'),

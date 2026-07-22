@@ -91,6 +91,15 @@ function ensureStyles(doc) {
     .board-add-field:focus-within .board-add-submit.ready, .board-add-submit.ready { background: var(--accent); color: #fff; opacity: 1; box-shadow: 0 2px 8px rgba(232,122,90,0.30); }
     .board-add-open { margin: 4px 8px 8px; padding: 8px 10px; border-radius: 8px; color: var(--text-2); font-size: var(--body); text-align: left; }
     .board-add-open:hover { background: var(--elevated); color: var(--text-1); }
+    /* Trailing "Add a list" column: always present at the end of the row, so it
+       doubles as the empty-board state (a board with zero lists shows only this,
+       which is the only way to add the first column). */
+    .board-add-lane { flex: 0 0 272px; align-self: flex-start; }
+    .board-add-lane-empty { flex: 0 0 320px; }
+    .board-add-lane-open { width: 100%; padding: 12px 14px; border: 1px dashed var(--border); border-radius: 12px; color: var(--text-2); font-size: var(--body); text-align: left; background: transparent; transition: color .15s ease, background .15s ease, border-color .15s ease; }
+    .board-add-lane-open:hover { color: var(--text-1); background: var(--surface); border-color: var(--text-2); }
+    .board-add-lane .board-add-field { background: var(--surface); }
+    .board-add-lane-input { flex: 1; min-width: 0; border: none; background: transparent; color: var(--text-1); font: inherit; font-size: var(--body); outline: none; }
     .board-dropped-warn { margin: 8px 20px; padding: 10px 14px; border-radius: 8px; background: rgba(232,168,76,0.12); border: 1px solid rgba(232,168,76,0.35); color: var(--text-1); font-size: var(--caption); }
   `;
   doc.head.appendChild(style);
@@ -185,6 +194,7 @@ export function mountBoardView({ paneElement, content, onWikilink }, Kanban) {
     if (staleToast) staleToast.remove();
     scroll.innerHTML = '';
     board.lanes.forEach((lane, laneIndex) => scroll.appendChild(renderLane(lane, laneIndex)));
+    scroll.appendChild(renderAddLane());
     const oldWarn = paneElement.querySelector('.board-dropped-warn');
     if (oldWarn) oldWarn.remove(); // never stack banners across renders
     if (board.dropped && board.dropped.length) {
@@ -578,6 +588,52 @@ export function mountBoardView({ paneElement, content, onWikilink }, Kanban) {
     toast.appendChild(btn);
     paneElement.appendChild(toast);
     undoTimer = setTimeout(() => toast.remove(), 6000);
+  }
+
+  // Trailing "Add a list" column. Mirrors the add-card composer grammar (open
+  // button -> inline field -> Enter/submit commits, Escape/empty-blur cancels)
+  // but adds a lane via Kanban.insertLane. Always rendered, so an empty board
+  // (zero lists) can be built and a fully-deleted board is never a dead end.
+  function renderAddLane() {
+    const empty = board.lanes.length === 0;
+    const wrap = doc.createElement('div');
+    wrap.className = 'board-add-lane' + (empty ? ' board-add-lane-empty' : '');
+    const openBtn = doc.createElement('button');
+    openBtn.type = 'button';
+    openBtn.className = 'board-add-lane-open';
+    openBtn.textContent = empty ? '+ Add your first list' : '+ Add list';
+    wrap.appendChild(openBtn);
+
+    openBtn.addEventListener('click', () => {
+      wrap.innerHTML = '';
+      const field = doc.createElement('div');
+      field.className = 'board-add-field';
+      const input = doc.createElement('input');
+      input.type = 'text';
+      input.placeholder = 'List name';
+      input.className = 'board-add-lane-input';
+      const submit = doc.createElement('button');
+      submit.type = 'button';
+      submit.className = 'board-add-submit';
+      submit.appendChild(plusIcon(doc));
+      field.appendChild(input);
+      field.appendChild(submit);
+      wrap.appendChild(field);
+      input.focus();
+      input.addEventListener('input', () => submit.classList.toggle('ready', input.value.trim().length > 0));
+      const commit = () => {
+        const v = input.value.trim();
+        if (v) { Kanban.insertLane(board, board.lanes.length, v); onChange(); }
+        render();
+      };
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); commit(); }
+        else if (e.key === 'Escape') { e.preventDefault(); render(); }
+      });
+      submit.addEventListener('mousedown', (e) => { e.preventDefault(); commit(); });
+      input.addEventListener('blur', () => { if (!input.value.trim()) render(); });
+    });
+    return wrap;
   }
 
   function addComposer(laneIndex) {
