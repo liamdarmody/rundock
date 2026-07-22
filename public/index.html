@@ -582,7 +582,7 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
    silent revert, so the typed text is kept and the reason is visible. */
 .tiptap-editor .ProseMirror .callout-edit.callout-edit-invalid { border-color: var(--danger, #d9534f); box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger, #d9534f) 30%, transparent); animation: callout-edit-shake 0.3s ease; }
 @keyframes callout-edit-shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-3px); } 75% { transform: translateX(3px); } }
-.floating-toolbar { position: absolute; display: none; gap: 2px; padding: 4px; background: var(--card); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.25); z-index: 50; left: 0; top: 0; }
+.floating-toolbar { position: absolute; display: none; gap: 2px; padding: 4px; background: var(--card); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 1px 2px rgba(0,0,0,0.10), 0 4px 12px rgba(0,0,0,0.16); z-index: 50; left: 0; top: 0; }
 .floating-toolbar.visible { display: inline-flex; }
 .floating-toolbar .tb-btn { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 28px; padding: 0 8px; background: transparent; color: var(--text-2); border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 600; font-family: inherit; }
 .floating-toolbar .tb-btn[data-style="b"] { font-weight: 700; }
@@ -597,7 +597,7 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .floating-toolbar .tb-dd { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 8px; background: transparent; color: var(--text-1); border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 600; font-family: inherit; }
 .floating-toolbar .tb-dd:hover, .floating-toolbar .tb-dd[aria-expanded="true"] { background: var(--accent-glow); color: var(--accent); }
 .floating-toolbar .tb-dd svg { display: block; opacity: 0.75; }
-.floating-toolbar .tb-menu { position: absolute; top: 100%; left: 0; margin-top: 6px; display: none; width: 216px; padding: 4px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 26px rgba(0,0,0,0.45); z-index: 51; }
+.floating-toolbar .tb-menu { position: absolute; top: 100%; left: 0; margin-top: 6px; display: none; width: 216px; padding: 4px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.10), 0 8px 20px rgba(0,0,0,0.16); z-index: 51; }
 .floating-toolbar .tb-menu.open { display: block; }
 /* Flip upward near the foot of the viewport so the menu never spills past the
    bottom (or extends the editor's scroll region). */
@@ -612,7 +612,12 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .floating-toolbar .tb-menu-sep { height: 1px; background: var(--border); margin: 4px 6px; }
 /* In-UI link popover: an input row anchored under the toolbar (replaces the
    OS-native prompt). Absolutely positioned so it sits below the flex row. */
-.floating-toolbar .tb-linkpop { position: absolute; top: 100%; left: 0; margin-top: 6px; display: none; align-items: center; gap: 4px; width: 288px; max-width: 80vw; padding: 5px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 26px rgba(0,0,0,0.45); z-index: 51; }
+.floating-toolbar .tb-linkpop { position: absolute; top: 100%; left: 0; margin-top: 6px; display: none; align-items: center; gap: 4px; width: 288px; max-width: 80vw; padding: 5px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.10), 0 8px 20px rgba(0,0,0,0.16); z-index: 51; }
+/* Light theme: pure-black shadows read harsher on a light background, so use a
+   lighter ambient. Toolbar and its dropped panels form one elevation cluster. */
+body.light .floating-toolbar { box-shadow: 0 1px 2px rgba(0,0,0,0.05), 0 4px 12px rgba(0,0,0,0.10); }
+body.light .floating-toolbar .tb-menu,
+body.light .floating-toolbar .tb-linkpop { box-shadow: 0 2px 6px rgba(0,0,0,0.06), 0 8px 20px rgba(0,0,0,0.10); }
 .floating-toolbar .tb-linkpop.open { display: flex; }
 .floating-toolbar .tb-linkpop.up { top: auto; bottom: 100%; margin-top: 0; margin-bottom: 6px; }
 .floating-toolbar .tb-link-input { flex: 1; min-width: 0; height: 28px; padding: 0 8px; background: var(--elevated); border: 1px solid var(--border); border-radius: 5px; color: var(--text-1); font-size: 13px; font-family: inherit; outline: none; }
