@@ -13,6 +13,7 @@
 
 // ---- Icons (Lucide, monochrome, currentColor so they sit flush with text) ----
 const LINK_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>';
+const UNLINK_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 0 1 4 8"/><line x1="8" y1="12" x2="12" y2="12"/><line x1="2" y1="2" x2="22" y2="22"/></svg>';
 const COMMENT_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
 const CHEVRON_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
 const CHECK_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
@@ -88,6 +89,19 @@ function renderInlineButton(b) {
   return `<button type="button" class="tb-btn" data-cmd="${b.id}" title="${escapeHtml(b.title)}"${styled}>${content}</button>`;
 }
 
+// The in-UI link popover: an input plus apply/remove controls, anchored under
+// the toolbar. Rendered only when the toolbar carries a link button. Replaces
+// the OS-native window.prompt so link editing stays inside the app chrome
+// (the Notion/Bear pattern): pre-filled with the current href, Enter applies,
+// Escape cancels, the unlink control clears the mark.
+function renderLinkPopover() {
+  return '<div class="tb-linkpop" role="dialog" aria-label="Link">'
+    + '<input type="text" class="tb-link-input" placeholder="Paste or type a link" spellcheck="false" autocomplete="off" />'
+    + `<button type="button" class="tb-link-apply" title="Apply link (Enter)" aria-label="Apply link">${CHECK_SVG}</button>`
+    + `<button type="button" class="tb-link-unlink" title="Remove link" aria-label="Remove link">${UNLINK_ICON_SVG}</button>`
+    + '</div>';
+}
+
 function renderBlockMenu() {
   const items = BLOCK_TYPES.map((t) => {
     if (t.sep) return '<div class="tb-menu-sep"></div>';
@@ -114,7 +128,20 @@ export function renderToolbarHTML(withComment, buttonIds = null) {
   const comment = withComment
     ? `<span class="tb-sep"></span><button type="button" class="tb-comment" data-cmd="comment" title="Comment on selection">${COMMENT_ICON_SVG}<span>Comment</span></button>`
     : '';
-  return `<div class="tb-row">${dropdown}${inline}${comment}</div>${menu}`;
+  const linkpop = inlineDefs.some((b) => b.id === 'link') ? renderLinkPopover() : '';
+  return `<div class="tb-row">${dropdown}${inline}${comment}</div>${menu}${linkpop}`;
+}
+
+// Applies (or clears) a link on the current selection. Empty/whitespace URL
+// removes the mark; otherwise the href is normalised and set. extendMarkRange
+// means editing an existing link updates the whole link, not just the part
+// under the caret. Exported so callers (and tests) can drive links directly.
+export function applyLink(editor, url) {
+  if (!editor) return;
+  const chain = editor.chain().focus().extendMarkRange('link');
+  const norm = normaliseLinkHref(String(url == null ? '' : url).trim());
+  if (norm === '') return chain.unsetLink().run();
+  return chain.setLink({ href: norm, rel: 'noopener noreferrer' }).run();
 }
 
 export function applyCommand(editor, id) {
@@ -124,13 +151,8 @@ export function applyCommand(editor, id) {
     case 'bold':   return chain.toggleBold().run();
     case 'italic': return chain.toggleItalic().run();
     case 'code':   return chain.toggleCode().run();
-    case 'link': {
-      const prev = editor.getAttributes('link').href || '';
-      const url = window.prompt('Link URL', prev);
-      if (url === null) return;
-      if (url === '')   return chain.unsetLink().run();
-      return chain.setLink({ href: normaliseLinkHref(url), rel: 'noopener noreferrer' }).run();
-    }
+    // 'link' is intentionally absent: links are edited through the in-UI link
+    // popover (openLinkPopover / applyLink), not this dispatch.
     case 'h1': return chain.toggleHeading({ level: 1 }).run();
     case 'h2': return chain.toggleHeading({ level: 2 }).run();
     case 'h3': return chain.toggleHeading({ level: 3 }).run();
@@ -194,11 +216,57 @@ export function attachFloatingToolbar({ toolbarElement, hostElement, editor, onR
     const open = menuEl.classList.toggle('open');
     if (dropdownBtn) dropdownBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
   };
-  // Removing 'visible' anywhere must also close the menu, so a hidden toolbar
-  // never leaves an orphaned open menu.
-  const hide = () => { toolbarElement.classList.remove('visible'); closeMenu(); };
+  // The in-UI link popover. While it is open the editor is blurred (the input
+  // holds focus), so the blur/reposition handlers must not tear the toolbar
+  // down: linkPopoverOpen guards them.
+  const linkPopEl = toolbarElement.querySelector('.tb-linkpop');
+  const linkInput = toolbarElement.querySelector('.tb-link-input');
+  let linkPopoverOpen = false;
+  const closeLinkPopover = () => {
+    if (linkPopEl) linkPopEl.classList.remove('open');
+    linkPopoverOpen = false;
+  };
+  const openLinkPopover = () => {
+    if (!linkPopEl || !linkInput) return;
+    linkPopoverOpen = true; // set BEFORE focusing the input so onBlur is guarded
+    linkInput.value = editor.getAttributes('link').href || '';
+    linkPopEl.classList.add('open');
+    linkInput.focus();
+    linkInput.select();
+  };
+  const commitLink = () => {
+    if (!linkInput) return;
+    applyLink(editor, linkInput.value);
+    closeLinkPopover();
+    updateActiveStates(editor, toolbarElement);
+  };
+  const removeLink = () => {
+    applyLink(editor, '');
+    closeLinkPopover();
+    updateActiveStates(editor, toolbarElement);
+  };
+  const cancelLink = () => {
+    closeLinkPopover();
+    editor.chain().focus().run(); // restore the caret/selection in the document
+  };
+
+  // Removing 'visible' anywhere must also close the menu and link popover, so a
+  // hidden toolbar never leaves an orphaned open panel.
+  const hide = () => { toolbarElement.classList.remove('visible'); closeMenu(); closeLinkPopover(); };
 
   const onClick = (event) => {
+    // Link popover: let the input take the caret; the apply/unlink buttons act.
+    if (event.target.closest('.tb-link-input')) return;
+    if (event.target.closest('.tb-link-apply')) {
+      event.preventDefault(); event.stopPropagation();
+      commitLink();
+      return;
+    }
+    if (event.target.closest('.tb-link-unlink')) {
+      event.preventDefault(); event.stopPropagation();
+      removeLink();
+      return;
+    }
     if (event.target.closest('.tb-dd')) {
       event.preventDefault(); event.stopPropagation();
       toggleMenu();
@@ -217,6 +285,12 @@ export function attachFloatingToolbar({ toolbarElement, hostElement, editor, onR
     event.preventDefault(); event.stopPropagation();
     closeMenu();
     const cmd = btn.getAttribute('data-cmd');
+    if (cmd === 'link') {
+      // Toggle the in-UI link popover instead of an OS dialog.
+      if (linkPopoverOpen) cancelLink();
+      else openLinkPopover();
+      return;
+    }
     if (cmd === 'comment') {
       if (typeof onReviewAction === 'function') onReviewAction('comment');
       hide();
@@ -229,13 +303,20 @@ export function attachFloatingToolbar({ toolbarElement, hostElement, editor, onR
 
   // Stop selection-collapse on any toolbar interaction by preventing the host
   // from losing focus during the brief mousedown on a control.
+  // Keep the document focus on any toolbar control EXCEPT the link input, which
+  // must be able to take focus so the user can type a URL.
   const preventBlur = (e) => {
-    if (e.target.closest('.tb-btn, .tb-comment, .tb-dd, .tb-menu-item')) e.preventDefault();
+    if (e.target.closest('.tb-link-input')) return;
+    if (e.target.closest('.tb-btn, .tb-comment, .tb-dd, .tb-menu-item, .tb-link-apply, .tb-link-unlink')) e.preventDefault();
   };
   toolbarElement.addEventListener('mousedown', preventBlur);
 
-  // Escape closes an open menu without collapsing the selection.
+  // Enter/Escape drive the link input; Escape otherwise closes an open menu.
   const onKeyDown = (e) => {
+    if (linkPopoverOpen && e.target.closest('.tb-link-input')) {
+      if (e.key === 'Enter')  { e.preventDefault(); commitLink(); return; }
+      if (e.key === 'Escape') { e.preventDefault(); cancelLink();  return; }
+    }
     if (e.key === 'Escape' && menuEl && menuEl.classList.contains('open')) {
       e.preventDefault();
       closeMenu();
@@ -244,6 +325,9 @@ export function attachFloatingToolbar({ toolbarElement, hostElement, editor, onR
   toolbarElement.addEventListener('keydown', onKeyDown);
 
   const position = () => {
+    // While the link popover holds focus the editor is blurred and the toolbar
+    // must stay put; don't let the usual empty/blur checks tear it down.
+    if (linkPopoverOpen) return;
     const { from, to, empty } = editor.state.selection;
     if (empty || !editor.isFocused) { hide(); return; }
     // An atom node selection (e.g. clicking a callout) is not inline-formattable,
@@ -297,10 +381,12 @@ export function attachFloatingToolbar({ toolbarElement, hostElement, editor, onR
   };
 
   // A real selection change (moving the caret, clicking into other text, or a
-  // block command's own transaction) closes any open menu, then repositions.
-  const onSelection = () => { closeMenu(); position(); };
+  // block command's own transaction) closes any open menu/link popover, then
+  // repositions. Closing the popover first clears its guard so the toolbar can
+  // follow the new selection (e.g. the user clicked back into the document).
+  const onSelection = () => { closeLinkPopover(); closeMenu(); position(); };
   const onUpdate    = () => position();
-  const onBlur      = () => hide();
+  const onBlur      = () => { if (linkPopoverOpen) return; hide(); };
 
   editor.on('selectionUpdate', onSelection);
   editor.on('transaction',     onUpdate);

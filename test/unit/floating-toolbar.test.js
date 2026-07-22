@@ -4,7 +4,7 @@
 // rendered markup. The DOM menu open/close and positioning are covered by e2e.
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderToolbarHTML, applyCommand, activeBlockType } from '../../public/editor/panels/floating-toolbar.js';
+import { renderToolbarHTML, applyCommand, applyLink, activeBlockType } from '../../public/editor/panels/floating-toolbar.js';
 
 // A mock editor whose chain records each command call in order, so we can
 // assert exactly which Tiptap commands a toolbar action dispatches without a
@@ -53,6 +53,22 @@ describe('floating toolbar markup', () => {
     assert.doesNotMatch(renderToolbarHTML(false), /data-cmd="comment"/);
     assert.match(renderToolbarHTML(true), /data-cmd="comment"/);
   });
+
+  test('the link popover is rendered whenever a link button is present, and omitted otherwise', () => {
+    // Full toolbar carries a link mark -> in-UI popover markup is present.
+    const full = renderToolbarHTML(false);
+    assert.match(full, /class="tb-linkpop"/, 'full toolbar has the link popover');
+    assert.match(full, /class="tb-link-input"/, 'popover has an input');
+    assert.match(full, /class="tb-link-apply"/, 'popover has an apply control');
+    assert.match(full, /class="tb-link-unlink"/, 'popover has an unlink control');
+
+    // A reduced toolbar without a link button omits the popover entirely.
+    const noLink = renderToolbarHTML(false, ['bold', 'italic']);
+    assert.doesNotMatch(noLink, /class="tb-linkpop"/, 'no popover without a link button');
+
+    // A reduced toolbar that keeps the link button keeps the popover.
+    assert.match(renderToolbarHTML(false, ['bold', 'link']), /class="tb-linkpop"/);
+  });
 });
 
 describe('applyCommand dispatch', () => {
@@ -94,6 +110,49 @@ describe('applyCommand dispatch', () => {
 
   test('a null editor is a no-op', () => {
     assert.doesNotThrow(() => applyCommand(null, 'bold'));
+  });
+
+  test('link is not handled by applyCommand (it goes through the popover/applyLink)', () => {
+    const ed = mockEditor();
+    applyCommand(ed, 'link');
+    // The link case is a no-op: no link command dispatched and the chain never runs.
+    assert.ok(!ed.calls.some((c) => c.startsWith('setLink(')), 'no setLink');
+    assert.ok(!ed.calls.includes('unsetLink'), 'no unsetLink');
+    assert.ok(!ed.calls.includes('run'), 'the chain is never run');
+  });
+});
+
+describe('applyLink', () => {
+  test('sets a link, extending over the whole existing link range, and normalises a bare domain', () => {
+    const ed = mockEditor();
+    applyLink(ed, 'rundock.ai');
+    assert.ok(ed.calls.includes('extendMarkRange("link")'), 'extends the link range');
+    const setCall = ed.calls.find((c) => c.startsWith('setLink('));
+    assert.ok(setCall, 'calls setLink');
+    assert.match(setCall, /https:\/\/rundock\.ai/, 'bare domain normalised to https');
+    assert.match(setCall, /noopener noreferrer/, 'sets a safe rel');
+    assert.equal(ed.calls.at(-1), 'run');
+  });
+
+  test('leaves an explicit protocol untouched', () => {
+    const ed = mockEditor();
+    applyLink(ed, 'mailto:hi@rundock.ai');
+    const setCall = ed.calls.find((c) => c.startsWith('setLink('));
+    assert.match(setCall, /mailto:hi@rundock\.ai/);
+  });
+
+  test('an empty or whitespace URL unsets the link', () => {
+    for (const val of ['', '   ', null, undefined]) {
+      const ed = mockEditor();
+      applyLink(ed, val);
+      assert.ok(ed.calls.includes('unsetLink'), `"${val}" removes the link`);
+      assert.ok(!ed.calls.some((c) => c.startsWith('setLink(')), 'never sets a link');
+      assert.equal(ed.calls.at(-1), 'run');
+    }
+  });
+
+  test('a null editor is a no-op', () => {
+    assert.doesNotThrow(() => applyLink(null, 'rundock.ai'));
   });
 });
 

@@ -602,6 +602,17 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .floating-toolbar .tb-menu-check { display: none; color: var(--accent); }
 .floating-toolbar .tb-menu-item.active .tb-menu-check { display: inline-flex; }
 .floating-toolbar .tb-menu-sep { height: 1px; background: var(--border); margin: 4px 6px; }
+/* In-UI link popover: an input row anchored under the toolbar (replaces the
+   OS-native prompt). Absolutely positioned so it sits below the flex row. */
+.floating-toolbar .tb-linkpop { position: absolute; top: 100%; left: 0; margin-top: 6px; display: none; align-items: center; gap: 4px; width: 288px; max-width: 80vw; padding: 5px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 26px rgba(0,0,0,0.45); z-index: 51; }
+.floating-toolbar .tb-linkpop.open { display: flex; }
+.floating-toolbar .tb-link-input { flex: 1; min-width: 0; height: 28px; padding: 0 8px; background: var(--elevated); border: 1px solid var(--border); border-radius: 5px; color: var(--text-1); font-size: 13px; font-family: inherit; outline: none; }
+.floating-toolbar .tb-link-input:focus { border-color: var(--accent); }
+.floating-toolbar .tb-link-input::placeholder { color: var(--text-2); }
+.floating-toolbar .tb-link-apply, .floating-toolbar .tb-link-unlink { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex: 0 0 auto; background: transparent; color: var(--text-2); border: none; border-radius: 5px; cursor: pointer; }
+.floating-toolbar .tb-link-apply:hover { background: var(--accent-glow); color: var(--accent); }
+.floating-toolbar .tb-link-unlink:hover { background: var(--accent-glow); color: var(--attention); }
+.floating-toolbar .tb-link-apply svg, .floating-toolbar .tb-link-unlink svg { display: block; }
 
 /* In-view find bar (Cmd+F / Ctrl+F). Positioned absolutely against the main
    panel area so it floats over whichever view is active. Match highlights

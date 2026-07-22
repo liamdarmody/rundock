@@ -78,3 +78,52 @@ test('a checklist item lays out the checkbox and its text on the same line (not 
   // And the checkbox sits to the LEFT of the text, not above it.
   expect(box.x + box.width).toBeLessThanOrEqual(txt.x + 1);
 });
+
+test('the link button opens an in-UI popover that sets, pre-fills, and removes a link', async ({ page }) => {
+  await openNote(page, 'Roadmap-2026.md');
+  const NEEDLE = 'Quarterly targets';
+
+  // Select the paragraph text and open the link popover from the toolbar.
+  await page.locator('.ProseMirror p', { hasText: NEEDLE }).first().click({ clickCount: 3 });
+  await expect(page.locator('#tiptap-toolbar.visible')).toBeVisible();
+  const popover = page.locator('#tiptap-toolbar .tb-linkpop');
+  const input = page.locator('#tiptap-toolbar .tb-link-input');
+  await expect(popover).toBeHidden();
+  await page.locator('#tiptap-toolbar .tb-btn[data-cmd="link"]').click();
+  await expect(popover).toBeVisible();
+  await expect(input).toBeFocused();
+
+  // Type a bare domain and apply with Enter. It is normalised to https:// and
+  // the selected text becomes a link; the popover closes.
+  await input.fill('rundock.ai');
+  await input.press('Enter');
+  await expect(popover).toBeHidden();
+  const link = page.locator('.ProseMirror a[href="https://rundock.ai"]');
+  await expect(link).toHaveCount(1);
+
+  // Reopening on the linked text pre-fills the existing href.
+  await link.click({ clickCount: 3 });
+  await expect(page.locator('#tiptap-toolbar.visible')).toBeVisible();
+  await page.locator('#tiptap-toolbar .tb-btn[data-cmd="link"]').click();
+  await expect(input).toHaveValue('https://rundock.ai');
+
+  // The unlink control removes the link.
+  await page.locator('#tiptap-toolbar .tb-link-unlink').click();
+  await expect(popover).toBeHidden();
+  await expect(page.locator('.ProseMirror a[href="https://rundock.ai"]')).toHaveCount(0);
+});
+
+test('Escape closes the link popover without changing the document', async ({ page }) => {
+  await openNote(page, 'Roadmap-2026.md');
+  const NEEDLE = 'Quarterly targets';
+
+  await page.locator('.ProseMirror p', { hasText: NEEDLE }).first().click({ clickCount: 3 });
+  await page.locator('#tiptap-toolbar .tb-btn[data-cmd="link"]').click();
+  const input = page.locator('#tiptap-toolbar .tb-link-input');
+  await expect(input).toBeFocused();
+  await input.fill('rundock.ai');
+  await input.press('Escape');
+
+  await expect(page.locator('#tiptap-toolbar .tb-linkpop')).toBeHidden();
+  await expect(page.locator('.ProseMirror a')).toHaveCount(0);
+});
