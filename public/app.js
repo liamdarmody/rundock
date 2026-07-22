@@ -3320,10 +3320,16 @@ function promptCreate(menu, type, folder) {
   field.className = 'files-menu-field';
   const input = document.createElement('input');
   input.type = 'text';
-  input.placeholder = type.kind === 'folder' ? 'Folder name' : type.label.replace('New ', '') + ' name';
+  // Note, board, and folder all behave identically. The default name is the
+  // single source of truth: pre-filled and selected so the user types over it
+  // or accepts it with Enter. The placeholder is a plain fallback for the rare
+  // cleared-field state (the type is already obvious from the menu item).
+  input.value = type.label;
+  input.placeholder = 'Name';
   field.appendChild(input);
   menu.appendChild(field);
   input.focus();
+  input.select();
   const submit = () => {
     const rel = FilesMenuModel.creatablePath(folder, input.value, type.ext);
     if (!rel) { closeFilesMenu(); return; }
