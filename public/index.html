@@ -537,6 +537,11 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .tiptap-editor .ProseMirror ul[data-type="taskList"] > li { display: flex; align-items: flex-start; gap: 8px; }
 .tiptap-editor .ProseMirror ul[data-type="taskList"] > li > label { flex: 0 0 auto; margin-top: 0.3em; user-select: none; }
 .tiptap-editor .ProseMirror ul[data-type="taskList"] > li > div { flex: 1 1 auto; min-width: 0; }
+/* Accent-tinted checkbox (orange tick), matching the board card. A ticked item
+   greys its text to read as done, but is NOT struck through (that heavier
+   line-through treatment is reserved for the board). */
+.tiptap-editor .ProseMirror ul[data-type="taskList"] input[type="checkbox"] { accent-color: var(--accent); }
+.tiptap-editor .ProseMirror ul[data-type="taskList"] > li[data-checked="true"] > div { color: var(--text-2); }
 .tiptap-editor .ProseMirror blockquote { border-left: 2px solid var(--border); padding-left: 16px; margin: 0 0 12px 0; color: var(--text-2); }
 .tiptap-editor .ProseMirror code { font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 13px; background: var(--card); padding: 2px 6px; border-radius: 4px; color: var(--text-1); }
 .tiptap-editor .ProseMirror pre { background: var(--card); border-radius: 8px; padding: 12px 16px; margin: 0 0 12px 0; overflow-x: auto; }

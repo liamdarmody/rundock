@@ -79,6 +79,41 @@ test('a checklist item lays out the checkbox and its text on the same line (not 
   expect(box.x + box.width).toBeLessThanOrEqual(txt.x + 1);
 });
 
+test('a checklist uses the accent checkbox and greys (not strikes) checked text', async ({ page }) => {
+  await openNote(page, 'Roadmap-2026.md');
+  const NEEDLE = 'Quarterly targets';
+  await transform(page, NEEDLE, 'taskList');
+
+  const li = page.locator('.ProseMirror ul[data-type="taskList"] > li').first();
+  const checkbox = li.locator('input[type="checkbox"]');
+  const content = li.locator('> div');
+
+  // Resolve the theme tokens to rgb so we can compare computed styles against them.
+  const resolve = (v) => page.evaluate((val) => {
+    const p = document.createElement('span');
+    p.style.color = val;
+    document.body.appendChild(p);
+    const c = getComputedStyle(p).color;
+    p.remove();
+    return c;
+  }, v);
+  const accent = await resolve('var(--accent)');
+  const muted = await resolve('var(--text-2)');
+
+  // The checkbox is tinted with the accent (orange), matching the board.
+  await expect(checkbox).toHaveCSS('accent-color', accent);
+  // Unchecked text is full-strength (not the muted colour).
+  expect(await content.evaluate((el) => getComputedStyle(el).color)).not.toBe(muted);
+
+  // Tick it: the text greys out but is NOT struck through (unlike the board card).
+  // A global `* { transition: color 0.2s }` animates the colour change, so use
+  // the auto-retrying toHaveCSS to let the transition settle before asserting.
+  await checkbox.click();
+  await expect(li).toHaveAttribute('data-checked', 'true');
+  await expect(content).toHaveCSS('color', muted);
+  await expect(content).toHaveCSS('text-decoration-line', 'none');
+});
+
 test('the link button opens an in-UI popover that sets, pre-fills, and removes a link', async ({ page }) => {
   await openNote(page, 'Roadmap-2026.md');
   const NEEDLE = 'Quarterly targets';
