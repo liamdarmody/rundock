@@ -4,6 +4,27 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** Editor & Board Polish
+
+### Added
+
+- **Turn text into any block from the toolbar:** the formatting toolbar gains a "Text" dropdown that converts the selection to a heading (H1 to H3), a bullet list, a numbered list, or a checklist, with the current block type shown as its label. Checklists were previously only creatable by typing `- [ ]` and so were effectively hidden; they are now one click away.
+
+### Changed
+
+- **Edit links inside Rundock, not in an OS dialog:** the link button now opens a small in-app popover anchored to the toolbar, pre-filled with the current link, where Enter applies (a bare domain such as `rundock.ai` becomes an `https://` link), Escape cancels, and an unlink button clears it, replacing the browser's native prompt box.
+- **New Kanban boards start ready to use:** creating a board now seeds it with To Do, In Progress, and Done columns and shows an "Add a list" control, instead of opening an empty board with no way to add columns.
+- **Checklist checkboxes match the board:** a checkbox in a note now uses the same accent tick as Kanban cards, and ticking an item greys its text to read as done, without the board's strike-through.
+- **New files start with a sensible name:** creating a note, board, or folder pre-fills the name field with a default (for example "New note") rather than leaving it blank.
+
+### Fixed
+
+- **Switching workspaces closes the file you had open:** any open file (note, board, HTML or SVG artifact, PDF, or image) from the previous workspace is now closed when you switch workspaces, instead of staying open and reappearing in the new one. Switching views within the same workspace still reopens your file.
+- **Checklist text no longer wraps under the checkbox:** a checklist item now lays its checkbox and text out on one line.
+- **The toolbar dropdown and link popover stay on screen:** near the foot of a file they now open upward instead of spilling past the visible area, and their shadows are softer, adapt to the light theme, and no longer wash over the toolbar.
+
 ## 0.11.0: Files, Boards & Streaming (2026-07-21)
 
 ### Added
