@@ -54,3 +54,27 @@ test('the "Text" dropdown transforms a paragraph into lists and headings, and re
   await expect(page.locator('.ProseMirror h2')).toHaveCount(1);
   await expect(label).toHaveText('Heading 2');
 });
+
+test('a checklist item lays out the checkbox and its text on the same line (not stacked)', async ({ page }) => {
+  await openNote(page, 'Roadmap-2026.md');
+  const NEEDLE = 'Quarterly targets';
+
+  await transform(page, NEEDLE, 'taskList');
+  // The TaskItem nodeView builds the <li> programmatically (no data-type on the
+  // li), so anchor on the taskList container instead.
+  const checkbox = page.locator('.ProseMirror ul[data-type="taskList"] > li input[type="checkbox"]');
+  const content = page.locator('.ProseMirror ul[data-type="taskList"] > li > div');
+  await expect(checkbox).toHaveCount(1);
+  await expect(content).toHaveCount(1);
+
+  const box = await checkbox.boundingBox();
+  const txt = await content.boundingBox();
+
+  // Same line: their vertical spans overlap (the text does not start below the
+  // checkbox). If the layout stacks, txt.y would sit at/after the checkbox's
+  // bottom edge and this overlap check fails.
+  const overlap = Math.min(box.y + box.height, txt.y + txt.height) - Math.max(box.y, txt.y);
+  expect(overlap).toBeGreaterThan(0);
+  // And the checkbox sits to the LEFT of the text, not above it.
+  expect(box.x + box.width).toBeLessThanOrEqual(txt.x + 1);
+});
