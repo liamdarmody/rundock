@@ -437,26 +437,24 @@ const CSS = `
   }
 }
 
-/* --- Review: floating toolbar additions ---------------------------------- */
-.floating-toolbar.visible { flex-direction: column; }
-.floating-toolbar .tb-row { display: flex; gap: 2px; }
+/* --- Review: floating toolbar Comment action (inline, single line) ------- */
+.floating-toolbar .tb-row { display: flex; align-items: center; gap: 2px; }
 .floating-toolbar .tb-comment {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
   gap: 6px;
-  width: 100%;
-  margin-top: 4px;
-  padding: 5px 10px;
-  border-top: 1px solid var(--border);
-  border-radius: 0 0 4px 4px;
+  height: 28px;
+  padding: 0 10px;
   background: transparent;
-  color: var(--text-1);
-  font-size: 12px;
+  color: var(--text-2);
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
   font-weight: 600;
   font-family: inherit;
   cursor: pointer;
 }
+.floating-toolbar .tb-comment svg { display: block; }
 .floating-toolbar .tb-comment:hover {
   background: var(--accent-glow, rgba(232, 122, 90, 0.15));
   color: var(--accent, #E87A5A);
