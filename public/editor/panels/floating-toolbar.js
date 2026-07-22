@@ -206,14 +206,33 @@ export function attachFloatingToolbar({ toolbarElement, hostElement, editor, onR
 
   const dropdownBtn = toolbarElement.querySelector('.tb-dd');
   const menuEl = toolbarElement.querySelector('.tb-menu');
+
+  // A dropped panel (the block menu or the link popover) opens below the toolbar
+  // by default. Near the foot of the viewport that would spill past the visible
+  // area (and extend the editor's scroll region), so flip it to open UPWARD when
+  // there is not enough room below but there is more room above. The `up` class
+  // is measured after the panel is already `.open` (so its height is real).
+  const flipPanelIfNeeded = (panel) => {
+    if (!panel) return;
+    panel.classList.remove('up');
+    const tbRect = toolbarElement.getBoundingClientRect();
+    const panelH = panel.getBoundingClientRect().height;
+    const gap = 8;
+    const roomBelow = window.innerHeight - tbRect.bottom;
+    const roomAbove = tbRect.top;
+    if (roomBelow < panelH + gap && roomAbove > roomBelow) panel.classList.add('up');
+  };
+
   const closeMenu = () => {
     if (!menuEl) return;
-    menuEl.classList.remove('open');
+    menuEl.classList.remove('open', 'up');
     if (dropdownBtn) dropdownBtn.setAttribute('aria-expanded', 'false');
   };
   const toggleMenu = () => {
     if (!menuEl) return;
     const open = menuEl.classList.toggle('open');
+    if (open) flipPanelIfNeeded(menuEl);
+    else menuEl.classList.remove('up');
     if (dropdownBtn) dropdownBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
   };
   // The in-UI link popover. While it is open the editor is blurred (the input
@@ -223,7 +242,7 @@ export function attachFloatingToolbar({ toolbarElement, hostElement, editor, onR
   const linkInput = toolbarElement.querySelector('.tb-link-input');
   let linkPopoverOpen = false;
   const closeLinkPopover = () => {
-    if (linkPopEl) linkPopEl.classList.remove('open');
+    if (linkPopEl) linkPopEl.classList.remove('open', 'up');
     linkPopoverOpen = false;
   };
   const openLinkPopover = () => {
@@ -231,6 +250,7 @@ export function attachFloatingToolbar({ toolbarElement, hostElement, editor, onR
     linkPopoverOpen = true; // set BEFORE focusing the input so onBlur is guarded
     linkInput.value = editor.getAttributes('link').href || '';
     linkPopEl.classList.add('open');
+    flipPanelIfNeeded(linkPopEl);
     linkInput.focus();
     linkInput.select();
   };

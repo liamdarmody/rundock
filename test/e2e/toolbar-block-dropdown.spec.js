@@ -79,6 +79,38 @@ test('a checklist item lays out the checkbox and its text on the same line (not 
   expect(box.x + box.width).toBeLessThanOrEqual(txt.x + 1);
 });
 
+test('the block dropdown flips upward when there is no room below', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 600 });
+  await openNote(page, 'long-note.md');
+
+  // Scroll the editor to its foot so the final line sits low in the viewport.
+  await page.locator('.ProseMirror').first().evaluate((pm) => {
+    let el = pm;
+    while (el && el !== document.body) {
+      if (el.scrollHeight > el.clientHeight + 4 && getComputedStyle(el).overflowY !== 'visible') { el.scrollTop = el.scrollHeight; return; }
+      el = el.parentElement;
+    }
+  });
+
+  // Triple-click the last line at its real coordinates (page.mouse does not
+  // auto-scroll it back to the centre, unlike a locator click).
+  const box = await page.locator('.ProseMirror p', { hasText: 'Final line at the very bottom' }).first().boundingBox();
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { clickCount: 3 });
+  await expect(page.locator('#tiptap-toolbar.visible')).toBeVisible();
+
+  // Open the "Text" dropdown: with the toolbar near the foot of the viewport it
+  // must flip upward and stay on-screen.
+  await page.locator('#tiptap-toolbar .tb-dd').click();
+  const menu = page.locator('#tiptap-toolbar .tb-menu.open');
+  await expect(menu).toBeVisible();
+  await expect(menu).toHaveClass(/\bup\b/);
+
+  const menuBottom = await menu.evaluate((el) => el.getBoundingClientRect().bottom);
+  const ddTop = await page.locator('#tiptap-toolbar .tb-dd').evaluate((el) => el.getBoundingClientRect().top);
+  expect(menuBottom).toBeLessThanOrEqual(ddTop + 1);   // opened above the trigger
+  expect(menuBottom).toBeLessThanOrEqual(600);          // never spills past the viewport foot
+});
+
 test('a checklist uses the accent checkbox and greys (not strikes) checked text', async ({ page }) => {
   await openNote(page, 'Roadmap-2026.md');
   const NEEDLE = 'Quarterly targets';

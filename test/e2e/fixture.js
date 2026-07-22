@@ -63,6 +63,12 @@ function buildFixture() {
   fs.writeFileSync(path.join(workspace, 'Roadmap-2026.md'),
     '# Roadmap 2026\n\nQuarterly targets and the mobile milestone.\n');
 
+  // A tall note that overflows the editor viewport, so the floating toolbar's
+  // dropdown can be exercised near the foot of the visible area (where the menu
+  // must flip to open upward rather than spilling past the bottom).
+  fs.writeFileSync(path.join(workspace, 'long-note.md'),
+    '# Long Note\n\n' + Array.from({ length: 60 }, (_, i) => `Paragraph ${i + 1} of the long note body.`).join('\n\n') + '\n\nFinal line at the very bottom of the file.\n');
+
   // A note whose body paragraph carries two inline wikilinks. Pressing Enter
   // at the end of this line must split the block cleanly and keep every
   // wikilink and its surrounding text (a contenteditable + inline-atom
