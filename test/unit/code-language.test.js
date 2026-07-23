@@ -51,6 +51,52 @@ describe('resolveCodeLanguage', () => {
     assert.strictEqual(resolveCodeLanguage(undefined, py, hljs).label, 'Python');
   });
 
+  // A long plain-text draft (e.g. a LinkedIn post) rendered in a bare fence.
+  // highlight.js relevance ACCUMULATES with length, so a long prose block piles
+  // up incidental matches and clears the flat relevance floor (tuned on short
+  // fixtures) while remaining obvious prose. A relevance-density gate catches
+  // it: prose stays low-density however long it runs; real code is dense.
+  const LONG_PROSE = [
+    'I spent three years building products nobody asked for.',
+    'Then I changed one habit and everything shifted.',
+    "Here's the habit: every Monday, I write down the single most important decision my team faces that week.",
+    'Not a task. Not a feature. A decision.',
+    "Because here's what I learned running product at two startups:",
+    "Teams don't fail because they can't build. They fail because they build the wrong thing, confidently, for months.",
+    'The best product leaders I know are ruthless about one question: what has to be true for this to work?',
+    "If you can't answer that, you're not ready to build. You're ready to guess.",
+    'Write the decision. Write what has to be true. Then go find out if it is.',
+    'What decision is your team avoiding right now?',
+  ].join('\n');
+
+  test('regression: a long plain-text draft resolves to text, not a code language', () => {
+    const r = resolveCodeLanguage(undefined, LONG_PROSE, hljs);
+    assert.strictEqual(r.label, 'text', 'long prose renders as text, not Rust');
+    assert.ok(!r.html.includes('<span'), 'long prose is escaped, not highlighted');
+    // Pin the mechanism: the block DOES clear the flat relevance floor, so this
+    // fails loudly if the density gate is removed and only the floor remains.
+    const subset = resolveCodeLanguage.AUTODETECT_SUBSET.filter(l => hljs.getLanguage(l));
+    const auto = hljs.highlightAuto(LONG_PROSE, subset);
+    assert.ok(auto.relevance >= resolveCodeLanguage.AUTODETECT_RELEVANCE_MIN,
+      `underlying auto-detect clears the flat floor (rel=${auto.relevance}), so only the density gate rejects it`);
+  });
+
+  test('a long, indented real code block still auto-detects (density gate keeps genuine code)', () => {
+    const py = [
+      'class Widget:',
+      '    def __init__(self, name):',
+      '        self.name = name',
+      '        self.children = []',
+      '',
+      '    def add(self, child):',
+      '        if child is not None:',
+      '            self.children.append(child)',
+      '            return True',
+      '        return False',
+    ].join('\n');
+    assert.strictEqual(resolveCodeLanguage(undefined, py, hljs).label, 'Python');
+  });
+
   test('an explicit hint always wins, including vbnet', () => {
     const r = resolveCodeLanguage('vbnet', 'Dim x As Integer = 4', hljs);
     assert.strictEqual(r.label, 'Visual Basic .NET');
