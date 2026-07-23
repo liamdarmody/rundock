@@ -33,6 +33,15 @@
   // (javascript/python). 5 splits the two populations cleanly.
   const AUTODETECT_RELEVANCE_MIN = 5;
 
+  // highlightAuto relevance ACCUMULATES with length, so the flat floor above is
+  // not enough on its own: a long prose block (e.g. a LinkedIn draft) piles up
+  // incidental matches and clears 5 while remaining obvious prose (it scored as
+  // Rust). Relevance DENSITY separates them cleanly regardless of length: on the
+  // vendored build, prose tops out around 0.015 relevance/char however long it
+  // runs, while real code floors around 0.048. 0.03 (about 3 per 100 chars)
+  // splits the two with margin. A detection must clear BOTH the floor and this.
+  const AUTODETECT_RELEVANCE_DENSITY_MIN = 0.03;
+
   // Language hints that mean "this is plain text": first-class, never
   // auto-detected, rendered escaped and labelled "text".
   const PLAIN_HINTS = new Set(['plaintext', 'text', 'plain', 'txt']);
@@ -71,10 +80,14 @@
       return { html: escapeHtml(text), label: hint || '' };
     }
 
-    // Unlabelled: auto-detect over the curated subset, gate on relevance.
+    // Unlabelled: auto-detect over the curated subset, gate on relevance AND
+    // relevance density (guards against long prose accumulating past the floor).
     const subset = AUTODETECT_SUBSET.filter(l => hljs.getLanguage(l));
     const result = hljs.highlightAuto(text, subset);
-    if (result.language && result.relevance >= AUTODETECT_RELEVANCE_MIN) {
+    const density = text.length ? result.relevance / text.length : 0;
+    if (result.language
+        && result.relevance >= AUTODETECT_RELEVANCE_MIN
+        && density >= AUTODETECT_RELEVANCE_DENSITY_MIN) {
       return {
         html: result.value,
         label: (hljs.getLanguage(result.language) || {}).name || result.language,
@@ -85,5 +98,6 @@
 
   resolveCodeLanguage.AUTODETECT_SUBSET = AUTODETECT_SUBSET;
   resolveCodeLanguage.AUTODETECT_RELEVANCE_MIN = AUTODETECT_RELEVANCE_MIN;
+  resolveCodeLanguage.AUTODETECT_RELEVANCE_DENSITY_MIN = AUTODETECT_RELEVANCE_DENSITY_MIN;
   return resolveCodeLanguage;
 }));

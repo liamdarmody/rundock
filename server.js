@@ -17,6 +17,7 @@ const codexRuntime = require('./codex.js');
 const codexAppServerLib = require('./codex-appserver.js');
 const PKG_VERSION = require('./package.json').version;
 const searchLib = require('./search.js');
+const { resolvePermissionConvoId } = require('./permission-routing.js');
 
 const PORT = process.env.PORT || 3000;
 let ACTUAL_PORT = PORT; // Updated after server.listen() with the real listening port
@@ -2201,7 +2202,14 @@ const server = http.createServer((req, res) => {
       try {
         const data = JSON.parse(body);
         const requestId = 'perm-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-        const convoId = data.conversation_id || '';
+        // Attribute the request to its conversation. Prefer the hook-supplied
+        // id; if empty, resolve from the session's running process so an id-less
+        // request is never misattributed to whatever conversation is on screen
+        // (L10). Log the genuinely-unattributable case so it is observable.
+        const convoId = resolvePermissionConvoId(data.conversation_id, data.session_id, chatProcesses);
+        if (!convoId) {
+          console.warn(`[Permission] Unattributed request (conversation_id empty, session=${data.session_id || 'none'} unmatched): ${data.tool_name} requestId=${requestId}`);
+        }
 
         // Store the pending HTTP response (resolved when user decides)
         pendingPermissionRequests.set(requestId, {

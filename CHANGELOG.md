@@ -4,6 +4,21 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** Chat & Profile Polish
+
+### Changed
+
+- **Instructions on a profile open in full:** expanding "Instructions" on an agent or skill profile now reveals the whole set of instructions and scrolls with the page, instead of scrolling inside a fixed, shorter panel.
+
+### Fixed
+
+- **Wide tables stay inside the chat message:** a wide table in a reply now scrolls sideways within its own message instead of stretching the bubble and forcing the whole conversation to scroll sideways.
+- **Plain text is no longer shown as code in some other language:** a long plain-text block inside a bare code fence (for example a drafted post) now renders as plain text, still in a copyable code block, rather than being colour-highlighted as Rust or another language.
+- **Approval cards appear in the conversation they came from:** a permission request that arrived without a conversation attached is now shown in the conversation whose agent raised it, resolved from that agent's running session, instead of appearing in whichever conversation happened to be on screen.
+- **The unread marker clears when a background approval expires:** if an approval raised in a conversation you are not viewing times out unanswered, that conversation stops showing as unread, without clearing a genuine unread message in the same conversation.
+
 ## 0.11.1: Editor & Board Polish (2026-07-22)
 
 ### Added
