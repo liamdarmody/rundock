@@ -385,7 +385,10 @@ function pickDefaultConversation() {
   });
 }
 let orgZoomOffset = 0; // User zoom adjustment: +/- steps of 0.1 on top of auto-fit scale
-const unreadConvos = new Set(); // convoIds with unread agent messages
+// Unread-signal bookkeeping by reason (message vs pending permission) lives in
+// unread-state.js (unit-tested), so a permission card timing out clears its own
+// contribution without wiping a co-occurring unread message.
+const unread = RundockUnread.createUnreadState();
 const workingConvos = new Set(); // convoIds with agents actively processing
 
 // ===== 2. HELPERS =====
@@ -410,7 +413,7 @@ function updateUnreadBadge() {
   const navBtn = document.querySelector('[data-nav="conversations"]');
   if (!navBtn) return;
   let badge = navBtn.querySelector('.nav-badge');
-  if (unreadConvos.size > 0) {
+  if (unread.size() > 0) {
     if (!badge) {
       badge = document.createElement('span');
       badge.className = 'nav-badge';
@@ -683,7 +686,16 @@ function handle(d) {
       pendingPermissions.delete(d.requestId);
       // Expired: a copy queued for a background conversation must never be
       // rendered (and answered) after the server has auto-denied it.
-      RundockPermissions.removePendingPermission(pendingPermissionsByConvo, d.requestId);
+      const timedOutConvo = RundockPermissions.removePendingPermission(pendingPermissionsByConvo, d.requestId);
+      // L4: a timed-out background card must clear its own contribution to the
+      // unread badge. Only once the conversation has no other pending card, and
+      // only the permission reason so a co-occurring unread message survives.
+      if (timedOutConvo
+          && RundockPermissions.pendingPermissionsFor(pendingPermissionsByConvo, timedOutConvo).length === 0) {
+        unread.resolvePermission(timedOutConvo);
+        updateUnreadBadge();
+        renderConvoList();
+      }
       const t = document.getElementById('thinking-indicator');
       if (t) t.style.display = '';
       break;
@@ -862,7 +874,7 @@ const EFFECT_EXECUTORS = {
     convo.lastMessagePreview = stripMd(ef.text).substring(0, 80);
   },
   'mark-unread': (convoId) => {
-    unreadConvos.add(convoId);
+    unread.markMessage(convoId);
     updateUnreadBadge();
   },
   'remove-thinking-indicator': () => {
@@ -1885,7 +1897,7 @@ function deleteConversation(id, evt) {
   evt.stopPropagation(); // Don't open the conversation
   conversations = conversations.filter(c => c.id !== id);
   delete convoState[id];
-  unreadConvos.delete(id);
+  unread.clearConvo(id);
   workingConvos.delete(id);
   updateUnreadBadge();
   if (activeConversation?.id === id) {
@@ -1965,7 +1977,7 @@ function convoBorderClass(c) {
   // Left border carries the unread/working signal only. Pinned-ness is
   // conveyed by list position + the title-row pin glyph (WhatsApp model), so
   // a pinned+unread conversation no longer has to pick one colour.
-  if (workingConvos.has(c.id) || unreadConvos.has(c.id)) return 'b-unread';
+  if (workingConvos.has(c.id) || unread.isUnread(c.id)) return 'b-unread';
   return '';
 }
 
@@ -2129,7 +2141,7 @@ function renderConvoList() {
   // loaded before this file).
   const { main, archived } = RundockConvoList.partitionConversations(conversations, {
     pill: activeSidebarPill,
-    unreadIds: unreadConvos,
+    unreadIds: unread.ids(),
   });
 
   let h = '';
@@ -2156,7 +2168,7 @@ function renderConvoList() {
   if (archived.length) {
     const archivedEl = document.getElementById('archived-convos');
     const archivedOpen = archivedEl ? !archivedEl.classList.contains('hidden') : false;
-    const archivedHasUnread = archived.some(c => unreadConvos.has(c.id));
+    const archivedHasUnread = archived.some(c => unread.isUnread(c.id));
     const unreadDot = archivedHasUnread ? '<span class="sidebar-label-unread" title="Unread in Archive"></span>' : '';
     h += `<div class="sidebar-section-divider" style="cursor:pointer" onclick="document.getElementById('archived-convos').classList.toggle('hidden')"><span class="sidebar-label">Archived (${archived.length})${unreadDot} &#x25BE;</span></div>`;
     h += `<div id="archived-convos" class="${archivedOpen ? '' : 'hidden'}">`;
@@ -2295,7 +2307,7 @@ function openConversation(id, withAnchor) {
   if (activeConversation && activeConversation.id !== id) discardIfEmpty();
   activeConversation=c;
   persistLastActiveConversation(id);
-  unreadConvos.delete(id);
+  unread.clearConvo(id);
   updateUnreadBadge();
   // Done status is the user's explicit "I'm finished with this thread" state;
   // opening a Done conversation to read past context should not silently
@@ -2514,7 +2526,7 @@ function finishProcessing(convoId) {
   const viewingChat = activeConversation?.id === convoId && currentView === 'chat';
   const convoInWorkspace = conversations.some(c => c.id === convoId);
   if (convoInWorkspace && !viewingChat) {
-    unreadConvos.add(convoId);
+    unread.markMessage(convoId);
     updateUnreadBadge();
   }
   renderConvoList();
@@ -2932,7 +2944,7 @@ function handlePermissionRequest(d, convoId) {
     // conversation opens) and surface the unread signal so the user knows
     // something in that conversation needs their attention.
     RundockPermissions.queuePendingPermission(pendingPermissionsByConvo, convoId, requestId, d);
-    unreadConvos.add(convoId);
+    unread.markPermission(convoId);
     updateUnreadBadge();
     renderConvoList();
     return;
@@ -3215,7 +3227,7 @@ function switchNav(nav) {
     }
   }
   else if(nav==='skills') { showView('skills'); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } else if(skills.length && !currentSkillId) { selectSkill(skills[0].id); } }
-  else if(nav==='conversations') { if(activeConversation) { showView('chat'); if(unreadConvos.delete(activeConversation.id)) { updateUnreadBadge(); renderConvoList(); } } else { const target = pickDefaultConversation(); if(target) { openConversation(target.id); } else { newConversation(); } } }
+  else if(nav==='conversations') { if(activeConversation) { showView('chat'); if(unread.clearConvo(activeConversation.id)) { updateUnreadBadge(); renderConvoList(); } } else { const target = pickDefaultConversation(); if(target) { openConversation(target.id); } else { newConversation(); } } }
   else if(nav==='team') { showView('home'); renderOrgChart(); }
 }
 function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }
@@ -4304,7 +4316,7 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   // Clear per-conversation client state that keys by convoId. Leftover entries
   // from the previous workspace can leak into nav rail indicators (unread dot,
   // working dot) even though the convoIds no longer exist in this workspace.
-  unreadConvos.clear();
+  unread.clearAll();
   workingConvos.clear();
   for (const key of Object.keys(convoState)) delete convoState[key];
   // Reconcile the nav rail badge DOM elements now that the Sets are empty.
