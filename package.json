@@ -42,6 +42,7 @@
       "search.js",
       "codex.js",
       "codex-appserver.js",
+      "permission-routing.js",
       "public/**/*",
       "scaffold/**/*",
       "scripts/**/*",
