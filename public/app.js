@@ -3851,6 +3851,12 @@ function renderMarkdown(text, options = {}) {
 
   // Post-processing: clean up marked output for our styling
 
+  // Wrap tables in a horizontal-scroll container so a wide table stays within
+  // the message bubble and scrolls inside it, rather than pushing the bubble
+  // wide and forcing the whole conversation to scroll sideways. marked emits a
+  // bare, non-nested <table>, so this non-greedy wrap is safe.
+  html = html.replace(/<table>([\s\S]*?)<\/table>/g, '<div class="md-table-wrap"><table>$1</table></div>');
+
   // Convert relative file links to in-app wikilinks
   // Matches href values that end in .md, .yaml, .yml, .json, .txt and don't start with http/mailto/obsidian
   html = html.replace(/<a href="(?!https?:\/\/|mailto:|obsidian:\/\/)([^"]*\.(?:md|yaml|yml|json|txt))"([^>]*)>(.*?)<\/a>/g,

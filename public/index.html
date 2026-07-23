@@ -689,7 +689,11 @@ mark.find-match.current,
 .msg-bubble em { font-style: italic; }
 .msg-bubble del { text-decoration: line-through; color: var(--text-2); }
 .msg-bubble blockquote { border-left: 3px solid var(--accent); padding-left: 16px; color: var(--text-2); margin: 8px 0; }
-.msg-bubble table { border-collapse: collapse; margin: 8px 0; width: 100%; font-size: var(--body); }
+/* Wide tables scroll horizontally inside the bubble instead of stretching it:
+   the wrapper caps at the bubble width and scrolls; the table sizes to its
+   content (min-width:100% so narrow tables still fill the bubble). */
+.msg-bubble .md-table-wrap { overflow-x: auto; max-width: 100%; min-width: 0; margin: 8px 0; }
+.msg-bubble table { border-collapse: collapse; margin: 0; width: auto; min-width: 100%; font-size: var(--body); }
 .msg-bubble th,.msg-bubble td { padding: 7px 12px; border: 1px solid var(--border); text-align: left; }
 .msg-bubble th { background: var(--card); font-weight: 600; }
 .msg-bubble hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
