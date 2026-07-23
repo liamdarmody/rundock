@@ -52,8 +52,12 @@ function buildFixture() {
   fs.mkdirSync(path.join(workspace, '.claude', 'agents'), { recursive: true });
   fs.writeFileSync(path.join(workspace, '.claude', 'agents', 'chief-of-staff.md'),
     '---\nname: chief-of-staff\ndisplayName: Cos\nrole: Chief of Staff\ntype: orchestrator\norder: 0\n---\nYou are Cos.\n');
+  // Penn's body carries the exact characters the profile-clipping bug feared
+  // (square brackets, HTML, a wikilink, a code fence) so the regression test can
+  // prove the instructions render in full past every one of them.
   fs.writeFileSync(path.join(workspace, '.claude', 'agents', 'penn.md'),
-    '---\nname: penn\ndisplayName: Penn\nrole: Content Lead\ntype: specialist\norder: 1\nreportsTo: chief-of-staff\n---\nYou are Penn.\n');
+    '---\nname: penn\ndisplayName: Penn\nrole: Content Lead\ntype: specialist\norder: 1\nreportsTo: chief-of-staff\n---\n'
+    + 'You are Penn.\n\nCore Ideas [Key]: SENTINEL_AFTER_BRACKET comes right after the bracket. Also <tag>, [[Roadmap-2026]], and a code fence below.\n\n```\nconst x = 1;\n```\n\nFINAL_SENTINEL_END.\n');
   fs.writeFileSync(path.join(workspace, 'CLAUDE.md'), '# E2E Workspace\n');
 
   // Files, including frontmatter tags for the files corpus.

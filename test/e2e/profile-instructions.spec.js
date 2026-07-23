@@ -24,3 +24,21 @@ test('the agent instructions panel expands fully, with no inner scroll cap', asy
   expect(style.maxHeight).toBe('none');       // no fixed cap
   expect(['visible', 'clip']).toContain(style.overflowY); // no inner scrollbar
 });
+
+// Regression lock for the 2026-04-30 "instructions cut off at a square bracket"
+// report. The render is now esc() (textContent -> innerHTML), which handles
+// brackets, HTML, wikilinks, and code fences without truncating, so this pins
+// that behaviour rather than fixing anything.
+test('agent instructions render in full past brackets, HTML, wikilinks, and code fences', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('.convo-item').first()).toBeVisible();
+  await page.evaluate(() => showProfile('penn'));
+  await page.evaluate(() => document.getElementById('agent-instructions').classList.remove('hidden'));
+
+  const text = await page.locator('#agent-instructions > div').textContent();
+  expect(text).toContain('SENTINEL_AFTER_BRACKET');   // content right after a '['
+  expect(text).toContain('FINAL_SENTINEL_END');       // content after <tag>, wikilink, and a fence
+  expect(text).toContain('[Key]');                    // literal bracket preserved
+  expect(text).toContain('<tag>');                    // escaped, not swallowed as HTML
+  expect(text).toContain('[[Roadmap-2026]]');         // wikilink text preserved verbatim
+});
