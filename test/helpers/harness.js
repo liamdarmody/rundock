@@ -84,6 +84,52 @@ function readInvocations() {
 
 function clearInvocations() {
   try { fs.unlinkSync(path.join(workspaceDir, 'stub-invocations.jsonl')); } catch (e) {}
+  // Prompt log is per-message test state with the same lifetime, so clear it
+  // alongside. Kept in a separate file because readInvocations() has exact
+  // count and index assertions across the suite.
+  clearPrompts();
+}
+
+// ── Prompt log (Claude stub) ──────────────────────────────────────────────
+// Direct assertion surface for what the server actually sent an agent. Use
+// this instead of encoding the expectation in a scenario rule's promptIncludes
+// and inferring success from the rule firing: that pattern fails as a timeout
+// with no expected-vs-actual, and is how handback payload bugs stayed hidden.
+// Codex equivalent: codexTurnPrompts().
+function readPrompts() {
+  const file = path.join(workspaceDir, 'stub-prompts.jsonl');
+  if (!fs.existsSync(file)) return [];
+  return fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+}
+
+/** Every prompt text sent to `agentId`, in order. */
+function promptsFor(agentId) {
+  return readPrompts().filter(p => p.agent === agentId).map(p => p.prompt);
+}
+
+/** Prompts that matched no scenario rule (fell through to STUB-NO-RULE). */
+function unmatchedPrompts() {
+  return readPrompts().filter(p => !p.matched);
+}
+
+/**
+ * Strict mode: fail loudly, naming the agent and printing the prompt, when a
+ * prompt fell through to the no-rule fallback. Without this an unmatched
+ * prompt surfaces as an unrelated waitFor timeout several seconds later.
+ */
+function assertAllPromptsMatched(label = 'scenario') {
+  const missed = unmatchedPrompts();
+  if (missed.length === 0) return;
+  const detail = missed
+    .map(p => `  agent=${p.agent}\n    ${p.prompt.replace(/\n/g, '\n    ').slice(0, 600)}`)
+    .join('\n');
+  throw new assert.AssertionError({
+    message: `${label}: ${missed.length} prompt(s) matched no rule:\n${detail}`,
+  });
+}
+
+function clearPrompts() {
+  try { fs.unlinkSync(path.join(workspaceDir, 'stub-prompts.jsonl')); } catch (e) {}
 }
 
 // WebSocket test client that records every message.
@@ -195,6 +241,7 @@ function freshConvoId(prefix = 'it') {
 module.exports = {
   boot, shutdown, connect, writeScenario, writeCodexScenario, codexTurnPrompts,
   readInvocations, clearInvocations,
+  readPrompts, promptsFor, unmatchedPrompts, assertAllPromptsMatched, clearPrompts,
   delay, freshConvoId, reapConvo,
   get internal() { return internal; },
   get port() { return port; },

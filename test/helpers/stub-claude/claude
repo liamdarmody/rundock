@@ -60,6 +60,13 @@ const RESUME = argValue('--resume');
 const PRINT = argv.includes('--print');
 const SCENARIO_FILE = path.join(process.cwd(), 'stub-scenario.json');
 const LOG_FILE = path.join(process.cwd(), 'stub-invocations.jsonl');
+// Prompt log lives in a SEPARATE file from the invocation log on purpose:
+// several tests assert exact counts and indices over readInvocations()
+// (e.g. delegation.test.js "no second spawn" expects length 0, chat-basic
+// reads invocations[0]). Mixing per-message records into that file would
+// silently corrupt those assertions. Parity note: this is the Claude-side
+// equivalent of codexTurnPrompts(), which the codex stub has had all along.
+const PROMPT_LOG_FILE = path.join(process.cwd(), 'stub-prompts.jsonl');
 
 // Record the invocation for spawn-arg assertions.
 try {
@@ -142,9 +149,27 @@ function emitTurn(rule) {
   if (PRINT) process.exit(0);
 }
 
+// Record every prompt this stub receives so tests can assert directly on what
+// the server sent, instead of asserting by side effect (writing a rule that
+// only matches the expected payload, then waiting for its output). The
+// side-effect pattern fails as an unrelated 8s timeout with no diff, which is
+// why payload assertions were rare enough for the 0.11.2 handback-amnesia bug
+// to survive. `matched` lets a test assert no prompt fell through to the
+// STUB-NO-RULE fallback.
+function logPrompt(content, matched) {
+  try {
+    fs.appendFileSync(PROMPT_LOG_FILE, JSON.stringify({
+      agent: AGENT, sessionId: SESSION_ID, resume: RESUME,
+      prompt: String(content), matched, ts: Date.now(),
+    }) + '\n');
+  } catch (e) { /* logging is best-effort */ }
+}
+
 function handleUserMessage(content) {
   const rules = loadRules();
-  const rule = rules.find(r => matches(r, content)) || {
+  const matchedRule = rules.find(r => matches(r, content));
+  logPrompt(content, !!matchedRule);
+  const rule = matchedRule || {
     turn: [{ text: `STUB-NO-RULE agent=${AGENT} prompt=${String(content).slice(0, 120)}` }],
   };
   if (rule.crash != null) {
