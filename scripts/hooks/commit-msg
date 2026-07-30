@@ -1,0 +1,12 @@
+#!/bin/sh
+# Optional local guard against internal-reference leaks in COMMIT MESSAGES.
+# Install alongside the pre-commit hook with:
+#   git config core.hooksPath scripts/hooks
+#
+# The pre-commit hook checks tracked files. This checks the message, which the
+# file scan cannot see and which is harder to correct once pushed: a message is
+# history, so fixing it means rewriting commits rather than editing a line.
+node scripts/check-internal-refs.js --message "$1" || {
+  echo "commit blocked: reword the internal references in your message, then commit again." >&2
+  exit 1
+}

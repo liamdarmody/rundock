@@ -11,6 +11,13 @@
 // those patterns and exits non-zero on a hit, so CI blocks the leak before it
 // merges. To run locally: `npm run check:refs`.
 //
+// It also scans COMMIT MESSAGES via `--message <file>`, wired up by the
+// optional commit-msg hook in scripts/hooks. File scanning alone is not
+// enough: a message is history that has to be rewritten to change, and it
+// travels further than file content (PR bodies, release notes, git log output
+// pasted into issues). A hygiene commit once shipped the very vault paths its
+// new rule was written to block, because nothing looked at the message.
+//
 // If a match is a genuine false positive, prefer rewording the line. As a last
 // resort, add an inline `internal-refs-allow` marker on the same line.
 
@@ -38,6 +45,13 @@ const RULES = [
   { label: 'review-round label (e.g. round-2 regressions)', re: /\bround-?[0-9] regress/i },
   { label: 'internal plan/run codename (e.g. HARDEN1, KAN2)', re: /\b(HARDEN[0-9]*|KAN[0-9])\b/ },
   { label: 'vault / private workspace path', re: /02_Areas|01_Projects|Liam-Agent-Workspace|Obsidian Vaults?/ },
+  // The path rule above only catches vault PATHS. These catch references to
+  // private workspace CONTENT, which reads as internal to any external
+  // contributor even though no path appears. Deliberately narrow: a bare
+  // "vault" is a legitimate product term (Obsidian vault support), and a bare
+  // 13-digit number is a legitimate millisecond timestamp in protocol traces.
+  { label: 'private workspace content reference', re: /\b(vault|private workspace) (conversation|transcript|note|entry)\b/i },
+  { label: 'workspace conversation id', re: /\bconversation 1[0-9]{12}\b/i },
   { label: 'internal process phrase', re: /adversarial (sweep|review round)|handoff file per run|completion report per run/i },
   { label: 'owner-attributed decision note', re: /\(Liam[ ,]|Liam 20[0-9]{2}|decision,? Liam/ },
   // Style rule: no em or en dashes anywhere. Use a colon, comma, full stop, or
@@ -57,23 +71,46 @@ function isProbablyBinary(buf) {
   return false;
 }
 
-const findings = [];
-for (const file of trackedFiles()) {
-  let buf;
-  try { buf = fs.readFileSync(file); } catch { continue; }
-  if (isProbablyBinary(buf)) continue;
-  const lines = buf.toString('utf8').split('\n');
-  lines.forEach((line, i) => {
+// Scan one file's lines, collecting rule hits. Comment lines in a commit
+// message (git's own `#` scissors and help text) are skipped: they never
+// become part of the stored message.
+function scanLines(label, text, { skipHashComments = false } = {}) {
+  const out = [];
+  text.split('\n').forEach((line, i) => {
     if (line.includes('internal-refs-allow')) return;
+    if (skipHashComments && line.startsWith('#')) return;
     for (const rule of RULES) {
       const m = line.match(rule.re);
-      if (m) findings.push({ file, line: i + 1, label: rule.label, match: m[0], text: line.trim().slice(0, 120) });
+      if (m) out.push({ file: label, line: i + 1, label: rule.label, match: m[0], text: line.trim().slice(0, 120) });
     }
   });
+  return out;
 }
 
+const msgFlag = process.argv.indexOf('--message');
+const MESSAGE_FILE = msgFlag >= 0 ? process.argv[msgFlag + 1] : null;
+
+const findings = [];
+if (MESSAGE_FILE) {
+  // Commit-message mode: scan only the message.
+  let text = '';
+  try { text = fs.readFileSync(MESSAGE_FILE, 'utf8'); } catch {
+    console.error(`check-internal-refs: could not read message file ${MESSAGE_FILE}`);
+    process.exit(1);
+  }
+  findings.push(...scanLines('commit message', text, { skipHashComments: true }));
+} else {
+  for (const file of trackedFiles()) {
+    let buf;
+    try { buf = fs.readFileSync(file); } catch { continue; }
+    if (isProbablyBinary(buf)) continue;
+    findings.push(...scanLines(file, buf.toString('utf8')));
+  }
+}
+
+const scope = MESSAGE_FILE ? 'commit message' : 'tracked files';
 if (findings.length === 0) {
-  console.log('check-internal-refs: clean (no internal references found).');
+  console.log(`check-internal-refs: clean (no internal references in ${scope}).`);
   process.exit(0);
 }
 
@@ -82,5 +119,5 @@ for (const f of findings) {
   console.error(`  ${f.file}:${f.line}  [${f.label}]  matched "${f.match}"`);
   console.error(`    ${f.text}`);
 }
-console.error('\nReword these in plain descriptive language, then re-run: npm run check:refs');
+console.error(`\nReword these in plain descriptive language${MESSAGE_FILE ? ', then commit again.' : ', then re-run: npm run check:refs'}`);
 process.exit(1);
