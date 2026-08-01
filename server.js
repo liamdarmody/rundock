@@ -919,7 +919,7 @@ const AGENT_CACHE_TTL = 2000; // 2 seconds
 // edit vanished"; the panel scrolls, so the length is not a layout problem.
 const AGENT_INSTRUCTIONS_MAX = 20000;
 
-function invalidateAgentCache() { _agentCache = null; _agentCacheTime = 0; _skillCache = null; _skillCacheTime = 0; invalidateFileListCache(); }
+function invalidateAgentCache() { _agentCache = null; _agentCacheTime = 0; _skillCache = null; _skillCacheTime = 0; invalidateFileListCache(); invalidateFileTreeCache(); }
 
 // Skill + file-list caches for the search hot path. discoverSkills
 // re-reads every SKILL.md and agent body per call, and the palette queries
@@ -942,7 +942,7 @@ function discoverSkillsCached(agents) {
 function flatFileListCached() {
   const now = Date.now();
   if (_fileListCache && (now - _fileListCacheTime) < AGENT_CACHE_TTL) return _fileListCache;
-  _fileListCache = flattenFileTree(getFileTree(WORKSPACE));
+  _fileListCache = flattenFileTree(getFileTreeCached());
   _fileListCacheTime = now;
   return _fileListCache;
 }
@@ -2108,7 +2108,7 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify(discoverAgents()));
   } else if (req.url === '/api/files') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(getFileTree(WORKSPACE)));
+    res.end(JSON.stringify(getFileTreeCached()));
   } else if (req.url.startsWith('/workspace-file?path=')) {
     // Binary transport for the file-type registry's image and PDF viewers.
     // Allowlist-only; bytes are served raw (the WS read_file path utf-8
@@ -4244,7 +4244,7 @@ wss.on('connection', (ws) => {
           try { analysis = analyzeWorkspace(dir, agentList); } catch (e) { console.warn('  Workspace analysis failed:', e.message); }
           ws.send(JSON.stringify({ type: 'workspace_set', path: WORKSPACE, analysis, isEmpty, workspaceMode: state.workspaceMode, setupComplete: !!state.setupComplete, scaffoldError }));
           ws.send(JSON.stringify({ type: 'agents', agents: agentList }));
-          try { ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) })); } catch (e) { console.warn('  File tree failed:', e.message); }
+          try { ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTreeCached() })); } catch (e) { console.warn('  File tree failed:', e.message); }
           // Warm the search index off the open path (reconcile-on-open);
           // ensureSearchEngine also self-heals lazily on first search.
           setImmediate(() => { try { ensureSearchEngine(); } catch (e) { console.warn('[Search] warm-up failed:', e.message); } });
@@ -4314,7 +4314,7 @@ wss.on('connection', (ws) => {
 
             ws.send(JSON.stringify({ type: 'workspace_set', path: WORKSPACE, analysis, isEmpty: true, workspaceMode: state.workspaceMode, setupComplete: false, scaffoldError }));
             ws.send(JSON.stringify({ type: 'agents', agents: agentList }));
-            ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) }));
+            ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTreeCached() }));
           } catch (e) {
             ws.send(JSON.stringify({ type: 'workspace_error', message: 'Could not create workspace: ' + e.message }));
           }
@@ -4332,7 +4332,7 @@ wss.on('connection', (ws) => {
       }
       if (msg.type === 'get_files') {
         if (!WORKSPACE) return;
-        try { ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) })); } catch (e) { console.warn('  File tree failed:', e.message); }
+        try { ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTreeCached() })); } catch (e) { console.warn('  File tree failed:', e.message); }
       }
       if (msg.type === 'get_skills') {
         let skillList = [];
@@ -4951,7 +4951,7 @@ wss.on('connection', (ws) => {
           // Keep the search index and the title-layer file list fresh on the
           // save hot path; guarded so an index failure can never affect the
           // save itself.
-          invalidateFileListCache();
+          invalidateFileListCache(); invalidateFileTreeCache();
           if (ensureSearchEngine()) {
             try { searchEngine.noteFileSaved(WORKSPACE, msg.path); } catch (e) { /* reconcile catches up */ }
           }
@@ -4975,10 +4975,10 @@ wss.on('connection', (ws) => {
             } else {
               fs.mkdirSync(path.dirname(full), { recursive: true });
               fs.writeFileSync(full, msg.content || '', 'utf-8');
-              invalidateFileListCache();
+              invalidateFileListCache(); invalidateFileTreeCache();
               if (ensureSearchEngine()) { try { searchEngine.noteFileSaved(WORKSPACE, rel); } catch (e) {} }
             }
-            ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) }));
+            ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTreeCached() }));
             ws.send(JSON.stringify({ type: 'path_created', path: rel, kind: msg.kind }));
           } catch (e) {
             ws.send(JSON.stringify({ type: 'create_error', path: rel, reason: String((e && e.message) || e) }));
@@ -5201,6 +5201,62 @@ function getFileTree(dir, prefix = '') {
     }
   } catch (e) {}
   return entries;
+}
+
+// ── File tree cache ────────────────────────────────────────────────────────
+// getFileTree walks the workspace synchronously and reads the first kilobyte
+// of every markdown file to classify it. The client asks for the tree far more
+// often than "on open": after every file-writing tool call and after every
+// agent turn. In the packaged app the server shares a thread with the window,
+// so an uncached walk surfaces as the whole UI freezing on a large vault.
+//
+// Freshness is a directory-only stat pass. Creating, deleting or renaming
+// anything bumps the mtime of the directory containing it, so directory mtimes
+// are exactly the signal for "the shape of the tree changed". Editing a file's
+// CONTENTS does not touch them, and that is the common case during agent work,
+// so it becomes a pure cache hit with no directory reads at all.
+//
+// Known limit: fileKind classifies a note as a board by reading its
+// frontmatter, so adding kanban-plugin frontmatter changes a node's kind
+// without changing any directory mtime. Saves made through Rundock invalidate
+// explicitly, which covers the path a user actually takes to do that.
+let _treeCache = null; // { tree, dirs: Map<absolutePath, mtimeMs> }
+
+function invalidateFileTreeCache() { _treeCache = null; }
+
+// Directory list is derived from the tree we just built rather than by walking
+// again: the folder nodes are already there, so this costs one stat per
+// directory and zero directory reads.
+function treeDirMtimes(nodes, out = new Map()) {
+  for (const n of nodes) {
+    if (n.type !== 'folder') continue;
+    const abs = path.join(WORKSPACE, n.path);
+    try { out.set(abs, fs.statSync(abs).mtimeMs); } catch (e) { /* raced away */ }
+    treeDirMtimes(n.children || [], out);
+  }
+  return out;
+}
+
+function treeCacheIsFresh() {
+  if (!_treeCache || !WORKSPACE) return false;
+  for (const [dir, mtimeMs] of _treeCache.dirs) {
+    let st;
+    try { st = fs.statSync(dir); } catch (e) { return false; } // deleted or renamed
+    if (st.mtimeMs !== mtimeMs) return false;
+  }
+  return true;
+}
+
+function getFileTreeCached() {
+  if (!WORKSPACE) return [];
+  if (treeCacheIsFresh()) return _treeCache.tree;
+  const tree = getFileTree(WORKSPACE);
+  const dirs = treeDirMtimes(tree);
+  // The root is not a node in its own tree, but a file created directly in it
+  // bumps only the root's mtime, so it has to be tracked explicitly.
+  try { dirs.set(WORKSPACE, fs.statSync(WORKSPACE).mtimeMs); } catch (e) {}
+  _treeCache = { tree, dirs };
+  return tree;
 }
 
 // ===== PROCESS CLEANUP (S4) =====
@@ -6660,7 +6716,7 @@ const GREP_MAX_FILE_BYTES = 1024 * 1024;
 function grepSearchFiles(query, limit) {
   const q = query.toLowerCase();
   const results = [];
-  const files = flattenFileTree(getFileTree(WORKSPACE)).slice(0, GREP_MAX_FILES);
+  const files = flattenFileTree(getFileTreeCached()).slice(0, GREP_MAX_FILES);
   for (const f of files) {
     if (results.length >= limit) break;
     const ext = path.extname(f.name).toLowerCase();
