@@ -2603,7 +2603,7 @@ function scheduleScopeReturnKill(e, convoId) {
       // Only open the window if this entry still executes the conversation;
       // a parked/replaced entry's kill must not buffer the successor's chat.
       if (chatProcesses.get(convoId) === e) beginConvoTransition(convoId, 'killing', e);
-      try { e.process.kill(); } catch (err) {}
+      try { killProcessTree(e.process); } catch (err) {}
     }
   }, 500);
 }
@@ -2735,7 +2735,7 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
                     const toolSummary = buildToolSummary(entry.toolCalls);
                     appendTranscript(convoId, 'agent', entry.agentId, toolSummary, 'routing');
                   }
-                  try { entry.process.kill('SIGKILL'); } catch (e) {}
+                  try { killProcessTree(entry.process, 'SIGKILL'); } catch (e) {}
                   entry.exited = true;
                   // Order matters: handleDelegation sends agent_switch synchronously,
                   // which the client uses to promote the orchestrator's streaming
@@ -2775,7 +2775,7 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
                     } else {
                       appendTranscript(convoId, 'agent', entry.agentId, buildToolSummary(entry.toolCalls), 'routing');
                     }
-                    try { entry.process.kill('SIGKILL'); } catch (e) {}
+                    try { killProcessTree(entry.process, 'SIGKILL'); } catch (e) {}
                     entry.exited = true;
                     const offName = offRoster.displayName || offRoster.name;
                     safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: `Blocked a handoff to ${offName}: not one of this agent's direct reports.`, _conversationId: convoId }));
@@ -4119,10 +4119,10 @@ wss.on('connection', (ws) => {
           if (entry.interrupt) {
             entry.interrupt();
           } else {
-            try { entry.process.kill('SIGTERM'); } catch (e) {}
+            try { killProcessTree(entry.process, 'SIGTERM'); } catch (e) {}
             // Safety net: SIGKILL after 2 seconds
             setTimeout(() => {
-              try { entry.process.kill('SIGKILL'); } catch (e) {}
+              try { killProcessTree(entry.process, 'SIGKILL'); } catch (e) {}
             }, 2000);
           }
 
@@ -4138,8 +4138,8 @@ wss.on('connection', (ws) => {
               if (e.interrupt) {
                 e.interrupt();
               } else if (e.process) {
-                try { e.process.kill('SIGTERM'); } catch (err) {}
-                setTimeout(() => { try { e.process.kill('SIGKILL'); } catch (err) {} }, 2000);
+                try { killProcessTree(e.process, 'SIGTERM'); } catch (err) {}
+                setTimeout(() => { try { killProcessTree(e.process, 'SIGKILL'); } catch (err) {} }, 2000);
               }
               console.log(`[Cancel] convo=${convoId} also killed parked ancestor agent=${e.agentId}`);
             };
@@ -5304,7 +5304,7 @@ function stopEntryProcess(entry, signal) {
   if (!entry) return;
   if (entry.interrupt) { entry.interrupt(); return; }
   if (entry.process) {
-    try { entry.process.kill(signal); } catch (e) { /* already dead */ }
+    try { killProcessTree(entry.process, signal); } catch (e) { /* already dead */ }
   }
 }
 
@@ -5466,12 +5466,45 @@ function resolveClaudeBin() {
 
 // Spawn a Claude Code process with PID tracking for crash cleanup.
 // Drop-in replacement for spawn('claude', ...) that registers/unregisters PIDs.
+// Signal a spawned process AND everything it started.
+//
+// An agent CLI spawns its own children: an MCP server per configured entry,
+// plus tool subprocesses. Those are grandchildren we hold no handle on and
+// never record, so signalling one pid leaves them running and reparented,
+// holding memory until the machine restarts.
+//
+// On POSIX the children are spawned detached, which puts each in its own
+// process group whose id equals the leader's pid, so a negative pid signals
+// the whole group. Windows has no process groups; taskkill /T walks the tree
+// instead. Windows also has no real signal semantics (Node maps kill() onto
+// TerminateProcess), so the graceful and forceful paths are the same there.
+function killProcessTree(target, signal = 'SIGTERM') {
+  const pid = typeof target === 'number' ? target : (target && target.pid);
+  if (!pid) return;
+  if (process.platform === 'win32') {
+    try { spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' }); } catch (e) {}
+    return;
+  }
+  // Negative pid = the whole process group. Fails with ESRCH if the group is
+  // already gone, or EPERM if the child was never detached; fall back to the
+  // single process so this is never worse than the old behaviour.
+  try { process.kill(-pid, signal); return; } catch (e) {}
+  try {
+    if (typeof target === 'number') process.kill(pid, signal);
+    else target.kill(signal);
+  } catch (e) { /* already dead */ }
+}
+
 function spawnClaude(args, options, onError) {
   // Safety net: never spawn Claude Code without an explicit --model. Call sites
   // pass the agent's model (see modelArgs); this guards any path that doesn't,
   // so the model can never silently fall back to the user's environment.
   if (!args.includes('--model')) args = ['--model', DEFAULT_MODEL, ...args];
-  const proc = spawn(resolveClaudeBin(), args, options);
+  // detached puts the child at the head of its own process group so its whole
+  // subtree can be signalled together. Safe for terminal users: the server
+  // installs its own SIGINT and SIGTERM handlers and kills children explicitly,
+  // so Ctrl-C never depended on the terminal reaching them by group.
+  const proc = spawn(resolveClaudeBin(), args, { ...options, detached: process.platform !== 'win32' });
   if (proc.pid) {
     registerChildPid(proc.pid);
     proc.on('close', () => unregisterChildPid(proc.pid));
@@ -6341,7 +6374,7 @@ function startCodexTurn(convoId, msg, agentData) {
       existing.interrupt();
       priorTurnEnd = existing._turnEnd || null;
     } else if (existing.process) {
-      try { existing.process.kill(); } catch (e) { /* already dead */ }
+      try { killProcessTree(existing.process); } catch (e) { /* already dead */ }
     }
     chatProcesses.delete(convoId);
   }
@@ -6509,13 +6542,13 @@ process.on('exit', () => {
   // 'exit' handler must be synchronous. Kill any stragglers with SIGKILL.
   for (const [, entry] of chatProcesses) {
     if (!entry.exited && entry.process) {
-      try { entry.process.kill('SIGKILL'); } catch (e) {}
+      try { killProcessTree(entry.process, 'SIGKILL'); } catch (e) {}
     }
   }
   // The shared Codex app-server may still be draining its graceful
   // SIGTERM; it must not outlive the server process.
   if (_codexAppServerPid) {
-    try { process.kill(_codexAppServerPid, 'SIGKILL'); } catch (e) {}
+    try { killProcessTree(_codexAppServerPid, 'SIGKILL'); } catch (e) {}
   }
 });
 

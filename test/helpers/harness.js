@@ -84,6 +84,31 @@ function readInvocations() {
 
 function clearInvocations() {
   try { fs.unlinkSync(path.join(workspaceDir, 'stub-invocations.jsonl')); } catch (e) {}
+  try { fs.unlinkSync(path.join(workspaceDir, 'stub-grandchildren.jsonl')); } catch (e) {}
+}
+
+// Pids of the long-lived children a `spawnChild: true` rule made the stub
+// spawn. These model MCP servers: grandchildren of the server that it has no
+// handle on, and which survive a single-pid kill of their parent.
+function readGrandchildren() {
+  const file = path.join(workspaceDir, 'stub-grandchildren.jsonl');
+  if (!fs.existsSync(file)) return [];
+  return fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+}
+
+/** True if the pid is still running (signal 0 probes without delivering). */
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (e) { return false; }
+}
+
+/** Poll until pid exits or the timeout lapses. Returns true if it exited. */
+async function waitForPidExit(pid, timeout = 4000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (!pidAlive(pid)) return true;
+    await delay(50);
+  }
+  return !pidAlive(pid);
 }
 
 // WebSocket test client that records every message.
@@ -195,6 +220,7 @@ function freshConvoId(prefix = 'it') {
 module.exports = {
   boot, shutdown, connect, writeScenario, writeCodexScenario, codexTurnPrompts,
   readInvocations, clearInvocations,
+  readGrandchildren, pidAlive, waitForPidExit,
   delay, freshConvoId, reapConvo,
   get internal() { return internal; },
   get port() { return port; },
