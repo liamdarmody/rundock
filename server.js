@@ -5332,11 +5332,19 @@ function savePidFile(pids) {
 // for one upgrade, and simply lack the recycling guard.
 function pidOf(rec) { return typeof rec === 'number' ? rec : (rec && rec.pid); }
 
+// Read a process's command line.
+//
+// Deliberately `args=` and not `comm=`. On Linux `comm` is the THREAD name from
+// /proc, not the executable: Node 24 renames its main thread to "MainThread",
+// so every record would have been judged foreign and discarded, defeating the
+// tracking this guard exists to protect. Node 22 on the same machine reports
+// "node". The command line is stable across both, and across macOS, where
+// `comm` gives a full path instead.
 function processCommand(pid) {
   if (process.platform === 'win32') return null; // no cheap equivalent; skip the check
   try {
     const { execFileSync } = require('child_process');
-    return execFileSync('ps', ['-p', String(pid), '-o', 'comm='], {
+    return execFileSync('ps', ['-p', String(pid), '-o', 'args='], {
       encoding: 'utf-8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
   } catch (e) { return null; } // not running, or ps unavailable
@@ -5354,17 +5362,19 @@ function pidRecordAlive(rec) {
   return commandsMatch(actual, expected);
 }
 
-// `ps -o comm=` is not portable in what it prints: macOS gives the full path,
-// Linux gives the basename truncated to 15 characters, and other variants
-// differ again. Compare basenames and tolerate truncation in either direction.
-// The guard only has to tell "still the thing we spawned" from "an unrelated
-// process that inherited this id", so a prefix match is enough and a stricter
-// comparison would silently fail for any binary with a longer name.
+// Does this command line still look like the thing we spawned?
+//
+// Deliberately loose: the guard only has to tell "the process we started" from
+// "something unrelated that inherited this id". Command-line formatting varies
+// by platform and by runtime version, and a strict comparison has already
+// broken once that way. Being too permissive means a redundant signal to a
+// process that is probably ours; being too strict means untracked processes
+// leaking forever, which is the failure this whole area exists to prevent.
 function commandsMatch(actual, expected) {
-  const a = path.basename(String(actual).trim());
-  const e = path.basename(String(expected).trim());
-  if (!a || !e) return true;
-  return a === e || a.startsWith(e) || e.startsWith(a);
+  const e = path.basename(String(expected || '').trim());
+  const a = String(actual || '').trim();
+  if (!e || !a) return true;
+  return a.includes(e);
 }
 
 function registerChildPid(pid, cmd) {
