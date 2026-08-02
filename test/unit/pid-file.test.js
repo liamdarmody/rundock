@@ -13,11 +13,21 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 
 const srv = require('../../server.js');
+
+/** Spawn a long-lived child and wait until it genuinely exists. */
+async function liveChild() {
+  const kid = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1e9)'], { stdio: 'ignore' });
+  await new Promise((resolve, reject) => {
+    kid.once('spawn', resolve);
+    kid.once('error', reject);
+  });
+  return kid;
+}
 const { pidRecordAlive } = srv._internal;
 
 describe('child pid records', () => {
   test('a live process spawned as the recorded command is recognised', async () => {
-    const kid = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1e9)'], { stdio: 'ignore' });
+    const kid = await liveChild();
     try {
       const rec = { pid: kid.pid, at: Date.now(), cmd: path.basename(process.execPath) };
       assert.strictEqual(pidRecordAlive(rec), true, 'our own live child must be recognised');
@@ -26,8 +36,8 @@ describe('child pid records', () => {
     }
   });
 
-  test('a pid running a DIFFERENT command is refused, so a recycled pid is not signalled', () => {
-    const kid = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1e9)'], { stdio: 'ignore' });
+  test('a pid running a DIFFERENT command is refused, so a recycled pid is not signalled', async () => {
+    const kid = await liveChild();
     try {
       // Same live pid, but recorded as something we never spawned it as.
       const rec = { pid: kid.pid, at: Date.now(), cmd: 'definitely-not-this-binary' };

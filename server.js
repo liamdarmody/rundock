@@ -5351,7 +5351,20 @@ function pidRecordAlive(rec) {
   if (!expected) return true; // legacy record, or a platform without the check
   const actual = processCommand(pid);
   if (actual == null) return true; // cannot tell; assume ours rather than leak it
-  return actual.endsWith(expected);
+  return commandsMatch(actual, expected);
+}
+
+// `ps -o comm=` is not portable in what it prints: macOS gives the full path,
+// Linux gives the basename truncated to 15 characters, and other variants
+// differ again. Compare basenames and tolerate truncation in either direction.
+// The guard only has to tell "still the thing we spawned" from "an unrelated
+// process that inherited this id", so a prefix match is enough and a stricter
+// comparison would silently fail for any binary with a longer name.
+function commandsMatch(actual, expected) {
+  const a = path.basename(String(actual).trim());
+  const e = path.basename(String(expected).trim());
+  if (!a || !e) return true;
+  return a === e || a.startsWith(e) || e.startsWith(a);
 }
 
 function registerChildPid(pid, cmd) {
