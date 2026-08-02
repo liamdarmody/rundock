@@ -6599,6 +6599,71 @@ const SEARCH_FILES_RECONCILE_TTL_MS = 2000;
 const _sessionPathMemo = new Map();
 const SESSION_PATH_NEGATIVE_TTL_MS = 30000;
 
+// ── Incremental file-index warm-up ─────────────────────────────────────────
+// Indexing the workspace files is the longest single piece of work the server
+// does, and it scales with workspace size. The server shares a thread with the
+// window in the packaged app, so running it to completion in one go paints the
+// UI and then freezes it until indexing finishes: indistinguishable, from the
+// user's side, from a crash. Restarting only starts the work again.
+//
+// Driving the pass a batch at a time, with a turn of the event loop between
+// batches, keeps the socket serviced throughout. Search degrades to the
+// existing grep fallback until the index is ready.
+let _fileIndexRun = null;
+
+/** Tell clients whether the index is building, so the UI can say so. */
+function broadcastSearchIndexState(state, extra) {
+  safeSend(JSON.stringify({ type: 'system', subtype: 'search_index', state, ...(extra || {}) }));
+}
+
+/** True while a warm-up pass is in flight. */
+function fileIndexInProgress() { return !!_fileIndexRun; }
+
+function cancelIncrementalFileIndex() {
+  if (!_fileIndexRun) return;
+  _fileIndexRun.cancelled = true;
+  // .return() runs the generator's finally, which rolls back any open batch.
+  try { _fileIndexRun.iter.return(); } catch (e) { /* already finished */ }
+  _fileIndexRun = null;
+}
+
+function beginIncrementalFileIndex(newMessages) {
+  cancelIncrementalFileIndex();
+  const engine = searchEngine;
+  const workspace = WORKSPACE;
+  const run = { iter: engine.reconcileFilesIncremental(workspace), cancelled: false };
+  _fileIndexRun = run;
+  broadcastSearchIndexState('indexing');
+
+  const finish = (result) => {
+    if (_fileIndexRun === run) _fileIndexRun = null;
+    searchFilesReconciledAt = Date.now();
+    const scanned = result ? result.scanned : 0;
+    const updated = result ? result.updated : 0;
+    console.log(`[Search] index ready: ${scanned} files scanned (${updated} indexed), ${newMessages || 0} new messages`);
+    broadcastSearchIndexState('ready', { scanned, updated });
+  };
+
+  const step = () => {
+    // A workspace switch replaces the engine underneath us. A stale run must
+    // stop and release its transaction rather than write into a closed
+    // database.
+    if (run.cancelled || searchEngine !== engine || WORKSPACE !== workspace) {
+      try { run.iter.return(); } catch (e) {}
+      return;
+    }
+    let r;
+    try { r = run.iter.next(); } catch (e) {
+      console.warn('[Search] file index pass failed; progress kept:', e && e.message ? e.message : e);
+      finish(null);
+      return;
+    }
+    if (!r.done) { setImmediate(step); return; }
+    finish(r.value);
+  };
+  setImmediate(step);
+}
+
 function ensureSearchEngine() {
   if (!WORKSPACE) {
     if (searchEngine) { try { searchEngine.close(); } catch (e) {} }
@@ -6627,17 +6692,17 @@ function ensureSearchEngine() {
       DatabaseSync: searchProbe.DatabaseSync,
     });
     searchEngine.open();
-    // Initial reconcile (the spec's reconcile-on-open): synchronous, with a
-    // progress line. Deleting the db and reopening the workspace is the
-    // supported rebuild path and lands here too.
-    const f = searchEngine.reconcileFiles(WORKSPACE);
     const validIds = readConversations().map(c => c.id);
+    // Conversations first, inline: byte-offset marks make an unchanged session
+    // a stat-only skip, so this stays in the milliseconds even on a long
+    // history, and it is what makes recent chat findable straight away.
     const m = searchEngine.reconcileConversations(conversationSessionsForSearch(), { validConversationIds: validIds });
     // Sweep rows for conversations deleted while the engine was closed or
     // unavailable (they would otherwise burn over-fetch slots forever).
     try { searchEngine.removeOrphanedConversations(validIds); } catch (e) {}
-    searchFilesReconciledAt = Date.now();
-    console.log(`[Search] index ready: ${f.scanned} files scanned (${f.updated} indexed), ${m.indexed} new messages`);
+    // Files are the heavy half and the only part that scales with workspace
+    // size, so they run incrementally rather than blocking the window.
+    beginIncrementalFileIndex(m.indexed);
   } catch (e) {
     console.warn('[Search] engine init failed; grep fallback active:', e && e.message ? e.message : e);
     try { if (searchEngine) searchEngine.close(); } catch (e2) {}
@@ -6704,7 +6769,11 @@ function reconcileSearchBeforeQuery() {
       validConversationIds: all.map(c => c.id),
     });
     const now = Date.now();
-    if (now - searchFilesReconciledAt >= SEARCH_FILES_RECONCILE_TTL_MS) {
+    // Never start a blocking full pass while the incremental warm-up is still
+    // running: it would duplicate the work the warm-up is already doing, and
+    // block the very query it is meant to serve. The warm-up stamps
+    // searchFilesReconciledAt when it lands.
+    if (!fileIndexInProgress() && now - searchFilesReconciledAt >= SEARCH_FILES_RECONCILE_TTL_MS) {
       searchFilesReconciledAt = now;
       searchEngine.reconcileFiles(WORKSPACE);
     }

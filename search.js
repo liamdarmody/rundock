@@ -428,7 +428,31 @@ class SearchIndex {
    * mtime/size moved, remove rows whose file is gone. The files table itself
    * is the high-water store. Returns {updated, removed, scanned}.
    */
+  /**
+   * Run a whole pass and return its result. Convenience wrapper over the
+   * incremental form, for callers happy to block: the pre-query refresh, the
+   * save hook, and tests.
+   */
   reconcileFiles(rootDir) {
+    const iter = this.reconcileFilesIncremental(rootDir);
+    for (;;) { const r = iter.next(); if (r.done) return r.value; }
+  }
+
+  /**
+   * The same pass, handing control back at every commit boundary.
+   *
+   * The initial index runs on the thread that draws the window, so a pass that
+   * cannot be interrupted freezes the app until it finishes, and on a large
+   * workspace that is the difference between "indexing" and "broken". Yielding
+   * lets the caller choose the pacing: this file stays synchronous and knows
+   * nothing about event loops, while the server spaces the steps out so the
+   * socket keeps being serviced.
+   *
+   * No transaction is open while suspended, so other writers can interleave
+   * safely. A driver that abandons the pass part-way should call .return() on
+   * the iterator; the finally below is what makes that safe either way.
+   */
+  *reconcileFilesIncremental(rootDir) {
     const onDisk = walkTextFiles(rootDir);
     const known = new Map(
       this.db.prepare('SELECT path, mtime_ms, size FROM files').all().map(r => [r.path, r])
@@ -456,15 +480,21 @@ class SearchIndex {
         if (st.size > MAX_FILE_BYTES) {
           // A file that grew past the cap must not keep its stale row
           // searchable forever; drop it (no-op when it was never indexed).
-          if (prev) { del.run(rel); removed++; batch.note(0); }
+          if (prev) { batch.enter(); del.run(rel); removed++; if (batch.note(0)) yield; }
           continue;
         }
+        batch.enter();
         this._indexFile(rootDir, rel, st, upsert);
         updated++;
-        batch.note(st.size);
+        // Yield only where a batch actually closed, so control is never handed
+        // back mid-transaction.
+        if (batch.note(st.size)) yield;
       }
       // Anything left in `known` no longer exists on disk.
-      for (const rel of known.keys()) { del.run(rel); removed++; batch.note(0); }
+      for (const rel of known.keys()) {
+        batch.enter(); del.run(rel); removed++;
+        if (batch.note(0)) yield;
+      }
       batch.finish();
     } catch (e) {
       // Only the batch in flight is lost. Everything committed before it stays,
@@ -472,6 +502,11 @@ class SearchIndex {
       batch.abort();
       console.warn(`[Search] files reconcile interrupted after ${durableUpdated} file(s); progress kept, will resume: ${e && e.message ? e.message : e}`);
       return { updated: durableUpdated, removed: durableRemoved, scanned: onDisk.length, interrupted: true };
+    } finally {
+      // No-op on every normal path. This only bites when a driver abandons the
+      // pass mid-flight, where a leaked transaction would block every later
+      // write to the index.
+      batch.abort();
     }
     return { updated, removed, scanned: onDisk.length };
   }
@@ -496,15 +531,23 @@ class SearchIndex {
   _beginBatch(onCommit, { maxFiles = RECONCILE_BATCH_FILES, maxBytes = RECONCILE_BATCH_BYTES } = {}) {
     const db = this.db;
     let open = false, files = 0, bytes = 0;
-    const start = () => { db.exec('BEGIN'); open = true; files = 0; bytes = 0; };
     const commit = () => { db.exec('COMMIT'); open = false; if (onCommit) onCommit(); };
-    start();
     return {
-      /** Record one unit of work; commits and reopens when a bound is reached. */
+      /**
+       * Open a transaction if none is in flight. Call before doing the work.
+       * Opening is explicit, and a commit deliberately leaves the batch CLOSED,
+       * so a caller that suspends between batches is never holding a
+       * transaction. That matters because an incremental pass yields control
+       * back to the server, and any other writer that ran meanwhile would
+       * otherwise fail with "cannot start a transaction within a transaction".
+       */
+      enter() { if (!open) { db.exec('BEGIN'); open = true; files = 0; bytes = 0; } },
+      /** Record one unit of work. Returns true when this closed a batch. */
       note(size) {
         files += 1;
         bytes += size || 0;
-        if (files >= maxFiles || bytes >= maxBytes) { commit(); start(); }
+        if (files >= maxFiles || bytes >= maxBytes) { commit(); return true; }
+        return false;
       },
       finish() { if (open) commit(); },
       abort() { if (open) { try { db.exec('ROLLBACK'); } catch (e) { /* already closed */ } open = false; } },
@@ -948,6 +991,8 @@ function normaliseReviewContent(content) {
 
 module.exports = {
   SCHEMA_VERSION,
+  RECONCILE_BATCH_FILES,
+  RECONCILE_BATCH_BYTES,
   RECONCILE_BATCH_FILES,
   RECONCILE_BATCH_BYTES,
   HIGHLIGHT_OPEN,
