@@ -395,9 +395,35 @@ async function parseSessionHistory(sessionId, limit = 20, offset = 0) {
 // (transcript handoffs, system markers, delegation briefs) and resume ghosts.
 // Returns 0 on any I/O or parse failure so a single bad file doesn't poison
 // the conversation total.
+// Message counts per session, keyed on the file's mtime and size.
+//
+// The conversation list enriches EVERY conversation on EVERY load, and it
+// reloads on workspace open and on every client reconnect, including whenever
+// a laptop wakes. Re-reading and re-parsing every session file each time makes
+// the cost scale with conversations HELD rather than conversations CHANGED,
+// which on a long-lived workspace is the difference between instant and a
+// visible freeze. Same shape as the file-tree cache: a cheap stat decides
+// whether the expensive read is needed at all.
+const _sessionCountMemo = new Map(); // sessionId -> { mtimeMs, size, count }
+
 function countSessionMessagesSync(sessionId) {
-  const filePath = getSessionJsonlPath(sessionId);
+  // The cached resolver, unlike the raw lookup, remembers a MISS. That matters
+  // because the expected location is derived from the workspace path: move or
+  // merge a workspace and every session misses, and each miss otherwise lists
+  // the projects directory and stats every entry, once per conversation, on
+  // every load.
+  const filePath = resolveSessionPathCached(sessionId);
   if (!filePath) return 0;
+  let st;
+  try { st = fs.statSync(filePath); } catch (e) { return 0; }
+  const memo = _sessionCountMemo.get(sessionId);
+  if (memo && memo.mtimeMs === st.mtimeMs && memo.size === st.size) return memo.count;
+  const count = readSessionMessageCount(filePath);
+  _sessionCountMemo.set(sessionId, { mtimeMs: st.mtimeMs, size: st.size, count });
+  return count;
+}
+
+function readSessionMessageCount(filePath) {
   let raw;
   try {
     raw = fs.readFileSync(filePath, 'utf-8');
@@ -6726,6 +6752,9 @@ function ensureSearchEngine() {
   if (searchEngine) { try { searchEngine.close(); } catch (e) {} searchEngine = null; }
   searchEngineWorkspace = WORKSPACE;
   _sessionPathMemo.clear();
+  // Counts are keyed by session id, which is unique per workspace, but a switch
+  // is the natural point to release them rather than grow forever.
+  _sessionCountMemo.clear();
   if (!searchProbe) {
     searchProbe = searchLib.probeSqlite();
     if (!searchProbe.available) {
