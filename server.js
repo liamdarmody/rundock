@@ -2806,7 +2806,7 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
                     const offName = offRoster.displayName || offRoster.name;
                     safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: `Blocked a handoff to ${offName}: not one of this agent's direct reports.`, _conversationId: convoId }));
                     const blockedEntry = spawnResumedProcess(convoId, entry.agentId, entry.sessionId, chatProcesses, {});
-                    blockedEntry.idle = false;
+                    blockedEntry.idle = false; blockedEntry.idleSince = null;
                     safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: blockedEntry.processId, _agent: entry.agentId, autoContinue: true }));
                     const runtimeNote = offRoster.runtime === 'codex' ? ` ${offName} runs on a different runtime (Codex), which only their own leader can start.` : '';
                     const blockPrompt = `[SYSTEM: delegation-blocked] Your Agent tool call named "${offName}" (${offRoster.name}), a workspace agent who is not one of your direct reports, so it was NOT run. No subagent may act as ${offName}.${runtimeNote} Do not retry the same call. If the task needs ${offName}, tell the user this needs routing through ${offName}'s leader and hand back. Otherwise continue without them.`;
@@ -2989,7 +2989,7 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
   // replay queues safely behind it (matching the delegate COMPLETE paths).
   const bufferedFollowUp = convoHasBufferedChat(convoId);
   if (!wasPipelineComplete && bufferedFollowUp) {
-    orchEntry.idle = true;
+    orchEntry.idle = true; orchEntry.idleSince = Date.now();
     console.log(`[KillWindow] convo=${convoId} skipping scope-return routing prompt, buffered follow-up takes over`);
   } else {
     // Circuit breaker: check consecutive auto-resume count before sending prompt.
@@ -2998,7 +2998,7 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
     if (resumeCount >= MAX_CONSECUTIVE_AGENT_RESUMES) {
       console.log(`[CircuitBreaker] convo=${convoId} ${resumeCount} consecutive agent resumes in handleScopeReturn, pausing orchestrator`);
       resetAutoResume(convoId);
-      orchEntry.idle = true;
+      orchEntry.idle = true; orchEntry.idleSince = Date.now();
       safeSend(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: `[Auto-paused: ${resumeCount} consecutive agent handoffs without user input. Last specialist: ${specialistEntry.agentId}. Please review the output above and send your next message to continue.]` }, _agent: orchestrator.id, _conversationId: convoId }));
     } else {
       // Build context for orchestrator. Both shapes inject the specialist's final output
@@ -3031,7 +3031,7 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
         appendTranscript(convoId, 'agent', e.agentId, textWithTools);
       }
       e.responseText = '';
-      e.idle = true;
+      e.idle = true; e.idleSince = Date.now();
     }
   });
 
@@ -3105,7 +3105,7 @@ function spawnResumedProcess(convoId, agentId, sessionId, processes, opts = {}) 
       }
       e.finalResponseText = e.responseText;
       e.responseText = '';
-      e.idle = true;
+      e.idle = true; e.idleSince = Date.now();
     }
   });
   proc.on('close', (rCode) => {
@@ -3179,7 +3179,7 @@ function handleDelegation(msg, processes) {
   // Park the original process (or reference the killed one for intercepted calls)
   const originalAgentId = isIntercepted ? msg._parentAgentId : existing.agentId;
   const originalProcessId = isIntercepted ? (existing?.processId || 'intercepted') : existing.processId;
-  if (!isIntercepted) existing.idle = true;
+  if (!isIntercepted) existing.idle = true; existing.idleSince = Date.now();
 
   // Spawn delegate process
   const delegateProcessId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -3365,7 +3365,7 @@ function handleDelegation(msg, processes) {
             appendTranscript(convoId, 'agent', e.agentId, textWithTools);
           }
       e.responseText = '';
-      e.idle = true;
+      e.idle = true; e.idleSince = Date.now();
     }
   });
   }
@@ -3453,7 +3453,7 @@ function handleDelegation(msg, processes) {
         // Skip mid-level parent, return directly to orchestrator
         console.log(`[AgentIntercept] convo=${convoId} sub-delegate handed back (${returnMarkerSeen}), skipping ${delegateEntry.delegation.originalAgentId}, restoring orchestrator ${orchestratorAgentId}`);
 
-        orchestratorEntry.idle = true;
+        orchestratorEntry.idle = true; orchestratorEntry.idleSince = Date.now();
         orchestratorEntry.delegation = null;
         orchestratorEntry.handbackAt = Date.now(); // stale end_delegation guard
         processes.set(convoId, orchestratorEntry);
@@ -3485,7 +3485,7 @@ function handleDelegation(msg, processes) {
               if (!orchestratorEntry.exited) {
                 console.log(`[AgentIntercept] convo=${convoId} auto-continuing orchestrator after skip-level ${returnMarkerSeen} (resume ${resumeCount}/${MAX_CONSECUTIVE_AGENT_RESUMES})`);
                 orchestratorEntry.responseText = '';
-                orchestratorEntry.idle = false;
+                orchestratorEntry.idle = false; orchestratorEntry.idleSince = null;
                 safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: orchestratorEntry.processId, _agent: orchestratorAgentId, autoContinue: true }));
                 const prompt = pendingRequest
                   ? `[SYSTEM: A specialist just returned because the user asked for something outside their scope. The user's pending request is: "${pendingRequest}"\n\nRoute this request now. Delegate to the right specialist if one fits, or handle it yourself. Do not summarise what the previous specialist did. Do not ask the user to repeat themselves. Respond to their request.]`
@@ -3567,14 +3567,14 @@ function handleDelegation(msg, processes) {
       if (isOutOfScope && bufferedFollowUp) {
         // Buffered user message supersedes the RETURN routing prompt: park
         // the resumed parent idle and let the replayed message drive it.
-        resumeEntry.idle = true;
+        resumeEntry.idle = true; resumeEntry.idleSince = Date.now();
         console.log(`[KillWindow] convo=${convoId} skipping RETURN routing prompt, buffered follow-up takes over`);
       } else if (isOutOfScope) {
         const resumeCount = incrementAutoResume(convoId);
         if (resumeCount >= MAX_CONSECUTIVE_AGENT_RESUMES) {
           console.log(`[CircuitBreaker] convo=${convoId} ${resumeCount} consecutive agent resumes on parked-parent RETURN path, pausing`);
           resetAutoResume(convoId);
-          resumeEntry.idle = true;
+          resumeEntry.idle = true; resumeEntry.idleSince = Date.now();
           safeSend(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: `[Auto-paused: ${resumeCount} consecutive agent handoffs without user input. Last specialist: ${delegateEntry.agentId}. Please review the output above and send your next message to continue.]` }, _agent: delegateEntry.delegation.originalAgentId, _conversationId: convoId }));
         } else {
           safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: resumeProcessId, _agent: parentAgentId, autoContinue: true }));
@@ -3588,14 +3588,14 @@ function handleDelegation(msg, processes) {
         safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: resumeProcessId, _agent: parentAgentId, autoContinue: true, silent: true }));
         const completePrompt = `[SYSTEM: pipeline-complete] ${delegateEntry.agentId} has finished the delegated work. Here is their final message to the conversation:${delegateOutputBlock}\n\nYour output for this turn MUST be exactly the literal string <silent> and nothing else. Do not narrate, summarise, or quote the specialist's output. Do not invoke any tools. Do not emit any other text. Just output <silent> and stop.`;
         resumeProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: completePrompt } }) + '\n');
-        resumeEntry.idle = true;
+        resumeEntry.idle = true; resumeEntry.idleSince = Date.now();
         console.log(`[AgentIntercept] convo=${convoId} delegate emitted COMPLETE, parent ${parentAgentId} parked with specialist output`);
       } else {
         // Normal exit (no marker). Inject specialist output for context, then park.
         safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: resumeProcessId, _agent: parentAgentId, autoContinue: true, silent: true }));
         const normalPrompt = `[SYSTEM: pipeline-complete] ${delegateEntry.agentId} completed their work. Here is their final message to the conversation:${delegateOutputBlock}\n\nYour output for this turn MUST be exactly the literal string <silent> and nothing else. Do not narrate, summarise, or quote the specialist's output. Do not invoke any tools. Do not emit any other text. Just output <silent> and stop.`;
         resumeProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: normalPrompt } }) + '\n');
-        resumeEntry.idle = true;
+        resumeEntry.idle = true; resumeEntry.idleSince = Date.now();
         console.log(`[AgentIntercept] convo=${convoId} delegate completed normally, parent ${parentAgentId} parked with specialist output`);
       }
 
@@ -3627,7 +3627,7 @@ function handleDelegation(msg, processes) {
           // specialist output into the orchestrator prompt, not an empty block.
           e.finalResponseText = e.responseText;
           e.responseText = '';
-          e.idle = true;
+          e.idle = true; e.idleSince = Date.now();
         }
       });
       resumeProc.on('close', (rCode) => {
@@ -3654,7 +3654,7 @@ function handleDelegation(msg, processes) {
       });
 
     } else if (orig && !orig.exited) {
-      orig.idle = true;
+      orig.idle = true; orig.idleSince = Date.now();
       orig.delegation = null;
       orig.handbackAt = Date.now(); // stale end_delegation guard
       processes.set(convoId, orig);
@@ -3671,7 +3671,7 @@ function handleDelegation(msg, processes) {
         if (resumeCount >= MAX_CONSECUTIVE_AGENT_RESUMES) {
           console.log(`[CircuitBreaker] convo=${convoId} ${resumeCount} consecutive agent resumes on delegate return path, pausing`);
           resetAutoResume(convoId);
-          orig.idle = true;
+          orig.idle = true; orig.idleSince = Date.now();
           safeSend(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: `[Auto-paused: ${resumeCount} consecutive agent handoffs without user input. Last specialist: ${delegateEntry.agentId}. Please review the output above and send your next message to continue.]` }, _agent: orig.agentId, _conversationId: convoId }));
         } else {
           const pendingRequest = delegateEntry.lastUserMessage || '';
@@ -3679,7 +3679,7 @@ function handleDelegation(msg, processes) {
             if (!orig.exited) {
               console.log(`[Delegate] convo=${convoId} auto-continuing orchestrator after specialist return (resume ${resumeCount}/${MAX_CONSECUTIVE_AGENT_RESUMES})`);
               orig.responseText = '';
-              orig.idle = false;
+              orig.idle = false; orig.idleSince = null;
               safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: orig.processId, _agent: orig.agentId, autoContinue: true }));
               const prompt = pendingRequest
                 ? `[SYSTEM: The specialist just returned because the user asked for something outside their scope. The user's pending request is: "${pendingRequest}"\n\nRoute this request now. Delegate to the right specialist if one fits, or handle it yourself. Do not summarise what the previous specialist did. Do not ask the user to repeat themselves. Respond to their request.]`
@@ -3825,7 +3825,7 @@ wss.on('connection', (ws) => {
             existing.sawTextDelta = false; // reset per-turn text-source flag (defensive)
             safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId, _agent: existing.agentId }));
             existing.responseText = '';
-            existing.idle = false;
+            existing.idle = false; existing.idleSince = null;
             existing.toolCalls = [];
             existing.turnStartTime = Date.now();
             existing.lastUserMessage = msg.content;
@@ -3927,7 +3927,7 @@ wss.on('connection', (ws) => {
             appendTranscript(convoId, 'agent', e.agentId, textWithTools);
           }
                 e.responseText = '';
-                e.idle = true;
+                e.idle = true; e.idleSince = Date.now();
               }
             });
 
@@ -5482,7 +5482,7 @@ function handleChatSpawnError(err, convoId) {
     if (entry && entry.delegation && entry.delegation.originalEntry
         && !entry.delegation.originalEntry.exited) {
       const parent = entry.delegation.originalEntry;
-      parent.idle = true;
+      parent.idle = true; parent.idleSince = Date.now();
       parent.delegation = null;
       chatProcesses.set(convoId, parent);
       safeSend(JSON.stringify({
@@ -6406,7 +6406,7 @@ function handleCodexDelegateEvent(entry, convoId, ev) {
         entry.resultSent = true;
         entry.finalResponseText = displayText;
         entry.responseText = '';
-        entry.idle = true;
+        entry.idle = true; entry.idleSince = Date.now();
       } else if (ev.status === 'failed' && !entry.cancelled) {
         if (!entry.resultSent && !entry.errorSent) {
           sendCodexError(entry, convoId, (ev.error && ev.error.message) || 'Codex turn failed');
@@ -6707,6 +6707,68 @@ function beginIncrementalFileIndex(newMessages) {
     finish(r.value);
   };
   setImmediate(step);
+}
+
+// ── Idle agent reaping ─────────────────────────────────────────────────────
+// One agent process is kept per conversation touched, plus every parked
+// ancestor in a delegation chain, and nothing used to release them: a process
+// lived until it exited on its own, was cancelled, or the app quit. Each also
+// holds its own set of tool servers, so memory grew with session length and
+// conversation count until the machine started swapping. Observed on a user's
+// machine as three agent trees alive for nearly eighteen hours, spawned within
+// four minutes of launch and untouched since.
+//
+// Safe because it is not destructive: session ids are persisted per
+// conversation and the client sends one back with its next message, so a
+// reaped conversation resumes with its context intact.
+const IDLE_REAP_MS = Number(process.env.RUNDOCK_IDLE_REAP_MS) || 15 * 60 * 1000;
+// Sweep often enough to be responsive, rarely enough to be invisible. Bounded
+// below so a small test interval cannot spin the loop.
+const REAP_SWEEP_MS = Math.max(1000, Math.min(IDLE_REAP_MS, 60 * 1000));
+
+/** Kill an entry and every ancestor parked behind it, tool servers included. */
+function reapEntryChain(entry) {
+  let node = entry;
+  const seen = new Set();
+  while (node && !seen.has(node)) {
+    seen.add(node);
+    if (!node.exited) stopEntryProcess(node, 'SIGTERM');
+    node.exited = true;
+    const d = node.delegation;
+    node = d ? (d.originalEntry || d.orchestratorEntry) : null;
+  }
+  return seen.size;
+}
+
+function reapIdleAgents(now = Date.now()) {
+  let reaped = 0, processes = 0;
+  for (const [convoId, entry] of [...chatProcesses]) {
+    if (!entry || entry.exited) continue;
+    // Mid-turn: the user is waiting on an answer.
+    if (!entry.idle) continue;
+    // A handback is already scheduled or in flight; do not race it.
+    if (entry.pendingKill || entry.scopeReturn) continue;
+    // The process is being replaced right now (kill-window state machine).
+    if (convoTransitions.has(convoId)) continue;
+    const since = entry.idleSince || 0;
+    if (!since || now - since < IDLE_REAP_MS) continue;
+
+    processes += reapEntryChain(entry);
+    chatProcesses.delete(convoId);
+    reaped += 1;
+  }
+  if (reaped > 0) {
+    console.log(`[Reap] released ${reaped} idle conversation(s), ${processes} process tree(s); they resume on next use`);
+  }
+  return reaped;
+}
+
+function startIdleReaper() {
+  const timer = setInterval(() => {
+    try { reapIdleAgents(); } catch (e) { console.warn('[Reap] sweep failed:', e && e.message ? e.message : e); }
+  }, REAP_SWEEP_MS);
+  if (timer.unref) timer.unref();
+  return timer;
 }
 
 // ── Startup timings ────────────────────────────────────────────────────────
@@ -7233,6 +7295,10 @@ function startServer(options = {}) {
       ACTUAL_PORT = actualPort;
       // Clean up orphaned processes from a previous crash
       if (WORKSPACE) cleanOrphanedProcesses();
+      // Release conversations nobody has touched for a while: each holds an
+      // agent process and its tool servers, and they used to live for the
+      // whole session.
+      startIdleReaper();
       console.log(`\n  Rundock running at http://localhost:${actualPort}`);
       if (WORKSPACE && !fs.existsSync(WORKSPACE)) {
         console.log(`  Workspace no longer exists: ${WORKSPACE}`);
