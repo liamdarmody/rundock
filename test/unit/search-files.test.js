@@ -8,7 +8,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { probeSqlite, createSearchIndex, SCHEMA_VERSION, HIGHLIGHT_OPEN, HIGHLIGHT_CLOSE } = require('../../search.js');
+const { probeSqlite, createSearchIndex, SCHEMA_VERSION, HIGHLIGHT_OPEN, HIGHLIGHT_CLOSE, RECONCILE_BATCH_FILES } = require('../../search.js');
 
 const probe = probeSqlite();
 if (!probe.available) {
@@ -375,5 +375,156 @@ describe('HTML/SVG artifact content indexing', () => {
     idx.reconcileFiles(workspace);
     assert.strictEqual(idx.searchFiles('narwhal').length, 1, 'body still indexes after frontmatter strip');
     assert.strictEqual(idx.searchFiles('octothorpe').length, 1, 'frontmatter value indexes for HTML too');
+  });
+});
+
+describe('reconcile durability on a large workspace', () => {
+  // The whole pass used to run inside one transaction, so any failure rolled
+  // back every file it had indexed and the next pass started from zero. A
+  // workspace large enough that the pass could not complete therefore never
+  // converged: each launch redid all the work and threw all of it away.
+  //
+  // These assert the observable property, convergence, rather than the batch
+  // size or the number of commits, so the batching strategy stays free to
+  // change.
+  // Sized against the real bounds: the corpus must span more than one batch,
+  // and the injected failure must land after at least one has committed.
+  // Hardcoding these would quietly stop testing anything if the bounds moved.
+  const CORPUS = RECONCILE_BATCH_FILES * 2;
+  const FAIL_AT = RECONCILE_BATCH_FILES + 10;
+
+  function writeCorpus() {
+    for (let i = 0; i < CORPUS; i++) {
+      write(`note-${i}.md`, `# Note ${i}\n\nBodytoken${i} and some shared filler prose.\n`);
+    }
+  }
+
+  /** Make the nth call to _indexFile throw, simulating a pass that dies partway. */
+  function failOnNthIndex(index, n) {
+    const real = index._indexFile.bind(index);
+    let calls = 0;
+    index._indexFile = (...args) => {
+      if (++calls === n) throw new Error('simulated mid-pass failure');
+      return real(...args);
+    };
+    return () => { index._indexFile = real; };
+  }
+
+  test('a pass interrupted partway keeps the files it had already indexed', () => {
+    writeCorpus();
+    idx = freshIndex();
+
+    const restore = failOnNthIndex(idx, FAIL_AT);
+    idx.reconcileFiles(workspace);
+    restore();
+
+    const indexed = idx.db.prepare('SELECT COUNT(*) AS c FROM files').get().c;
+    assert.ok(indexed > 0,
+      `an interrupted pass must keep the work it had already committed, or a workspace `
+      + `too large to index in one go can never converge. Indexed ${indexed} of ${CORPUS} `
+      + `files before the failure, and kept none of them.`);
+  });
+
+  test('a later pass completes the remainder instead of starting again', () => {
+    writeCorpus();
+    idx = freshIndex();
+
+    const restore = failOnNthIndex(idx, FAIL_AT);
+    idx.reconcileFiles(workspace);
+    const afterFailure = idx.db.prepare('SELECT COUNT(*) AS c FROM files').get().c;
+    restore();
+
+    // Second pass, nothing on disk changed, no injected failure.
+    const res = idx.reconcileFiles(workspace);
+    const afterRetry = idx.db.prepare('SELECT COUNT(*) AS c FROM files').get().c;
+
+    assert.strictEqual(afterRetry, CORPUS, 'the second pass must finish the job');
+    assert.ok(res.updated < CORPUS,
+      `the second pass must index only what the first did not, rather than redoing `
+      + `everything. It re-indexed ${res.updated} of ${CORPUS} after ${afterFailure} were `
+      + `already done.`);
+  });
+
+  test('files indexed before the failure are searchable straight away', () => {
+    writeCorpus();
+    idx = freshIndex();
+
+    const restore = failOnNthIndex(idx, FAIL_AT);
+    idx.reconcileFiles(workspace);
+    restore();
+
+    // Something from the first batch must already be findable: a partially
+    // built index is useful, an empty one is not.
+    assert.strictEqual(idx.searchFiles('Bodytoken0').length, 1,
+      'a file committed before the failure must be searchable, not lost with the rollback');
+  });
+});
+
+describe('reconcile can be driven incrementally', () => {
+  // The initial index runs on the Electron main thread, so a pass that cannot
+  // be interrupted freezes the whole window until it finishes. Exposing the
+  // pass as a sequence of steps lets the caller decide the pacing; search.js
+  // stays synchronous and knows nothing about event loops.
+  const CORPUS = RECONCILE_BATCH_FILES * 2;
+
+  function writeCorpus() {
+    for (let i = 0; i < CORPUS; i++) {
+      write(`note-${i}.md`, `# Note ${i}\n\nBodytoken${i} and some shared filler prose.\n`);
+    }
+  }
+
+  test('the pass yields between batches instead of running to completion', () => {
+    writeCorpus();
+    idx = freshIndex();
+
+    let steps = 0, result;
+    for (const iter = idx.reconcileFilesIncremental(workspace); ;) {
+      const r = iter.next();
+      steps++;
+      if (r.done) { result = r.value; break; }
+    }
+
+    assert.ok(steps > 2,
+      `a corpus spanning ${CORPUS / RECONCILE_BATCH_FILES} batches must yield more than once, `
+      + `or the caller has no opportunity to let anything else run. Got ${steps} step(s).`);
+    assert.strictEqual(result.updated, CORPUS, 'every file is still indexed');
+  });
+
+  test('driving it in steps produces exactly the same index as running it in one go', () => {
+    writeCorpus();
+
+    idx = freshIndex();
+    for (const iter = idx.reconcileFilesIncremental(workspace); !iter.next().done;) { /* step */ }
+    const incremental = idx.db.prepare('SELECT path, title FROM files ORDER BY path').all();
+    const incrementalHit = idx.searchFiles('Bodytoken7').length;
+    idx.close();
+
+    fs.rmSync(dbPath, { force: true });
+    idx = freshIndex();
+    idx.reconcileFiles(workspace);
+    const oneShot = idx.db.prepare('SELECT path, title FROM files ORDER BY path').all();
+
+    assert.deepStrictEqual(incremental, oneShot, 'stepping must not change what gets indexed');
+    assert.strictEqual(incrementalHit, idx.searchFiles('Bodytoken7').length, 'nor what is findable');
+  });
+
+  test('a step that throws still keeps the batches already committed', () => {
+    writeCorpus();
+    idx = freshIndex();
+
+    const real = idx._indexFile.bind(idx);
+    let calls = 0;
+    idx._indexFile = (...args) => {
+      if (++calls === RECONCILE_BATCH_FILES + 10) throw new Error('simulated mid-step failure');
+      return real(...args);
+    };
+
+    const iter = idx.reconcileFilesIncremental(workspace);
+    try { for (;;) { if (iter.next().done) break; } } catch (e) { /* surfaced to the driver */ }
+    idx._indexFile = real;
+
+    const kept = idx.db.prepare('SELECT COUNT(*) AS c FROM files').get().c;
+    assert.ok(kept >= RECONCILE_BATCH_FILES,
+      `a failure while stepping must keep the completed batches, same as the one-shot path. Kept ${kept}.`);
   });
 });

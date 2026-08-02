@@ -208,6 +208,12 @@ const INDEXED_EXTENSIONS = new Set(['.md', '.txt', '.html', '.htm', '.svg']);
 const HTML_EXTENSIONS = new Set(['.html', '.htm', '.svg']);
 const MAX_FILE_BYTES = 2 * 1024 * 1024; // ignore pathological files
 
+// Write-batch bounds for a reconcile pass. Sized so a commit is frequent
+// enough that an interrupted pass loses little, and rare enough that commit
+// overhead stays negligible against the cost of indexing the content itself.
+const RECONCILE_BATCH_FILES = 250;
+const RECONCILE_BATCH_BYTES = 8 * 1024 * 1024;
+
 function walkTextFiles(rootDir, prefix = '', out = []) {
   let items;
   try {
@@ -394,6 +400,34 @@ class SearchIndex {
     this.db.prepare("SELECT count(*) FROM files_fts WHERE files_fts MATCH '\"__probe__\"'").get();
   }
 
+  /**
+   * What share of indexed paths still exist on disk, sampled.
+   *
+   * Paths are stored relative to the workspace root, so an index carried across
+   * from a different layout describes files that are no longer there. A
+   * workspace between two normal opens scores near 1.0; one that has been moved
+   * or restructured scores near 0, and is cheaper to rebuild than to reconcile
+   * row by row.
+   *
+   * Returns null when nothing is indexed yet, since there is nothing to judge.
+   */
+  indexedPathsStillPresent(rootDir, sample = 50) {
+    const rows = this.db.prepare('SELECT path FROM files LIMIT ?').all(sample);
+    if (rows.length === 0) return null;
+    let present = 0;
+    for (const r of rows) {
+      if (fs.existsSync(path.join(rootDir, r.path))) present += 1;
+    }
+    return present / rows.length;
+  }
+
+  /** Throw the index away and start clean. It is a derived artifact. */
+  rebuild() {
+    this.close();
+    this._deleteDbFiles();
+    this.open();
+  }
+
   _deleteDbFiles() {
     for (const suffix of ['', '-wal', '-shm']) {
       try { fs.rmSync(this.dbPath + suffix, { force: true }); } catch (e) {}
@@ -422,7 +456,31 @@ class SearchIndex {
    * mtime/size moved, remove rows whose file is gone. The files table itself
    * is the high-water store. Returns {updated, removed, scanned}.
    */
+  /**
+   * Run a whole pass and return its result. Convenience wrapper over the
+   * incremental form, for callers happy to block: the pre-query refresh, the
+   * save hook, and tests.
+   */
   reconcileFiles(rootDir) {
+    const iter = this.reconcileFilesIncremental(rootDir);
+    for (;;) { const r = iter.next(); if (r.done) return r.value; }
+  }
+
+  /**
+   * The same pass, handing control back at every commit boundary.
+   *
+   * The initial index runs on the thread that draws the window, so a pass that
+   * cannot be interrupted freezes the app until it finishes, and on a large
+   * workspace that is the difference between "indexing" and "broken". Yielding
+   * lets the caller choose the pacing: this file stays synchronous and knows
+   * nothing about event loops, while the server spaces the steps out so the
+   * socket keeps being serviced.
+   *
+   * No transaction is open while suspended, so other writers can interleave
+   * safely. A driver that abandons the pass part-way should call .return() on
+   * the iterator; the finally below is what makes that safe either way.
+   */
+  *reconcileFilesIncremental(rootDir) {
     const onDisk = walkTextFiles(rootDir);
     const known = new Map(
       this.db.prepare('SELECT path, mtime_ms, size FROM files').all().map(r => [r.path, r])
@@ -435,8 +493,12 @@ class SearchIndex {
     // failure rolls the pass back; the next reconcile simply retries.
     const upsert = this._prepareFileUpsert();
     const del = this.db.prepare('DELETE FROM files WHERE path = ?');
+    // Counters advance as work happens; the durable pair is snapshotted on
+    // every commit, so an interrupted pass reports what actually survived
+    // rather than what it attempted.
+    let durableUpdated = 0, durableRemoved = 0;
+    const batch = this._beginBatch(() => { durableUpdated = updated; durableRemoved = removed; });
     try {
-      this.db.exec('BEGIN');
       for (const rel of onDisk) {
         let st;
         try { st = fs.statSync(path.join(rootDir, rel)); } catch (e) { continue; }
@@ -446,21 +508,78 @@ class SearchIndex {
         if (st.size > MAX_FILE_BYTES) {
           // A file that grew past the cap must not keep its stale row
           // searchable forever; drop it (no-op when it was never indexed).
-          if (prev) { del.run(rel); removed++; }
+          if (prev) { batch.enter(); del.run(rel); removed++; if (batch.note(0)) yield; }
           continue;
         }
+        batch.enter();
         this._indexFile(rootDir, rel, st, upsert);
         updated++;
+        // Yield only where a batch actually closed, so control is never handed
+        // back mid-transaction.
+        if (batch.note(st.size)) yield;
       }
       // Anything left in `known` no longer exists on disk.
-      for (const rel of known.keys()) { del.run(rel); removed++; }
-      this.db.exec('COMMIT');
+      for (const rel of known.keys()) {
+        batch.enter(); del.run(rel); removed++;
+        if (batch.note(0)) yield;
+      }
+      batch.finish();
     } catch (e) {
-      try { this.db.exec('ROLLBACK'); } catch (e2) {}
-      console.warn(`[Search] files reconcile failed (rolled back, will retry): ${e && e.message ? e.message : e}`);
-      return { updated: 0, removed: 0, scanned: onDisk.length };
+      // Only the batch in flight is lost. Everything committed before it stays,
+      // so the next pass resumes from there instead of starting over.
+      batch.abort();
+      console.warn(`[Search] files reconcile interrupted after ${durableUpdated} file(s); progress kept, will resume: ${e && e.message ? e.message : e}`);
+      return { updated: durableUpdated, removed: durableRemoved, scanned: onDisk.length, interrupted: true };
+    } finally {
+      // No-op on every normal path. This only bites when a driver abandons the
+      // pass mid-flight, where a leaked transaction would block every later
+      // write to the index.
+      batch.abort();
     }
     return { updated, removed, scanned: onDisk.length };
+  }
+
+  /**
+   * Bounded write batching.
+   *
+   * A single transaction for a whole reconcile meant one failure discarded
+   * every file already indexed, and the next pass began again from nothing, so
+   * a workspace too large to finish in one go could never converge. It also
+   * held the entire pass in memory until commit, which on a large workspace is
+   * hundreds of megabytes.
+   *
+   * Both bounds are needed: file sizes span orders of magnitude, so a count
+   * alone lets a few huge files blow the memory ceiling, and a byte budget
+   * alone lets a very large number of tiny files hold one transaction open for
+   * the whole pass.
+   *
+   * `onCommit` runs after each successful commit so the caller can record how
+   * much work is now durable.
+   */
+  _beginBatch(onCommit, { maxFiles = RECONCILE_BATCH_FILES, maxBytes = RECONCILE_BATCH_BYTES } = {}) {
+    const db = this.db;
+    let open = false, files = 0, bytes = 0;
+    const commit = () => { db.exec('COMMIT'); open = false; if (onCommit) onCommit(); };
+    return {
+      /**
+       * Open a transaction if none is in flight. Call before doing the work.
+       * Opening is explicit, and a commit deliberately leaves the batch CLOSED,
+       * so a caller that suspends between batches is never holding a
+       * transaction. That matters because an incremental pass yields control
+       * back to the server, and any other writer that ran meanwhile would
+       * otherwise fail with "cannot start a transaction within a transaction".
+       */
+      enter() { if (!open) { db.exec('BEGIN'); open = true; files = 0; bytes = 0; } },
+      /** Record one unit of work. Returns true when this closed a batch. */
+      note(size) {
+        files += 1;
+        bytes += size || 0;
+        if (files >= maxFiles || bytes >= maxBytes) { commit(); return true; }
+        return false;
+      },
+      finish() { if (open) commit(); },
+      abort() { if (open) { try { db.exec('ROLLBACK'); } catch (e) { /* already closed */ } open = false; } },
+    };
   }
 
   /** Index one file immediately (save_file hot path); no directory walk. */
@@ -900,6 +1019,10 @@ function normaliseReviewContent(content) {
 
 module.exports = {
   SCHEMA_VERSION,
+  RECONCILE_BATCH_FILES,
+  RECONCILE_BATCH_BYTES,
+  RECONCILE_BATCH_FILES,
+  RECONCILE_BATCH_BYTES,
   HIGHLIGHT_OPEN,
   HIGHLIGHT_CLOSE,
   probeSqlite,

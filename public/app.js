@@ -482,7 +482,13 @@ function handle(d) {
   const convoId = d._conversationId;
   switch(d.type) {
     case 'workspaces': handleWorkspaces(d); break;
-    case 'workspace_set': onWorkspaceReady(d.path, d.analysis, d.isEmpty, d.workspaceMode, d.scaffoldError, d.setupComplete); break;
+    case 'workspace_set':
+      // Start the clock on the renderer's share of opening a workspace. The
+      // server times its own phases; without this the client is the one part
+      // of a slow startup nobody can see.
+      workspaceOpenStartedAt = Date.now();
+      onWorkspaceReady(d.path, d.analysis, d.isEmpty, d.workspaceMode, d.scaffoldError, d.setupComplete);
+      break;
     case 'folder_picked': if (d.path) selectWorkspace(d.path); break;
     case 'workspace_error': {
       const errEl = document.getElementById('workspace-error');
@@ -497,7 +503,16 @@ function handle(d) {
     case 'needs_workspace': showView('workspace'); break;
     case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesSidebar(); renderConvoList(); break;
     case 'skills': skills=d.skills; skillsLoaded=true; renderSkills(); if(palettePendingSkill){const s=palettePendingSkill;palettePendingSkill=null;selectSkill(s);} break;
-    case 'conversations': handlePersistedConversations(d.conversations, d.lastActiveConversationId); break;
+    case 'conversations':
+      handlePersistedConversations(d.conversations, d.lastActiveConversationId);
+      // Conversations are the last of the four payloads the client requests on
+      // open, so by here the workspace is on screen. Report once per open.
+      if (workspaceOpenStartedAt) {
+        const renderMs = Date.now() - workspaceOpenStartedAt;
+        workspaceOpenStartedAt = null;
+        try { ws.send(JSON.stringify({ type: 'client_render_time', ms: renderMs })); } catch (e) {}
+      }
+      break;
     case 'lists': {
       const prevIds = new Set(convoLists.map(l => l.id));
       convoLists = d.lists || [];
@@ -628,7 +643,19 @@ function handle(d) {
     case 'result':
       if(convoId && !isStaleProcess(d, convoId)) handleResult(d, convoId);
       break;
-    case 'file_tree': cachedFileTree = d.tree; renderFileTree(d.tree); break;
+    case 'file_tree': {
+      // The client asks for the tree after every file-writing tool call and
+      // every agent turn, but an agent editing file CONTENTS does not change
+      // the tree at all. Re-rendering identical data tore down the DOM and
+      // collapsed every folder, losing any wikilink reveal and any folder the
+      // user had opened by hand. Compare first and skip when nothing moved.
+      const nextTreeJson = JSON.stringify(d.tree);
+      cachedFileTree = d.tree;
+      if (nextTreeJson === cachedFileTreeJson) break;
+      cachedFileTreeJson = nextTreeJson;
+      renderFileTree(d.tree);
+      break;
+    }
     case 'file_content': loadFileContent(d.path, d.content); break;
     case 'file_changed': handleExternalFileChange(d.path, d.content); break;
     case 'file_saved': document.getElementById('editor-status').textContent='Saved'; break;
@@ -3240,7 +3267,16 @@ try{if(localStorage.getItem('rundock-theme')==='light'){document.body.classList.
 
 // ===== 11. FILE TREE & EDITOR =====
 
+// Set when a workspace opens, cleared once the client has rendered it.
+let workspaceOpenStartedAt = null;
 let cachedFileTree = null;
+// Serialised copy of the last rendered tree, so an unchanged push can be
+// skipped without walking the structure again.
+let cachedFileTreeJson = null;
+// Folder paths the user (or a wikilink reveal) has opened. renderFileTree
+// rebuilds the DOM from scratch, so without this every re-render collapsed
+// the whole tree back to its default.
+const expandedFolders = new Set();
 
 function renderFileTree(tree) {
   const c=document.getElementById('file-tree');
@@ -3279,11 +3315,13 @@ function treeIconSvg(inner) {
 function buildTree(items,container) {
   for(const item of items) {
     if(item.type==='folder') {
-      const f=document.createElement('div'); f.className='folder-item'; f.innerHTML=`${treeIconSvg(TREE_ICONS.folder)} ${esc(item.name)}`;
-      f.onclick=()=>{const ch=f.nextElementSibling,svg=f.querySelector('svg.file-item-icon');const collapsed=ch.classList.toggle('collapsed');if(svg)svg.innerHTML=collapsed?TREE_ICONS.folder:TREE_ICONS.folderOpen;};
+      const open=expandedFolders.has(item.path);
+      const f=document.createElement('div'); f.className='folder-item'; f.innerHTML=`${treeIconSvg(open?TREE_ICONS.folderOpen:TREE_ICONS.folder)} ${esc(item.name)}`;
+      f.dataset.path=item.path;
+      f.onclick=()=>{const ch=f.nextElementSibling,svg=f.querySelector('svg.file-item-icon');const collapsed=ch.classList.toggle('collapsed');if(collapsed)expandedFolders.delete(item.path);else expandedFolders.add(item.path);if(svg)svg.innerHTML=collapsed?TREE_ICONS.folder:TREE_ICONS.folderOpen;};
       f.oncontextmenu=(e)=>{e.preventDefault();openRowContextMenu(e,item.path,'folder');};
       container.appendChild(f);
-      const ch=document.createElement('div'); ch.className='file-children collapsed'; buildTree(item.children,ch); container.appendChild(ch);
+      const ch=document.createElement('div'); ch.className=open?'file-children':'file-children collapsed'; buildTree(item.children,ch); container.appendChild(ch);
     } else {
       const fi=document.createElement('div'); fi.className='file-item';
       fi.innerHTML=`${treeIconSvg(TREE_ICONS[item.kind]||TREE_ICONS.file)} ${esc(item.name)}`;
@@ -3675,6 +3713,8 @@ function highlightFileInSidebar(filePath) {
     if (node.classList && node.classList.contains('file-children') && node.classList.contains('collapsed')) {
       node.classList.remove('collapsed');
       const folder = node.previousElementSibling;
+      // Remember it, so a later structural change does not undo the reveal.
+      if (folder && folder.dataset && folder.dataset.path) expandedFolders.add(folder.dataset.path);
       // Swap the folder's icon to the open-folder SVG, matching the manual
       // click-expand path. The earlier selector (.folder-icon) matched nothing
       // and injected a text chevron into an <svg>, so the icon stayed closed.
@@ -4167,7 +4207,10 @@ function changeWorkspace() {
 
 function handleWorkspaces(d) {
   if (d.current) {
-    // Server already has a workspace set (env var or previous selection)
+    // Server already has a workspace set (env var or previous selection).
+    // This path never sends set_workspace, so start the render clock here or
+    // the client's share of startup goes unmeasured for these instances.
+    workspaceOpenStartedAt = Date.now();
     onWorkspaceReady(d.current, d.analysis, d.isEmpty, d.workspaceMode, d.scaffoldError, d.setupComplete);
     return;
   }
@@ -5242,11 +5285,16 @@ function openPaletteResult(idx) {
 // plus nav state so the sidebar matches where the user landed.
 function paletteOpenFile(filePath) {
   switchNav('files');
-  document.querySelectorAll('.file-item').forEach(x => x.classList.toggle('active', x.dataset.path === filePath));
   editorReturnView = 'editor';
   fileHistory = [];
   ws.send(JSON.stringify({ type: 'read_file', path: filePath }));
   showView('editor');
+  // Reveal, don't just select. Marking the row active while its folders stay
+  // collapsed leaves the user looking at a file they cannot see, since
+  // .file-children.collapsed is display:none. This also handles the active
+  // class, the folder icons and scrolling it into view, which is why the
+  // sibling route for links inside an artifact has always ended here.
+  highlightFileInSidebar(filePath);
 }
 
 // Conversation route: the existing openConversation, extended with the

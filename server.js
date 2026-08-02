@@ -395,9 +395,35 @@ async function parseSessionHistory(sessionId, limit = 20, offset = 0) {
 // (transcript handoffs, system markers, delegation briefs) and resume ghosts.
 // Returns 0 on any I/O or parse failure so a single bad file doesn't poison
 // the conversation total.
+// Message counts per session, keyed on the file's mtime and size.
+//
+// The conversation list enriches EVERY conversation on EVERY load, and it
+// reloads on workspace open and on every client reconnect, including whenever
+// a laptop wakes. Re-reading and re-parsing every session file each time makes
+// the cost scale with conversations HELD rather than conversations CHANGED,
+// which on a long-lived workspace is the difference between instant and a
+// visible freeze. Same shape as the file-tree cache: a cheap stat decides
+// whether the expensive read is needed at all.
+const _sessionCountMemo = new Map(); // sessionId -> { mtimeMs, size, count }
+
 function countSessionMessagesSync(sessionId) {
-  const filePath = getSessionJsonlPath(sessionId);
+  // The cached resolver, unlike the raw lookup, remembers a MISS. That matters
+  // because the expected location is derived from the workspace path: move or
+  // merge a workspace and every session misses, and each miss otherwise lists
+  // the projects directory and stats every entry, once per conversation, on
+  // every load.
+  const filePath = resolveSessionPathCached(sessionId);
   if (!filePath) return 0;
+  let st;
+  try { st = fs.statSync(filePath); } catch (e) { return 0; }
+  const memo = _sessionCountMemo.get(sessionId);
+  if (memo && memo.mtimeMs === st.mtimeMs && memo.size === st.size) return memo.count;
+  const count = readSessionMessageCount(filePath);
+  _sessionCountMemo.set(sessionId, { mtimeMs: st.mtimeMs, size: st.size, count });
+  return count;
+}
+
+function readSessionMessageCount(filePath) {
   let raw;
   try {
     raw = fs.readFileSync(filePath, 'utf-8');
@@ -919,7 +945,7 @@ const AGENT_CACHE_TTL = 2000; // 2 seconds
 // edit vanished"; the panel scrolls, so the length is not a layout problem.
 const AGENT_INSTRUCTIONS_MAX = 20000;
 
-function invalidateAgentCache() { _agentCache = null; _agentCacheTime = 0; _skillCache = null; _skillCacheTime = 0; invalidateFileListCache(); }
+function invalidateAgentCache() { _agentCache = null; _agentCacheTime = 0; _skillCache = null; _skillCacheTime = 0; invalidateFileListCache(); invalidateFileTreeCache(); }
 
 // Skill + file-list caches for the search hot path. discoverSkills
 // re-reads every SKILL.md and agent body per call, and the palette queries
@@ -942,7 +968,7 @@ function discoverSkillsCached(agents) {
 function flatFileListCached() {
   const now = Date.now();
   if (_fileListCache && (now - _fileListCacheTime) < AGENT_CACHE_TTL) return _fileListCache;
-  _fileListCache = flattenFileTree(getFileTree(WORKSPACE));
+  _fileListCache = flattenFileTree(getFileTreeCached());
   _fileListCacheTime = now;
   return _fileListCache;
 }
@@ -2108,7 +2134,7 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify(discoverAgents()));
   } else if (req.url === '/api/files') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(getFileTree(WORKSPACE)));
+    res.end(JSON.stringify(getFileTreeCached()));
   } else if (req.url.startsWith('/workspace-file?path=')) {
     // Binary transport for the file-type registry's image and PDF viewers.
     // Allowlist-only; bytes are served raw (the WS read_file path utf-8
@@ -2603,7 +2629,7 @@ function scheduleScopeReturnKill(e, convoId) {
       // Only open the window if this entry still executes the conversation;
       // a parked/replaced entry's kill must not buffer the successor's chat.
       if (chatProcesses.get(convoId) === e) beginConvoTransition(convoId, 'killing', e);
-      try { e.process.kill(); } catch (err) {}
+      try { killProcessTree(e.process); } catch (err) {}
     }
   }, 500);
 }
@@ -2735,7 +2761,7 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
                     const toolSummary = buildToolSummary(entry.toolCalls);
                     appendTranscript(convoId, 'agent', entry.agentId, toolSummary, 'routing');
                   }
-                  try { entry.process.kill('SIGKILL'); } catch (e) {}
+                  try { killProcessTree(entry.process, 'SIGKILL'); } catch (e) {}
                   entry.exited = true;
                   // Order matters: handleDelegation sends agent_switch synchronously,
                   // which the client uses to promote the orchestrator's streaming
@@ -2775,12 +2801,12 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
                     } else {
                       appendTranscript(convoId, 'agent', entry.agentId, buildToolSummary(entry.toolCalls), 'routing');
                     }
-                    try { entry.process.kill('SIGKILL'); } catch (e) {}
+                    try { killProcessTree(entry.process, 'SIGKILL'); } catch (e) {}
                     entry.exited = true;
                     const offName = offRoster.displayName || offRoster.name;
                     safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: `Blocked a handoff to ${offName}: not one of this agent's direct reports.`, _conversationId: convoId }));
                     const blockedEntry = spawnResumedProcess(convoId, entry.agentId, entry.sessionId, chatProcesses, {});
-                    blockedEntry.idle = false;
+                    blockedEntry.idle = false; blockedEntry.idleSince = null;
                     safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: blockedEntry.processId, _agent: entry.agentId, autoContinue: true }));
                     const runtimeNote = offRoster.runtime === 'codex' ? ` ${offName} runs on a different runtime (Codex), which only their own leader can start.` : '';
                     const blockPrompt = `[SYSTEM: delegation-blocked] Your Agent tool call named "${offName}" (${offRoster.name}), a workspace agent who is not one of your direct reports, so it was NOT run. No subagent may act as ${offName}.${runtimeNote} Do not retry the same call. If the task needs ${offName}, tell the user this needs routing through ${offName}'s leader and hand back. Otherwise continue without them.`;
@@ -2816,6 +2842,12 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
               last.arg = input.file_path || input.path || input.pattern || input.query || input.url
                 || (input.command ? input.command.substring(0, 60) : null);
             }
+            // A backgrounded command outlives the turn that started it, and it
+            // is the one kind of work that never appears in this stream again.
+            // Remember it so the idle reaper leaves this conversation alone:
+            // the turn ends, the entry looks idle, and killing it would take
+            // the job with it while the user waits for exactly that result.
+            if (input.run_in_background === true) entry.startedBackgroundTask = true;
           } catch (e) {}
           entry._pendingToolArg = null;
         }
@@ -2963,7 +2995,7 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
   // replay queues safely behind it (matching the delegate COMPLETE paths).
   const bufferedFollowUp = convoHasBufferedChat(convoId);
   if (!wasPipelineComplete && bufferedFollowUp) {
-    orchEntry.idle = true;
+    orchEntry.idle = true; orchEntry.idleSince = Date.now();
     console.log(`[KillWindow] convo=${convoId} skipping scope-return routing prompt, buffered follow-up takes over`);
   } else {
     // Circuit breaker: check consecutive auto-resume count before sending prompt.
@@ -2972,7 +3004,7 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
     if (resumeCount >= MAX_CONSECUTIVE_AGENT_RESUMES) {
       console.log(`[CircuitBreaker] convo=${convoId} ${resumeCount} consecutive agent resumes in handleScopeReturn, pausing orchestrator`);
       resetAutoResume(convoId);
-      orchEntry.idle = true;
+      orchEntry.idle = true; orchEntry.idleSince = Date.now();
       safeSend(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: `[Auto-paused: ${resumeCount} consecutive agent handoffs without user input. Last specialist: ${specialistEntry.agentId}. Please review the output above and send your next message to continue.]` }, _agent: orchestrator.id, _conversationId: convoId }));
     } else {
       // Build context for orchestrator. Both shapes inject the specialist's final output
@@ -3005,7 +3037,7 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
         appendTranscript(convoId, 'agent', e.agentId, textWithTools);
       }
       e.responseText = '';
-      e.idle = true;
+      e.idle = true; e.idleSince = Date.now();
     }
   });
 
@@ -3079,7 +3111,7 @@ function spawnResumedProcess(convoId, agentId, sessionId, processes, opts = {}) 
       }
       e.finalResponseText = e.responseText;
       e.responseText = '';
-      e.idle = true;
+      e.idle = true; e.idleSince = Date.now();
     }
   });
   proc.on('close', (rCode) => {
@@ -3153,7 +3185,7 @@ function handleDelegation(msg, processes) {
   // Park the original process (or reference the killed one for intercepted calls)
   const originalAgentId = isIntercepted ? msg._parentAgentId : existing.agentId;
   const originalProcessId = isIntercepted ? (existing?.processId || 'intercepted') : existing.processId;
-  if (!isIntercepted) existing.idle = true;
+  if (!isIntercepted) existing.idle = true; existing.idleSince = Date.now();
 
   // Spawn delegate process
   const delegateProcessId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -3339,7 +3371,7 @@ function handleDelegation(msg, processes) {
             appendTranscript(convoId, 'agent', e.agentId, textWithTools);
           }
       e.responseText = '';
-      e.idle = true;
+      e.idle = true; e.idleSince = Date.now();
     }
   });
   }
@@ -3427,7 +3459,7 @@ function handleDelegation(msg, processes) {
         // Skip mid-level parent, return directly to orchestrator
         console.log(`[AgentIntercept] convo=${convoId} sub-delegate handed back (${returnMarkerSeen}), skipping ${delegateEntry.delegation.originalAgentId}, restoring orchestrator ${orchestratorAgentId}`);
 
-        orchestratorEntry.idle = true;
+        orchestratorEntry.idle = true; orchestratorEntry.idleSince = Date.now();
         orchestratorEntry.delegation = null;
         orchestratorEntry.handbackAt = Date.now(); // stale end_delegation guard
         processes.set(convoId, orchestratorEntry);
@@ -3459,7 +3491,7 @@ function handleDelegation(msg, processes) {
               if (!orchestratorEntry.exited) {
                 console.log(`[AgentIntercept] convo=${convoId} auto-continuing orchestrator after skip-level ${returnMarkerSeen} (resume ${resumeCount}/${MAX_CONSECUTIVE_AGENT_RESUMES})`);
                 orchestratorEntry.responseText = '';
-                orchestratorEntry.idle = false;
+                orchestratorEntry.idle = false; orchestratorEntry.idleSince = null;
                 safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: orchestratorEntry.processId, _agent: orchestratorAgentId, autoContinue: true }));
                 const prompt = pendingRequest
                   ? `[SYSTEM: A specialist just returned because the user asked for something outside their scope. The user's pending request is: "${pendingRequest}"\n\nRoute this request now. Delegate to the right specialist if one fits, or handle it yourself. Do not summarise what the previous specialist did. Do not ask the user to repeat themselves. Respond to their request.]`
@@ -3541,14 +3573,14 @@ function handleDelegation(msg, processes) {
       if (isOutOfScope && bufferedFollowUp) {
         // Buffered user message supersedes the RETURN routing prompt: park
         // the resumed parent idle and let the replayed message drive it.
-        resumeEntry.idle = true;
+        resumeEntry.idle = true; resumeEntry.idleSince = Date.now();
         console.log(`[KillWindow] convo=${convoId} skipping RETURN routing prompt, buffered follow-up takes over`);
       } else if (isOutOfScope) {
         const resumeCount = incrementAutoResume(convoId);
         if (resumeCount >= MAX_CONSECUTIVE_AGENT_RESUMES) {
           console.log(`[CircuitBreaker] convo=${convoId} ${resumeCount} consecutive agent resumes on parked-parent RETURN path, pausing`);
           resetAutoResume(convoId);
-          resumeEntry.idle = true;
+          resumeEntry.idle = true; resumeEntry.idleSince = Date.now();
           safeSend(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: `[Auto-paused: ${resumeCount} consecutive agent handoffs without user input. Last specialist: ${delegateEntry.agentId}. Please review the output above and send your next message to continue.]` }, _agent: delegateEntry.delegation.originalAgentId, _conversationId: convoId }));
         } else {
           safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: resumeProcessId, _agent: parentAgentId, autoContinue: true }));
@@ -3562,14 +3594,14 @@ function handleDelegation(msg, processes) {
         safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: resumeProcessId, _agent: parentAgentId, autoContinue: true, silent: true }));
         const completePrompt = `[SYSTEM: pipeline-complete] ${delegateEntry.agentId} has finished the delegated work. Here is their final message to the conversation:${delegateOutputBlock}\n\nYour output for this turn MUST be exactly the literal string <silent> and nothing else. Do not narrate, summarise, or quote the specialist's output. Do not invoke any tools. Do not emit any other text. Just output <silent> and stop.`;
         resumeProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: completePrompt } }) + '\n');
-        resumeEntry.idle = true;
+        resumeEntry.idle = true; resumeEntry.idleSince = Date.now();
         console.log(`[AgentIntercept] convo=${convoId} delegate emitted COMPLETE, parent ${parentAgentId} parked with specialist output`);
       } else {
         // Normal exit (no marker). Inject specialist output for context, then park.
         safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: resumeProcessId, _agent: parentAgentId, autoContinue: true, silent: true }));
         const normalPrompt = `[SYSTEM: pipeline-complete] ${delegateEntry.agentId} completed their work. Here is their final message to the conversation:${delegateOutputBlock}\n\nYour output for this turn MUST be exactly the literal string <silent> and nothing else. Do not narrate, summarise, or quote the specialist's output. Do not invoke any tools. Do not emit any other text. Just output <silent> and stop.`;
         resumeProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: normalPrompt } }) + '\n');
-        resumeEntry.idle = true;
+        resumeEntry.idle = true; resumeEntry.idleSince = Date.now();
         console.log(`[AgentIntercept] convo=${convoId} delegate completed normally, parent ${parentAgentId} parked with specialist output`);
       }
 
@@ -3601,7 +3633,7 @@ function handleDelegation(msg, processes) {
           // specialist output into the orchestrator prompt, not an empty block.
           e.finalResponseText = e.responseText;
           e.responseText = '';
-          e.idle = true;
+          e.idle = true; e.idleSince = Date.now();
         }
       });
       resumeProc.on('close', (rCode) => {
@@ -3628,7 +3660,7 @@ function handleDelegation(msg, processes) {
       });
 
     } else if (orig && !orig.exited) {
-      orig.idle = true;
+      orig.idle = true; orig.idleSince = Date.now();
       orig.delegation = null;
       orig.handbackAt = Date.now(); // stale end_delegation guard
       processes.set(convoId, orig);
@@ -3645,7 +3677,7 @@ function handleDelegation(msg, processes) {
         if (resumeCount >= MAX_CONSECUTIVE_AGENT_RESUMES) {
           console.log(`[CircuitBreaker] convo=${convoId} ${resumeCount} consecutive agent resumes on delegate return path, pausing`);
           resetAutoResume(convoId);
-          orig.idle = true;
+          orig.idle = true; orig.idleSince = Date.now();
           safeSend(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: `[Auto-paused: ${resumeCount} consecutive agent handoffs without user input. Last specialist: ${delegateEntry.agentId}. Please review the output above and send your next message to continue.]` }, _agent: orig.agentId, _conversationId: convoId }));
         } else {
           const pendingRequest = delegateEntry.lastUserMessage || '';
@@ -3653,7 +3685,7 @@ function handleDelegation(msg, processes) {
             if (!orig.exited) {
               console.log(`[Delegate] convo=${convoId} auto-continuing orchestrator after specialist return (resume ${resumeCount}/${MAX_CONSECUTIVE_AGENT_RESUMES})`);
               orig.responseText = '';
-              orig.idle = false;
+              orig.idle = false; orig.idleSince = null;
               safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: orig.processId, _agent: orig.agentId, autoContinue: true }));
               const prompt = pendingRequest
                 ? `[SYSTEM: The specialist just returned because the user asked for something outside their scope. The user's pending request is: "${pendingRequest}"\n\nRoute this request now. Delegate to the right specialist if one fits, or handle it yourself. Do not summarise what the previous specialist did. Do not ask the user to repeat themselves. Respond to their request.]`
@@ -3799,7 +3831,7 @@ wss.on('connection', (ws) => {
             existing.sawTextDelta = false; // reset per-turn text-source flag (defensive)
             safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId, _agent: existing.agentId }));
             existing.responseText = '';
-            existing.idle = false;
+            existing.idle = false; existing.idleSince = null;
             existing.toolCalls = [];
             existing.turnStartTime = Date.now();
             existing.lastUserMessage = msg.content;
@@ -3901,7 +3933,7 @@ wss.on('connection', (ws) => {
             appendTranscript(convoId, 'agent', e.agentId, textWithTools);
           }
                 e.responseText = '';
-                e.idle = true;
+                e.idle = true; e.idleSince = Date.now();
               }
             });
 
@@ -4119,10 +4151,10 @@ wss.on('connection', (ws) => {
           if (entry.interrupt) {
             entry.interrupt();
           } else {
-            try { entry.process.kill('SIGTERM'); } catch (e) {}
+            try { killProcessTree(entry.process, 'SIGTERM'); } catch (e) {}
             // Safety net: SIGKILL after 2 seconds
             setTimeout(() => {
-              try { entry.process.kill('SIGKILL'); } catch (e) {}
+              try { killProcessTree(entry.process, 'SIGKILL'); } catch (e) {}
             }, 2000);
           }
 
@@ -4138,8 +4170,8 @@ wss.on('connection', (ws) => {
               if (e.interrupt) {
                 e.interrupt();
               } else if (e.process) {
-                try { e.process.kill('SIGTERM'); } catch (err) {}
-                setTimeout(() => { try { e.process.kill('SIGKILL'); } catch (err) {} }, 2000);
+                try { killProcessTree(e.process, 'SIGTERM'); } catch (err) {}
+                setTimeout(() => { try { killProcessTree(e.process, 'SIGKILL'); } catch (err) {} }, 2000);
               }
               console.log(`[Cancel] convo=${convoId} also killed parked ancestor agent=${e.agentId}`);
             };
@@ -4189,6 +4221,14 @@ wss.on('connection', (ws) => {
         ws.send(JSON.stringify(wsData));
       }
 
+      // Reported by the client once it has finished rendering a freshly opened
+      // workspace. A summary showing every server phase fast and the client slow
+      // redirects an investigation in one line.
+      if (msg.type === 'client_render_time') {
+        const ms = Number(msg.ms);
+        if (Number.isFinite(ms) && ms >= 0) reportStartup(`client render ${Math.round(ms)}ms`);
+      }
+
       if (msg.type === 'list_workspaces') {
         ws.send(JSON.stringify({
           type: 'workspaces',
@@ -4201,8 +4241,11 @@ wss.on('connection', (ws) => {
         const dir = msg.path;
         if (dir && fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
           // Kill all running processes when switching workspace
+          const startup = phaseTimer();
           killAllChildren();
           WORKSPACE = dir;
+          // Before anything reads state that may have come from another path.
+          healWorkspaceIfMoved(dir);
           // A workspace switch (including re-selecting the same one) is the
           // retry trigger for a failed search-engine open, and must not
           // serve the previous workspace's cached file/skill lists.
@@ -4212,10 +4255,12 @@ wss.on('connection', (ws) => {
           saveRecentWorkspace(dir);
           // Clean up orphaned processes from previous sessions in this workspace
           cleanOrphanedProcesses();
+          startup.mark('prepare');
 
           // Detect empty workspace before scaffolding (scaffoldWorkspace adds Doc/skills)
           let agentList = [];
           try { agentList = discoverAgents(); } catch (e) { console.warn('  Agent discovery failed:', e.message); }
+          startup.mark('agents');
           const isEmpty = isEmptyWorkspace(dir, agentList);
 
           // Empty workspace: scaffold default folders and CLAUDE.md
@@ -4227,6 +4272,7 @@ wss.on('connection', (ws) => {
           }
 
           try { scaffoldWorkspace(dir); } catch (e) { console.warn('Scaffold warning:', e.message); }
+          startup.mark('scaffold');
           console.log(`  Workspace changed to: ${WORKSPACE} (empty=${isEmpty})`);
 
           // Re-discover agents after scaffolding
@@ -4242,9 +4288,12 @@ wss.on('connection', (ws) => {
 
           let analysis = null;
           try { analysis = analyzeWorkspace(dir, agentList); } catch (e) { console.warn('  Workspace analysis failed:', e.message); }
+          startup.mark('analyze');
           ws.send(JSON.stringify({ type: 'workspace_set', path: WORKSPACE, analysis, isEmpty, workspaceMode: state.workspaceMode, setupComplete: !!state.setupComplete, scaffoldError }));
           ws.send(JSON.stringify({ type: 'agents', agents: agentList }));
-          try { ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) })); } catch (e) { console.warn('  File tree failed:', e.message); }
+          try { ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTreeCached() })); } catch (e) { console.warn('  File tree failed:', e.message); }
+          startup.mark('tree');
+          reportStartup(`workspace open: ${startup.summary()}`);
           // Warm the search index off the open path (reconcile-on-open);
           // ensureSearchEngine also self-heals lazily on first search.
           setImmediate(() => { try { ensureSearchEngine(); } catch (e) { console.warn('[Search] warm-up failed:', e.message); } });
@@ -4314,7 +4363,7 @@ wss.on('connection', (ws) => {
 
             ws.send(JSON.stringify({ type: 'workspace_set', path: WORKSPACE, analysis, isEmpty: true, workspaceMode: state.workspaceMode, setupComplete: false, scaffoldError }));
             ws.send(JSON.stringify({ type: 'agents', agents: agentList }));
-            ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) }));
+            ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTreeCached() }));
           } catch (e) {
             ws.send(JSON.stringify({ type: 'workspace_error', message: 'Could not create workspace: ' + e.message }));
           }
@@ -4332,7 +4381,7 @@ wss.on('connection', (ws) => {
       }
       if (msg.type === 'get_files') {
         if (!WORKSPACE) return;
-        try { ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) })); } catch (e) { console.warn('  File tree failed:', e.message); }
+        try { ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTreeCached() })); } catch (e) { console.warn('  File tree failed:', e.message); }
       }
       if (msg.type === 'get_skills') {
         let skillList = [];
@@ -4951,7 +5000,7 @@ wss.on('connection', (ws) => {
           // Keep the search index and the title-layer file list fresh on the
           // save hot path; guarded so an index failure can never affect the
           // save itself.
-          invalidateFileListCache();
+          invalidateFileListCache(); invalidateFileTreeCache();
           if (ensureSearchEngine()) {
             try { searchEngine.noteFileSaved(WORKSPACE, msg.path); } catch (e) { /* reconcile catches up */ }
           }
@@ -4975,10 +5024,10 @@ wss.on('connection', (ws) => {
             } else {
               fs.mkdirSync(path.dirname(full), { recursive: true });
               fs.writeFileSync(full, msg.content || '', 'utf-8');
-              invalidateFileListCache();
+              invalidateFileListCache(); invalidateFileTreeCache();
               if (ensureSearchEngine()) { try { searchEngine.noteFileSaved(WORKSPACE, rel); } catch (e) {} }
             }
-            ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTree(WORKSPACE) }));
+            ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTreeCached() }));
             ws.send(JSON.stringify({ type: 'path_created', path: rel, kind: msg.kind }));
           } catch (e) {
             ws.send(JSON.stringify({ type: 'create_error', path: rel, reason: String((e && e.message) || e) }));
@@ -5203,6 +5252,62 @@ function getFileTree(dir, prefix = '') {
   return entries;
 }
 
+// ── File tree cache ────────────────────────────────────────────────────────
+// getFileTree walks the workspace synchronously and reads the first kilobyte
+// of every markdown file to classify it. The client asks for the tree far more
+// often than "on open": after every file-writing tool call and after every
+// agent turn. In the packaged app the server shares a thread with the window,
+// so an uncached walk surfaces as the whole UI freezing on a large vault.
+//
+// Freshness is a directory-only stat pass. Creating, deleting or renaming
+// anything bumps the mtime of the directory containing it, so directory mtimes
+// are exactly the signal for "the shape of the tree changed". Editing a file's
+// CONTENTS does not touch them, and that is the common case during agent work,
+// so it becomes a pure cache hit with no directory reads at all.
+//
+// Known limit: fileKind classifies a note as a board by reading its
+// frontmatter, so adding kanban-plugin frontmatter changes a node's kind
+// without changing any directory mtime. Saves made through Rundock invalidate
+// explicitly, which covers the path a user actually takes to do that.
+let _treeCache = null; // { tree, dirs: Map<absolutePath, mtimeMs> }
+
+function invalidateFileTreeCache() { _treeCache = null; }
+
+// Directory list is derived from the tree we just built rather than by walking
+// again: the folder nodes are already there, so this costs one stat per
+// directory and zero directory reads.
+function treeDirMtimes(nodes, out = new Map()) {
+  for (const n of nodes) {
+    if (n.type !== 'folder') continue;
+    const abs = path.join(WORKSPACE, n.path);
+    try { out.set(abs, fs.statSync(abs).mtimeMs); } catch (e) { /* raced away */ }
+    treeDirMtimes(n.children || [], out);
+  }
+  return out;
+}
+
+function treeCacheIsFresh() {
+  if (!_treeCache || !WORKSPACE) return false;
+  for (const [dir, mtimeMs] of _treeCache.dirs) {
+    let st;
+    try { st = fs.statSync(dir); } catch (e) { return false; } // deleted or renamed
+    if (st.mtimeMs !== mtimeMs) return false;
+  }
+  return true;
+}
+
+function getFileTreeCached() {
+  if (!WORKSPACE) return [];
+  if (treeCacheIsFresh()) return _treeCache.tree;
+  const tree = getFileTree(WORKSPACE);
+  const dirs = treeDirMtimes(tree);
+  // The root is not a node in its own tree, but a file created directly in it
+  // bumps only the root's mtime, so it has to be tracked explicitly.
+  try { dirs.set(WORKSPACE, fs.statSync(WORKSPACE).mtimeMs); } catch (e) {}
+  _treeCache = { tree, dirs };
+  return tree;
+}
+
 // ===== PROCESS CLEANUP (S4) =====
 
 // PID file: track all spawned Claude Code process PIDs so orphans can be cleaned up
@@ -5227,17 +5332,66 @@ function savePidFile(pids) {
   } catch (e) {}
 }
 
-function registerChildPid(pid) {
-  const pids = loadPidFile();
-  if (!pids.includes(pid)) {
-    pids.push(pid);
-    savePidFile(pids);
-  }
+// Pid records carry the command they were spawned as, so a pid the OS has
+// since recycled onto an unrelated process is not signalled. The file used to
+// hold bare integers with no way to tell the difference; those are still read
+// for one upgrade, and simply lack the recycling guard.
+function pidOf(rec) { return typeof rec === 'number' ? rec : (rec && rec.pid); }
+
+// Read a process's command line.
+//
+// Deliberately `args=` and not `comm=`. On Linux `comm` is the THREAD name from
+// /proc, not the executable: Node 24 renames its main thread to "MainThread",
+// so every record would have been judged foreign and discarded, defeating the
+// tracking this guard exists to protect. Node 22 on the same machine reports
+// "node". The command line is stable across both, and across macOS, where
+// `comm` gives a full path instead.
+function processCommand(pid) {
+  if (process.platform === 'win32') return null; // no cheap equivalent; skip the check
+  try {
+    const { execFileSync } = require('child_process');
+    return execFileSync('ps', ['-p', String(pid), '-o', 'args='], {
+      encoding: 'utf-8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch (e) { return null; } // not running, or ps unavailable
+}
+
+/** Running AND still the process we spawned, rather than a recycled pid. */
+function pidRecordAlive(rec) {
+  const pid = pidOf(rec);
+  if (!pid) return false;
+  try { process.kill(pid, 0); } catch (e) { return false; }
+  const expected = typeof rec === 'object' && rec ? rec.cmd : null;
+  if (!expected) return true; // legacy record, or a platform without the check
+  const actual = processCommand(pid);
+  if (actual == null) return true; // cannot tell; assume ours rather than leak it
+  return commandsMatch(actual, expected);
+}
+
+// Does this command line still look like the thing we spawned?
+//
+// Deliberately loose: the guard only has to tell "the process we started" from
+// "something unrelated that inherited this id". Command-line formatting varies
+// by platform and by runtime version, and a strict comparison has already
+// broken once that way. Being too permissive means a redundant signal to a
+// process that is probably ours; being too strict means untracked processes
+// leaking forever, which is the failure this whole area exists to prevent.
+function commandsMatch(actual, expected) {
+  const e = path.basename(String(expected || '').trim());
+  const a = String(actual || '').trim();
+  if (!e || !a) return true;
+  return a.includes(e);
+}
+
+function registerChildPid(pid, cmd) {
+  const records = loadPidFile();
+  if (records.some(r => pidOf(r) === pid)) return;
+  records.push({ pid, at: Date.now(), cmd: cmd ? path.basename(cmd) : null });
+  savePidFile(records);
 }
 
 function unregisterChildPid(pid) {
-  const pids = loadPidFile().filter(p => p !== pid);
-  savePidFile(pids);
+  savePidFile(loadPidFile().filter(r => pidOf(r) !== pid));
 }
 
 // Stop whatever executes a conversation entry. Claude entries own a child
@@ -5248,7 +5402,7 @@ function stopEntryProcess(entry, signal) {
   if (!entry) return;
   if (entry.interrupt) { entry.interrupt(); return; }
   if (entry.process) {
-    try { entry.process.kill(signal); } catch (e) { /* already dead */ }
+    try { killProcessTree(entry.process, signal); } catch (e) { /* already dead */ }
   }
 }
 
@@ -5261,30 +5415,32 @@ function killAllChildren() {
   // The shared Codex app-server goes down with the rest; the next Codex
   // turn recreates it lazily (against the new workspace after a switch).
   shutdownCodexAppServer();
-  // Clear PID file since we handled cleanup
-  savePidFile([]);
+  // Only forget the pids we can confirm are gone. Clearing the file
+  // unconditionally meant any child that was slow to exit, or that ignored
+  // SIGTERM, became untracked and could never be reaped on the next launch:
+  // the comment claimed cleanup was handled, but nothing checked.
+  savePidFile(loadPidFile().filter(rec => pidRecordAlive(rec)));
 }
 
 // Clean up orphaned processes from a previous crash (PIDs left in the file)
 function cleanOrphanedProcesses() {
-  const pids = loadPidFile();
-  if (pids.length === 0) return;
+  const records = loadPidFile();
+  if (records.length === 0) return;
   let cleaned = 0;
-  for (const pid of pids) {
-    try {
-      // Check if process exists (signal 0 doesn't kill, just checks)
-      process.kill(pid, 0);
-      // Process exists: kill it
-      process.kill(pid, 'SIGTERM');
-      cleaned++;
-    } catch (e) {
-      // Process doesn't exist: already gone
-    }
+  const survivors = [];
+  for (const rec of records) {
+    const pid = pidOf(rec);
+    if (!pidRecordAlive(rec)) continue; // gone, or the pid now belongs to something else
+    killProcessTree(pid, 'SIGTERM');
+    cleaned++;
+    // Keep it until a later launch observes it gone: a process that ignores
+    // SIGTERM must not be forgotten just because we signalled it once.
+    if (pidRecordAlive(rec)) survivors.push(rec);
   }
   if (cleaned > 0) {
-    console.log(`[Cleanup] Killed ${cleaned} orphaned Claude Code process(es) from previous session`);
+    console.log(`[Cleanup] Killed ${cleaned} orphaned process tree(s) from a previous session`);
   }
-  savePidFile([]);
+  savePidFile(survivors);
 }
 
 // Track recent spawn errors per conversation for dedupe within a 30-second window.
@@ -5355,7 +5511,7 @@ function handleChatSpawnError(err, convoId) {
     if (entry && entry.delegation && entry.delegation.originalEntry
         && !entry.delegation.originalEntry.exited) {
       const parent = entry.delegation.originalEntry;
-      parent.idle = true;
+      parent.idle = true; parent.idleSince = Date.now();
       parent.delegation = null;
       chatProcesses.set(convoId, parent);
       safeSend(JSON.stringify({
@@ -5410,14 +5566,66 @@ function resolveClaudeBin() {
 
 // Spawn a Claude Code process with PID tracking for crash cleanup.
 // Drop-in replacement for spawn('claude', ...) that registers/unregisters PIDs.
+// Signal a spawned process AND everything it started.
+//
+// An agent CLI spawns its own children: an MCP server per configured entry,
+// plus tool subprocesses. Those are grandchildren we hold no handle on and
+// never record, so signalling one pid leaves them running and reparented,
+// holding memory until the machine restarts.
+//
+// On POSIX the children are spawned detached, which puts each in its own
+// process group whose id equals the leader's pid, so a negative pid signals
+// the whole group. Windows has no process groups; taskkill /T walks the tree
+// instead. Windows also has no real signal semantics (Node maps kill() onto
+// TerminateProcess), so the graceful and forceful paths are the same there.
+function killProcessTree(target, signal = 'SIGTERM') {
+  const pid = typeof target === 'number' ? target : (target && target.pid);
+  if (!pid) return;
+  // Floor: kill at least the process itself, so no path here can end up doing
+  // less than the single-pid kill this replaced.
+  const killJustThis = () => {
+    try {
+      if (typeof target === 'number') process.kill(pid, signal);
+      else target.kill(signal);
+    } catch (e) { /* already dead */ }
+  };
+
+  if (process.platform === 'win32') {
+    // Windows has no process groups; taskkill walks the tree instead. It is
+    // spawned rather than awaited, so a missing binary arrives as an error
+    // EVENT and never reaches a try/catch: without the listener below a
+    // failure would kill nothing at all, which is worse than what this
+    // replaced. Order matters, since killing the parent first would orphan
+    // the children out of taskkill's reach.
+    let killer = null;
+    try {
+      killer = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
+      killer.on('error', killJustThis);
+    } catch (e) {
+      killJustThis();
+    }
+    return;
+  }
+
+  // Negative pid = the whole process group. Fails with ESRCH if the group is
+  // already gone, or EPERM if the child was never detached; fall back to the
+  // single process so this is never worse than the old behaviour.
+  try { process.kill(-pid, signal); return; } catch (e) {}
+  killJustThis();
+}
+
 function spawnClaude(args, options, onError) {
   // Safety net: never spawn Claude Code without an explicit --model. Call sites
   // pass the agent's model (see modelArgs); this guards any path that doesn't,
   // so the model can never silently fall back to the user's environment.
   if (!args.includes('--model')) args = ['--model', DEFAULT_MODEL, ...args];
-  const proc = spawn(resolveClaudeBin(), args, options);
+  // detached puts the child at the head of its own process group so its whole
+  // subtree can be signalled together. Safe for terminal users: the server
+  // installs its own SIGINT and SIGTERM handlers and kills children explicitly,
+  // so Ctrl-C never depended on the terminal reaching them by group.
+  const proc = spawn(resolveClaudeBin(), args, { ...options, detached: process.platform !== 'win32' });
   if (proc.pid) {
-    registerChildPid(proc.pid);
+    registerChildPid(proc.pid, resolveClaudeBin());
     proc.on('close', () => unregisterChildPid(proc.pid));
   }
   // Always attach a baseline 'error' listener so an unhandled error event
@@ -6246,7 +6454,7 @@ function handleCodexDelegateEvent(entry, convoId, ev) {
         entry.resultSent = true;
         entry.finalResponseText = displayText;
         entry.responseText = '';
-        entry.idle = true;
+        entry.idle = true; entry.idleSince = Date.now();
       } else if (ev.status === 'failed' && !entry.cancelled) {
         if (!entry.resultSent && !entry.errorSent) {
           sendCodexError(entry, convoId, (ev.error && ev.error.message) || 'Codex turn failed');
@@ -6285,7 +6493,7 @@ function startCodexTurn(convoId, msg, agentData) {
       existing.interrupt();
       priorTurnEnd = existing._turnEnd || null;
     } else if (existing.process) {
-      try { existing.process.kill(); } catch (e) { /* already dead */ }
+      try { killProcessTree(existing.process); } catch (e) { /* already dead */ }
     }
     chatProcesses.delete(convoId);
   }
@@ -6453,13 +6661,13 @@ process.on('exit', () => {
   // 'exit' handler must be synchronous. Kill any stragglers with SIGKILL.
   for (const [, entry] of chatProcesses) {
     if (!entry.exited && entry.process) {
-      try { entry.process.kill('SIGKILL'); } catch (e) {}
+      try { killProcessTree(entry.process, 'SIGKILL'); } catch (e) {}
     }
   }
   // The shared Codex app-server may still be draining its graceful
   // SIGTERM; it must not outlive the server process.
   if (_codexAppServerPid) {
-    try { process.kill(_codexAppServerPid, 'SIGKILL'); } catch (e) {}
+    try { killProcessTree(_codexAppServerPid, 'SIGKILL'); } catch (e) {}
   }
 });
 
@@ -6482,6 +6690,271 @@ const SEARCH_FILES_RECONCILE_TTL_MS = 2000;
 const _sessionPathMemo = new Map();
 const SESSION_PATH_NEGATIVE_TTL_MS = 30000;
 
+// ── Incremental file-index warm-up ─────────────────────────────────────────
+// Indexing the workspace files is the longest single piece of work the server
+// does, and it scales with workspace size. The server shares a thread with the
+// window in the packaged app, so running it to completion in one go paints the
+// UI and then freezes it until indexing finishes: indistinguishable, from the
+// user's side, from a crash. Restarting only starts the work again.
+//
+// Driving the pass a batch at a time, with a turn of the event loop between
+// batches, keeps the socket serviced throughout. Search degrades to the
+// existing grep fallback until the index is ready.
+let _fileIndexRun = null;
+
+/** Tell clients whether the index is building, so the UI can say so. */
+function broadcastSearchIndexState(state, workspace, extra) {
+  safeSend(JSON.stringify({ type: 'system', subtype: 'search_index', state, path: workspace, ...(extra || {}) }));
+}
+
+/** True while a warm-up pass is in flight. */
+function fileIndexInProgress() { return !!_fileIndexRun; }
+
+function cancelIncrementalFileIndex() {
+  if (!_fileIndexRun) return;
+  _fileIndexRun.cancelled = true;
+  // .return() runs the generator's finally, which rolls back any open batch.
+  try { _fileIndexRun.iter.return(); } catch (e) { /* already finished */ }
+  _fileIndexRun = null;
+}
+
+function beginIncrementalFileIndex(newMessages) {
+  cancelIncrementalFileIndex();
+  const engine = searchEngine;
+  const workspace = WORKSPACE;
+  const startedAt = Date.now();
+  const run = { iter: engine.reconcileFilesIncremental(workspace), cancelled: false };
+  _fileIndexRun = run;
+  broadcastSearchIndexState('indexing', workspace);
+
+  const finish = (result) => {
+    if (_fileIndexRun === run) _fileIndexRun = null;
+    searchFilesReconciledAt = Date.now();
+    const scanned = result ? result.scanned : 0;
+    const updated = result ? result.updated : 0;
+    console.log(`[Search] index ready: ${scanned} files scanned (${updated} indexed), ${newMessages || 0} new messages`);
+    reportStartup(`search index ready in ${Date.now() - startedAt}ms | scanned ${scanned} | indexed ${updated}`);
+    broadcastSearchIndexState('ready', workspace, { scanned, updated });
+  };
+
+  const step = () => {
+    // A workspace switch replaces the engine underneath us. A stale run must
+    // stop and release its transaction rather than write into a closed
+    // database.
+    if (run.cancelled || searchEngine !== engine || WORKSPACE !== workspace) {
+      try { run.iter.return(); } catch (e) {}
+      return;
+    }
+    let r;
+    try { r = run.iter.next(); } catch (e) {
+      console.warn('[Search] file index pass failed; progress kept:', e && e.message ? e.message : e);
+      finish(null);
+      return;
+    }
+    if (!r.done) { setImmediate(step); return; }
+    finish(r.value);
+  };
+  setImmediate(step);
+}
+
+// ── Idle agent reaping ─────────────────────────────────────────────────────
+// One agent process is kept per conversation touched, plus every parked
+// ancestor in a delegation chain, and nothing used to release them: a process
+// lived until it exited on its own, was cancelled, or the app quit. Each also
+// holds its own set of tool servers, so memory grew with session length and
+// conversation count until the machine started swapping. Observed on a user's
+// machine as three agent trees alive for nearly eighteen hours, spawned within
+// four minutes of launch and untouched since.
+//
+// Safe because it is not destructive: session ids are persisted per
+// conversation and the client sends one back with its next message, so a
+// reaped conversation resumes with its context intact.
+// An hour rather than minutes. Both real reports of this problem were small
+// numbers of processes held for enormous durations (three trees for nearly
+// eighteen hours; one parked for fifteen), so duration is what needs bounding,
+// and a twitchy timer buys nothing while risking work we cannot see. Set to 0
+// to switch reaping off entirely.
+const IDLE_REAP_RAW = process.env.RUNDOCK_IDLE_REAP_MS;
+const IDLE_REAP_MS = (IDLE_REAP_RAW == null || IDLE_REAP_RAW === '')
+  ? 60 * 60 * 1000
+  : Number(IDLE_REAP_RAW);
+// Sweep often enough to be responsive, rarely enough to be invisible. Bounded
+// below so a small test interval cannot spin the loop.
+const REAP_SWEEP_MS = Math.max(1000, Math.min(IDLE_REAP_MS || 0, 60 * 1000) || 60 * 1000);
+
+/**
+ * Did this conversation, or any agent parked behind it, launch a background
+ * task? The flag says one was STARTED, not that it is still running: telling
+ * those apart would mean inspecting processes, which has no portable form
+ * across macOS, Windows and Linux. Erring towards holding one extra agent is
+ * the right way to be wrong, since the alternative is killing work someone is
+ * waiting on.
+ */
+function chainStartedBackgroundTask(entry) {
+  let node = entry;
+  const seen = new Set();
+  while (node && !seen.has(node)) {
+    if (node.startedBackgroundTask) return true;
+    seen.add(node);
+    const d = node.delegation;
+    node = d ? (d.originalEntry || d.orchestratorEntry) : null;
+  }
+  return false;
+}
+
+/** Kill an entry and every ancestor parked behind it, tool servers included. */
+function reapEntryChain(entry) {
+  let node = entry;
+  const seen = new Set();
+  while (node && !seen.has(node)) {
+    seen.add(node);
+    if (!node.exited) stopEntryProcess(node, 'SIGTERM');
+    node.exited = true;
+    const d = node.delegation;
+    node = d ? (d.originalEntry || d.orchestratorEntry) : null;
+  }
+  return seen.size;
+}
+
+function reapIdleAgents(now = Date.now()) {
+  let reaped = 0, processes = 0;
+  for (const [convoId, entry] of [...chatProcesses]) {
+    if (!entry || entry.exited) continue;
+    // Mid-turn: the user is waiting on an answer.
+    if (!entry.idle) continue;
+    // A handback is already scheduled or in flight; do not race it.
+    if (entry.pendingKill || entry.scopeReturn) continue;
+    // The process is being replaced right now (kill-window state machine).
+    if (convoTransitions.has(convoId)) continue;
+    // Work that outlives its turn and never reappears in the stream.
+    if (chainStartedBackgroundTask(entry)) continue;
+    const since = entry.idleSince || 0;
+    if (!since || now - since < IDLE_REAP_MS) continue;
+
+    processes += reapEntryChain(entry);
+    chatProcesses.delete(convoId);
+    reaped += 1;
+  }
+  if (reaped > 0) {
+    console.log(`[Reap] released ${reaped} idle conversation(s), ${processes} process tree(s); they resume on next use`);
+  }
+  return reaped;
+}
+
+function startIdleReaper() {
+  if (!(IDLE_REAP_MS > 0)) {
+    console.log('[Reap] idle reaping disabled');
+    return null;
+  }
+  const timer = setInterval(() => {
+    try { reapIdleAgents(); } catch (e) { console.warn('[Reap] sweep failed:', e && e.message ? e.message : e); }
+  }, REAP_SWEEP_MS);
+  if (timer.unref) timer.unref();
+  return timer;
+}
+
+// ── Startup timings ────────────────────────────────────────────────────────
+// Diagnosing a single hang report meant five rounds of asking a user for
+// process lists, memory figures and directory sizes, produced seven hypotheses
+// of which six were refuted by measurement, and still did not find the cause,
+// because nothing the app recorded said where its time had gone.
+//
+// Console output alone does not help: in the packaged app it goes nowhere a
+// user can see, and asking someone to quit, open a terminal and reproduce the
+// problem was tried three times and happened zero times. So this also lands in
+// a small file we can simply ask for.
+//
+// SAFE TO HAND OVER UNREAD, BY CONSTRUCTION: phase names and numbers, nothing
+// else. Never add a path, a filename, an agent name, or any content to these
+// lines. A test asserts this and should be left to.
+const STARTUP_LOG_MAX_LINES = 200;
+const SLOW_PHASE_MS = 1000;
+
+function appendStartupLog(line) {
+  if (!WORKSPACE) return;
+  try {
+    const file = path.join(rundockDir(), 'startup.log');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    let lines = [];
+    try { lines = fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean); } catch (e) {}
+    lines.push(line);
+    // A support artifact, not an audit trail.
+    if (lines.length > STARTUP_LOG_MAX_LINES) lines = lines.slice(-STARTUP_LOG_MAX_LINES);
+    fs.writeFileSync(file, lines.join('\n') + '\n');
+  } catch (e) { /* diagnostics must never break startup */ }
+}
+
+function reportStartup(line) {
+  const stamped = `[Startup] ${new Date().toISOString()} ${line}`;
+  console.log(stamped);
+  appendStartupLog(stamped);
+}
+
+/** Accumulate per-phase durations, flagging any that are unusually slow. */
+function phaseTimer() {
+  const started = Date.now();
+  let last = started;
+  const parts = [];
+  return {
+    mark(name) {
+      const now = Date.now();
+      parts.push({ name, ms: now - last });
+      last = now;
+    },
+    summary() {
+      const total = Date.now() - started;
+      const rendered = parts.map(p => `${p.name} ${p.ms}ms`).join(' | ');
+      const slow = parts.filter(p => p.ms >= SLOW_PHASE_MS).map(p => p.name);
+      return `${rendered} | total ${total}ms${slow.length ? `  SLOW: ${slow.join(', ')}` : ''}`;
+    },
+  };
+}
+
+// ── Moved-workspace healing ────────────────────────────────────────────────
+// Parts of .rundock silently assume the absolute path the workspace lived at
+// when they were written. Move it, rename it, or copy it to another machine and
+// they are all wrong, with nothing to notice or repair them.
+//
+// Users zip folders; that is what people do. Any rule we publish about what to
+// migrate will be got wrong by someone doing the obvious thing, so the product
+// copes instead.
+//
+// Conversations and transcripts are deliberately NOT touched: they are real
+// content, they are self-contained, and they travel fine.
+let _indexProvenanceUnknown = false;
+
+// Below this share of indexed paths still existing, the index plainly belongs
+// to a different layout. Generous on purpose: a normal workspace between two
+// opens scores near 1.0, and a moved one scores near 0.
+const STALE_INDEX_PRESENT_RATIO = 0.2;
+
+function healWorkspaceIfMoved(dir) {
+  const state = readState();
+  const previous = state.workspacePath || null;
+  const moved = !!previous && previous !== dir;
+
+  if (moved) {
+    console.log('[Workspace] state was written for a different path; clearing what assumed the old location');
+    // The index stores RELATIVE paths, so after a move every one is wrong.
+    // Reconciling would index every file AND delete every row: strictly more
+    // work than rebuilding, and the index is an explicitly derived artifact.
+    for (const suffix of ['', '-wal', '-shm']) {
+      try { fs.rmSync(path.join(rundockDir(), 'search-index.db' + suffix), { force: true }); } catch (e) {}
+    }
+    // Process ids belong to the machine that wrote them. On this one those
+    // numbers may well belong to something else entirely.
+    try { savePidFile([]); } catch (e) {}
+  }
+
+  if (previous !== dir) {
+    try { writeState({ ...state, workspacePath: dir }); } catch (e) { /* best effort */ }
+  }
+  // No fingerprint means state predating this check, so we cannot tell whether
+  // it moved. The index itself can answer that once it is open.
+  _indexProvenanceUnknown = !previous;
+  return { moved, hadFingerprint: !!previous };
+}
+
 function ensureSearchEngine() {
   if (!WORKSPACE) {
     if (searchEngine) { try { searchEngine.close(); } catch (e) {} }
@@ -6497,6 +6970,9 @@ function ensureSearchEngine() {
   if (searchEngine) { try { searchEngine.close(); } catch (e) {} searchEngine = null; }
   searchEngineWorkspace = WORKSPACE;
   _sessionPathMemo.clear();
+  // Counts are keyed by session id, which is unique per workspace, but a switch
+  // is the natural point to release them rather than grow forever.
+  _sessionCountMemo.clear();
   if (!searchProbe) {
     searchProbe = searchLib.probeSqlite();
     if (!searchProbe.available) {
@@ -6510,17 +6986,30 @@ function ensureSearchEngine() {
       DatabaseSync: searchProbe.DatabaseSync,
     });
     searchEngine.open();
-    // Initial reconcile (the spec's reconcile-on-open): synchronous, with a
-    // progress line. Deleting the db and reopening the workspace is the
-    // supported rebuild path and lands here too.
-    const f = searchEngine.reconcileFiles(WORKSPACE);
+    // Fallback for state written before workspaces were fingerprinted: we have
+    // no record of where it came from, so ask the index whether its contents
+    // still describe this workspace. A moved or restructured one scores near
+    // zero, and rebuilding beats reconciling every row.
+    if (_indexProvenanceUnknown) {
+      _indexProvenanceUnknown = false;
+      let present = null;
+      try { present = searchEngine.indexedPathsStillPresent(WORKSPACE); } catch (e) {}
+      if (present !== null && present < STALE_INDEX_PRESENT_RATIO) {
+        console.log(`[Search] index does not describe this workspace (${Math.round(present * 100)}% of indexed paths present); rebuilding`);
+        searchEngine.rebuild();
+      }
+    }
     const validIds = readConversations().map(c => c.id);
+    // Conversations first, inline: byte-offset marks make an unchanged session
+    // a stat-only skip, so this stays in the milliseconds even on a long
+    // history, and it is what makes recent chat findable straight away.
     const m = searchEngine.reconcileConversations(conversationSessionsForSearch(), { validConversationIds: validIds });
     // Sweep rows for conversations deleted while the engine was closed or
     // unavailable (they would otherwise burn over-fetch slots forever).
     try { searchEngine.removeOrphanedConversations(validIds); } catch (e) {}
-    searchFilesReconciledAt = Date.now();
-    console.log(`[Search] index ready: ${f.scanned} files scanned (${f.updated} indexed), ${m.indexed} new messages`);
+    // Files are the heavy half and the only part that scales with workspace
+    // size, so they run incrementally rather than blocking the window.
+    beginIncrementalFileIndex(m.indexed);
   } catch (e) {
     console.warn('[Search] engine init failed; grep fallback active:', e && e.message ? e.message : e);
     try { if (searchEngine) searchEngine.close(); } catch (e2) {}
@@ -6587,7 +7076,11 @@ function reconcileSearchBeforeQuery() {
       validConversationIds: all.map(c => c.id),
     });
     const now = Date.now();
-    if (now - searchFilesReconciledAt >= SEARCH_FILES_RECONCILE_TTL_MS) {
+    // Never start a blocking full pass while the incremental warm-up is still
+    // running: it would duplicate the work the warm-up is already doing, and
+    // block the very query it is meant to serve. The warm-up stamps
+    // searchFilesReconciledAt when it lands.
+    if (!fileIndexInProgress() && now - searchFilesReconciledAt >= SEARCH_FILES_RECONCILE_TTL_MS) {
       searchFilesReconciledAt = now;
       searchEngine.reconcileFiles(WORKSPACE);
     }
@@ -6660,7 +7153,7 @@ const GREP_MAX_FILE_BYTES = 1024 * 1024;
 function grepSearchFiles(query, limit) {
   const q = query.toLowerCase();
   const results = [];
-  const files = flattenFileTree(getFileTree(WORKSPACE)).slice(0, GREP_MAX_FILES);
+  const files = flattenFileTree(getFileTreeCached()).slice(0, GREP_MAX_FILES);
   for (const f of files) {
     if (results.length >= limit) break;
     const ext = path.extname(f.name).toLowerCase();
@@ -6882,8 +7375,20 @@ function startServer(options = {}) {
     server.listen(port, () => {
       const actualPort = server.address().port;
       ACTUAL_PORT = actualPort;
-      // Clean up orphaned processes from a previous crash
-      if (WORKSPACE) cleanOrphanedProcesses();
+      if (WORKSPACE) {
+        const boot = phaseTimer();
+        // Before cleanOrphanedProcesses, so pid records carried from another
+        // machine are dropped rather than signalled.
+        healWorkspaceIfMoved(WORKSPACE);
+        boot.mark('heal');
+        cleanOrphanedProcesses();
+        boot.mark('orphans');
+        reportStartup(`workspace preset from environment: ${boot.summary()}`);
+      }
+      // Release conversations nobody has touched for a while: each holds an
+      // agent process and its tool servers, and they used to live for the
+      // whole session.
+      startIdleReaper();
       console.log(`\n  Rundock running at http://localhost:${actualPort}`);
       if (WORKSPACE && !fs.existsSync(WORKSPACE)) {
         console.log(`  Workspace no longer exists: ${WORKSPACE}`);
@@ -6954,7 +7459,7 @@ module.exports._internal = {
   handleChatSpawnError, resolveClaudeBin, spawnClaude,
   getBareArgs, getSpawnEnv, getDisallowedTools, getPermissionMode,
   getAllowedToolsInteractive, getAllowedToolsLegacy, modelArgs,
-  killAllChildren, cleanOrphanedProcesses, loadPidFile,
+  killAllChildren, cleanOrphanedProcesses, loadPidFile, savePidFile, pidRecordAlive, processCommand,
   // live state maps
   chatProcesses, convoTranscripts, pendingPermissionRequests,
   agentAutoResumeCount, disconnectBuffer, connectedClients,

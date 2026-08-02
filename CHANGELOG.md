@@ -4,6 +4,27 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** Long Sessions & Large Workspaces
+
+Rundock no longer gets slower the longer it stays open, and a large workspace no longer freezes the window while it builds its search index. Agent processes are released once a conversation has been idle for a while, the file tree is cached instead of re-scanned every time an agent writes a file, and a workspace that has been moved or copied now repairs its own state instead of quietly doing double work on every launch.
+
+### Added
+
+- **A startup log you can send when something is slow:** every workspace open now records how long each phase took, both in the console and in a small capped file at `.rundock/startup.log`. The search index and the interface report their own timings too, and anything unusually slow is flagged in the line. The file contains only phase names and numbers, no paths, filenames or content, so it is safe to share without reading it first. Previously there was no log file at all and console output was invisible in the packaged app, which made a slow start impossible to diagnose without a terminal.
+
+### Fixed
+
+- **Rundock stops slowing down the longer it stays open:** an agent process was kept for every conversation you touched, for as long as the app was running, and each one held its own set of tool servers. Open a dozen conversations across a working day and a dozen agent process trees were still resident that evening. A conversation left untouched for an hour now releases its processes, along with any agent parked behind a handoff, and resumes with its history intact the next time you use it. Archiving a conversation previously reclaimed nothing, because archiving only set a status flag.
+- **Nothing is released while it is still working:** an agent part way through a turn is never released, however long that turn runs, and neither is a conversation whose agent has started a task in the background, since that work outlives the turn that began it and would otherwise be cut short. If you would rather Rundock never released anything, setting `RUNDOCK_IDLE_REAP_MS=0` switches the behaviour off.
+- **Cancelling or quitting no longer leaves processes behind:** stopping an agent signalled only the agent itself, so the tool servers it had started survived, were adopted by the system, and kept consuming memory until the machine was restarted. The whole process tree is now stopped together, on macOS, Windows and Linux.
+- **The interface no longer freezes while an agent works with files:** the whole workspace was re-scanned from disk every time an agent wrote a file and again at the end of every turn, on the same thread that draws the window. On a workspace of a few thousand notes that was around two thirds of a second of frozen interface per file written. The scan result is now reused unless something has actually been created, deleted or renamed.
+- **The file tree stops collapsing while an agent writes files:** every refresh rebuilt the tree from scratch, so folders you had opened snapped shut and a file revealed by clicking a link was lost, roughly once a second during active work. Identical data is now left alone, and folders you have opened stay open when the tree genuinely changes.
+- **A large workspace stays usable while it indexes:** the first search index was built in one uninterruptible pass on the thread that draws the window, so the app appeared and then froze until it finished. Indexing now runs in the background and the app stays responsive throughout, with search falling back to a direct file scan until the index is ready. An index interrupted part way also keeps the work it had already done instead of starting again from nothing, so a workspace too large to finish in one go can now finish across several attempts.
+- **A moved or copied workspace repairs itself:** moving a workspace, renaming it, or copying it to another machine left behind a search index built against the old file locations and process records belonging to the old machine. Every launch then treated every file as new and every indexed entry as deleted, roughly twice the necessary work, forever. Rundock now notices that a workspace has opened somewhere new, rebuilds the index once, and discards the stale process records. Conversations and their transcripts are untouched.
+- **The conversation list stops getting slower as history grows:** opening a workspace, or simply reconnecting after a laptop wakes, re-read and re-counted every session file for every conversation you had ever had. Counts are now remembered until the underlying file actually changes, so the cost reflects what has changed rather than how much history you have kept.
+
 ## 0.11.2: Chat & Profile Polish (2026-07-23)
 
 ### Changed

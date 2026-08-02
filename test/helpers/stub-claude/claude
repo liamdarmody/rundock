@@ -142,11 +142,32 @@ function emitTurn(rule) {
   if (PRINT) process.exit(0);
 }
 
+// Model an MCP server. The real `claude` spawns these as its OWN children over
+// stdio, so they are grandchildren of the server, which holds no handle on
+// them. A rule sets `spawnChild: true` to reproduce that shape. The pid is
+// logged so a test can assert whether it survived its parent being killed.
+const GRANDCHILD_LOG = path.join(process.cwd(), 'stub-grandchildren.jsonl');
+let spawnedGrandchild = false;
+function spawnGrandchild() {
+  if (spawnedGrandchild) return;
+  spawnedGrandchild = true;
+  try {
+    const { spawn } = require('child_process');
+    // Long-lived and signal-quiet, like a stdio MCP server idling on input.
+    const kid = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1e9)'], { stdio: 'ignore' });
+    kid.unref();
+    fs.appendFileSync(GRANDCHILD_LOG, JSON.stringify({
+      parentAgent: AGENT, parentPid: process.pid, pid: kid.pid, ts: Date.now(),
+    }) + '\n');
+  } catch (e) { /* best effort */ }
+}
+
 function handleUserMessage(content) {
   const rules = loadRules();
   const rule = rules.find(r => matches(r, content)) || {
     turn: [{ text: `STUB-NO-RULE agent=${AGENT} prompt=${String(content).slice(0, 120)}` }],
   };
+  if (rule.spawnChild) spawnGrandchild();
   if (rule.crash != null) {
     // Abnormal death: exit non-zero without emitting a result envelope, so the
     // server's close handler runs with no result for this turn.
