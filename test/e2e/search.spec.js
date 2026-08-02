@@ -280,3 +280,27 @@ test('sidebar: pinned conversations group first and the Unread filter has a caug
   await page.locator('#pill-all').click();
   await expect(page.locator('.convo-item').first()).toBeVisible();
 });
+
+// Opening a file from search left it selected but hidden: the row was marked
+// active while every ancestor folder stayed collapsed, and `.file-children.collapsed`
+// is `display: none`. For anything more than one level deep the user landed on a
+// file they could not see in the tree. The sibling path used for links inside an
+// artifact has always ended with the reveal; the palette route never picked it up.
+test('opening a nested file from search reveals it in the tree, not just selects it', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('.convo-item').first()).toBeVisible();
+
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+k' : 'Control+k');
+  await page.locator('#palette-input').fill('pricing-strategy');
+  // Target the row we assert on. Taking .first() couples the test to result
+  // ranking, which shifts as other specs add files to the shared workspace.
+  const hit = page.locator('.palette-item[data-type="file"]', { hasText: 'pricing-strategy' }).first();
+  await expect(hit).toBeVisible();
+  await hit.click();
+
+  // The row must be genuinely on screen, which means its containing folder was
+  // expanded. Marking it active inside a collapsed folder is not enough.
+  const row = page.locator('.file-item[data-path="notes/pricing-strategy.md"]');
+  await expect(row).toBeVisible();
+  await expect(row).toHaveClass(/\bactive\b/);
+});

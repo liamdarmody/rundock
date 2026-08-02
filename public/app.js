@@ -5285,11 +5285,16 @@ function openPaletteResult(idx) {
 // plus nav state so the sidebar matches where the user landed.
 function paletteOpenFile(filePath) {
   switchNav('files');
-  document.querySelectorAll('.file-item').forEach(x => x.classList.toggle('active', x.dataset.path === filePath));
   editorReturnView = 'editor';
   fileHistory = [];
   ws.send(JSON.stringify({ type: 'read_file', path: filePath }));
   showView('editor');
+  // Reveal, don't just select. Marking the row active while its folders stay
+  // collapsed leaves the user looking at a file they cannot see, since
+  // .file-children.collapsed is display:none. This also handles the active
+  // class, the folder icons and scrolling it into view, which is why the
+  // sibling route for links inside an artifact has always ended here.
+  highlightFileInSidebar(filePath);
 }
 
 // Conversation route: the existing openConversation, extended with the
