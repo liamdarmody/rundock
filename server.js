@@ -7382,7 +7382,7 @@ module.exports._internal = {
   handleChatSpawnError, resolveClaudeBin, spawnClaude,
   getBareArgs, getSpawnEnv, getDisallowedTools, getPermissionMode,
   getAllowedToolsInteractive, getAllowedToolsLegacy, modelArgs,
-  killAllChildren, cleanOrphanedProcesses, loadPidFile, savePidFile, pidRecordAlive,
+  killAllChildren, cleanOrphanedProcesses, loadPidFile, savePidFile, pidRecordAlive, processCommand,
   // live state maps
   chatProcesses, convoTranscripts, pendingPermissionRequests,
   agentAutoResumeCount, disconnectBuffer, connectedClients,

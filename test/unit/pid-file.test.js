@@ -23,14 +23,20 @@ async function liveChild() {
   });
   return kid;
 }
-const { pidRecordAlive } = srv._internal;
+const { pidRecordAlive, processCommand } = srv._internal;
 
 describe('child pid records', () => {
   test('a live process spawned as the recorded command is recognised', async () => {
     const kid = await liveChild();
     try {
       const rec = { pid: kid.pid, at: Date.now(), cmd: path.basename(process.execPath) };
-      assert.strictEqual(pidRecordAlive(rec), true, 'our own live child must be recognised');
+      // Report what the platform actually said. `ps -o comm=` differs by OS and
+      // has differed by Node version, so a bare true/false failure here is not
+      // diagnosable from a CI log.
+      assert.strictEqual(pidRecordAlive(rec), true,
+        'our own live child must be recognised. '
+        + `execPath=${process.execPath} recorded=${rec.cmd} `
+        + `ps=${JSON.stringify(processCommand(kid.pid))} alive=${(() => { try { process.kill(kid.pid, 0); return true; } catch (e) { return false; } })()}`);
     } finally {
       try { kid.kill('SIGKILL'); } catch (e) {}
     }
