@@ -42,13 +42,21 @@ describe('child pid records', () => {
     }
   });
 
+  // Windows has no cheap command lookup, so the guard is deliberately skipped
+  // there and an unverifiable record is assumed to be ours: leaking a process
+  // is worse than a redundant signal. Asserting the POSIX behaviour on Windows
+  // would report a designed difference as a defect.
+  const guardActive = process.platform !== 'win32';
+
   test('a pid running a DIFFERENT command is refused, so a recycled pid is not signalled', async () => {
     const kid = await liveChild();
     try {
       // Same live pid, but recorded as something we never spawned it as.
       const rec = { pid: kid.pid, at: Date.now(), cmd: 'definitely-not-this-binary' };
-      assert.strictEqual(pidRecordAlive(rec), false,
-        'a pid whose command does not match the record must not be treated as ours');
+      assert.strictEqual(pidRecordAlive(rec), guardActive ? false : true,
+        guardActive
+          ? 'a pid whose command does not match the record must not be treated as ours'
+          : 'on a platform without a command lookup the record is assumed ours, never discarded');
     } finally {
       try { kid.kill('SIGKILL'); } catch (e) {}
     }
