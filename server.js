@@ -5575,18 +5575,37 @@ function resolveClaudeBin() {
 function killProcessTree(target, signal = 'SIGTERM') {
   const pid = typeof target === 'number' ? target : (target && target.pid);
   if (!pid) return;
+  // Floor: kill at least the process itself, so no path here can end up doing
+  // less than the single-pid kill this replaced.
+  const killJustThis = () => {
+    try {
+      if (typeof target === 'number') process.kill(pid, signal);
+      else target.kill(signal);
+    } catch (e) { /* already dead */ }
+  };
+
   if (process.platform === 'win32') {
-    try { spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' }); } catch (e) {}
+    // Windows has no process groups; taskkill walks the tree instead. It is
+    // spawned rather than awaited, so a missing binary arrives as an error
+    // EVENT and never reaches a try/catch: without the listener below a
+    // failure would kill nothing at all, which is worse than what this
+    // replaced. Order matters, since killing the parent first would orphan
+    // the children out of taskkill's reach.
+    let killer = null;
+    try {
+      killer = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
+      killer.on('error', killJustThis);
+    } catch (e) {
+      killJustThis();
+    }
     return;
   }
+
   // Negative pid = the whole process group. Fails with ESRCH if the group is
   // already gone, or EPERM if the child was never detached; fall back to the
   // single process so this is never worse than the old behaviour.
   try { process.kill(-pid, signal); return; } catch (e) {}
-  try {
-    if (typeof target === 'number') process.kill(pid, signal);
-    else target.kill(signal);
-  } catch (e) { /* already dead */ }
+  killJustThis();
 }
 
 function spawnClaude(args, options, onError) {
