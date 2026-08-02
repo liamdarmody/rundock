@@ -4,9 +4,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## Unreleased
-
-**Name:** Long Sessions & Large Workspaces
+## 0.11.3: Long Sessions & Large Workspaces (2026-08-02)
 
 Rundock no longer gets slower the longer it stays open, and a large workspace no longer freezes the window while it builds its search index. Agent processes are released once a conversation has been idle for a while, the file tree is cached instead of re-scanned every time an agent writes a file, and a workspace that has been moved or copied now repairs its own state instead of quietly doing double work on every launch.
 
