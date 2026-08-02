@@ -2842,6 +2842,12 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
               last.arg = input.file_path || input.path || input.pattern || input.query || input.url
                 || (input.command ? input.command.substring(0, 60) : null);
             }
+            // A backgrounded command outlives the turn that started it, and it
+            // is the one kind of work that never appears in this stream again.
+            // Remember it so the idle reaper leaves this conversation alone:
+            // the turn ends, the entry looks idle, and killing it would take
+            // the job with it while the user waits for exactly that result.
+            if (input.run_in_background === true) entry.startedBackgroundTask = true;
           } catch (e) {}
           entry._pendingToolArg = null;
         }
@@ -6763,10 +6769,38 @@ function beginIncrementalFileIndex(newMessages) {
 // Safe because it is not destructive: session ids are persisted per
 // conversation and the client sends one back with its next message, so a
 // reaped conversation resumes with its context intact.
-const IDLE_REAP_MS = Number(process.env.RUNDOCK_IDLE_REAP_MS) || 15 * 60 * 1000;
+// An hour rather than minutes. Both real reports of this problem were small
+// numbers of processes held for enormous durations (three trees for nearly
+// eighteen hours; one parked for fifteen), so duration is what needs bounding,
+// and a twitchy timer buys nothing while risking work we cannot see. Set to 0
+// to switch reaping off entirely.
+const IDLE_REAP_RAW = process.env.RUNDOCK_IDLE_REAP_MS;
+const IDLE_REAP_MS = (IDLE_REAP_RAW == null || IDLE_REAP_RAW === '')
+  ? 60 * 60 * 1000
+  : Number(IDLE_REAP_RAW);
 // Sweep often enough to be responsive, rarely enough to be invisible. Bounded
 // below so a small test interval cannot spin the loop.
-const REAP_SWEEP_MS = Math.max(1000, Math.min(IDLE_REAP_MS, 60 * 1000));
+const REAP_SWEEP_MS = Math.max(1000, Math.min(IDLE_REAP_MS || 0, 60 * 1000) || 60 * 1000);
+
+/**
+ * Did this conversation, or any agent parked behind it, launch a background
+ * task? The flag says one was STARTED, not that it is still running: telling
+ * those apart would mean inspecting processes, which has no portable form
+ * across macOS, Windows and Linux. Erring towards holding one extra agent is
+ * the right way to be wrong, since the alternative is killing work someone is
+ * waiting on.
+ */
+function chainStartedBackgroundTask(entry) {
+  let node = entry;
+  const seen = new Set();
+  while (node && !seen.has(node)) {
+    if (node.startedBackgroundTask) return true;
+    seen.add(node);
+    const d = node.delegation;
+    node = d ? (d.originalEntry || d.orchestratorEntry) : null;
+  }
+  return false;
+}
 
 /** Kill an entry and every ancestor parked behind it, tool servers included. */
 function reapEntryChain(entry) {
@@ -6792,6 +6826,8 @@ function reapIdleAgents(now = Date.now()) {
     if (entry.pendingKill || entry.scopeReturn) continue;
     // The process is being replaced right now (kill-window state machine).
     if (convoTransitions.has(convoId)) continue;
+    // Work that outlives its turn and never reappears in the stream.
+    if (chainStartedBackgroundTask(entry)) continue;
     const since = entry.idleSince || 0;
     if (!since || now - since < IDLE_REAP_MS) continue;
 
@@ -6806,6 +6842,10 @@ function reapIdleAgents(now = Date.now()) {
 }
 
 function startIdleReaper() {
+  if (!(IDLE_REAP_MS > 0)) {
+    console.log('[Reap] idle reaping disabled');
+    return null;
+  }
   const timer = setInterval(() => {
     try { reapIdleAgents(); } catch (e) { console.warn('[Reap] sweep failed:', e && e.message ? e.message : e); }
   }, REAP_SWEEP_MS);
@@ -7335,8 +7375,16 @@ function startServer(options = {}) {
     server.listen(port, () => {
       const actualPort = server.address().port;
       ACTUAL_PORT = actualPort;
-      // Clean up orphaned processes from a previous crash
-      if (WORKSPACE) cleanOrphanedProcesses();
+      if (WORKSPACE) {
+        const boot = phaseTimer();
+        // Before cleanOrphanedProcesses, so pid records carried from another
+        // machine are dropped rather than signalled.
+        healWorkspaceIfMoved(WORKSPACE);
+        boot.mark('heal');
+        cleanOrphanedProcesses();
+        boot.mark('orphans');
+        reportStartup(`workspace preset from environment: ${boot.summary()}`);
+      }
       // Release conversations nobody has touched for a while: each holds an
       // agent process and its tool servers, and they used to live for the
       // whole session.

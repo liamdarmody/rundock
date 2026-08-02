@@ -49,6 +49,49 @@ async function completeTurn(convoId, keyword, agent = 'chief-of-staff') {
 }
 
 describe('idle agent processes', () => {
+  test('a conversation that started a background task is never reaped', async () => {
+    const convoId = h.freshConvoId('reap-bg');
+    h.writeScenario([
+      { match: { agent: 'chief-of-staff', promptIncludes: 'background-guard' },
+        turn: [
+          // Exactly the shape the real CLI emits for a backgrounded command:
+          // the flag arrives inside the tool input, which the server already
+          // parses and used to discard.
+          { tool: { name: 'Bash', input: { command: 'sleep 400', description: 'Long job', run_in_background: true } } },
+          { text: 'Started, running in the background now.' },
+        ] },
+    ]);
+
+    await completeTurn(convoId, 'background-guard');
+    assert.ok(h.internal.chatProcesses.has(convoId), 'precondition: the turn left a live process');
+
+    // Several reap windows. The turn is finished and the conversation looks
+    // idle, but work Rundock cannot see in the stream is still running.
+    await h.delay(REAP_MS * 5);
+
+    const entry = h.internal.chatProcesses.get(convoId);
+    assert.ok(entry && !entry.exited,
+      'a conversation whose agent launched a background task must not be reaped. The turn '
+      + 'ended, so it looks idle, but killing it takes the job with it and the user is '
+      + 'usually waiting on exactly that result.');
+
+    h.reapConvo(convoId);
+  });
+
+  test('an ordinary turn in the same run is still reaped, so the guard is not blanket', async () => {
+    const convoId = h.freshConvoId('reap-plain');
+    h.writeScenario([
+      { match: { agent: 'chief-of-staff', promptIncludes: 'no-background-here' },
+        turn: [{ text: 'Answered, nothing running.' }] },
+    ]);
+
+    await completeTurn(convoId, 'no-background-here');
+    await h.delay(REAP_MS * 5);
+
+    assert.ok(!h.internal.chatProcesses.has(convoId),
+      'the background guard must apply only to conversations that actually started one');
+  });
+
   test('an idle process is reaped instead of living for the whole session', async () => {
     const CONVOS = 4;
     h.writeScenario([

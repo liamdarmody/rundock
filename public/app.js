@@ -4207,7 +4207,10 @@ function changeWorkspace() {
 
 function handleWorkspaces(d) {
   if (d.current) {
-    // Server already has a workspace set (env var or previous selection)
+    // Server already has a workspace set (env var or previous selection).
+    // This path never sends set_workspace, so start the render clock here or
+    // the client's share of startup goes unmeasured for these instances.
+    workspaceOpenStartedAt = Date.now();
     onWorkspaceReady(d.current, d.analysis, d.isEmpty, d.workspaceMode, d.scaffoldError, d.setupComplete);
     return;
   }
