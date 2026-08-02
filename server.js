@@ -4215,6 +4215,14 @@ wss.on('connection', (ws) => {
         ws.send(JSON.stringify(wsData));
       }
 
+      // Reported by the client once it has finished rendering a freshly opened
+      // workspace. A summary showing every server phase fast and the client slow
+      // redirects an investigation in one line.
+      if (msg.type === 'client_render_time') {
+        const ms = Number(msg.ms);
+        if (Number.isFinite(ms) && ms >= 0) reportStartup(`client render ${Math.round(ms)}ms`);
+      }
+
       if (msg.type === 'list_workspaces') {
         ws.send(JSON.stringify({
           type: 'workspaces',
@@ -4227,6 +4235,7 @@ wss.on('connection', (ws) => {
         const dir = msg.path;
         if (dir && fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
           // Kill all running processes when switching workspace
+          const startup = phaseTimer();
           killAllChildren();
           WORKSPACE = dir;
           // Before anything reads state that may have come from another path.
@@ -4240,10 +4249,12 @@ wss.on('connection', (ws) => {
           saveRecentWorkspace(dir);
           // Clean up orphaned processes from previous sessions in this workspace
           cleanOrphanedProcesses();
+          startup.mark('prepare');
 
           // Detect empty workspace before scaffolding (scaffoldWorkspace adds Doc/skills)
           let agentList = [];
           try { agentList = discoverAgents(); } catch (e) { console.warn('  Agent discovery failed:', e.message); }
+          startup.mark('agents');
           const isEmpty = isEmptyWorkspace(dir, agentList);
 
           // Empty workspace: scaffold default folders and CLAUDE.md
@@ -4255,6 +4266,7 @@ wss.on('connection', (ws) => {
           }
 
           try { scaffoldWorkspace(dir); } catch (e) { console.warn('Scaffold warning:', e.message); }
+          startup.mark('scaffold');
           console.log(`  Workspace changed to: ${WORKSPACE} (empty=${isEmpty})`);
 
           // Re-discover agents after scaffolding
@@ -4270,9 +4282,12 @@ wss.on('connection', (ws) => {
 
           let analysis = null;
           try { analysis = analyzeWorkspace(dir, agentList); } catch (e) { console.warn('  Workspace analysis failed:', e.message); }
+          startup.mark('analyze');
           ws.send(JSON.stringify({ type: 'workspace_set', path: WORKSPACE, analysis, isEmpty, workspaceMode: state.workspaceMode, setupComplete: !!state.setupComplete, scaffoldError }));
           ws.send(JSON.stringify({ type: 'agents', agents: agentList }));
           try { ws.send(JSON.stringify({ type: 'file_tree', tree: getFileTreeCached() })); } catch (e) { console.warn('  File tree failed:', e.message); }
+          startup.mark('tree');
+          reportStartup(`workspace open: ${startup.summary()}`);
           // Warm the search index off the open path (reconcile-on-open);
           // ensureSearchEngine also self-heals lazily on first search.
           setImmediate(() => { try { ensureSearchEngine(); } catch (e) { console.warn('[Search] warm-up failed:', e.message); } });
@@ -6659,6 +6674,7 @@ function beginIncrementalFileIndex(newMessages) {
   cancelIncrementalFileIndex();
   const engine = searchEngine;
   const workspace = WORKSPACE;
+  const startedAt = Date.now();
   const run = { iter: engine.reconcileFilesIncremental(workspace), cancelled: false };
   _fileIndexRun = run;
   broadcastSearchIndexState('indexing', workspace);
@@ -6669,6 +6685,7 @@ function beginIncrementalFileIndex(newMessages) {
     const scanned = result ? result.scanned : 0;
     const updated = result ? result.updated : 0;
     console.log(`[Search] index ready: ${scanned} files scanned (${updated} indexed), ${newMessages || 0} new messages`);
+    reportStartup(`search index ready in ${Date.now() - startedAt}ms | scanned ${scanned} | indexed ${updated}`);
     broadcastSearchIndexState('ready', workspace, { scanned, updated });
   };
 
@@ -6690,6 +6707,63 @@ function beginIncrementalFileIndex(newMessages) {
     finish(r.value);
   };
   setImmediate(step);
+}
+
+// ── Startup timings ────────────────────────────────────────────────────────
+// Diagnosing a single hang report meant five rounds of asking a user for
+// process lists, memory figures and directory sizes, produced seven hypotheses
+// of which six were refuted by measurement, and still did not find the cause,
+// because nothing the app recorded said where its time had gone.
+//
+// Console output alone does not help: in the packaged app it goes nowhere a
+// user can see, and asking someone to quit, open a terminal and reproduce the
+// problem was tried three times and happened zero times. So this also lands in
+// a small file we can simply ask for.
+//
+// SAFE TO HAND OVER UNREAD, BY CONSTRUCTION: phase names and numbers, nothing
+// else. Never add a path, a filename, an agent name, or any content to these
+// lines. A test asserts this and should be left to.
+const STARTUP_LOG_MAX_LINES = 200;
+const SLOW_PHASE_MS = 1000;
+
+function appendStartupLog(line) {
+  if (!WORKSPACE) return;
+  try {
+    const file = path.join(rundockDir(), 'startup.log');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    let lines = [];
+    try { lines = fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean); } catch (e) {}
+    lines.push(line);
+    // A support artifact, not an audit trail.
+    if (lines.length > STARTUP_LOG_MAX_LINES) lines = lines.slice(-STARTUP_LOG_MAX_LINES);
+    fs.writeFileSync(file, lines.join('\n') + '\n');
+  } catch (e) { /* diagnostics must never break startup */ }
+}
+
+function reportStartup(line) {
+  const stamped = `[Startup] ${new Date().toISOString()} ${line}`;
+  console.log(stamped);
+  appendStartupLog(stamped);
+}
+
+/** Accumulate per-phase durations, flagging any that are unusually slow. */
+function phaseTimer() {
+  const started = Date.now();
+  let last = started;
+  const parts = [];
+  return {
+    mark(name) {
+      const now = Date.now();
+      parts.push({ name, ms: now - last });
+      last = now;
+    },
+    summary() {
+      const total = Date.now() - started;
+      const rendered = parts.map(p => `${p.name} ${p.ms}ms`).join(' | ');
+      const slow = parts.filter(p => p.ms >= SLOW_PHASE_MS).map(p => p.name);
+      return `${rendered} | total ${total}ms${slow.length ? `  SLOW: ${slow.join(', ')}` : ''}`;
+    },
+  };
 }
 
 // ── Moved-workspace healing ────────────────────────────────────────────────

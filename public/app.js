@@ -482,7 +482,13 @@ function handle(d) {
   const convoId = d._conversationId;
   switch(d.type) {
     case 'workspaces': handleWorkspaces(d); break;
-    case 'workspace_set': onWorkspaceReady(d.path, d.analysis, d.isEmpty, d.workspaceMode, d.scaffoldError, d.setupComplete); break;
+    case 'workspace_set':
+      // Start the clock on the renderer's share of opening a workspace. The
+      // server times its own phases; without this the client is the one part
+      // of a slow startup nobody can see.
+      workspaceOpenStartedAt = Date.now();
+      onWorkspaceReady(d.path, d.analysis, d.isEmpty, d.workspaceMode, d.scaffoldError, d.setupComplete);
+      break;
     case 'folder_picked': if (d.path) selectWorkspace(d.path); break;
     case 'workspace_error': {
       const errEl = document.getElementById('workspace-error');
@@ -497,7 +503,16 @@ function handle(d) {
     case 'needs_workspace': showView('workspace'); break;
     case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesSidebar(); renderConvoList(); break;
     case 'skills': skills=d.skills; skillsLoaded=true; renderSkills(); if(palettePendingSkill){const s=palettePendingSkill;palettePendingSkill=null;selectSkill(s);} break;
-    case 'conversations': handlePersistedConversations(d.conversations, d.lastActiveConversationId); break;
+    case 'conversations':
+      handlePersistedConversations(d.conversations, d.lastActiveConversationId);
+      // Conversations are the last of the four payloads the client requests on
+      // open, so by here the workspace is on screen. Report once per open.
+      if (workspaceOpenStartedAt) {
+        const renderMs = Date.now() - workspaceOpenStartedAt;
+        workspaceOpenStartedAt = null;
+        try { ws.send(JSON.stringify({ type: 'client_render_time', ms: renderMs })); } catch (e) {}
+      }
+      break;
     case 'lists': {
       const prevIds = new Set(convoLists.map(l => l.id));
       convoLists = d.lists || [];
@@ -3252,6 +3267,8 @@ try{if(localStorage.getItem('rundock-theme')==='light'){document.body.classList.
 
 // ===== 11. FILE TREE & EDITOR =====
 
+// Set when a workspace opens, cleared once the client has rendered it.
+let workspaceOpenStartedAt = null;
 let cachedFileTree = null;
 // Serialised copy of the last rendered tree, so an unchanged push can be
 // skipped without walking the structure again.
