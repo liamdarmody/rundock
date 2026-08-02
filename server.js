@@ -5283,17 +5283,43 @@ function savePidFile(pids) {
   } catch (e) {}
 }
 
-function registerChildPid(pid) {
-  const pids = loadPidFile();
-  if (!pids.includes(pid)) {
-    pids.push(pid);
-    savePidFile(pids);
-  }
+// Pid records carry the command they were spawned as, so a pid the OS has
+// since recycled onto an unrelated process is not signalled. The file used to
+// hold bare integers with no way to tell the difference; those are still read
+// for one upgrade, and simply lack the recycling guard.
+function pidOf(rec) { return typeof rec === 'number' ? rec : (rec && rec.pid); }
+
+function processCommand(pid) {
+  if (process.platform === 'win32') return null; // no cheap equivalent; skip the check
+  try {
+    const { execFileSync } = require('child_process');
+    return execFileSync('ps', ['-p', String(pid), '-o', 'comm='], {
+      encoding: 'utf-8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch (e) { return null; } // not running, or ps unavailable
+}
+
+/** Running AND still the process we spawned, rather than a recycled pid. */
+function pidRecordAlive(rec) {
+  const pid = pidOf(rec);
+  if (!pid) return false;
+  try { process.kill(pid, 0); } catch (e) { return false; }
+  const expected = typeof rec === 'object' && rec ? rec.cmd : null;
+  if (!expected) return true; // legacy record, or a platform without the check
+  const actual = processCommand(pid);
+  if (actual == null) return true; // cannot tell; assume ours rather than leak it
+  return actual.endsWith(expected);
+}
+
+function registerChildPid(pid, cmd) {
+  const records = loadPidFile();
+  if (records.some(r => pidOf(r) === pid)) return;
+  records.push({ pid, at: Date.now(), cmd: cmd ? path.basename(cmd) : null });
+  savePidFile(records);
 }
 
 function unregisterChildPid(pid) {
-  const pids = loadPidFile().filter(p => p !== pid);
-  savePidFile(pids);
+  savePidFile(loadPidFile().filter(r => pidOf(r) !== pid));
 }
 
 // Stop whatever executes a conversation entry. Claude entries own a child
@@ -5317,30 +5343,32 @@ function killAllChildren() {
   // The shared Codex app-server goes down with the rest; the next Codex
   // turn recreates it lazily (against the new workspace after a switch).
   shutdownCodexAppServer();
-  // Clear PID file since we handled cleanup
-  savePidFile([]);
+  // Only forget the pids we can confirm are gone. Clearing the file
+  // unconditionally meant any child that was slow to exit, or that ignored
+  // SIGTERM, became untracked and could never be reaped on the next launch:
+  // the comment claimed cleanup was handled, but nothing checked.
+  savePidFile(loadPidFile().filter(rec => pidRecordAlive(rec)));
 }
 
 // Clean up orphaned processes from a previous crash (PIDs left in the file)
 function cleanOrphanedProcesses() {
-  const pids = loadPidFile();
-  if (pids.length === 0) return;
+  const records = loadPidFile();
+  if (records.length === 0) return;
   let cleaned = 0;
-  for (const pid of pids) {
-    try {
-      // Check if process exists (signal 0 doesn't kill, just checks)
-      process.kill(pid, 0);
-      // Process exists: kill it
-      process.kill(pid, 'SIGTERM');
-      cleaned++;
-    } catch (e) {
-      // Process doesn't exist: already gone
-    }
+  const survivors = [];
+  for (const rec of records) {
+    const pid = pidOf(rec);
+    if (!pidRecordAlive(rec)) continue; // gone, or the pid now belongs to something else
+    killProcessTree(pid, 'SIGTERM');
+    cleaned++;
+    // Keep it until a later launch observes it gone: a process that ignores
+    // SIGTERM must not be forgotten just because we signalled it once.
+    if (pidRecordAlive(rec)) survivors.push(rec);
   }
   if (cleaned > 0) {
-    console.log(`[Cleanup] Killed ${cleaned} orphaned Claude Code process(es) from previous session`);
+    console.log(`[Cleanup] Killed ${cleaned} orphaned process tree(s) from a previous session`);
   }
-  savePidFile([]);
+  savePidFile(survivors);
 }
 
 // Track recent spawn errors per conversation for dedupe within a 30-second window.
@@ -5506,7 +5534,7 @@ function spawnClaude(args, options, onError) {
   // so Ctrl-C never depended on the terminal reaching them by group.
   const proc = spawn(resolveClaudeBin(), args, { ...options, detached: process.platform !== 'win32' });
   if (proc.pid) {
-    registerChildPid(proc.pid);
+    registerChildPid(proc.pid, resolveClaudeBin());
     proc.on('close', () => unregisterChildPid(proc.pid));
   }
   // Always attach a baseline 'error' listener so an unhandled error event
@@ -7043,7 +7071,7 @@ module.exports._internal = {
   handleChatSpawnError, resolveClaudeBin, spawnClaude,
   getBareArgs, getSpawnEnv, getDisallowedTools, getPermissionMode,
   getAllowedToolsInteractive, getAllowedToolsLegacy, modelArgs,
-  killAllChildren, cleanOrphanedProcesses, loadPidFile,
+  killAllChildren, cleanOrphanedProcesses, loadPidFile, savePidFile, pidRecordAlive,
   // live state maps
   chatProcesses, convoTranscripts, pendingPermissionRequests,
   agentAutoResumeCount, disconnectBuffer, connectedClients,
