@@ -628,7 +628,19 @@ function handle(d) {
     case 'result':
       if(convoId && !isStaleProcess(d, convoId)) handleResult(d, convoId);
       break;
-    case 'file_tree': cachedFileTree = d.tree; renderFileTree(d.tree); break;
+    case 'file_tree': {
+      // The client asks for the tree after every file-writing tool call and
+      // every agent turn, but an agent editing file CONTENTS does not change
+      // the tree at all. Re-rendering identical data tore down the DOM and
+      // collapsed every folder, losing any wikilink reveal and any folder the
+      // user had opened by hand. Compare first and skip when nothing moved.
+      const nextTreeJson = JSON.stringify(d.tree);
+      cachedFileTree = d.tree;
+      if (nextTreeJson === cachedFileTreeJson) break;
+      cachedFileTreeJson = nextTreeJson;
+      renderFileTree(d.tree);
+      break;
+    }
     case 'file_content': loadFileContent(d.path, d.content); break;
     case 'file_changed': handleExternalFileChange(d.path, d.content); break;
     case 'file_saved': document.getElementById('editor-status').textContent='Saved'; break;
@@ -3241,6 +3253,13 @@ try{if(localStorage.getItem('rundock-theme')==='light'){document.body.classList.
 // ===== 11. FILE TREE & EDITOR =====
 
 let cachedFileTree = null;
+// Serialised copy of the last rendered tree, so an unchanged push can be
+// skipped without walking the structure again.
+let cachedFileTreeJson = null;
+// Folder paths the user (or a wikilink reveal) has opened. renderFileTree
+// rebuilds the DOM from scratch, so without this every re-render collapsed
+// the whole tree back to its default.
+const expandedFolders = new Set();
 
 function renderFileTree(tree) {
   const c=document.getElementById('file-tree');
@@ -3279,11 +3298,13 @@ function treeIconSvg(inner) {
 function buildTree(items,container) {
   for(const item of items) {
     if(item.type==='folder') {
-      const f=document.createElement('div'); f.className='folder-item'; f.innerHTML=`${treeIconSvg(TREE_ICONS.folder)} ${esc(item.name)}`;
-      f.onclick=()=>{const ch=f.nextElementSibling,svg=f.querySelector('svg.file-item-icon');const collapsed=ch.classList.toggle('collapsed');if(svg)svg.innerHTML=collapsed?TREE_ICONS.folder:TREE_ICONS.folderOpen;};
+      const open=expandedFolders.has(item.path);
+      const f=document.createElement('div'); f.className='folder-item'; f.innerHTML=`${treeIconSvg(open?TREE_ICONS.folderOpen:TREE_ICONS.folder)} ${esc(item.name)}`;
+      f.dataset.path=item.path;
+      f.onclick=()=>{const ch=f.nextElementSibling,svg=f.querySelector('svg.file-item-icon');const collapsed=ch.classList.toggle('collapsed');if(collapsed)expandedFolders.delete(item.path);else expandedFolders.add(item.path);if(svg)svg.innerHTML=collapsed?TREE_ICONS.folder:TREE_ICONS.folderOpen;};
       f.oncontextmenu=(e)=>{e.preventDefault();openRowContextMenu(e,item.path,'folder');};
       container.appendChild(f);
-      const ch=document.createElement('div'); ch.className='file-children collapsed'; buildTree(item.children,ch); container.appendChild(ch);
+      const ch=document.createElement('div'); ch.className=open?'file-children':'file-children collapsed'; buildTree(item.children,ch); container.appendChild(ch);
     } else {
       const fi=document.createElement('div'); fi.className='file-item';
       fi.innerHTML=`${treeIconSvg(TREE_ICONS[item.kind]||TREE_ICONS.file)} ${esc(item.name)}`;
@@ -3675,6 +3696,8 @@ function highlightFileInSidebar(filePath) {
     if (node.classList && node.classList.contains('file-children') && node.classList.contains('collapsed')) {
       node.classList.remove('collapsed');
       const folder = node.previousElementSibling;
+      // Remember it, so a later structural change does not undo the reveal.
+      if (folder && folder.dataset && folder.dataset.path) expandedFolders.add(folder.dataset.path);
       // Swap the folder's icon to the open-folder SVG, matching the manual
       // click-expand path. The earlier selector (.folder-icon) matched nothing
       // and injected a text chevron into an <svg>, so the icon stayed closed.
