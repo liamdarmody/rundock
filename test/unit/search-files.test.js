@@ -8,7 +8,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { probeSqlite, createSearchIndex, SCHEMA_VERSION, HIGHLIGHT_OPEN, HIGHLIGHT_CLOSE } = require('../../search.js');
+const { probeSqlite, createSearchIndex, SCHEMA_VERSION, HIGHLIGHT_OPEN, HIGHLIGHT_CLOSE, RECONCILE_BATCH_FILES } = require('../../search.js');
 
 const probe = probeSqlite();
 if (!probe.available) {
@@ -375,5 +375,87 @@ describe('HTML/SVG artifact content indexing', () => {
     idx.reconcileFiles(workspace);
     assert.strictEqual(idx.searchFiles('narwhal').length, 1, 'body still indexes after frontmatter strip');
     assert.strictEqual(idx.searchFiles('octothorpe').length, 1, 'frontmatter value indexes for HTML too');
+  });
+});
+
+describe('reconcile durability on a large workspace', () => {
+  // The whole pass used to run inside one transaction, so any failure rolled
+  // back every file it had indexed and the next pass started from zero. A
+  // workspace large enough that the pass could not complete therefore never
+  // converged: each launch redid all the work and threw all of it away.
+  //
+  // These assert the observable property, convergence, rather than the batch
+  // size or the number of commits, so the batching strategy stays free to
+  // change.
+  // Sized against the real bounds: the corpus must span more than one batch,
+  // and the injected failure must land after at least one has committed.
+  // Hardcoding these would quietly stop testing anything if the bounds moved.
+  const CORPUS = RECONCILE_BATCH_FILES * 2;
+  const FAIL_AT = RECONCILE_BATCH_FILES + 10;
+
+  function writeCorpus() {
+    for (let i = 0; i < CORPUS; i++) {
+      write(`note-${i}.md`, `# Note ${i}\n\nBodytoken${i} and some shared filler prose.\n`);
+    }
+  }
+
+  /** Make the nth call to _indexFile throw, simulating a pass that dies partway. */
+  function failOnNthIndex(index, n) {
+    const real = index._indexFile.bind(index);
+    let calls = 0;
+    index._indexFile = (...args) => {
+      if (++calls === n) throw new Error('simulated mid-pass failure');
+      return real(...args);
+    };
+    return () => { index._indexFile = real; };
+  }
+
+  test('a pass interrupted partway keeps the files it had already indexed', () => {
+    writeCorpus();
+    idx = freshIndex();
+
+    const restore = failOnNthIndex(idx, FAIL_AT);
+    idx.reconcileFiles(workspace);
+    restore();
+
+    const indexed = idx.db.prepare('SELECT COUNT(*) AS c FROM files').get().c;
+    assert.ok(indexed > 0,
+      `an interrupted pass must keep the work it had already committed, or a workspace `
+      + `too large to index in one go can never converge. Indexed ${indexed} of ${CORPUS} `
+      + `files before the failure, and kept none of them.`);
+  });
+
+  test('a later pass completes the remainder instead of starting again', () => {
+    writeCorpus();
+    idx = freshIndex();
+
+    const restore = failOnNthIndex(idx, FAIL_AT);
+    idx.reconcileFiles(workspace);
+    const afterFailure = idx.db.prepare('SELECT COUNT(*) AS c FROM files').get().c;
+    restore();
+
+    // Second pass, nothing on disk changed, no injected failure.
+    const res = idx.reconcileFiles(workspace);
+    const afterRetry = idx.db.prepare('SELECT COUNT(*) AS c FROM files').get().c;
+
+    assert.strictEqual(afterRetry, CORPUS, 'the second pass must finish the job');
+    assert.ok(res.updated < CORPUS,
+      `the second pass must index only what the first did not, rather than redoing `
+      + `everything. It re-indexed ${res.updated} of ${CORPUS} after ${afterFailure} were `
+      + `already done.`);
+  });
+
+  test('files indexed before the failure are searchable straight away', () => {
+    writeCorpus();
+    idx = freshIndex();
+
+    const restore = failOnNthIndex(idx, FAIL_AT);
+    idx.reconcileFiles(workspace);
+    restore();
+
+    // Something from the first batch must already be findable: a partially
+    // built index is useful, an empty one is not.
+    assert.strictEqual(idx.searchFiles('Bodytoken0').length, 1,
+      'a file committed before the failure must be searchable, not lost with the rollback');
   });
 });

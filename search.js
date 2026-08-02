@@ -208,6 +208,12 @@ const INDEXED_EXTENSIONS = new Set(['.md', '.txt', '.html', '.htm', '.svg']);
 const HTML_EXTENSIONS = new Set(['.html', '.htm', '.svg']);
 const MAX_FILE_BYTES = 2 * 1024 * 1024; // ignore pathological files
 
+// Write-batch bounds for a reconcile pass. Sized so a commit is frequent
+// enough that an interrupted pass loses little, and rare enough that commit
+// overhead stays negligible against the cost of indexing the content itself.
+const RECONCILE_BATCH_FILES = 250;
+const RECONCILE_BATCH_BYTES = 8 * 1024 * 1024;
+
 function walkTextFiles(rootDir, prefix = '', out = []) {
   let items;
   try {
@@ -435,8 +441,12 @@ class SearchIndex {
     // failure rolls the pass back; the next reconcile simply retries.
     const upsert = this._prepareFileUpsert();
     const del = this.db.prepare('DELETE FROM files WHERE path = ?');
+    // Counters advance as work happens; the durable pair is snapshotted on
+    // every commit, so an interrupted pass reports what actually survived
+    // rather than what it attempted.
+    let durableUpdated = 0, durableRemoved = 0;
+    const batch = this._beginBatch(() => { durableUpdated = updated; durableRemoved = removed; });
     try {
-      this.db.exec('BEGIN');
       for (const rel of onDisk) {
         let st;
         try { st = fs.statSync(path.join(rootDir, rel)); } catch (e) { continue; }
@@ -446,21 +456,59 @@ class SearchIndex {
         if (st.size > MAX_FILE_BYTES) {
           // A file that grew past the cap must not keep its stale row
           // searchable forever; drop it (no-op when it was never indexed).
-          if (prev) { del.run(rel); removed++; }
+          if (prev) { del.run(rel); removed++; batch.note(0); }
           continue;
         }
         this._indexFile(rootDir, rel, st, upsert);
         updated++;
+        batch.note(st.size);
       }
       // Anything left in `known` no longer exists on disk.
-      for (const rel of known.keys()) { del.run(rel); removed++; }
-      this.db.exec('COMMIT');
+      for (const rel of known.keys()) { del.run(rel); removed++; batch.note(0); }
+      batch.finish();
     } catch (e) {
-      try { this.db.exec('ROLLBACK'); } catch (e2) {}
-      console.warn(`[Search] files reconcile failed (rolled back, will retry): ${e && e.message ? e.message : e}`);
-      return { updated: 0, removed: 0, scanned: onDisk.length };
+      // Only the batch in flight is lost. Everything committed before it stays,
+      // so the next pass resumes from there instead of starting over.
+      batch.abort();
+      console.warn(`[Search] files reconcile interrupted after ${durableUpdated} file(s); progress kept, will resume: ${e && e.message ? e.message : e}`);
+      return { updated: durableUpdated, removed: durableRemoved, scanned: onDisk.length, interrupted: true };
     }
     return { updated, removed, scanned: onDisk.length };
+  }
+
+  /**
+   * Bounded write batching.
+   *
+   * A single transaction for a whole reconcile meant one failure discarded
+   * every file already indexed, and the next pass began again from nothing, so
+   * a workspace too large to finish in one go could never converge. It also
+   * held the entire pass in memory until commit, which on a large workspace is
+   * hundreds of megabytes.
+   *
+   * Both bounds are needed: file sizes span orders of magnitude, so a count
+   * alone lets a few huge files blow the memory ceiling, and a byte budget
+   * alone lets a very large number of tiny files hold one transaction open for
+   * the whole pass.
+   *
+   * `onCommit` runs after each successful commit so the caller can record how
+   * much work is now durable.
+   */
+  _beginBatch(onCommit, { maxFiles = RECONCILE_BATCH_FILES, maxBytes = RECONCILE_BATCH_BYTES } = {}) {
+    const db = this.db;
+    let open = false, files = 0, bytes = 0;
+    const start = () => { db.exec('BEGIN'); open = true; files = 0; bytes = 0; };
+    const commit = () => { db.exec('COMMIT'); open = false; if (onCommit) onCommit(); };
+    start();
+    return {
+      /** Record one unit of work; commits and reopens when a bound is reached. */
+      note(size) {
+        files += 1;
+        bytes += size || 0;
+        if (files >= maxFiles || bytes >= maxBytes) { commit(); start(); }
+      },
+      finish() { if (open) commit(); },
+      abort() { if (open) { try { db.exec('ROLLBACK'); } catch (e) { /* already closed */ } open = false; } },
+    };
   }
 
   /** Index one file immediately (save_file hot path); no directory walk. */
@@ -900,6 +948,8 @@ function normaliseReviewContent(content) {
 
 module.exports = {
   SCHEMA_VERSION,
+  RECONCILE_BATCH_FILES,
+  RECONCILE_BATCH_BYTES,
   HIGHLIGHT_OPEN,
   HIGHLIGHT_CLOSE,
   probeSqlite,
