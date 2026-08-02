@@ -400,6 +400,34 @@ class SearchIndex {
     this.db.prepare("SELECT count(*) FROM files_fts WHERE files_fts MATCH '\"__probe__\"'").get();
   }
 
+  /**
+   * What share of indexed paths still exist on disk, sampled.
+   *
+   * Paths are stored relative to the workspace root, so an index carried across
+   * from a different layout describes files that are no longer there. A
+   * workspace between two normal opens scores near 1.0; one that has been moved
+   * or restructured scores near 0, and is cheaper to rebuild than to reconcile
+   * row by row.
+   *
+   * Returns null when nothing is indexed yet, since there is nothing to judge.
+   */
+  indexedPathsStillPresent(rootDir, sample = 50) {
+    const rows = this.db.prepare('SELECT path FROM files LIMIT ?').all(sample);
+    if (rows.length === 0) return null;
+    let present = 0;
+    for (const r of rows) {
+      if (fs.existsSync(path.join(rootDir, r.path))) present += 1;
+    }
+    return present / rows.length;
+  }
+
+  /** Throw the index away and start clean. It is a derived artifact. */
+  rebuild() {
+    this.close();
+    this._deleteDbFiles();
+    this.open();
+  }
+
   _deleteDbFiles() {
     for (const suffix of ['', '-wal', '-shm']) {
       try { fs.rmSync(this.dbPath + suffix, { force: true }); } catch (e) {}

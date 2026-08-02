@@ -48,7 +48,7 @@ describe('search index warm-up', () => {
 
     client.send({ type: 'set_workspace', path: dir });
     await client.waitFor(
-      m => m.type === 'system' && m.subtype === 'search_index' && m.state === 'indexing',
+      m => m.type === 'system' && m.subtype === 'search_index' && m.state === 'indexing' && m.path === dir,
       { since, label: 'indexing started' });
     // Scan from HERE: set_workspace sends its own agents payload, and matching
     // that instead of the reply to our request would pass by accident.
@@ -59,7 +59,7 @@ describe('search index warm-up', () => {
     const { index: answered } = await client.waitFor(
       m => m.type === 'agents', { since: probeSince, label: 'agents reply during indexing' });
     const { index: ready } = await client.waitFor(
-      m => m.type === 'system' && m.subtype === 'search_index' && m.state === 'ready',
+      m => m.type === 'system' && m.subtype === 'search_index' && m.state === 'ready' && m.path === dir,
       { since: probeSince, label: 'search_index ready' });
 
     assert.ok(answered < ready,
@@ -75,7 +75,7 @@ describe('search index warm-up', () => {
     client.send({ type: 'set_workspace', path: dir });
 
     const { msg } = await client.waitFor(
-      m => m.type === 'system' && m.subtype === 'search_index' && m.state === 'indexing',
+      m => m.type === 'system' && m.subtype === 'search_index' && m.state === 'indexing' && m.path === dir,
       { since, label: 'search_index indexing' });
     assert.strictEqual(msg.state, 'indexing');
   });
@@ -86,7 +86,7 @@ describe('search index warm-up', () => {
 
     client.send({ type: 'set_workspace', path: dir });
     await client.waitFor(
-      m => m.type === 'system' && m.subtype === 'search_index' && m.state === 'ready',
+      m => m.type === 'system' && m.subtype === 'search_index' && m.state === 'ready' && m.path === dir,
       { since, label: 'search_index ready' });
 
     const searchSince = client.messages.length;

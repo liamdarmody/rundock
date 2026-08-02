@@ -4203,6 +4203,8 @@ wss.on('connection', (ws) => {
           // Kill all running processes when switching workspace
           killAllChildren();
           WORKSPACE = dir;
+          // Before anything reads state that may have come from another path.
+          healWorkspaceIfMoved(dir);
           // A workspace switch (including re-selecting the same one) is the
           // retry trigger for a failed search-engine open, and must not
           // serve the previous workspace's cached file/skill lists.
@@ -6612,8 +6614,8 @@ const SESSION_PATH_NEGATIVE_TTL_MS = 30000;
 let _fileIndexRun = null;
 
 /** Tell clients whether the index is building, so the UI can say so. */
-function broadcastSearchIndexState(state, extra) {
-  safeSend(JSON.stringify({ type: 'system', subtype: 'search_index', state, ...(extra || {}) }));
+function broadcastSearchIndexState(state, workspace, extra) {
+  safeSend(JSON.stringify({ type: 'system', subtype: 'search_index', state, path: workspace, ...(extra || {}) }));
 }
 
 /** True while a warm-up pass is in flight. */
@@ -6633,7 +6635,7 @@ function beginIncrementalFileIndex(newMessages) {
   const workspace = WORKSPACE;
   const run = { iter: engine.reconcileFilesIncremental(workspace), cancelled: false };
   _fileIndexRun = run;
-  broadcastSearchIndexState('indexing');
+  broadcastSearchIndexState('indexing', workspace);
 
   const finish = (result) => {
     if (_fileIndexRun === run) _fileIndexRun = null;
@@ -6641,7 +6643,7 @@ function beginIncrementalFileIndex(newMessages) {
     const scanned = result ? result.scanned : 0;
     const updated = result ? result.updated : 0;
     console.log(`[Search] index ready: ${scanned} files scanned (${updated} indexed), ${newMessages || 0} new messages`);
-    broadcastSearchIndexState('ready', { scanned, updated });
+    broadcastSearchIndexState('ready', workspace, { scanned, updated });
   };
 
   const step = () => {
@@ -6662,6 +6664,51 @@ function beginIncrementalFileIndex(newMessages) {
     finish(r.value);
   };
   setImmediate(step);
+}
+
+// ── Moved-workspace healing ────────────────────────────────────────────────
+// Parts of .rundock silently assume the absolute path the workspace lived at
+// when they were written. Move it, rename it, or copy it to another machine and
+// they are all wrong, with nothing to notice or repair them.
+//
+// Users zip folders; that is what people do. Any rule we publish about what to
+// migrate will be got wrong by someone doing the obvious thing, so the product
+// copes instead.
+//
+// Conversations and transcripts are deliberately NOT touched: they are real
+// content, they are self-contained, and they travel fine.
+let _indexProvenanceUnknown = false;
+
+// Below this share of indexed paths still existing, the index plainly belongs
+// to a different layout. Generous on purpose: a normal workspace between two
+// opens scores near 1.0, and a moved one scores near 0.
+const STALE_INDEX_PRESENT_RATIO = 0.2;
+
+function healWorkspaceIfMoved(dir) {
+  const state = readState();
+  const previous = state.workspacePath || null;
+  const moved = !!previous && previous !== dir;
+
+  if (moved) {
+    console.log('[Workspace] state was written for a different path; clearing what assumed the old location');
+    // The index stores RELATIVE paths, so after a move every one is wrong.
+    // Reconciling would index every file AND delete every row: strictly more
+    // work than rebuilding, and the index is an explicitly derived artifact.
+    for (const suffix of ['', '-wal', '-shm']) {
+      try { fs.rmSync(path.join(rundockDir(), 'search-index.db' + suffix), { force: true }); } catch (e) {}
+    }
+    // Process ids belong to the machine that wrote them. On this one those
+    // numbers may well belong to something else entirely.
+    try { savePidFile([]); } catch (e) {}
+  }
+
+  if (previous !== dir) {
+    try { writeState({ ...state, workspacePath: dir }); } catch (e) { /* best effort */ }
+  }
+  // No fingerprint means state predating this check, so we cannot tell whether
+  // it moved. The index itself can answer that once it is open.
+  _indexProvenanceUnknown = !previous;
+  return { moved, hadFingerprint: !!previous };
 }
 
 function ensureSearchEngine() {
@@ -6692,6 +6739,19 @@ function ensureSearchEngine() {
       DatabaseSync: searchProbe.DatabaseSync,
     });
     searchEngine.open();
+    // Fallback for state written before workspaces were fingerprinted: we have
+    // no record of where it came from, so ask the index whether its contents
+    // still describe this workspace. A moved or restructured one scores near
+    // zero, and rebuilding beats reconciling every row.
+    if (_indexProvenanceUnknown) {
+      _indexProvenanceUnknown = false;
+      let present = null;
+      try { present = searchEngine.indexedPathsStillPresent(WORKSPACE); } catch (e) {}
+      if (present !== null && present < STALE_INDEX_PRESENT_RATIO) {
+        console.log(`[Search] index does not describe this workspace (${Math.round(present * 100)}% of indexed paths present); rebuilding`);
+        searchEngine.rebuild();
+      }
+    }
     const validIds = readConversations().map(c => c.id);
     // Conversations first, inline: byte-offset marks make an unchanged session
     // a stat-only skip, so this stays in the milliseconds even on a long
