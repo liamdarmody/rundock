@@ -9,6 +9,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 ### Added
 
 - **Copy a code block from a note in one click:** hovering a fenced code block while viewing or editing a file now shows a copy control in its corner, the same one chat messages have had. It copies the contents of the fence only, without the backtick markers or the language label, and confirms with a tick. Previously the only way to get a snippet out of a note was to select it by hand inside the editor.
+- **Right-click now works wherever you type:** the desktop app had no right-click menu in the editor or the message box, so there was no Cut, Copy, Paste or Select All, and a word the spellchecker had underlined could only be fixed by retyping it. Right-clicking editable text now offers the standard editing actions, and right-clicking an underlined word offers the corrections your system suggests, plus "Add to Dictionary" for words it should stop flagging. Added words are remembered after a restart. Right-clicking a conversation or a file in the sidebar still shows the menu it always did, and only that one.
 - **The file tree shows which folder a file belongs to:** a soft vertical line now runs down each open folder, linking everything inside it back to the folder itself, so several levels of nesting stay readable at a glance. Previously nothing connected a file to its parent, and past two or three levels you had to compare indentation by eye to work out where you were. Spacing is unchanged, so nothing shifts position.
 
 ### Fixed
