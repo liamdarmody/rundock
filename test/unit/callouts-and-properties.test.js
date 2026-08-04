@@ -116,6 +116,59 @@ describe('frontmatter wikilink properties', () => {
     assert.deepEqual(edits, [['tags', { list: { add: 'gamma' } }]], 'commit routes a byte-honest list add');
   });
 
+  test('a list item added and then clicked away from is committed, not lost', () => {
+    // Regression, shipped in 0.11.0 and live for two weeks: the add input's
+    // blur handler referenced `seed`, a parameter of the SCALAR edit function
+    // that does not exist in the list-add scope. Blur therefore threw
+    // ReferenceError, so the item was never added AND the input was never
+    // torn down: the typed text just sat there looking accepted.
+    //
+    // The Enter path above never hit it, because Enter does not consult
+    // `seed`. That is exactly why the bug survived: adding by keyboard was
+    // covered, adding by mouse-and-click-away was not.
+    const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
+    global.HTMLElement = dom.window.HTMLElement;
+    const container = dom.window.document.getElementById('p');
+    const edits = [];
+    renderProperties(container, { tags: ['alpha', 'beta'] }, {
+      onEditProperty: (key, value) => { edits.push([key, value]); return true; },
+    });
+    container.querySelector('.prop-add').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    const input = container.querySelector('input.prop-add-input');
+    input.value = 'gamma';
+    // The real-world action: type, then click somewhere else.
+    assert.doesNotThrow(
+      () => input.dispatchEvent(new dom.window.FocusEvent('blur')),
+      'blurring the add input must not throw'
+    );
+    assert.deepEqual(edits, [['tags', { list: { add: 'gamma' } }]], 'the typed item is committed on blur');
+  });
+
+  test('blurring an EMPTY add input adds nothing and tidies itself away', () => {
+    // Opening the add affordance and changing your mind must not write an
+    // empty item into the frontmatter, and must not leave the input open.
+    const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
+    global.HTMLElement = dom.window.HTMLElement;
+    const container = dom.window.document.getElementById('p');
+    const edits = [];
+    renderProperties(container, { tags: ['alpha'] }, {
+      onEditProperty: (key, value) => { edits.push([key, value]); return true; },
+    });
+    // The panel does not tear the input down itself: it asks its host to
+    // re-render, via the __propsRerender callback editor/index.js installs.
+    // Stubbed here so the request is observable, since renderProperties is
+    // being driven directly rather than through the editor.
+    let rerendered = 0;
+    container.__propsRerender = () => { rerendered += 1; };
+
+    container.querySelector('.prop-add').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    const input = container.querySelector('input.prop-add-input');
+    input.dispatchEvent(new dom.window.FocusEvent('blur'));
+    assert.deepEqual(edits, [], 'nothing is written for an empty input');
+    assert.equal(rerendered, 1, 'the panel asks to re-render, which is what clears the input');
+    assert.equal(container.querySelectorAll('.prop-chip').length, 1, 'the existing item is still there');
+  });
+
   test('wikilink list items render as inline links, not pills; plain items stay pills', () => {
     const dom = new JSDOM('<div id="p"></div>', { url: 'http://localhost/' });
     global.HTMLElement = dom.window.HTMLElement;

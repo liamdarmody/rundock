@@ -14,6 +14,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 ### Fixed
 
 - **A reply that is only a number stays inside its message bubble:** an agent answering with just a number, such as `4471.`, was read as the opening of a numbered list. The number was then drawn as the list's marker rather than as the message itself, which put it outside the bubble, beside an empty one. A reply like that now reads as the number. Genuine numbered lists are untouched, and a list counting past ninety-nine now keeps its numbers inside the bubble too, which it did not always do before.
+- **Adding a property value no longer loses it if you click away:** typing a new item into a list property (tags, for example) and then clicking elsewhere instead of pressing Enter silently discarded it, and left the half-finished box sitting open as though it had worked. The item is now saved either way. Present since 0.11.0.
 - **Files that differ only by type are no longer identical in search:** a report kept as a PDF, a web page and two images produced four results with the same name, the same generic icon, and nothing to tell them apart. Results now show the file type, and each type draws its own icon, the same one the file tree uses. Notes keep their clean name, since almost every file is a note and its extension never told two of them apart. How search matches is unchanged: typing a full file name including its type already worked, and still does.
 
 ## 0.11.3: Long Sessions & Large Workspaces (2026-08-02)
