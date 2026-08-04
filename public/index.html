@@ -551,7 +551,29 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .tiptap-editor .ProseMirror ul[data-type="taskList"] > li[data-checked="true"] > div { color: var(--text-2); }
 .tiptap-editor .ProseMirror blockquote { border-left: 2px solid var(--border); padding-left: 16px; margin: 0 0 12px 0; color: var(--text-2); }
 .tiptap-editor .ProseMirror code { font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 13px; background: var(--card); padding: 2px 6px; border-radius: 4px; color: var(--text-1); }
-.tiptap-editor .ProseMirror pre { background: var(--card); border-radius: 8px; padding: 12px 16px; margin: 0 0 12px 0; overflow-x: auto; }
+.tiptap-editor .ProseMirror pre { background: var(--card); border-radius: 8px; padding: 12px 16px; margin: 0 0 12px 0; overflow-x: auto; position: relative; }
+/* Copy control on editor code blocks, injected as a widget decoration (see
+   editor/plugins/code-copy.js) so it never becomes document content.
+   `float: right` keeps it out of the text flow, so the first line of code is
+   not indented around it.
+   position: sticky rather than absolute. Measured: these blocks do not
+   scroll today, because ProseMirror gives code blocks white-space: pre-wrap,
+   so even a very long single-line command wraps and scrollWidth never exceeds
+   clientWidth. The `overflow-x: auto` above is therefore dormant. Sticky is
+   used anyway because it costs nothing and behaves identically when there is
+   no scrolling, while staying correct if the wrapping ever changes; absolute
+   would silently scroll the button out of view the day it does. */
+.tiptap-editor .ProseMirror pre .editor-copy-code-btn {
+  position: sticky; float: right; right: 0; top: 0; z-index: 2;
+  background: var(--card); border: none; color: var(--text-2); cursor: pointer;
+  padding: 4px; border-radius: 4px; display: flex; align-items: center;
+  justify-content: center; line-height: 0; opacity: 0;
+  transition: color 0.15s ease, opacity 0.15s ease;
+}
+.tiptap-editor .ProseMirror pre:hover .editor-copy-code-btn { opacity: 1; }
+.tiptap-editor .ProseMirror pre .editor-copy-code-btn:hover { color: var(--text-1); }
+.tiptap-editor .ProseMirror pre .editor-copy-code-btn:focus-visible { opacity: 1; outline: 2px solid var(--accent); outline-offset: 1px; }
+.tiptap-editor .ProseMirror pre .editor-copy-code-btn.copied { opacity: 1; color: var(--success); }
 .tiptap-editor .ProseMirror pre code { background: transparent; padding: 0; font-size: 13px; line-height: 1.5; }
 .tiptap-editor .ProseMirror a { color: var(--accent); text-decoration: underline; cursor: pointer; }
 .tiptap-editor .ProseMirror a.wikilink { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; padding: 0 2px; border-radius: 3px; transition: background 0.15s ease, color 0.15s ease; }

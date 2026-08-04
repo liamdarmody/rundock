@@ -67,6 +67,15 @@ function buildFixture() {
   fs.writeFileSync(path.join(workspace, 'Roadmap-2026.md'),
     '# Roadmap 2026\n\nQuarterly targets and the mobile milestone.\n');
 
+  // A note with fenced code blocks, for the editor's copy control. Three
+  // fences on purpose: a labelled one, an unlabelled one (the copy control
+  // must not depend on a language), and inline code, which must NOT get a
+  // button. The exact bytes matter: the round-trip assertion compares this
+  // file before and after a save to prove the injected button never becomes
+  // document content.
+  fs.writeFileSync(path.join(workspace, 'code-blocks.md'),
+    '# Code Blocks\n\nA labelled fence:\n\n```js\nconst total = 4471;\nconsole.log(total);\n```\n\nAn unlabelled fence:\n\n```\nplain fenced content\n```\n\nInline `code` must not gain a button.\n');
+
   // A tall note that overflows the editor viewport, so the floating toolbar's
   // dropdown can be exercised near the foot of the visible area (where the menu
   // must flip to open upward rather than spilling past the bottom).
