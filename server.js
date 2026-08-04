@@ -965,6 +965,32 @@ function discoverSkillsCached(agents) {
   return _skillCache;
 }
 
+/**
+ * Present a file result: its name, and the kind its icon needs.
+ *
+ * Applied to every file hit whichever layer produced it, so the name layer and
+ * the content layer cannot drift apart. They already had drifted: the same
+ * extension-stripping was written out longhand in three places.
+ *
+ * Deliberately done here at assembly time rather than in the search index. The
+ * indexed title is what FTS matches on, and rewriting it would change what
+ * queries hit, force every existing index to be migrated, and gain nothing:
+ * the name layer already matches on the full file name including the
+ * extension, over every file in the tree rather than only the indexed ones.
+ * So this is a presentation change, and it stays one.
+ */
+function decorateFileHits(hits) {
+  let kinds = null;
+  return (hits || []).map((hit) => {
+    let kind = hit.kind;
+    if (!kind) {
+      if (!kinds) kinds = new Map(flatFileListCached().map(f => [f.path, f.kind]));
+      kind = kinds.get(hit.path);
+    }
+    return { ...hit, title: searchLib.displayTitle(hit.path), kind: kind || 'file' };
+  });
+}
+
 function flatFileListCached() {
   const now = Date.now();
   if (_fileListCache && (now - _fileListCacheTime) < AGENT_CACHE_TTL) return _fileListCache;
@@ -7140,7 +7166,9 @@ function titleLayerMatches(query, items, titleOf, { fuzzy = true } = {}) {
 function flattenFileTree(tree, out = []) {
   for (const entry of tree || []) {
     if (entry.type === 'folder') flattenFileTree(entry.children, out);
-    else out.push({ path: entry.path, name: entry.name });
+    // `kind` is already computed for the tree icons; carrying it here is what
+    // lets a search result show the same icon instead of one generic file glyph.
+    else out.push({ path: entry.path, name: entry.name, kind: entry.kind });
   }
   return out;
 }
@@ -7259,8 +7287,9 @@ async function runUniversalSearch(msg) {
       try { recentFiles = searchEngine.recentFiles(limit); } catch (e) { recentFiles = []; }
     } else {
       recentFiles = flatFileListCached().slice(0, limit)
-        .map(f => ({ type: 'file', path: f.path, title: path.basename(f.name, path.extname(f.name)), matchType: 'recent', tags: [] }));
+        .map(f => ({ type: 'file', path: f.path, kind: f.kind, matchType: 'recent', tags: [] }));
     }
+    recentFiles = decorateFileHits(recentFiles);
     return { groups: { ...groups, conversations: recentConvos, files: recentFiles }, recent: true };
   }
 
@@ -7268,8 +7297,7 @@ async function runUniversalSearch(msg) {
   const fileTitleHits = filtersActive ? [] : titleLayerMatches(rawQuery, flatFileListCached(), f => f.name, { fuzzy })
     .slice(0, limit)
     .map(({ item, score }) => ({
-      type: 'file', path: item.path,
-      title: path.basename(item.name, path.extname(item.name)),
+      type: 'file', path: item.path, kind: item.kind,
       tags: [], matchType: 'title', score,
     }));
   let fileContentHits = [];
@@ -7287,8 +7315,8 @@ async function runUniversalSearch(msg) {
   } else {
     fileContentHits = grepSearchFiles(rawQuery, limit);
   }
-  groups.files = mergeHits(fileTitleHits, fileContentHits, h => h.path,
-    (t, h) => { t.snippet = h.snippet; t.tags = h.tags; }, limit);
+  groups.files = decorateFileHits(mergeHits(fileTitleHits, fileContentHits, h => h.path,
+    (t, h) => { t.snippet = h.snippet; t.tags = h.tags; }, limit));
 
   // ── Conversations: fuzzy title layer + FTS content (or legacy grep) ──
   const convoPool = msg.agentId
