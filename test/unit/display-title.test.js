@@ -86,6 +86,32 @@ describe('displayTitle', () => {
     }
   });
 
+  test('behaves identically under Windows path rules', () => {
+    // Tree and index paths are built with explicit forward slashes on every
+    // platform, and Windows accepts both separators. This pins that, so the
+    // rule cannot quietly diverge on the one platform CI does not run the
+    // integration suite on.
+    const path = require('node:path');
+    const HIDDEN = '.md';
+    const under = (P, rel) => {
+      const b = P.basename(rel);
+      const e = P.extname(b);
+      if (!e) return b;
+      if (e.toLowerCase() !== HIDDEN) return b;
+      return P.basename(b, e) || b;
+    };
+    const cases = [
+      'packs/board-pack-q3.pdf', 'notes/sub/report.MD', 'Makefile',
+      '.gitignore', 'archive.tar.gz', 'notes.v2.md', 'x/y/.md',
+    ];
+    for (const c of cases) {
+      assert.strictEqual(under(path.win32, c), under(path.posix, c),
+        `${c} must present the same way regardless of platform path rules`);
+      assert.strictEqual(displayTitle(c), under(path.posix, c),
+        `${c} must match the reference rule`);
+    }
+  });
+
   test('is total: junk input yields a string rather than throwing', () => {
     // It runs on every indexed row and every result. A throw here would take
     // out indexing or the whole result list.
