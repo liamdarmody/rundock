@@ -205,7 +205,12 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .folder-item { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; cursor: pointer; font-size: var(--body); font-weight: 600; color: var(--text-1); user-select: none; }
 .folder-item:hover { background: var(--elevated); }
 .folder-icon { font-size: 10px; color: var(--text-2); width: 12px; text-align: center; }
-.file-children { padding-left: 20px; }
+.file-children { padding-left: 20px; position: relative; }
+/* Indent guide: a subtle vertical line in the indent gutter, aligned under the
+   parent folder's icon, spanning the folder's children. One per nesting level
+   (cascades because each .file-children nests in its parent), so deep
+   indentation stays easy to follow. */
+.file-children::before { content: ''; position: absolute; left: 15px; top: 0; bottom: 0; width: 1px; background: var(--border); }
 .file-children.collapsed { display: none; }
 .file-item { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; cursor: pointer; font-size: var(--body); color: var(--text-1); }
 .file-item:hover { background: var(--elevated); }
