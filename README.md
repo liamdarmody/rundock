@@ -22,7 +22,7 @@ Built by [Liam Darmody](https://www.linkedin.com/in/liamdarmody/). Learn more at
 
 **Find anything with one shortcut.** Press Cmd+K to search file contents, conversation messages, and agent and skill names at once, then open the result at the right place.
 
-![Rundock universal search palette showing grouped, highlighted results across files and conversations](docs/rundock-search.png)
+![Rundock universal search palette showing grouped, highlighted results across files and conversations, each file row carrying its type and a matching icon](docs/rundock-search.png)
 
 **Your boards open as real columns.** An Obsidian Kanban board opens as a column board you drag cards across, and writes back the same markdown so it stays interchangeable with Obsidian.
 
