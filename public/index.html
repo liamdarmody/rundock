@@ -12,6 +12,7 @@
 <link id="hljs-light" rel="stylesheet" href="/vendor/highlight/atom-one-light.min.css" disabled>
 <script src="/vendor/highlight/highlight.min.js"></script>
 <script src="/code-language.js"></script>
+<script src="/empty-list.js"></script>
 <script src="/unread-state.js"></script>
 <script src="/markers.js"></script>
 <script src="/permissions.js"></script>
@@ -671,7 +672,16 @@ mark.find-match.current,
 .msg-bubble *:first-child { margin-top: 0; }
 .msg-bubble h1 { font-size: 17px; } .msg-bubble h2 { font-size: 15px; } .msg-bubble h3 { font-size: var(--body); font-weight: 600; } .msg-bubble h4 { font-size: var(--body); font-weight: 600; }
 .msg-bubble p { margin: 0 0 8px; } .msg-bubble p:last-child { margin-bottom: 0; }
-.msg-bubble ul,.msg-bubble ol { margin: 2px 0 8px; padding-left: 20px; }
+/* 32px, not 20px: the list marker is drawn inside this padding, so a marker
+   wider than it is drawn outside the bubble. Measured at 14px Inter, decimal
+   markers are 10.0px for "1.", 21.0px for "99.", 29.8px for "999." and 35.5px
+   for "4471.", so the old 20px was already half a pixel short of a list simply
+   counting to 99. 32px carries any list numbered into the hundreds. Beyond
+   that is left alone deliberately: a reply that is ONLY a number no longer
+   reaches here at all (see the list renderer in app.js), so what remains is a
+   genuine list with a four-digit start, which is rare enough not to be worth
+   indenting every ordinary list to accommodate. */
+.msg-bubble ul,.msg-bubble ol { margin: 2px 0 8px; padding-left: 32px; }
 .msg-bubble ul { list-style: disc; } .msg-bubble ol { list-style: decimal; }
 .msg-bubble li { margin-bottom: 2px; line-height: 1.5; }
 .msg-bubble li > p { margin: 0 0 2px; }
