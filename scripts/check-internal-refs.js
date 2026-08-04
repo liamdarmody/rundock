@@ -53,6 +53,18 @@ const RULES = [
   { label: 'private workspace content reference', re: /\b(vault|private workspace) (conversation|transcript|note|entry)\b/i },
   { label: 'workspace conversation id', re: /\bconversation 1[0-9]{12}\b/i },
   { label: 'internal process phrase', re: /adversarial (sweep|review round)|handoff file per run|completion report per run/i },
+  // An external tool named as the JUSTIFICATION for a design choice. Naming
+  // formats we interoperate with describes the system and belongs in the code;
+  // naming a tool as authority describes how the decision was reached, which is
+  // planning context. State the reason on its own merits instead: not "hidden,
+  // following X" but "markdown is the default format, so the extension never
+  // distinguishes one file from another". That also survives the tool changing.
+  // Narrow by construction: it matches the citing phrasing, never a bare
+  // product name, which appears legitimately across docs, app.js and search.js.
+  {
+    label: 'external tool cited as design rationale (state the reason itself)',
+    re: /\b(following|per|as in|mirrors?|matching|copying|like)\s+(Obsidian|Notion|Cursor|VS ?Code|Linear)\b|\b(Obsidian|Notion|Cursor|VS ?Code|Linear)('s)?\s+(convention|precedent|rule|behaviou?r)\b/i,
+  },
   { label: 'owner-attributed decision note', re: /\(Liam[ ,]|Liam 20[0-9]{2}|decision,? Liam/ },
   // Style rule: no em or en dashes anywhere. Use a colon, comma, full stop, or
   // restructure. Genuinely intentional dashes (a splitter char class, the

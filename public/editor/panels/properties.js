@@ -10,7 +10,7 @@
 // renderer; the renderer itself never mutates the underlying data.
 
 // Per-type row icons as Lucide-style inline SVGs (24 viewBox, 1.8 stroke, round
-// caps), matching Obsidian's property-type icons far better than glyphs did.
+// caps). Icons read as a type at a glance where the previous glyphs did not.
 const TYPE_ICON_PATHS = {
   string: ['M4 7V5h16v2', 'M9 19h6', 'M12 5v14'],                           // type
   number: ['M4 9h16', 'M4 15h16', 'M10 3 8 21', 'M16 3l-2 18'],            // hash
@@ -129,7 +129,7 @@ function renderValue(value, type, resolveWikilink, editable) {
       })
       .join('');
     // Inline add affordance, always present (subtle) rather than a hover row,
-    // so adding reads like Obsidian.
+    // so the way to add an item is visible without hunting for it.
     const add = editable ? '<button type="button" class="prop-add" title="Add item">+</button>' : '';
     return `<span class="prop-value list">${items || '<span class="empty">empty</span>'}${add}</span>`;
   }
