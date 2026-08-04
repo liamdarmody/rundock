@@ -3312,6 +3312,14 @@ const TREE_ICONS = {
 function treeIconSvg(inner) {
   return '<svg class="file-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + inner + '</svg>';
 }
+// The palette draws the same glyphs as the file tree, so a file looks the same
+// wherever it appears and the two cannot drift. Only the frame differs: tree
+// rows size their icon from CSS, palette rows carry explicit dimensions.
+function paletteFileIcon(kind) {
+  const inner = TREE_ICONS[kind] || TREE_ICONS.file;
+  return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+    + 'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + inner + '</svg>';
+}
 function buildTree(items,container) {
   for(const item of items) {
     if(item.type==='folder') {
@@ -5167,7 +5175,6 @@ function paletteHl(s) { return RundockPalette.highlightToMark(s, esc); }
 function paletteSnippetPlain(s) { return RundockPalette.snippetPlain(s); }
 
 const PALETTE_ICONS = {
-  file: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
   skill: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
 };
 
@@ -5201,7 +5208,7 @@ function renderPalette() {
 function paletteItemHtml(item, idx) {
   let icon = '', title = '', meta = '';
   if (item.type === 'file') {
-    icon = `<div class="palette-item-icon">${PALETTE_ICONS.file}</div>`;
+    icon = `<div class="palette-item-icon">${paletteFileIcon(item.kind)}</div>`;
     title = esc(item.title || item.path);
     const dir = item.path && item.path.includes('/') ? item.path.substring(0, item.path.lastIndexOf('/')) + '/' : '';
     const tagStr = (item.tags && item.tags.length) ? ` &middot; #${item.tags.map(esc).join(' #')}` : '';
