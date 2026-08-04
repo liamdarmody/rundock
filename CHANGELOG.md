@@ -4,6 +4,12 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+### Fixed
+
+- **Files that differ only by type are no longer identical in search:** a report kept as a PDF, a web page and two images produced four results with the same name, the same generic icon, and nothing to tell them apart. Results now show the file type, and each type draws its own icon, the same one the file tree uses. Notes keep their clean name, since almost every file is a note and its extension never told two of them apart. How search matches is unchanged: typing a full file name including its type already worked, and still does.
+
 ## 0.11.3: Long Sessions & Large Workspaces (2026-08-02)
 
 Rundock no longer gets slower the longer it stays open, and a large workspace no longer freezes the window while it builds its search index. Agent processes are released once a conversation has been idle for a while, the file tree is cached instead of re-scanned every time an agent writes a file, and a workspace that has been moved or copied now repairs its own state instead of quietly doing double work on every launch.

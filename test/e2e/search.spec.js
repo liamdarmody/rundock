@@ -304,3 +304,51 @@ test('opening a nested file from search reveals it in the tree, not just selects
   await expect(row).toBeVisible();
   await expect(row).toHaveClass(/\bactive\b/);
 });
+
+// ── file type in results ─────────────────────────────────────────────────────
+// Files that differ only by type used to render as identical rows: same text,
+// same generic icon, no type anywhere. Driven through real clicks and typing
+// because the equivalent mock bugs were invisible when state was set directly
+// and only appeared when the actual controls were used.
+test('files differing only by type are distinguishable in results', async ({ page }) => {
+  await boot(page);
+  await search(page, 'board-pack-q3');
+
+  const rows = page.locator('.palette-item[data-type="file"]', { hasText: 'board-pack-q3' });
+  await expect(rows).toHaveCount(4);
+
+  const titles = await rows.locator('.palette-item-title').allTextContents();
+  const trimmed = titles.map(t => t.trim());
+  expect(new Set(trimmed).size).toBe(trimmed.length);
+  expect(trimmed).toContain('board-pack-q3.pdf');
+  expect(trimmed).toContain('board-pack-q3.png');
+  expect(trimmed).toContain('board-pack-q3.html');
+  // Markdown keeps a clean name: .md is on almost every file and never tells
+  // two of them apart.
+  expect(trimmed).toContain('board-pack-q3');
+});
+
+test('each file type draws its own icon rather than one generic glyph', async ({ page }) => {
+  await boot(page);
+  await search(page, 'board-pack-q3');
+
+  const rows = page.locator('.palette-item[data-type="file"]', { hasText: 'board-pack-q3' });
+  await expect(rows).toHaveCount(4);
+
+  // Compare the rendered icon markup per row. An extension alone cannot
+  // separate a note from a board, and png/jpg/gif share one glyph, so text and
+  // icon each cover what the other cannot.
+  const icons = await rows.locator('.palette-item-icon svg').evaluateAll(
+    els => els.map(e => e.innerHTML));
+  expect(icons.length).toBe(4);
+  expect(new Set(icons).size).toBeGreaterThan(1);
+});
+
+test('opening a typed file from search still opens that exact file', async ({ page }) => {
+  // Guards the whole point: the row now says .pdf, so clicking it must open the
+  // pdf and not the same-named note.
+  await boot(page);
+  await search(page, 'board-pack-q3');
+  await page.locator('.palette-item[data-type="file"]', { hasText: 'board-pack-q3.pdf' }).first().click();
+  await expect(page.locator('.file-item[data-path="packs/board-pack-q3.pdf"]')).toHaveClass(/\bactive\b/);
+});

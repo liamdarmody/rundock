@@ -91,6 +91,41 @@ function sanitizeFtsQuery(raw, { prefix = false } = {}) {
   return quoted.join(' ');
 }
 
+// ── Display title ────────────────────────────────────────────────────────────
+
+/**
+ * How a file's name is presented, in the index and in every result row.
+ *
+ * Markdown is the default format for notes, so `.md` appears on almost every
+ * file and never distinguishes one from another. It is hidden. Every other
+ * extension is shown, because when several files share a name it is the only
+ * thing telling them apart: a report held as HTML, PDF, PNG, JPG and GIF is
+ * ordinary, and stripping the extension collapsed all five into identical rows.
+ *
+ * This is deliberately the single definition of that rule. The stripping it
+ * replaces was written out longhand in three separate places.
+ *
+ * Note this feeds the indexed `title`, not just the rendering. That is
+ * required, not incidental: query tokens are combined with implicit AND, so a
+ * title shown as `report.pdf` but indexed as `report` would not be found by
+ * someone typing exactly what they can see.
+ *
+ * Total by design: it runs on every indexed row and every result, so junk in
+ * yields a string out rather than taking down indexing or a result list.
+ */
+const HIDDEN_EXTENSION = '.md';
+function displayTitle(relPath) {
+  if (typeof relPath !== 'string' || relPath === '') return '';
+  const base = path.basename(relPath);
+  const ext = path.extname(base);
+  // path.extname('.gitignore') is '' by design, so dotfiles keep their name.
+  if (!ext) return base;
+  if (ext.toLowerCase() !== HIDDEN_EXTENSION) return base;
+  const stem = path.basename(base, ext);
+  // A file named exactly '.md' would strip to nothing; never blank a row.
+  return stem || base;
+}
+
 // ── Fuzzy title matcher ──────────────────────────────────────────────────────
 
 /**
@@ -1021,8 +1056,7 @@ module.exports = {
   SCHEMA_VERSION,
   RECONCILE_BATCH_FILES,
   RECONCILE_BATCH_BYTES,
-  RECONCILE_BATCH_FILES,
-  RECONCILE_BATCH_BYTES,
+  displayTitle,
   HIGHLIGHT_OPEN,
   HIGHLIGHT_CLOSE,
   probeSqlite,

@@ -32,6 +32,11 @@ before(async () => {
     workspaceOpts: {
       files: {
         'guide.md': 'A guide covering the pelican deployment steps.',
+        // Same name, several types: the reported case must stay solved on the
+        // degraded path too, not only where the FTS engine is available.
+        'packs/quarter-pack.md': 'The written pack about pelican logistics.',
+        'packs/quarter-pack.pdf': '%PDF-1.4 pelican',
+        'packs/quarter-pack.png': 'PNG pelican bytes',
       },
     },
   });
@@ -85,5 +90,27 @@ describe('grep fallback (no sqlite)', () => {
     assert.ok(hit);
     assert.strictEqual(hit.matchType, 'content');
     assert.ok(hit.snippet);
+  });
+});
+
+describe('file type on the degraded path', () => {
+  test('types still tell same-named files apart without the FTS engine', async () => {
+    // Runtimes without node:sqlite fall back to bounded grep plus the
+    // in-memory name layer. Presentation happens where the two layers merge,
+    // so it must survive one of them being absent.
+    const reply = await search({ query: 'quarter-pack' });
+    const files = (reply.groups && reply.groups.files) || [];
+    const titles = files.map(f => f.title);
+
+    for (const want of ['quarter-pack.pdf', 'quarter-pack.png', 'quarter-pack']) {
+      assert.ok(titles.includes(want),
+        `expected a row titled ${want} on the grep path; got ${JSON.stringify(titles)}`);
+    }
+    assert.strictEqual(new Set(titles).size, titles.length,
+      `rows must stay distinct without the engine; got ${JSON.stringify(titles)}`);
+
+    const missingKind = files.filter(f => !f.kind);
+    assert.strictEqual(missingKind.length, 0,
+      `every row needs a kind for its icon on this path too; ${missingKind.length} lacked one`);
   });
 });

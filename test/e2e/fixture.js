@@ -161,6 +161,17 @@ function buildFixture() {
   // A single-lane board for the in-column drag-reorder test.
   fs.writeFileSync(path.join(workspace, 'dnd-board.md'),
     "---\n\nkanban-plugin: board\n\n---\n\n## Queue\n\n- [ ] Card A\n- [ ] Card B\n- [ ] Card C\n\n\n\n\n%% kanban:settings\n```\n{\"kanban-plugin\":\"board\",\"list-collapse\":[false]}\n```\n%%");
+  // A set of files differing only by type, for the search result tests. This
+  // is the reported case: one name held as several formats, which used to
+  // render as identical rows.
+  fs.mkdirSync(path.join(workspace, 'packs'), { recursive: true });
+  fs.writeFileSync(path.join(workspace, 'packs', 'board-pack-q3.md'),
+    '# Board pack\n\nThe written quarterly board pack.');
+  fs.writeFileSync(path.join(workspace, 'packs', 'board-pack-q3.html'),
+    '<h1>Board pack</h1><p>The quarterly board pack as an artifact.</p>');
+  fs.writeFileSync(path.join(workspace, 'packs', 'board-pack-q3.png'), buildPng());
+  fs.writeFileSync(path.join(workspace, 'packs', 'board-pack-q3.pdf'), Buffer.from(
+    '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\ntrailer<</Size 4/Root 1 0 R>>\n%%EOF\n'));
   fs.writeFileSync(path.join(workspace, 'chart.png'), buildPng());
   fs.writeFileSync(path.join(workspace, 'report.pdf'), Buffer.from(
     '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n' +
