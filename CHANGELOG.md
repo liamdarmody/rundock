@@ -6,6 +6,10 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ## Unreleased
 
+### Added
+
+- **The file tree shows which folder a file belongs to:** a soft vertical line now runs down each open folder, linking everything inside it back to the folder itself, so several levels of nesting stay readable at a glance. Previously nothing connected a file to its parent, and past two or three levels you had to compare indentation by eye to work out where you were. Spacing is unchanged, so nothing shifts position.
+
 ### Fixed
 
 - **Files that differ only by type are no longer identical in search:** a report kept as a PDF, a web page and two images produced four results with the same name, the same generic icon, and nothing to tell them apart. Results now show the file type, and each type draws its own icon, the same one the file tree uses. Notes keep their clean name, since almost every file is a note and its extension never told two of them apart. How search matches is unchanged: typing a full file name including its type already worked, and still does.
