@@ -279,6 +279,26 @@ ipcMain.handle('select-directory', async () => {
 
 ipcMain.handle('get-app-version', () => app.getVersion());
 
+// The Windows caption buttons are drawn by the OS from colours we pass, so
+// they keep the old ones until re-sent. The renderer calls this on every theme
+// change AND on the restore-from-storage path at launch: sending only on
+// toggle leaves the buttons correct after a click and wrong after a restart.
+// A no-op anywhere but Windows, where setTitleBarOverlay does not exist.
+ipcMain.handle('set-title-bar-overlay', (event, isLight) => {
+  if (process.platform !== 'win32') return false;
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed() || typeof win.setTitleBarOverlay !== 'function') return false;
+  try {
+    win.setTitleBarOverlay({ ...(isLight ? OVERLAY_COLOURS.light : OVERLAY_COLOURS.dark), height: TOPBAR_HEIGHT });
+    return true;
+  } catch (e) {
+    // Throws if the window was created without titleBarOverlay. Not fatal:
+    // the caption buttons simply keep the colours they had.
+    console.warn('[Electron] setTitleBarOverlay failed:', e.message);
+    return false;
+  }
+});
+
 // ===== APP MENU =====
 
 function setupMenu() {
@@ -429,6 +449,48 @@ function setupAutoUpdate() {
 
 // ===== MAIN WINDOW =====
 
+// Height of the app's top bar, which the window controls now sit inside.
+// Must match --topbar-height in public/index.html.
+const TOPBAR_HEIGHT = 44;
+
+// Colours for the Windows caption buttons, which the OS draws for us from
+// values we pass. They must track the app theme, so they are re-sent whenever
+// it changes (see the set-title-bar-overlay handler). Values match --base and
+// --text-1 in public/index.html.
+const OVERLAY_COLOURS = {
+  dark: { color: '#1A1A1A', symbolColor: '#F0EDE8' },
+  light: { color: '#F5F2ED', symbolColor: '#1A1A1A' },
+};
+
+// The per-platform half of the window chrome, and deliberately the ONLY place
+// a platform is named. Everything else derives from the two insets the
+// renderer computes (see public/chrome-insets.js).
+//
+// titleBarStyle: 'hidden', NOT frame: false. frame: false removes the native
+// buttons entirely and would mean drawing our own; the whole approach here is
+// to keep the real controls and their real behaviour, and only move them.
+function chromeWindowOptions() {
+  if (process.platform === 'darwin') {
+    // We position the traffic lights ourselves, which is why the renderer's
+    // left inset is a constant rather than a measurement: x=20 puts the
+    // 52px-wide cluster at 20..72, and the inset reserves 88 so the first
+    // interface element is not flush against it. y centres them in the bar.
+    return { titleBarStyle: 'hidden', trafficLightPosition: { x: 20, y: (TOPBAR_HEIGHT - 12) / 2 } };
+  }
+  if (process.platform === 'win32') {
+    // Enabling the overlay is also what switches on the Window Controls
+    // Overlay API in the renderer, which is the only way to learn how wide the
+    // caption buttons actually are. Without this they cannot be measured.
+    return { titleBarStyle: 'hidden', titleBarOverlay: { ...OVERLAY_COLOURS.dark, height: TOPBAR_HEIGHT } };
+  }
+  // Linux keeps its standard title bar. There is no dependable convention
+  // there (GNOME right and often close-only, KDE configurable, older Ubuntu
+  // left) and titleBarOverlay depends on the window manager honouring
+  // client-side decorations. Standard chrome cannot break, and Linux is not a
+  // shipping build target.
+  return {};
+}
+
 function createMainWindow(port) {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -437,12 +499,23 @@ function createMainWindow(port) {
     minHeight: 600,
     show: true,
     center: true,
+    ...chromeWindowOptions(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
     },
   });
+
+  // macOS hides the traffic lights in fullscreen. The renderer drops its left
+  // inset to 0 in response, so the bar does not carry a permanent empty gap.
+  const sendFullScreen = (isFullScreen) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('rundock-fullscreen', isFullScreen);
+    }
+  };
+  mainWindow.on('enter-full-screen', () => sendFullScreen(true));
+  mainWindow.on('leave-full-screen', () => sendFullScreen(false));
 
   const url = `http://localhost:${port}`;
   console.log(`[Electron] Loading ${url}`);

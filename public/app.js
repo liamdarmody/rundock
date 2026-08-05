@@ -3261,9 +3261,19 @@ function showView(v) { currentView=v; ['workspace','home','profile','chat','conv
 function goHome() { discardIfEmpty(); activeConversation=null; switchNav('conversations'); }
 
 // Theme
-function toggleTheme() { document.body.classList.toggle('light'); const isLight=document.body.classList.contains('light'); document.getElementById('theme-toggle').innerHTML=isLight?moonIcon:sunIcon; if(typeof applyHljsTheme==='function')applyHljsTheme(isLight); try{localStorage.setItem('rundock-theme',isLight?'light':'dark');}catch(e){} }
+function toggleTheme() { document.body.classList.toggle('light'); const isLight=document.body.classList.contains('light'); document.getElementById('theme-toggle').innerHTML=isLight?moonIcon:sunIcon; if(typeof applyHljsTheme==='function')applyHljsTheme(isLight); syncTitleBarOverlay(isLight); try{localStorage.setItem('rundock-theme',isLight?'light':'dark');}catch(e){} }
 // Restore saved theme on load
 try{if(localStorage.getItem('rundock-theme')==='light'){document.body.classList.add('light');document.getElementById('theme-toggle').innerHTML=moonIcon;}}catch(e){}
+
+// The Windows caption buttons are drawn by the OS from colours we pass, so
+// they keep the old ones until re-sent. BOTH paths must call this: only
+// hooking the toggle leaves them correct after a click and wrong after a
+// restart, because the restore-from-storage path above changes the theme
+// without going through it. A no-op off Windows and in a browser.
+function syncTitleBarOverlay(isLight) {
+  try { window.electronAPI?.setTitleBarOverlay?.(!!isLight); } catch (e) {}
+}
+syncTitleBarOverlay(document.body.classList.contains('light'));
 
 // ===== 11. FILE TREE & EDITOR =====
 
@@ -5075,6 +5085,47 @@ var pendingMessageAnchor = null; // {convoId, text, fragment}: var: openConversa
 // Group order/labels/limit live in palette-model.js (unit-tested).
 const PALETTE_GROUP_LIMIT = RundockPalette.GROUP_LIMIT;
 const IS_MAC = /Mac/i.test(navigator.platform);
+
+// ── Window chrome insets ─────────────────────────────────────────────────────
+//
+// macOS puts its window controls top-left, Windows top-right. Rather than two
+// layouts, the top bar reserves an inset on each side and these two variables
+// carry the entire difference. The DECISION lives in chrome-insets.js (pure,
+// unit-tested across the platform matrix); this is only the plumbing that
+// feeds it real values and writes the result to CSS.
+//
+// In a browser both stay 0, which is also the Linux case, so nothing here
+// needs a browser-versus-Electron branch.
+function applyChromeInsets() {
+  if (typeof computeChromeInsets !== 'function') return;
+  const overlay = navigator.windowControlsOverlay;
+  const insets = computeChromeInsets({
+    platform: window.electronAPI?.platform ?? null,
+    viewportWidth: window.innerWidth,
+    fullScreen: document.body.classList.contains('is-fullscreen'),
+    // getTitlebarAreaRect is only meaningful once the overlay is enabled and
+    // laid out; computeChromeInsets treats a non-visible overlay as zero.
+    overlay: overlay ? { visible: overlay.visible, rect: overlay.getTitlebarAreaRect?.() } : null,
+  });
+  const root = document.documentElement.style;
+  root.setProperty('--chrome-inset-left', insets.left + 'px');
+  root.setProperty('--chrome-inset-right', insets.right + 'px');
+}
+
+// The caption width is NOT a constant: it changes with DPI scaling and again
+// when the window maximises. geometrychange is how Windows tells us, and
+// hardcoding 138 instead is the classic bug this avoids.
+navigator.windowControlsOverlay?.addEventListener?.('geometrychange', applyChromeInsets);
+window.addEventListener('resize', applyChromeInsets);
+
+// macOS hides the traffic lights in fullscreen; keeping the inset would leave
+// a permanent empty gap at the top-left.
+window.electronAPI?.onFullScreenChange?.((isFullScreen) => {
+  document.body.classList.toggle('is-fullscreen', !!isFullScreen);
+  applyChromeInsets();
+});
+
+applyChromeInsets();
 let paletteReturnFocus = null; // element to restore focus to on close
 let palettePrevNav = null;     // nav we came from, restored on cancel (destination wins on navigate)
 

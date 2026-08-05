@@ -21,4 +21,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onUpdate: (callback) => {
     ipcRenderer.on('rundock-update', (event, data) => callback(data));
   },
+
+  // Window chrome. macOS hides the traffic lights in fullscreen, so the
+  // renderer drops its left inset in response rather than carrying an empty
+  // gap. Windows caption buttons are drawn by the OS from colours we pass, so
+  // they must be re-sent whenever the app theme changes.
+  onFullScreenChange: (callback) => {
+    ipcRenderer.on('rundock-fullscreen', (event, isFullScreen) => callback(isFullScreen));
+  },
+  setTitleBarOverlay: (isLight) => ipcRenderer.invoke('set-title-bar-overlay', isLight),
 });
