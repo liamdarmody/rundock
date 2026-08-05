@@ -3854,6 +3854,21 @@ marked.use({
         `<button class="copy-code-btn" onclick="copyCode(this)" title="Copy code">${COPY_ICON}</button>` +
         `</div><pre><code class="hljs">${highlighted}</code></pre></div>`
       );
+    },
+    list(token) {
+      // A reply that is only a number (`4471.`) is valid ordered-list syntax,
+      // so it parses to a list whose single item is empty. The reply then
+      // exists solely as the marker, which the bubble's fixed list padding
+      // cannot contain, and it renders outside the bubble. The intent was
+      // never a list, so emit the original text instead.
+      //
+      // Decision logic lives in empty-list.js (pure, unit-tested). It returns
+      // null for anything it does not recognise, and `false` here hands the
+      // token back to marked's own renderer untouched, so every genuine list
+      // is completely unaffected.
+      const text = emptyOrderedListText(token);
+      if (text !== null) return `<p>${esc(text)}</p>\n`;
+      return false;
     }
   }
 });

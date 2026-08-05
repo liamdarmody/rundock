@@ -13,6 +13,7 @@
 <script src="/vendor/highlight/highlight.min.js"></script>
 <script src="/code-language.js"></script>
 <script src="/chrome-insets.js"></script>
+<script src="/empty-list.js"></script>
 <script src="/unread-state.js"></script>
 <script src="/markers.js"></script>
 <script src="/permissions.js"></script>
@@ -684,7 +685,29 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .tiptap-editor .ProseMirror ul[data-type="taskList"] > li[data-checked="true"] > div { color: var(--text-2); }
 .tiptap-editor .ProseMirror blockquote { border-left: 2px solid var(--border); padding-left: 16px; margin: 0 0 12px 0; color: var(--text-2); }
 .tiptap-editor .ProseMirror code { font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 13px; background: var(--card); padding: 2px 6px; border-radius: 4px; color: var(--text-1); }
-.tiptap-editor .ProseMirror pre { background: var(--card); border-radius: 8px; padding: 12px 16px; margin: 0 0 12px 0; overflow-x: auto; }
+.tiptap-editor .ProseMirror pre { background: var(--card); border-radius: 8px; padding: 12px 16px; margin: 0 0 12px 0; overflow-x: auto; position: relative; }
+/* Copy control on editor code blocks, injected as a widget decoration (see
+   editor/plugins/code-copy.js) so it never becomes document content.
+   `float: right` keeps it out of the text flow, so the first line of code is
+   not indented around it.
+   position: sticky rather than absolute. Measured: these blocks do not
+   scroll today, because ProseMirror gives code blocks white-space: pre-wrap,
+   so even a very long single-line command wraps and scrollWidth never exceeds
+   clientWidth. The `overflow-x: auto` above is therefore dormant. Sticky is
+   used anyway because it costs nothing and behaves identically when there is
+   no scrolling, while staying correct if the wrapping ever changes; absolute
+   would silently scroll the button out of view the day it does. */
+.tiptap-editor .ProseMirror pre .editor-copy-code-btn {
+  position: sticky; float: right; right: 0; top: 0; z-index: 2;
+  background: var(--card); border: none; color: var(--text-2); cursor: pointer;
+  padding: 4px; border-radius: 4px; display: flex; align-items: center;
+  justify-content: center; line-height: 0; opacity: 0;
+  transition: color 0.15s ease, opacity 0.15s ease;
+}
+.tiptap-editor .ProseMirror pre:hover .editor-copy-code-btn { opacity: 1; }
+.tiptap-editor .ProseMirror pre .editor-copy-code-btn:hover { color: var(--text-1); }
+.tiptap-editor .ProseMirror pre .editor-copy-code-btn:focus-visible { opacity: 1; outline: 2px solid var(--accent); outline-offset: 1px; }
+.tiptap-editor .ProseMirror pre .editor-copy-code-btn.copied { opacity: 1; color: var(--success); }
 .tiptap-editor .ProseMirror pre code { background: transparent; padding: 0; font-size: 13px; line-height: 1.5; }
 .tiptap-editor .ProseMirror a { color: var(--accent); text-decoration: underline; cursor: pointer; }
 .tiptap-editor .ProseMirror a.wikilink { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; padding: 0 2px; border-radius: 3px; transition: background 0.15s ease, color 0.15s ease; }
@@ -805,7 +828,16 @@ mark.find-match.current,
 .msg-bubble *:first-child { margin-top: 0; }
 .msg-bubble h1 { font-size: 17px; } .msg-bubble h2 { font-size: 15px; } .msg-bubble h3 { font-size: var(--body); font-weight: 600; } .msg-bubble h4 { font-size: var(--body); font-weight: 600; }
 .msg-bubble p { margin: 0 0 8px; } .msg-bubble p:last-child { margin-bottom: 0; }
-.msg-bubble ul,.msg-bubble ol { margin: 2px 0 8px; padding-left: 20px; }
+/* 32px, not 20px: the list marker is drawn inside this padding, so a marker
+   wider than it is drawn outside the bubble. Measured at 14px Inter, decimal
+   markers are 10.0px for "1.", 21.0px for "99.", 29.8px for "999." and 35.5px
+   for "4471.", so the old 20px was already half a pixel short of a list simply
+   counting to 99. 32px carries any list numbered into the hundreds. Beyond
+   that is left alone deliberately: a reply that is ONLY a number no longer
+   reaches here at all (see the list renderer in app.js), so what remains is a
+   genuine list with a four-digit start, which is rare enough not to be worth
+   indenting every ordinary list to accommodate. */
+.msg-bubble ul,.msg-bubble ol { margin: 2px 0 8px; padding-left: 32px; }
 .msg-bubble ul { list-style: disc; } .msg-bubble ol { list-style: decimal; }
 .msg-bubble li { margin-bottom: 2px; line-height: 1.5; }
 .msg-bubble li > p { margin: 0 0 2px; }
