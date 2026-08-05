@@ -2,6 +2,7 @@ const { app, BrowserWindow, Menu, nativeImage, dialog, ipcMain, shell } = requir
 const path = require('path');
 const fs = require('fs');
 const { execSync } = require('child_process');
+const buildContextMenuTemplate = require('./context-menu-template.js');
 
 let autoUpdater;
 try {
@@ -429,6 +430,42 @@ function setupAutoUpdate() {
 
 // ===== MAIN WINDOW =====
 
+// Electron does not provide Chromium's default context menu: unless the main
+// process listens for `context-menu` and builds one, right-clicking does
+// nothing at all. Without this the packaged app had no spelling suggestions
+// and, more consequentially, no Cut, Copy, Paste or Select All in the editor
+// or the chat composer.
+//
+// The menu's SHAPE is decided in context-menu-template.js, which requires
+// nothing from electron and is unit-tested. This function is only the wiring.
+//
+// The template returns null for anything that is not editable, which is what
+// keeps this menu off the conversation rows and file-tree rows that draw their
+// own. A renderer calling preventDefault() does NOT suppress this event, so
+// that gate is load-bearing rather than defensive. The chat composer is
+// editable and so is covered by the same gate, with no extra wiring.
+function attachContextMenu(webContents) {
+  webContents.on('context-menu', (event, params) => {
+    const descriptors = buildContextMenuTemplate(params);
+    if (!descriptors) return;
+
+    const template = descriptors.map((item) => {
+      if (!item.action) return item;
+      const { type, word } = item.action;
+      return {
+        label: item.label,
+        click: () => {
+          if (type === 'replaceMisspelling') webContents.replaceMisspelling(word);
+          // Learned words persist in the session's dictionary across restarts.
+          else if (type === 'addToDictionary') webContents.session.addWordToSpellCheckerDictionary(word);
+        },
+      };
+    });
+
+    Menu.buildFromTemplate(template).popup({ window: BrowserWindow.fromWebContents(webContents) });
+  });
+}
+
 function createMainWindow(port) {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -443,6 +480,8 @@ function createMainWindow(port) {
       contextIsolation: true,
     },
   });
+
+  attachContextMenu(mainWindow.webContents);
 
   const url = `http://localhost:${port}`;
   console.log(`[Electron] Loading ${url}`);
