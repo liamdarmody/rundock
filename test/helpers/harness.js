@@ -175,6 +175,32 @@ async function connect() {
 // must be asserted (e.g. "no auto-resume"). Bounded and explicit.
 function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+// Wait for something to BECOME true, rather than sleeping a guessed duration
+// and asserting it already has.
+//
+// Use this whenever a background timer drives the state under test. Idle
+// reaping is the motivating case: the sweep interval is floored at 1000ms
+// (REAP_SWEEP_MS in server.js) no matter how small RUNDOCK_IDLE_REAP_MS is,
+// so a test that sleeps a multiple of the idle window is racing that floor,
+// not the behaviour. That race failed CI on Node 24 while Node 22 passed the
+// same commit.
+//
+// Only for asserting a state is REACHED. To assert a state is never reached,
+// delay() is still correct: proving a negative needs real elapsed time.
+//
+// Resolves rather than throwing on timeout, so the caller's own assertion
+// reports the failure. Those assertions explain what broke and interpolate
+// live state; a generic timeout from in here would replace that with less.
+// Callers therefore assert the same predicate straight after.
+async function waitUntil(predicate, { timeout = 8000, interval = 25 } = {}) {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    if (predicate()) return true;
+    if (Date.now() >= deadline) return false;
+    await delay(interval);
+  }
+}
+
 // Kill every process attached to a conversation entry (delegate + parked
 // parents). Test-level cleanup for scenarios that intentionally leave live
 // processes behind.
@@ -221,7 +247,7 @@ module.exports = {
   boot, shutdown, connect, writeScenario, writeCodexScenario, codexTurnPrompts,
   readInvocations, clearInvocations,
   readGrandchildren, pidAlive, waitForPidExit,
-  delay, freshConvoId, reapConvo,
+  delay, waitUntil, freshConvoId, reapConvo,
   get internal() { return internal; },
   get port() { return port; },
   get workspaceDir() { return workspaceDir; },

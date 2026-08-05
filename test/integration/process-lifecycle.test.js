@@ -86,7 +86,7 @@ describe('idle agent processes', () => {
     ]);
 
     await completeTurn(convoId, 'no-background-here');
-    await h.delay(REAP_MS * 5);
+    await h.waitUntil(() => !h.internal.chatProcesses.has(convoId));
 
     assert.ok(!h.internal.chatProcesses.has(convoId),
       'the background guard must apply only to conversations that actually started one');
@@ -109,8 +109,8 @@ describe('idle agent processes', () => {
     assert.strictEqual(liveEntries().length, CONVOS,
       'precondition: every completed conversation leaves a live process');
 
-    // Well past the configured idle window, with nothing working.
-    await h.delay(REAP_MS * 4);
+    // Nothing is working, so the sweep must retire at least one of them.
+    await h.waitUntil(() => liveEntries().length < CONVOS);
 
     const after = liveEntries();
     assert.ok(after.length < CONVOS,
@@ -135,7 +135,7 @@ describe('idle agent processes', () => {
     const sessionId = h.internal.chatProcesses.get(convoId)?.sessionId;
     assert.ok(sessionId, 'precondition: the first turn established a session');
 
-    await h.delay(REAP_MS * 4);
+    await h.waitUntil(() => !h.internal.chatProcesses.has(convoId));
     assert.ok(!h.internal.chatProcesses.has(convoId), 'precondition: it was reaped');
 
     // The client sends the session id back, exactly as it does after a restart.
@@ -199,7 +199,7 @@ describe('idle agent processes', () => {
     assert.ok(parked && !parked.exited,
       'precondition: delegating parks the caller alive behind the delegate');
 
-    await h.delay(REAP_MS * 4);
+    await h.waitUntil(() => parked.exited || !h.pidAlive(parked.process.pid));
 
     assert.ok(parked.exited || !h.pidAlive(parked.process.pid),
       'a parked ancestor holds its own agent process and its own set of tool servers. '
