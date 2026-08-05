@@ -3261,9 +3261,19 @@ function showView(v) { currentView=v; ['workspace','home','profile','chat','conv
 function goHome() { discardIfEmpty(); activeConversation=null; switchNav('conversations'); }
 
 // Theme
-function toggleTheme() { document.body.classList.toggle('light'); const isLight=document.body.classList.contains('light'); document.getElementById('theme-toggle').innerHTML=isLight?moonIcon:sunIcon; if(typeof applyHljsTheme==='function')applyHljsTheme(isLight); try{localStorage.setItem('rundock-theme',isLight?'light':'dark');}catch(e){} }
+function toggleTheme() { document.body.classList.toggle('light'); const isLight=document.body.classList.contains('light'); document.getElementById('theme-toggle').innerHTML=isLight?moonIcon:sunIcon; if(typeof applyHljsTheme==='function')applyHljsTheme(isLight); syncTitleBarOverlay(isLight); try{localStorage.setItem('rundock-theme',isLight?'light':'dark');}catch(e){} }
 // Restore saved theme on load
 try{if(localStorage.getItem('rundock-theme')==='light'){document.body.classList.add('light');document.getElementById('theme-toggle').innerHTML=moonIcon;}}catch(e){}
+
+// The Windows caption buttons are drawn by the OS from colours we pass, so
+// they keep the old ones until re-sent. BOTH paths must call this: only
+// hooking the toggle leaves them correct after a click and wrong after a
+// restart, because the restore-from-storage path above changes the theme
+// without going through it. A no-op off Windows and in a browser.
+function syncTitleBarOverlay(isLight) {
+  try { window.electronAPI?.setTitleBarOverlay?.(!!isLight); } catch (e) {}
+}
+syncTitleBarOverlay(document.body.classList.contains('light'));
 
 // ===== 11. FILE TREE & EDITOR =====
 
@@ -4245,6 +4255,13 @@ function showWorkspacePicker(recent, discovered) {
   // Hide nav and sidebar when picking workspace
   document.querySelector('.nav-rail').style.display = 'none';
   document.querySelector('.sidebar').style.display = 'none';
+  // The top bar itself stays: it carries the window's only drag region once
+  // the OS title bar is removed. Only search hides, since there is nothing to
+  // search yet. Help deliberately remains, because this is the screen where a
+  // new user is most likely to want it.
+  const tbs = document.getElementById('tb-search');
+  if (tbs) tbs.style.display = 'none';
+  document.querySelector('.app')?.classList.add('no-workspace');
   showView('workspace');
   // Reset create form
   const createBtn = document.getElementById('create-workspace-btn');
@@ -4351,6 +4368,9 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   // Show nav and sidebar
   document.querySelector('.nav-rail').style.display = '';
   document.querySelector('.sidebar').style.display = '';
+  const tbsOn = document.getElementById('tb-search');
+  if (tbsOn) tbsOn.style.display = '';
+  document.querySelector('.app')?.classList.remove('no-workspace');
   // Load workspace data
   ws.send(JSON.stringify({ type: 'get_agents' }));
   ws.send(JSON.stringify({ type: 'get_files' }));
@@ -5082,28 +5102,86 @@ var pendingMessageAnchor = null; // {convoId, text, fragment}: var: openConversa
 // Group order/labels/limit live in palette-model.js (unit-tested).
 const PALETTE_GROUP_LIMIT = RundockPalette.GROUP_LIMIT;
 const IS_MAC = /Mac/i.test(navigator.platform);
-let paletteReturnFocus = null; // element to restore focus to on close
-let palettePrevNav = null;     // nav we came from, restored on cancel (destination wins on navigate)
 
-// The nav rail tooltip teaches the shortcut with the right modifier per
-// platform (the Windows and Linux builds have no Cmd key).
-document.getElementById('nav-search-btn')?.setAttribute('data-tooltip', IS_MAC ? 'Search ⌘K' : 'Search Ctrl+K');
+// ── Window chrome insets ─────────────────────────────────────────────────────
+//
+// macOS puts its window controls top-left, Windows top-right. Rather than two
+// layouts, the top bar reserves an inset on each side and these two variables
+// carry the entire difference. The DECISION lives in chrome-insets.js (pure,
+// unit-tested across the platform matrix); this is only the plumbing that
+// feeds it real values and writes the result to CSS.
+//
+// In a browser both stay 0, which is also the Linux case, so nothing here
+// needs a browser-versus-Electron branch.
+function applyChromeInsets() {
+  if (typeof computeChromeInsets !== 'function') return;
+  const overlay = navigator.windowControlsOverlay;
+  const insets = computeChromeInsets({
+    platform: window.electronAPI?.platform ?? null,
+    viewportWidth: window.innerWidth,
+    fullScreen: document.body.classList.contains('is-fullscreen'),
+    // getTitlebarAreaRect is only meaningful once the overlay is enabled and
+    // laid out; computeChromeInsets treats a non-visible overlay as zero.
+    overlay: overlay ? { visible: overlay.visible, rect: overlay.getTitlebarAreaRect?.() } : null,
+  });
+  const root = document.documentElement.style;
+  root.setProperty('--chrome-inset-left', insets.left + 'px');
+  root.setProperty('--chrome-inset-right', insets.right + 'px');
+}
+
+// The caption width is NOT a constant: it changes with DPI scaling and again
+// when the window maximises. geometrychange is how Windows tells us, and
+// hardcoding 138 instead is the classic bug this avoids.
+navigator.windowControlsOverlay?.addEventListener?.('geometrychange', applyChromeInsets);
+window.addEventListener('resize', applyChromeInsets);
+
+// macOS hides the traffic lights in fullscreen; keeping the inset would leave
+// a permanent empty gap at the top-left.
+window.electronAPI?.onFullScreenChange?.((isFullScreen) => {
+  document.body.classList.toggle('is-fullscreen', !!isFullScreen);
+  applyChromeInsets();
+});
+
+applyChromeInsets();
+let paletteReturnFocus = null; // element to restore focus to on close
+
+// The top bar's search field teaches the shortcut with the right modifier per
+// platform (the Windows and Linux builds have no Cmd key). It sits inline in
+// the field rather than in a tooltip, so it does not have to be hovered to be
+// discovered, which was the weakness of the rail icon it replaced.
+{
+  const kbd = document.getElementById('tb-search-kbd');
+  if (kbd) kbd.textContent = IS_MAC ? '⌘K' : 'Ctrl K';
+}
+
+// Documentation was reachable only from three authentication error states and
+// nowhere else in the interface.
+//
+// No IPC needed: main.js already installs a setWindowOpenHandler that hands
+// any window.open to shell.openExternal and denies the popup, so this opens
+// the default browser in Electron and a new tab in the browser build, from
+// one line that knows about neither.
+function openDocs() {
+  window.open('https://docs.rundock.ai/', '_blank', 'noopener');
+}
 
 function openPalette() {
   if (currentView === 'workspace' || !currentWorkspacePath) return; // no workspace yet
   const overlay = document.getElementById('palette-overlay');
   if (!overlay) return;
-  if (!paletteOpen) {
-    // Search is now the active surface: light the search icon and clear the
-    // origin view's highlight so it does not show through the overlay. Capture
-    // the origin once (guard against a re-entrant open losing the return nav).
-    const prevActive = document.querySelector('.nav-item[data-nav].active');
-    palettePrevNav = prevActive ? prevActive.getAttribute('data-nav') : null;
-    prevActive?.classList.remove('active');
-    document.getElementById('nav-search-btn')?.classList.add('active');
-  }
+  // The rail is deliberately left alone. Opening search used to clear the
+  // current view's highlight, because the rail's own magnifier took the active
+  // state in its place and two lit icons would have been wrong. That magnifier
+  // is gone: search lives in the top bar now, so clearing the highlight lit
+  // nothing instead, and the rail simply went dark while a view was still
+  // open behind the panel. The view has not changed, so its icon should not
+  // change either.
   paletteOpen = true;
   paletteReturnFocus = document.activeElement;
+  // Hides the top bar's field while the panel stands in its place. visibility,
+  // not display, so the grid column keeps its width and nothing in the bar
+  // shifts as the panel opens.
+  document.body.classList.add('palette-open');
   overlay.classList.remove('hidden');
   const input = document.getElementById('palette-input');
   input.value = paletteQuery = '';
@@ -5124,15 +5202,15 @@ function closePalette(opts = {}) {
   // Blur before hiding so focus never sits inside a hidden subtree
   // (browsers silently drop it to <body>; an explicit blur is deterministic).
   try { document.activeElement?.blur?.(); } catch (e) {}
+  // MUST come before the focus restore below. The opener is usually the top
+  // bar's search field, and a visibility:hidden element cannot take focus:
+  // restoring first would drop focus to <body> instead, silently breaking
+  // keyboard flow after Escape. Verified in both orders before landing.
+  document.body.classList.remove('palette-open');
   document.getElementById('palette-overlay')?.classList.add('hidden');
-  // Clear the search icon regardless of how we close. On cancel (restoreFocus)
-  // return the highlight to the origin view; on navigate the destination's own
-  // routing sets the active nav, so leave it alone (destination wins).
-  document.getElementById('nav-search-btn')?.classList.remove('active');
-  if (restoreFocus && palettePrevNav) {
-    document.querySelector(`.nav-item[data-nav="${palettePrevNav}"]`)?.classList.add('active');
-  }
-  palettePrevNav = null;
+  // Nothing to restore: the highlight was never removed. Navigating to a
+  // result still hands the active icon to the destination, because setNavState
+  // clears every nav item before lighting the new one.
   if (restoreFocus && paletteReturnFocus && document.contains(paletteReturnFocus)) {
     try { paletteReturnFocus.focus(); } catch (e) {}
   }

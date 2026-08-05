@@ -42,7 +42,8 @@ async function boot(page) {
 }
 
 async function openPalette(page) {
-  await page.locator('#nav-search-btn').click();
+  // Search moved from the nav rail to the top bar in 0.11.4.
+  await page.locator('#tb-search').click();
   await expect(page.locator('#palette-input')).toBeFocused();
 }
 
@@ -159,20 +160,29 @@ test('reveal: opening a file in a collapsed folder shows the open-folder icon', 
 
 // ── search icon active state ────────────────────────────────────────────────
 
-test('nav rail: the search icon activates while the palette is open and the origin view dims', async ({ page }) => {
+test('top bar: the current view stays highlighted while search is open', async ({ page }) => {
+  // Opening search used to CLEAR the current view's highlight, because the
+  // rail's own magnifier took the active state in its place. That magnifier
+  // was removed in 0.11.4 when search moved to the top bar, so clearing the
+  // highlight lit nothing instead and the rail went dark while a view was
+  // still open behind the panel. Searching does not change which view you are
+  // in, so its icon must not change either.
   await boot(page);
   await page.locator('.nav-item[data-nav="files"]').click();
   await expect(page.locator('.nav-item.active[data-nav="files"]')).toBeVisible();
-  // Opening search lights the search icon and clears the origin highlight, so
-  // no view icon shows through the overlay.
+
   await openPalette(page);
-  await expect(page.locator('#nav-search-btn')).toHaveClass(/\bactive\b/);
-  await expect(page.locator('.nav-item[data-nav="files"]')).not.toHaveClass(/\bactive\b/);
-  // Cancelling returns to the view we came from.
+  await expect(page.locator('.nav-item.active[data-nav="files"]')).toBeVisible();
+
   await page.keyboard.press('Escape');
   await expect(page.locator('#palette-overlay')).toBeHidden();
-  await expect(page.locator('#nav-search-btn')).not.toHaveClass(/\bactive\b/);
   await expect(page.locator('.nav-item.active[data-nav="files"]')).toBeVisible();
+
+  // Exactly one icon is ever lit, which is what made the old clearing
+  // necessary and what makes it unnecessary now.
+  await expect(page.locator('.nav-item[data-nav].active')).toHaveCount(1);
+  // And the rail really has no search affordance any more.
+  await expect(page.locator('#nav-search-btn')).toHaveCount(0);
 });
 
 test('nav rail: navigating from search hands the active icon to the destination, not the origin', async ({ page }) => {
@@ -180,15 +190,14 @@ test('nav rail: navigating from search hands the active icon to the destination,
   await page.locator('.nav-item[data-nav="conversations"]').click();
   await search(page, 'pricing');
   await page.locator('.palette-item[data-type="file"]').first().click();
-  // Destination (files) wins; search icon and origin are both cleared.
-  await expect(page.locator('#nav-search-btn')).not.toHaveClass(/\bactive\b/);
+  // Destination (files) wins; the origin highlight is cleared.
   await expect(page.locator('.nav-item.active[data-nav="files"]')).toBeVisible();
   await expect(page.locator('.nav-item[data-nav="conversations"]')).not.toHaveClass(/\bactive\b/);
 });
 
 // ── palette golden paths ─────────────────────────────────────────────────────
 
-test('palette: opens from the nav rail icon and via the keyboard shortcut', async ({ page }) => {
+test('palette: opens from the top bar search field and via the keyboard shortcut', async ({ page }) => {
   await boot(page);
   await openPalette(page);
   await page.keyboard.press('Escape');
@@ -220,7 +229,9 @@ test('palette: Escape closes and returns focus to the opener', async ({ page }) 
   await openPalette(page);
   await page.keyboard.press('Escape');
   await expect(page.locator('#palette-overlay')).toBeHidden();
-  await expect(page.locator('#nav-search-btn')).toBeFocused();
+  // Focus returns to whatever opened the palette, which is now the top bar's
+  // search field rather than the removed nav rail icon.
+  await expect(page.locator('#tb-search')).toBeFocused();
 });
 
 test('palette: navigating to a result leaves no stale focus ring on the nav rail', async ({ page }) => {

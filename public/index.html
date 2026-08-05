@@ -12,6 +12,7 @@
 <link id="hljs-light" rel="stylesheet" href="/vendor/highlight/atom-one-light.min.css" disabled>
 <script src="/vendor/highlight/highlight.min.js"></script>
 <script src="/code-language.js"></script>
+<script src="/chrome-insets.js"></script>
 <script src="/empty-list.js"></script>
 <script src="/unread-state.js"></script>
 <script src="/markers.js"></script>
@@ -26,6 +27,13 @@
 <style>
 :root {
   --base: #1A1A1A; --surface: #212121; --elevated: #272727;
+  /* The window chrome (top bar + rail) sits BEHIND the content, so it is
+     recessed rather than level with it. Deliberately its own token, not a
+     shift of --surface: that is used in eleven places including every hover
+     state and the composer, and moving it to gain one edge would move all of
+     them. --base to --surface was a 6-point luma step, too soft to delineate
+     the rail once its border was removed; chrome to --surface is 14. */
+  --chrome: #131313;
   --card: #333333; --border: #3D3D3D;
   --text-1: #F0EDE8; --text-2: #9A9590;
   --accent: #E87A5A; --accent-hover: #F09070; --accent-glow: rgba(232,122,90,0.12);
@@ -36,6 +44,10 @@
 
 body.light {
   --base: #F5F2ED; --surface: #FAF8F5; --elevated: #FFFFFF;
+  /* Same direction in light: the chrome recedes. Light theme has no headroom
+     to lighten the panel (--surface is already near-white), so darkening the
+     chrome is the only lever, and it happens to be the same one. */
+  --chrome: #E8E4DC;
   --card: #F0EDE8; --border: #E5E0D8;
   --text-1: #1A1A1A; --text-2: #7A756E;
   --accent-glow: rgba(232,122,90,0.08);
@@ -47,11 +59,116 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
 input { border: none; background: none; font-family: inherit; color: inherit; outline: none; }
 .hidden { display: none !important; }
 
-.app { display: flex; height: 100vh; overflow: hidden; }
+/* The window chrome reserves an inset on each side and the platform supplies
+   the values: macOS traffic lights sit left, Windows caption buttons sit
+   right. Both are 0 in a browser and on Linux, which is the same path.
+   There is deliberately NO per-platform CSS anywhere; chrome-insets.js is the
+   only platform-aware code. See Window-Chrome-Topbar-Spec. */
+/* The bar is as tall as the rail is wide, so the chrome's corner is a true
+   square rather than an arbitrary rectangle, and the rail's icons sit on the
+   same rhythm as the bar above them. */
+/* --tb-cluster is the width of our own controls in the right gutter (a 30px
+   Help button plus 8px padding). The gutter each side is then the LARGER of
+   the two sides' total occupancy, which is what keeps the middle column
+   centred on the WINDOW rather than on the leftover space. */
+:root { --chrome-inset-left: 0px; --chrome-inset-right: 0px; --nav-rail-width: 60px; --topbar-height: 60px; --content-radius: 12px;
+        --tb-cluster: 38px;
+        --chrome-gutter: max(var(--chrome-inset-left), calc(var(--chrome-inset-right) + var(--tb-cluster))); }
+
+/* .app is a COLUMN: the top bar spans the full width and the three original
+   panes sit in the body row beneath it. min-height: 0 on the body row is
+   load-bearing, not decorative: without it a flex child refuses to shrink
+   below its content and the sidebar and main panes stop scrolling. */
+/* background, not just layout: the content panel's rounded corners reveal
+   whatever sits behind them, so this must be the chrome or the notch would
+   not match the rail and bar it is cut out of. */
+.app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; background: var(--chrome); }
+.app-body { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+
+/* ── Top bar ─────────────────────────────────────────────────────────────── */
+.topbar {
+  height: var(--topbar-height); flex-shrink: 0; position: relative;
+  /* A three-column grid, not a flex row with an absolutely-positioned field.
+     Both side columns are the same width, so the middle column is centred on
+     the window, and the field physically cannot reach the gutters however
+     narrow the window gets. The previous version computed a max width by
+     subtracting the window-control insets, which silently ignored the Help
+     button sitting inside the right gutter and overlapped it at the app's own
+     minimum width. Reserving space beats arithmetic that has to stay correct. */
+  display: grid; align-items: center;
+  grid-template-columns: var(--chrome-gutter) 1fr var(--chrome-gutter);
+  background: var(--chrome);
+  /* A transparent border keeps the height identical to the variant that draws
+     a real one, so nothing shifts by a pixel between them. */
+  border-bottom: 1px solid transparent;
+  /* The whole bar drags the window; every interactive child opts out below.
+     Getting this inverted is silent in tests: either the window will not move,
+     or the controls stop responding to clicks. */
+  -webkit-app-region: drag;
+}
+/* The chrome/content boundary is drawn by the CONTENT tucking under it, not
+   by a rule. See --content-radius on .sidebar and .main below: the panel's
+   rounded corners reveal the chrome behind them, so the window reads as a
+   frame around a page, the way a browser frames a tab.
+   A 1px rule was tried first and removed: a straight border meeting a rounded
+   corner never resolves, and with the corners in place it is redundant. */
+.topbar button, .topbar input, .topbar a { -webkit-app-region: no-drag; }
+/* On the workspace picker there is no rail and no content panel, so there is
+   no chrome for the bar to be part of: a dark strip above a full-bleed picker
+   just looks like a leftover. It takes the picker's own surface instead and
+   disappears into it, while still carrying the window controls and the drag
+   region, which is the only reason it must stay present at all. */
+.app.no-workspace .topbar { background: var(--elevated); }
+
+/* Centred on the WINDOW, not between the gutters, so the field never moves
+   when the platform changes or when Windows' caption width changes with DPI
+   or on maximise. */
+.tb-search {
+  display: flex; align-items: center; gap: 8px;
+  height: 36px; padding: 0 14px;
+  /* Lives in the grid's middle column, so its width is bounded by the column
+     rather than by a formula. 32px of breathing room stops it sitting flush
+     against whatever occupies the gutter. */
+  grid-column: 2; justify-self: center;
+  width: min(680px, calc(100% - 32px));
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text-2); font-size: var(--caption); font-family: inherit;
+  cursor: pointer; user-select: none;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+body.light .tb-search { background: var(--card); }
+.tb-search:hover { border-color: var(--text-2); color: var(--text-1); }
+.tb-search:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tb-search svg { width: 14px; height: 14px; flex-shrink: 0; }
+.tb-search .tb-kbd { margin-left: auto; font-size: var(--label); opacity: 0.7; padding-left: 10px; }
+
+body.palette-open .tb-search { visibility: hidden; }
+.tb-right { grid-column: 3; justify-self: end; display: flex; align-items: center; gap: 2px; padding-right: calc(var(--chrome-inset-right) + 8px); }
+.tb-btn { width: 30px; height: 30px; border-radius: 7px; display: flex; align-items: center; justify-content: center; color: var(--text-2); position: relative; }
+.tb-btn:hover { color: var(--text-1); background: var(--surface); }
+.tb-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tb-btn svg { width: 17px; height: 17px; }
+.tb-btn[data-tooltip]::after {
+  content: attr(data-tooltip); position: absolute; top: calc(100% + 6px); right: 0;
+  opacity: 0; pointer-events: none; white-space: nowrap;
+  font-size: 12px; font-weight: 500; color: var(--text-1);
+  background: var(--elevated); border: 1px solid var(--border);
+  padding: 4px 9px; border-radius: 6px; z-index: 120;
+  transition: opacity 150ms ease; transition-delay: 0ms;
+}
+.tb-btn[data-tooltip]:hover::after { opacity: 1; transition-delay: 400ms; }
 
 /* Nav rail */
-.nav-rail { width: 60px; background: var(--base); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; padding: 40px 0 16px; flex-shrink: 0; z-index: 2; }
-.nav-main { display: flex; flex-direction: column; gap: 4px; flex: 1; padding-top: 4px; align-items: center; }
+/* No border-right: the boundary is drawn by the chrome/content step and the
+   panel's rounded corner. A leftover vertical rule contradicts that, and it
+   also made the 60x60 corner read as 59px plus a line.
+   9px top and bottom matches the 9px the 42px icons already sit in
+   horizontally, so each icon occupies a square 60x60 cell on the same module
+   as the bar above. */
+.nav-rail { width: var(--nav-rail-width); background: var(--chrome); display: flex; flex-direction: column; align-items: center; padding: 9px 0; flex-shrink: 0; z-index: 2; }
+/* padding-top 0, not 4: the rail's own 9px IS the grid inset, and 4 more
+   would quietly make it 13. */
+.nav-main { display: flex; flex-direction: column; gap: 4px; flex: 1; align-items: center; }
 .nav-bottom { display: flex; flex-direction: column; gap: 4px; align-items: center; }
 .nav-item { position: relative; width: 42px; height: 42px; display: flex; align-items: center; justify-content: center; border-radius: 12px; color: var(--text-2); transition: all 0.2s ease; }
 .nav-item:hover { color: var(--text-1); background: var(--surface); }
@@ -65,7 +182,11 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .nav-separator { width: 24px; height: 1px; background: var(--border); margin: 8px 0; }
 
 /* Sidebar */
-.sidebar { width: var(--sidebar-width, 280px); background: var(--surface); border-right: none; display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; box-shadow: 1px 0 8px rgba(0,0,0,0.08); z-index: 1; position: relative; }
+/* Top-left corner of the content region. The notch reveals the chrome behind
+   it. The effect is deliberately quiet in dark theme, where --base and
+   --surface are only six points of luma apart; it reads more strongly in
+   light. Chrome should not shout. */
+.sidebar { border-top-left-radius: var(--content-radius); width: var(--sidebar-width, 280px); background: var(--surface); border-right: none; display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; box-shadow: 1px 0 8px rgba(0,0,0,0.08); z-index: 1; position: relative; }
 /* Drag-resize handle on the sidebar's inner edge; same interaction grammar
    as the file editor's review panel (cursor, hover affordance, clamp). */
 .sidebar-resize-handle { position: absolute; right: 0; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 3; border-right: 1px solid transparent; }
@@ -379,9 +500,22 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 .permission-resolved.denied { background: rgba(232,122,90,0.12); color: var(--accent); }
 .permission-resolved.auto-allowed { background: rgba(107,198,126,0.06); color: var(--text-2); font-style: italic; }
 .chat-input { padding: 16px 24px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
-.chat-input textarea { flex: 1; padding: 12px 16px; background: var(--card); border-radius: 16px; font-size: var(--body); border: 1px solid transparent; transition: all 0.2s ease; resize: none; overflow-y: auto; min-height: 44px; max-height: 200px; line-height: 1.5; font-family: inherit; color: var(--text-1); outline: none; }
+.chat-input textarea { flex: 1; padding: 12px 16px; background: var(--card); border-radius: 8px; font-size: var(--body); border: 1px solid transparent; transition: all 0.2s ease; resize: none; overflow-y: auto; min-height: 44px; max-height: 200px; line-height: 1.5; font-family: inherit; color: var(--text-1); outline: none; }
 .chat-input textarea::-webkit-scrollbar { display: none; }
-.chat-input textarea:focus { box-shadow: 0 0 0 2px rgba(232,122,90,0.2); }
+/* Text inputs take the accent on their BORDER, not a 2px offset outline.
+   This is not a softer exception invented for the composer: it is the rule
+   the app already follows in four other places (.chat-title-input,
+   .tb-link-input, .ws-picker-input, .convo-menu-input). The composer was the
+   odd one out, first with a box-shadow glow and then briefly with the button
+   treatment.
+   Why text inputs differ from buttons at all: :focus-visible ALWAYS matches on
+   an element that expects typing, whatever focused it, so a text input cannot
+   distinguish mouse from keyboard the way a button can. A 2px offset outline
+   therefore fires on every click, which on a surface this large reads as an
+   error state. The caret is already an unambiguous focus indicator here; the
+   border only has to confirm it.
+   The design system needs the matching clause; see the drift card. */
+.chat-input textarea:focus { border-color: var(--accent); }
 .chat-input textarea::placeholder { color: var(--text-2); }
 .chat-input textarea:disabled { opacity: 0.5; }
 .send-btn { width: 42px; height: 42px; background: var(--card); color: var(--text-2); border-radius: 50%; display: flex; align-items: center; justify-content: center; transition: all 0.25s ease; flex-shrink: 0; }
@@ -873,15 +1007,43 @@ mark.find-match.current,
  * overlay scrim and shadows use rgba per the codebase's existing convention
  */
 /* ===== Universal search palette (Cmd+K) ===== */
-.palette-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.42); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); z-index: 200; display: flex; align-items: flex-start; justify-content: center; padding: 11vh 16px 16px; }
-.palette { width: min(680px, 94vw); max-height: min(66vh, 620px); display: flex; flex-direction: column; background: var(--elevated); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 18px 50px rgba(0,0,0,0.4), 0 2px 8px rgba(0,0,0,0.2); overflow: hidden; animation: palette-in 140ms cubic-bezier(0.16, 1, 0.3, 1); }
-@keyframes palette-in { from { opacity: 0; transform: translateY(-8px) scale(0.985); } to { opacity: 1; transform: none; } }
+/* The palette opens where the search field is, not in the middle of the
+   screen: the field appears to expand in place rather than summon a separate
+   surface. padding-top places the panel's top exactly on the field's top,
+   which is (bar height - field height) / 2. */
+/* Light dim, no blur. The scrim's job changed when the panel stopped floating
+   in the middle of the screen: it is now anchored to the field that opened it,
+   and the anchor does the explaining a scrim used to do. Blur specifically
+   means "what is behind is unavailable", which is modal vocabulary this panel
+   no longer speaks. It is also real work, rasterising and blurring everything
+   behind on every frame.
+   A light dim rather than none, because the panel still captures the keyboard:
+   arrows navigate, Enter opens, Escape closes. 0.18 says "your keyboard lives
+   here now" without claiming the app is blocked. 0.42 was modal weight, and
+   over the LIGHT theme it washed the whole interface grey. */
+.palette-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.18); z-index: 200; display: flex; align-items: flex-start; justify-content: center; padding: calc((var(--topbar-height) - 36px) / 2) 16px 16px; }
+/* Same width expression as the field, via the same gutter variable, so the
+   two are the same object in two states and the panel cannot overlap the
+   window controls any more than the field could. */
+.palette { width: min(680px, calc(100vw - 2 * var(--chrome-gutter) - 32px)); max-height: min(72vh, 640px); display: flex; flex-direction: column; background: var(--elevated); border: 1px solid var(--border); box-shadow: 0 18px 50px rgba(0,0,0,0.4), 0 2px 8px rgba(0,0,0,0.2); overflow: hidden; animation: palette-in 160ms cubic-bezier(0.16, 1, 0.3, 1); transform-origin: top center; border-radius: 12px; }
+/* Grows downward out of the field rather than sliding in from above. */
+@keyframes palette-in { from { opacity: 0.4; transform: scaleY(0.88); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .palette { animation: none; } }
-.palette-input-row { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
-.palette-input-row svg.palette-glass { width: 17px; height: 17px; color: var(--text-2); flex-shrink: 0; }
-.palette-input { flex: 1; font-size: 15px; color: var(--text-1); background: none; border: none; outline: none; min-width: 0; }
+/* Exactly the field's height, so the text does not jump as the field is
+   replaced. flex-shrink:0 because it is a flex child of a column and would
+   otherwise collapse under the results list. */
+.palette-input-row { display: flex; align-items: center; gap: 10px; height: 36px; flex-shrink: 0; padding: 0 14px; border-bottom: 1px solid var(--border); }
+.palette-input-row svg.palette-glass { width: 14px; height: 14px; color: var(--text-2); flex-shrink: 0; }
+.palette-input { flex: 1; font-size: 13px; color: var(--text-1); background: none; border: none; outline: none; min-width: 0; }
 .palette-input::placeholder { color: var(--text-2); opacity: 0.7; }
-.palette-scope-row { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+/* Fixed height, and no scrollbar. overflow-x: auto painted a horizontal
+   scrollbar under the filter pills whenever they came close to the panel's
+   width, which on a narrow window is most of the time. The row can still
+   scroll if the pills genuinely do not fit, but the bar itself is hidden:
+   it is chrome inside chrome, and it was stealing vertical space from the
+   results as well as looking like a mistake. */
+.palette-scope-row { display: flex; align-items: center; gap: 6px; height: 37px; flex-shrink: 0; padding: 0 12px; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none; }
+.palette-scope-row::-webkit-scrollbar { display: none; }
 .palette-scope { font-size: var(--caption); font-weight: 500; color: var(--text-2); padding: 4px 10px; border-radius: 999px; border: 1px solid transparent; cursor: pointer; white-space: nowrap; transition: color 0.15s ease, background 0.15s ease; }
 .palette-scope:hover { color: var(--text-1); background: var(--card); }
 .palette-scope:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -915,6 +1077,26 @@ mark.find-match.current,
 </head>
 <body>
 <div class="app">
+  <!-- The top bar renders in EVERY state, including the workspace picker.
+       This is not cosmetic: once the OS title bar is removed, this bar carries
+       the only drag region, so gating it the way the rail and sidebar are
+       gated would leave a first-run user with a window they cannot move.
+       Only the search field is conditional, since there is nothing to search
+       before a workspace is open. Help is most useful precisely here. -->
+  <div class="topbar" id="topbar">
+    <button class="tb-search" id="tb-search" style="display:none" onclick="openPalette()" aria-label="Search workspace">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <span>Search workspace</span>
+      <span class="tb-kbd" id="tb-search-kbd"></span>
+    </button>
+    <div class="tb-right">
+      <button class="tb-btn" id="tb-help" data-tooltip="Help and docs" aria-label="Help and docs" onclick="openDocs()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="app-body">
   <nav class="nav-rail" style="display:none">
     <div class="nav-main">
       <button class="nav-item active" data-nav="conversations" onclick="switchNav('conversations')" data-tooltip="Conversations">
@@ -933,18 +1115,11 @@ mark.find-match.current,
         <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
         <svg class="icon-filled" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
       </button>
-      <!-- Universal search: opens the palette overlay rather than switching
-           views, so it carries no data-nav. It DOES take the active state while
-           the palette is open, so it has both an outline and a filled magnifier
-           and swaps to the filled one on active, consistent with every other
-           nav icon (a thin outline washes out behind the palette blur; a filled
-           accent glyph reads in both themes). The tooltip doubles as the
-           shortcut teacher; app.js fills it in with the platform's modifier
-           (Cmd on macOS, Ctrl elsewhere). -->
-      <button class="nav-item" id="nav-search-btn" onclick="openPalette()" aria-label="Search workspace">
-        <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <svg class="icon-filled" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
-      </button>
+      <!-- Search moved to the top bar. Two affordances for one overlay is what
+           made search feel hidden in the first place, so the rail no longer
+           carries a magnifier. The shortcut hint moved with it, and lives
+           inline in the field rather than in a tooltip you had to hover to
+           find. Cmd+K / Ctrl+K is unchanged. -->
     </div>
     <div class="nav-bottom">
       <button class="nav-item" onclick="toggleTheme()" data-tooltip="Theme" id="theme-toggle">
@@ -1104,6 +1279,7 @@ mark.find-match.current,
       <div class="settings-content" id="settings-content"></div>
     </div>
   </main>
+  </div><!-- /.app-body -->
 </div>
 
 <!-- Universal search palette (Cmd+K / Ctrl+K) -->
