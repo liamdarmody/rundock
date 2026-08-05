@@ -8,6 +8,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Added
 
+- **Copy a code block from a note in one click:** hovering a fenced code block while viewing or editing a file now shows a copy control in its corner, the same one chat messages have had. It copies the contents of the fence only, without the backtick markers or the language label, and confirms with a tick. Previously the only way to get a snippet out of a note was to select it by hand inside the editor.
 - **The file tree shows which folder a file belongs to:** a soft vertical line now runs down each open folder, linking everything inside it back to the folder itself, so several levels of nesting stay readable at a glance. Previously nothing connected a file to its parent, and past two or three levels you had to compare indentation by eye to work out where you were. Spacing is unchanged, so nothing shifts position.
 
 ### Fixed
