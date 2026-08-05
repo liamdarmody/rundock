@@ -330,7 +330,13 @@ function openListAddInput(container, onEditProperty, row, key) {
     if (e.key === 'Enter') { e.preventDefault(); finish(true); }
     else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
   });
-  input.addEventListener('blur', () => finish(input.value.trim().length > 0 && input.value !== seed));
+  // Commit whatever was typed, exactly as Enter does. There is deliberately no
+  // comparison against a seed value here: unlike the scalar editor above, this
+  // input starts EMPTY, so "the user typed something" is the whole test.
+  // (It previously copied the scalar line verbatim, including its `seed`
+  // reference, which is not in scope in this function. Blur therefore threw
+  // and the item was silently dropped.)
+  input.addEventListener('blur', () => finish(input.value.trim().length > 0));
 }
 
 function handleEditClick(container, st, event) {
