@@ -160,21 +160,27 @@ test('reveal: opening a file in a collapsed folder shows the open-folder icon', 
 
 // ── search icon active state ────────────────────────────────────────────────
 
-test('top bar: opening search dims the origin view, and cancelling restores it', async ({ page }) => {
-  // Was "the search icon activates while the palette is open". Search moved to
-  // the top bar in 0.11.4 and the rail no longer carries a magnifier, so there
-  // is no icon left to light: the bar is always visible and needs no active
-  // state. What still matters is that the origin view's highlight is cleared
-  // so it does not show through the overlay, and comes back on cancel.
+test('top bar: the current view stays highlighted while search is open', async ({ page }) => {
+  // Opening search used to CLEAR the current view's highlight, because the
+  // rail's own magnifier took the active state in its place. That magnifier
+  // was removed in 0.11.4 when search moved to the top bar, so clearing the
+  // highlight lit nothing instead and the rail went dark while a view was
+  // still open behind the panel. Searching does not change which view you are
+  // in, so its icon must not change either.
   await boot(page);
   await page.locator('.nav-item[data-nav="files"]').click();
   await expect(page.locator('.nav-item.active[data-nav="files"]')).toBeVisible();
+
   await openPalette(page);
-  await expect(page.locator('.nav-item[data-nav="files"]')).not.toHaveClass(/\bactive\b/);
-  // Cancelling returns to the view we came from.
+  await expect(page.locator('.nav-item.active[data-nav="files"]')).toBeVisible();
+
   await page.keyboard.press('Escape');
   await expect(page.locator('#palette-overlay')).toBeHidden();
   await expect(page.locator('.nav-item.active[data-nav="files"]')).toBeVisible();
+
+  // Exactly one icon is ever lit, which is what made the old clearing
+  // necessary and what makes it unnecessary now.
+  await expect(page.locator('.nav-item[data-nav].active')).toHaveCount(1);
   // And the rail really has no search affordance any more.
   await expect(page.locator('#nav-search-btn')).toHaveCount(0);
 });

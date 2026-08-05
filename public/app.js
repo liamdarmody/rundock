@@ -5129,7 +5129,6 @@ window.electronAPI?.onFullScreenChange?.((isFullScreen) => {
 
 applyChromeInsets();
 let paletteReturnFocus = null; // element to restore focus to on close
-let palettePrevNav = null;     // nav we came from, restored on cancel (destination wins on navigate)
 
 // The top bar's search field teaches the shortcut with the right modifier per
 // platform (the Windows and Linux builds have no Cmd key). It sits inline in
@@ -5155,16 +5154,13 @@ function openPalette() {
   if (currentView === 'workspace' || !currentWorkspacePath) return; // no workspace yet
   const overlay = document.getElementById('palette-overlay');
   if (!overlay) return;
-  if (!paletteOpen) {
-    // Search is now the active surface: clear the origin view's highlight so
-    // it does not show through the overlay. Capture the origin once (guard
-    // against a re-entrant open losing the return nav).
-    // Nothing is lit in its place any more: search lives in the top bar, which
-    // is always visible, so it needs no active state in the rail.
-    const prevActive = document.querySelector('.nav-item[data-nav].active');
-    palettePrevNav = prevActive ? prevActive.getAttribute('data-nav') : null;
-    prevActive?.classList.remove('active');
-  }
+  // The rail is deliberately left alone. Opening search used to clear the
+  // current view's highlight, because the rail's own magnifier took the active
+  // state in its place and two lit icons would have been wrong. That magnifier
+  // is gone: search lives in the top bar now, so clearing the highlight lit
+  // nothing instead, and the rail simply went dark while a view was still
+  // open behind the panel. The view has not changed, so its icon should not
+  // change either.
   paletteOpen = true;
   paletteReturnFocus = document.activeElement;
   // Hides the top bar's field while the panel stands in its place. visibility,
@@ -5197,13 +5193,9 @@ function closePalette(opts = {}) {
   // keyboard flow after Escape. Verified in both orders before landing.
   document.body.classList.remove('palette-open');
   document.getElementById('palette-overlay')?.classList.add('hidden');
-  // On cancel (restoreFocus) return the highlight to the origin view; on
-  // navigate the destination's own routing sets the active nav, so leave it
-  // alone (destination wins).
-  if (restoreFocus && palettePrevNav) {
-    document.querySelector(`.nav-item[data-nav="${palettePrevNav}"]`)?.classList.add('active');
-  }
-  palettePrevNav = null;
+  // Nothing to restore: the highlight was never removed. Navigating to a
+  // result still hands the active icon to the destination, because setNavState
+  // clears every nav item before lighting the new one.
   if (restoreFocus && paletteReturnFocus && document.contains(paletteReturnFocus)) {
     try { paletteReturnFocus.focus(); } catch (e) {}
   }
