@@ -979,7 +979,17 @@ mark.find-match.current,
    screen: the field appears to expand in place rather than summon a separate
    surface. padding-top places the panel's top exactly on the field's top,
    which is (bar height - field height) / 2. */
-.palette-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.42); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); z-index: 200; display: flex; align-items: flex-start; justify-content: center; padding: calc((var(--topbar-height) - 36px) / 2) 16px 16px; }
+/* Light dim, no blur. The scrim's job changed when the panel stopped floating
+   in the middle of the screen: it is now anchored to the field that opened it,
+   and the anchor does the explaining a scrim used to do. Blur specifically
+   means "what is behind is unavailable", which is modal vocabulary this panel
+   no longer speaks. It is also real work, rasterising and blurring everything
+   behind on every frame.
+   A light dim rather than none, because the panel still captures the keyboard:
+   arrows navigate, Enter opens, Escape closes. 0.18 says "your keyboard lives
+   here now" without claiming the app is blocked. 0.42 was modal weight, and
+   over the LIGHT theme it washed the whole interface grey. */
+.palette-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.18); z-index: 200; display: flex; align-items: flex-start; justify-content: center; padding: calc((var(--topbar-height) - 36px) / 2) 16px 16px; }
 /* Same width expression as the field, via the same gutter variable, so the
    two are the same object in two states and the panel cannot overlap the
    window controls any more than the field could. */
