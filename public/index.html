@@ -66,7 +66,13 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 /* The bar is as tall as the rail is wide, so the chrome's corner is a true
    square rather than an arbitrary rectangle, and the rail's icons sit on the
    same rhythm as the bar above them. */
-:root { --chrome-inset-left: 0px; --chrome-inset-right: 0px; --nav-rail-width: 60px; --topbar-height: 60px; --content-radius: 10px; }
+/* --tb-cluster is the width of our own controls in the right gutter (a 30px
+   Help button plus 8px padding). The gutter each side is then the LARGER of
+   the two sides' total occupancy, which is what keeps the middle column
+   centred on the WINDOW rather than on the leftover space. */
+:root { --chrome-inset-left: 0px; --chrome-inset-right: 0px; --nav-rail-width: 60px; --topbar-height: 60px; --content-radius: 10px;
+        --tb-cluster: 38px;
+        --chrome-gutter: max(var(--chrome-inset-left), calc(var(--chrome-inset-right) + var(--tb-cluster))); }
 
 /* .app is a COLUMN: the top bar spans the full width and the three original
    panes sit in the body row beneath it. min-height: 0 on the body row is
@@ -81,9 +87,15 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 /* ── Top bar ─────────────────────────────────────────────────────────────── */
 .topbar {
   height: var(--topbar-height); flex-shrink: 0; position: relative;
-  display: flex; align-items: center;
-  padding-left: var(--chrome-inset-left);
-  padding-right: var(--chrome-inset-right);
+  /* A three-column grid, not a flex row with an absolutely-positioned field.
+     Both side columns are the same width, so the middle column is centred on
+     the window, and the field physically cannot reach the gutters however
+     narrow the window gets. The previous version computed a max width by
+     subtracting the window-control insets, which silently ignored the Help
+     button sitting inside the right gutter and overlapped it at the app's own
+     minimum width. Reserving space beats arithmetic that has to stay correct. */
+  display: grid; align-items: center;
+  grid-template-columns: var(--chrome-gutter) 1fr var(--chrome-gutter);
   background: var(--chrome);
   /* A transparent border keeps the height identical to the variant that draws
      a real one, so nothing shifts by a pixel between them. */
@@ -106,23 +118,19 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
    disappears into it, while still carrying the window controls and the drag
    region, which is the only reason it must stay present at all. */
 .app.no-workspace .topbar { background: var(--elevated); }
-.app.no-workspace .main { border-top-right-radius: 0; }
 
 /* Centred on the WINDOW, not between the gutters, so the field never moves
    when the platform changes or when Windows' caption width changes with DPI
    or on maximise. */
 .tb-search {
-  position: absolute; left: 50%; transform: translateX(-50%);
   display: flex; align-items: center; gap: 8px;
   height: 36px; padding: 0 14px;
-  /* As wide as the palette this opens (min(680px, 94vw)), so the field reads
-     as that modal's collapsed state rather than as a different control.
-     The ceiling is not decorative: centred at the 900px minimum width, a
-     fixed 680px would span 110..790 while the Windows caption buttons start
-     at 762. Subtracting twice the larger inset keeps a 24px gap on the side
-     that has controls, whichever side that is. */
-  width: min(680px, calc(100vw - 2 * max(var(--chrome-inset-left), var(--chrome-inset-right)) - 48px));
-  background: var(--surface); border: 1px solid var(--border); border-radius: 7px;
+  /* Lives in the grid's middle column, so its width is bounded by the column
+     rather than by a formula. 32px of breathing room stops it sitting flush
+     against whatever occupies the gutter. */
+  grid-column: 2; justify-self: center;
+  width: min(680px, calc(100% - 32px));
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
   color: var(--text-2); font-size: var(--caption); font-family: inherit;
   cursor: pointer; user-select: none;
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
@@ -133,7 +141,7 @@ body.light .tb-search { background: var(--card); }
 .tb-search svg { width: 14px; height: 14px; flex-shrink: 0; }
 .tb-search .tb-kbd { margin-left: auto; font-size: var(--label); opacity: 0.7; padding-left: 10px; }
 
-.tb-right { margin-left: auto; display: flex; align-items: center; gap: 2px; padding-right: 8px; }
+.tb-right { grid-column: 3; justify-self: end; display: flex; align-items: center; gap: 2px; padding-right: calc(var(--chrome-inset-right) + 8px); }
 .tb-btn { width: 30px; height: 30px; border-radius: 7px; display: flex; align-items: center; justify-content: center; color: var(--text-2); position: relative; }
 .tb-btn:hover { color: var(--text-1); background: var(--surface); }
 .tb-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -335,7 +343,7 @@ body.light .tb-search { background: var(--card); }
 .add-btn:hover { color: var(--accent); background: var(--accent-glow); border-color: rgba(232,122,90,0.3); }
 
 /* Main panel */
-.main { flex: 1; display: flex; flex-direction: column; background: var(--elevated); overflow: hidden; position: relative; border-top-right-radius: var(--content-radius); }
+.main { flex: 1; display: flex; flex-direction: column; background: var(--elevated); overflow: hidden; position: relative; }
 .main-view-transition { animation: viewFadeIn 0.15s ease; }
 @keyframes viewFadeIn { from { opacity: 0; } to { opacity: 1; } }
 
