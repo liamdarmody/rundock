@@ -141,6 +141,7 @@ body.light .tb-search { background: var(--card); }
 .tb-search svg { width: 14px; height: 14px; flex-shrink: 0; }
 .tb-search .tb-kbd { margin-left: auto; font-size: var(--label); opacity: 0.7; padding-left: 10px; }
 
+body.palette-open .tb-search { visibility: hidden; }
 .tb-right { grid-column: 3; justify-self: end; display: flex; align-items: center; gap: 2px; padding-right: calc(var(--chrome-inset-right) + 8px); }
 .tb-btn { width: 30px; height: 30px; border-radius: 7px; display: flex; align-items: center; justify-content: center; color: var(--text-2); position: relative; }
 .tb-btn:hover { color: var(--text-1); background: var(--surface); }
@@ -961,15 +962,33 @@ mark.find-match.current,
  * overlay scrim and shadows use rgba per the codebase's existing convention
  */
 /* ===== Universal search palette (Cmd+K) ===== */
-.palette-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.42); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); z-index: 200; display: flex; align-items: flex-start; justify-content: center; padding: 11vh 16px 16px; }
-.palette { width: min(680px, 94vw); max-height: min(66vh, 620px); display: flex; flex-direction: column; background: var(--elevated); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 18px 50px rgba(0,0,0,0.4), 0 2px 8px rgba(0,0,0,0.2); overflow: hidden; animation: palette-in 140ms cubic-bezier(0.16, 1, 0.3, 1); }
-@keyframes palette-in { from { opacity: 0; transform: translateY(-8px) scale(0.985); } to { opacity: 1; transform: none; } }
+/* The palette opens where the search field is, not in the middle of the
+   screen: the field appears to expand in place rather than summon a separate
+   surface. padding-top places the panel's top exactly on the field's top,
+   which is (bar height - field height) / 2. */
+.palette-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.42); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); z-index: 200; display: flex; align-items: flex-start; justify-content: center; padding: calc((var(--topbar-height) - 36px) / 2) 16px 16px; }
+/* Same width expression as the field, via the same gutter variable, so the
+   two are the same object in two states and the panel cannot overlap the
+   window controls any more than the field could. */
+.palette { width: min(680px, calc(100vw - 2 * var(--chrome-gutter) - 32px)); max-height: min(72vh, 640px); display: flex; flex-direction: column; background: var(--elevated); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 18px 50px rgba(0,0,0,0.4), 0 2px 8px rgba(0,0,0,0.2); overflow: hidden; animation: palette-in 160ms cubic-bezier(0.16, 1, 0.3, 1); transform-origin: top center; }
+/* Grows downward out of the field rather than sliding in from above. */
+@keyframes palette-in { from { opacity: 0.4; transform: scaleY(0.88); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .palette { animation: none; } }
-.palette-input-row { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
-.palette-input-row svg.palette-glass { width: 17px; height: 17px; color: var(--text-2); flex-shrink: 0; }
-.palette-input { flex: 1; font-size: 15px; color: var(--text-1); background: none; border: none; outline: none; min-width: 0; }
+/* Exactly the field's height, so the text does not jump as the field is
+   replaced. flex-shrink:0 because it is a flex child of a column and would
+   otherwise collapse under the results list. */
+.palette-input-row { display: flex; align-items: center; gap: 10px; height: 36px; flex-shrink: 0; padding: 0 14px; border-bottom: 1px solid var(--border); }
+.palette-input-row svg.palette-glass { width: 14px; height: 14px; color: var(--text-2); flex-shrink: 0; }
+.palette-input { flex: 1; font-size: 13px; color: var(--text-1); background: none; border: none; outline: none; min-width: 0; }
 .palette-input::placeholder { color: var(--text-2); opacity: 0.7; }
-.palette-scope-row { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+/* Fixed height, and no scrollbar. overflow-x: auto painted a horizontal
+   scrollbar under the filter pills whenever they came close to the panel's
+   width, which on a narrow window is most of the time. The row can still
+   scroll if the pills genuinely do not fit, but the bar itself is hidden:
+   it is chrome inside chrome, and it was stealing vertical space from the
+   results as well as looking like a mistake. */
+.palette-scope-row { display: flex; align-items: center; gap: 6px; height: 37px; flex-shrink: 0; padding: 0 12px; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none; }
+.palette-scope-row::-webkit-scrollbar { display: none; }
 .palette-scope { font-size: var(--caption); font-weight: 500; color: var(--text-2); padding: 4px 10px; border-radius: 999px; border: 1px solid transparent; cursor: pointer; white-space: nowrap; transition: color 0.15s ease, background 0.15s ease; }
 .palette-scope:hover { color: var(--text-1); background: var(--card); }
 .palette-scope:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

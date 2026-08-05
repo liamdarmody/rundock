@@ -5167,6 +5167,10 @@ function openPalette() {
   }
   paletteOpen = true;
   paletteReturnFocus = document.activeElement;
+  // Hides the top bar's field while the panel stands in its place. visibility,
+  // not display, so the grid column keeps its width and nothing in the bar
+  // shifts as the panel opens.
+  document.body.classList.add('palette-open');
   overlay.classList.remove('hidden');
   const input = document.getElementById('palette-input');
   input.value = paletteQuery = '';
@@ -5187,6 +5191,11 @@ function closePalette(opts = {}) {
   // Blur before hiding so focus never sits inside a hidden subtree
   // (browsers silently drop it to <body>; an explicit blur is deterministic).
   try { document.activeElement?.blur?.(); } catch (e) {}
+  // MUST come before the focus restore below. The opener is usually the top
+  // bar's search field, and a visibility:hidden element cannot take focus:
+  // restoring first would drop focus to <body> instead, silently breaking
+  // keyboard flow after Escape. Verified in both orders before landing.
+  document.body.classList.remove('palette-open');
   document.getElementById('palette-overlay')?.classList.add('hidden');
   // On cancel (restoreFocus) return the highlight to the origin view; on
   // navigate the destination's own routing sets the active nav, so leave it
