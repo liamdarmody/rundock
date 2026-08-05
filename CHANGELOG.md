@@ -8,6 +8,8 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Added
 
+- **Search has moved to a bar across the top of the window:** it used to be a magnifying glass tucked into the left rail below Files, which is a hard place to notice, and the keyboard shortcut was only mentioned in a tooltip you had to hover to find. There is now a search field across the top of the window with the shortcut written into it. Cmd+K, or Ctrl+K, works exactly as before.
+- **Help is now one click away:** the top bar carries a help control that opens the documentation. Until now the docs were only linked from a few error messages, so there was no way to reach them from the app unless something had already gone wrong.
 - **The file tree shows which folder a file belongs to:** a soft vertical line now runs down each open folder, linking everything inside it back to the folder itself, so several levels of nesting stay readable at a glance. Previously nothing connected a file to its parent, and past two or three levels you had to compare indentation by eye to work out where you were. Spacing is unchanged, so nothing shifts position.
 
 ### Fixed

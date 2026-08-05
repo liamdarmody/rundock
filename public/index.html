@@ -12,6 +12,7 @@
 <link id="hljs-light" rel="stylesheet" href="/vendor/highlight/atom-one-light.min.css" disabled>
 <script src="/vendor/highlight/highlight.min.js"></script>
 <script src="/code-language.js"></script>
+<script src="/chrome-insets.js"></script>
 <script src="/unread-state.js"></script>
 <script src="/markers.js"></script>
 <script src="/permissions.js"></script>
@@ -46,10 +47,83 @@ button { border: none; background: none; cursor: pointer; font-family: inherit; 
 input { border: none; background: none; font-family: inherit; color: inherit; outline: none; }
 .hidden { display: none !important; }
 
-.app { display: flex; height: 100vh; overflow: hidden; }
+/* The window chrome reserves an inset on each side and the platform supplies
+   the values: macOS traffic lights sit left, Windows caption buttons sit
+   right. Both are 0 in a browser and on Linux, which is the same path.
+   There is deliberately NO per-platform CSS anywhere; chrome-insets.js is the
+   only platform-aware code. See Window-Chrome-Topbar-Spec. */
+:root { --chrome-inset-left: 0px; --chrome-inset-right: 0px; --nav-rail-width: 60px; --topbar-height: 44px; }
+
+/* .app is a COLUMN: the top bar spans the full width and the three original
+   panes sit in the body row beneath it. min-height: 0 on the body row is
+   load-bearing, not decorative: without it a flex child refuses to shrink
+   below its content and the sidebar and main panes stop scrolling. */
+.app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+.app-body { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+
+/* ── Top bar ─────────────────────────────────────────────────────────────── */
+.topbar {
+  height: var(--topbar-height); flex-shrink: 0; position: relative;
+  display: flex; align-items: center;
+  padding-left: var(--chrome-inset-left);
+  padding-right: var(--chrome-inset-right);
+  background: var(--base);
+  /* A transparent border keeps the height identical to the variant that draws
+     a real one, so nothing shifts by a pixel between them. */
+  border-bottom: 1px solid transparent;
+  /* The whole bar drags the window; every interactive child opts out below.
+     Getting this inverted is silent in tests: either the window will not move,
+     or the controls stop responding to clicks. */
+  -webkit-app-region: drag;
+}
+/* Merged chrome: the bar shares the rail's background so they read as one
+   region wrapping the top-left, and a single rule traces the boundary between
+   chrome and content. It starts where the rail ends and meets the rail's own
+   border-right to close the L. The segment deliberately NOT drawn is the one
+   across the rail's width, which would cut the bar away from it.
+   Offset from --nav-rail-width rather than a literal 60px, so the rail and
+   this rule cannot drift apart. */
+.topbar::after {
+  content: ''; position: absolute; left: var(--nav-rail-width); right: 0; bottom: -1px;
+  height: 1px; background: var(--border); pointer-events: none; z-index: 3;
+}
+.topbar button, .topbar input, .topbar a { -webkit-app-region: no-drag; }
+
+/* Centred on the WINDOW, not between the gutters, so the field never moves
+   when the platform changes or when Windows' caption width changes with DPI
+   or on maximise. */
+.tb-search {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 8px;
+  height: 28px; padding: 0 12px; width: 380px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 7px;
+  color: var(--text-2); font-size: var(--caption); font-family: inherit;
+  cursor: pointer; user-select: none;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+body.light .tb-search { background: var(--card); }
+.tb-search:hover { border-color: var(--text-2); color: var(--text-1); }
+.tb-search:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tb-search svg { width: 14px; height: 14px; flex-shrink: 0; }
+.tb-search .tb-kbd { margin-left: auto; font-size: var(--label); opacity: 0.7; padding-left: 10px; }
+
+.tb-right { margin-left: auto; display: flex; align-items: center; gap: 2px; padding-right: 8px; }
+.tb-btn { width: 30px; height: 30px; border-radius: 7px; display: flex; align-items: center; justify-content: center; color: var(--text-2); position: relative; }
+.tb-btn:hover { color: var(--text-1); background: var(--surface); }
+.tb-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tb-btn svg { width: 17px; height: 17px; }
+.tb-btn[data-tooltip]::after {
+  content: attr(data-tooltip); position: absolute; top: calc(100% + 6px); right: 0;
+  opacity: 0; pointer-events: none; white-space: nowrap;
+  font-size: 12px; font-weight: 500; color: var(--text-1);
+  background: var(--elevated); border: 1px solid var(--border);
+  padding: 4px 9px; border-radius: 6px; z-index: 120;
+  transition: opacity 150ms ease; transition-delay: 0ms;
+}
+.tb-btn[data-tooltip]:hover::after { opacity: 1; transition-delay: 400ms; }
 
 /* Nav rail */
-.nav-rail { width: 60px; background: var(--base); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; padding: 40px 0 16px; flex-shrink: 0; z-index: 2; }
+.nav-rail { width: var(--nav-rail-width); background: var(--base); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; padding: 8px 0 16px; flex-shrink: 0; z-index: 2; }
 .nav-main { display: flex; flex-direction: column; gap: 4px; flex: 1; padding-top: 4px; align-items: center; }
 .nav-bottom { display: flex; flex-direction: column; gap: 4px; align-items: center; }
 .nav-item { position: relative; width: 42px; height: 42px; display: flex; align-items: center; justify-content: center; border-radius: 12px; color: var(--text-2); transition: all 0.2s ease; }
@@ -883,6 +957,26 @@ mark.find-match.current,
 </head>
 <body>
 <div class="app">
+  <!-- The top bar renders in EVERY state, including the workspace picker.
+       This is not cosmetic: once the OS title bar is removed, this bar carries
+       the only drag region, so gating it the way the rail and sidebar are
+       gated would leave a first-run user with a window they cannot move.
+       Only the search field is conditional, since there is nothing to search
+       before a workspace is open. Help is most useful precisely here. -->
+  <div class="topbar" id="topbar">
+    <button class="tb-search" id="tb-search" style="display:none" onclick="openPalette()" aria-label="Search workspace">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <span>Search workspace</span>
+      <span class="tb-kbd" id="tb-search-kbd"></span>
+    </button>
+    <div class="tb-right">
+      <button class="tb-btn" id="tb-help" data-tooltip="Help and docs" aria-label="Help and docs" onclick="openDocs()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="app-body">
   <nav class="nav-rail" style="display:none">
     <div class="nav-main">
       <button class="nav-item active" data-nav="conversations" onclick="switchNav('conversations')" data-tooltip="Conversations">
@@ -901,18 +995,11 @@ mark.find-match.current,
         <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
         <svg class="icon-filled" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
       </button>
-      <!-- Universal search: opens the palette overlay rather than switching
-           views, so it carries no data-nav. It DOES take the active state while
-           the palette is open, so it has both an outline and a filled magnifier
-           and swaps to the filled one on active, consistent with every other
-           nav icon (a thin outline washes out behind the palette blur; a filled
-           accent glyph reads in both themes). The tooltip doubles as the
-           shortcut teacher; app.js fills it in with the platform's modifier
-           (Cmd on macOS, Ctrl elsewhere). -->
-      <button class="nav-item" id="nav-search-btn" onclick="openPalette()" aria-label="Search workspace">
-        <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <svg class="icon-filled" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
-      </button>
+      <!-- Search moved to the top bar. Two affordances for one overlay is what
+           made search feel hidden in the first place, so the rail no longer
+           carries a magnifier. The shortcut hint moved with it, and lives
+           inline in the field rather than in a tooltip you had to hover to
+           find. Cmd+K / Ctrl+K is unchanged. -->
     </div>
     <div class="nav-bottom">
       <button class="nav-item" onclick="toggleTheme()" data-tooltip="Theme" id="theme-toggle">
@@ -1072,6 +1159,7 @@ mark.find-match.current,
       <div class="settings-content" id="settings-content"></div>
     </div>
   </main>
+  </div><!-- /.app-body -->
 </div>
 
 <!-- Universal search palette (Cmd+K / Ctrl+K) -->

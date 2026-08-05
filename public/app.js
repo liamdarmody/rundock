@@ -4230,6 +4230,12 @@ function showWorkspacePicker(recent, discovered) {
   // Hide nav and sidebar when picking workspace
   document.querySelector('.nav-rail').style.display = 'none';
   document.querySelector('.sidebar').style.display = 'none';
+  // The top bar itself stays: it carries the window's only drag region once
+  // the OS title bar is removed. Only search hides, since there is nothing to
+  // search yet. Help deliberately remains, because this is the screen where a
+  // new user is most likely to want it.
+  const tbs = document.getElementById('tb-search');
+  if (tbs) tbs.style.display = 'none';
   showView('workspace');
   // Reset create form
   const createBtn = document.getElementById('create-workspace-btn');
@@ -4336,6 +4342,8 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   // Show nav and sidebar
   document.querySelector('.nav-rail').style.display = '';
   document.querySelector('.sidebar').style.display = '';
+  const tbsOn = document.getElementById('tb-search');
+  if (tbsOn) tbsOn.style.display = '';
   // Load workspace data
   ws.send(JSON.stringify({ type: 'get_agents' }));
   ws.send(JSON.stringify({ type: 'get_files' }));
@@ -5070,22 +5078,39 @@ const IS_MAC = /Mac/i.test(navigator.platform);
 let paletteReturnFocus = null; // element to restore focus to on close
 let palettePrevNav = null;     // nav we came from, restored on cancel (destination wins on navigate)
 
-// The nav rail tooltip teaches the shortcut with the right modifier per
-// platform (the Windows and Linux builds have no Cmd key).
-document.getElementById('nav-search-btn')?.setAttribute('data-tooltip', IS_MAC ? 'Search ⌘K' : 'Search Ctrl+K');
+// The top bar's search field teaches the shortcut with the right modifier per
+// platform (the Windows and Linux builds have no Cmd key). It sits inline in
+// the field rather than in a tooltip, so it does not have to be hovered to be
+// discovered, which was the weakness of the rail icon it replaced.
+{
+  const kbd = document.getElementById('tb-search-kbd');
+  if (kbd) kbd.textContent = IS_MAC ? '⌘K' : 'Ctrl K';
+}
+
+// Documentation was reachable only from three authentication error states and
+// nowhere else in the interface.
+//
+// No IPC needed: main.js already installs a setWindowOpenHandler that hands
+// any window.open to shell.openExternal and denies the popup, so this opens
+// the default browser in Electron and a new tab in the browser build, from
+// one line that knows about neither.
+function openDocs() {
+  window.open('https://docs.rundock.ai/', '_blank', 'noopener');
+}
 
 function openPalette() {
   if (currentView === 'workspace' || !currentWorkspacePath) return; // no workspace yet
   const overlay = document.getElementById('palette-overlay');
   if (!overlay) return;
   if (!paletteOpen) {
-    // Search is now the active surface: light the search icon and clear the
-    // origin view's highlight so it does not show through the overlay. Capture
-    // the origin once (guard against a re-entrant open losing the return nav).
+    // Search is now the active surface: clear the origin view's highlight so
+    // it does not show through the overlay. Capture the origin once (guard
+    // against a re-entrant open losing the return nav).
+    // Nothing is lit in its place any more: search lives in the top bar, which
+    // is always visible, so it needs no active state in the rail.
     const prevActive = document.querySelector('.nav-item[data-nav].active');
     palettePrevNav = prevActive ? prevActive.getAttribute('data-nav') : null;
     prevActive?.classList.remove('active');
-    document.getElementById('nav-search-btn')?.classList.add('active');
   }
   paletteOpen = true;
   paletteReturnFocus = document.activeElement;
@@ -5110,10 +5135,9 @@ function closePalette(opts = {}) {
   // (browsers silently drop it to <body>; an explicit blur is deterministic).
   try { document.activeElement?.blur?.(); } catch (e) {}
   document.getElementById('palette-overlay')?.classList.add('hidden');
-  // Clear the search icon regardless of how we close. On cancel (restoreFocus)
-  // return the highlight to the origin view; on navigate the destination's own
-  // routing sets the active nav, so leave it alone (destination wins).
-  document.getElementById('nav-search-btn')?.classList.remove('active');
+  // On cancel (restoreFocus) return the highlight to the origin view; on
+  // navigate the destination's own routing sets the active nav, so leave it
+  // alone (destination wins).
   if (restoreFocus && palettePrevNav) {
     document.querySelector(`.nav-item[data-nav="${palettePrevNav}"]`)?.classList.add('active');
   }
