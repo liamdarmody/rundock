@@ -6,6 +6,8 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ## Unreleased
 
+**Name:** Window Chrome & Search
+
 ### Added
 
 - **The window controls now sit inside Rundock, not in a strip above it:** the desktop app used to be framed by the standard system title bar, which took a band of vertical space and made the window look bolted together rather than designed. The buttons are now the real system ones, in their usual place for your platform (left on a Mac, right on Windows), sitting inside Rundock's own top bar. Dragging, fullscreen, maximise and snap all behave exactly as before. Linux is unchanged and keeps its standard title bar.
