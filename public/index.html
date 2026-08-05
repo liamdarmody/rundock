@@ -52,7 +52,10 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
    right. Both are 0 in a browser and on Linux, which is the same path.
    There is deliberately NO per-platform CSS anywhere; chrome-insets.js is the
    only platform-aware code. See Window-Chrome-Topbar-Spec. */
-:root { --chrome-inset-left: 0px; --chrome-inset-right: 0px; --nav-rail-width: 60px; --topbar-height: 44px; }
+/* The bar is as tall as the rail is wide, so the chrome's corner is a true
+   square rather than an arbitrary rectangle, and the rail's icons sit on the
+   same rhythm as the bar above them. */
+:root { --chrome-inset-left: 0px; --chrome-inset-right: 0px; --nav-rail-width: 60px; --topbar-height: 60px; --content-radius: 10px; }
 
 /* .app is a COLUMN: the top bar spans the full width and the three original
    panes sit in the body row beneath it. min-height: 0 on the body row is
@@ -76,18 +79,20 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
      or the controls stop responding to clicks. */
   -webkit-app-region: drag;
 }
-/* Merged chrome: the bar shares the rail's background so they read as one
-   region wrapping the top-left, and a single rule traces the boundary between
-   chrome and content. It starts where the rail ends and meets the rail's own
-   border-right to close the L. The segment deliberately NOT drawn is the one
-   across the rail's width, which would cut the bar away from it.
-   Offset from --nav-rail-width rather than a literal 60px, so the rail and
-   this rule cannot drift apart. */
-.topbar::after {
-  content: ''; position: absolute; left: var(--nav-rail-width); right: 0; bottom: -1px;
-  height: 1px; background: var(--border); pointer-events: none; z-index: 3;
-}
+/* The chrome/content boundary is drawn by the CONTENT tucking under it, not
+   by a rule. See --content-radius on .sidebar and .main below: the panel's
+   rounded corners reveal the chrome behind them, so the window reads as a
+   frame around a page, the way a browser frames a tab.
+   A 1px rule was tried first and removed: a straight border meeting a rounded
+   corner never resolves, and with the corners in place it is redundant. */
 .topbar button, .topbar input, .topbar a { -webkit-app-region: no-drag; }
+/* On the workspace picker there is no rail and no content panel, so there is
+   no chrome for the bar to be part of: a dark strip above a full-bleed picker
+   just looks like a leftover. It takes the picker's own surface instead and
+   disappears into it, while still carrying the window controls and the drag
+   region, which is the only reason it must stay present at all. */
+.app.no-workspace .topbar { background: var(--elevated); }
+.app.no-workspace .main { border-top-right-radius: 0; }
 
 /* Centred on the WINDOW, not between the gutters, so the field never moves
    when the platform changes or when Windows' caption width changes with DPI
@@ -138,7 +143,11 @@ body.light .tb-search { background: var(--card); }
 .nav-separator { width: 24px; height: 1px; background: var(--border); margin: 8px 0; }
 
 /* Sidebar */
-.sidebar { width: var(--sidebar-width, 280px); background: var(--surface); border-right: none; display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; box-shadow: 1px 0 8px rgba(0,0,0,0.08); z-index: 1; position: relative; }
+/* Top-left corner of the content region. The notch reveals the chrome behind
+   it. The effect is deliberately quiet in dark theme, where --base and
+   --surface are only six points of luma apart; it reads more strongly in
+   light. Chrome should not shout. */
+.sidebar { border-top-left-radius: var(--content-radius); width: var(--sidebar-width, 280px); background: var(--surface); border-right: none; display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; box-shadow: 1px 0 8px rgba(0,0,0,0.08); z-index: 1; position: relative; }
 /* Drag-resize handle on the sidebar's inner edge; same interaction grammar
    as the file editor's review panel (cursor, hover affordance, clamp). */
 .sidebar-resize-handle { position: absolute; right: 0; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 3; border-right: 1px solid transparent; }
@@ -297,7 +306,7 @@ body.light .tb-search { background: var(--card); }
 .add-btn:hover { color: var(--accent); background: var(--accent-glow); border-color: rgba(232,122,90,0.3); }
 
 /* Main panel */
-.main { flex: 1; display: flex; flex-direction: column; background: var(--elevated); overflow: hidden; position: relative; }
+.main { flex: 1; display: flex; flex-direction: column; background: var(--elevated); overflow: hidden; position: relative; border-top-right-radius: var(--content-radius); }
 .main-view-transition { animation: viewFadeIn 0.15s ease; }
 @keyframes viewFadeIn { from { opacity: 0; } to { opacity: 1; } }
 

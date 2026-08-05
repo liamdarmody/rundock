@@ -451,7 +451,7 @@ function setupAutoUpdate() {
 
 // Height of the app's top bar, which the window controls now sit inside.
 // Must match --topbar-height in public/index.html.
-const TOPBAR_HEIGHT = 44;
+const TOPBAR_HEIGHT = 60;
 
 // Colours for the Windows caption buttons, which the OS draws for us from
 // values we pass. They must track the app theme, so they are re-sent whenever

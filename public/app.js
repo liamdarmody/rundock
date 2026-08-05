@@ -4246,6 +4246,7 @@ function showWorkspacePicker(recent, discovered) {
   // new user is most likely to want it.
   const tbs = document.getElementById('tb-search');
   if (tbs) tbs.style.display = 'none';
+  document.querySelector('.app')?.classList.add('no-workspace');
   showView('workspace');
   // Reset create form
   const createBtn = document.getElementById('create-workspace-btn');
@@ -4354,6 +4355,7 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   document.querySelector('.sidebar').style.display = '';
   const tbsOn = document.getElementById('tb-search');
   if (tbsOn) tbsOn.style.display = '';
+  document.querySelector('.app')?.classList.remove('no-workspace');
   // Load workspace data
   ws.send(JSON.stringify({ type: 'get_agents' }));
   ws.send(JSON.stringify({ type: 'get_files' }));
