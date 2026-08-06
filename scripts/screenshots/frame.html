@@ -34,17 +34,11 @@
       0 0 0 1px rgba(150,150,150,0.35);
   }
 
-  /* Hero chrome: a macOS-style title bar with the three traffic lights. Shown
-     only for the treatment-hero images. */
-  #titlebar { display: none; height: 40px; align-items: center; padding: 0 16px; gap: 9px; position: relative; }
-  body.treatment-hero #titlebar { display: flex; }
-  body.theme-light #titlebar { background: #ededf0; border-bottom: 1px solid rgba(0,0,0,0.06); }
-  body.theme-dark  #titlebar { background: #2b2b30; border-bottom: 1px solid rgba(255,255,255,0.06); }
-  .dot { width: 12px; height: 12px; border-radius: 50%; }
-  .dot.r { background: #ff5f57; } .dot.y { background: #febc2e; } .dot.g { background: #28c840; }
-  #title { position: absolute; left: 0; right: 0; text-align: center; font-size: 13px; font-weight: 500; pointer-events: none; }
-  body.theme-light #title { color: #6b6b72; }
-  body.theme-dark  #title { color: #9a9aa2; }
+  /* The macOS window controls are drawn into the app's own top bar at capture
+     time (see gotoWorkspace in harness.mjs), so every asset carries them from
+     one definition and element-scoped crops exclude them for free. Framing
+     therefore adds no chrome of its own: it only rounds, shadows and pads. */
+  #window { position: relative; }
 
   #shot { display: block; width: var(--shot-w); height: auto; }
 </style>
@@ -52,10 +46,6 @@
 <body class="theme-light treatment-hero">
   <div id="stage">
     <div id="window">
-      <div id="titlebar">
-        <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-        <span id="title">Rundock</span>
-      </div>
       <img id="shot" alt="">
     </div>
   </div>

@@ -1,7 +1,7 @@
 // Polish layer: wraps a flat @2x master capture in an Apple-esque frame by
 // screenshotting a CSS wrapper page (frame.html), and derives per-target sizes
 // with the macOS image tool (sips). Two framing treatments:
-//   - hero:    browser/window chrome (traffic lights + title bar) on a neutral
+//   - hero:    the macOS window controls drawn inside the app's own top bar,
 //              theme-aware gradient, for the three hero placements only.
 //   - feature: a self-framed variant (rounded corners + soft shadow + small
 //              neutral padding), for plain-markdown placements (README, raw
@@ -35,24 +35,23 @@ export function pngDims(file) {
 // Frames a master into outPath using the given treatment and theme. The page
 // must already be on FRAME_HTML_URL in a deviceScaleFactor:2 context, so the
 // element screenshot lands at @2x.
-export async function frameImage(page, { masterPath, outPath, theme, treatment, title = 'Rundock' }) {
+export async function frameImage(page, { masterPath, outPath, theme, treatment }) {
   const { width } = pngDims(masterPath);
   const shotWCss = Math.round(width / DEVICE_SCALE);
   // Tight padding, floored so the soft drop shadow is never clipped.
   const pad = Math.max(44, Math.round(shotWCss * (treatment === 'hero' ? 0.05 : 0.035)));
   const dataUri = 'data:image/png;base64,' + fs.readFileSync(masterPath).toString('base64');
 
-  await page.evaluate(async ({ theme, treatment, shotWCss, pad, title, dataUri }) => {
+  await page.evaluate(async ({ theme, treatment, shotWCss, pad, dataUri }) => {
     document.body.className = `theme-${theme} treatment-${treatment}`;
     const root = document.documentElement.style;
     root.setProperty('--shot-w', shotWCss + 'px');
     root.setProperty('--pad', pad + 'px');
     root.setProperty('--radius', '12px');
-    document.getElementById('title').textContent = title;
     const img = document.getElementById('shot');
     await new Promise((res) => { img.onload = res; img.onerror = res; img.src = dataUri; });
     if (document.fonts && document.fonts.ready) { try { await document.fonts.ready; } catch { /* ignore */ } }
-  }, { theme, treatment, shotWCss, pad, title, dataUri });
+  }, { theme, treatment, shotWCss, pad, dataUri });
 
   await page.waitForTimeout(60);
   const stage = await page.$('#stage');
