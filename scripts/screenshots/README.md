@@ -36,9 +36,12 @@ not expect a clean git diff to tell you whether a GIF actually changed.
 3. **Boot** the real `server.js` against that workspace on a dedicated port.
 4. **Capture** the full still shot list in light and dark at deviceScaleFactor 2
    (2880x1800 @2x masters), plus element-scoped crops.
-5. **Frame** the three hero shots in window chrome and every feature shot as a
-   flat clean master plus a self-framed variant, on a neutral theme-aware
-   gradient, and derive README-width sizes.
+5. **Frame** every shot as a flat clean master plus a self-framed variant, and
+   the three hero shots additionally with wider padding, and derive
+   README-width sizes. The macOS window controls are NOT added here: they are
+   drawn into the app's own top bar during capture (step 4), because the app
+   integrates them into that bar rather than sitting below a separate title
+   bar. Framing only rounds, shadows and pads.
 6. **Motion**: record five scripted interactions and convert each to an optimized,
    palette-based looping GIF.
 7. Write **`MANIFEST.md`** mapping every asset to its intended target repo, path,
