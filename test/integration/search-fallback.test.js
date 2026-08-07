@@ -102,7 +102,7 @@ describe('file type on the degraded path', () => {
     const files = (reply.groups && reply.groups.files) || [];
     const titles = files.map(f => f.title);
 
-    for (const want of ['quarter-pack.pdf', 'quarter-pack.png', 'quarter-pack']) {
+    for (const want of ['quarter-pack.pdf', 'quarter-pack.png', 'quarter-pack.md']) {
       assert.ok(titles.includes(want),
         `expected a row titled ${want} on the grep path; got ${JSON.stringify(titles)}`);
     }
