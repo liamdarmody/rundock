@@ -18,14 +18,13 @@ import { fileURLToPath } from 'node:url';
 import { buildWorkspace, checkSanitization, hasProjectBannedTokens } from './generate-workspace.mjs';
 import { startRundock } from './serve.mjs';
 import { assertAppContract } from './harness.mjs';
-import { captureStills, SHOTS } from './capture.mjs';
+import { captureStills, SHOTS, THEMES } from './capture.mjs';
 import { frameImage, FRAME_HTML_URL, resizeTo, toWebp, pngDims } from './frame.mjs';
 import { captureMotion, ffmpegAvailable, CLIPS, MOTION_THEMES } from './motion.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const OUT = path.join(REPO_ROOT, 'screenshots-out');
-const GAPS_SRC = path.join(__dirname, 'content-and-copy-gaps.md');
 
 // README-friendly derived width (GitHub's content column is ~1000px, crisp at @2x).
 const README_WIDTH = 2200;
@@ -125,6 +124,24 @@ async function main() {
     // 3. Capture flat @2x masters + crops, both themes.
     log('[3/6] Capturing stills (light + dark, @2x)...');
     const shots = await captureStills({ browser, url: server.url, stagingDir: staging, log });
+
+    // A shot that fails is caught and logged inside captureStills so one bad
+    // selector cannot lose the whole run. That is right, but on its own it is
+    // too quiet: the run still exits 0, and a missing shot shows up only as one
+    // `!` line inside a couple of hundred, then as an asset nobody notices is
+    // absent. Motion already gates on its expected count; stills did not, so a
+    // renamed selector could silently ship a set with the search shots missing.
+    const missingShots = [];
+    for (const shot of SHOTS) {
+      for (const theme of THEMES) {
+        if (!shots.some(p => p.name === shot.name && p.theme === theme && p.kind === 'flat')) {
+          missingShots.push(`${shot.name}.${theme}`);
+        }
+      }
+    }
+    if (missingShots.length) {
+      log(`      ! STILLS INCOMPLETE: expected ${SHOTS.length * THEMES.length} flat masters, got ${shots.filter(p => p.kind === 'flat').length}. Missing: ${missingShots.join(', ')}`);
+    }
 
     // 4. Frame + derive per target.
     log('[4/6] Framing (hero chrome + feature self-frame) and deriving sizes...');
