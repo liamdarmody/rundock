@@ -769,7 +769,13 @@ app.whenReady().then(async () => {
 
   const setupMarker = path.join(app.getPath('userData'), '.claude-setup-verified');
   const setupVerified = fs.existsSync(setupMarker);
-  const needsWizard = !claudeBin || (!setupVerified && !isClaudeAuthenticated());
+  // RUNDOCK_SMOKE_TEST: boot verification for the packaged app (see
+  // scripts/smoke-packaged.mjs). The machine running it has no CLI and no
+  // sign-in, so the wizard gate is skipped; everything else about startup
+  // (module loading, embedded server, window creation) runs for real, which
+  // is the point: a packaging mistake that breaks any of it must fail here.
+  const isSmokeTest = process.env.RUNDOCK_SMOKE_TEST === '1';
+  const needsWizard = !isSmokeTest && (!claudeBin || (!setupVerified && !isClaudeAuthenticated()));
 
   if (needsWizard) {
     console.log('[Electron] Showing first-run wizard (Claude missing or not signed in)');
@@ -784,7 +790,11 @@ app.whenReady().then(async () => {
   // Setup confirmed (installed + signed in): remember it so future launches
   // skip the auth API call. Sign-in expiry after this point is handled
   // separately, when a later request fails authentication.
-  try { fs.writeFileSync(setupMarker, new Date().toISOString()); } catch { /* non-fatal */ }
+  // Never written during a smoke test: on a developer machine that would
+  // fake the verification the wizard exists to perform.
+  if (!isSmokeTest) {
+    try { fs.writeFileSync(setupMarker, new Date().toISOString()); } catch { /* non-fatal */ }
+  }
 
   // Start the embedded server on an OS-assigned port
   console.log('[Electron] Starting server...');
@@ -796,8 +806,18 @@ app.whenReady().then(async () => {
   // Open the main window
   createMainWindow(serverPort);
   setupMenu();
-  setupAutoUpdate();
+  // The updater talks to the release feed over the network; a boot check
+  // must not depend on that being reachable, so smoke runs skip it.
+  if (!isSmokeTest) setupAutoUpdate();
   console.log('[Electron] Ready');
+
+  if (isSmokeTest) {
+    // Full boot succeeded: modules loaded, server up, window created. The
+    // marker line is what scripts/smoke-packaged.mjs waits for; quitting
+    // with code 0 is the pass signal.
+    console.log('[Electron] Smoke test OK');
+    app.quit();
+  }
 });
 
 // macOS: re-show window when dock icon is clicked
