@@ -484,11 +484,37 @@ function setupAutoUpdate() {
   });
 
   autoUpdater.on('update-downloaded', (info) => {
-    showUpdateUi({
+    const ui = showUpdateUi({
       phase: 'downloaded',
       version: info && info.version ? info.version : updateState.version,
     });
+    presentInstallPrompt(ui);
   });
+
+  // The decided UI names its buttons and the action each one performs, so
+  // this stays a dumb translator: show the dialog, run the chosen action.
+  // "Restart now" calling quitAndInstall() directly is the core fix: the
+  // install used to depend entirely on autoInstallOnAppQuit winning a race
+  // at process exit, which it often lost. That setting remains as a
+  // fallback, but the explicit call is what makes the install deterministic.
+  function presentInstallPrompt(ui) {
+    if (ui.kind !== 'ready' && ui.kind !== 'stuck') return;
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      message: ui.text,
+      detail: ui.detail,
+      buttons: ui.buttons,
+      defaultId: ui.defaultId,
+      cancelId: ui.actions.indexOf('dismiss'),
+    }).then(({ response }) => {
+      const action = ui.actions[response];
+      if (action === 'quitAndInstall') {
+        autoUpdater.quitAndInstall();
+      } else if (action === 'openDownloadPage') {
+        shell.openExternal(ui.downloadUrl);
+      }
+    }).catch(() => { /* window closed mid-dialog; the update installs on quit */ });
+  }
 
   // Check for updates silently on launch (don't block startup)
   autoUpdater.checkForUpdatesAndNotify().catch(() => {});
