@@ -30,14 +30,15 @@ const GAPS_SRC = path.join(__dirname, 'content-and-copy-gaps.md');
 // README-friendly derived width (GitHub's content column is ~1000px, crisp at @2x).
 const README_WIDTH = 2200;
 
-// Per-shot destination hints, grounded in the content/copy gap analysis. Each
+// Per-shot destination hints, originally grounded in the content/copy gap
+// analysis (see that file's stated release before trusting its reasoning). Each
 // entry drives the MANIFEST rows. `hero` placements are added separately.
 const TARGETS = {
   'org-chart':        { repo: 'Rundock Site',  path: 'index.html (hero) + images/rundock-app-hero.png',       note: 'Flagship "one operator, whole team" image; replaces the stale April hero.' },
   'agent-profile':    { repo: 'rundock-docs',  path: 'concepts/agents.mdx',                                    note: 'Shows an agent profile with role, skills, and routines.' },
   'skills':           { repo: 'Rundock Site',  path: 'index.html Skills section + rundock-docs/concepts/skills.mdx', note: 'Skills list plus a skill detail; refreshes the April skills-detail.png.' },
   'conversations':    { repo: 'rundock-docs',  path: 'images/conversation-flow.png + introduction.mdx',        note: 'Conversation list plus an open thread; product-in-use hero candidate.' },
-  'streaming':        { repo: 'Rundock Site',  path: 'index.html Conversations section',                       note: 'A reply streaming in; supports the live, working-team story.' },
+  'streaming':        { repo: 'Rundock Site + rundock-docs', path: 'index.html Conversations section + docs images/conversation-handoff.gif (quickstart.mdx, concepts/how-rundock-works.mdx)', note: 'A reply streaming in; supports the live, working-team story. NOTE the docs publish this clip under the name conversation-handoff, which is what it shows rather than how it is produced. That mismatch let a stale copy survive a full estate refresh, so check both destinations.' },
   'files':            { repo: 'Rundock Site',  path: 'index.html Files section + rundock-docs/concepts/files.mdx', note: 'File tree with per-type icons; replaces the materially wrong April file-browser.png.' },
   'markdown-note':    { repo: 'rundock-docs',  path: 'concepts/files.mdx (the editor + properties)',           note: 'Frontmatter properties panel, callouts, and clickable wikilinks.' },
   'callouts':         { repo: 'rundock-docs',  path: 'concepts/files.mdx (callouts)',                          note: 'Nested Obsidian callouts rendered in place.' },
@@ -47,7 +48,10 @@ const TARGETS = {
   'pdf-viewer':       { repo: 'rundock-docs',  path: 'concepts/files.mdx (any file type)',                     note: 'PDF opens inline alongside notes and boards.' },
   'search':           { repo: 'Rundock Site',  path: 'index.html new Search section + rundock-docs/concepts/search.mdx', note: 'Cmd+K universal search; headline 0.10.0 feature, absent everywhere today.' },
   'find':             { repo: 'rundock-docs',  path: 'concepts/search.mdx (Cmd+F)',                            note: 'In-view find inside the editor.' },
-  'settings':         { repo: 'rundock-docs',  path: 'concepts/runtimes.mdx',                                  note: 'Settings and runtimes surface.' },
+  // 'settings' was listed here with a home in concepts/runtimes.mdx, but no
+  // such shot has ever been defined in capture.mjs, so the manifest described a
+  // destination for an asset that does not exist. Removed rather than left
+  // promising: add it back alongside a real capture definition.
 };
 
 // The three chrome-framed hero placements (spec: Site hero, README hero, docs
