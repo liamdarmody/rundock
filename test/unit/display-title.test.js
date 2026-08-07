@@ -1,66 +1,46 @@
 'use strict';
 // Unit: how a file's name is presented in search results.
 //
-// Search used to strip the extension from every file, so a set of files that
-// differed only by type collapsed into identical rows: the same text, the same
-// generic icon, no type anywhere. Having a report as HTML, PDF, PNG, JPG and
-// GIF is ordinary, and the list gave no way to tell which row was which.
+// The rule: every file, markdown included, is shown under its real filename,
+// extension and all, exactly as the file tree shows it. The two panes are
+// usually visible at the same time, and the same file must not carry two
+// names on one screen.
 //
-// The rule: markdown is the default format for notes, so `.md` appears on
-// almost every file and never distinguishes one from another. It is hidden.
-// Every other extension is shown, because it is the only thing separating
-// those five files.
-//
-// This function is the single definition of that rule. It exists as one shared
-// function precisely because the old stripping logic was written in three
-// separate places, and they drifted.
+// This DELIBERATELY REVERSES an earlier rule that hid `.md` in search
+// ("almost every file is a note and its extension never told two of them
+// apart"). That reasoning is sound per-pane and was overridden anyway:
+// consistency between two simultaneously visible panes beats per-pane
+// tidiness. Recorded here as a reversal so the argument is not re-run from
+// scratch a fourth time; this function is the single written form of the
+// naming rule, and the tree side simply renders names untouched.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 
 const { displayTitle } = require('../../search.js');
 
 describe('displayTitle', () => {
-  test('hides .md, because it appears on almost every file', () => {
-    assert.strictEqual(displayTitle('notes.md'), 'notes');
-    assert.strictEqual(displayTitle('pricing-strategy.md'), 'pricing-strategy');
+  test('shows .md, so the tree and search agree on one name per file', () => {
+    assert.strictEqual(displayTitle('notes.md'), 'notes.md');
+    assert.strictEqual(displayTitle('pricing-strategy.md'), 'pricing-strategy.md');
+    assert.strictEqual(displayTitle('REPORT.MD'), 'REPORT.MD');
   });
 
-  test('shows every other extension, because that is what tells files apart', () => {
-    // The exact case this change exists for: one name, five types.
-    assert.strictEqual(displayTitle('board-pack-q3.pdf'), 'board-pack-q3.pdf');
-    assert.strictEqual(displayTitle('board-pack-q3.html'), 'board-pack-q3.html');
-    assert.strictEqual(displayTitle('board-pack-q3.png'), 'board-pack-q3.png');
-    assert.strictEqual(displayTitle('board-pack-q3.jpg'), 'board-pack-q3.jpg');
-    assert.strictEqual(displayTitle('board-pack-q3.gif'), 'board-pack-q3.gif');
-
+  test('shows every other extension, unchanged from before', () => {
+    // One name, five types: the extension is what tells the rows apart.
     const titles = ['pdf', 'html', 'png', 'jpg', 'gif']
       .map(e => displayTitle(`board-pack-q3.${e}`));
     assert.strictEqual(new Set(titles).size, 5,
-      'five files sharing a name must produce five distinct titles; that is the whole point');
+      'five files sharing a name must produce five distinct titles');
+    assert.strictEqual(displayTitle('board-pack-q3.pdf'), 'board-pack-q3.pdf');
   });
 
   test('takes the basename, so a nested path does not leak into the title', () => {
     assert.strictEqual(displayTitle('notes/board-packs/report.pdf'), 'report.pdf');
-    assert.strictEqual(displayTitle('notes/board-packs/report.md'), 'report');
+    assert.strictEqual(displayTitle('notes/board-packs/report.md'), 'report.md');
   });
 
-  test('matches the extension case-insensitively', () => {
-    // A case-insensitive filesystem will hand us either spelling, and .MD is
-    // still markdown. Getting this wrong shows `REPORT.MD` to some users only.
-    assert.strictEqual(displayTitle('REPORT.MD'), 'REPORT');
-    assert.strictEqual(displayTitle('notes.Md'), 'notes');
-    assert.strictEqual(displayTitle('REPORT.PDF'), 'REPORT.PDF',
-      'a shown extension keeps its original case; only the comparison is insensitive');
-  });
-
-  test('leaves a file with no extension alone', () => {
+  test('leaves files with no extension and dotfiles alone', () => {
     assert.strictEqual(displayTitle('Makefile'), 'Makefile');
-    assert.strictEqual(displayTitle('LICENSE'), 'LICENSE');
-  });
-
-  test('treats a dotfile as a name, not as an extension', () => {
-    // path.extname('.gitignore') is '' by design. Stripping naively here would
-    // produce an empty title and an invisible row.
     assert.strictEqual(displayTitle('.gitignore'), '.gitignore');
     assert.strictEqual(displayTitle('.env'), '.env');
     assert.strictEqual(displayTitle('.md'), '.md');
@@ -68,13 +48,11 @@ describe('displayTitle', () => {
 
   test('handles multiple dots without eating part of the name', () => {
     assert.strictEqual(displayTitle('archive.tar.gz'), 'archive.tar.gz');
-    assert.strictEqual(displayTitle('notes.v2.md'), 'notes.v2');
-    assert.strictEqual(displayTitle('.env.md'), '.env');
+    assert.strictEqual(displayTitle('notes.v2.md'), 'notes.v2.md');
+    assert.strictEqual(displayTitle('.env.md'), '.env.md');
   });
 
-  test('never returns an empty title for any input', () => {
-    // An empty title renders as a blank, unclickable-looking row. No input
-    // that names a real file may produce one.
+  test('never returns an empty title for any input that names a file', () => {
     const inputs = [
       'notes.md', '.md', '.gitignore', 'Makefile', 'a.md', 'a.pdf',
       'x/y/z.md', 'x/y/.md', 'archive.tar.gz', 'REPORT.MD', '.env.md',
@@ -88,18 +66,10 @@ describe('displayTitle', () => {
 
   test('behaves identically under Windows path rules', () => {
     // Tree and index paths are built with explicit forward slashes on every
-    // platform, and Windows accepts both separators. This pins that, so the
-    // rule cannot quietly diverge on the one platform CI does not run the
-    // integration suite on.
+    // platform, and Windows accepts both separators. Pinned so the rule
+    // cannot quietly diverge on the platform CI does not integration-test.
     const path = require('node:path');
-    const HIDDEN = '.md';
-    const under = (P, rel) => {
-      const b = P.basename(rel);
-      const e = P.extname(b);
-      if (!e) return b;
-      if (e.toLowerCase() !== HIDDEN) return b;
-      return P.basename(b, e) || b;
-    };
+    const under = (P, rel) => P.basename(rel);
     const cases = [
       'packs/board-pack-q3.pdf', 'notes/sub/report.MD', 'Makefile',
       '.gitignore', 'archive.tar.gz', 'notes.v2.md', 'x/y/.md',

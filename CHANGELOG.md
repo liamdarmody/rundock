@@ -4,6 +4,30 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** Updater & Polish
+
+> **Updating from 0.11.4:** this update still arrives through the old update flow, so it may take a quit and relaunch or two to apply. If it refuses, download it directly from [rundock.ai/download](https://rundock.ai/download). From this version onward, the new flow below takes over.
+
+### Added
+
+- **Rundock now tells you what its updater is doing, and asks before restarting:** updating used to be a silent gamble. The download happened invisibly, and installing it depended on quitting at the right moment, sometimes several times. Now a small indicator at the bottom of the sidebar shows an update downloading, with real progress, and when it is ready Rundock asks: Restart now, or Later. Restart now installs immediately. Later keeps a quiet reminder in the sidebar for whenever suits.
+- **If an update keeps failing to install, Rundock says so plainly:** after several restarts with an update downloaded but not applied, the app stops promising that the next restart will work and offers a direct download link instead. No more silent failure loops.
+- **The app follows your system's light or dark appearance:** until you pick a theme yourself, Rundock matches your OS setting, including when it changes mid-session. The moment you choose a theme with the toggle, your choice wins and stays.
+
+### Changed
+
+- **The top bar is shorter and the window controls sit on an even inset:** the bar drops from 60px to 50px, sized so the search field reads as evenly padded on screen, and the macOS traffic lights sit the same distance from the left edge as from the top, so the corner reads as one deliberate inset. The divider between the theme and settings buttons in the nav rail is gone; the gap does the job.
+- **State is now shown with dots and fills, not coloured edge bars:** four places used a coloured stripe down the side of an element to signal state. A working agent is now a pulsing green dot and an unread conversation a still one; the selected search result gets its own tinted fill instead of a thin edge on the same background as hover; tool activity carries its state in a small icon ring; and the message box marks focus with a neutral outline rather than a colour change.
+- **Search results show the `.md` extension, matching the file tree:** the tree said `Roadmap.md` while search said `Roadmap`, two names for one file on the same screen. Both now show the real filename. This deliberately reverses 0.11.4's tidier-search decision: consistency between two panes you see at once beats per-pane neatness. Typing a name with or without the extension finds the file, exactly as before.
+
+### Fixed
+
+- **Your settings survive a restart:** theme choice and sidebar width silently reset on every launch of the desktop app, because the browser storage they lived in was tied to an address that changes each launch. They now live with the app itself and simply persist.
+- **Large synced vaults no longer freeze the file tree:** rebuilding the tree used to open every note to decide its icon, and on a cloud-synced vault (iCloud, OneDrive, Dropbox) each open can force a download. Rundock now only opens files that have actually changed; a rebuild over an unchanged vault opens none at all.
+- **Releases are safer to cut:** the draft release now arrives with its title and notes filled in from this changelog, and no release can publish unless the packaged app has actually booted on the build machine first. A packaging mistake that once shipped a broken build now stops the pipeline instead.
+
 ## 0.11.4: Window Chrome & Search (2026-08-05)
 
 ### Added
