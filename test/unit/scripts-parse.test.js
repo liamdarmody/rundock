@@ -29,8 +29,10 @@ const ROOT = path.join(__dirname, '..', '..');
 const SCRIPTS = path.join(ROOT, 'scripts');
 
 function collect(dir, out = []) {
-  let items;
-  try { items = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return out; }
+  // Deliberately NOT swallowing a read failure. Skipping an unreadable
+  // directory would let the suite pass while checking less than it claims,
+  // which is the single way this guard could report a false all-clear.
+  const items = fs.readdirSync(dir, { withFileTypes: true });
   for (const item of items) {
     const full = path.join(dir, item.name);
     if (item.isDirectory()) {
@@ -54,8 +56,8 @@ describe('scripts parse', () => {
     const rel = path.relative(ROOT, file);
     test(rel, () => {
       try {
-        // --check parses without executing. ESM vs CJS is inferred from the
-        // extension, which is why .mjs files are checked correctly here.
+        // --check parses without executing, which is the point: several of
+        // these modules would launch browsers and servers on import.
         execFileSync(process.execPath, ['--check', file], { stdio: 'pipe' });
       } catch (e) {
         const detail = (e.stderr ? e.stderr.toString() : '') || e.message;
