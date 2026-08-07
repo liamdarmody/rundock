@@ -572,8 +572,12 @@ function setupAutoUpdate() {
 // ===== MAIN WINDOW =====
 
 // Height of the app's top bar, which the window controls now sit inside.
-// Must match --topbar-height in public/index.html.
-const TOPBAR_HEIGHT = 60;
+// Must match --topbar-height in public/index.html. Deliberately NOT tied to
+// the nav rail width any more: the bar is 50 and the rail stays 60. The 50
+// is derived from the search field reading as evenly padded on screen:
+// macOS draws a 1px highlight along the window's top edge, so 1 + 6.5 + 36
+// + 6.5 is the shortest bar where the field's visible gaps match.
+const TOPBAR_HEIGHT = 50;
 
 // Colours for the Windows caption buttons, which the OS draws for us from
 // values we pass. They must track the app theme, so they are re-sent whenever
@@ -594,10 +598,13 @@ const OVERLAY_COLOURS = {
 function chromeWindowOptions() {
   if (process.platform === 'darwin') {
     // We position the traffic lights ourselves, which is why the renderer's
-    // left inset is a constant rather than a measurement: x=20 puts the
-    // 52px-wide cluster at 20..72, and the inset reserves 88 so the first
-    // interface element is not flush against it. y centres them in the bar.
-    return { titleBarStyle: 'hidden', trafficLightPosition: { x: 20, y: (TOPBAR_HEIGHT - 12) / 2 } };
+    // left inset is a constant rather than a measurement: x=19 puts the
+    // 52px-wide cluster at 19..71, and the inset reserves 87 so the first
+    // interface element is not flush against it. x equals the centred y, so
+    // the cluster's padding from the left edge matches its padding from the
+    // top: the corner reads as one even inset. (A tighter x matching the nav
+    // rail's 9px icon inset was tried and sat too close to the corner.)
+    return { titleBarStyle: 'hidden', trafficLightPosition: { x: 19, y: (TOPBAR_HEIGHT - 12) / 2 } };
   }
   if (process.platform === 'win32') {
     // Enabling the overlay is also what switches on the Window Controls

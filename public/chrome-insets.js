@@ -22,12 +22,14 @@
 }(typeof self !== 'undefined' ? self : this, function () {
 
   // Room for the macOS traffic lights. The cluster is three 12px buttons with
-  // 8px gaps starting at x=20, so it ends at 72; 88 leaves a margin before the
-  // first interface element rather than butting straight up against them.
+  // 8px gaps starting at x=19, so it ends at 71; 87 leaves a margin before
+  // the first interface element rather than butting straight up against them.
+  // The 19px start equals the cluster's distance from the top of the bar, so
+  // the corner reads as one even inset.
   // A constant, not a measurement, because macOS exposes no equivalent of the
   // Window Controls Overlay API: the lights are positioned BY us, via
   // trafficLightPosition, so their location is something we choose.
-  const MAC_TRAFFIC_LIGHTS = 88;
+  const MAC_TRAFFIC_LIGHTS = 87;
 
   const ZERO = { left: 0, right: 0 };
 
