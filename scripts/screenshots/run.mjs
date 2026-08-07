@@ -196,8 +196,13 @@ async function main() {
     }
 
     // 6. Gap analysis + MANIFEST.
-    log('[6/6] Writing gap analysis and MANIFEST...');
-    if (fs.existsSync(GAPS_SRC)) fs.copyFileSync(GAPS_SRC, path.join(OUT, 'content-and-copy-gaps.md'));
+    log('[6/6] Writing MANIFEST...');
+    // The content and copy gap analysis is deliberately NOT copied here.
+    // It was written against a specific release and reasons throughout from
+    // that feature set, so copying it beside freshly generated assets made it
+    // read as current when it was several releases behind. It stays in
+    // scripts/screenshots/ as a dated record; regenerate it against the
+    // current release before relying on it again.
     writeManifest(manifest, { built, gate, webpOk: manifest.some((m) => m.variant === 'webp') });
 
     // Cleanup staging (flat masters are already copied into stills/flat).
@@ -240,7 +245,7 @@ function writeManifest(rows, { built, gate, webpOk }) {
     '- `stills/flat/` flat clean @2x masters and element-scoped crops (`-tile`), for the Site and Docs to frame in their own containers.',
     '- `stills/framed/` self-framed variants (and README-width derivations) for plain-markdown placements.',
     '- `motion/` the five looping GIFs, light and dark.',
-    '- `content-and-copy-gaps.md` the release content and copy gap analysis (proposal only).',
+    '- The content and copy gap analysis is not included: it was written against an earlier release and would read as current. See `scripts/screenshots/content-and-copy-gaps.md`, and check its stated release before relying on it.',
     '',
     '## Sanitization',
     '',

@@ -45,7 +45,7 @@ not expect a clean git diff to tell you whether a GIF actually changed.
 6. **Motion**: record five scripted interactions and convert each to an optimized,
    palette-based looping GIF.
 7. Write **`MANIFEST.md`** mapping every asset to its intended target repo, path,
-   feature, theme, and rationale, and copy in the content and copy gap analysis.
+   feature, theme, and rationale.
 
 ## Prerequisites
 
