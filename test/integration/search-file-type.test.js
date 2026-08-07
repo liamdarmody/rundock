@@ -78,15 +78,15 @@ describe('telling files apart in search results', () => {
       + `got ${JSON.stringify(collisions)}`);
   });
 
-  test('the extension is shown for everything except markdown', async () => {
+  test('the extension is shown for every type, markdown included', async () => {
+    // Markdown used to be the one hidden extension here. That was reversed:
+    // the tree shows .md and both panes must give a file one name. The full
+    // rationale is recorded on displayTitle in search.js.
     const titles = titlesFor(await search('board-pack-q3'));
-    for (const ext of ['pdf', 'html', 'png', 'jpg', 'gif']) {
+    for (const ext of ['pdf', 'html', 'png', 'jpg', 'gif', 'md']) {
       assert.ok(titles.includes(`board-pack-q3.${ext}`),
         `expected a row titled board-pack-q3.${ext}; got ${JSON.stringify(titles)}`);
     }
-    assert.ok(titles.includes('board-pack-q3'),
-      'the markdown file keeps a clean title, because .md is on almost every file '
-      + `and never tells two of them apart; got ${JSON.stringify(titles)}`);
   });
 
   test('a title shown on screen can be found by typing it exactly', async () => {
@@ -101,9 +101,11 @@ describe('telling files apart in search results', () => {
   });
 
   test('searching a bare stem still finds a markdown note', async () => {
+    // The title now carries .md, but a user typing just the name they think
+    // of must still find the note.
     const titles = titlesFor(await search('pricing-strategy'));
-    assert.ok(titles.includes('pricing-strategy'),
-      `an ordinary note must be unaffected; got ${JSON.stringify(titles)}`);
+    assert.ok(titles.includes('pricing-strategy.md'),
+      `an ordinary note must be found by its stem; got ${JSON.stringify(titles)}`);
   });
 
   test('results carry a kind, so the row can show a per-type icon', async () => {
@@ -119,6 +121,6 @@ describe('telling files apart in search results', () => {
     const byTitle = Object.fromEntries(rows.map(r => [r.title, r.kind]));
     assert.strictEqual(byTitle['board-pack-q3.pdf'], 'pdf');
     assert.strictEqual(byTitle['board-pack-q3.png'], 'image');
-    assert.strictEqual(byTitle['board-pack-q3'], 'note');
+    assert.strictEqual(byTitle['board-pack-q3.md'], 'note');
   });
 });
