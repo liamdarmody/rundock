@@ -91,15 +91,26 @@ jobs:
           printf '%s' "$APPLE_API_KEY_P8" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
           echo "APPLE_API_KEY=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
 
+      - name: Extract release name and notes from the changelog
+        # Fails the build if the changelog has no entry for this version:
+        # a draft release with blank notes must never be published.
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          node scripts/release-notes.js "$VERSION" --out release-info
+
       - name: Build, sign, notarise, publish
         # Version comes from the tag (v1.2.3 -> 1.2.3) and overrides package.json,
         # so the built artefacts and the published release always match the tag.
+        # releaseInfo names the draft release and fills its notes from the
+        # changelog, so the draft arrives ready to review rather than blank.
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           echo "Building version $VERSION from tag $GITHUB_REF_NAME"
           npx electron-builder --mac --universal \
             -c.mac.notarize=true \
             -c.extraMetadata.version="$VERSION" \
+            -c.releaseInfo.releaseName="$(cat release-info/release-name.txt)" \
+            -c.releaseInfo.releaseNotesFile=release-info/release-notes.md \
             --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -130,13 +141,26 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Extract release name and notes from the changelog
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          node scripts/release-notes.js "$VERSION" --out release-info
+
       - name: Build and publish
         # Use bash (available on Windows runners) so version extraction matches macOS.
+        # Passing the same releaseInfo as the macOS job is deliberate: whichever
+        # job reaches the draft release first names it, and identical values make
+        # the order irrelevant.
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           echo "Building Windows version $VERSION from tag $GITHUB_REF_NAME"
-          npx electron-builder --win -c.extraMetadata.version="$VERSION" --publish always
+          npx electron-builder --win \
+            -c.extraMetadata.version="$VERSION" \
+            -c.releaseInfo.releaseName="$(cat release-info/release-name.txt)" \
+            -c.releaseInfo.releaseNotesFile=release-info/release-notes.md \
+            --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
