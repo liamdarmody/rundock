@@ -1039,7 +1039,14 @@ mark.find-match.current,
    arrows navigate, Enter opens, Escape closes. 0.18 says "your keyboard lives
    here now" without claiming the app is blocked. 0.42 was modal weight, and
    over the LIGHT theme it washed the whole interface grey. */
-.palette-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.18); z-index: 200; display: flex; align-items: flex-start; justify-content: center; padding: calc((var(--topbar-height) - 36px) / 2) 16px 16px; }
+/* The palette must open exactly where the search field sits: one control in
+   two states. The field is grid-centred inside the bar's content box (the
+   bar keeps a 1px transparent bottom border, so that box is 1px short) and
+   then nudged down 2px for visual centring against the window's top
+   highlight; this padding re-derives that same position: (content box minus
+   field minus nudge) / 2 plus the nudge. If the field's margin-top changes,
+   change the 2px here with it; the e2e suite pins the two to the pixel. */
+.palette-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.18); z-index: 200; display: flex; align-items: flex-start; justify-content: center; padding: calc((var(--topbar-height) - 1px - 36px - 2px) / 2 + 2px) 16px 16px; }
 /* Same width expression as the field, via the same gutter variable, so the
    two are the same object in two states and the panel cannot overlap the
    window controls any more than the field could. */
