@@ -5256,6 +5256,32 @@ function fileKind(fullPath, name) {
   return 'file';
 }
 
+// Kind, but only opening files whose identity has changed. Classifying a
+// markdown file reads its frontmatter head, which OPENS it, and on a
+// cloud-synced vault (iCloud, OneDrive, Dropbox online-only files) an open
+// can force the provider to download content. A stat reads metadata only and
+// materialises nothing, so it is the cheap question ("same file as last
+// time?") that decides whether the expensive one ("what is in it?") is asked
+// at all. A rebuild over an unchanged vault opens zero files.
+//
+// Entries for deleted files linger until the process restarts; at three
+// small numbers per path that is noise, and pruning would cost a pass over
+// the map on every walk to save it.
+const _fileKindCache = new Map(); // absolute path -> { mtimeMs, size, kind }
+
+function fileKindCached(fullPath, name) {
+  // Only markdown classification reads content; everything else is decided
+  // by extension alone, with no I/O to save.
+  if (!/\.mdx?$/i.test(name)) return fileKind(fullPath, name);
+  let st;
+  try { st = fs.statSync(fullPath); } catch (e) { return fileKind(fullPath, name); }
+  const hit = _fileKindCache.get(fullPath);
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.kind;
+  const kind = fileKind(fullPath, name);
+  _fileKindCache.set(fullPath, { mtimeMs: st.mtimeMs, size: st.size, kind });
+  return kind;
+}
+
 function getFileTree(dir, prefix = '') {
   const entries = [];
   try {
@@ -5271,7 +5297,7 @@ function getFileTree(dir, prefix = '') {
       if (item.isDirectory()) {
         entries.push({ type: 'folder', name: item.name, path: relativePath, children: getFileTree(path.join(dir, item.name), relativePath) });
       } else if (VIEWABLE_FILE_RE.test(item.name)) {
-        entries.push({ type: 'file', name: item.name, path: relativePath, kind: fileKind(path.join(dir, item.name), item.name) });
+        entries.push({ type: 'file', name: item.name, path: relativePath, kind: fileKindCached(path.join(dir, item.name), item.name) });
       }
     }
   } catch (e) {}
