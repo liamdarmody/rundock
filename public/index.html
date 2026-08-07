@@ -71,7 +71,7 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
    Help button plus 8px padding). The gutter each side is then the LARGER of
    the two sides' total occupancy, which is what keeps the middle column
    centred on the WINDOW rather than on the leftover space. */
-:root { --chrome-inset-left: 0px; --chrome-inset-right: 0px; --nav-rail-width: 60px; --topbar-height: 48px; --content-radius: 12px;
+:root { --chrome-inset-left: 0px; --chrome-inset-right: 0px; --nav-rail-width: 60px; --topbar-height: 50px; --content-radius: 12px;
         --tb-cluster: 38px;
         --chrome-gutter: max(var(--chrome-inset-left), calc(var(--chrome-inset-right) + var(--tb-cluster))); }
 
@@ -130,6 +130,13 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
      rather than by a formula. 32px of breathing room stops it sitting flush
      against whatever occupies the gutter. */
   grid-column: 2; justify-self: center;
+  /* Visual centring, not geometric. Two things eat into the apparent top
+     gap: macOS draws a 1px highlight line along the window's top edge, and
+     the bar's transparent 1px bottom border sits inside its border-box, so
+     plain centring lands the field 1px high before the highlight is even
+     counted. Nudging down 2px makes the gap above and below read equal on
+     screen. Measured, not guessed; remeasure if the bar height changes. */
+  margin-top: 2px;
   width: min(680px, calc(100% - 32px));
   background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
   color: var(--text-2); font-size: var(--caption); font-family: inherit;

@@ -29,12 +29,12 @@ describe('computeChromeInsets', () => {
     });
 
     test('the reserve matches where the lights are actually placed', () => {
-      // The lights sit at x=9 (electron/main.js, trafficLightPosition), the
-      // 52px cluster ends at 61, and 16px of margin follows. If either side
+      // The lights sit at x=19 (electron/main.js, trafficLightPosition), the
+      // 52px cluster ends at 71, and 16px of margin follows. If either side
       // of that arrangement changes, this number and that one must move
       // together; the pinned value is what forces the revisit.
       const i = computeChromeInsets({ platform: 'darwin', viewportWidth: 1280 });
-      assert.strictEqual(i.left, 77);
+      assert.strictEqual(i.left, 87);
     });
 
     test('collapses to zero in fullscreen, where the lights are hidden', () => {
