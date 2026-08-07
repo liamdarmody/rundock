@@ -4,6 +4,7 @@ const fs = require('fs');
 const { execSync } = require('child_process');
 const buildContextMenuTemplate = require('./context-menu-template.js');
 const { resolveUpdateFeed } = require('./update-feed.js');
+const { decideUpdateUi } = require('./update-state.js');
 
 let autoUpdater;
 try {
@@ -317,6 +318,10 @@ function setupMenu() {
     }
     isCheckingManually = true;
     autoUpdater.checkForUpdates().catch((err) => {
+      // Failures normally surface through the updater's error event, which
+      // resets the flag before this rejection lands. Only report here if
+      // that event never fired, so the user gets one dialog, not two.
+      if (!isCheckingManually) return;
       isCheckingManually = false;
       dialog.showMessageBox(mainWindow, {
         type: 'error',
@@ -420,24 +425,44 @@ function setupAutoUpdate() {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
 
+  // Everything the user sees about an update is decided by the pure module
+  // (electron/update-state.js); this function only carries state between
+  // events and delivers the result. The renderer receives every decision on
+  // the existing channel so it can show update state in place; dialogs are
+  // shown here because they are native.
+  let updateState = { phase: 'idle', percent: null, version: null, manual: false, launchesSinceDownload: 0 };
+
+  function showUpdateUi(patch) {
+    updateState = { ...updateState, ...patch };
+    const ui = decideUpdateUi(updateState);
+    if (mainWindow) mainWindow.webContents.send('rundock-update', ui);
+    return ui;
+  }
+
   autoUpdater.on('update-available', (info) => {
-    if (mainWindow) {
-      mainWindow.webContents.send('rundock-update', { type: 'available', version: info.version });
-    }
-    if (isCheckingManually) {
-      isCheckingManually = false;
-      dialog.showMessageBox(mainWindow, {
-        type: 'info',
-        message: `Update available: ${info.version}`,
-        detail: 'Downloading in the background. Rundock will install the update on next quit.',
-        buttons: ['OK'],
-      });
-    }
+    const ui = showUpdateUi({
+      phase: 'available',
+      version: info && info.version ? info.version : null,
+      percent: null,
+      manual: isCheckingManually,
+    });
+    isCheckingManually = false;
+    updateState.manual = false;
+    if (ui.dialog) dialog.showMessageBox(mainWindow, ui.dialog);
+  });
+
+  autoUpdater.on('download-progress', (progress) => {
+    showUpdateUi({
+      phase: 'downloading',
+      percent: progress && typeof progress.percent === 'number' ? progress.percent : null,
+    });
   });
 
   autoUpdater.on('update-not-available', () => {
-    if (isCheckingManually) {
-      isCheckingManually = false;
+    const wasManual = isCheckingManually;
+    isCheckingManually = false;
+    showUpdateUi({ phase: 'idle', version: null, percent: null, manual: false });
+    if (wasManual) {
       dialog.showMessageBox(mainWindow, {
         type: 'info',
         message: 'Rundock is up to date.',
@@ -448,21 +473,21 @@ function setupAutoUpdate() {
   });
 
   autoUpdater.on('error', (err) => {
-    if (isCheckingManually) {
-      isCheckingManually = false;
-      dialog.showMessageBox(mainWindow, {
-        type: 'error',
-        message: 'Could not check for updates',
-        detail: err && err.message ? err.message : String(err),
-        buttons: ['OK'],
-      });
-    }
+    const ui = showUpdateUi({
+      phase: 'error',
+      manual: isCheckingManually,
+      error: err && err.message ? err.message : String(err),
+    });
+    isCheckingManually = false;
+    updateState.manual = false;
+    if (ui.dialog) dialog.showMessageBox(mainWindow, ui.dialog);
   });
 
-  autoUpdater.on('update-downloaded', () => {
-    if (mainWindow) {
-      mainWindow.webContents.send('rundock-update', { type: 'ready' });
-    }
+  autoUpdater.on('update-downloaded', (info) => {
+    showUpdateUi({
+      phase: 'downloaded',
+      version: info && info.version ? info.version : updateState.version,
+    });
   });
 
   // Check for updates silently on launch (don't block startup)
