@@ -751,7 +751,8 @@ app.whenReady().then(async () => {
   }
 
   // Setup confirmed (installed + signed in): remember it so future launches
-  // skip the auth API call. The 401 recovery card covers later expiry.
+  // skip the auth API call. Sign-in expiry after this point is handled
+  // separately, when a later request fails authentication.
   try { fs.writeFileSync(setupMarker, new Date().toISOString()); } catch { /* non-fatal */ }
 
   // Start the embedded server on an OS-assigned port
