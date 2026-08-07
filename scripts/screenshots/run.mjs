@@ -18,26 +18,26 @@ import { fileURLToPath } from 'node:url';
 import { buildWorkspace, checkSanitization, hasProjectBannedTokens } from './generate-workspace.mjs';
 import { startRundock } from './serve.mjs';
 import { assertAppContract } from './harness.mjs';
-import { captureStills, SHOTS } from './capture.mjs';
+import { captureStills, SHOTS, THEMES } from './capture.mjs';
 import { frameImage, FRAME_HTML_URL, resizeTo, toWebp, pngDims } from './frame.mjs';
 import { captureMotion, ffmpegAvailable, CLIPS, MOTION_THEMES } from './motion.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const OUT = path.join(REPO_ROOT, 'screenshots-out');
-const GAPS_SRC = path.join(__dirname, 'content-and-copy-gaps.md');
 
 // README-friendly derived width (GitHub's content column is ~1000px, crisp at @2x).
 const README_WIDTH = 2200;
 
-// Per-shot destination hints, grounded in the content/copy gap analysis. Each
+// Per-shot destination hints, originally grounded in the content/copy gap
+// analysis (see that file's stated release before trusting its reasoning). Each
 // entry drives the MANIFEST rows. `hero` placements are added separately.
 const TARGETS = {
   'org-chart':        { repo: 'Rundock Site',  path: 'index.html (hero) + images/rundock-app-hero.png',       note: 'Flagship "one operator, whole team" image; replaces the stale April hero.' },
   'agent-profile':    { repo: 'rundock-docs',  path: 'concepts/agents.mdx',                                    note: 'Shows an agent profile with role, skills, and routines.' },
   'skills':           { repo: 'Rundock Site',  path: 'index.html Skills section + rundock-docs/concepts/skills.mdx', note: 'Skills list plus a skill detail; refreshes the April skills-detail.png.' },
   'conversations':    { repo: 'rundock-docs',  path: 'images/conversation-flow.png + introduction.mdx',        note: 'Conversation list plus an open thread; product-in-use hero candidate.' },
-  'streaming':        { repo: 'Rundock Site',  path: 'index.html Conversations section',                       note: 'A reply streaming in; supports the live, working-team story.' },
+  'streaming':        { repo: 'Rundock Site + rundock-docs', path: 'index.html Conversations section + docs images/conversation-handoff.gif (quickstart.mdx, concepts/how-rundock-works.mdx)', note: 'A reply streaming in; supports the live, working-team story. NOTE the docs publish this clip under the name conversation-handoff, which is what it shows rather than how it is produced. That mismatch let a stale copy survive a full estate refresh, so check both destinations.' },
   'files':            { repo: 'Rundock Site',  path: 'index.html Files section + rundock-docs/concepts/files.mdx', note: 'File tree with per-type icons; replaces the materially wrong April file-browser.png.' },
   'markdown-note':    { repo: 'rundock-docs',  path: 'concepts/files.mdx (the editor + properties)',           note: 'Frontmatter properties panel, callouts, and clickable wikilinks.' },
   'callouts':         { repo: 'rundock-docs',  path: 'concepts/files.mdx (callouts)',                          note: 'Nested Obsidian callouts rendered in place.' },
@@ -47,7 +47,10 @@ const TARGETS = {
   'pdf-viewer':       { repo: 'rundock-docs',  path: 'concepts/files.mdx (any file type)',                     note: 'PDF opens inline alongside notes and boards.' },
   'search':           { repo: 'Rundock Site',  path: 'index.html new Search section + rundock-docs/concepts/search.mdx', note: 'Cmd+K universal search; headline 0.10.0 feature, absent everywhere today.' },
   'find':             { repo: 'rundock-docs',  path: 'concepts/search.mdx (Cmd+F)',                            note: 'In-view find inside the editor.' },
-  'settings':         { repo: 'rundock-docs',  path: 'concepts/runtimes.mdx',                                  note: 'Settings and runtimes surface.' },
+  // 'settings' was listed here with a home in concepts/runtimes.mdx, but no
+  // such shot has ever been defined in capture.mjs, so the manifest described a
+  // destination for an asset that does not exist. Removed rather than left
+  // promising: add it back alongside a real capture definition.
 };
 
 // The three chrome-framed hero placements (spec: Site hero, README hero, docs
@@ -122,6 +125,24 @@ async function main() {
     log('[3/6] Capturing stills (light + dark, @2x)...');
     const shots = await captureStills({ browser, url: server.url, stagingDir: staging, log });
 
+    // A shot that fails is caught and logged inside captureStills so one bad
+    // selector cannot lose the whole run. That is right, but on its own it is
+    // too quiet: the run still exits 0, and a missing shot shows up only as one
+    // `!` line inside a couple of hundred, then as an asset nobody notices is
+    // absent. Motion already gates on its expected count; stills did not, so a
+    // renamed selector could silently ship a set with the search shots missing.
+    const missingShots = [];
+    for (const shot of SHOTS) {
+      for (const theme of THEMES) {
+        if (!shots.some(p => p.name === shot.name && p.theme === theme && p.kind === 'flat')) {
+          missingShots.push(`${shot.name}.${theme}`);
+        }
+      }
+    }
+    if (missingShots.length) {
+      log(`      ! STILLS INCOMPLETE: expected ${SHOTS.length * THEMES.length} flat masters, got ${shots.filter(p => p.kind === 'flat').length}. Missing: ${missingShots.join(', ')}`);
+    }
+
     // 4. Frame + derive per target.
     log('[4/6] Framing (hero chrome + feature self-frame) and deriving sizes...');
     const frameCtx = await browser.newContext({ deviceScaleFactor: 2 });
@@ -192,8 +213,13 @@ async function main() {
     }
 
     // 6. Gap analysis + MANIFEST.
-    log('[6/6] Writing gap analysis and MANIFEST...');
-    if (fs.existsSync(GAPS_SRC)) fs.copyFileSync(GAPS_SRC, path.join(OUT, 'content-and-copy-gaps.md'));
+    log('[6/6] Writing MANIFEST...');
+    // The content and copy gap analysis is deliberately NOT copied here.
+    // It was written against a specific release and reasons throughout from
+    // that feature set, so copying it beside freshly generated assets made it
+    // read as current when it was several releases behind. It stays in
+    // scripts/screenshots/ as a dated record; regenerate it against the
+    // current release before relying on it again.
     writeManifest(manifest, { built, gate, webpOk: manifest.some((m) => m.variant === 'webp') });
 
     // Cleanup staging (flat masters are already copied into stills/flat).
@@ -227,7 +253,7 @@ function writeManifest(rows, { built, gate, webpOk }) {
     '- **Master:** 1440x900 logical at deviceScaleFactor 2, so every flat master is 2880x1800 @2x. Per-target sizes are derived down from the master, never upscaled.',
     '- **Themes:** every still and every GIF captured in both light and dark.',
     '- **Determinism:** fixed data and a frozen clock (2026-07-18, UTC), animations disabled for stills, scrollbars and caret hidden, the connection toast suppressed, web fonts awaited before capture.',
-    '- **Framing:** transparent-background PNGs, so one framed image drops onto any page background (light or dark). The macOS window controls are drawn into the app's own top bar during capture, so every shot that includes that bar carries them and element-scoped crops do not. Hero images take wider padding; feature shots ship as a flat clean master (for destinations that CSS-frame) plus a self-framed variant (rounded corners, soft drop shadow, and a neutral hairline ring that holds the edge on dark backgrounds). Tight padding.',
+    '- **Framing:** transparent-background PNGs, so one framed image drops onto any page background (light or dark). The macOS window controls are drawn into the app\'s own top bar during capture, so every shot that includes that bar carries them and element-scoped crops do not. Hero images take wider padding; feature shots ship as a flat clean master (for destinations that CSS-frame) plus a self-framed variant (rounded corners, soft drop shadow, and a neutral hairline ring that holds the edge on dark backgrounds). Tight padding.',
     '- **Motion:** palette-optimized looping GIFs, ~1280px wide, 15fps, roughly 5-6s.',
     '',
     '## Folder layout',
@@ -236,7 +262,7 @@ function writeManifest(rows, { built, gate, webpOk }) {
     '- `stills/flat/` flat clean @2x masters and element-scoped crops (`-tile`), for the Site and Docs to frame in their own containers.',
     '- `stills/framed/` self-framed variants (and README-width derivations) for plain-markdown placements.',
     '- `motion/` the five looping GIFs, light and dark.',
-    '- `content-and-copy-gaps.md` the release content and copy gap analysis (proposal only).',
+    '- The content and copy gap analysis is not included: it was written against an earlier release and would read as current. See `scripts/screenshots/content-and-copy-gaps.md`, and check its stated release before relying on it.',
     '',
     '## Sanitization',
     '',

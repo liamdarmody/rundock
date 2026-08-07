@@ -106,10 +106,16 @@ function setVersion(version) {
 }
 
 // Extract the title line and body of a specific version from CHANGELOG.md.
-function extractChangelogEntry(version) {
-  const changelogPath = path.join(ROOT, 'CHANGELOG.md');
-  if (!fs.existsSync(changelogPath)) return null;
-  const lines = fs.readFileSync(changelogPath, 'utf8').split('\n');
+// Pass `changelogText` to parse supplied content (used by tests and by
+// scripts/release-notes.js); omit it to read the repository's CHANGELOG.md.
+function extractChangelogEntry(version, changelogText) {
+  let text = changelogText;
+  if (typeof text !== 'string') {
+    const changelogPath = path.join(ROOT, 'CHANGELOG.md');
+    if (!fs.existsSync(changelogPath)) return null;
+    text = fs.readFileSync(changelogPath, 'utf8');
+  }
+  const lines = text.split('\n');
   const matchesHeading = (line) => {
     if (version === 'Unreleased') return /^## Unreleased\s*$/.test(line);
     return line.startsWith(`## ${version}:`);
@@ -193,15 +199,21 @@ function commitTagPush(version) {
 // Main
 // ---------------------------------------------------------------------------
 
-const version = getVersion();
-preflight(version);
-setVersion(version);
-promoteUnreleasedChangelog(version);
-commitTagPush(version);
+// Guarded so the changelog helpers are requireable (by tests and by
+// scripts/release-notes.js) without starting a release.
+if (require.main === module) {
+  const version = getVersion();
+  preflight(version);
+  setVersion(version);
+  promoteUnreleasedChangelog(version);
+  commitTagPush(version);
 
-console.log('');
-log('done', `Tagged v${version}. GitHub Actions is now building, signing, notarising, and publishing a DRAFT release.`);
-log('done', `Watch the build:   https://github.com/${REPO}/actions`);
-log('done', `Review + publish:  https://github.com/${REPO}/releases`);
-log('done', `Then bump the Rundock Site download links to v${version}.`);
-log('done', `If CI fails (e.g. expired Apple agreement): fix it and re-run the workflow on tag v${version}: no need to revert main.`);
+  console.log('');
+  log('done', `Tagged v${version}. GitHub Actions is now building, signing, notarising, and publishing a DRAFT release.`);
+  log('done', `Watch the build:   https://github.com/${REPO}/actions`);
+  log('done', `Review + publish:  https://github.com/${REPO}/releases`);
+  log('done', `Then bump the Rundock Site download links to v${version}.`);
+  log('done', `If CI fails (e.g. expired Apple agreement): fix it and re-run the workflow on tag v${version}: no need to revert main.`);
+}
+
+module.exports = { extractChangelogEntry, promoteUnreleasedChangelog };

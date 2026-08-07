@@ -71,7 +71,7 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
    Help button plus 8px padding). The gutter each side is then the LARGER of
    the two sides' total occupancy, which is what keeps the middle column
    centred on the WINDOW rather than on the leftover space. */
-:root { --chrome-inset-left: 0px; --chrome-inset-right: 0px; --nav-rail-width: 60px; --topbar-height: 60px; --content-radius: 12px;
+:root { --chrome-inset-left: 0px; --chrome-inset-right: 0px; --nav-rail-width: 60px; --topbar-height: 50px; --content-radius: 12px;
         --tb-cluster: 38px;
         --chrome-gutter: max(var(--chrome-inset-left), calc(var(--chrome-inset-right) + var(--tb-cluster))); }
 
@@ -130,6 +130,13 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
      rather than by a formula. 32px of breathing room stops it sitting flush
      against whatever occupies the gutter. */
   grid-column: 2; justify-self: center;
+  /* Visual centring, not geometric. Two things eat into the apparent top
+     gap: macOS draws a 1px highlight line along the window's top edge, and
+     the bar's transparent 1px bottom border sits inside its border-box, so
+     plain centring lands the field 1px high before the highlight is even
+     counted. Nudging down 2px makes the gap above and below read equal on
+     screen. Measured, not guessed; remeasure if the bar height changes. */
+  margin-top: 2px;
   width: min(680px, calc(100% - 32px));
   background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
   color: var(--text-2); font-size: var(--caption); font-family: inherit;
@@ -179,7 +186,6 @@ body.palette-open .tb-search { visibility: hidden; }
 .nav-item .icon-filled { display: none; }
 .nav-item.active .icon-outline { display: none; }
 .nav-item.active .icon-filled { display: block; }
-.nav-separator { width: 24px; height: 1px; background: var(--border); margin: 8px 0; }
 
 /* Sidebar */
 /* Top-left corner of the content region. The notch reveals the chrome behind
@@ -1125,7 +1131,6 @@ mark.find-match.current,
       <button class="nav-item" onclick="toggleTheme()" data-tooltip="Theme" id="theme-toggle">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
       </button>
-      <div class="nav-separator"></div>
       <button class="nav-item" data-nav="settings" onclick="switchNav('settings')" data-tooltip="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.604.852.997 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>

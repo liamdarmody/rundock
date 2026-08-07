@@ -1,5 +1,14 @@
 # Screenshot placement plan (Site, README, Docs)
 
+> **Written against release 0.10.0, with 0.11.0 then unreleased. Not maintained since.**
+>
+> This document reasons throughout from the feature set of that release, so
+> every gap it identifies and every placement it proposes should be re-checked
+> against the current CHANGELOG before being acted on. It is kept as a record
+> of the analysis, not as current advice. It is deliberately no longer copied
+> into `screenshots-out/`, because sitting beside freshly generated assets made
+> it read as current.
+
 A curated proposal for where the generated assets should go and why. The
 pipeline produces more than any surface needs on purpose; this plan uses fewer,
 better images, each earning its place, and pairs them with copy where a feature
