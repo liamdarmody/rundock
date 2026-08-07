@@ -318,15 +318,12 @@ body.palette-open .tb-search { visibility: hidden; }
 .convo-title { font-size: var(--body); font-weight: 500; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .convo-preview { font-size: var(--caption); color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .convo-meta { font-size: var(--caption); color: var(--text-2); display: flex; align-items: center; gap: 6px; }
-/* The two conversation-state dots share hue and differ two ways: motion
-   (halo pulses vs nothing) and single-frame shape (working carries a ring
-   that never fully disappears, so even a screenshot or reduced motion shows
-   ring vs no-ring). */
+/* The two conversation-state dots share hue and differ by motion: working
+   pulses, unread holds still. A halo ring on the working dot was tried for
+   an extra single-frame distinction and reviewed as too much; motion is the
+   accepted separator. */
 .convo-unread { width: 8px; height: 8px; min-width: 8px; background: var(--success); border-radius: 50%; }
-.convo-working { width: 8px; height: 8px; min-width: 8px; background: var(--success); border-radius: 50%; margin-left: auto; position: relative; }
-.convo-working::after { content: ''; position: absolute; inset: -4px; border-radius: 50%; border: 1.5px solid var(--success); animation: convoHalo 2s ease-in-out infinite; }
-@keyframes convoHalo { 0%, 100% { transform: scale(0.82); opacity: 0.4; } 50% { transform: scale(1.18); opacity: 0.9; } }
-@media (prefers-reduced-motion: reduce) { .convo-working::after { animation: none; opacity: 0.65; transform: scale(1); } }
+.convo-working { width: 8px; height: 8px; min-width: 8px; background: var(--success); border-radius: 50%; margin-left: auto; animation: orgPulse 2s ease-in-out infinite; }
 .nav-badge { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--attention); border-radius: 50%; pointer-events: none; }
 .nav-badge-working { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--success); border-radius: 50%; pointer-events: none; animation: orgPulse 2s ease-in-out infinite; }
 
