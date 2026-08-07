@@ -232,7 +232,7 @@ body.palette-open .tb-search { visibility: hidden; }
 
 /* Conversation list */
 .convo-list { flex: 1; overflow-y: auto; padding: 8px; }
-.convo-item { display: flex; flex-direction: column; gap: 3px; padding: 12px 8px 12px 5px; border-radius: 8px; cursor: pointer; transition: background 0.15s ease, border-left-color 0.12s ease; position: relative; border-left: 3px solid transparent; }
+.convo-item { display: flex; flex-direction: column; gap: 3px; padding: 12px 8px 12px 5px; border-radius: 8px; cursor: pointer; transition: background 0.15s ease; position: relative; }
 .convo-item:hover { background: var(--elevated); }
 .convo-item.active { background: var(--accent-glow); }
 .convo-item.active:hover { background: rgba(232,122,90,0.18); }
@@ -245,9 +245,10 @@ body.palette-open .tb-search { visibility: hidden; }
 .convo-item:hover .convo-pin-indicator { opacity: 0; }
 .convo-item:hover .convo-title-row { padding-right: 24px; }
 .convo-pin:hover { color: var(--accent); background: var(--surface); }
-.convo-item.b-unread { border-left-color: var(--success); }
-/* b-pinned removed: pinned-ness is position + the title-row pin glyph; the
-   left border is reserved for the unread/working signal. */
+/* The coloured left border is gone from conversation rows: state lives in
+   the meta-row dots below (pulsing halo = working, static = unread) and in
+   the accent-glow fill for the active row. Pinned-ness stays position + the
+   title-row pin glyph. */
 
 /* Sidebar filter pills (conversations sidebar only). No divider: the bordered
    pills anchor the top of the list on their own (WhatsApp-style). */
@@ -324,7 +325,11 @@ body.palette-open .tb-search { visibility: hidden; }
 .convo-title { font-size: var(--body); font-weight: 500; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .convo-preview { font-size: var(--caption); color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .convo-meta { font-size: var(--caption); color: var(--text-2); display: flex; align-items: center; gap: 6px; }
-.convo-unread { width: 8px; height: 8px; min-width: 8px; background: var(--accent); border-radius: 50%; margin-left: auto; }
+/* The two conversation-state dots share hue and differ by motion: working
+   pulses, unread holds still. A halo ring on the working dot was tried for
+   an extra single-frame distinction and reviewed as too much; motion is the
+   accepted separator. */
+.convo-unread { width: 8px; height: 8px; min-width: 8px; background: var(--success); border-radius: 50%; }
 .convo-working { width: 8px; height: 8px; min-width: 8px; background: var(--success); border-radius: 50%; margin-left: auto; animation: orgPulse 2s ease-in-out infinite; }
 .nav-badge { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--attention); border-radius: 50%; pointer-events: none; }
 .nav-badge-working { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--success); border-radius: 50%; pointer-events: none; animation: orgPulse 2s ease-in-out infinite; }
@@ -459,8 +464,13 @@ body.palette-open .tb-search { visibility: hidden; }
 .runtime-default { font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-2); border: 1px solid var(--border); padding: 1px 6px; border-radius: 4px; margin-right: 4px; }
 .runtime-guidance { padding: 0 16px 14px; font-size: var(--caption); color: var(--text-2); line-height: 1.6; }
 .runtime-guidance code { font-family: 'SF Mono','Fira Code','Consolas',monospace; font-size: 11px; background: var(--elevated); padding: 2px 6px; border-radius: 4px; color: var(--text-1); }
-.msg-tool { align-self: flex-start; max-width: 85%; padding: 8px 12px; background: var(--card); border-left: 3px solid var(--working); border-radius: 0 8px 8px 0; font-size: var(--caption); color: var(--text-2); display: flex; align-items: center; gap: 8px; animation: fadeIn 0.2s ease; }
-.msg-tool.done { border-left-color: var(--success); }
+/* Tool activity: state sits in an outlined icon ring at the start of the
+   chip rather than a coloured edge, so the radius is uniform and the done
+   state genuinely recolours (the old border-only version left the glyph
+   blue forever). */
+.msg-tool { align-self: flex-start; max-width: 85%; padding: 7px 12px 7px 8px; background: var(--card); border-radius: 8px; font-size: var(--caption); color: var(--text-2); display: flex; align-items: center; gap: 8px; animation: fadeIn 0.2s ease; }
+.msg-tool-icon { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--working); color: var(--working); display: flex; align-items: center; justify-content: center; font-size: 8.5px; flex-shrink: 0; background: transparent; }
+.msg-tool.done .msg-tool-icon { border-color: var(--success); color: var(--success); }
 /* Activity summary */
 .activity-summary { margin-top: 8px; font-size: var(--caption); color: var(--text-2); }
 .activity-summary summary { cursor: pointer; user-select: none; padding: 4px 0; list-style: none; opacity: 0.6; transition: opacity 0.15s ease; }
@@ -522,7 +532,9 @@ body.palette-open .tb-search { visibility: hidden; }
    error state. The caret is already an unambiguous focus indicator here; the
    border only has to confirm it.
    The design system needs the matching clause; see the drift card. */
-.chat-input textarea:focus { border-color: var(--accent); }
+/* Focus shifts weight, not hue: a 1px neutral ring where the border was
+   transparent. The caret is the primary signal; the ring only confirms it. */
+.chat-input textarea:focus { box-shadow: 0 0 0 1px var(--text-2); }
 .chat-input textarea::placeholder { color: var(--text-2); }
 .chat-input textarea:disabled { opacity: 0.5; }
 .send-btn { width: 42px; height: 42px; background: var(--card); color: var(--text-2); border-radius: 50%; display: flex; align-items: center; justify-content: center; transition: all 0.25s ease; flex-shrink: 0; }
@@ -1058,9 +1070,14 @@ mark.find-match.current,
 .palette-results { flex: 1; overflow-y: auto; padding: 6px 6px 10px; scroll-padding: 40px; }
 .palette-group-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); padding: 12px 12px 5px; display: flex; align-items: center; gap: 6px; }
 .palette-group-count { font-weight: 500; letter-spacing: 0; text-transform: none; opacity: 0.75; }
-.palette-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; cursor: pointer; border-left: 2px solid transparent; }
+.palette-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+/* Hover and selected are two different FILLS, not one fill plus a hairline:
+   neutral card for the pointer, the same accent-glow the sidebar's active
+   row uses for the keyboard selection. .selected is declared after :hover
+   at equal specificity, so when the mouse rests on the selected row the
+   selection fill wins by source order. */
 .palette-item:hover { background: var(--card); }
-.palette-item.selected { background: var(--card); border-left-color: var(--accent); }
+.palette-item.selected { background: var(--accent-glow); }
 .palette-item-icon { width: 26px; height: 26px; border-radius: 7px; background: var(--card); color: var(--text-2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 13px; }
 .palette-item.selected .palette-item-icon { color: var(--text-1); }
 .palette-item-body { flex: 1; min-width: 0; }
