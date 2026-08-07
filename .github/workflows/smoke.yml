@@ -13,14 +13,6 @@ name: Packaged-app smoke test
 on:
   workflow_call:
   workflow_dispatch:
-  # TEMPORARY, removed before merge: dispatch-by-name only works once the
-  # workflow exists on the default branch, so the gate's own verification
-  # (green on a healthy branch, red on a deliberately broken one) runs via
-  # push triggers on the two verification branches.
-  push:
-    branches:
-      - fix/packaged-smoke-gate
-      - smoke-gate-break-check
 
 jobs:
   smoke:
