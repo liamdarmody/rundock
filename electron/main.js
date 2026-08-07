@@ -283,6 +283,30 @@ ipcMain.handle('select-directory', async () => {
 
 ipcMain.handle('get-app-version', () => app.getVersion());
 
+// ===== RENDERER STORAGE =====
+
+// Durable storage for the renderer (see electron/renderer-storage.js). The
+// page's origin changes every launch with the OS-assigned port, so anything
+// the renderer needs across sessions is kept here, under userData, where no
+// port ever enters the path. The snapshot read is synchronous because
+// preload fetches it once before the page loads.
+const { loadRendererStorage, setRendererStorageKey } = require('./renderer-storage.js');
+
+ipcMain.on('rundock-storage-snapshot', (event) => {
+  event.returnValue = loadRendererStorage(app.getPath('userData'));
+});
+
+ipcMain.handle('rundock-storage-set', (event, key, value) => {
+  try {
+    setRendererStorageKey(app.getPath('userData'), key, value);
+  } catch (err) {
+    // A failed persist must never surface as a renderer error: the value is
+    // already applied in-page for this session, and losing it on relaunch is
+    // the lesser harm.
+    console.warn('[Electron] Failed to persist renderer storage:', err && err.message ? err.message : err);
+  }
+});
+
 // The Windows caption buttons are drawn by the OS from colours we pass, so
 // they keep the old ones until re-sent. The renderer calls this on every theme
 // change AND on the restore-from-storage path at launch: sending only on
