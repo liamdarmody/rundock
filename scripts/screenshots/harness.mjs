@@ -76,9 +76,53 @@ export async function newContext(browser, { motion = false, recordVideoDir = nul
 
 // Navigates to the app and waits for the workspace to connect (nav revealed)
 // and the first agents/skills payloads to arrive.
+// The desktop app reserves space at the left of the top bar for the macOS
+// window controls, which since 0.11.4 live inside that bar rather than in a
+// strip above it. That reservation comes from computeChromeInsets, which keys
+// off window.electronAPI: undefined in a browser, so a plain capture lays the
+// bar out with no inset and the centred search field sits slightly left of
+// where a real user sees it. Every shot therefore declares the macOS inset, so
+// the captured layout matches the product rather than the browser.
+export const MAC_CHROME_INSET_LEFT = 88;   // computeChromeInsets MAC_TRAFFIC_LIGHTS
+export const TOPBAR_HEIGHT = 60;           // electron/main.js TOPBAR_HEIGHT
+
 export async function gotoWorkspace(page, url) {
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('.nav-item[data-nav="team"]', { state: 'visible', timeout: 20000 });
+  await page.evaluate(({ inset, lightY }) => {
+    document.documentElement.style.setProperty('--chrome-inset-left', inset + 'px');
+    // Draw the macOS window controls into the app's own top bar.
+    //
+    // On macOS these are drawn by the OS over a window whose title bar is
+    // hidden, so they never appear in a browser capture. Since 0.11.4 they sit
+    // INSIDE the top bar rather than in a strip above it, so a screenshot
+    // without them shows a bar with an unexplained empty gutter at its left.
+    //
+    // Injecting them here rather than during framing means every asset gets
+    // them from one definition: flat masters, self-framed variants, heroes and
+    // motion clips alike. Element-scoped crops exclude them for free, because
+    // those are captured from a selector that does not contain the top bar.
+    //
+    // Position is the app's own (electron/main.js trafficLightPosition), and
+    // the inset above reserves the space they occupy, so they can never
+    // collide with the search field. Above everything, because the real ones
+    // are drawn by the OS and are never covered by the app's own overlays.
+    if (document.getElementById('__mkchrome')) return;
+    const wrap = document.createElement('div');
+    wrap.id = '__mkchrome';
+    Object.assign(wrap.style, {
+      position: 'fixed', left: '20px', top: lightY + 'px', display: 'flex', gap: '9px',
+      zIndex: '2147483646', pointerEvents: 'none',
+    });
+    for (const colour of ['#ff5f57', '#febc2e', '#28c840']) {
+      const dot = document.createElement('span');
+      Object.assign(dot.style, {
+        width: '12px', height: '12px', borderRadius: '50%', background: colour,
+      });
+      wrap.appendChild(dot);
+    }
+    document.body.appendChild(wrap);
+  }, { inset: MAC_CHROME_INSET_LEFT, lightY: (TOPBAR_HEIGHT - 12) / 2 });
   // Let the initial agents/skills/conversations messages settle.
   await page.evaluate(() => document.fonts && document.fonts.ready).catch(() => {});
   await page.waitForTimeout(400);

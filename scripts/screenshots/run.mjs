@@ -227,7 +227,7 @@ function writeManifest(rows, { built, gate, webpOk }) {
     '- **Master:** 1440x900 logical at deviceScaleFactor 2, so every flat master is 2880x1800 @2x. Per-target sizes are derived down from the master, never upscaled.',
     '- **Themes:** every still and every GIF captured in both light and dark.',
     '- **Determinism:** fixed data and a frozen clock (2026-07-18, UTC), animations disabled for stills, scrollbars and caret hidden, the connection toast suppressed, web fonts awaited before capture.',
-    '- **Framing:** transparent-background PNGs, so one framed image drops onto any page background (light or dark). Window chrome on the three hero images only; feature shots ship as a flat clean master (for destinations that CSS-frame) plus a self-framed variant (rounded corners, soft drop shadow, and a neutral hairline ring that holds the edge on dark backgrounds). Tight padding.',
+    '- **Framing:** transparent-background PNGs, so one framed image drops onto any page background (light or dark). The macOS window controls are drawn into the app's own top bar during capture, so every shot that includes that bar carries them and element-scoped crops do not. Hero images take wider padding; feature shots ship as a flat clean master (for destinations that CSS-frame) plus a self-framed variant (rounded corners, soft drop shadow, and a neutral hairline ring that holds the edge on dark backgrounds). Tight padding.',
     '- **Motion:** palette-optimized looping GIFs, ~1280px wide, 15fps, roughly 5-6s.',
     '',
     '## Folder layout',
