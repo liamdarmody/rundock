@@ -1999,12 +1999,13 @@ function formatRecency(iso) {
   return d + '/' + m + '/' + ts.getFullYear();
 }
 
-// Left-border colour class for a convo row.
-function convoBorderClass(c) {
-  // Left border carries the unread/working signal only. Pinned-ness is
-  // conveyed by list position + the title-row pin glyph (WhatsApp model), so
-  // a pinned+unread conversation no longer has to pick one colour.
-  if (workingConvos.has(c.id) || unread.isUnread(c.id)) return 'b-unread';
+// State dot for a convo row's meta line. The coloured left border is gone;
+// working shows the pulsing halo dot, unread (and not working) the static
+// dot, same hue, so the difference is motion plus ring-vs-no-ring rather
+// than position. Pinned-ness stays list position + the title-row pin glyph.
+function convoStateDot(c) {
+  if (workingConvos.has(c.id)) return '<span class="convo-working"></span>';
+  if (unread.isUnread(c.id)) return '<span class="convo-unread"></span>';
   return '';
 }
 
@@ -2212,9 +2213,9 @@ function renderConvoList() {
 //                 dimming if the agent has since been removed.
 //   'done'     -> Done section. Delete button, fixed 0.7 opacity.
 //
-// Left-border colour state lives on the row via convoBorderClass(c): green
-// for working or unread, none otherwise. Pinned-ness is conveyed by list
-// position and the title-row pin glyph, not the border.
+// Row state lives in the meta-line dot via convoStateDot(c): pulsing halo
+// for working, static for unread, none otherwise. Pinned-ness is conveyed
+// by list position and the title-row pin glyph.
 function renderConvoItem(c, variant) {
   const isActive = activeConversation?.id === c.id;
   const cState = convoState[c.id];
@@ -2244,10 +2245,7 @@ function renderConvoItem(c, variant) {
     preview = lastMsg ? stripMd(lastMsg.content).substring(0, 60) + '...' : (c.lastMessagePreview || 'No messages yet');
   }
 
-  // Only the working dot renders inline now. Unread state is conveyed by the
-  // green left border via convoBorderClass; a separate unread dot would
-  // duplicate that signal.
-  const indicator = working ? '<span class="convo-working"></span>' : '';
+  const indicator = convoStateDot(c);
   // Recency label, right-aligned in the meta row. Omitted while the agent is
   // working: the pulsing dot already communicates "right now" and a time value
   // would be ambiguous.
@@ -2255,8 +2253,6 @@ function renderConvoItem(c, variant) {
 
   const classes = ['convo-item'];
   if (isActive) classes.push('active');
-  const bc = convoBorderClass(c);
-  if (bc) classes.push(bc);
 
   const inline = [];
   if (variant === 'previous') {
@@ -2765,7 +2761,7 @@ function renderCodexErrorPill(convoId, d) {
   const name = agentDisplayName(d._agent);
   addSystemMsg(`${name}'s runtime hit a problem and this turn stopped.` + (d.detail ? ` Codex: ${d.detail}` : ''));
 }
-function addToolMsg(name) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg-tool'; d.innerHTML=`<span style="color:var(--working)">&#x2192;</span> Using ${esc(name)}`; m.appendChild(d); scrollBottom(); return d; }
+function addToolMsg(name) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg-tool'; d.innerHTML=`<span class="msg-tool-icon">&#x2192;</span> Using ${esc(name)}`; m.appendChild(d); scrollBottom(); return d; }
 // ===== SESSION HISTORY =====
 
 function createHistoryDivider() {
