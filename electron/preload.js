@@ -22,6 +22,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('rundock-update', (event, data) => callback(data));
   },
 
+  // Durable renderer storage. The page's origin includes an OS-assigned port
+  // that changes every launch, so localStorage cannot hold anything across
+  // sessions; durable state lives in the main process instead. The snapshot
+  // is fetched synchronously here, before the page loads, so boot-time reads
+  // (the theme) apply without a flash of the wrong value. The one sendSync is
+  // a single small read during preload, never on the hot path.
+  storage: {
+    snapshot: ipcRenderer.sendSync('rundock-storage-snapshot'),
+    set: (key, value) => ipcRenderer.invoke('rundock-storage-set', key, value),
+  },
+
   // Window chrome. macOS hides the traffic lights in fullscreen, so the
   // renderer drops its left inset in response rather than carrying an empty
   // gap. Windows caption buttons are drawn by the OS from colours we pass, so

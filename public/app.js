@@ -24,6 +24,32 @@
 
 // ===== 1. CONSTANTS & STATE =====
 
+// Durable key-value persistence. In the desktop app the page's origin is
+// http://localhost:<port> with an OS-assigned port, so localStorage is
+// scoped to an origin that changes every launch and silently loses
+// everything. There, durable state lives in the main process (a file under
+// userData): preload exposes a synchronous snapshot, taken before this
+// script runs, so boot-time reads like the theme apply without a flash, and
+// writes go through IPC. In a plain browser localStorage behaves normally
+// and is used as before. Same semantics either way: string in, string out,
+// null when absent, and a write that cannot persist never throws.
+const persist = (() => {
+  const api = typeof window !== 'undefined' && window.electronAPI && window.electronAPI.storage;
+  if (api && api.snapshot) {
+    return {
+      get(key) { return Object.prototype.hasOwnProperty.call(api.snapshot, key) ? api.snapshot[key] : null; },
+      set(key, value) {
+        api.snapshot[key] = String(value);
+        try { api.set(key, String(value)); } catch (e) { /* best-effort */ }
+      },
+    };
+  }
+  return {
+    get(key) { try { return localStorage.getItem(key); } catch (e) { return null; } },
+    set(key, value) { try { localStorage.setItem(key, String(value)); } catch (e) { /* private mode */ } },
+  };
+})();
+
 const sunIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`;
 const moonIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
 
@@ -1720,10 +1746,8 @@ function createConversation(agentId, title) {
 function maybeShowCodexFirstRun(agent) {
   if (!agent || agent.runtime !== 'codex') return;
   const key = 'rundock:codexFirstRun:' + agent.id;
-  try {
-    if (localStorage.getItem(key)) return;
-    localStorage.setItem(key, '1');
-  } catch (e) { return; }
+  if (persist.get(key)) return;
+  persist.set(key, '1');
   const m = document.getElementById('messages');
   if (!m) return;
   const el = document.createElement('div');
@@ -3179,7 +3203,7 @@ function initSidebarResize() {
     document.documentElement.style.setProperty('--sidebar-width', `${clamped}px`);
     return clamped;
   };
-  let width = applySidebarWidth(Number(localStorage.getItem(SIDEBAR_WIDTH_KEY)) || 280);
+  let width = applySidebarWidth(Number(persist.get(SIDEBAR_WIDTH_KEY)) || 280);
   const handle = document.createElement('div');
   handle.className = 'sidebar-resize-handle';
   handle.title = 'Drag to resize';
@@ -3203,7 +3227,7 @@ function initSidebarResize() {
       handle.classList.remove('dragging');
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
-      try { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width)); } catch (e2) { /* private mode */ }
+      persist.set(SIDEBAR_WIDTH_KEY, String(width));
     };
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
@@ -3261,9 +3285,9 @@ function showView(v) { currentView=v; ['workspace','home','profile','chat','conv
 function goHome() { discardIfEmpty(); activeConversation=null; switchNav('conversations'); }
 
 // Theme
-function toggleTheme() { document.body.classList.toggle('light'); const isLight=document.body.classList.contains('light'); document.getElementById('theme-toggle').innerHTML=isLight?moonIcon:sunIcon; if(typeof applyHljsTheme==='function')applyHljsTheme(isLight); syncTitleBarOverlay(isLight); try{localStorage.setItem('rundock-theme',isLight?'light':'dark');}catch(e){} }
+function toggleTheme() { document.body.classList.toggle('light'); const isLight=document.body.classList.contains('light'); document.getElementById('theme-toggle').innerHTML=isLight?moonIcon:sunIcon; if(typeof applyHljsTheme==='function')applyHljsTheme(isLight); syncTitleBarOverlay(isLight); persist.set('rundock-theme',isLight?'light':'dark'); }
 // Restore saved theme on load
-try{if(localStorage.getItem('rundock-theme')==='light'){document.body.classList.add('light');document.getElementById('theme-toggle').innerHTML=moonIcon;}}catch(e){}
+if(persist.get('rundock-theme')==='light'){document.body.classList.add('light');document.getElementById('theme-toggle').innerHTML=moonIcon;}
 
 // The Windows caption buttons are drawn by the OS from colours we pass, so
 // they keep the old ones until re-sent. BOTH paths must call this: only
