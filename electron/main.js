@@ -5,6 +5,7 @@ const { execSync } = require('child_process');
 const buildContextMenuTemplate = require('./context-menu-template.js');
 const { resolveUpdateFeed } = require('./update-feed.js');
 const { decideUpdateUi } = require('./update-state.js');
+const { reconcileOnLaunch, recordDownloaded } = require('./update-launches.js');
 
 let autoUpdater;
 try {
@@ -399,6 +400,30 @@ function setupMenu() {
 // pops a dialog unprompted.
 let isCheckingManually = false;
 
+// How many times the app has launched with an update downloaded but not yet
+// installed (see electron/update-launches.js for the counting rules). The
+// record survives restarts in userData; reading or writing it is
+// best-effort, because losing the count only delays the escape-hatch
+// message, while crashing here would break updates entirely.
+function launchRecordPath() {
+  return path.join(app.getPath('userData'), 'update-launches.json');
+}
+
+function readLaunchRecord() {
+  try {
+    return JSON.parse(fs.readFileSync(launchRecordPath(), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function writeLaunchRecord(record) {
+  try {
+    if (record) fs.writeFileSync(launchRecordPath(), JSON.stringify(record));
+    else fs.rmSync(launchRecordPath(), { force: true });
+  } catch { /* best-effort, see above */ }
+}
+
 function setupAutoUpdate() {
   if (!autoUpdater) return;
 
@@ -430,7 +455,20 @@ function setupAutoUpdate() {
   // events and delivers the result. The renderer receives every decision on
   // the existing channel so it can show update state in place; dialogs are
   // shown here because they are native.
-  let updateState = { phase: 'idle', percent: null, version: null, manual: false, launchesSinceDownload: 0 };
+  // If the previous run left an update downloaded and this run is still on
+  // the old version, that install failed; count the launch so repeated
+  // failures eventually switch the downloaded prompt to the escape hatch.
+  const launch = reconcileOnLaunch({ currentVersion: app.getVersion(), stored: readLaunchRecord() });
+  writeLaunchRecord(launch.record);
+  let pendingRecord = launch.record;
+
+  let updateState = {
+    phase: 'idle',
+    percent: null,
+    version: null,
+    manual: false,
+    launchesSinceDownload: launch.launchesSinceDownload,
+  };
 
   function showUpdateUi(patch) {
     updateState = { ...updateState, ...patch };
@@ -484,10 +522,14 @@ function setupAutoUpdate() {
   });
 
   autoUpdater.on('update-downloaded', (info) => {
-    const ui = showUpdateUi({
-      phase: 'downloaded',
-      version: info && info.version ? info.version : updateState.version,
-    });
+    const version = info && info.version ? info.version : updateState.version;
+    let launchesSinceDownload = updateState.launchesSinceDownload;
+    if (version) {
+      pendingRecord = recordDownloaded(version, pendingRecord);
+      writeLaunchRecord(pendingRecord);
+      launchesSinceDownload = pendingRecord.launches;
+    }
+    const ui = showUpdateUi({ phase: 'downloaded', version, launchesSinceDownload });
     presentInstallPrompt(ui);
   });
 
