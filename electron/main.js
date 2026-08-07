@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { execSync } = require('child_process');
 const buildContextMenuTemplate = require('./context-menu-template.js');
+const { resolveUpdateFeed } = require('./update-feed.js');
 
 let autoUpdater;
 try {
@@ -395,6 +396,26 @@ let isCheckingManually = false;
 
 function setupAutoUpdate() {
   if (!autoUpdater) return;
+
+  // RUNDOCK_UPDATE_FEED points the updater at any static server hosting the
+  // artefacts electron-builder generates (see scripts/update-harness/), so
+  // the full update cycle can be exercised locally before anything ships.
+  // An unusable value disables the updater for the run rather than silently
+  // falling back to the production feed: whoever set it is testing, and a
+  // test that quietly hits the wrong feed passes for the wrong reason.
+  const feed = resolveUpdateFeed(process.env);
+  if (feed.kind === 'invalid') {
+    console.warn(`[Electron] ${feed.reason}. Auto-updates disabled for this run.`);
+    return;
+  }
+  if (feed.kind === 'feed') {
+    autoUpdater.setFeedURL({ provider: 'generic', url: feed.url });
+    // Unpacked dev builds refuse update checks unless forced, and moving
+    // back to the older test version is how the cycle repeats.
+    autoUpdater.forceDevUpdateConfig = true;
+    autoUpdater.allowDowngrade = true;
+    console.log(`[Electron] Update feed overridden: ${feed.url}`);
+  }
 
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
