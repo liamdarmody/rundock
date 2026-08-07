@@ -451,8 +451,9 @@ function setupAutoUpdate() {
 // ===== MAIN WINDOW =====
 
 // Height of the app's top bar, which the window controls now sit inside.
-// Must match --topbar-height in public/index.html.
-const TOPBAR_HEIGHT = 60;
+// Must match --topbar-height in public/index.html. Deliberately NOT tied to
+// the nav rail width any more: the bar is 48 and the rail stays 60.
+const TOPBAR_HEIGHT = 48;
 
 // Colours for the Windows caption buttons, which the OS draws for us from
 // values we pass. They must track the app theme, so they are re-sent whenever
@@ -473,10 +474,12 @@ const OVERLAY_COLOURS = {
 function chromeWindowOptions() {
   if (process.platform === 'darwin') {
     // We position the traffic lights ourselves, which is why the renderer's
-    // left inset is a constant rather than a measurement: x=20 puts the
-    // 52px-wide cluster at 20..72, and the inset reserves 88 so the first
-    // interface element is not flush against it. y centres them in the bar.
-    return { titleBarStyle: 'hidden', trafficLightPosition: { x: 20, y: (TOPBAR_HEIGHT - 12) / 2 } };
+    // left inset is a constant rather than a measurement: x=9 puts the
+    // 52px-wide cluster at 9..61, and the inset reserves 77 so the first
+    // interface element is not flush against it. The 9px matches the nav
+    // rail's icon inset, so the lights sit on the rail column's rhythm.
+    // y centres them in the bar.
+    return { titleBarStyle: 'hidden', trafficLightPosition: { x: 9, y: (TOPBAR_HEIGHT - 12) / 2 } };
   }
   if (process.platform === 'win32') {
     // Enabling the overlay is also what switches on the Window Controls
