@@ -96,34 +96,30 @@ function sanitizeFtsQuery(raw, { prefix = false } = {}) {
 /**
  * How a file's name is presented, in the index and in every result row.
  *
- * Markdown is the default format for notes, so `.md` appears on almost every
- * file and never distinguishes one from another. It is hidden. Every other
- * extension is shown, because when several files share a name it is the only
- * thing telling them apart: a report held as HTML, PDF, PNG, JPG and GIF is
- * ordinary, and stripping the extension collapsed all five into identical rows.
+ * THE NAMING RULE, in its single written form: every file, markdown
+ * included, is shown under its real filename, extension and all, exactly as
+ * the file tree shows it. The tree and search are usually visible at the
+ * same time, and one file must not carry two names on one screen. The tree
+ * side follows the same rule by rendering names untouched.
  *
- * This is deliberately the single definition of that rule. The stripping it
- * replaces was written out longhand in three separate places.
+ * This deliberately REVERSES an earlier rule that hid `.md` here ("almost
+ * every file is a note and its extension never told two of them apart").
+ * That reasoning is sound within a single pane and was overridden anyway:
+ * consistency between two simultaneously visible panes beats per-pane
+ * tidiness. Recorded as a reversal so the argument is not re-run from
+ * scratch; if this changes again, change it HERE and nowhere else.
  *
  * Note this feeds the indexed `title`, not just the rendering. That is
- * required, not incidental: query tokens are combined with implicit AND, so a
- * title shown as `report.pdf` but indexed as `report` would not be found by
- * someone typing exactly what they can see.
+ * required, not incidental: query tokens are combined with implicit AND, so
+ * the indexed title must be the string the user can see. It also means
+ * typing a full filename including its extension matches, as it always has.
  *
  * Total by design: it runs on every indexed row and every result, so junk in
  * yields a string out rather than taking down indexing or a result list.
  */
-const HIDDEN_EXTENSION = '.md';
 function displayTitle(relPath) {
   if (typeof relPath !== 'string' || relPath === '') return '';
-  const base = path.basename(relPath);
-  const ext = path.extname(base);
-  // path.extname('.gitignore') is '' by design, so dotfiles keep their name.
-  if (!ext) return base;
-  if (ext.toLowerCase() !== HIDDEN_EXTENSION) return base;
-  const stem = path.basename(base, ext);
-  // A file named exactly '.md' would strip to nothing; never blank a row.
-  return stem || base;
+  return path.basename(relPath);
 }
 
 // ── Fuzzy title matcher ──────────────────────────────────────────────────────

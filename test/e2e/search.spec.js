@@ -334,9 +334,10 @@ test('files differing only by type are distinguishable in results', async ({ pag
   expect(trimmed).toContain('board-pack-q3.pdf');
   expect(trimmed).toContain('board-pack-q3.png');
   expect(trimmed).toContain('board-pack-q3.html');
-  // Markdown keeps a clean name: .md is on almost every file and never tells
-  // two of them apart.
-  expect(trimmed).toContain('board-pack-q3');
+  // Markdown shows its extension like everything else: the tree and search
+  // must give a file one name. The rule and its history live on
+  // displayTitle in search.js.
+  expect(trimmed).toContain('board-pack-q3.md');
 });
 
 test('each file type draws its own icon rather than one generic glyph', async ({ page }) => {
