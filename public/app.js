@@ -5163,6 +5163,92 @@ window.electronAPI?.onFullScreenChange?.((isFullScreen) => {
 });
 
 applyChromeInsets();
+
+// ===== UPDATE STRIP =====
+// The sidebar's update surface. The main process decides what the user
+// should know (its decision object arrives on the update channel); the pure
+// view module decides how the strip presents it; this code only draws.
+// "Later" defers the ready row to a quiet chip for this session; it never
+// dismisses, because the pending update stays pending regardless, and the
+// next launch re-offers the prompt.
+let _updateUi = null;
+let _updateDeferred = false;
+
+// Radial progress ring, 18px. r=7 so the circumference is 43.98; the arc is
+// drawn from 12 o'clock via the -90 degree rotation. A null percent renders
+// the indeterminate spinner (a fixed arc the CSS rotates).
+function updateRingSvg(percent) {
+  const base = '<circle cx="9" cy="9" r="7" fill="none" stroke="var(--border)" stroke-width="2"/>';
+  if (percent === null) {
+    return `<span class="u-ring indet"><svg width="18" height="18" viewBox="0 0 18 18">${base}<circle cx="9" cy="9" r="7" fill="none" stroke="var(--working)" stroke-width="2" stroke-linecap="round" stroke-dasharray="11 33"/></svg></span>`;
+  }
+  const C = 43.98;
+  const off = (C * (1 - Math.max(0, Math.min(100, percent)) / 100)).toFixed(2);
+  return `<span class="u-ring"><svg width="18" height="18" viewBox="0 0 18 18">${base}<circle cx="9" cy="9" r="7" fill="none" stroke="var(--working)" stroke-width="2" stroke-linecap="round" stroke-dasharray="43.98" stroke-dashoffset="${off}" transform="rotate(-90 9 9)"/></svg></span>`;
+}
+
+// The decided text carries the version inside a plain sentence; bolding just
+// that phrase is presentation, so it happens here, after escaping.
+function updateTextHtml(text, version) {
+  const safe = esc(text || '');
+  if (!version) return safe;
+  const phrase = esc('Rundock ' + version);
+  return safe.replace(phrase, `<b>${phrase}</b>`);
+}
+
+function renderUpdateStrip() {
+  const el = document.getElementById('update-strip');
+  if (!el || typeof updateStripView !== 'function') return;
+  const view = updateStripView(_updateUi, _updateDeferred);
+  if (!view.show) {
+    el.style.display = 'none';
+    el.className = 'u-strip';
+    el.innerHTML = '';
+    el.removeAttribute('tabindex');
+    return;
+  }
+  el.style.display = '';
+  if (view.mode === 'download') {
+    const pctNum = view.indeterminate ? null : Math.round(view.percent);
+    el.className = 'u-strip collapsed dl';
+    // Focusable so keyboard users can expand the collapsed ring, matching
+    // the pointer's hover.
+    el.setAttribute('tabindex', '0');
+    el.innerHTML = `
+      <div class="u-collapsed-row">${updateRingSvg(pctNum)}${pctNum === null ? '' : `<span class="u-collapsed-pct">${pctNum}%</span>`}</div>
+      <div class="u-row u-expanded-row">${updateRingSvg(pctNum)}<span class="u-text">${updateTextHtml(view.text, _updateUi && _updateUi.version)}</span>${pctNum === null ? '' : `<span class="u-pct">${pctNum}%</span>`}</div>`;
+    return;
+  }
+  if (view.mode === 'chip') {
+    el.className = 'u-strip collapsed';
+    el.removeAttribute('tabindex');
+    el.innerHTML = `<button class="u-collapsed-row" onclick="undeferUpdateStrip()" aria-label="An update is ready; show details"><span class="u-dot"></span></button>`;
+    return;
+  }
+  // ready (and stuck, which presents the same and cannot be deferred)
+  el.className = 'u-strip expanded';
+  el.removeAttribute('tabindex');
+  const restartSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>';
+  el.innerHTML = `
+    <div class="u-row"><span class="u-dot"></span><span class="u-text ready">${updateTextHtml(view.text, _updateUi && _updateUi.version)}</span></div>
+    <div class="u-actions">
+      <button class="u-restart-btn" onclick="updateRestartNow()">${restartSvg}Restart</button>
+      ${_updateUi && _updateUi.kind === 'ready' ? '<button class="u-collapse-link" onclick="deferUpdateStrip()">Later</button>' : ''}
+    </div>`;
+}
+
+function updateRestartNow() { try { window.electronAPI?.updateRestart?.(); } catch (e) { /* main handles logging */ } }
+function deferUpdateStrip() { _updateDeferred = true; renderUpdateStrip(); }
+function undeferUpdateStrip() { _updateDeferred = false; renderUpdateStrip(); }
+
+window.electronAPI?.onUpdate?.((ui) => {
+  _updateUi = ui;
+  // A fresh download supersedes any earlier "Later": the deferral belonged
+  // to the update it deferred.
+  if (ui && ui.kind === 'progress') _updateDeferred = false;
+  renderUpdateStrip();
+});
+
 let paletteReturnFocus = null; // element to restore focus to on close
 
 // The top bar's search field teaches the shortcut with the right modifier per

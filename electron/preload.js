@@ -22,6 +22,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('rundock-update', (event, data) => callback(data));
   },
 
+  // The sidebar's update surface offers Restart when an update is ready;
+  // installing means quitting, which only the main process can do.
+  updateRestart: () => ipcRenderer.invoke('rundock-update-restart'),
+
   // Durable renderer storage. The page's origin includes an OS-assigned port
   // that changes every launch, so localStorage cannot hold anything across
   // sessions; durable state lives in the main process instead. The snapshot

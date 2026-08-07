@@ -307,6 +307,14 @@ ipcMain.handle('rundock-storage-set', (event, key, value) => {
   }
 });
 
+// The sidebar's update strip offers Restart when an update is ready.
+// Installing means quitting and relaunching, which only this process can
+// do; the explicit call is the same deterministic path the native prompt
+// uses, rather than relying on install-on-quit winning a race at exit.
+ipcMain.handle('rundock-update-restart', () => {
+  if (autoUpdater) autoUpdater.quitAndInstall();
+});
+
 // The Windows caption buttons are drawn by the OS from colours we pass, so
 // they keep the old ones until re-sent. The renderer calls this on every theme
 // change AND on the restore-from-storage path at launch: sending only on
