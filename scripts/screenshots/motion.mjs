@@ -178,7 +178,21 @@ async function clipSearch(page, { mark }) {
   await page.waitForTimeout(400);
   await installCursor(page);
   mark();
-  await page.evaluate(() => { if (typeof openPalette === 'function') openPalette(); });
+  // Drive the control a user drives. Search expands in place from the field in
+  // the top bar, and this clip exists to show that behaviour, so calling the
+  // function behind the control would demonstrate the wrong thing.
+  const field = await page.$('#tb-search');
+  const box = field && await field.boundingBox();
+  if (box) {
+    // cursorTo starts a CSS transition and returns immediately, so the wait
+    // has to EXCEED the travel time. Waiting less clicks while the cursor is
+    // still moving, and the panel then opens with the pointer nowhere near the
+    // control, which is the opposite of what this clip is for.
+    const TRAVEL_MS = 620;
+    await cursorTo(page, box.x + Math.min(120, box.width / 2), box.y + box.height / 2, TRAVEL_MS);
+    await page.waitForTimeout(TRAVEL_MS + 260);
+  }
+  await page.click('#tb-search');
   await page.waitForSelector('#palette-input', { state: 'visible', timeout: 8000 });
   await page.waitForTimeout(400);
   await page.type('#palette-input', 'launch', { delay: 150 });

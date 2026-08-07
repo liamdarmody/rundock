@@ -1,5 +1,14 @@
 # Content and Copy Gap Analysis
 
+> **Written against release 0.10.0, with 0.11.0 then unreleased. Not maintained since.**
+>
+> This document reasons throughout from the feature set of that release, so
+> every gap it identifies and every placement it proposes should be re-checked
+> against the current CHANGELOG before being acted on. It is kept as a record
+> of the analysis, not as current advice. It is deliberately no longer copied
+> into `screenshots-out/`, because sitting beside freshly generated assets made
+> it read as current.
+
 - **Date / release context:** `package.json` reads version 0.10.0 (Search, Review & Codex, shipped 2026-07-14). The "Files, Boards & Streaming" body sits in `## Unreleased` in `Rundock/CHANGELOG.md`, staged as the imminent 0.11.0. Public site and docs imagery and feature copy date from late April (all five screenshots in `Rundock Site/images/` and the site root are stamped 29 Apr; the site feature sections have not changed since). Everything shipped from 0.10.0 onward, and the whole Unreleased block, is effectively uncommunicated.
 
 - **Method:** I read the full `Rundock/CHANGELOG.md` (Unreleased + 0.10.0 in detail, earlier entries for the feature inventory), the marketing site (`Rundock Site/index.html` in full, plus `llms.txt`, `compare.html`), and the docs site (`rundock-docs/`: `docs.json` navigation, `introduction.mdx`, all of `concepts/`, `first-run.mdx`, `reference/workspace-structure.mdx`). For each shipped capability I checked whether the behaviour is described anywhere on the Site and in the Docs, then located the exact file and section where it belongs. The Site is static HTML (hand-authored `index.html`, feature sections are `<section class="feature-section">` blocks around lines 1568-1657). The Docs are Mintlify MDX, navigation defined in `docs.json`.

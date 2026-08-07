@@ -45,7 +45,7 @@ not expect a clean git diff to tell you whether a GIF actually changed.
 6. **Motion**: record five scripted interactions and convert each to an optimized,
    palette-based looping GIF.
 7. Write **`MANIFEST.md`** mapping every asset to its intended target repo, path,
-   feature, theme, and rationale, and copy in the content and copy gap analysis.
+   feature, theme, and rationale.
 
 ## Prerequisites
 
@@ -77,8 +77,9 @@ not expect a clean git diff to tell you whether a GIF actually changed.
 - `frame.mjs` + `frame.html` the framing wrapper and per-target derivations.
 - `motion.mjs` the five clips and ffmpeg conversion.
 - `run.mjs` the orchestrator behind `npm run screenshots`.
-- `content-and-copy-gaps.md` the release content and copy gap analysis (a
-  proposal; copied into the output folder each run).
+- `content-and-copy-gaps.md` the release content and copy gap analysis. Written
+  against an earlier release and NOT copied into the output folder: check the
+  release stated at the top of it before relying on its reasoning.
 
 ## Phase 2 (not built yet)
 
