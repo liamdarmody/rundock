@@ -3,6 +3,9 @@ const path = require('path');
 const fs = require('fs');
 const { execSync } = require('child_process');
 const buildContextMenuTemplate = require('./context-menu-template.js');
+const { resolveUpdateFeed } = require('./update-feed.js');
+const { decideUpdateUi } = require('./update-state.js');
+const { reconcileOnLaunch, recordDownloaded } = require('./update-launches.js');
 
 let autoUpdater;
 try {
@@ -316,6 +319,10 @@ function setupMenu() {
     }
     isCheckingManually = true;
     autoUpdater.checkForUpdates().catch((err) => {
+      // Failures normally surface through the updater's error event, which
+      // resets the flag before this rejection lands. Only report here if
+      // that event never fired, so the user gets one dialog, not two.
+      if (!isCheckingManually) return;
       isCheckingManually = false;
       dialog.showMessageBox(mainWindow, {
         type: 'error',
@@ -393,30 +400,110 @@ function setupMenu() {
 // pops a dialog unprompted.
 let isCheckingManually = false;
 
+// How many times the app has launched with an update downloaded but not yet
+// installed (see electron/update-launches.js for the counting rules). The
+// record survives restarts in userData; reading or writing it is
+// best-effort, because losing the count only delays the escape-hatch
+// message, while crashing here would break updates entirely.
+function launchRecordPath() {
+  return path.join(app.getPath('userData'), 'update-launches.json');
+}
+
+function readLaunchRecord() {
+  try {
+    return JSON.parse(fs.readFileSync(launchRecordPath(), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function writeLaunchRecord(record) {
+  try {
+    if (record) fs.writeFileSync(launchRecordPath(), JSON.stringify(record));
+    else fs.rmSync(launchRecordPath(), { force: true });
+  } catch { /* best-effort, see above */ }
+}
+
 function setupAutoUpdate() {
   if (!autoUpdater) return;
+
+  // RUNDOCK_UPDATE_FEED points the updater at any static server hosting the
+  // artefacts electron-builder generates (see scripts/update-harness/), so
+  // the full update cycle can be exercised locally before anything ships.
+  // An unusable value disables the updater for the run rather than silently
+  // falling back to the production feed: whoever set it is testing, and a
+  // test that quietly hits the wrong feed passes for the wrong reason.
+  const feed = resolveUpdateFeed(process.env);
+  if (feed.kind === 'invalid') {
+    console.warn(`[Electron] ${feed.reason}. Auto-updates disabled for this run.`);
+    // Nulling the handle disables every update path, including the menu
+    // item, which would otherwise still check against the production feed.
+    autoUpdater = null;
+    return;
+  }
+  if (feed.kind === 'feed') {
+    autoUpdater.setFeedURL({ provider: 'generic', url: feed.url });
+    // Unpacked dev builds refuse update checks unless forced, and moving
+    // back to the older test version is how the cycle repeats.
+    autoUpdater.forceDevUpdateConfig = true;
+    autoUpdater.allowDowngrade = true;
+    console.log(`[Electron] Update feed overridden: ${feed.url}`);
+  }
 
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
 
+  // If the previous run left an update downloaded and this run is still on
+  // the old version, that install failed; count the launch so repeated
+  // failures eventually switch the downloaded prompt to the escape hatch.
+  const launch = reconcileOnLaunch({ currentVersion: app.getVersion(), stored: readLaunchRecord() });
+  writeLaunchRecord(launch.record);
+  let pendingRecord = launch.record;
+
+  let updateState = {
+    phase: 'idle',
+    percent: null,
+    version: null,
+    manual: false,
+    launchesSinceDownload: launch.launchesSinceDownload,
+  };
+
+  // Everything the user sees about an update is decided by the pure module
+  // (electron/update-state.js); this function only carries state between
+  // events and delivers the result. The renderer receives every decision on
+  // the existing channel so it can show update state in place; dialogs are
+  // shown here because they are native.
+  function showUpdateUi(patch) {
+    updateState = { ...updateState, ...patch };
+    const ui = decideUpdateUi(updateState);
+    if (mainWindow) mainWindow.webContents.send('rundock-update', ui);
+    return ui;
+  }
+
   autoUpdater.on('update-available', (info) => {
-    if (mainWindow) {
-      mainWindow.webContents.send('rundock-update', { type: 'available', version: info.version });
-    }
-    if (isCheckingManually) {
-      isCheckingManually = false;
-      dialog.showMessageBox(mainWindow, {
-        type: 'info',
-        message: `Update available: ${info.version}`,
-        detail: 'Downloading in the background. Rundock will install the update on next quit.',
-        buttons: ['OK'],
-      });
-    }
+    const ui = showUpdateUi({
+      phase: 'available',
+      version: info && info.version ? info.version : null,
+      percent: null,
+      manual: isCheckingManually,
+    });
+    isCheckingManually = false;
+    updateState.manual = false;
+    if (ui.dialog) dialog.showMessageBox(mainWindow, ui.dialog);
+  });
+
+  autoUpdater.on('download-progress', (progress) => {
+    showUpdateUi({
+      phase: 'downloading',
+      percent: progress && typeof progress.percent === 'number' ? progress.percent : null,
+    });
   });
 
   autoUpdater.on('update-not-available', () => {
-    if (isCheckingManually) {
-      isCheckingManually = false;
+    const wasManual = isCheckingManually;
+    isCheckingManually = false;
+    showUpdateUi({ phase: 'idle', version: null, percent: null, manual: false });
+    if (wasManual) {
       dialog.showMessageBox(mainWindow, {
         type: 'info',
         message: 'Rundock is up to date.',
@@ -427,25 +514,59 @@ function setupAutoUpdate() {
   });
 
   autoUpdater.on('error', (err) => {
-    if (isCheckingManually) {
-      isCheckingManually = false;
-      dialog.showMessageBox(mainWindow, {
-        type: 'error',
-        message: 'Could not check for updates',
-        detail: err && err.message ? err.message : String(err),
-        buttons: ['OK'],
-      });
-    }
+    const ui = showUpdateUi({
+      phase: 'error',
+      manual: isCheckingManually,
+      error: err && err.message ? err.message : String(err),
+    });
+    isCheckingManually = false;
+    updateState.manual = false;
+    if (ui.dialog) dialog.showMessageBox(mainWindow, ui.dialog);
   });
 
-  autoUpdater.on('update-downloaded', () => {
-    if (mainWindow) {
-      mainWindow.webContents.send('rundock-update', { type: 'ready' });
+  autoUpdater.on('update-downloaded', (info) => {
+    const version = info && info.version ? info.version : updateState.version;
+    let launchesSinceDownload = updateState.launchesSinceDownload;
+    if (version) {
+      pendingRecord = recordDownloaded(version, pendingRecord);
+      writeLaunchRecord(pendingRecord);
+      launchesSinceDownload = pendingRecord.launches;
     }
+    const ui = showUpdateUi({ phase: 'downloaded', version, launchesSinceDownload });
+    presentInstallPrompt(ui);
   });
 
-  // Check for updates silently on launch (don't block startup)
-  autoUpdater.checkForUpdatesAndNotify().catch(() => {});
+  // The decided UI names its buttons and the action each one performs, so
+  // this stays a dumb translator: show the dialog, run the chosen action.
+  // "Restart now" calling quitAndInstall() directly is the core fix: the
+  // install used to depend entirely on autoInstallOnAppQuit winning a race
+  // at process exit, which it often lost. That setting remains as a
+  // fallback, but the explicit call is what makes the install deterministic.
+  function presentInstallPrompt(ui) {
+    if (ui.kind !== 'ready' && ui.kind !== 'stuck') return;
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      message: ui.text,
+      detail: ui.detail,
+      buttons: ui.buttons,
+      defaultId: ui.defaultId,
+      cancelId: ui.actions.indexOf('dismiss'),
+    }).then(({ response }) => {
+      const action = ui.actions[response];
+      if (action === 'quitAndInstall') {
+        autoUpdater.quitAndInstall();
+      } else if (action === 'openDownloadPage') {
+        shell.openExternal(ui.downloadUrl);
+      }
+    }).catch(() => { /* window closed mid-dialog; the update installs on quit */ });
+  }
+
+  // Check for updates silently on launch (don't block startup). Plain
+  // checkForUpdates, not checkForUpdatesAndNotify: the built-in OS
+  // notification announces that the update "will be automatically installed
+  // on exit", which is the promise this updater no longer makes. The
+  // downloaded prompt above is the announcement now.
+  autoUpdater.checkForUpdates().catch(() => {});
 }
 
 // ===== MAIN WINDOW =====
@@ -630,7 +751,8 @@ app.whenReady().then(async () => {
   }
 
   // Setup confirmed (installed + signed in): remember it so future launches
-  // skip the auth API call. The 401 recovery card covers later expiry.
+  // skip the auth API call. Sign-in expiry after this point is handled
+  // separately, when a later request fails authentication.
   try { fs.writeFileSync(setupMarker, new Date().toISOString()); } catch { /* non-fatal */ }
 
   // Start the embedded server on an OS-assigned port

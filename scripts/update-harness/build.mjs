@@ -28,10 +28,11 @@ const FEED = join(HERE, 'feed');
 const DIST = join(ROOT, 'dist');
 
 function parseArgs(argv) {
-  const out = { version: null, platform: process.platform === 'win32' ? 'win' : 'mac', clean: false };
+  const out = { version: null, platform: process.platform === 'win32' ? 'win' : 'mac', clean: false, out: null };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--version' && argv[i + 1]) out.version = argv[++i];
     else if (argv[i] === '--platform' && argv[i + 1]) out.platform = argv[++i];
+    else if (argv[i] === '--out' && argv[i + 1]) out.out = argv[++i];
     else if (argv[i] === '--clean') out.clean = true;
   }
   return out;
@@ -45,7 +46,16 @@ const WANTED = {
   win: (f) => f === 'latest.yml' || (f.endsWith('.exe') || f.endsWith('.exe.blockmap')),
 };
 
-const { version, platform, clean } = parseArgs(process.argv.slice(2));
+const { version, platform, clean, out } = parseArgs(process.argv.slice(2));
+
+// --out redirects electron-builder's output. Needed when the repo lives in a
+// folder managed by a sync service (iCloud Drive, Dropbox, OneDrive): those
+// re-stamp Finder and file-provider metadata onto freshly written bundles
+// while the build is still running, and codesign then rejects the app with
+// "resource fork, Finder information, or similar detritus not allowed".
+// Building into an unmanaged location (for example under /tmp) avoids the
+// race entirely.
+const outDir = out ? resolve(out) : DIST;
 
 if (clean) {
   if (existsSync(FEED)) rmSync(FEED, { recursive: true, force: true });
@@ -54,7 +64,7 @@ if (clean) {
 }
 
 if (!version) {
-  console.error('Usage: node scripts/update-harness/build.mjs --version <version> [--platform mac|win]');
+  console.error('Usage: node scripts/update-harness/build.mjs --version <version> [--platform mac|win] [--out <dir>]');
   console.error('       node scripts/update-harness/build.mjs --clean');
   process.exit(1);
 }
@@ -85,7 +95,9 @@ writeFileSync(PKG, JSON.stringify(pkg, null, 2) + '\n');
 
 // --publish never: the whole point is that nothing leaves this machine.
 const target = platform === 'mac' ? '--mac' : '--win';
-execFileSync('npx', ['electron-builder', target, '--publish', 'never'], {
+const builderArgs = ['electron-builder', target, '--publish', 'never'];
+if (outDir !== DIST) builderArgs.push(`--config.directories.output=${outDir}`);
+execFileSync('npx', builderArgs, {
   cwd: ROOT,
   stdio: 'inherit',
 });
@@ -93,15 +105,15 @@ execFileSync('npx', ['electron-builder', target, '--publish', 'never'], {
 mkdirSync(FEED, { recursive: true });
 const keep = WANTED[platform];
 let copied = 0;
-for (const f of readdirSync(DIST)) {
+for (const f of readdirSync(outDir)) {
   if (!keep(f)) continue;
-  copyFileSync(join(DIST, f), join(FEED, f));
+  copyFileSync(join(outDir, f), join(FEED, f));
   console.log(`  -> feed/${f}`);
   copied++;
 }
 
 if (copied === 0) {
-  console.error(`\nNothing matched in ${DIST}. Did the build actually produce artefacts?`);
+  console.error(`\nNothing matched in ${outDir}. Did the build actually produce artefacts?`);
   process.exit(1);
 }
 
