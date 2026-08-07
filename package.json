@@ -47,6 +47,7 @@
       "scaffold/**/*",
       "scripts/**/*",
       "!scripts/screenshots/**",
+      "!scripts/update-harness/**",
       "node_modules/**/*",
       "electron/**/*",
       "package.json"
