@@ -436,6 +436,9 @@ function setupAutoUpdate() {
   const feed = resolveUpdateFeed(process.env);
   if (feed.kind === 'invalid') {
     console.warn(`[Electron] ${feed.reason}. Auto-updates disabled for this run.`);
+    // Nulling the handle disables every update path, including the menu
+    // item, which would otherwise still check against the production feed.
+    autoUpdater = null;
     return;
   }
   if (feed.kind === 'feed') {
@@ -450,11 +453,6 @@ function setupAutoUpdate() {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
 
-  // Everything the user sees about an update is decided by the pure module
-  // (electron/update-state.js); this function only carries state between
-  // events and delivers the result. The renderer receives every decision on
-  // the existing channel so it can show update state in place; dialogs are
-  // shown here because they are native.
   // If the previous run left an update downloaded and this run is still on
   // the old version, that install failed; count the launch so repeated
   // failures eventually switch the downloaded prompt to the escape hatch.
@@ -470,6 +468,11 @@ function setupAutoUpdate() {
     launchesSinceDownload: launch.launchesSinceDownload,
   };
 
+  // Everything the user sees about an update is decided by the pure module
+  // (electron/update-state.js); this function only carries state between
+  // events and delivers the result. The renderer receives every decision on
+  // the existing channel so it can show update state in place; dialogs are
+  // shown here because they are native.
   function showUpdateUi(patch) {
     updateState = { ...updateState, ...patch };
     const ui = decideUpdateUi(updateState);
@@ -558,8 +561,12 @@ function setupAutoUpdate() {
     }).catch(() => { /* window closed mid-dialog; the update installs on quit */ });
   }
 
-  // Check for updates silently on launch (don't block startup)
-  autoUpdater.checkForUpdatesAndNotify().catch(() => {});
+  // Check for updates silently on launch (don't block startup). Plain
+  // checkForUpdates, not checkForUpdatesAndNotify: the built-in OS
+  // notification announces that the update "will be automatically installed
+  // on exit", which is the promise this updater no longer makes. The
+  // downloaded prompt above is the announcement now.
+  autoUpdater.checkForUpdates().catch(() => {});
 }
 
 // ===== MAIN WINDOW =====
