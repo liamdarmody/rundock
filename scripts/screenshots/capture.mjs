@@ -138,7 +138,11 @@ export const SHOTS = [
     async setup(page) {
       await page.evaluate(() => switchNav('team'));
       await page.waitForTimeout(200);
-      await page.evaluate(() => { if (typeof openPalette === 'function') openPalette(); });
+      // Click the search control in the top bar rather than calling the
+      // function behind it. Search expands in place from that control, so
+      // driving it any other way photographs a state the product does not
+      // actually produce.
+      await page.click('#tb-search');
       await page.waitForSelector('#palette-input', { state: 'visible', timeout: 8000 });
       await page.fill('#palette-input', 'launch');
       await page.waitForTimeout(600);

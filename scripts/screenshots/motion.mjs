@@ -178,7 +178,16 @@ async function clipSearch(page, { mark }) {
   await page.waitForTimeout(400);
   await installCursor(page);
   mark();
-  await page.evaluate(() => { if (typeof openPalette === 'function') openPalette(); });
+  // Drive the control a user drives. Search expands in place from the field in
+  // the top bar, and this clip exists to show that behaviour, so calling the
+  // function behind the control would demonstrate the wrong thing.
+  const field = await page.$('#tb-search');
+  const box = field && await field.boundingBox();
+  if (box) {
+    await cursorTo(page, box.x + Math.min(120, box.width / 2), box.y + box.height / 2, 620);
+    await page.waitForTimeout(320);
+  }
+  await page.click('#tb-search');
   await page.waitForSelector('#palette-input', { state: 'visible', timeout: 8000 });
   await page.waitForTimeout(400);
   await page.type('#palette-input', 'launch', { delay: 150 });
