@@ -13,6 +13,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual runs against any branch. Exists because push and pull_request
+  # event processing has been observed to stall on GitHub's side while
+  # dispatch kept working; this keeps full CI reachable for a branch when
+  # that happens.
+  workflow_dispatch:
 
 permissions:
   contents: read
