@@ -14,6 +14,7 @@
 <script src="/code-language.js"></script>
 <script src="/chrome-insets.js"></script>
 <script src="/theme-choice.js"></script>
+<script src="/update-strip-view.js"></script>
 <script src="/empty-list.js"></script>
 <script src="/unread-state.js"></script>
 <script src="/markers.js"></script>
@@ -355,6 +356,51 @@ body.palette-open .tb-search { visibility: hidden; }
 .convo-footer { height: 76px; border-top: 1px solid var(--border); background: var(--surface); flex-shrink: 0; display: flex; align-items: center; padding: 0 8px; }
 .add-btn { display: flex; align-items: center; justify-content: flex-start; gap: 8px; padding: 10px 8px; margin: 0; width: 100%; border-radius: 8px; font-size: var(--body); font-weight: 500; color: var(--text-2); border: 1px solid transparent; transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease; }
 .add-btn:hover { color: var(--accent); background: var(--accent-glow); border-color: rgba(232,122,90,0.3); }
+
+/* Update strip: the sidebar's update surface, ambient at rest and legible
+   on demand. Two weights: a collapsed ~22px ring while a download runs
+   (hover or focus expands it to the full sentence), and an expanded row
+   when an update is ready, which stays expanded because it is the one
+   moment the feature exists for. "Later" defers ready to a small static
+   chip; it never dismisses, since the pending update stays pending
+   regardless of what the interface shows. Sits at the very bottom of the
+   sidebar, below whichever panel is active. */
+.u-strip { border-top: 1px solid var(--border); background: var(--surface); flex-shrink: 0; }
+/* The sidebar's generic panel rule stretches every child div to full
+   height; the strip and the conversation footer are chrome, not panels,
+   and keep their natural heights at the bottom regardless of which panel
+   is active. The strip sits ABOVE the footer, so its appearing or
+   expanding consumes list space and the New conversation button never
+   moves. */
+.sidebar > .u-strip { height: auto; display: block; overflow: visible; margin-top: auto; }
+.sidebar > .convo-footer { height: 76px; display: flex; flex-direction: row; align-items: center; overflow: visible; }
+.u-collapsed-label { font-size: 10px; color: var(--text-2); letter-spacing: 0.02em; }
+.u-strip.collapsed { padding: 6px 14px; }
+.u-strip.expanded { padding: 10px 14px 11px; }
+.u-collapsed-row { display: flex; align-items: center; gap: 7px; height: 22px; width: 100%; }
+.u-collapsed-pct { font-size: 10.5px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.u-row { display: flex; align-items: flex-start; gap: 9px; }
+.u-dot { width: 7px; height: 7px; min-width: 7px; border-radius: 50%; background: var(--success); flex-shrink: 0; margin-top: 4px; }
+.u-collapsed-row .u-dot { margin-top: 0; }
+.u-text { flex: 1; min-width: 0; font-size: 11.5px; color: var(--text-2); line-height: 1.55; overflow-wrap: anywhere; text-align: left; }
+.u-text.ready { color: var(--text-1); }
+.u-text b { color: var(--text-1); font-weight: 600; }
+.u-pct { flex-shrink: 0; font-size: 11px; color: var(--text-1); font-variant-numeric: tabular-nums; font-weight: 500; margin-top: 1px; }
+.u-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; padding-left: 16px; }
+.u-restart-btn { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; color: var(--accent); padding: 0; }
+.u-restart-btn svg { width: 12px; height: 12px; }
+.u-collapse-link { font-size: 11px; color: var(--text-2); opacity: 0.8; padding: 0; }
+.u-ring { flex-shrink: 0; }
+.u-ring svg { display: block; }
+.u-ring.indet { animation: uSpin 900ms linear infinite; transform-origin: 50% 50%; }
+@keyframes uSpin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .u-ring.indet { animation: none; opacity: 0.6; } }
+/* Downloading renders both rows; hover or keyboard focus swaps which one
+   shows, so the expansion needs no JS and no mouse tracking. */
+.u-strip.dl .u-expanded-row { display: none; }
+.u-strip.dl:hover, .u-strip.dl:focus-within { padding: 10px 14px 11px; }
+.u-strip.dl:hover .u-expanded-row, .u-strip.dl:focus-within .u-expanded-row { display: flex; }
+.u-strip.dl:hover .u-collapsed-row, .u-strip.dl:focus-within .u-collapsed-row { display: none; }
 
 /* Main panel */
 .main { flex: 1; display: flex; flex-direction: column; background: var(--elevated); overflow: hidden; position: relative; }
@@ -1175,9 +1221,6 @@ mark.find-match.current,
         <button class="pill" id="pill-unread" onclick="setSidebarPill('unread')">Unread</button>
       </div>
       <div class="convo-list" id="convo-list"></div>
-      <div class="convo-footer">
-        <button class="add-btn" onclick="newConversation()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>New conversation</button>
-      </div>
     </div>
     <div id="sidebar-skills" class="hidden">
       <div class="sidebar-header"><span class="sidebar-label">Skills</span></div>
@@ -1203,6 +1246,13 @@ mark.find-match.current,
           About
         </div>
       </div>
+    </div>
+    <div id="update-strip" class="u-strip" style="display:none"></div>
+    <!-- Sidebar-level so the update strip can sit ABOVE it: the strip
+         appearing or expanding consumes list space, and this button never
+         moves. Shown only on the Conversations tab (setNavState). -->
+    <div class="convo-footer" id="convo-footer">
+      <button class="add-btn" onclick="newConversation()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>New conversation</button>
     </div>
   </aside>
 
