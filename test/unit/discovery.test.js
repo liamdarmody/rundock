@@ -353,12 +353,16 @@ describe('rosters and system prompt', () => {
 
   test('buildSystemPrompt: self-description is runtime-neutral (a Codex agent must not say "powered by Claude Code")', () => {
     // Live finding: the base rules described Rundock as "powered by Claude
-    // Code" and a Codex agent said it verbatim. The identity line now names
-    // both runtimes and no agent claims a single one.
+    // Code" and a Codex agent said it verbatim. The identity line then named
+    // both runtimes as the first fix; the decided positioning goes further
+    // and names neither, so no agent can claim a single one and the
+    // description stays in the user's language. Runtime detail routes to
+    // Doc and the docs.
     useWorkspace({ agents: standardTeam() });
     const prompt = srv.buildSystemPrompt(srv.discoverAgents().find(a => a.id === 'content-lead'));
     assert.ok(!prompt.includes('powered by Claude Code'), 'single-runtime claim removed');
-    assert.ok(prompt.includes('Claude Code') && prompt.includes('Codex'), 'both runtimes named');
+    assert.ok(prompt.includes('AI team workspace'), 'the decided self-description is present');
+    assert.ok(!prompt.includes('Claude Code') && !prompt.includes('Codex'), 'no runtime named in the shared identity');
   });
 
   test('buildSystemPrompt: injects the concrete review-annotation handle instead of a derivation rule', () => {
