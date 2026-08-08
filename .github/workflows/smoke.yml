@@ -1,0 +1,37 @@
+name: Packaged-app smoke test
+
+# Boots the PACKAGED app once and requires a clean start. The unit and e2e
+# suites run against source; nothing they prove survives a packaging mistake
+# (a module missing from the build whitelist, a broken main entry, a
+# dependency absent from the asar). One shipped release died on its first
+# require, after install, where no test had ever looked.
+#
+# workflow_call: the release pipeline runs this as a gate before publishing.
+# workflow_dispatch: runnable against any branch, which is also how the gate
+# itself is verified (break the packaging on a branch, dispatch, expect red).
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    name: Boot the packaged app
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build unpacked, launch, and require a clean boot
+        # Unsigned --dir build: signing and notarisation are the publish
+        # jobs' concern. This gate answers one question only: does the app
+        # that packaging produces actually start?
+        run: node scripts/smoke-packaged.mjs

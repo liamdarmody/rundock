@@ -3284,20 +3284,45 @@ function switchNav(nav) {
 function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }
 function goHome() { discardIfEmpty(); activeConversation=null; switchNav('conversations'); }
 
-// Theme
-function toggleTheme() { document.body.classList.toggle('light'); const isLight=document.body.classList.contains('light'); document.getElementById('theme-toggle').innerHTML=isLight?moonIcon:sunIcon; if(typeof applyHljsTheme==='function')applyHljsTheme(isLight); syncTitleBarOverlay(isLight); persist.set('rundock-theme',isLight?'light':'dark'); }
-// Restore saved theme on load
-if(persist.get('rundock-theme')==='light'){document.body.classList.add('light');document.getElementById('theme-toggle').innerHTML=moonIcon;}
+// Theme. One function applies it everywhere it shows (body class, toggle
+// icon, code highlighting, Windows caption colours); which theme applies is
+// decided by chooseTheme (public/theme-choice.js): an explicit choice wins
+// forever, and until one exists the app follows the OS setting, live.
+function applyTheme(isLight) {
+  document.body.classList.toggle('light', isLight);
+  const t = document.getElementById('theme-toggle');
+  if (t) t.innerHTML = isLight ? moonIcon : sunIcon;
+  if (typeof applyHljsTheme === 'function') applyHljsTheme(isLight);
+  syncTitleBarOverlay(isLight);
+}
+function toggleTheme() {
+  const isLight = !document.body.classList.contains('light');
+  applyTheme(isLight);
+  // The toggle is the user choosing. From here on the OS setting no longer
+  // moves the theme (the media listener below checks storage before acting).
+  persist.set('rundock-theme', isLight ? 'light' : 'dark');
+}
+// Apply the right theme on load, and follow OS changes only while no
+// explicit choice exists.
+{
+  const osLight = window.matchMedia('(prefers-color-scheme: light)');
+  const choice = chooseTheme({ stored: persist.get('rundock-theme'), osPrefersLight: osLight.matches });
+  applyTheme(choice.light);
+  if (choice.followOs) {
+    osLight.addEventListener('change', (e) => {
+      const again = chooseTheme({ stored: persist.get('rundock-theme'), osPrefersLight: e.matches });
+      if (again.followOs) applyTheme(again.light);
+    });
+  }
+}
 
 // The Windows caption buttons are drawn by the OS from colours we pass, so
-// they keep the old ones until re-sent. BOTH paths must call this: only
-// hooking the toggle leaves them correct after a click and wrong after a
-// restart, because the restore-from-storage path above changes the theme
-// without going through it. A no-op off Windows and in a browser.
+// they keep the old ones until re-sent. Every theme change flows through
+// applyTheme above, which calls this, so boot, toggle, and OS-follow all
+// keep the buttons in step. A no-op off Windows and in a browser.
 function syncTitleBarOverlay(isLight) {
   try { window.electronAPI?.setTitleBarOverlay?.(!!isLight); } catch (e) {}
 }
-syncTitleBarOverlay(document.body.classList.contains('light'));
 
 // ===== 11. FILE TREE & EDITOR =====
 

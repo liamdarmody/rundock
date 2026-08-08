@@ -68,9 +68,15 @@ jobs:
       - name: Run E2E suite
         run: npx playwright test
 
+  # The packaged app must BOOT before anything publishes. Source-level suites
+  # cannot catch packaging mistakes; this is the gate that does.
+  smoke:
+    name: Packaged-app smoke test
+    uses: ./.github/workflows/smoke.yml
+
   macos:
     name: Build macOS (arm64 + x64)
-    needs: [test, e2e]
+    needs: [test, e2e, smoke]
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -127,7 +133,7 @@ jobs:
   # ---------------------------------------------------------------------------
   windows:
     name: Build Windows (x64)
-    needs: [test, e2e]
+    needs: [test, e2e, smoke]
     runs-on: windows-latest
     steps:
       - name: Checkout
