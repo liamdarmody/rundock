@@ -4,9 +4,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## Unreleased
-
-**Name:** Updater & Polish
+## 0.11.5: Updater & Polish (2026-08-08)
 
 > **Updating from 0.11.4:** this update still arrives through the old update flow, so it may take a quit and relaunch or two to apply. If it refuses, download it directly from [rundock.ai/download](https://rundock.ai/download). From this version onward, the new flow below takes over.
 
