@@ -366,9 +366,14 @@ body.palette-open .tb-search { visibility: hidden; }
    sidebar, below whichever panel is active. */
 .u-strip { border-top: 1px solid var(--border); background: var(--surface); flex-shrink: 0; }
 /* The sidebar's generic panel rule stretches every child div to full
-   height; the strip is chrome, not a panel, and keeps its natural height
-   at the bottom regardless of which panel is active. */
+   height; the strip and the conversation footer are chrome, not panels,
+   and keep their natural heights at the bottom regardless of which panel
+   is active. The strip sits ABOVE the footer, so its appearing or
+   expanding consumes list space and the New conversation button never
+   moves. */
 .sidebar > .u-strip { height: auto; display: block; overflow: visible; margin-top: auto; }
+.sidebar > .convo-footer { height: 76px; display: flex; flex-direction: row; align-items: center; overflow: visible; }
+.u-collapsed-label { font-size: 10px; color: var(--text-2); letter-spacing: 0.02em; }
 .u-strip.collapsed { padding: 6px 14px; }
 .u-strip.expanded { padding: 10px 14px 11px; }
 .u-collapsed-row { display: flex; align-items: center; gap: 7px; height: 22px; width: 100%; }
@@ -1215,9 +1220,6 @@ mark.find-match.current,
         <button class="pill" id="pill-unread" onclick="setSidebarPill('unread')">Unread</button>
       </div>
       <div class="convo-list" id="convo-list"></div>
-      <div class="convo-footer">
-        <button class="add-btn" onclick="newConversation()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>New conversation</button>
-      </div>
     </div>
     <div id="sidebar-skills" class="hidden">
       <div class="sidebar-header"><span class="sidebar-label">Skills</span></div>
@@ -1245,6 +1247,12 @@ mark.find-match.current,
       </div>
     </div>
     <div id="update-strip" class="u-strip" style="display:none"></div>
+    <!-- Sidebar-level so the update strip can sit ABOVE it: the strip
+         appearing or expanding consumes list space, and this button never
+         moves. Shown only on the Conversations tab (setNavState). -->
+    <div class="convo-footer" id="convo-footer">
+      <button class="add-btn" onclick="newConversation()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>New conversation</button>
+    </div>
   </aside>
 
   <main class="main">

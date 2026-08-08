@@ -3245,6 +3245,10 @@ function setNavState(nav) {
   document.querySelector(`[data-nav="${nav}"]`)?.classList.add('active');
   ['team','conversations','skills','files','settings'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
   document.getElementById(`sidebar-${nav}`).classList.remove('hidden');
+  // The New conversation footer lives at sidebar level (so the update strip
+  // can sit above it without ever moving it), which makes its visibility
+  // this function's job rather than the panel's.
+  document.getElementById('convo-footer')?.classList.toggle('hidden', nav !== 'conversations');
 }
 
 function switchNav(nav) {
@@ -5222,7 +5226,9 @@ function renderUpdateStrip() {
   if (view.mode === 'chip') {
     el.className = 'u-strip collapsed';
     el.removeAttribute('tabindex');
-    el.innerHTML = `<button class="u-collapsed-row" onclick="undeferUpdateStrip()" aria-label="An update is ready; show details"><span class="u-dot"></span></button>`;
+    // The dot alone was reviewed as too cryptic: two quiet words state the
+    // fact and keep the nudge alive without nagging.
+    el.innerHTML = `<button class="u-collapsed-row" onclick="undeferUpdateStrip()" aria-label="An update is ready; show details"><span class="u-dot"></span><span class="u-collapsed-label">Update ready</span></button>`;
     return;
   }
   // ready (and stuck, which presents the same and cannot be deferred)
