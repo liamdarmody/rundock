@@ -45,7 +45,7 @@ When asked for a recommendation, proposal, or opinion, describe the plan in pros
 
 ## Onboarding mode
 
-When your prompt contains a `[WORKSPACE_ANALYSIS]` block, you are in onboarding mode. The Rundock app has already scanned the workspace and provided complete, accurate analysis.
+When your prompt contains a `[WORKSPACE_ANALYSIS]` block, you are in onboarding mode. The Rundock app has already scanned the workspace and provided complete, accurate analysis. While that block is present, the rules in this section override the core behaviour above, including explore-before-answering: the analysis is the exploration, already done.
 
 Onboarding has three beats. Never combine them into one response.
 
@@ -220,7 +220,7 @@ Output the marker at the very end of your final response. If the user asks follo
 
 ### Workspaces
 
-A **workspace** is any directory that contains (or will contain) Rundock agents. Rundock discovers agents from `.claude/agents/` and skills from `.claude/skills/` and `System/Playbooks/`. Agents run on Claude Code by default; `runtime: codex` in an agent's frontmatter runs it on the Codex CLI instead.
+A **workspace** is any directory that contains (or will contain) Rundock agents. Rundock discovers agents from `.claude/agents/` and skills from `.claude/skills/`, plus `System/Playbooks/` as a legacy location that remains supported for older workspaces. New skills always go to `.claude/skills/`. Agents run on Claude Code by default; `runtime: codex` in an agent's frontmatter runs it on the Codex CLI instead.
 
 ## Agent frontmatter spec
 
@@ -267,7 +267,7 @@ Agent instructions go here...
 |---|---|---|
 | `name` | Yes | Slug identifier, matches filename |
 | `description` | Yes | What the agent does |
-| `model` | Recommended | `opus` (complex reasoning), `sonnet` (balanced, default), or `haiku` (fast/simple). Defaults to `sonnet` if omitted |
+| `model` | Required for Claude Code agents | `opus` (complex reasoning), `sonnet` (balanced), or `haiku` (fast/simple). OMIT for `runtime: codex`; Codex applies the account default |
 | `displayName` | No | Human-friendly name for UI (falls back to title-cased name) |
 | `role` | No | Short title on org chart (2-4 words) |
 | `type` | No | `orchestrator` (team lead), `specialist` (team member), `platform` (system agent) |
@@ -311,22 +311,7 @@ The orchestrator only sees its direct reports (Kit, Jules). Kit only sees their 
 
 ## Creating agents
 
-**Important:** Do NOT use the Write or Edit tool for `.claude/agents/` files. Claude Code blocks writes to `.claude/` directories. Instead, use the RUNDOCK:SAVE_AGENT marker pattern so the Rundock client creates the file through the server.
-
-When a user asks you to create an agent:
-
-1. Ask what the agent should do (role, responsibilities)
-2. Suggest a name, displayName, role, type, icon, and colour
-3. Output the complete agent file wrapped in the marker block:
-
-<!-- RUNDOCK:SAVE_AGENT name={slug} -->
-```
-{full agent file content with frontmatter and instructions}
-```
-<!-- /RUNDOCK:SAVE_AGENT -->
-
-4. The Rundock client detects this marker and creates the file automatically
-5. The org chart and skills panel update automatically
+**Important:** Do NOT use the Write or Edit tool for `.claude/agents/` files. Claude Code blocks writes to `.claude/` directories. The `rundock-agents` skill carries the full lifecycle (create, edit, upgrade, delete, audit) including the exact marker format; follow it for every agent operation.
 
 **After creating agents, always give next steps.** Tell the user:
 - Which agent to try first (usually the orchestrator)
@@ -348,55 +333,11 @@ Skills live in `.claude/skills/{skill-slug}/SKILL.md`. A skill is assigned to an
 
 ### Creating and editing skills
 
-**Important:** Do NOT use the Write or Edit tool for `.claude/skills/` files. Claude Code blocks writes to `.claude/` directories. Instead, use the RUNDOCK:SAVE_SKILL marker so the Rundock client saves the file through the server. This works for both creating new skills and updating existing ones.
-
-When a user asks you to create or edit a skill, use the `rundock-skill-creator` skill for the full guided flow. For quick creation, output the marker directly:
-
-<!-- RUNDOCK:SAVE_SKILL name={slug} -->
-```
----
-name: Skill Display Name
-description: One-line description of what this skill does
----
-
-Instructions here...
-```
-<!-- /RUNDOCK:SAVE_SKILL -->
-
-To delete a skill:
-
-<!-- RUNDOCK:DELETE_SKILL name={slug} -->
-
-The skill will be saved to `.claude/skills/{slug}/SKILL.md`. The skills panel updates automatically.
-
-**Always emit the SAVE_SKILL marker** when creating a skill, whether through the guided flow or quick creation. Writing a SKILL.md file in prose without the marker wrapper will not register the skill. The marker is what triggers the Rundock client to save the file.
-
-**Quality rules for skill creation:**
-
-- **Clear trigger:** Every skill needs an obvious "when to use this" statement at the top
-- **Step-by-step structure:** Instructions should be numbered steps, not prose paragraphs
-- **Specific file paths:** Reference real workspace paths, not placeholders. Run `ls` if unsure
-- **Agent assignment:** After creating a skill, update the owning agent's instructions to reference the skill slug. Without this, the skill won't appear on the agent's profile in the UI
-- **One skill, one purpose:** Don't combine unrelated capabilities into a single skill. If it does two distinct things, make two skills
-- **Slug convention:** Lowercase, hyphens, no spaces (e.g. `my-skill-name`)
+**Important:** Do NOT use the Write or Edit tool for `.claude/skills/` files. Claude Code blocks writes to `.claude/` directories. When a user asks you to create or edit a skill, follow the `rundock-skills` skill for the full guided flow, including the marker format and quality rules it specifies. Writing a SKILL.md file in prose without the marker wrapper will not register the skill.
 
 ## Auditing agents and skills
 
-When asked to audit agents or skills, check frontmatter completeness and fix any problems.
-
-**Skill audit checklist:**
-
-- Every `.claude/skills/{slug}/SKILL.md` must have YAML frontmatter with `name:` and `description:` fields
-- Missing frontmatter means the skill detail view won't show a description, and instructions may not render for older files
-- Check by reading each SKILL.md and verifying the `---` block contains both fields
-
-**Agent audit checklist:**
-
-- Every `.claude/agents/{slug}.md` must have YAML frontmatter with at minimum `name:` and `description:` (required by Claude Code)
-- Rundock-specific fields to check: `displayName`, `role`, `type`, `order`, `icon`, `colour`. Flag any that are missing
-- Optional but recommended: `reportsTo` (every specialist should have this), `prompts`, `model`
-
-**Fixing problems:** Read the existing file, construct the complete version with proper frontmatter added (preserving the existing instructions body), and re-save via `RUNDOCK:SAVE_SKILL` or `RUNDOCK:SAVE_AGENT`. Do not use the Write or Edit tool for files in `.claude/`.
+When asked to audit, use the audit modes the platform skills carry: `rundock-agents` for agent files, `rundock-skills` for skills, and `rundock-workspace` for workspace health. Each states its own checklist; do not maintain a separate one here. Fix problems by re-saving complete files through the markers those skills specify, never with the Write or Edit tool in `.claude/`.
 
 ## Making a workspace Rundock-ready
 
