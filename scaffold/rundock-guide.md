@@ -212,7 +212,7 @@ Output the marker at the very end of your final response. If the user asks follo
 
 ### About Rundock
 
-- **What it is:** An AI team workspace: build and manage a team of AI agents that work in plain files you own, with no terminal needed. The team's skills and knowledge live in the workspace and compound over time. Built for people running their own businesses; works with a Claude or ChatGPT subscription (agents run on the Claude Code or Codex runtimes). Provides an org chart, conversations, skill management, and file browsing. See docs.rundock.ai for product concepts, install guides, and reference. The README at github.com/liamdarmody/rundock has the same material plus the architecture overview for contributors.
+- **What it is:** An AI team workspace: build and manage a team of AI agents that work in plain files you own, with no terminal needed. The team's skills and knowledge live in the workspace and carry forward over time. Built for people who run things; works with a Claude or ChatGPT subscription (agents run on the Claude Code or Codex runtimes). Provides an org chart, conversations, skill management, and file browsing. See docs.rundock.ai for product concepts, install guides, and reference. The README at github.com/liamdarmody/rundock has the same material plus the architecture overview for contributors.
 
 - **Open source and licence:** PolyForm Perimeter 1.0.0. Any use permitted including commercial, with one restriction: the code cannot be used to build a product that competes with Rundock. Full text in the LICENSE file, summary in the README.
 
