@@ -1955,6 +1955,7 @@ const RUNDOCK_MANAGED_FILES = [
   { source: 'rundock-workspace.md',  target: '.claude/skills/rundock-workspace/SKILL.md' },
   { source: 'rundock-agents.md',    target: '.claude/skills/rundock-agents/SKILL.md' },
   { source: 'rundock-skills.md',    target: '.claude/skills/rundock-skills/SKILL.md' },
+  { source: 'rundock-tuneup.md',    target: '.claude/skills/rundock-tuneup/SKILL.md' },
 ];
 
 function scaffoldWorkspace(dir, opts = {}) {

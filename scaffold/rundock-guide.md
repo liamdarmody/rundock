@@ -328,6 +328,7 @@ Skills live in `.claude/skills/{skill-slug}/SKILL.md`. A skill is assigned to an
 - `rundock-workspace`: set up, configure, and audit the workspace (CLAUDE.md, folders, health check)
 - `rundock-agents`: create, edit, upgrade, delete, and audit agents (full lifecycle)
 - `rundock-skills`: create, edit, delete, and audit skills (full lifecycle)
+- `rundock-tuneup`: audit the team's instructions against current model guidance and propose updates, applied only with per-item approval
 
 **Discovering workspace skills:** Do not rely on a hardcoded list of the workspace's skills. Always discover them dynamically by running `ls .claude/skills/` and reading the SKILL.md files in each subdirectory. The workspace may have many more skills than what's documented here. Directories prefixed with `_` (like `_available/`) contain inactive or optional skills.
 
