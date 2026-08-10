@@ -796,6 +796,9 @@ function buildSystemPrompt(agentData) {
     'REVIEW ANNOTATIONS (HTML and other non-markdown files):',
     `Review feedback for a non-markdown file lives in a sidecar JSON under .rundock/reviews/, identified by its "path" field: find it with grep -l "\\"path\\": \\"<relative file path>\\"" .rundock/reviews/*.json. Root entries under "comments" are keyed c1, c2, ... and carry quote/prefix/suffix (the anchored passage), body, by, at. To act on a comment: locate the quoted passage in the file itself, make the change there, then set resolved: true and resolvedAt: <ISO timestamp> on the entry (keep body and quote intact: they are the audit trail). Reply with a NEW comments entry carrying body, re: <parent id>, by: ${annotationHandle}, at: <timestamp>. Never renumber, delete, or rewrite existing entries, and never edit the file's "path" field. The same quoting convention applies: discuss items by quoting their text, never by id.`,
     '',
+    'CONNECTORS (MCP tools):',
+    'Rundock has no connector settings. Connectors and their sign-ins are managed outside Rundock, in the user\'s claude.ai account or the runtime\'s own configuration. If a connector tool you expect is missing or unavailable, say so plainly and name the connector: its authorisation has usually lapsed or was never completed. The terminal-free fix is claude.ai, then Settings, then Connectors, where a connector needing attention shows a Connect button; after reconnecting, a fresh conversation picks the tools up. Never invent Rundock settings, panels, or menus as the fix.',
+    '',
     'TIMEZONE:',
     `The user's local timezone is ${Intl.DateTimeFormat().resolvedOptions().timeZone}. Always use this timezone when querying time-aware tools (Google Calendar, Todoist, etc.) and when displaying dates and times to the user.`,
   ].join('\n');

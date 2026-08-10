@@ -386,6 +386,20 @@ describe('rosters and system prompt', () => {
     assert.ok(!prompt.includes('Claude Code') && !prompt.includes('Codex'), 'no runtime named in the shared identity');
   });
 
+  test('buildSystemPrompt: agents are told the truth about missing connectors', () => {
+    // Live finding (issue #70): when a connector's authorisation lapses, its
+    // tools are silently absent and the agent improvises an explanation. One
+    // user was sent hunting for "Rundock connector settings", which do not
+    // exist. The base rules now state the honest cause and the terminal-free
+    // fix. Phrased runtime-neutrally: the neutrality test below must keep
+    // passing, and a Codex agent's connectors are not Claude Code's anyway.
+    useWorkspace({ agents: standardTeam() });
+    const prompt = srv.buildSystemPrompt(srv.discoverAgents().find(a => a.id === 'content-lead'));
+    assert.ok(prompt.includes('Rundock has no connector settings'), 'the non-existent settings are ruled out');
+    assert.ok(prompt.includes('claude.ai'), 'points at where connectors are actually managed');
+    assert.ok(prompt.includes('Never invent Rundock settings'), 'the hallucination is named and forbidden');
+  });
+
   test('buildSystemPrompt: injects the concrete review-annotation handle instead of a derivation rule', () => {
     // Live finding: "by: <your agent name, lowercase>" parsed differently on
     // GPT-5 (it wrote its ROLE). The concrete handle is now injected.
