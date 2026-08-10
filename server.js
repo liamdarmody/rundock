@@ -18,6 +18,7 @@ const codexAppServerLib = require('./codex-appserver.js');
 const PKG_VERSION = require('./package.json').version;
 const searchLib = require('./search.js');
 const { resolvePermissionConvoId } = require('./permission-routing.js');
+const { resolveMarkers } = require('./lib/delegation/markers.js');
 
 const PORT = process.env.PORT || 3000;
 let ACTUAL_PORT = PORT; // Updated after server.listen() with the real listening port
@@ -3500,9 +3501,7 @@ function handleDelegation(msg, processes) {
   wireProcessHandlers(delegateEntry, convoId, null, {
     enableInterception: true,
     onResult: (e) => {
-      const hasOutOfScope = /<!-- RUNDOCK:RETURN -->/.test(e.responseText);
-      const hasComplete = /<!-- RUNDOCK:COMPLETE -->/.test(e.responseText);
-      const hasCrudMarker = /<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT|<!-- RUNDOCK:DELETE_AGENT|<!-- RUNDOCK:SAVE_SKILL|<!-- RUNDOCK:DELETE_SKILL/.test(e.responseText);
+      const { hasReturn: hasOutOfScope, hasComplete, hasCrudMarker } = resolveMarkers(e.responseText);
       const hasHandoff = hasOutOfScope || hasComplete;
       const shouldAutoReturn = e.isPlatformDelegate
         ? (hasHandoff || hasCrudMarker)
