@@ -68,7 +68,12 @@ function parseLcov(file, wantedFile) {
   for (const rec of records) {
     const sfMatch = rec.match(/SF:(.*)/);
     if (!sfMatch) continue;
-    if (path.basename(sfMatch[1].trim()) !== wantedFile) continue;
+    // Accept a bare basename ('server.js') or a repo-relative path
+    // ('lib/delegation/markers.js'): basename-only matching cannot address a
+    // file inside a subdirectory, and two files sharing a basename would
+    // collide.
+    const sf = sfMatch[1].trim();
+    if (sf !== wantedFile && path.basename(sf) !== wantedFile) continue;
     const hits = new Map(); // line -> count
     for (const m of rec.matchAll(/^DA:(\d+),(\d+)/gm)) {
       hits.set(parseInt(m[1], 10), parseInt(m[2], 10));
@@ -106,7 +111,7 @@ function main() {
   console.log('\n===== server.js coverage by functional area =====\n');
   console.log(`OVERALL server.js: ${pct(fileCovered, fileTotal)}  (${fileCovered}/${fileTotal} executable lines)`);
   // Sibling modules included in coverage get their own overall line.
-  for (const extra of ['codex.js', 'codex-appserver.js', 'search.js']) {
+  for (const extra of ['codex.js', 'codex-appserver.js', 'search.js', 'lib/delegation/markers.js', 'lib/delegation/handback.js', 'lib/delegation/state.js']) {
     const extraHits = parseLcov(lcovPath, extra);
     if (extraHits) {
       let t = 0, c2 = 0;
