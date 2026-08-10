@@ -326,6 +326,45 @@ function sanitizeSpecialistOutput(text) {
   return cleaned;
 }
 
+// The delegate's plain chat turns from the on-disk transcript, in order.
+// Boundary is a TIMESTAMP, not an index: appendTranscript splices entry 1 at
+// the 1000-entry soft cap, so a stored index silently drifts on long
+// conversations. Typed rows (e.g. 'routing') are bookkeeping and carry no
+// session content.
+function transcriptTurnsSince(convoId, agentId, sinceIso) {
+  const transcript = loadTranscript(convoId) || [];
+  return transcript
+    .filter(t => t.role === 'agent' && t.agent === agentId && !t.type)
+    .filter(t => !sinceIso || t.timestamp >= sinceIso)
+    .map(t => t.text);
+}
+
+// Build the payload a parent agent receives when a delegate hands back. The
+// single source of handback content: every substantive turn, not just the
+// last one.
+//
+// Incident (0.11.2): an analyst delivered a 6,665-char analysis in turn 1 and
+// a 106-char sign-off in turn 2; only the sign-off reached the lead, because
+// finalResponseText holds one turn by design (responseText resets per turn).
+// The lead refused to invent the analysis and the user pasted 6,050 chars by
+// hand while the full report sat in the transcript on disk.
+//
+// Prefers in-memory accumulated turns (fast path); falls back to the
+// transcript, which survives process death and is authoritative. Truncation
+// over the cap is LOUD: the parent is told what was omitted and where the
+// full output lives, never silently handed a fragment.
+function buildHandbackPayload(entry, convoId) {
+  const turns = (entry.deliveredTurns && entry.deliveredTurns.length)
+    ? entry.deliveredTurns
+    : transcriptTurnsSince(convoId, entry.agentId, entry.delegationStartedAt);
+  const cleaned = turns.map(t => stripRundockMarkers(t || '').trim()).filter(Boolean);
+  const joined = cleaned.join('\n\n');
+  if (joined.length <= SPECIALIST_OUTPUT_MAX_CHARS) return joined;
+  const omitted = joined.length - SPECIALIST_OUTPUT_MAX_CHARS;
+  return joined.substring(0, SPECIALIST_OUTPUT_MAX_CHARS)
+    + `\n\n[Handback truncated: ${omitted} of ${joined.length} characters omitted across ${cleaned.length} turn(s). Read the full output in .rundock/transcripts/${convoId}.json]`;
+}
+
 // Session history: read Claude Code JSONL transcripts from disk
 function getSessionJsonlPath(sessionId) {
   if (!WORKSPACE || !sessionId) return null;
@@ -850,6 +889,10 @@ function buildSystemPrompt(agentData) {
       '- Do NOT narrate the delegation brief in visible chat. Do not describe what the team member will do, list the steps they will take, announce which files they will load, or refer to the user in third person. That belongs inside the Agent tool prompt.',
       '- Do NOT ask clarifying questions on the team member\'s behalf. Let them ask their own if needed.',
       '- Use your team member\'s actual name when handing off. Do not invent labels or role titles.',
+      // Bug A1 (handback integrity): the 0.8.5 sequential rule lived only in
+      // the orchestrator branch, so leads promised parallel work the engine
+      // cannot deliver ("I'll get Ana on the cadence question in parallel").
+      '- Delegation is sequential: one team member at a time. Do not tell the user you are running tasks "in parallel", "simultaneously", or "at the same time". You hand off to one team member, they complete their work, then you can hand off to the next.',
       '- Hand control back to the orchestrator using one of two markers, on its own line, as the very last thing in your response (after any final summary):',
       '  - <!-- RUNDOCK:RETURN --> when the user asks for something outside your domain entirely. Tell the user briefly you are handing them back, do not name other specialists, then emit the marker.',
       '  - <!-- RUNDOCK:COMPLETE --> when the orchestrator\'s original delegated pipeline is finished end-to-end. All deliverables are written to their final locations and the workflow has reached its final status (for example content moved to Ready for Review, spec written and linked, final audit posted). Post your final summary first, then emit the marker.',
@@ -2772,7 +2815,7 @@ function sendModelError(entry, convoId) {
  * Consolidates JSONL parsing, metadata enrichment, session capture,
  * Agent tool interception, response text accumulation, and result handling.
  *
- * @param {object} entry - Process entry (must have: process, buffer, processId, agentId, responseText, exited, pendingAgentTool)
+ * @param {object} entry - Process entry (must have: process, buffer, processId, agentId, responseText, exited, pendingAgentTools)
  * @param {string} convoId - Conversation ID
  * @param {object} ws - WebSocket connection (unused, kept for signature compatibility)
  * @param {object} options
@@ -2803,96 +2846,30 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
           parsed._sessionId = parsed.session_id;
         }
 
-        // ── Agent tool interception ──
+        // ── Agent tool interception: collection ──
+        // Blocks are only COLLECTED as they stream. The interception decision
+        // waits for the end-of-message `assistant` envelope, because a turn
+        // can emit several Agent calls: acting (and SIGKILLing) on the first
+        // block's stop meant blocks 2..N were never even parsed, so the
+        // engine silently discarded them with no log and no event. Deferring
+        // to message end sees the whole turn. The cost is a few milliseconds
+        // in which the runtime may begin its own generic subagent for the
+        // call; killProcessTree takes that subagent down with its parent
+        // before it can act, so nothing observable escapes.
         if (enableInterception) {
           const evt = parsed.type === 'stream_event' ? parsed.event : null;
           if (evt) {
             if (evt.type === 'content_block_start' && evt.content_block?.type === 'tool_use' && evt.content_block?.name === 'Agent') {
-              entry.pendingAgentTool = { blockIndex: evt.index, inputJson: '' };
+              if (!entry.pendingAgentTools) entry.pendingAgentTools = [];
+              entry.pendingAgentTools.push({ blockIndex: evt.index, inputJson: '', complete: false });
             }
-            if (entry.pendingAgentTool && evt.type === 'content_block_delta' && evt.index === entry.pendingAgentTool.blockIndex && evt.delta?.type === 'input_json_delta') {
-              entry.pendingAgentTool.inputJson += evt.delta.partial_json;
+            if (entry.pendingAgentTools && evt.type === 'content_block_delta' && evt.delta?.type === 'input_json_delta') {
+              const block = entry.pendingAgentTools.find(b => b.blockIndex === evt.index && !b.complete);
+              if (block) block.inputJson += evt.delta.partial_json;
             }
-            if (entry.pendingAgentTool && evt.type === 'content_block_stop' && evt.index === entry.pendingAgentTool.blockIndex) {
-              let intercepted = false;
-              try {
-                const toolInput = JSON.parse(entry.pendingAgentTool.inputJson);
-                const target = findDirectReportMatch(entry.agentId, toolInput);
-                if (target) {
-                  console.log(`[AgentIntercept] convo=${convoId} agent=${entry.agentId} intercepting Agent tool call targeting: ${target.name}`);
-                  intercepted = true;
-                  // Save orchestrator's response to transcript before killing the process.
-                  // The result event won't fire after SIGKILL so we must persist here.
-                  // With prose: append the prose (with tools prefix) as a regular agent
-                  // entry so it renders in the chat and survives navigate-away/back.
-                  // Without prose: still append a routing-typed entry so the orchestrator's
-                  // turn is recorded in the transcript (otherwise the turn is invisible
-                  // on rehydrate). The renderer skips routing entries from chat bubbles.
-                  if (entry.responseText) {
-                    const toolSummary = buildToolSummary(entry.toolCalls);
-                    const textWithTools = toolSummary ? toolSummary + '\n' + entry.responseText : entry.responseText;
-                    appendTranscript(convoId, 'agent', entry.agentId, textWithTools);
-                  } else {
-                    const toolSummary = buildToolSummary(entry.toolCalls);
-                    appendTranscript(convoId, 'agent', entry.agentId, toolSummary, 'routing');
-                  }
-                  try { killProcessTree(entry.process, 'SIGKILL'); } catch (e) {}
-                  entry.exited = true;
-                  // Order matters: handleDelegation sends agent_switch synchronously,
-                  // which the client uses to promote the orchestrator's streaming
-                  // bubble (state.currentStreamingMsg) into a permanent message.
-                  // If 'done' fires first, finishProcessing nulls currentStreamingMsg
-                  // and the handoff text is orphaned. Send 'done' AFTER handleDelegation
-                  // so agent_switch (and the specialist's process_started, also sent
-                  // inside handleDelegation) reach the client first. By then
-                  // activeProcessId points at the specialist, so the orchestrator's
-                  // 'done' fails the process-id match in finishProcessing: exactly
-                  // what we want: the orchestrator's working indicator clears via
-                  // agent_switch, not via 'done'.
-                  handleDelegation({
-                    type: 'delegate', conversationId: convoId,
-                    targetAgent: target.name,
-                    context: toolInput.prompt || toolInput.description || 'Handle this request.',
-                    _intercepted: true, _parentSessionId: entry.sessionId, _parentAgentId: entry.agentId
-                  }, chatProcesses);
-                  safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: 0, _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId }));
-                } else {
-                  // Impersonation guard: an explicit subagent_type naming a
-                  // workspace agent OUTSIDE this caller's direct reports must
-                  // not fall through, or Claude Code spawns a generic subagent
-                  // wearing that agent's name (for runtime: codex agents this
-                  // silently bypasses the user's runtime choice). Soft block:
-                  // kill the turn and resume the caller with a corrective
-                  // message so it recovers in-conversation.
-                  // KNOWN LIMITATION: without a captured sessionId the caller cannot be resumed, so the block does not fire and the call falls through (pre-fix behavior). In practice init always precedes tool_use, so sessionId is present. Narrow.
-                  const offRoster = findOffRosterWorkspaceMatch(entry.agentId, toolInput);
-                  if (offRoster && entry.sessionId) {
-                    console.log(`[AgentIntercept] convo=${convoId} agent=${entry.agentId} blocking off-roster Agent tool target: ${offRoster.name}`);
-                    intercepted = true;
-                    if (entry.responseText) {
-                      const toolSummary = buildToolSummary(entry.toolCalls);
-                      const textWithTools = toolSummary ? toolSummary + '\n' + entry.responseText : entry.responseText;
-                      appendTranscript(convoId, 'agent', entry.agentId, textWithTools);
-                    } else {
-                      appendTranscript(convoId, 'agent', entry.agentId, buildToolSummary(entry.toolCalls), 'routing');
-                    }
-                    try { killProcessTree(entry.process, 'SIGKILL'); } catch (e) {}
-                    entry.exited = true;
-                    const offName = offRoster.displayName || offRoster.name;
-                    safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: `Blocked a handoff to ${offName}: not one of this agent's direct reports.`, _conversationId: convoId }));
-                    const blockedEntry = spawnResumedProcess(convoId, entry.agentId, entry.sessionId, chatProcesses, {});
-                    blockedEntry.idle = false; blockedEntry.idleSince = null;
-                    safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: blockedEntry.processId, _agent: entry.agentId, autoContinue: true }));
-                    const runtimeNote = offRoster.runtime === 'codex' ? ` ${offName} runs on a different runtime (Codex), which only their own leader can start.` : '';
-                    const blockPrompt = `[SYSTEM: delegation-blocked] Your Agent tool call named "${offName}" (${offRoster.name}), a workspace agent who is not one of your direct reports, so it was NOT run. No subagent may act as ${offName}.${runtimeNote} Do not retry the same call. If the task needs ${offName}, tell the user this needs routing through ${offName}'s leader and hand back. Otherwise continue without them.`;
-                    blockedEntry.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: blockPrompt } }) + '\n');
-                  }
-                }
-              } catch (e) {
-                console.log(`[AgentIntercept] convo=${convoId} failed to parse Agent tool input: ${e.message}`);
-              }
-              entry.pendingAgentTool = null;
-              if (intercepted) continue;
+            if (entry.pendingAgentTools && evt.type === 'content_block_stop') {
+              const block = entry.pendingAgentTools.find(b => b.blockIndex === evt.index && !b.complete);
+              if (block) block.complete = true;
             }
           }
         }
@@ -2947,6 +2924,115 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
           }
         }
 
+        // ── Agent tool interception: decision ──
+        // Runs at the end-of-message `assistant` envelope with every Agent
+        // block of the turn collected (see the collection block above), and
+        // AFTER text accumulation so the transcript entry written below
+        // carries the turn's full prose.
+        if (enableInterception && parsed.type === 'assistant' && entry.pendingAgentTools && entry.pendingAgentTools.length) {
+          const agentCalls = [];
+          for (const block of entry.pendingAgentTools) {
+            if (!block.complete) continue; // never closed: stream ended mid-block
+            try {
+              agentCalls.push(JSON.parse(block.inputJson));
+            } catch (e) {
+              console.log(`[AgentIntercept] convo=${convoId} failed to parse Agent tool input: ${e.message}`);
+            }
+          }
+          entry.pendingAgentTools = null;
+
+          // First call naming a direct report wins; delegation is sequential.
+          // The REMAINING calls are recorded and named back to the caller on
+          // handback so it can sequence them: an honest queue, never a
+          // silent drop. Actual concurrent execution is a separate card.
+          let target = null, targetInput = null;
+          const deferredTargets = [];
+          for (const input of agentCalls) {
+            const match = findDirectReportMatch(entry.agentId, input);
+            if (!target && match) {
+              target = match; targetInput = input;
+              continue;
+            }
+            // Every other call in the turn dies with the kill below, whether
+            // it names a direct report or a built-in subagent type, so every
+            // one of them is named back.
+            deferredTargets.push(match ? match.name : (input.subagent_type || 'an unnamed target'));
+          }
+
+          if (target) {
+            console.log(`[AgentIntercept] convo=${convoId} agent=${entry.agentId} intercepting Agent tool call targeting: ${target.name}${deferredTargets.length ? ` (deferring: ${deferredTargets.join(', ')})` : ''}`);
+            // Save orchestrator's response to transcript before killing the process.
+            // The result event won't fire after SIGKILL so we must persist here.
+            // With prose: append the prose (with tools prefix) as a regular agent
+            // entry so it renders in the chat and survives navigate-away/back.
+            // Without prose: still append a routing-typed entry so the orchestrator's
+            // turn is recorded in the transcript (otherwise the turn is invisible
+            // on rehydrate). The renderer skips routing entries from chat bubbles.
+            if (entry.responseText) {
+              const toolSummary = buildToolSummary(entry.toolCalls);
+              const textWithTools = toolSummary ? toolSummary + '\n' + entry.responseText : entry.responseText;
+              appendTranscript(convoId, 'agent', entry.agentId, textWithTools);
+            } else {
+              const toolSummary = buildToolSummary(entry.toolCalls);
+              appendTranscript(convoId, 'agent', entry.agentId, toolSummary, 'routing');
+            }
+            try { killProcessTree(entry.process, 'SIGKILL'); } catch (e) {}
+            entry.exited = true;
+            // Order matters: handleDelegation sends agent_switch synchronously,
+            // which the client uses to promote the orchestrator's streaming
+            // bubble (state.currentStreamingMsg) into a permanent message.
+            // If 'done' fires first, finishProcessing nulls currentStreamingMsg
+            // and the handoff text is orphaned. Send 'done' AFTER handleDelegation
+            // so agent_switch (and the specialist's process_started, also sent
+            // inside handleDelegation) reach the client first. By then
+            // activeProcessId points at the specialist, so the orchestrator's
+            // 'done' fails the process-id match in finishProcessing: exactly
+            // what we want: the orchestrator's working indicator clears via
+            // agent_switch, not via 'done'.
+            handleDelegation({
+              type: 'delegate', conversationId: convoId,
+              targetAgent: target.name,
+              context: targetInput.prompt || targetInput.description || 'Handle this request.',
+              _intercepted: true, _parentSessionId: entry.sessionId, _parentAgentId: entry.agentId,
+              _deferredTargets: deferredTargets.length ? deferredTargets : null
+            }, chatProcesses);
+            safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: 0, _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId }));
+            continue; // suppress the assistant envelope: agent_switch owns the client handoff
+          }
+
+          // Impersonation guard: an explicit subagent_type naming a
+          // workspace agent OUTSIDE this caller's direct reports must
+          // not fall through, or Claude Code spawns a generic subagent
+          // wearing that agent's name (for runtime: codex agents this
+          // silently bypasses the user's runtime choice). Soft block:
+          // kill the turn and resume the caller with a corrective
+          // message so it recovers in-conversation.
+          // KNOWN LIMITATION: without a captured sessionId the caller cannot be resumed, so the block does not fire and the call falls through (pre-fix behavior). In practice init always precedes tool_use, so sessionId is present. Narrow.
+          const offInput = entry.sessionId ? agentCalls.find(input => findOffRosterWorkspaceMatch(entry.agentId, input)) : null;
+          const offRoster = offInput ? findOffRosterWorkspaceMatch(entry.agentId, offInput) : null;
+          if (offRoster) {
+            console.log(`[AgentIntercept] convo=${convoId} agent=${entry.agentId} blocking off-roster Agent tool target: ${offRoster.name}`);
+            if (entry.responseText) {
+              const toolSummary = buildToolSummary(entry.toolCalls);
+              const textWithTools = toolSummary ? toolSummary + '\n' + entry.responseText : entry.responseText;
+              appendTranscript(convoId, 'agent', entry.agentId, textWithTools);
+            } else {
+              appendTranscript(convoId, 'agent', entry.agentId, buildToolSummary(entry.toolCalls), 'routing');
+            }
+            try { killProcessTree(entry.process, 'SIGKILL'); } catch (e) {}
+            entry.exited = true;
+            const offName = offRoster.displayName || offRoster.name;
+            safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: `Blocked a handoff to ${offName}: not one of this agent's direct reports.`, _conversationId: convoId }));
+            const blockedEntry = spawnResumedProcess(convoId, entry.agentId, entry.sessionId, chatProcesses, {});
+            blockedEntry.idle = false; blockedEntry.idleSince = null;
+            safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: blockedEntry.processId, _agent: entry.agentId, autoContinue: true }));
+            const runtimeNote = offRoster.runtime === 'codex' ? ` ${offName} runs on a different runtime (Codex), which only their own leader can start.` : '';
+            const blockPrompt = `[SYSTEM: delegation-blocked] Your Agent tool call named "${offName}" (${offRoster.name}), a workspace agent who is not one of your direct reports, so it was NOT run. No subagent may act as ${offName}.${runtimeNote} Do not retry the same call. If the task needs ${offName}, tell the user this needs routing through ${offName}'s leader and hand back. Otherwise continue without them.`;
+            blockedEntry.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: blockPrompt } }) + '\n');
+            continue;
+          }
+        }
+
         // Result handling
         if (parsed.type === 'result') {
           entry.resultSent = true;
@@ -2966,6 +3052,7 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
           safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: 0, _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId }));
           if (onResult) onResult(entry, parsed);
           entry.sawTextDelta = false; // turn boundary: next turn re-decides delta vs assistant
+          entry.pendingAgentTools = null; // turn boundary: stale collected blocks never leak across turns
         } else {
           safeSend(JSON.stringify(parsed));
         }
@@ -3043,7 +3130,7 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
     process: proc, buffer: '', processId, agentId: orchestrator.id,
     responseText: '', exited: false, resultSent: false,
     lastUserMessage: specialistEntry.lastUserMessage,
-    pendingAgentTool: null,
+    pendingAgentTools: null,
     toolCalls: [], turnStartTime: Date.now(),
     scopeReturnSource: wasPipelineComplete ? null : specialistEntry.agentId
   };
@@ -3086,7 +3173,7 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
       // so the orchestrator has visibility into what was delivered. Without this, the
       // orchestrator's JSONL only contains its own pre-delegation state and it has to
       // guess or re-read files to know what the specialist did.
-      const specialistOutput = sanitizeSpecialistOutput(specialistEntry.finalResponseText || specialistEntry.responseText);
+      const specialistOutput = buildHandbackPayload(specialistEntry, convoId);
       const outputBlock = specialistOutput
         ? `\n\n--- ${specialistEntry.agentId} ---\n${specialistOutput}\n---`
         : '';
@@ -3162,7 +3249,10 @@ function spawnResumedProcess(convoId, agentId, sessionId, processes, opts = {}) 
   const entry = {
     process: proc, buffer: '', processId, agentId,
     responseText: '', exited: false, resultSent: false,
-    pendingAgentTool: null, toolCalls: [], turnStartTime: Date.now(),
+    // Handback integrity: a respawned agent can hand back via its scope-return
+    // close path, so its turns accumulate the same as a delegate's.
+    deliveredTurns: [], delegationStartedAt: new Date().toISOString(),
+    pendingAgentTools: null, toolCalls: [], turnStartTime: Date.now(),
     idle: true, scopeReturnSource: opts.scopeReturnSource || null,
     handbackAt: Date.now(), // stale end_delegation guard
   };
@@ -3183,6 +3273,7 @@ function spawnResumedProcess(convoId, agentId, sessionId, processes, opts = {}) 
         const toolSummary = buildToolSummary(e.toolCalls);
         const textWithTools = toolSummary ? toolSummary + '\n' + e.responseText : e.responseText;
         appendTranscript(convoId, 'agent', e.agentId, textWithTools);
+        if (e.deliveredTurns) e.deliveredTurns.push(e.responseText);
       }
       e.finalResponseText = e.responseText;
       e.responseText = '';
@@ -3339,7 +3430,16 @@ function handleDelegation(msg, processes) {
     agentId: targetAgent.id, responseText: '', exited: false, resultSent: false, idle: false,
     isPlatformDelegate, lastUserMessage: msg.context, receivedFollowUp: false,
     isIntercepted,
-    pendingAgentTool: null,
+    // Handback integrity: every turn's text accumulates here so the handback
+    // carries the whole delegation, not the final turn. The timestamp bounds
+    // the transcript fallback when this array is empty (delegate crashed
+    // before any result).
+    deliveredTurns: [], delegationStartedAt: new Date().toISOString(),
+    // Agent calls from the delegating turn that were NOT run (delegation is
+    // sequential): named back to the caller on handback so it can sequence
+    // them instead of believing they ran.
+    deferredTargets: msg._deferredTargets || null,
+    pendingAgentTools: null,
     toolCalls: [], turnStartTime: Date.now(),
     delegation: {
       originalAgentId, originalProcessId,
@@ -3444,6 +3544,9 @@ function handleDelegation(msg, processes) {
             const toolSummary = buildToolSummary(e.toolCalls);
             const textWithTools = toolSummary ? toolSummary + '\n' + e.responseText : e.responseText;
             appendTranscript(convoId, 'agent', e.agentId, textWithTools);
+            // Accumulate before the reset: the reset is correct for per-turn
+            // streaming, but the handback must carry every turn.
+            e.deliveredTurns.push(e.responseText);
           }
       e.responseText = '';
       e.idle = true; e.idleSince = Date.now();
@@ -3488,6 +3591,17 @@ function handleDelegation(msg, processes) {
     // drives the restored parent instead of a routing prompt. Mirrors the
     // live-window rule where a follow-up cancels the auto-return.
     const bufferedFollowUp = convoHasBufferedChat(convoId);
+
+    // Multi-target honesty: Agent calls from the delegating turn that were
+    // not run are named back to the caller. The engine used to discard them
+    // with no log and no event, so callers believed parallel work happened.
+    // Worded to inform, not to command: two of the receiving prompts require
+    // the parent to output <silent>, so the note must survive being read
+    // without being acted on until the parent's next active turn.
+    const deferred = delegateEntry.deferredTargets || [];
+    const deferredNote = deferred.length
+      ? `\n\nNOTE: the turn that delegated to ${delegateEntry.agentId} also invoked the Agent tool for: ${deferred.join(', ')}. Delegation is sequential, so ${deferred.length === 1 ? 'that call was' : 'those calls were'} NOT run. If that work is still needed, sequence it one target at a time on your next active turn.`
+      : '';
 
     // If cancelled by user, skip all parent restoration logic
     if (delegateEntry.cancelled) {
@@ -3569,8 +3683,8 @@ function handleDelegation(msg, processes) {
                 orchestratorEntry.idle = false; orchestratorEntry.idleSince = null;
                 safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: orchestratorEntry.processId, _agent: orchestratorAgentId, autoContinue: true }));
                 const prompt = pendingRequest
-                  ? `[SYSTEM: A specialist just returned because the user asked for something outside their scope. The user's pending request is: "${pendingRequest}"\n\nRoute this request now. Delegate to the right specialist if one fits, or handle it yourself. Do not summarise what the previous specialist did. Do not ask the user to repeat themselves. Respond to their request.]`
-                  : '[SYSTEM: A specialist just returned. Ask the user what they need next.]';
+                  ? `[SYSTEM: A specialist just returned because the user asked for something outside their scope. The user's pending request is: "${pendingRequest}"\n\nRoute this request now. Delegate to the right specialist if one fits, or handle it yourself. Do not summarise what the previous specialist did. Do not ask the user to repeat themselves. Respond to their request.${deferredNote}]`
+                  : `[SYSTEM: A specialist just returned. Ask the user what they need next.${deferredNote}]`;
                 try {
                   orchestratorEntry.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n');
                 } catch (err) {
@@ -3619,7 +3733,10 @@ function handleDelegation(msg, processes) {
       const resumeEntry = {
         process: resumeProc, buffer: '', processId: resumeProcessId,
         agentId: parentAgentId, responseText: '', exited: false, resultSent: false,
-        pendingAgentTool: null,
+        // Handback integrity: a restored parent can hand back onward via its
+        // scope-return close path, so its turns accumulate too.
+        deliveredTurns: [], delegationStartedAt: new Date().toISOString(),
+        pendingAgentTools: null,
         toolCalls: [], turnStartTime: Date.now(),
         // Tag with returning specialist so handleDelegation's scopeReturnSource
         // guard blocks immediate re-delegation to the same agent. Only set for
@@ -3640,7 +3757,7 @@ function handleDelegation(msg, processes) {
       // visibility into what was delivered. The parent's --resume session only
       // contains its own pre-delegation state; the specialist's work is invisible
       // without this injection.
-      const delegateOutput = sanitizeSpecialistOutput(delegateEntry.finalResponseText || delegateEntry.responseText);
+      const delegateOutput = buildHandbackPayload(delegateEntry, convoId);
       const delegateOutputBlock = delegateOutput
         ? `\n\n--- ${delegateEntry.agentId} ---\n${delegateOutput}\n---`
         : '';
@@ -3660,21 +3777,21 @@ function handleDelegation(msg, processes) {
         } else {
           safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: resumeProcessId, _agent: parentAgentId, autoContinue: true }));
 
-          const resumePrompt = `[SYSTEM: ${delegateEntry.agentId} returned because the request was outside their scope. Here is what they said:${delegateOutputBlock}\n\nThe user's latest request was: "${delegateEntry.lastUserMessage || 'continue'}". Respond with full awareness of what ${delegateEntry.agentId} delivered. Do not re-delegate work already done. Route to the right specialist using the Agent tool.]`;
+          const resumePrompt = `[SYSTEM: ${delegateEntry.agentId} returned because the request was outside their scope. Here is what they said:${delegateOutputBlock}\n\nThe user's latest request was: "${delegateEntry.lastUserMessage || 'continue'}". Respond with full awareness of what ${delegateEntry.agentId} delivered. Do not re-delegate work already done. Route to the right specialist using the Agent tool.${deferredNote}]`;
           resumeProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: resumePrompt } }) + '\n');
         }
       } else if (isPipelineComplete) {
         // Park silently but inject specialist output so the next user message
         // resumes with real context about what was delivered.
         safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: resumeProcessId, _agent: parentAgentId, autoContinue: true, silent: true }));
-        const completePrompt = `[SYSTEM: pipeline-complete] ${delegateEntry.agentId} has finished the delegated work. Here is their final message to the conversation:${delegateOutputBlock}\n\nYour output for this turn MUST be exactly the literal string <silent> and nothing else. Do not narrate, summarise, or quote the specialist's output. Do not invoke any tools. Do not emit any other text. Just output <silent> and stop.`;
+        const completePrompt = `[SYSTEM: pipeline-complete] ${delegateEntry.agentId} has finished the delegated work. Here is their final message to the conversation:${delegateOutputBlock}${deferredNote}\n\nYour output for this turn MUST be exactly the literal string <silent> and nothing else. Do not narrate, summarise, or quote the specialist's output. Do not invoke any tools. Do not emit any other text. Just output <silent> and stop.`;
         resumeProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: completePrompt } }) + '\n');
         resumeEntry.idle = true; resumeEntry.idleSince = Date.now();
         console.log(`[AgentIntercept] convo=${convoId} delegate emitted COMPLETE, parent ${parentAgentId} parked with specialist output`);
       } else {
         // Normal exit (no marker). Inject specialist output for context, then park.
         safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: resumeProcessId, _agent: parentAgentId, autoContinue: true, silent: true }));
-        const normalPrompt = `[SYSTEM: pipeline-complete] ${delegateEntry.agentId} completed their work. Here is their final message to the conversation:${delegateOutputBlock}\n\nYour output for this turn MUST be exactly the literal string <silent> and nothing else. Do not narrate, summarise, or quote the specialist's output. Do not invoke any tools. Do not emit any other text. Just output <silent> and stop.`;
+        const normalPrompt = `[SYSTEM: pipeline-complete] ${delegateEntry.agentId} completed their work. Here is their final message to the conversation:${delegateOutputBlock}${deferredNote}\n\nYour output for this turn MUST be exactly the literal string <silent> and nothing else. Do not narrate, summarise, or quote the specialist's output. Do not invoke any tools. Do not emit any other text. Just output <silent> and stop.`;
         resumeProc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: normalPrompt } }) + '\n');
         resumeEntry.idle = true; resumeEntry.idleSince = Date.now();
         console.log(`[AgentIntercept] convo=${convoId} delegate completed normally, parent ${parentAgentId} parked with specialist output`);
@@ -3702,6 +3819,7 @@ function handleDelegation(msg, processes) {
             const toolSummary = buildToolSummary(e.toolCalls);
             const textWithTools = toolSummary ? toolSummary + '\n' + e.responseText : e.responseText;
             appendTranscript(convoId, 'agent', e.agentId, textWithTools);
+            if (e.deliveredTurns) e.deliveredTurns.push(e.responseText);
           }
           // Mirror the delegate (~2673) and direct-start (~3134) paths:
           // preserve the final text so a later handleScopeReturn injects the real
@@ -3763,8 +3881,8 @@ function handleDelegation(msg, processes) {
               orig.idle = false; orig.idleSince = null;
               safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: orig.processId, _agent: orig.agentId, autoContinue: true }));
               const prompt = pendingRequest
-                ? `[SYSTEM: The specialist just returned because the user asked for something outside their scope. The user's pending request is: "${pendingRequest}"\n\nRoute this request now. Delegate to the right specialist if one fits, or handle it yourself. Do not summarise what the previous specialist did. Do not ask the user to repeat themselves. Respond to their request.]`
-                : '[SYSTEM: The specialist just returned. The user indicated they were done with that specialist. Ask the user what they need next.]';
+                ? `[SYSTEM: The specialist just returned because the user asked for something outside their scope. The user's pending request is: "${pendingRequest}"\n\nRoute this request now. Delegate to the right specialist if one fits, or handle it yourself. Do not summarise what the previous specialist did. Do not ask the user to repeat themselves. Respond to their request.${deferredNote}]`
+                : `[SYSTEM: The specialist just returned. The user indicated they were done with that specialist. Ask the user what they need next.${deferredNote}]`;
               try {
                 orig.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n');
               } catch (err) {
@@ -3969,8 +4087,12 @@ wss.on('connection', (ws) => {
               process: proc, buffer: '', processId, agentId: msg.agent || 'default',
               responseText: '', exited: false, resultSent: false,
               lastUserMessage: msg.content,
+              // Handback integrity: a directly-started specialist can hand
+              // back too (handleScopeReturn), and must hand back all of its
+              // turns, not the last one.
+              deliveredTurns: [], delegationStartedAt: new Date().toISOString(),
               // Agent tool interception state
-              pendingAgentTool: null,  // { blockIndex, inputJson: '' }
+              pendingAgentTools: null,  // [{ blockIndex, inputJson, complete }]
               toolCalls: [], turnStartTime: Date.now()
             };
             processes.set(convoId, entry);
@@ -4006,6 +4128,7 @@ wss.on('connection', (ws) => {
             const toolSummary = buildToolSummary(e.toolCalls);
             const textWithTools = toolSummary ? toolSummary + '\n' + e.responseText : e.responseText;
             appendTranscript(convoId, 'agent', e.agentId, textWithTools);
+            if (e.deliveredTurns) e.deliveredTurns.push(e.responseText);
           }
                 e.responseText = '';
                 e.idle = true; e.idleSince = Date.now();
@@ -6554,6 +6677,9 @@ function handleCodexDelegateEvent(entry, convoId, ev) {
         }));
         entry.resultSent = true;
         entry.finalResponseText = displayText;
+        // Handback parity with the Claude delegate onResult: accumulate the
+        // turn before the reset so multi-turn handbacks stay whole.
+        if (displayText && entry.deliveredTurns) entry.deliveredTurns.push(displayText);
         entry.responseText = '';
         entry.idle = true; entry.idleSince = Date.now();
       } else if (ev.status === 'failed' && !entry.cancelled) {
@@ -7543,6 +7669,7 @@ module.exports._internal = {
   parseRoutines, parsePrompts, parseSkills, readNormalisedFile, titleCase,
   // markers + text helpers
   stripRundockMarkers, isSilentParkResponse, sanitizeSpecialistOutput,
+  buildHandbackPayload, transcriptTurnsSince,
   extractSnippet, buildToolSummary, isAuthError, isModelError,
   // rosters + prompts
   findDirectReportMatch, findOffRosterWorkspaceMatch, buildTeamRoster, buildPeerRoster,

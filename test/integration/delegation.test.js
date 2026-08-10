@@ -782,3 +782,142 @@ describe('roster refresh', () => {
     await client.waitFor(m => m.type === 'agent_deleted', { label: 'cleanup delete' });
   });
 });
+
+// ── Handback payload integrity ────────────────────────────────────────────
+// A delegate can work across several turns: it delivers substance, the user
+// replies to it directly, and only later does it hand back. When it does, the
+// parent must receive everything the delegate produced, not just its final
+// turn.
+//
+// Reported in 0.11.2: an analyst delivered a long analysis in one turn, was
+// then asked to hand back, and only its one-line sign-off reached the lead who
+// had delegated to it. The lead correctly declined to invent the missing
+// conclusions and asked the user to paste them in by hand, which defeats the
+// purpose of delegating at all.
+//
+// Root cause: server.js resets entry.responseText to '' after every turn, so
+// finalResponseText (the handback payload source) holds the LAST turn only.
+//
+// These tests assert on h.promptsFor(agent) rather than by encoding the
+// expectation in a scenario rule's promptIncludes: a rule that fails to match
+// dies as an unrelated waitFor timeout with no expected-vs-actual, which is
+// precisely why this class of bug went unnoticed for three releases.
+describe('handback payload integrity', () => {
+  test('a multi-turn delegate hands back every substantive turn, not just its sign-off', async () => {
+    const convoId = h.freshConvoId('handback-multiturn');
+    h.clearInvocations();
+
+    // Substance lands in Ana's FIRST turn. Her second turn is only a sign-off
+    // plus the RETURN marker, mirroring the real incident exactly.
+    const SUBSTANCE = 'CADENCE-SUBSTANCE-T1: Thursday baseline is 287 median engagement, 1.0x, neutral. No fatigue signal across two back-to-back pairs.';
+    const SIGNOFF = 'Passing this back to Penn now with the full cadence analysis.';
+
+    h.writeScenario([
+      { match: { agent: 'chief-of-staff', promptIncludes: 'multiturn-handback please' },
+        turn: [{ agentTool: { subagent_type: 'content-lead', prompt: 'multiturn brief for penn' } }] },
+      { match: { agent: 'content-lead', promptIncludes: 'multiturn brief for penn' },
+        turn: [{ agentTool: { subagent_type: 'content-analyst', prompt: 'multiturn brief for ana' } }] },
+      // Ana turn 1: the real deliverable. No marker, so she stays in the conversation.
+      { match: { agent: 'content-analyst', promptIncludes: 'multiturn brief for ana' },
+        turn: [{ text: SUBSTANCE }] },
+      // Ana turn 2: user tells her to hand back. Sign-off only.
+      { match: { agent: 'content-analyst', promptIncludes: 'pass your findings back' },
+        turn: [{ text: `${SIGNOFF} ${MARKERS.RETURN}` }] },
+      // Penn resumed with the handback prompt.
+      { match: { agent: 'content-lead', promptIncludes: '[SYSTEM:' },
+        turn: [{ text: 'Folding Ana findings into the batch foundation.' }] },
+    ]);
+
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'multiturn-handback please' });
+
+    // Cos -> Penn -> Ana, then Ana's first turn completes.
+    await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
+      && m._conversationId === convoId && m.toAgent === 'content-lead', { since, label: 'switch to Penn' });
+    await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
+      && m._conversationId === convoId && m.toAgent === 'content-analyst', { since, label: 'switch to Ana' });
+    const { index: anaTurn1 } = await client.waitFor(m => m.type === 'result'
+      && m._conversationId === convoId && m._agent === 'content-analyst', { since, label: 'Ana turn 1 result' });
+
+    // The user addresses Ana directly, exactly as in the incident.
+    client.send({ type: 'chat', conversationId: convoId, agent: 'content-analyst', content: 'pass your findings back to Penn to continue this work' });
+    await client.waitFor(m => m.type === 'result' && m._conversationId === convoId
+      && m._agent === 'content-analyst', { since: anaTurn1 + 1, label: 'Ana turn 2 (sign-off) result' });
+
+    // RETURN -> 500ms auto-return kill -> Penn resumed with the handback prompt.
+    // Sequence off Penn's RESULT, not the agent_switch: the switch is emitted
+    // before the resume prompt is written to stdin, and the prompt log is
+    // appended by the stub child, so asserting on the switch races the write.
+    try {
+      await client.waitFor(m => m.type === 'result' && m._conversationId === convoId
+        && m._agent === 'content-lead', { since: anaTurn1 + 1, label: 'Penn resumed result' });
+
+      const pennPrompts = h.promptsFor('content-lead');
+      const handback = pennPrompts.find(p => p.includes('[SYSTEM:'));
+      assert.ok(handback, `Penn never received a handback prompt. Prompts seen:\n${JSON.stringify(pennPrompts, null, 2)}`);
+
+      // The defect: only the sign-off arrives.
+      assert.ok(handback.includes(SUBSTANCE),
+        `handback must carry Ana's turn-1 substance, not just her sign-off.\n`
+        + `  expected to contain: ${SUBSTANCE}\n`
+        + `  actual handback prompt:\n${handback}`);
+    } finally {
+      // Must run even when the assertion fails, or this conversation's pending
+      // auto-return fires during the NEXT test and pollutes its prompt log.
+      h.reapConvo(convoId);
+    }
+  });
+
+  test('a turn emitting two Agent calls does not silently discard the second target', async () => {
+    const convoId = h.freshConvoId('handback-multitarget');
+    h.clearInvocations();
+
+    // Penn emits TWO Agent tool calls in one turn. entry.pendingAgentTool is a
+    // single slot, so the first block to reach content_block_stop SIGKILLs the
+    // process and blocks 2..N die with it: no log, no event, no signal anywhere.
+    // Sequential-only is the correct behaviour; SILENT truncation is not.
+    h.writeScenario([
+      { match: { agent: 'chief-of-staff', promptIncludes: 'multitarget please' },
+        turn: [{ agentTool: { subagent_type: 'content-lead', prompt: 'multitarget brief for penn' } }] },
+      { match: { agent: 'content-lead', promptIncludes: 'multitarget brief for penn' },
+        turn: [
+          { text: 'Getting Ana and Des on this.' },
+          { agentTool: { subagent_type: 'content-analyst', prompt: 'multitarget leg one' } },
+          { agentTool: { subagent_type: 'lead-designer', prompt: 'multitarget leg two' } },
+        ] },
+      { match: { agent: 'content-analyst', promptIncludes: 'multitarget leg one' },
+        turn: [{ text: `Leg one done. ${MARKERS.RETURN}` }] },
+      { match: { agent: 'content-lead', promptIncludes: '[SYSTEM:' },
+        turn: [{ text: 'Picking up leg two now.' }] },
+    ]);
+
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'multitarget please' });
+
+    await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
+      && m._conversationId === convoId && m.toAgent === 'content-analyst', { since, label: 'switch to first target (Ana)' });
+    const { index: anaDone } = await client.waitFor(m => m.type === 'result'
+      && m._conversationId === convoId && m._agent === 'content-analyst', { since, label: 'Ana result' });
+
+    try {
+      await client.waitFor(m => m.type === 'result' && m._conversationId === convoId
+        && m._agent === 'content-lead', { since: anaDone + 1, label: 'Penn resumed result' });
+
+      // Des must never be spawned: concurrent execution is NOT the expectation here.
+      assert.strictEqual(h.readInvocations().find(i => i.agent === 'lead-designer'), undefined,
+        'second target must not run concurrently: delegation is sequential');
+
+      // But the deferral must be OBSERVABLE somewhere. Task 10 picks the channel
+      // (handback text is the current candidate); this asserts only that the
+      // dropped target is surfaced rather than swallowed.
+      const pennPrompts = h.promptsFor('content-lead');
+      const handback = pennPrompts.find(p => p.includes('[SYSTEM:'));
+      assert.ok(handback, `Penn never received a handback prompt. Prompts seen:\n${JSON.stringify(pennPrompts, null, 2)}`);
+      assert.ok(/lead-designer|Des/.test(handback),
+        'the un-run second target must be named back to the caller so it can sequence it, '
+        + `not silently dropped.\n  actual handback prompt:\n${handback}`);
+    } finally {
+      h.reapConvo(convoId);
+    }
+  });
+});
