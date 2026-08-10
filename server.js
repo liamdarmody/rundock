@@ -3262,8 +3262,7 @@ function spawnResumedProcess(convoId, agentId, sessionId, processes, opts = {}) 
   wireProcessHandlers(entry, convoId, null, {
     enableInterception: true,
     onResult: (e) => {
-      const hasOutOfScope = /<!-- RUNDOCK:RETURN -->/.test(e.responseText);
-      const hasComplete = /<!-- RUNDOCK:COMPLETE -->/.test(e.responseText);
+      const { hasReturn: hasOutOfScope, hasComplete } = resolveMarkers(e.responseText);
       // KNOWN LIMITATION: a respawned orchestrator that emits its own RETURN/COMPLETE marker here is self-treated as a scope-return. Low/narrow.
       if ((hasOutOfScope || hasComplete) && !e.delegation) {
         e.scopeReturn = true;
