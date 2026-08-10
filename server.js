@@ -2714,6 +2714,21 @@ function convoHasBufferedChat(convoId) {
   return !!(t && t.queued.length);
 }
 
+// The ONE buffered-follow-up gate, used by every restoration path. When a
+// chat message was buffered during the kill/restore window, the auto-continue
+// prompt is skipped: the entry parks idle and the replayed message drives it
+// instead. Without this gate the replayed message queues BEHIND the routing
+// prompt and dies unread in stdin when that prompt re-delegates. Four
+// hand-copied variants of this check once existed; a restoration path added
+// without the gate silently drops a user's message, which is why it now has
+// a single implementation to reach for.
+function bufferedFollowUpTakesOver(convoId, entry, skippedWhat) {
+  if (!convoHasBufferedChat(convoId)) return false;
+  if (entry) { entry.idle = true; entry.idleSince = Date.now(); }
+  console.log(`[KillWindow] convo=${convoId} skipping ${skippedWhat}, buffered follow-up takes over`);
+  return true;
+}
+
 // End the transition and replay buffered messages through the normal chat
 // handler, in arrival order. The map entry is deleted BEFORE replaying so
 // the replayed message flows through the full handler (transcript append,
@@ -3156,10 +3171,8 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
   // SIGKILLs the orchestrator). The pipeline-complete prompt is not gated:
   // it only parks the orchestrator silently, never re-delegates, so the
   // replay queues safely behind it (matching the delegate COMPLETE paths).
-  const bufferedFollowUp = convoHasBufferedChat(convoId);
-  if (!wasPipelineComplete && bufferedFollowUp) {
-    orchEntry.idle = true; orchEntry.idleSince = Date.now();
-    console.log(`[KillWindow] convo=${convoId} skipping scope-return routing prompt, buffered follow-up takes over`);
+  if (!wasPipelineComplete && bufferedFollowUpTakesOver(convoId, orchEntry, 'scope-return routing prompt')) {
+    // parked by the gate; the replayed message drives the orchestrator
   } else {
     // Circuit breaker: check consecutive auto-resume count before sending prompt.
     // COMPLETE paths are low-risk (orchestrator goes silent) but still count.
@@ -3588,8 +3601,6 @@ function handleDelegation(msg, processes) {
     // handoff's auto-continue: the user has spoken, so their replayed message
     // drives the restored parent instead of a routing prompt. Mirrors the
     // live-window rule where a follow-up cancels the auto-return.
-    const bufferedFollowUp = convoHasBufferedChat(convoId);
-
     // Multi-target honesty: Agent calls from the delegating turn that were
     // not run are named back to the caller. The engine used to discard them
     // with no log and no event, so callers believed parallel work happened.
@@ -3659,10 +3670,8 @@ function handleDelegation(msg, processes) {
         // the specialist's output and decides what to do next.
         if (isPipelineComplete) {
           console.log(`[AgentIntercept] convo=${convoId} COMPLETE gate: specialist ${delegateEntry.agentId} finished, orchestrator ${orchestratorAgentId} stays idle`);
-        } else if (bufferedFollowUp) {
-          // Buffered user message supersedes the RETURN auto-continue: the
-          // orchestrator stays idle and the replayed message drives it.
-          console.log(`[KillWindow] convo=${convoId} skipping RETURN auto-continue, buffered follow-up takes over`);
+        } else if (bufferedFollowUpTakesOver(convoId, orchestratorEntry, 'RETURN auto-continue')) {
+          // orchestrator stays idle; the replayed message drives it
         } else if (orchestratorEntry.process && orchestratorEntry.process.stdin && orchestratorEntry.process.stdin.writable && !orchestratorEntry.process.killed) {
           // RETURN path: auto-continue to route the pending request to another specialist
           const resumeCount = incrementAutoResume(convoId);
@@ -3758,11 +3767,8 @@ function handleDelegation(msg, processes) {
         ? `\n\n--- ${delegateEntry.agentId} ---\n${delegateOutput}\n---`
         : '';
 
-      if (isOutOfScope && bufferedFollowUp) {
-        // Buffered user message supersedes the RETURN routing prompt: park
-        // the resumed parent idle and let the replayed message drive it.
-        resumeEntry.idle = true; resumeEntry.idleSince = Date.now();
-        console.log(`[KillWindow] convo=${convoId} skipping RETURN routing prompt, buffered follow-up takes over`);
+      if (isOutOfScope && bufferedFollowUpTakesOver(convoId, resumeEntry, 'RETURN routing prompt')) {
+        // parked by the gate; the replayed message drives the resumed parent
       } else if (isOutOfScope) {
         const resumeCount = incrementAutoResume(convoId);
         if (resumeCount >= MAX_CONSECUTIVE_AGENT_RESUMES) {
@@ -3860,7 +3866,7 @@ function handleDelegation(msg, processes) {
 
       // bufferedFollowUp gate: a message buffered during the window replays
       // to the restored parent directly, superseding the auto-continue.
-      if (!delegateEntry.isPlatformDelegate && delegateEntry.receivedFollowUp && !bufferedFollowUp && orig.process && orig.process.stdin && orig.process.stdin.writable) {
+      if (!delegateEntry.isPlatformDelegate && delegateEntry.receivedFollowUp && !bufferedFollowUpTakesOver(convoId, orig, 'specialist-return auto-continue') && orig.process && orig.process.stdin && orig.process.stdin.writable) {
         const resumeCount = incrementAutoResume(convoId);
         if (resumeCount >= MAX_CONSECUTIVE_AGENT_RESUMES) {
           console.log(`[CircuitBreaker] convo=${convoId} ${resumeCount} consecutive agent resumes on delegate return path, pausing`);
