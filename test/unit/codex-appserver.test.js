@@ -600,10 +600,17 @@ test('interrupt retry: turn/interrupt is re-sent once at the (injectable) halfwa
   // Lost streams on the Windows VM meant a single interrupt could vanish in
   // transit; one retry before the failsafe rescues that case and is benign
   // when the first landed (interrupting an ended turn errors harmlessly).
+  // hangAfterDeltas holds the turn open until an interrupt arrives, closing
+  // the race this test flaked on twice (2026-08-07/08, both on loaded CI
+  // runners, reproduced locally under full CPU load 2026-08-11): without it
+  // the stub's natural completion window after its last delta is one tick
+  // wide, and a loaded run can slip the interrupt past it, so `done` arrives
+  // as 'completed' instead of 'interrupted'. With the turn held open, only
+  // the interrupt path can end it and the timing seam is fully injectable.
   const dir = makeDir({
     appServer: {
       zombieInterrupt: { resumeDelayMs: 5000 },
-      rules: [{ match: { promptIncludes: 'count slowly' }, deltas: ['one '], text: 'one two three' }],
+      rules: [{ match: { promptIncludes: 'count slowly' }, deltas: ['one '], text: 'one two three', hangAfterDeltas: true }],
     },
   });
   const server = makeServer(dir, { interruptFailsafeMs: 400, interruptRetryMs: 100 });
