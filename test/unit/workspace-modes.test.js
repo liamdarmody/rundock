@@ -80,6 +80,47 @@ describe('isEmptyWorkspace', () => {
     const withUserSkill = makeWorkspace({ skills: { 'my-skill': 'x' } });
     assert.strictEqual(srv.isEmptyWorkspace(withUserSkill, []), false);
   });
+
+  // The Lucas Simonian incident (2026-04-30): an existing, well-organised
+  // Obsidian vault with no CLAUDE.md passed as "empty" and had the default
+  // folder scaffold written into it. A workspace with real user structure
+  // is not empty, whatever its CLAUDE.md status.
+  test('a structured vault without CLAUDE.md is not empty', () => {
+    const dir = makeWorkspace({ files: {
+      'Notes/2026-04-30.md': '# meeting',
+      'Projects/launch.md': 'plan',
+      'Archive/old.md': 'x',
+    } });
+    assert.strictEqual(srv.isEmptyWorkspace(dir, []), false);
+  });
+
+  test('a single user folder is enough to be non-empty', () => {
+    const dir = makeWorkspace({ files: { 'Notes/hello.md': 'x' } });
+    assert.strictEqual(srv.isEmptyWorkspace(dir, []), false);
+  });
+
+  test('one or two stray root files still count as empty', () => {
+    const one = makeWorkspace({ files: { 'readme.md': 'x' } });
+    assert.strictEqual(srv.isEmptyWorkspace(one, []), true);
+    const two = makeWorkspace({ files: { 'readme.md': 'x', 'notes.md': 'y' } });
+    assert.strictEqual(srv.isEmptyWorkspace(two, []), true);
+  });
+
+  test('three or more root files count as non-empty', () => {
+    const dir = makeWorkspace({ files: { 'a.md': 'x', 'b.md': 'y', 'c.md': 'z' } });
+    assert.strictEqual(srv.isEmptyWorkspace(dir, []), false);
+  });
+
+  test('hidden and tool-managed entries never count toward structure', () => {
+    const dir = makeWorkspace({ files: {
+      '.obsidian/app.json': '{}',
+      '.claude/settings.local.json': '{}',
+      '.rundock/state.json': '{}',
+      '.DS_Store': '',
+      '.git/config': '',
+    } });
+    assert.strictEqual(srv.isEmptyWorkspace(dir, []), true);
+  });
 });
 
 describe('scaffoldDefaults', () => {

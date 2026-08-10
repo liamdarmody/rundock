@@ -1848,6 +1848,22 @@ function isEmptyWorkspace(dir, agentList) {
     } catch (e) { /* ignore */ }
   }
 
+  // Check for user file structure. A workspace can lack CLAUDE.md, agents,
+  // and skills and still be someone's organised vault (beta incident,
+  // 2026-04-30: an existing Obsidian vault was scaffolded with the default
+  // folders during onboarding). Hidden entries never count: they are tool
+  // state (.obsidian, .claude, .rundock, .git, .DS_Store), not structure.
+  // One or two stray root files are tolerated so a folder holding a lone
+  // readme still gets the full scaffold; any visible directory, or three
+  // or more visible files, means the user has structure we must not
+  // scaffold over.
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true })
+      .filter(e => !e.name.startsWith('.'));
+    if (entries.some(e => e.isDirectory())) return false;
+    if (entries.filter(e => e.isFile()).length >= 3) return false;
+  } catch (e) { /* unreadable dir: treat as empty, matching prior behaviour */ }
+
   return true;
 }
 
