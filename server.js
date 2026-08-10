@@ -3802,12 +3802,11 @@ function handleDelegation(msg, processes) {
           // records which one fired so the close handler can route correctly: 'return'
           // means route the pending request to a different specialist, 'complete' means
           // the delegated pipeline is finished and the orchestrator should resume silently.
-          const hasOutOfScope = /<!-- RUNDOCK:RETURN -->/.test(e.responseText);
-          const hasComplete = /<!-- RUNDOCK:COMPLETE -->/.test(e.responseText);
-          if ((hasOutOfScope || hasComplete) && !e.delegation) {
+          const markers = resolveMarkers(e.responseText);
+          if (markers.mode && !e.delegation) {
             e.scopeReturn = true;
-            // COMPLETE takes priority when both markers are present
-            e.scopeReturnMode = hasComplete ? 'complete' : 'return';
+            // mode already applies COMPLETE-beats-RETURN precedence
+            e.scopeReturnMode = markers.mode;
             console.log(`[ScopeReturn] convo=${convoId} agent=${e.agentId} ${e.scopeReturnMode} marker on resumed parent`);
             // Follow-up in-window cancels the auto-return; post-kill messages buffer.
             scheduleScopeReturnKill(e, convoId);
