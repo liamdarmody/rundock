@@ -20,6 +20,7 @@ const searchLib = require('./search.js');
 const { resolvePermissionConvoId } = require('./permission-routing.js');
 const { resolveMarkers } = require('./lib/delegation/markers.js');
 const { createHandbackBuilder } = require('./lib/delegation/handback.js');
+const { createDelegationRecord, attachDelegationRecord } = require('./lib/delegation/state.js');
 
 const PORT = process.env.PORT || 3000;
 let ACTUAL_PORT = PORT; // Updated after server.listen() with the real listening port
@@ -3119,9 +3120,11 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
     responseText: '', exited: false, resultSent: false,
     lastUserMessage: specialistEntry.lastUserMessage,
     pendingAgentTools: null,
-    toolCalls: [], turnStartTime: Date.now(),
-    scopeReturnSource: wasPipelineComplete ? null : specialistEntry.agentId
+    toolCalls: [], turnStartTime: Date.now()
   };
+  attachDelegationRecord(orchEntry, createDelegationRecord({
+    scopeReturnSource: wasPipelineComplete ? null : specialistEntry.agentId
+  }));
   chatProcesses.set(convoId, orchEntry);
 
   // Notify client of agent switch
@@ -3235,13 +3238,15 @@ function spawnResumedProcess(convoId, agentId, sessionId, processes, opts = {}) 
   const entry = {
     process: proc, buffer: '', processId, agentId,
     responseText: '', exited: false, resultSent: false,
-    // Handback integrity: a respawned agent can hand back via its scope-return
-    // close path, so its turns accumulate the same as a delegate's.
-    deliveredTurns: [], delegationStartedAt: new Date().toISOString(),
     pendingAgentTools: null, toolCalls: [], turnStartTime: Date.now(),
-    idle: true, scopeReturnSource: opts.scopeReturnSource || null,
+    idle: true,
     handbackAt: Date.now(), // stale end_delegation guard
   };
+  // A respawned agent can hand back via its scope-return close path, so it
+  // carries a delegation record like a delegate does.
+  attachDelegationRecord(entry, createDelegationRecord({
+    scopeReturnSource: opts.scopeReturnSource || null
+  }));
   processes.set(convoId, entry);
 
   wireProcessHandlers(entry, convoId, null, {
@@ -3415,15 +3420,6 @@ function handleDelegation(msg, processes) {
     agentId: targetAgent.id, responseText: '', exited: false, resultSent: false, idle: false,
     isPlatformDelegate, lastUserMessage: msg.context, receivedFollowUp: false,
     isIntercepted,
-    // Handback integrity: every turn's text accumulates here so the handback
-    // carries the whole delegation, not the final turn. The timestamp bounds
-    // the transcript fallback when this array is empty (delegate crashed
-    // before any result).
-    deliveredTurns: [], delegationStartedAt: new Date().toISOString(),
-    // Agent calls from the delegating turn that were NOT run (delegation is
-    // sequential): named back to the caller on handback so it can sequence
-    // them instead of believing they ran.
-    deferredTargets: msg._deferredTargets || null,
     pendingAgentTools: null,
     toolCalls: [], turnStartTime: Date.now(),
     delegation: {
@@ -3439,6 +3435,13 @@ function handleDelegation(msg, processes) {
         ? existing.delegation.originalAgentId : null
     }
   };
+  // The delegation record owns the durable state: the accumulated turn log
+  // for the handback, the timestamp bounding the transcript fallback, and
+  // the Agent calls from the delegating turn that were not run (named back
+  // to the caller so it can sequence them instead of believing they ran).
+  attachDelegationRecord(delegateEntry, createDelegationRecord({
+    deferredTargets: msg._deferredTargets || null
+  }));
   processes.set(convoId, delegateEntry);
 
   // Notify client of agent switch
@@ -3710,17 +3713,18 @@ function handleDelegation(msg, processes) {
       const resumeEntry = {
         process: resumeProc, buffer: '', processId: resumeProcessId,
         agentId: parentAgentId, responseText: '', exited: false, resultSent: false,
-        // Handback integrity: a restored parent can hand back onward via its
-        // scope-return close path, so its turns accumulate too.
-        deliveredTurns: [], delegationStartedAt: new Date().toISOString(),
         pendingAgentTools: null,
         toolCalls: [], turnStartTime: Date.now(),
-        // Tag with returning specialist so handleDelegation's scopeReturnSource
-        // guard blocks immediate re-delegation to the same agent. Only set for
-        // out-of-scope returns; pipeline-complete should allow re-delegation.
-        scopeReturnSource: isOutOfScope ? delegateEntry.agentId : null,
         handbackAt: Date.now() // stale end_delegation guard
       };
+      // A restored parent can hand back onward via its scope-return close
+      // path, so it carries a record. scopeReturnSource tags the returning
+      // specialist so handleDelegation's guard blocks immediate re-delegation
+      // to the same agent; only set for out-of-scope returns, because
+      // pipeline-complete should allow re-delegation.
+      attachDelegationRecord(resumeEntry, createDelegationRecord({
+        scopeReturnSource: isOutOfScope ? delegateEntry.agentId : null
+      }));
       processes.set(convoId, resumeEntry);
 
       // Auto-prompt only on out-of-scope: parent is resumed with a routing request so
@@ -4060,14 +4064,14 @@ wss.on('connection', (ws) => {
               process: proc, buffer: '', processId, agentId: msg.agent || 'default',
               responseText: '', exited: false, resultSent: false,
               lastUserMessage: msg.content,
-              // Handback integrity: a directly-started specialist can hand
-              // back too (handleScopeReturn), and must hand back all of its
-              // turns, not the last one.
-              deliveredTurns: [], delegationStartedAt: new Date().toISOString(),
               // Agent tool interception state
               pendingAgentTools: null,  // [{ blockIndex, inputJson, complete }]
               toolCalls: [], turnStartTime: Date.now()
             };
+            // A directly-started specialist can hand back too
+            // (handleScopeReturn), and must hand back all of its turns, not
+            // the last one, so it carries a delegation record.
+            attachDelegationRecord(entry, createDelegationRecord());
             processes.set(convoId, entry);
 
             safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId, _agent: entry.agentId }));
