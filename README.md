@@ -4,15 +4,21 @@
 [![Latest release](https://img.shields.io/github/v/release/liamdarmody/rundock)](https://github.com/liamdarmody/rundock/releases)
 [![GitHub stars](https://img.shields.io/github/stars/liamdarmody/rundock?style=social)](https://github.com/liamdarmody/rundock/stargazers)
 
-A visual workspace for your AI agent team. Built by someone running their own business, for people running their own. Works with your Claude or ChatGPT subscription.
+The AI team workspace. Build and manage a team of AI agents in files you own, no terminal needed. Free and open source; works with the Claude or ChatGPT subscription you may already have. Built by someone running their own business, for people running their own.
+
+**[Download for macOS or Windows](https://rundock.ai/download)** · guided setup, about ten minutes, no terminal in your day.
 
 You run content, ops, sales, admin, and research. When you started, there was nobody else, so the work fell to you. A single chatbot is a single assistant. An agent platform built for developers assumes you can write code. Rundock gives you a team you can actually manage: an org chart of named specialists, parallel conversations you can watch side by side, and delegation that happens in front of you. One beta user described it as having a virtual team of highly paid experts, running in parallel. That is the experience.
+
+Everything the team learns lives in the workspace as files you own. Skills and knowledge carry forward instead of resetting with every session.
 
 Built by [Liam Darmody](https://www.linkedin.com/in/liamdarmody/). Learn more at [rundock.ai](https://rundock.ai/?utm_source=github&utm_medium=readme).
 
 > **Star this repo** if Rundock is useful to you. It is the simplest way to support the project and helps other people running their own businesses find it. [Add a star ->](https://github.com/liamdarmody/rundock)
 
 ![Rundock showing an example agent team as an org chart: a Chief of Staff at the top with the team reporting in below, a Rundock Guide agent, live team status in the sidebar, and scheduled routines](docs/rundock-hero-org-chart.png)
+
+The org chart is the product. Show someone yours.
 
 ## A look inside
 
