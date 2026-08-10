@@ -101,6 +101,27 @@ describe('nested frontmatter block parsers', () => {
   test('parseSkills extracts skill slugs', () => {
     assert.deepStrictEqual(srv.parseSkills(fm), ['linkedin-hook-generator', 'content-linter']);
   });
+
+  // The inline flow form is valid YAML that authors legitimately write, and
+  // it silently parsed to [] for as long as the parser existed: the agent
+  // looked correct to its author while Rundock saw no skills at all. The
+  // failure was masked by the body-text fallback scan, so nothing ever
+  // surfaced it. Same class: block lists indented with four spaces or tabs.
+  test('parseSkills reads the inline flow form', () => {
+    assert.deepStrictEqual(srv.parseSkills('skills: [alpha, beta]'), ['alpha', 'beta']);
+    assert.deepStrictEqual(srv.parseSkills('skills: ["alpha", \'beta-two\']'), ['alpha', 'beta-two']);
+    assert.deepStrictEqual(srv.parseSkills('skills: []'), []);
+  });
+
+  test('parseSkills reads block lists at any indent', () => {
+    assert.deepStrictEqual(srv.parseSkills('skills:\n    - four-space\n    - indent'), ['four-space', 'indent']);
+    assert.deepStrictEqual(srv.parseSkills('skills:\n\t- tab\n\t- indent'), ['tab', 'indent']);
+  });
+
+  test('parseSkills only matches the top-level skills key', () => {
+    assert.deepStrictEqual(srv.parseSkills('other-skills:\n  - nope'), []);
+    assert.deepStrictEqual(srv.parseSkills('meta:\n  skills: [nested]'), []);
+  });
 });
 
 describe('discoverAgents', () => {
