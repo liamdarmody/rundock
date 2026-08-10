@@ -4,6 +4,26 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+### Added
+
+- **Doc can tune up your team's instructions:** ask Doc for an instruction tuneup and it audits every agent and skill against guidance for the current model generation, then proposes precise deletions, rewrites, and judgement calls for you to approve item by item in chat. Instructions that made older models behave (forced double-checking, "keep it simple" rules, retired model names) quietly degrade current ones; now they are found and fixed without you learning prompt engineering. Nothing changes without your approval, and the criteria ship with the app so the audit is repeatable.
+- **Agents tell you the truth about unreachable connectors:** when a connector like Granola or Google Drive drops its authorisation, its tools silently vanish from the agent's session, and agents used to guess at why, sometimes inventing Rundock settings that do not exist. Every agent now knows the honest cause and the terminal-free fix: reconnect the connector at claude.ai under Settings, then Connectors, and a fresh conversation picks it up.
+
+### Changed
+
+- **New workspaces start with Cos, a Chief of Staff:** the starter orchestrator created during onboarding is now Cos (Chief of Staff) rather than Ted (Team Lead), matching the team structure Rundock's guides teach. Existing workspaces keep their orchestrator exactly as configured; nothing changes on update.
+- **Agents describe Rundock in your language:** ask any agent what Rundock is and the answer now leads with what you can do (build and manage a team of AI agents in files you own, no terminal needed) instead of naming the machinery underneath. The machinery is still documented; it just is not the introduction.
+
+### Fixed
+
+- **Opening an existing organised vault no longer writes starter folders into it:** Rundock scaffolds its default folders for new and empty workspaces, but a well-organised vault that simply lacked a CLAUDE.md counted as empty, so onboarding could pollute a workspace you had already structured. Rundock now recognises your file structure as structure and leaves it alone; genuinely new or near-empty folders still get the full starter scaffold.
+- **An edit made outside Rundock right after opening a file can no longer be missed:** the watcher that pushes external changes into an open file had a startup gap where a change landing at just the wrong moment was absorbed silently and never shown. The watch is now armed against exactly the content you were sent, before you could possibly react to it.
+- **Skills declared on one line now count:** an agent file declaring `skills: [research, writing]` on a single line, or with a list indented by anything other than exactly two spaces, silently parsed as having no skills while looking perfectly correct. Both forms now parse; nothing in the wild was affected, this closes the trap before anyone falls in.
+- **The scaffolded guide no longer points at things that do not exist:** the workspace guide Doc ships with referenced a skill that was never created and carried instructions that contradicted its own audit; both repaired, and a test now proves every reference in the scaffold resolves to something real.
+- **The draft release is named and filled by a step that actually does it:** the 0.11.5 draft arrived untitled and empty despite the pipeline claiming otherwise, because the build tool ignored the metadata it was passed. A dedicated step now writes the title and notes from this changelog after both builds finish, so the next draft arrives ready to review with no manual step.
+
 ## 0.11.5: Updater & Polish (2026-08-08)
 
 > **Updating from 0.11.4:** this update still arrives through the old update flow, so it may take a quit and relaunch or two to apply. If it refuses, download it directly from [rundock.ai/download](https://rundock.ai/download). From this version onward, the new flow below takes over.
