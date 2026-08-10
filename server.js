@@ -6656,12 +6656,11 @@ function handleCodexDelegateEvent(entry, convoId, ev) {
       stopCodexTurnKeepalive(entry);
       if (entry._turnEndResolve) entry._turnEndResolve();
       if (ev.status === 'completed' && !entry.cancelled) {
-        // Marker scan, COMPLETE priority: same contract as the Claude
-        // delegate onResult handler.
-        const hasComplete = /<!-- RUNDOCK:COMPLETE -->/.test(entry.responseText);
-        const hasReturn = /<!-- RUNDOCK:RETURN -->/.test(entry.responseText);
-        if (hasComplete) entry.returnMarkerSeen = 'complete';
-        else if (hasReturn) entry.returnMarkerSeen = 'return';
+        // Marker scan, COMPLETE priority: same single resolver as the
+        // Claude delegate onResult handler. mode is null when no handoff
+        // marker is present, matching the unset-field contract downstream.
+        const markerMode = resolveMarkers(entry.responseText).mode;
+        if (markerMode) entry.returnMarkerSeen = markerMode;
         const displayText = entry.responseText;
         if (displayText) appendTranscript(convoId, 'agent', entry.agentId, displayText);
         safeSend(JSON.stringify({
