@@ -608,7 +608,9 @@ function buildTeamRoster(leaderId, scopedToDirectReports = false) {
   const allAgents = discoverAgents();
   const allSkills = discoverSkills(allAgents);
   // All agents use explicit reportsTo. Filter to direct reports of this leader.
-  // Match reportsTo against both id and name (the default agent has id='default' but name='team-lead').
+  // Match reportsTo against both id and name (a scaffolded orchestrator keeps its file slug as
+  // name while its id becomes 'default': `chief-of-staff` in new workspaces, `team-lead` in ones
+  // scaffolded before the default changed).
   // Fallback: agents with no reportsTo are included for orchestrators (backward compat).
   const leader = allAgents.find(a => a.id === leaderId);
   const leaderName = leader ? leader.name : leaderId;
