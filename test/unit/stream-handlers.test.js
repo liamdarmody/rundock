@@ -177,9 +177,20 @@ describe('tool call tracking', () => {
   test('unknown tools are tracked without arg extraction', () => {
     const entry = makeEntry();
     srv.wireProcessHandlers(entry, 'convo-1', null, {});
-    push(entry, fx.toolUseFlow('Skill', { skill: 'design-content' }));
+    push(entry, fx.toolUseFlow('TodoWrite', { todos: [] }));
     assert.strictEqual(entry.toolCalls.length, 1);
     assert.strictEqual(entry.toolCalls[0].arg, null);
+  });
+
+  test('Skill invocations extract the slug (signal layer feeds on it)', () => {
+    // Skill was the example unknown tool above until the signal layer began
+    // tracking it: the slug feeds the turn event and the usage sidecar, and
+    // the transcript summary now names the skill instead of a bare [Skill].
+    const entry = makeEntry();
+    srv.wireProcessHandlers(entry, 'convo-1', null, {});
+    push(entry, fx.toolUseFlow('Skill', { skill: 'design-content' }));
+    assert.strictEqual(entry.toolCalls.length, 1);
+    assert.strictEqual(entry.toolCalls[0].arg, 'design-content');
   });
 
   test('interception disabled: Agent tool_use events flow through untouched', () => {
