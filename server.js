@@ -3627,12 +3627,10 @@ function handleDelegation(msg, processes) {
       // pipeline finished end-to-end (orchestrator resumes silently).
       let returnMarkerSeen = delegateEntry.returnMarkerSeen || null;
       if (!returnMarkerSeen) {
-        const tail = delegateEntry.finalResponseText || delegateEntry.responseText || '';
-        const tailHasComplete = /<!-- RUNDOCK:COMPLETE -->/.test(tail);
-        const tailHasReturn = /<!-- RUNDOCK:RETURN -->/.test(tail);
-        // COMPLETE takes priority (same logic as onResult handler)
-        if (tailHasComplete) returnMarkerSeen = 'complete';
-        else if (tailHasReturn) returnMarkerSeen = 'return';
+        // Tail scan for a marker the onResult handler never saw (e.g. the
+        // process died after streaming it). Same single resolver, same
+        // COMPLETE-beats-RETURN precedence.
+        returnMarkerSeen = resolveMarkers(delegateEntry.finalResponseText || delegateEntry.responseText).mode;
       }
       const hasHandoffMarker = !!returnMarkerSeen;
       const isOutOfScope = returnMarkerSeen === 'return';
