@@ -4,7 +4,7 @@
 [![Latest release](https://img.shields.io/github/v/release/liamdarmody/rundock)](https://github.com/liamdarmody/rundock/releases)
 [![GitHub stars](https://img.shields.io/github/stars/liamdarmody/rundock?style=social)](https://github.com/liamdarmody/rundock/stargazers)
 
-The AI team workspace. Build and manage a team of AI agents in files you own, no terminal needed. Free and open source; works with the Claude or ChatGPT subscription you may already have. Built by someone running their own business, for people running their own.
+The AI team workspace. Build and manage a team of AI agents in files you own, no terminal needed. Free and open source. Works with the Claude or ChatGPT subscription you may already have. Built by someone running their own business, for people running their own.
 
 **[Download for macOS or Windows](https://rundock.ai/download)** · guided setup, about ten minutes, no terminal in your day.
 
