@@ -1338,13 +1338,26 @@ function parsePrompts(fmText) {
   return prompts;
 }
 
+// Reads the `skills:` list from frontmatter text. Accepts both YAML list
+// forms authors actually write: the block sequence at any indent (two-space,
+// four-space, tabs) and the inline flow form `skills: [a, b]`. The inline
+// form silently parsed to [] for as long as this function existed, masked by
+// the body-text fallback scan, so an agent could look correctly configured
+// while Rundock saw no skills at all. Anchored to the top-level key so
+// `other-skills:` and nested `skills:` keys never match.
 function parseSkills(fmText) {
-  const match = fmText.match(/skills:\n((?:  - [^\n]*(?:\n|$))+)/);
+  const inline = fmText.match(/^skills:[ \t]*\[([^\]]*)\][ \t]*$/m);
+  if (inline) {
+    return inline[1].split(',')
+      .map(s => s.trim().replace(/^["']|["']$/g, '').trim())
+      .filter(Boolean);
+  }
+  const match = fmText.match(/^skills:[ \t]*\n((?:[ \t]+-[ \t]*[^\n]*(?:\n|$))+)/m);
   if (!match) return [];
   const skills = [];
   for (const line of match[1].split('\n')) {
     if (!line.trim()) continue;
-    const item = line.match(/^\s+-\s*"?(.*?)"?\s*$/);
+    const item = line.match(/^[ \t]+-[ \t]*["']?(.*?)["']?[ \t]*$/);
     if (item && item[1].trim()) skills.push(item[1].trim());
   }
   return skills;
