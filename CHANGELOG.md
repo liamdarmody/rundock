@@ -19,6 +19,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Fixed
 
+- **Your orchestrator's profile now shows the instructions it was actually given:** an orchestrator that doubles as the workspace default agent had its authored instructions replaced by the workspace's CLAUDE.md in the profile and in team rosters, so a freshly created Chief of Staff appeared to have almost no instructions at all. The agent file's own body now wins; CLAUDE.md fills in only for agents that genuinely have none.
 - **Agents the org chart shows on your team are now actually delegable:** an agent file without a `reportsTo` line was displayed under your orchestrator and listed in its own team roster, but the delegation engine refused the handoff and told the orchestrator to route through a leader that did not exist. One membership rule now governs the chart, the roster, and the delegation engine together.
 - **Editing agent files outside Rundock now reaches running agents:** hand edits (your editor, git, a sync client) update the sidebar and chart within seconds, and live agents now pick up the new roster on their next message instead of holding a stale one until they happened to restart.
 - **Reopening a conversation where Doc created agents no longer shows raw file internals:** the first paint of a reopened conversation rendered the agent file's frontmatter as message text; it now renders exactly like the live view did.

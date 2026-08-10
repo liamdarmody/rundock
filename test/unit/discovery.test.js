@@ -167,17 +167,35 @@ describe('discoverAgents', () => {
     assert.deepStrictEqual(statuses, ['onTeam', 'available', 'raw']);
   });
 
-  test('order: 0 marks the default agent and CLAUDE.md instructions are merged', () => {
+  test('order: 0 marks the default agent; CLAUDE.md fills in ONLY when the file has no body', () => {
+    // Live incident (0.11.6 pre-publish testing): the old code REPLACED the
+    // default agent's authored body with CLAUDE.md, so a freshly scaffolded
+    // Cos showed 279 bytes of workspace boilerplate as its instructions and
+    // none of the file Doc actually wrote. The file's body wins when it
+    // exists; CLAUDE.md remains the source for body-less stubs (and the
+    // synthesised no-file default below), which was the merge's original
+    // purpose. The runtime is unaffected either way: it loads the agent file
+    // and CLAUDE.md separately.
+    // Raw file: agentFile() always writes a default body, and this arm needs
+    // a genuinely body-less stub.
     useWorkspace({
-      agents: { lead: agentFile({ name: 'team-lead', displayName: 'Lead', type: 'orchestrator', order: 0 }) },
+      agents: { lead: '---\nname: team-lead\ndisplayName: Lead\ntype: orchestrator\norder: 0\n---\n' },
       claudeMd: '# My Workspace\n\nWorkspace instructions here.',
     });
-    const agents = srv.discoverAgents();
-    const def = agents.find(a => a.isDefault);
+    let def = srv.discoverAgents().find(a => a.isDefault);
     assert.ok(def, 'order 0 agent is the default');
     assert.strictEqual(def.id, 'default');
     assert.strictEqual(def.name, 'team-lead');
-    assert.ok(def.instructions.includes('Workspace instructions here'));
+    assert.ok(def.instructions.includes('Workspace instructions here'), 'body-less stub: CLAUDE.md fills in');
+
+    useWorkspace({
+      agents: { lead: agentFile({ name: 'team-lead', displayName: 'Lead', type: 'orchestrator', order: 0,
+        body: 'You are Lead.\n\n## Responsibilities\n\nRun the whole team end to end.' }) },
+      claudeMd: '# My Workspace\n\nWorkspace instructions here.',
+    });
+    def = srv.discoverAgents().find(a => a.isDefault);
+    assert.ok(def.instructions.includes('Run the whole team end to end'), 'authored body is the instructions');
+    assert.ok(!def.instructions.includes('Workspace instructions here'), 'CLAUDE.md must not replace an authored body');
   });
 
   test('no agent files: default agent synthesised from CLAUDE.md heading', () => {
