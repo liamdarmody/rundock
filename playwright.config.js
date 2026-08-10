@@ -11,7 +11,12 @@ module.exports = defineConfig({
   testDir: 'test/e2e',
   workers: 1,
   fullyParallel: false,
-  timeout: 30_000,
+  // 60s is a ceiling, not a wait: green tests are unaffected (typical spec
+  // time is a few seconds) and only a genuinely stuck test takes longer to
+  // fail. 30s was exceeded by a healthy spec on a busy runner (2026-08-08,
+  // on a PR that changed only PNG assets), which is a false red. No retries:
+  // a retry would hide real timing regressions instead of surfacing them.
+  timeout: 60_000,
   expect: { timeout: 7_000 },
   reporter: process.env.CI ? [['list'], ['github']] : [['list']],
   use: {

@@ -1200,16 +1200,25 @@ function readNormalisedFile(filePath) {
 
 // Live external refresh: watch the file a client currently has open and push
 // its new content when it changes on disk (Obsidian, an agent, another window).
-// We poll the file's stats with fs.watchFile rather than fs.watch: polling is
-// deterministic and never drops events (fs.watch misses changes under load and
-// varies by platform), and it naturally handles atomic saves (write-temp-then-
-// rename). Identical content is never re-sent, so Rundock's own saves do not
-// echo into a needless refresh. One watch per connection; it is replaced when
-// the client opens another file and cleared on disconnect. Up-to-interval
-// latency is an acceptable trade for reliability on an external-edit refresh.
+// We poll the file's stats on our own timer rather than using fs.watch or
+// fs.watchFile. fs.watch misses changes under load and varies by platform.
+// fs.watchFile seeds its stat baseline ASYNCHRONOUSLY, which loses any change
+// landing between the file_content send and that seed: the baseline absorbs
+// the post-change stats and the watcher stays silent forever (reproduced
+// under full CPU load, 2026-08-11; it was the CI flake of 2026-08-06). Our
+// timer seeds the baseline synchronously in the same tick as the read, so by
+// the time a client can react to file_content the watch is already armed
+// against the content it was sent. Polling naturally handles atomic saves
+// (write-temp-then-rename); identical content is never re-sent, so Rundock's
+// own saves do not echo into a needless refresh. One watch per connection;
+// it is replaced when the client opens another file and cleared on
+// disconnect. Up-to-interval latency is an acceptable trade for reliability
+// on an external-edit refresh.
+const OPEN_FILE_POLL_MS = 700;
+
 function closeOpenFileWatcher(ws) {
   if (ws._openFileWatch) {
-    try { fs.unwatchFile(ws._openFileWatch.path, ws._openFileWatch.listener); } catch (e) { /* already gone */ }
+    clearInterval(ws._openFileWatch.timer);
     ws._openFileWatch = null;
   }
 }
@@ -1217,22 +1226,27 @@ function closeOpenFileWatcher(ws) {
 function watchOpenFile(ws, relPath, fullPath) {
   closeOpenFileWatcher(ws);
   let lastPushed = null;
-  try { lastPushed = readNormalisedFile(fullPath); } catch (e) { /* unreadable now; still watch */ }
-  const listener = () => {
+  let lastStat = null; // { mtimeMs, size } of the content last examined
+  try {
+    lastPushed = readNormalisedFile(fullPath);
+    const st = fs.statSync(fullPath);
+    lastStat = { mtimeMs: st.mtimeMs, size: st.size };
+  } catch (e) { /* unreadable now; still watch, the first tick re-examines */ }
+  const tick = () => {
     if (ws.readyState !== 1) return;
+    let st;
+    try { st = fs.statSync(fullPath); } catch (e) { return; } // deletion: leave the open view intact
+    if (lastStat && st.mtimeMs === lastStat.mtimeMs && st.size === lastStat.size) return;
     let content;
-    try {
-      if (!fs.existsSync(fullPath)) return; // deletion: leave the open view intact
-      content = readNormalisedFile(fullPath);
-    } catch (e) { return; } // mid-write read error: the next poll settles it
+    try { content = readNormalisedFile(fullPath); } catch (e) { return; } // mid-write: lastStat untouched, next tick retries
+    lastStat = { mtimeMs: st.mtimeMs, size: st.size };
     if (content === lastPushed) return; // no real change (or our own save)
     lastPushed = content;
     ws.send(JSON.stringify({ type: 'file_changed', path: relPath, content }));
   };
-  try {
-    fs.watchFile(fullPath, { interval: 700 }, listener);
-    ws._openFileWatch = { path: fullPath, listener };
-  } catch (e) { /* unwatchable path: live refresh is simply unavailable here */ }
+  const timer = setInterval(tick, OPEN_FILE_POLL_MS);
+  if (timer.unref) timer.unref(); // never hold shutdown open for a view refresh
+  ws._openFileWatch = { timer };
 }
 
 function extractFrontmatterText(content) {
