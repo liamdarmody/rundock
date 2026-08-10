@@ -171,6 +171,54 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ---------------------------------------------------------------------------
+  # Name and fill the draft release deterministically. electron-builder is also
+  # passed releaseInfo above, but the first live run (v0.11.5) showed it does
+  # not reliably apply it to the draft it attaches artefacts to: the draft
+  # arrived untitled with an empty body and was filled by hand, the exact
+  # manual step this pipeline exists to remove. This job is the single
+  # deterministic writer: after both builds finish, it patches the draft via
+  # the API with the same changelog-derived name and notes. The releaseInfo
+  # flags stay until this step has proven itself at a real tag, then they can
+  # go, so there is one mechanism rather than two.
+  # ---------------------------------------------------------------------------
+  finalize:
+    name: Name and fill the draft release
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Extract release name and notes from the changelog
+        # Same extraction as the build jobs; it already failed the build there
+        # if the changelog had no entry, so here it can only succeed.
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          node scripts/release-notes.js "$VERSION" --out release-info
+
+      - name: Patch the draft release with the name and notes
+        # Draft releases are not addressable via /releases/tags/<tag>, so list
+        # and match on tag_name instead.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE_ID=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
+            --jq ".[] | select(.tag_name==\"${GITHUB_REF_NAME}\") | .id" | head -1)
+          if [ -z "$RELEASE_ID" ]; then
+            echo "No release found for ${GITHUB_REF_NAME}; electron-builder should have created the draft" >&2
+            exit 1
+          fi
+          gh api -X PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            -f name="$(cat release-info/release-name.txt)" \
+            -f body="$(cat release-info/release-notes.md)" > /dev/null
+          echo "Draft release ${RELEASE_ID} named and filled from the changelog."
+
+  # ---------------------------------------------------------------------------
   # SCAFFOLDED, INACTIVE. Reserved for future Linux support.
   # ---------------------------------------------------------------------------
   # linux:
