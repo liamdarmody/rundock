@@ -326,6 +326,45 @@ function sanitizeSpecialistOutput(text) {
   return cleaned;
 }
 
+// The delegate's plain chat turns from the on-disk transcript, in order.
+// Boundary is a TIMESTAMP, not an index: appendTranscript splices entry 1 at
+// the 1000-entry soft cap, so a stored index silently drifts on long
+// conversations. Typed rows (e.g. 'routing') are bookkeeping and carry no
+// session content.
+function transcriptTurnsSince(convoId, agentId, sinceIso) {
+  const transcript = loadTranscript(convoId) || [];
+  return transcript
+    .filter(t => t.role === 'agent' && t.agent === agentId && !t.type)
+    .filter(t => !sinceIso || t.timestamp >= sinceIso)
+    .map(t => t.text);
+}
+
+// Build the payload a parent agent receives when a delegate hands back. The
+// single source of handback content: every substantive turn, not just the
+// last one.
+//
+// Incident (0.11.2): an analyst delivered a 6,665-char analysis in turn 1 and
+// a 106-char sign-off in turn 2; only the sign-off reached the lead, because
+// finalResponseText holds one turn by design (responseText resets per turn).
+// The lead refused to invent the analysis and the user pasted 6,050 chars by
+// hand while the full report sat in the transcript on disk.
+//
+// Prefers in-memory accumulated turns (fast path); falls back to the
+// transcript, which survives process death and is authoritative. Truncation
+// over the cap is LOUD: the parent is told what was omitted and where the
+// full output lives, never silently handed a fragment.
+function buildHandbackPayload(entry, convoId) {
+  const turns = (entry.deliveredTurns && entry.deliveredTurns.length)
+    ? entry.deliveredTurns
+    : transcriptTurnsSince(convoId, entry.agentId, entry.delegationStartedAt);
+  const cleaned = turns.map(t => stripRundockMarkers(t || '').trim()).filter(Boolean);
+  const joined = cleaned.join('\n\n');
+  if (joined.length <= SPECIALIST_OUTPUT_MAX_CHARS) return joined;
+  const omitted = joined.length - SPECIALIST_OUTPUT_MAX_CHARS;
+  return joined.substring(0, SPECIALIST_OUTPUT_MAX_CHARS)
+    + `\n\n[Handback truncated: ${omitted} of ${joined.length} characters omitted across ${cleaned.length} turn(s). Read the full output in .rundock/transcripts/${convoId}.json]`;
+}
+
 // Session history: read Claude Code JSONL transcripts from disk
 function getSessionJsonlPath(sessionId) {
   if (!WORKSPACE || !sessionId) return null;
@@ -3090,7 +3129,7 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
       // so the orchestrator has visibility into what was delivered. Without this, the
       // orchestrator's JSONL only contains its own pre-delegation state and it has to
       // guess or re-read files to know what the specialist did.
-      const specialistOutput = sanitizeSpecialistOutput(specialistEntry.finalResponseText || specialistEntry.responseText);
+      const specialistOutput = buildHandbackPayload(specialistEntry, convoId);
       const outputBlock = specialistOutput
         ? `\n\n--- ${specialistEntry.agentId} ---\n${specialistOutput}\n---`
         : '';
@@ -3166,6 +3205,9 @@ function spawnResumedProcess(convoId, agentId, sessionId, processes, opts = {}) 
   const entry = {
     process: proc, buffer: '', processId, agentId,
     responseText: '', exited: false, resultSent: false,
+    // Handback integrity: a respawned agent can hand back via its scope-return
+    // close path, so its turns accumulate the same as a delegate's.
+    deliveredTurns: [], delegationStartedAt: new Date().toISOString(),
     pendingAgentTool: null, toolCalls: [], turnStartTime: Date.now(),
     idle: true, scopeReturnSource: opts.scopeReturnSource || null,
     handbackAt: Date.now(), // stale end_delegation guard
@@ -3187,6 +3229,7 @@ function spawnResumedProcess(convoId, agentId, sessionId, processes, opts = {}) 
         const toolSummary = buildToolSummary(e.toolCalls);
         const textWithTools = toolSummary ? toolSummary + '\n' + e.responseText : e.responseText;
         appendTranscript(convoId, 'agent', e.agentId, textWithTools);
+        if (e.deliveredTurns) e.deliveredTurns.push(e.responseText);
       }
       e.finalResponseText = e.responseText;
       e.responseText = '';
@@ -3343,6 +3386,11 @@ function handleDelegation(msg, processes) {
     agentId: targetAgent.id, responseText: '', exited: false, resultSent: false, idle: false,
     isPlatformDelegate, lastUserMessage: msg.context, receivedFollowUp: false,
     isIntercepted,
+    // Handback integrity: every turn's text accumulates here so the handback
+    // carries the whole delegation, not the final turn. The timestamp bounds
+    // the transcript fallback when this array is empty (delegate crashed
+    // before any result).
+    deliveredTurns: [], delegationStartedAt: new Date().toISOString(),
     pendingAgentTool: null,
     toolCalls: [], turnStartTime: Date.now(),
     delegation: {
@@ -3448,6 +3496,9 @@ function handleDelegation(msg, processes) {
             const toolSummary = buildToolSummary(e.toolCalls);
             const textWithTools = toolSummary ? toolSummary + '\n' + e.responseText : e.responseText;
             appendTranscript(convoId, 'agent', e.agentId, textWithTools);
+            // Accumulate before the reset: the reset is correct for per-turn
+            // streaming, but the handback must carry every turn.
+            e.deliveredTurns.push(e.responseText);
           }
       e.responseText = '';
       e.idle = true; e.idleSince = Date.now();
@@ -3623,6 +3674,9 @@ function handleDelegation(msg, processes) {
       const resumeEntry = {
         process: resumeProc, buffer: '', processId: resumeProcessId,
         agentId: parentAgentId, responseText: '', exited: false, resultSent: false,
+        // Handback integrity: a restored parent can hand back onward via its
+        // scope-return close path, so its turns accumulate too.
+        deliveredTurns: [], delegationStartedAt: new Date().toISOString(),
         pendingAgentTool: null,
         toolCalls: [], turnStartTime: Date.now(),
         // Tag with returning specialist so handleDelegation's scopeReturnSource
@@ -3644,7 +3698,7 @@ function handleDelegation(msg, processes) {
       // visibility into what was delivered. The parent's --resume session only
       // contains its own pre-delegation state; the specialist's work is invisible
       // without this injection.
-      const delegateOutput = sanitizeSpecialistOutput(delegateEntry.finalResponseText || delegateEntry.responseText);
+      const delegateOutput = buildHandbackPayload(delegateEntry, convoId);
       const delegateOutputBlock = delegateOutput
         ? `\n\n--- ${delegateEntry.agentId} ---\n${delegateOutput}\n---`
         : '';
@@ -3706,6 +3760,7 @@ function handleDelegation(msg, processes) {
             const toolSummary = buildToolSummary(e.toolCalls);
             const textWithTools = toolSummary ? toolSummary + '\n' + e.responseText : e.responseText;
             appendTranscript(convoId, 'agent', e.agentId, textWithTools);
+            if (e.deliveredTurns) e.deliveredTurns.push(e.responseText);
           }
           // Mirror the delegate (~2673) and direct-start (~3134) paths:
           // preserve the final text so a later handleScopeReturn injects the real
@@ -3973,6 +4028,10 @@ wss.on('connection', (ws) => {
               process: proc, buffer: '', processId, agentId: msg.agent || 'default',
               responseText: '', exited: false, resultSent: false,
               lastUserMessage: msg.content,
+              // Handback integrity: a directly-started specialist can hand
+              // back too (handleScopeReturn), and must hand back all of its
+              // turns, not the last one.
+              deliveredTurns: [], delegationStartedAt: new Date().toISOString(),
               // Agent tool interception state
               pendingAgentTool: null,  // { blockIndex, inputJson: '' }
               toolCalls: [], turnStartTime: Date.now()
@@ -4010,6 +4069,7 @@ wss.on('connection', (ws) => {
             const toolSummary = buildToolSummary(e.toolCalls);
             const textWithTools = toolSummary ? toolSummary + '\n' + e.responseText : e.responseText;
             appendTranscript(convoId, 'agent', e.agentId, textWithTools);
+            if (e.deliveredTurns) e.deliveredTurns.push(e.responseText);
           }
                 e.responseText = '';
                 e.idle = true; e.idleSince = Date.now();
@@ -6558,6 +6618,9 @@ function handleCodexDelegateEvent(entry, convoId, ev) {
         }));
         entry.resultSent = true;
         entry.finalResponseText = displayText;
+        // Handback parity with the Claude delegate onResult: accumulate the
+        // turn before the reset so multi-turn handbacks stay whole.
+        if (displayText && entry.deliveredTurns) entry.deliveredTurns.push(displayText);
         entry.responseText = '';
         entry.idle = true; entry.idleSince = Date.now();
       } else if (ev.status === 'failed' && !entry.cancelled) {
@@ -7547,6 +7610,7 @@ module.exports._internal = {
   parseRoutines, parsePrompts, parseSkills, readNormalisedFile, titleCase,
   // markers + text helpers
   stripRundockMarkers, isSilentParkResponse, sanitizeSpecialistOutput,
+  buildHandbackPayload, transcriptTurnsSince,
   extractSnippet, buildToolSummary, isAuthError, isModelError,
   // rosters + prompts
   findDirectReportMatch, findOffRosterWorkspaceMatch, buildTeamRoster, buildPeerRoster,
