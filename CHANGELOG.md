@@ -6,6 +6,8 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ## Unreleased
 
+**Name:** Team Integrity
+
 ### Added
 
 - **Your workspace now keeps a private log of how your team behaves:** delegations, handbacks, permission decisions, routine outcomes, and skill use are recorded as small structured events in `.rundock/state/` inside your workspace, alongside a per-skill usage count. The log holds structure only, never message content or tool arguments, rotates monthly, prunes itself after six months, and never leaves your machine. Nothing reads it yet; it is the evidence base future team-health features will rest on, accruing from today so they arrive with history instead of amnesia.
