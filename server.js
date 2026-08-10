@@ -18,6 +18,9 @@ const codexAppServerLib = require('./codex-appserver.js');
 const PKG_VERSION = require('./package.json').version;
 const searchLib = require('./search.js');
 const { resolvePermissionConvoId } = require('./permission-routing.js');
+const { resolveMarkers } = require('./lib/delegation/markers.js');
+const { createHandbackBuilder } = require('./lib/delegation/handback.js');
+const { createDelegationRecord, attachDelegationRecord } = require('./lib/delegation/state.js');
 
 const PORT = process.env.PORT || 3000;
 let ACTUAL_PORT = PORT; // Updated after server.listen() with the real listening port
@@ -326,44 +329,15 @@ function sanitizeSpecialistOutput(text) {
   return cleaned;
 }
 
-// The delegate's plain chat turns from the on-disk transcript, in order.
-// Boundary is a TIMESTAMP, not an index: appendTranscript splices entry 1 at
-// the 1000-entry soft cap, so a stored index silently drifts on long
-// conversations. Typed rows (e.g. 'routing') are bookkeeping and carry no
-// session content.
-function transcriptTurnsSince(convoId, agentId, sinceIso) {
-  const transcript = loadTranscript(convoId) || [];
-  return transcript
-    .filter(t => t.role === 'agent' && t.agent === agentId && !t.type)
-    .filter(t => !sinceIso || t.timestamp >= sinceIso)
-    .map(t => t.text);
-}
-
-// Build the payload a parent agent receives when a delegate hands back. The
-// single source of handback content: every substantive turn, not just the
-// last one.
-//
-// Incident (0.11.2): an analyst delivered a 6,665-char analysis in turn 1 and
-// a 106-char sign-off in turn 2; only the sign-off reached the lead, because
-// finalResponseText holds one turn by design (responseText resets per turn).
-// The lead refused to invent the analysis and the user pasted 6,050 chars by
-// hand while the full report sat in the transcript on disk.
-//
-// Prefers in-memory accumulated turns (fast path); falls back to the
-// transcript, which survives process death and is authoritative. Truncation
-// over the cap is LOUD: the parent is told what was omitted and where the
-// full output lives, never silently handed a fragment.
-function buildHandbackPayload(entry, convoId) {
-  const turns = (entry.deliveredTurns && entry.deliveredTurns.length)
-    ? entry.deliveredTurns
-    : transcriptTurnsSince(convoId, entry.agentId, entry.delegationStartedAt);
-  const cleaned = turns.map(t => stripRundockMarkers(t || '').trim()).filter(Boolean);
-  const joined = cleaned.join('\n\n');
-  if (joined.length <= SPECIALIST_OUTPUT_MAX_CHARS) return joined;
-  const omitted = joined.length - SPECIALIST_OUTPUT_MAX_CHARS;
-  return joined.substring(0, SPECIALIST_OUTPUT_MAX_CHARS)
-    + `\n\n[Handback truncated: ${omitted} of ${joined.length} characters omitted across ${cleaned.length} turn(s). Read the full output in .rundock/transcripts/${convoId}.json]`;
-}
+// Handback payload building lives in lib/delegation/handback.js; the factory
+// receives transcript access and marker stripping so the module stays free
+// of workspace globals. Function declarations hoist, so binding here at the
+// top of the file is safe even though loadTranscript is defined further down.
+const { buildHandbackPayload, transcriptTurnsSince } = createHandbackBuilder({
+  loadTranscript: (convoId) => loadTranscript(convoId),
+  stripMarkers: (text) => stripRundockMarkers(text),
+  maxChars: SPECIALIST_OUTPUT_MAX_CHARS,
+});
 
 // Session history: read Claude Code JSONL transcripts from disk
 function getSessionJsonlPath(sessionId) {
@@ -2713,6 +2687,21 @@ function convoHasBufferedChat(convoId) {
   return !!(t && t.queued.length);
 }
 
+// The ONE buffered-follow-up gate, used by every restoration path. When a
+// chat message was buffered during the kill/restore window, the auto-continue
+// prompt is skipped: the entry parks idle and the replayed message drives it
+// instead. Without this gate the replayed message queues BEHIND the routing
+// prompt and dies unread in stdin when that prompt re-delegates. Four
+// hand-copied variants of this check once existed; a restoration path added
+// without the gate silently drops a user's message, which is why it now has
+// a single implementation to reach for.
+function bufferedFollowUpTakesOver(convoId, entry, skippedWhat) {
+  if (!convoHasBufferedChat(convoId)) return false;
+  if (entry) { entry.idle = true; entry.idleSince = Date.now(); }
+  console.log(`[KillWindow] convo=${convoId} skipping ${skippedWhat}, buffered follow-up takes over`);
+  return true;
+}
+
 // End the transition and replay buffered messages through the normal chat
 // handler, in arrival order. The map entry is deleted BEFORE replaying so
 // the replayed message flows through the full handler (transcript append,
@@ -3131,9 +3120,11 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
     responseText: '', exited: false, resultSent: false,
     lastUserMessage: specialistEntry.lastUserMessage,
     pendingAgentTools: null,
-    toolCalls: [], turnStartTime: Date.now(),
-    scopeReturnSource: wasPipelineComplete ? null : specialistEntry.agentId
+    toolCalls: [], turnStartTime: Date.now()
   };
+  attachDelegationRecord(orchEntry, createDelegationRecord({
+    scopeReturnSource: wasPipelineComplete ? null : specialistEntry.agentId
+  }));
   chatProcesses.set(convoId, orchEntry);
 
   // Notify client of agent switch
@@ -3155,10 +3146,8 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
   // SIGKILLs the orchestrator). The pipeline-complete prompt is not gated:
   // it only parks the orchestrator silently, never re-delegates, so the
   // replay queues safely behind it (matching the delegate COMPLETE paths).
-  const bufferedFollowUp = convoHasBufferedChat(convoId);
-  if (!wasPipelineComplete && bufferedFollowUp) {
-    orchEntry.idle = true; orchEntry.idleSince = Date.now();
-    console.log(`[KillWindow] convo=${convoId} skipping scope-return routing prompt, buffered follow-up takes over`);
+  if (!wasPipelineComplete && bufferedFollowUpTakesOver(convoId, orchEntry, 'scope-return routing prompt')) {
+    // parked by the gate; the replayed message drives the orchestrator
   } else {
     // Circuit breaker: check consecutive auto-resume count before sending prompt.
     // COMPLETE paths are low-risk (orchestrator goes silent) but still count.
@@ -3249,20 +3238,21 @@ function spawnResumedProcess(convoId, agentId, sessionId, processes, opts = {}) 
   const entry = {
     process: proc, buffer: '', processId, agentId,
     responseText: '', exited: false, resultSent: false,
-    // Handback integrity: a respawned agent can hand back via its scope-return
-    // close path, so its turns accumulate the same as a delegate's.
-    deliveredTurns: [], delegationStartedAt: new Date().toISOString(),
     pendingAgentTools: null, toolCalls: [], turnStartTime: Date.now(),
-    idle: true, scopeReturnSource: opts.scopeReturnSource || null,
+    idle: true,
     handbackAt: Date.now(), // stale end_delegation guard
   };
+  // A respawned agent can hand back via its scope-return close path, so it
+  // carries a delegation record like a delegate does.
+  attachDelegationRecord(entry, createDelegationRecord({
+    scopeReturnSource: opts.scopeReturnSource || null
+  }));
   processes.set(convoId, entry);
 
   wireProcessHandlers(entry, convoId, null, {
     enableInterception: true,
     onResult: (e) => {
-      const hasOutOfScope = /<!-- RUNDOCK:RETURN -->/.test(e.responseText);
-      const hasComplete = /<!-- RUNDOCK:COMPLETE -->/.test(e.responseText);
+      const { hasReturn: hasOutOfScope, hasComplete } = resolveMarkers(e.responseText);
       // KNOWN LIMITATION: a respawned orchestrator that emits its own RETURN/COMPLETE marker here is self-treated as a scope-return. Low/narrow.
       if ((hasOutOfScope || hasComplete) && !e.delegation) {
         e.scopeReturn = true;
@@ -3430,15 +3420,6 @@ function handleDelegation(msg, processes) {
     agentId: targetAgent.id, responseText: '', exited: false, resultSent: false, idle: false,
     isPlatformDelegate, lastUserMessage: msg.context, receivedFollowUp: false,
     isIntercepted,
-    // Handback integrity: every turn's text accumulates here so the handback
-    // carries the whole delegation, not the final turn. The timestamp bounds
-    // the transcript fallback when this array is empty (delegate crashed
-    // before any result).
-    deliveredTurns: [], delegationStartedAt: new Date().toISOString(),
-    // Agent calls from the delegating turn that were NOT run (delegation is
-    // sequential): named back to the caller on handback so it can sequence
-    // them instead of believing they ran.
-    deferredTargets: msg._deferredTargets || null,
     pendingAgentTools: null,
     toolCalls: [], turnStartTime: Date.now(),
     delegation: {
@@ -3454,6 +3435,13 @@ function handleDelegation(msg, processes) {
         ? existing.delegation.originalAgentId : null
     }
   };
+  // The delegation record owns the durable state: the accumulated turn log
+  // for the handback, the timestamp bounding the transcript fallback, and
+  // the Agent calls from the delegating turn that were not run (named back
+  // to the caller so it can sequence them instead of believing they ran).
+  attachDelegationRecord(delegateEntry, createDelegationRecord({
+    deferredTargets: msg._deferredTargets || null
+  }));
   processes.set(convoId, delegateEntry);
 
   // Notify client of agent switch
@@ -3500,9 +3488,7 @@ function handleDelegation(msg, processes) {
   wireProcessHandlers(delegateEntry, convoId, null, {
     enableInterception: true,
     onResult: (e) => {
-      const hasOutOfScope = /<!-- RUNDOCK:RETURN -->/.test(e.responseText);
-      const hasComplete = /<!-- RUNDOCK:COMPLETE -->/.test(e.responseText);
-      const hasCrudMarker = /<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT|<!-- RUNDOCK:DELETE_AGENT|<!-- RUNDOCK:SAVE_SKILL|<!-- RUNDOCK:DELETE_SKILL/.test(e.responseText);
+      const { hasReturn: hasOutOfScope, hasComplete, hasCrudMarker } = resolveMarkers(e.responseText);
       const hasHandoff = hasOutOfScope || hasComplete;
       const shouldAutoReturn = e.isPlatformDelegate
         ? (hasHandoff || hasCrudMarker)
@@ -3590,8 +3576,6 @@ function handleDelegation(msg, processes) {
     // handoff's auto-continue: the user has spoken, so their replayed message
     // drives the restored parent instead of a routing prompt. Mirrors the
     // live-window rule where a follow-up cancels the auto-return.
-    const bufferedFollowUp = convoHasBufferedChat(convoId);
-
     // Multi-target honesty: Agent calls from the delegating turn that were
     // not run are named back to the caller. The engine used to discard them
     // with no log and no event, so callers believed parallel work happened.
@@ -3629,12 +3613,10 @@ function handleDelegation(msg, processes) {
       // pipeline finished end-to-end (orchestrator resumes silently).
       let returnMarkerSeen = delegateEntry.returnMarkerSeen || null;
       if (!returnMarkerSeen) {
-        const tail = delegateEntry.finalResponseText || delegateEntry.responseText || '';
-        const tailHasComplete = /<!-- RUNDOCK:COMPLETE -->/.test(tail);
-        const tailHasReturn = /<!-- RUNDOCK:RETURN -->/.test(tail);
-        // COMPLETE takes priority (same logic as onResult handler)
-        if (tailHasComplete) returnMarkerSeen = 'complete';
-        else if (tailHasReturn) returnMarkerSeen = 'return';
+        // Tail scan for a marker the onResult handler never saw (e.g. the
+        // process died after streaming it). Same single resolver, same
+        // COMPLETE-beats-RETURN precedence.
+        returnMarkerSeen = resolveMarkers(delegateEntry.finalResponseText || delegateEntry.responseText).mode;
       }
       const hasHandoffMarker = !!returnMarkerSeen;
       const isOutOfScope = returnMarkerSeen === 'return';
@@ -3663,10 +3645,8 @@ function handleDelegation(msg, processes) {
         // the specialist's output and decides what to do next.
         if (isPipelineComplete) {
           console.log(`[AgentIntercept] convo=${convoId} COMPLETE gate: specialist ${delegateEntry.agentId} finished, orchestrator ${orchestratorAgentId} stays idle`);
-        } else if (bufferedFollowUp) {
-          // Buffered user message supersedes the RETURN auto-continue: the
-          // orchestrator stays idle and the replayed message drives it.
-          console.log(`[KillWindow] convo=${convoId} skipping RETURN auto-continue, buffered follow-up takes over`);
+        } else if (bufferedFollowUpTakesOver(convoId, orchestratorEntry, 'RETURN auto-continue')) {
+          // orchestrator stays idle; the replayed message drives it
         } else if (orchestratorEntry.process && orchestratorEntry.process.stdin && orchestratorEntry.process.stdin.writable && !orchestratorEntry.process.killed) {
           // RETURN path: auto-continue to route the pending request to another specialist
           const resumeCount = incrementAutoResume(convoId);
@@ -3733,17 +3713,18 @@ function handleDelegation(msg, processes) {
       const resumeEntry = {
         process: resumeProc, buffer: '', processId: resumeProcessId,
         agentId: parentAgentId, responseText: '', exited: false, resultSent: false,
-        // Handback integrity: a restored parent can hand back onward via its
-        // scope-return close path, so its turns accumulate too.
-        deliveredTurns: [], delegationStartedAt: new Date().toISOString(),
         pendingAgentTools: null,
         toolCalls: [], turnStartTime: Date.now(),
-        // Tag with returning specialist so handleDelegation's scopeReturnSource
-        // guard blocks immediate re-delegation to the same agent. Only set for
-        // out-of-scope returns; pipeline-complete should allow re-delegation.
-        scopeReturnSource: isOutOfScope ? delegateEntry.agentId : null,
         handbackAt: Date.now() // stale end_delegation guard
       };
+      // A restored parent can hand back onward via its scope-return close
+      // path, so it carries a record. scopeReturnSource tags the returning
+      // specialist so handleDelegation's guard blocks immediate re-delegation
+      // to the same agent; only set for out-of-scope returns, because
+      // pipeline-complete should allow re-delegation.
+      attachDelegationRecord(resumeEntry, createDelegationRecord({
+        scopeReturnSource: isOutOfScope ? delegateEntry.agentId : null
+      }));
       processes.set(convoId, resumeEntry);
 
       // Auto-prompt only on out-of-scope: parent is resumed with a routing request so
@@ -3762,11 +3743,8 @@ function handleDelegation(msg, processes) {
         ? `\n\n--- ${delegateEntry.agentId} ---\n${delegateOutput}\n---`
         : '';
 
-      if (isOutOfScope && bufferedFollowUp) {
-        // Buffered user message supersedes the RETURN routing prompt: park
-        // the resumed parent idle and let the replayed message drive it.
-        resumeEntry.idle = true; resumeEntry.idleSince = Date.now();
-        console.log(`[KillWindow] convo=${convoId} skipping RETURN routing prompt, buffered follow-up takes over`);
+      if (isOutOfScope && bufferedFollowUpTakesOver(convoId, resumeEntry, 'RETURN routing prompt')) {
+        // parked by the gate; the replayed message drives the resumed parent
       } else if (isOutOfScope) {
         const resumeCount = incrementAutoResume(convoId);
         if (resumeCount >= MAX_CONSECUTIVE_AGENT_RESUMES) {
@@ -3804,12 +3782,11 @@ function handleDelegation(msg, processes) {
           // records which one fired so the close handler can route correctly: 'return'
           // means route the pending request to a different specialist, 'complete' means
           // the delegated pipeline is finished and the orchestrator should resume silently.
-          const hasOutOfScope = /<!-- RUNDOCK:RETURN -->/.test(e.responseText);
-          const hasComplete = /<!-- RUNDOCK:COMPLETE -->/.test(e.responseText);
-          if ((hasOutOfScope || hasComplete) && !e.delegation) {
+          const markers = resolveMarkers(e.responseText);
+          if (markers.mode && !e.delegation) {
             e.scopeReturn = true;
-            // COMPLETE takes priority when both markers are present
-            e.scopeReturnMode = hasComplete ? 'complete' : 'return';
+            // mode already applies COMPLETE-beats-RETURN precedence
+            e.scopeReturnMode = markers.mode;
             console.log(`[ScopeReturn] convo=${convoId} agent=${e.agentId} ${e.scopeReturnMode} marker on resumed parent`);
             // Follow-up in-window cancels the auto-return; post-kill messages buffer.
             scheduleScopeReturnKill(e, convoId);
@@ -3865,7 +3842,7 @@ function handleDelegation(msg, processes) {
 
       // bufferedFollowUp gate: a message buffered during the window replays
       // to the restored parent directly, superseding the auto-continue.
-      if (!delegateEntry.isPlatformDelegate && delegateEntry.receivedFollowUp && !bufferedFollowUp && orig.process && orig.process.stdin && orig.process.stdin.writable) {
+      if (!delegateEntry.isPlatformDelegate && delegateEntry.receivedFollowUp && !bufferedFollowUpTakesOver(convoId, orig, 'specialist-return auto-continue') && orig.process && orig.process.stdin && orig.process.stdin.writable) {
         const resumeCount = incrementAutoResume(convoId);
         if (resumeCount >= MAX_CONSECUTIVE_AGENT_RESUMES) {
           console.log(`[CircuitBreaker] convo=${convoId} ${resumeCount} consecutive agent resumes on delegate return path, pausing`);
@@ -4087,14 +4064,14 @@ wss.on('connection', (ws) => {
               process: proc, buffer: '', processId, agentId: msg.agent || 'default',
               responseText: '', exited: false, resultSent: false,
               lastUserMessage: msg.content,
-              // Handback integrity: a directly-started specialist can hand
-              // back too (handleScopeReturn), and must hand back all of its
-              // turns, not the last one.
-              deliveredTurns: [], delegationStartedAt: new Date().toISOString(),
               // Agent tool interception state
               pendingAgentTools: null,  // [{ blockIndex, inputJson, complete }]
               toolCalls: [], turnStartTime: Date.now()
             };
+            // A directly-started specialist can hand back too
+            // (handleScopeReturn), and must hand back all of its turns, not
+            // the last one, so it carries a delegation record.
+            attachDelegationRecord(entry, createDelegationRecord());
             processes.set(convoId, entry);
 
             safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId, _agent: entry.agentId }));
@@ -4108,14 +4085,13 @@ wss.on('connection', (ws) => {
                 // Detect scope return on a directly-started specialist. Either marker
                 // triggers a handoff to the orchestrator; scopeReturnMode selects the
                 // downstream behaviour (routing request vs silent exit).
-                const hasOutOfScope = /<!-- RUNDOCK:RETURN -->/.test(e.responseText);
-                const hasComplete = /<!-- RUNDOCK:COMPLETE -->/.test(e.responseText);
-                if ((hasOutOfScope || hasComplete) && !e.delegation) {
+                const markers = resolveMarkers(e.responseText);
+                if (markers.mode && !e.delegation) {
                   e.scopeReturn = true;
-                  // COMPLETE takes priority when both markers are present, matching
-                  // every other path (delegate/resumed-parent). Previously inverted
-                  // to 'return' on both-markers here.
-                  e.scopeReturnMode = hasComplete ? 'complete' : 'return';
+                  // mode already applies COMPLETE-beats-RETURN precedence. This
+                  // is the site that once shipped with the precedence inverted,
+                  // which is why the rule now has exactly one implementation.
+                  e.scopeReturnMode = markers.mode;
                   console.log(`[ScopeReturn] convo=${convoId} agent=${e.agentId} ${e.scopeReturnMode} marker on non-delegated process`);
                   // Follow-up in-window cancels the auto-return; post-kill messages buffer.
                   scheduleScopeReturnKill(e, convoId);
@@ -6662,12 +6638,11 @@ function handleCodexDelegateEvent(entry, convoId, ev) {
       stopCodexTurnKeepalive(entry);
       if (entry._turnEndResolve) entry._turnEndResolve();
       if (ev.status === 'completed' && !entry.cancelled) {
-        // Marker scan, COMPLETE priority: same contract as the Claude
-        // delegate onResult handler.
-        const hasComplete = /<!-- RUNDOCK:COMPLETE -->/.test(entry.responseText);
-        const hasReturn = /<!-- RUNDOCK:RETURN -->/.test(entry.responseText);
-        if (hasComplete) entry.returnMarkerSeen = 'complete';
-        else if (hasReturn) entry.returnMarkerSeen = 'return';
+        // Marker scan, COMPLETE priority: same single resolver as the
+        // Claude delegate onResult handler. mode is null when no handoff
+        // marker is present, matching the unset-field contract downstream.
+        const markerMode = resolveMarkers(entry.responseText).mode;
+        if (markerMode) entry.returnMarkerSeen = markerMode;
         const displayText = entry.responseText;
         if (displayText) appendTranscript(convoId, 'agent', entry.agentId, displayText);
         safeSend(JSON.stringify({

@@ -301,15 +301,22 @@ describe('P2/P3 regressions', () => {
   test('direct-start onResult: both markers resolve to COMPLETE', () => {
     // Full behavior covered in delegation.test.js. Here we assert the source
     // uses the COMPLETE-priority rule on the directly-started path.
+    // The rule itself now has exactly one implementation
+    // (lib/delegation/markers.js, unit-tested in delegation-markers.test.js
+    // including the both-markers case), so this pin asserts the direct-start
+    // path derives its mode FROM that resolver instead of hand-copying the
+    // precedence, which is how the inversion this test caught shipped in the
+    // first place.
+    const { resolveMarkers } = require('../../lib/delegation/markers.js');
     const responseText = `done ${fx.MARKERS.RETURN} ${fx.MARKERS.COMPLETE}`;
-    const hasComplete = /<!-- RUNDOCK:COMPLETE -->/.test(responseText);
-    const mode = hasComplete ? 'complete' : 'return'; // production rule (fixed)
-    assert.strictEqual(mode, 'complete', 'both-markers must resolve to complete');
+    assert.strictEqual(resolveMarkers(responseText).mode, 'complete', 'both-markers must resolve to complete');
     const src = fs.readFileSync(path.join(__dirname, '../../server.js'), 'utf-8');
     const anchor = src.indexOf('marker on non-delegated process');
-    const region = src.slice(anchor - 300, anchor);
-    assert.match(region, /e\.scopeReturnMode = hasComplete \? 'complete' : 'return'/,
-      'direct-start path must use the COMPLETE-priority rule');
+    const region = src.slice(anchor - 800, anchor);
+    assert.match(region, /e\.scopeReturnMode = markers\.mode/,
+      'direct-start path must take its mode from the single resolver');
+    assert.match(region, /resolveMarkers\(e\.responseText\)/,
+      'direct-start path must scan via the single resolver');
   });
 
   test('isResumeFailure guards against cancelled turns', () => {
