@@ -599,29 +599,45 @@ function validateAgentSlug(name) {
 // reach live processes the same way in-app CRUD does. Without this, a hand
 // edit updates discovery (2s cache TTL: chart, sidebar, matcher) but a
 // long-lived agent process keeps its stale prompt roster until it happens to
-// respawn. Debounced because editors fire multiple fs events per save; the
-// in-app CRUD paths still call flagRosterRefresh directly (the watcher
-// firing again behind them is idempotent).
-let _agentsDirWatcher = null;
-let _agentsWatchDebounce = null;
+// respawn.
+//
+// A self-owned POLLER, not fs.watch: event-based watching is exactly the
+// seam where the live-refresh data-loss bug lived (0.11.5: fs.watchFile's
+// async baseline could swallow a change forever) and fs.watch delivery
+// differs across platforms and Node versions (its event form failed on CI
+// Node 22 while passing on 24). A 2s signature poll over a directory of a
+// dozen small files is deterministic everywhere and matches the agent
+// cache's own TTL. In-app CRUD still flags directly; the poller firing
+// behind it is idempotent.
+const AGENTS_WATCH_POLL_MS = 2000;
+let _agentsWatchTimer = null;
+let _agentsDirSig = null;
+function agentsDirSignature(dir) {
+  try {
+    let sig = '';
+    for (const f of fs.readdirSync(dir).sort()) {
+      if (!f.endsWith('.md')) continue;
+      try { sig += f + ':' + fs.statSync(path.join(dir, f)).mtimeMs + ';'; } catch (e) { /* file vanished mid-scan */ }
+    }
+    return sig;
+  } catch (e) {
+    return null; // directory missing: a later appearance counts as a change
+  }
+}
 function armAgentsDirWatcher() {
-  if (_agentsDirWatcher) { try { _agentsDirWatcher.close(); } catch (e) {} _agentsDirWatcher = null; }
+  if (_agentsWatchTimer) { clearInterval(_agentsWatchTimer); _agentsWatchTimer = null; }
   if (!WORKSPACE) return;
   const dir = path.join(WORKSPACE, '.claude', 'agents');
-  if (!fs.existsSync(dir)) return; // re-armed on the next workspace set; in-app CRUD flags directly regardless
-  try {
-    _agentsDirWatcher = fs.watch(dir, { persistent: false }, () => {
-      clearTimeout(_agentsWatchDebounce);
-      _agentsWatchDebounce = setTimeout(() => {
-        invalidateAgentCache();
-        flagRosterRefresh();
-        console.log('[Roster] agents directory changed on disk; live orchestrators flagged');
-      }, 250);
-      if (_agentsWatchDebounce.unref) _agentsWatchDebounce.unref();
-    });
-  } catch (e) {
-    console.warn(`[Roster] could not watch agents directory: ${e.message}`);
-  }
+  _agentsDirSig = agentsDirSignature(dir);
+  _agentsWatchTimer = setInterval(() => {
+    const sig = agentsDirSignature(dir);
+    if (sig === _agentsDirSig) return;
+    _agentsDirSig = sig;
+    invalidateAgentCache();
+    flagRosterRefresh();
+    console.log('[Roster] agents directory changed on disk; live orchestrators flagged');
+  }, AGENTS_WATCH_POLL_MS);
+  if (_agentsWatchTimer.unref) _agentsWatchTimer.unref();
 }
 
 function flagRosterRefresh() {
