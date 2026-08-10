@@ -296,6 +296,7 @@ function stripRundockMarkers(t) {
     .replace(/<!-- RUNDOCK:DELEGATE agent=[\w-]+ -->\n?[\s\S]*/g, '')
     .replace(/<!-- RUNDOCK:RETURN -->/g, '')
     .replace(/<!-- RUNDOCK:COMPLETE -->/g, '')
+    .replace(/<!-- RUNDOCK:DOCS_GAP[^>]*-->/g, '')
     .replace(/<!-- RUNDOCK:(?:SAVE|CREATE)_AGENT name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:(?:SAVE|CREATE)_AGENT -->/g, '')
     .replace(/<!-- RUNDOCK:SAVE_SKILL name=[\w-]+ -->[\s\S]*?<!-- \/RUNDOCK:SAVE_SKILL -->/g, '')
     .replace(/<!-- RUNDOCK:DELETE_(?:SKILL|AGENT) name=[\w-]+ -->/g, '');
@@ -1473,6 +1474,7 @@ function executeRoutine(agent, routine, key) {
       duration
     });
     console.log(`[Scheduler] Routine "${routine.name}" ${ok ? 'completed' : 'failed'} (${duration}s)`);
+    recordEvent('routine_run', { agent: agent.id, runtime: agent.runtime || 'claude', d: { routine: routine.name, status: ok ? 'completed' : 'failed', duration } });
     broadcastRoutineUpdate();
   };
 
@@ -2340,6 +2342,7 @@ const server = http.createServer((req, res) => {
             if (pending) {
               pendingPermissionRequests.delete(requestId);
               console.log(`[Permission] Auto-denied (timeout): ${data.tool_name} convo=${convoId} requestId=${requestId}`);
+              recordEvent('permission', { conv: convoId, d: { tool: data.tool_name, decision: 'timeout' } });
               // Send denied indicator to browser
               safeSend(JSON.stringify({
                 type: 'permission_timeout',
@@ -2545,7 +2548,94 @@ function buildToolSummary(toolCalls) {
   return parts.join(' ');
 }
 
-function appendTranscript(convoId, role, agentId, text, type) {
+// ── Signal layer (Build A) ─────────────────────────────────────────────────
+// Local, append-only, skinny events at server-layer convergence points, so
+// both runtimes are measured identically and a third runtime inherits
+// measurement for free. Events carry structure, never content: no message
+// text, no prompt text, no tool arguments. One write path; a capture failure
+// is logged and dropped, never thrown, so instrumentation can never break
+// the product. Files rotate monthly (.rundock/state/events-YYYY-MM.jsonl,
+// already gitignored via .rundock/) and months older than the retention
+// window are pruned when a new month begins. No settings.
+const EVENTS_RETENTION_MONTHS = 6;
+let _lastEventsKey = null;
+function recordEvent(name, fields = {}) {
+  try {
+    if (!WORKSPACE) return;
+    const now = new Date();
+    const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const dir = path.join(WORKSPACE, '.rundock', 'state');
+    const ev = { ts: now.toISOString(), e: name };
+    if (fields.conv) ev.conv = fields.conv;
+    if (fields.agent) ev.agent = fields.agent;
+    if (fields.runtime) ev.runtime = fields.runtime;
+    ev.d = fields.d || {};
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFile(path.join(dir, `events-${month}.jsonl`), JSON.stringify(ev) + '\n', (err) => {
+      if (err) console.warn(`[Signals] event append failed: ${err.message}`);
+    });
+    const key = `${dir}|${month}`;
+    if (key !== _lastEventsKey) {
+      _lastEventsKey = key;
+      pruneOldEventFiles(dir, now);
+    }
+  } catch (e) {
+    console.warn(`[Signals] recordEvent failed: ${e.message}`);
+  }
+}
+
+function pruneOldEventFiles(dir, now) {
+  try {
+    const cutoff = now.getFullYear() * 12 + now.getMonth() - EVENTS_RETENTION_MONTHS;
+    for (const f of fs.readdirSync(dir)) {
+      const m = f.match(/^events-(\d{4})-(\d{2})\.jsonl$/);
+      if (!m) continue;
+      const fileMonths = parseInt(m[1], 10) * 12 + (parseInt(m[2], 10) - 1);
+      if (fileMonths < cutoff) fs.unlink(path.join(dir, f), () => {});
+    }
+  } catch (e) { /* retention is best-effort */ }
+}
+
+// Per-skill usage sidecar (counts never live in the skill markdown). Closes
+// the assigned-versus-used gap without scanning history on every audit.
+// Observable on the Claude runtime only: Codex agents receive skills through
+// their instruction body, so per-skill usage there is not measurable in v1;
+// consumers must exempt skills whose assigned agents are not all
+// Claude-runtime rather than falsely flag them.
+function bumpSkillUsage(slug) {
+  try {
+    if (!WORKSPACE || !slug) return;
+    const dir = path.join(WORKSPACE, '.rundock', 'state');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, 'skill-usage.json');
+    let usage = {};
+    try { usage = JSON.parse(fs.readFileSync(file, 'utf-8')); } catch (e) { /* first use or unreadable: start fresh */ }
+    const rec = usage[slug] || { useCount: 0, lastUsed: null };
+    rec.useCount += 1;
+    rec.lastUsed = new Date().toISOString();
+    usage[slug] = rec;
+    fs.writeFileSync(file, JSON.stringify(usage, null, 2));
+  } catch (e) {
+    console.warn(`[Signals] skill usage update failed: ${e.message}`);
+  }
+}
+
+// Docs-gap topics normalize in code, not in a model: lowercase, punctuation
+// out, stopwords dropped, so the same question asked twice produces the same
+// key and the repeat-detection contract holds.
+const DOCS_GAP_STOPWORDS = new Set(['a', 'an', 'the', 'how', 'what', 'why', 'when', 'where', 'who',
+  'is', 'are', 'do', 'does', 'did', 'i', 'my', 'our', 'your', 'to', 'of', 'in', 'on', 'for',
+  'it', 'this', 'that', 'with', 'and', 'or', 'we', 'you']);
+function normalizeDocsGapTopic(topic) {
+  return String(topic || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w && !DOCS_GAP_STOPWORDS.has(w))
+    .join(' ');
+}
+
+function appendTranscript(convoId, role, agentId, text, type, meta) {
   // Load from disk if not in memory (e.g. after server restart)
   if (!convoTranscripts.has(convoId)) {
     const existing = loadTranscript(convoId);
@@ -2569,6 +2659,31 @@ function appendTranscript(convoId, role, agentId, text, type) {
   transcript.push(entry);
   // Persist to disk
   saveTranscript(convoId);
+  // Signal layer: every agent turn converges here for BOTH runtimes with its
+  // final text in hand, which makes this the one capture site for the turn
+  // event. Callers with a process entry in scope pass it as `meta` so the
+  // event can carry tool and skill STRUCTURE (counts and slugs, never
+  // arguments); callers without one still produce a valid skinny event.
+  if (role === 'agent') {
+    const resolved = resolveMarkers(text || '');
+    const markers = [];
+    if (resolved.hasReturn) markers.push('return');
+    if (resolved.hasComplete) markers.push('complete');
+    const toolCalls = (meta && meta.toolCalls) || [];
+    recordEvent('turn', {
+      conv: convoId, agent: agentId,
+      runtime: (meta && meta.runtime) || 'claude',
+      d: {
+        tools: toolCalls.length,
+        skills: toolCalls.filter(t => t.tool === 'Skill' && t.arg).map(t => t.arg),
+        markers,
+        routing: type === 'routing',
+      },
+    });
+    for (const m of (text || '').matchAll(/<!-- RUNDOCK:DOCS_GAP topic="([^"]*)" -->/g)) {
+      recordEvent('docs_gap', { conv: convoId, agent: agentId, d: { topic: normalizeDocsGapTopic(m[1]) } });
+    }
+  }
   // Live search-index reconcile at end of an agent turn: by this point the
   // Claude Code session jsonl has the turn's content, so the delta read makes
   // the new messages findable immediately. Fire-and-forget; failures are
@@ -2781,6 +2896,7 @@ function isModelError(text) {
 function sendAuthError(entry, convoId) {
   if (entry.authErrorSent) return;
   entry.authErrorSent = true;
+  recordEvent('runtime_error', { conv: convoId, agent: entry.agentId, runtime: entry.runtime || 'claude', d: { class: 'auth' } });
   _claudeAuthEvidence = false; // runtime status: sign-in is demonstrably broken
   safeSend(JSON.stringify({
     type: 'system', subtype: 'auth_error',
@@ -2792,6 +2908,7 @@ function sendAuthError(entry, convoId) {
 function sendModelError(entry, convoId) {
   if (entry.modelErrorSent) return;
   entry.modelErrorSent = true;
+  recordEvent('runtime_error', { conv: convoId, agent: entry.agentId, runtime: entry.runtime || 'claude', d: { class: 'model' } });
   safeSend(JSON.stringify({
     type: 'error',
     content: "The model set for this agent isn't valid. Open the agent's profile and set its model to opus, sonnet, or haiku. Rundock uses sonnet by default when no model is set.",
@@ -2871,6 +2988,29 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
           if (/^(Read|Edit|Write|Glob|Grep|Bash|PowerShell|WebFetch|WebSearch)$/.test(toolName)) {
             entry._pendingToolArg = { blockIndex: parsed.event.index, inputJson: '' };
           }
+          // Signal layer: Skill invocations get their own tracker (separate
+          // from _pendingToolArg so the two can never interfere) because the
+          // slug feeds the turn event and the usage sidecar. Claude runtime
+          // only by nature: Codex agents receive skills in their instruction
+          // body, so there is no tool call to observe there.
+          if (toolName === 'Skill') {
+            entry._pendingSkillArg = { blockIndex: parsed.event.index, inputJson: '' };
+          }
+        }
+        if (entry._pendingSkillArg && parsed.type === 'stream_event' && parsed.event?.type === 'content_block_delta' && parsed.event?.index === entry._pendingSkillArg.blockIndex && parsed.event?.delta?.type === 'input_json_delta') {
+          entry._pendingSkillArg.inputJson += parsed.event.delta.partial_json;
+        }
+        if (entry._pendingSkillArg && parsed.type === 'stream_event' && parsed.event?.type === 'content_block_stop' && parsed.event?.index === entry._pendingSkillArg.blockIndex) {
+          try {
+            const input = JSON.parse(entry._pendingSkillArg.inputJson);
+            const slug = input.skill || input.name || null;
+            if (slug) {
+              const lastSkillCall = [...entry.toolCalls].reverse().find(t => t.tool === 'Skill' && !t.arg);
+              if (lastSkillCall) lastSkillCall.arg = slug;
+              bumpSkillUsage(slug);
+            }
+          } catch (e) { /* partial input: no slug, no count */ }
+          entry._pendingSkillArg = null;
         }
         if (entry._pendingToolArg && parsed.type === 'stream_event' && parsed.event?.type === 'content_block_delta' && parsed.event?.index === entry._pendingToolArg.blockIndex && parsed.event?.delta?.type === 'input_json_delta') {
           entry._pendingToolArg.inputJson += parsed.event.delta.partial_json;
@@ -2926,6 +3066,7 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
               agentCalls.push(JSON.parse(block.inputJson));
             } catch (e) {
               console.log(`[AgentIntercept] convo=${convoId} failed to parse Agent tool input: ${e.message}`);
+              recordEvent('marker_error', { conv: convoId, agent: entry.agentId, d: { kind: 'agent_tool_input' } });
             }
           }
           entry.pendingAgentTools = null;
@@ -2960,10 +3101,10 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
             if (entry.responseText) {
               const toolSummary = buildToolSummary(entry.toolCalls);
               const textWithTools = toolSummary ? toolSummary + '\n' + entry.responseText : entry.responseText;
-              appendTranscript(convoId, 'agent', entry.agentId, textWithTools);
+              appendTranscript(convoId, 'agent', entry.agentId, textWithTools, undefined, entry);
             } else {
               const toolSummary = buildToolSummary(entry.toolCalls);
-              appendTranscript(convoId, 'agent', entry.agentId, toolSummary, 'routing');
+              appendTranscript(convoId, 'agent', entry.agentId, toolSummary, 'routing', entry);
             }
             try { killProcessTree(entry.process, 'SIGKILL'); } catch (e) {}
             entry.exited = true;
@@ -3001,12 +3142,13 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
           const offRoster = offInput ? findOffRosterWorkspaceMatch(entry.agentId, offInput) : null;
           if (offRoster) {
             console.log(`[AgentIntercept] convo=${convoId} agent=${entry.agentId} blocking off-roster Agent tool target: ${offRoster.name}`);
+            recordEvent('delegation_error', { conv: convoId, agent: entry.agentId, d: { reason: 'off_roster_blocked' } });
             if (entry.responseText) {
               const toolSummary = buildToolSummary(entry.toolCalls);
               const textWithTools = toolSummary ? toolSummary + '\n' + entry.responseText : entry.responseText;
-              appendTranscript(convoId, 'agent', entry.agentId, textWithTools);
+              appendTranscript(convoId, 'agent', entry.agentId, textWithTools, undefined, entry);
             } else {
-              appendTranscript(convoId, 'agent', entry.agentId, buildToolSummary(entry.toolCalls), 'routing');
+              appendTranscript(convoId, 'agent', entry.agentId, buildToolSummary(entry.toolCalls), 'routing', entry);
             }
             try { killProcessTree(entry.process, 'SIGKILL'); } catch (e) {}
             entry.exited = true;
@@ -3115,6 +3257,10 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
     stdio: ['pipe', 'pipe', 'pipe']
   }, (err) => handleChatSpawnError(err, convoId));
 
+  recordEvent('handback', {
+    conv: convoId, agent: specialistEntry.agentId, runtime: specialistEntry.runtime || 'claude',
+    d: { kind: wasPipelineComplete ? 'complete' : 'return', to: orchestrator.id },
+  });
   const orchEntry = {
     process: proc, buffer: '', processId, agentId: orchestrator.id,
     responseText: '', exited: false, resultSent: false,
@@ -3154,6 +3300,7 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
     const resumeCount = incrementAutoResume(convoId);
     if (resumeCount >= MAX_CONSECUTIVE_AGENT_RESUMES) {
       console.log(`[CircuitBreaker] convo=${convoId} ${resumeCount} consecutive agent resumes in handleScopeReturn, pausing orchestrator`);
+          recordEvent('circuit_breaker', { conv: convoId, d: { count: resumeCount } });
       resetAutoResume(convoId);
       orchEntry.idle = true; orchEntry.idleSince = Date.now();
       safeSend(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: `[Auto-paused: ${resumeCount} consecutive agent handoffs without user input. Last specialist: ${specialistEntry.agentId}. Please review the output above and send your next message to continue.]` }, _agent: orchestrator.id, _conversationId: convoId }));
@@ -3185,7 +3332,7 @@ function handleScopeReturn(specialistEntry, convoId, wasPipelineComplete = false
       if (e.responseText && !isSilentParkResponse(e.responseText)) {
         const toolSummary = buildToolSummary(e.toolCalls);
         const textWithTools = toolSummary ? toolSummary + '\n' + e.responseText : e.responseText;
-        appendTranscript(convoId, 'agent', e.agentId, textWithTools);
+        appendTranscript(convoId, 'agent', e.agentId, textWithTools, undefined, e);
       }
       e.responseText = '';
       e.idle = true; e.idleSince = Date.now();
@@ -3262,7 +3409,7 @@ function spawnResumedProcess(convoId, agentId, sessionId, processes, opts = {}) 
       if (e.responseText && !isSilentParkResponse(e.responseText)) {
         const toolSummary = buildToolSummary(e.toolCalls);
         const textWithTools = toolSummary ? toolSummary + '\n' + e.responseText : e.responseText;
-        appendTranscript(convoId, 'agent', e.agentId, textWithTools);
+        appendTranscript(convoId, 'agent', e.agentId, textWithTools, undefined, e);
         if (e.deliveredTurns) e.deliveredTurns.push(e.responseText);
       }
       e.finalResponseText = e.responseText;
@@ -3317,6 +3464,7 @@ function handleDelegation(msg, processes) {
 
   // Prevent immediate re-delegation to the specialist that just scope-returned
   if (existing && existing.scopeReturnSource === targetAgent.id) {
+    recordEvent('delegation_error', { conv: convoId, agent: existing.agentId, d: { reason: 'loop_guard' } });
     console.log(`[ScopeReturn] convo=${convoId} preventing loop: ${targetAgent.id} just scope-returned`);
     const displayName = targetAgent.displayName || targetAgent.name;
     const orchestratorAgentId = isIntercepted ? (msg._parentAgentId || existing.agentId) : existing.agentId;
@@ -3401,6 +3549,7 @@ function handleDelegation(msg, processes) {
     '--agent', targetAgent.name];
 
   console.log(`[Delegate] convo=${convoId} from=${originalAgentId} to=${targetAgent.id} proc=${delegateProcessId} runtime=${targetAgent.runtime}${priorSessionId ? ` resume=${priorSessionId}` : ''}`);
+  recordEvent('delegation_start', { conv: convoId, agent: originalAgentId, runtime: targetAgent.runtime, d: { from: originalAgentId, to: targetAgent.id, intercepted: isIntercepted } });
 
   // Normalised for the codex path: thread resolution and prompt must agree
   // on whether this is a resume (see startCodexTurn for the identity-loss
@@ -3529,7 +3678,7 @@ function handleDelegation(msg, processes) {
       if (e.responseText) {
             const toolSummary = buildToolSummary(e.toolCalls);
             const textWithTools = toolSummary ? toolSummary + '\n' + e.responseText : e.responseText;
-            appendTranscript(convoId, 'agent', e.agentId, textWithTools);
+            appendTranscript(convoId, 'agent', e.agentId, textWithTools, undefined, e);
             // Accumulate before the reset: the reset is correct for per-turn
             // streaming, but the handback must carry every turn.
             e.deliveredTurns.push(e.responseText);
@@ -3594,6 +3743,20 @@ function handleDelegation(msg, processes) {
       return;
     }
 
+    // Signal layer: every delegate handback converges here for both runtimes
+    // (Claude via process close, Codex via onTurnDone). kind 'none' is a
+    // markerless exit; the tail scan mirrors the intercepted branch below
+    // without changing its behavior.
+    recordEvent('handback', {
+      conv: convoId, agent: delegateEntry.agentId, runtime: delegateEntry.runtime || 'claude',
+      d: {
+        kind: delegateEntry.returnMarkerSeen
+          || resolveMarkers(delegateEntry.finalResponseText || delegateEntry.responseText).mode
+          || 'none',
+        to: delegateEntry.delegation.originalAgentId,
+      },
+    });
+
     // Flush remaining buffer
     if (delegateEntry.buffer.trim()) {
       try {
@@ -3652,6 +3815,7 @@ function handleDelegation(msg, processes) {
           const resumeCount = incrementAutoResume(convoId);
           if (resumeCount >= MAX_CONSECUTIVE_AGENT_RESUMES) {
             console.log(`[CircuitBreaker] convo=${convoId} ${resumeCount} consecutive agent resumes, pausing orchestrator`);
+          recordEvent('circuit_breaker', { conv: convoId, d: { count: resumeCount } });
             resetAutoResume(convoId);
             safeSend(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: `[Auto-paused: ${resumeCount} consecutive agent handoffs without user input. Agents involved: ${delegateEntry.agentId} → ${orchestratorAgentId}. Please review the output above and send your next message to continue.]` }, _agent: orchestratorAgentId, _conversationId: convoId }));
           } else {
@@ -3749,6 +3913,7 @@ function handleDelegation(msg, processes) {
         const resumeCount = incrementAutoResume(convoId);
         if (resumeCount >= MAX_CONSECUTIVE_AGENT_RESUMES) {
           console.log(`[CircuitBreaker] convo=${convoId} ${resumeCount} consecutive agent resumes on parked-parent RETURN path, pausing`);
+          recordEvent('circuit_breaker', { conv: convoId, d: { count: resumeCount } });
           resetAutoResume(convoId);
           resumeEntry.idle = true; resumeEntry.idleSince = Date.now();
           safeSend(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: `[Auto-paused: ${resumeCount} consecutive agent handoffs without user input. Last specialist: ${delegateEntry.agentId}. Please review the output above and send your next message to continue.]` }, _agent: delegateEntry.delegation.originalAgentId, _conversationId: convoId }));
@@ -3795,7 +3960,7 @@ function handleDelegation(msg, processes) {
           if (e.responseText && !isSilentParkResponse(e.responseText)) {
             const toolSummary = buildToolSummary(e.toolCalls);
             const textWithTools = toolSummary ? toolSummary + '\n' + e.responseText : e.responseText;
-            appendTranscript(convoId, 'agent', e.agentId, textWithTools);
+            appendTranscript(convoId, 'agent', e.agentId, textWithTools, undefined, e);
             if (e.deliveredTurns) e.deliveredTurns.push(e.responseText);
           }
           // Mirror the delegate (~2673) and direct-start (~3134) paths:
@@ -3846,6 +4011,7 @@ function handleDelegation(msg, processes) {
         const resumeCount = incrementAutoResume(convoId);
         if (resumeCount >= MAX_CONSECUTIVE_AGENT_RESUMES) {
           console.log(`[CircuitBreaker] convo=${convoId} ${resumeCount} consecutive agent resumes on delegate return path, pausing`);
+          recordEvent('circuit_breaker', { conv: convoId, d: { count: resumeCount } });
           resetAutoResume(convoId);
           orig.idle = true; orig.idleSince = Date.now();
           safeSend(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: `[Auto-paused: ${resumeCount} consecutive agent handoffs without user input. Last specialist: ${delegateEntry.agentId}. Please review the output above and send your next message to continue.]` }, _agent: orig.agentId, _conversationId: convoId }));
@@ -4103,7 +4269,7 @@ wss.on('connection', (ws) => {
                 if (e.responseText) {
             const toolSummary = buildToolSummary(e.toolCalls);
             const textWithTools = toolSummary ? toolSummary + '\n' + e.responseText : e.responseText;
-            appendTranscript(convoId, 'agent', e.agentId, textWithTools);
+            appendTranscript(convoId, 'agent', e.agentId, textWithTools, undefined, e);
             if (e.deliveredTurns) e.deliveredTurns.push(e.responseText);
           }
                 e.responseText = '';
@@ -4276,6 +4442,7 @@ wss.on('connection', (ws) => {
             try { pending.onDecision(msg.allow === true, 'user'); } catch (e) { console.error('[Permission] onDecision threw:', e); }
           }
           console.log(`[Permission] convo=${msg.conversationId} requestId=${msg.requestId} decision=${msg.allow ? 'allow' : 'deny'}`);
+          recordEvent('permission', { conv: msg.conversationId, d: { tool: pending.toolName, decision: msg.allow ? 'allow' : 'deny' } });
         } else {
           console.warn(`[Permission] No pending request for requestId=${msg.requestId} (expired or already resolved)`);
         }
@@ -5651,6 +5818,7 @@ const recentSpawnErrors = new Map(); // convoId -> { code, ts }
 // identical errors per conversation, and mark the corresponding chatProcesses
 // entry so the close handler can skip its user-facing emissions.
 function handleChatSpawnError(err, convoId) {
+  recordEvent('delegation_error', { conv: convoId, d: { reason: 'spawn_failed' } });
   try {
     const entry = chatProcesses.get(convoId);
 
@@ -6058,6 +6226,7 @@ function sendCodexError(entry, convoId, message, kind) {
   entry.errorSent = true;
   const classified = codexRuntime.classifyCodexError(message);
   if (kind && kind !== 'unknown') classified.kind = kind;
+  recordEvent('runtime_error', { conv: convoId, agent: entry.agentId, runtime: 'codex', d: { class: classified.kind === 'quota' ? 'codex_quota' : 'codex_error' } });
   // Actionable failures (signed out, unavailable model) become guidance cards
   // with a concrete fix; quota keeps its dedicated card; everything else
   // surfaces verbatim as a classified error pill.
@@ -6088,7 +6257,7 @@ function sendCodexError(entry, convoId, message, kind) {
     friendly = 'This turn stopped: the runtime hit a problem.';
   }
   try {
-    appendTranscript(convoId, 'agent', entry.agentId, `${friendly}\nCodex: ${message}`);
+    appendTranscript(convoId, 'agent', entry.agentId, `${friendly}\nCodex: ${message}`, undefined, entry);
   } catch (e) { /* transcript persistence is best-effort */ }
   safeSend(JSON.stringify({
     type: 'system', subtype, detail: message, ...(guidance || {}),
@@ -6292,7 +6461,7 @@ function finishCodexTurn(entry, convoId) {
   if (entry.resultSent) return;
   entry.resultSent = true;
   const text = entry.responseText || '';
-  if (text) appendTranscript(convoId, 'agent', entry.agentId, text);
+  if (text) appendTranscript(convoId, 'agent', entry.agentId, text, undefined, entry);
   safeSend(JSON.stringify({
     type: 'result', result: text, is_error: false, usage: entry.usage,
     _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
@@ -6644,7 +6813,7 @@ function handleCodexDelegateEvent(entry, convoId, ev) {
         const markerMode = resolveMarkers(entry.responseText).mode;
         if (markerMode) entry.returnMarkerSeen = markerMode;
         const displayText = entry.responseText;
-        if (displayText) appendTranscript(convoId, 'agent', entry.agentId, displayText);
+        if (displayText) appendTranscript(convoId, 'agent', entry.agentId, displayText, undefined, entry);
         safeSend(JSON.stringify({
           type: 'result', result: displayText, is_error: false, usage: entry.usage || ev.usage,
           _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId,
@@ -7645,6 +7814,7 @@ module.exports._internal = {
   // markers + text helpers
   stripRundockMarkers, isSilentParkResponse, sanitizeSpecialistOutput,
   buildHandbackPayload, transcriptTurnsSince,
+  recordEvent, normalizeDocsGapTopic, bumpSkillUsage,
   extractSnippet, buildToolSummary, isAuthError, isModelError,
   // rosters + prompts
   findDirectReportMatch, findOffRosterWorkspaceMatch, buildTeamRoster, buildPeerRoster,
