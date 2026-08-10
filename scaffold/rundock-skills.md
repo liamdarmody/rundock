@@ -27,8 +27,9 @@ A good skill file has:
 - **File references:** Specific paths the skill reads from or writes to. Run `ls` if unsure what exists.
 - **Output format:** What the result should look like (structure, length, tone).
 - **Boundaries:** What the skill does NOT cover. Which other skill or agent handles adjacent requests.
+- **House style:** UK spelling throughout, and never any em dashes or en dashes.
 
-**Naming:** Slugs are lowercase with hyphens: `meeting-prep`, `weekly-digest`, `code-review`.
+**Naming:** Slugs are lowercase with hyphens: `meeting-prep`, `weekly-digest`, `code-review`. The slug in the marker must match this convention exactly.
 
 ### 3. Save the skill
 
@@ -106,14 +107,3 @@ Review all skills for quality and consistency.
 Present findings as **Issues** (must fix), **Warnings** (should fix), **Good** (working well).
 
 Offer to fix each issue. Output corrected skill files using the SAVE_SKILL marker, one at a time. For assignment issues, also update the relevant agent file using the SAVE_AGENT marker.
-
-## Quality checklist (for all operations)
-
-Before outputting any SAVE_SKILL marker, verify:
-- [ ] Skill has a clear, specific purpose
-- [ ] Instructions are step-by-step
-- [ ] File paths reference real workspace locations
-- [ ] Slug matches naming convention
-- [ ] No em dashes or en dashes
-- [ ] UK spelling throughout
-- [ ] Frontmatter includes name and description

@@ -33,7 +33,7 @@ Keep it concise. CLAUDE.md should be a quick reference, not a manual.
 
 Suggest the best-fit structure based on the workspace purpose:
 
-**PARA** (personal productivity, knowledge management):
+**PARA** (personal productivity, knowledge management; note the scaffold's default folders are a simple starting structure, not PARA, so offer this only when the user wants a named methodology):
 - `0 Inbox/`, `1 Projects/`, `2 Areas/`, `3 Resources/`, `4 Archive/`
 
 **Functional** (business or team workspaces):
