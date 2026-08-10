@@ -115,6 +115,7 @@ function buildEnvelopes(rule) {
   if (!initSent) { events.push(fx.init(SESSION_ID)); initSent = true; }
   let fullText = '';
   let toolIndex = 1;
+  let hadTool = false;
   for (const block of rule.turn || []) {
     if (block.text != null) {
       events.push(fx.contentBlockStartText());
@@ -125,14 +126,23 @@ function buildEnvelopes(rule) {
       events.push(fx.contentBlockStop());
       fullText += (fullText ? '\n' : '') + text;
     } else if (block.agentTool) {
+      hadTool = true;
       events.push(...fx.toolUseFlow('Agent', block.agentTool, toolIndex++));
     } else if (block.tool) {
+      hadTool = true;
       events.push(...fx.toolUseFlow(block.tool.name, block.tool.input || {}, toolIndex++));
     } else if (block.raw) {
       events.push(block.raw);
     }
   }
-  events.push(fx.assistantMessage(fullText));
+  // Faithful end-of-message shape: the real stream closes the message with
+  // message_delta + message_stop BEFORE any consolidated assistant envelope,
+  // and interactive turns may omit the assistant envelope entirely. A rule
+  // sets realStream: true to model that omission and pin code paths against
+  // the production shape.
+  events.push(fx.messageDelta(hadTool ? 'tool_use' : 'end_turn'));
+  events.push(fx.messageStop());
+  if (!rule.realStream) events.push(fx.assistantMessage(fullText));
   events.push(fx.result({ text: fullText, isError: !!rule.isError, sessionId: SESSION_ID }));
   return events;
 }

@@ -36,6 +36,20 @@ function inputJsonDelta(partialJson, index = 1) {
   return { type: 'stream_event', event: { type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: partialJson } } };
 }
 
+// End-of-message events. The REAL interactive stream closes every assistant
+// message with message_delta (stop_reason) then message_stop, and does NOT
+// reliably emit a consolidated `assistant` envelope before tool execution
+// begins. The 0.11.6 interception regression shipped because these events
+// were missing here: the stub's stream shape diverged from production, so
+// a decision point anchored on the assistant envelope passed every test and
+// never fired in real use.
+function messageDelta(stopReason = 'end_turn') {
+  return { type: 'stream_event', event: { type: 'message_delta', delta: { stop_reason: stopReason, stop_sequence: null }, usage: {} } };
+}
+function messageStop() {
+  return { type: 'stream_event', event: { type: 'message_stop' } };
+}
+
 // Full tool_use flow with the input JSON split into two deltas.
 function toolUseFlow(name, input, index = 1) {
   const json = JSON.stringify(input);
@@ -92,6 +106,6 @@ const MARKERS = {
 
 module.exports = {
   init, contentBlockStartText, textDelta, contentBlockStop,
-  toolUseStart, inputJsonDelta, toolUseFlow,
+  toolUseStart, inputJsonDelta, toolUseFlow, messageDelta, messageStop,
   assistantMessage, result, textTurn, toLines, MARKERS,
 };

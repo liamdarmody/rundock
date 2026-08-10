@@ -802,6 +802,82 @@ describe('roster refresh', () => {
 // expectation in a scenario rule's promptIncludes: a rule that fails to match
 // dies as an unrelated waitFor timeout with no expected-vs-actual, which is
 // precisely why this class of bug went unnoticed for three releases.
+describe('real-stream interception (0.11.6 regression)', () => {
+  test('interception fires on the real interactive stream shape: no consolidated assistant envelope', async () => {
+    // THE 0.11.6 LIVE INCIDENT, reproduced against a real model 2026-08-12:
+    // the interception decision was anchored on the consolidated `assistant`
+    // envelope, which the stub emitted but the real interactive stream does
+    // not (it closes messages with message_delta + message_stop and runs the
+    // tool). Result in production: every Agent tool call fell through to the
+    // runtime's native subagent, the caller narrated a fabricated success,
+    // and no delegation machinery ran, while 1,300 stub-shaped tests stayed
+    // green. realStream: true pins the production shape forever.
+    const convoId = h.freshConvoId('realstream-intercept');
+    h.clearInvocations();
+    h.writeScenario([
+      { match: { agent: 'chief-of-staff', promptIncludes: 'realstream delegation please' },
+        realStream: true,
+        turn: [
+          { text: 'Handing to Penn.' },
+          { agentTool: { subagent_type: 'content-lead', prompt: 'realstream brief for penn' } },
+        ] },
+      { match: { agent: 'content-lead', promptIncludes: 'realstream brief for penn' },
+        turn: [{ text: `Penn did the work. ${MARKERS.COMPLETE}` }] },
+    ]);
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'realstream delegation please' });
+    try {
+      await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
+        && m._conversationId === convoId && m.toAgent === 'content-lead',
+        { since, label: 'interception fires without an assistant envelope' });
+      const { msg } = await client.waitFor(m => m.type === 'result' && m._conversationId === convoId
+        && m._agent === 'content-lead', { since, label: 'Penn result' });
+      assert.ok(msg.result.includes('Penn did the work'), 'the delegate actually ran');
+    } finally {
+      h.reapConvo(convoId);
+    }
+  });
+
+  test('a mid-message assistant envelope before the block closes does not destroy the collection', async () => {
+    // The exact captured production sequence (CLI v2.1.226): the consolidated
+    // assistant envelope for a block arrives BETWEEN its input deltas and its
+    // content_block_stop. The 0.11.6 code treated that envelope as
+    // end-of-message, found the Agent block incomplete, and cleared the
+    // collection, so the real message_stop that followed had nothing to
+    // decide on. This test replays that sequence verbatim via raw events.
+    const convoId = h.freshConvoId('midmsg-envelope');
+    h.clearInvocations();
+    const input = JSON.stringify({ subagent_type: 'content-lead', prompt: 'midmsg brief for penn' });
+    const mid = Math.floor(input.length / 2);
+    const fx = require('../fixtures/stream-json.js');
+    h.writeScenario([
+      { match: { agent: 'chief-of-staff', promptIncludes: 'midmsg delegation please' },
+        realStream: true,
+        turn: [
+          { text: 'Handing to Penn.' },
+          { raw: fx.toolUseStart('Agent', 2) },
+          { raw: fx.inputJsonDelta(input.slice(0, mid), 2) },
+          { raw: fx.inputJsonDelta(input.slice(mid), 2) },
+          // The mid-message consolidated envelope, exactly where the real
+          // stream puts it: before the block's stop event.
+          { raw: fx.assistantMessage('Handing to Penn.') },
+          { raw: fx.contentBlockStop(2) },
+        ] },
+      { match: { agent: 'content-lead', promptIncludes: 'midmsg brief for penn' },
+        turn: [{ text: `Penn on it. ${MARKERS.COMPLETE}` }] },
+    ]);
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'midmsg delegation please' });
+    try {
+      await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch'
+        && m._conversationId === convoId && m.toAgent === 'content-lead',
+        { since, label: 'interception survives the mid-message envelope' });
+    } finally {
+      h.reapConvo(convoId);
+    }
+  });
+});
+
 describe('handback payload integrity', () => {
   test('a multi-turn delegate hands back every substantive turn, not just its sign-off', async () => {
     const convoId = h.freshConvoId('handback-multiturn');

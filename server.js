@@ -3054,11 +3054,29 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
         }
 
         // ── Agent tool interception: decision ──
-        // Runs at the end-of-message `assistant` envelope with every Agent
-        // block of the turn collected (see the collection block above), and
-        // AFTER text accumulation so the transcript entry written below
-        // carries the turn's full prose.
-        if (enableInterception && parsed.type === 'assistant' && entry.pendingAgentTools && entry.pendingAgentTools.length) {
+        // Runs at end of message with every Agent block of the turn
+        // collected (see the collection block above), and AFTER text
+        // accumulation so the transcript entry written below carries the
+        // turn's full prose.
+        //
+        // The trigger is the message_stop stream event, with the result
+        // envelope as a belt-and-braces fallback for any stream shape that
+        // ends a turn without one. It is NEVER the consolidated `assistant`
+        // envelope: the real interactive stream emits that envelope PER
+        // BLOCK, mid-message, BEFORE the block's content_block_stop
+        // (captured from a live CLI stream, v2.1.226, 2026-08-12). The
+        // 0.11.6 regression anchored the decision there: on real streams it
+        // fired while the Agent block was still incomplete, skipped it,
+        // cleared the collection, and every real delegation fell through to
+        // the runtime's native subagent, which then did teammate-shaped
+        // work invisibly while the caller narrated an invented success. The
+        // stub-shaped suite stayed green throughout because the stub only
+        // emitted the envelope at end of message. The stub now emits the
+        // real end-of-message events (message_delta + message_stop) and a
+        // realStream rule mode pins the exact production shape.
+        const messageEnded = (parsed.type === 'stream_event' && parsed.event?.type === 'message_stop')
+          || parsed.type === 'result';
+        if (enableInterception && messageEnded && entry.pendingAgentTools && entry.pendingAgentTools.length) {
           const agentCalls = [];
           for (const block of entry.pendingAgentTools) {
             if (!block.complete) continue; // never closed: stream ended mid-block
@@ -3127,7 +3145,7 @@ function wireProcessHandlers(entry, convoId, ws, options = {}) {
               _deferredTargets: deferredTargets.length ? deferredTargets : null
             }, chatProcesses);
             safeSend(JSON.stringify({ type: 'system', subtype: 'done', code: 0, _agent: entry.agentId, _conversationId: convoId, _processId: entry.processId }));
-            continue; // suppress the assistant envelope: agent_switch owns the client handoff
+            continue; // suppress this end-of-message envelope: agent_switch owns the client handoff
           }
 
           // Impersonation guard: an explicit subagent_type naming a
