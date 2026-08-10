@@ -400,6 +400,21 @@ describe('rosters and system prompt', () => {
     assert.ok(prompt.includes('Never invent Rundock settings'), 'the hallucination is named and forbidden');
   });
 
+  test('buildSystemPrompt: a lead with direct reports gets the sequential-delegation rule, same as the orchestrator', () => {
+    // Bug A1 (handback integrity spec): the 0.8.5 sequential rule was added
+    // inside the orchestrator branch only. An agent with direct reports takes
+    // the hasDirectReports branch, was never told, and promised the user
+    // parallel execution the engine cannot deliver ("I'll get Ana on the
+    // cadence question in parallel", conversation 2026-07-29).
+    useWorkspace({ agents: standardTeam() });
+    const agents = srv.discoverAgents();
+    const orch = srv.buildSystemPrompt(agents.find(a => a.id === 'chief-of-staff'));
+    const lead = srv.buildSystemPrompt(agents.find(a => a.id === 'content-lead'));
+    assert.ok(orch.includes('Delegation is sequential'), 'orchestrator wording unchanged');
+    assert.ok(lead.includes('Delegation is sequential'), 'lead with direct reports gets the rule');
+    assert.ok(lead.includes('"in parallel"'), 'the forbidden claim is named for leads');
+  });
+
   test('buildSystemPrompt: injects the concrete review-annotation handle instead of a derivation rule', () => {
     // Live finding: "by: <your agent name, lowercase>" parsed differently on
     // GPT-5 (it wrote its ROLE). The concrete handle is now injected.

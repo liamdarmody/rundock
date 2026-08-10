@@ -850,6 +850,10 @@ function buildSystemPrompt(agentData) {
       '- Do NOT narrate the delegation brief in visible chat. Do not describe what the team member will do, list the steps they will take, announce which files they will load, or refer to the user in third person. That belongs inside the Agent tool prompt.',
       '- Do NOT ask clarifying questions on the team member\'s behalf. Let them ask their own if needed.',
       '- Use your team member\'s actual name when handing off. Do not invent labels or role titles.',
+      // Bug A1 (handback integrity): the 0.8.5 sequential rule lived only in
+      // the orchestrator branch, so leads promised parallel work the engine
+      // cannot deliver ("I'll get Ana on the cadence question in parallel").
+      '- Delegation is sequential: one team member at a time. Do not tell the user you are running tasks "in parallel", "simultaneously", or "at the same time". You hand off to one team member, they complete their work, then you can hand off to the next.',
       '- Hand control back to the orchestrator using one of two markers, on its own line, as the very last thing in your response (after any final summary):',
       '  - <!-- RUNDOCK:RETURN --> when the user asks for something outside your domain entirely. Tell the user briefly you are handing them back, do not name other specialists, then emit the marker.',
       '  - <!-- RUNDOCK:COMPLETE --> when the orchestrator\'s original delegated pipeline is finished end-to-end. All deliverables are written to their final locations and the workflow has reached its final status (for example content moved to Ready for Review, spec written and linked, final audit posted). Post your final summary first, then emit the marker.',
