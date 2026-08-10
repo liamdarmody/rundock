@@ -4105,14 +4105,13 @@ wss.on('connection', (ws) => {
                 // Detect scope return on a directly-started specialist. Either marker
                 // triggers a handoff to the orchestrator; scopeReturnMode selects the
                 // downstream behaviour (routing request vs silent exit).
-                const hasOutOfScope = /<!-- RUNDOCK:RETURN -->/.test(e.responseText);
-                const hasComplete = /<!-- RUNDOCK:COMPLETE -->/.test(e.responseText);
-                if ((hasOutOfScope || hasComplete) && !e.delegation) {
+                const markers = resolveMarkers(e.responseText);
+                if (markers.mode && !e.delegation) {
                   e.scopeReturn = true;
-                  // COMPLETE takes priority when both markers are present, matching
-                  // every other path (delegate/resumed-parent). Previously inverted
-                  // to 'return' on both-markers here.
-                  e.scopeReturnMode = hasComplete ? 'complete' : 'return';
+                  // mode already applies COMPLETE-beats-RETURN precedence. This
+                  // is the site that once shipped with the precedence inverted,
+                  // which is why the rule now has exactly one implementation.
+                  e.scopeReturnMode = markers.mode;
                   console.log(`[ScopeReturn] convo=${convoId} agent=${e.agentId} ${e.scopeReturnMode} marker on non-delegated process`);
                   // Follow-up in-window cancels the auto-return; post-kill messages buffer.
                   scheduleScopeReturnKill(e, convoId);
