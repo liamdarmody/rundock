@@ -595,6 +595,51 @@ function validateAgentSlug(name) {
 // Flag all active orchestrator processes for roster refresh on next message.
 // Called after agent/skill CRUD so the orchestrator respawns with an updated team roster.
 // Uses chatProcesses (global Map declared later) via late binding.
+// Watch .claude/agents so EXTERNAL edits (an editor, git, a sync client)
+// reach live processes the same way in-app CRUD does. Without this, a hand
+// edit updates discovery (2s cache TTL: chart, sidebar, matcher) but a
+// long-lived agent process keeps its stale prompt roster until it happens to
+// respawn.
+//
+// A self-owned POLLER, not fs.watch: event-based watching is exactly the
+// seam where the live-refresh data-loss bug lived (0.11.5: fs.watchFile's
+// async baseline could swallow a change forever) and fs.watch delivery
+// differs across platforms and Node versions (its event form failed on CI
+// Node 22 while passing on 24). A 2s signature poll over a directory of a
+// dozen small files is deterministic everywhere and matches the agent
+// cache's own TTL. In-app CRUD still flags directly; the poller firing
+// behind it is idempotent.
+const AGENTS_WATCH_POLL_MS = 2000;
+let _agentsWatchTimer = null;
+let _agentsDirSig = null;
+function agentsDirSignature(dir) {
+  try {
+    let sig = '';
+    for (const f of fs.readdirSync(dir).sort()) {
+      if (!f.endsWith('.md')) continue;
+      try { sig += f + ':' + fs.statSync(path.join(dir, f)).mtimeMs + ';'; } catch (e) { /* file vanished mid-scan */ }
+    }
+    return sig;
+  } catch (e) {
+    return null; // directory missing: a later appearance counts as a change
+  }
+}
+function armAgentsDirWatcher() {
+  if (_agentsWatchTimer) { clearInterval(_agentsWatchTimer); _agentsWatchTimer = null; }
+  if (!WORKSPACE) return;
+  const dir = path.join(WORKSPACE, '.claude', 'agents');
+  _agentsDirSig = agentsDirSignature(dir);
+  _agentsWatchTimer = setInterval(() => {
+    const sig = agentsDirSignature(dir);
+    if (sig === _agentsDirSig) return;
+    _agentsDirSig = sig;
+    invalidateAgentCache();
+    flagRosterRefresh();
+    console.log('[Roster] agents directory changed on disk; live orchestrators flagged');
+  }, AGENTS_WATCH_POLL_MS);
+  if (_agentsWatchTimer.unref) _agentsWatchTimer.unref();
+}
+
 function flagRosterRefresh() {
   if (typeof chatProcesses === 'undefined') return;
   const agentList = discoverAgents();
@@ -694,7 +739,15 @@ function findDirectReportMatch(agentId, toolInput) {
     a.status === 'onTeam' && a.id !== agentId && (
       a.reportsTo === agentId ||
       a.reportsTo === leader?.name ||
-      (isOrchestrator && a.type === 'platform')
+      (isOrchestrator && a.type === 'platform') ||
+      // One membership rule: an onTeam, non-platform agent with NO reportsTo
+      // belongs to the orchestrator. The org chart and buildTeamRoster have
+      // always applied this fallback; the matcher lacking it meant the
+      // orchestrator's own prompt roster offered agents this function then
+      // refused, and the off-roster guard blocked the delegation the system
+      // prompt instructed (live incident, 2026-08-12: the user was told to
+      // route through a leader that does not exist).
+      (isOrchestrator && !a.reportsTo && a.type !== 'platform')
     )
   );
   if (directReports.length === 0) return null;
@@ -766,7 +819,10 @@ function findOffRosterWorkspaceMatch(agentId, toolInput) {
   const isDirectReport =
     match.reportsTo === agentId ||
     match.reportsTo === leader?.name ||
-    (isOrchestrator && match.type === 'platform');
+    (isOrchestrator && match.type === 'platform') ||
+    // Keep this mirror in lockstep with findDirectReportMatch: the guard must
+    // never block an agent the roster offered.
+    (isOrchestrator && !match.reportsTo && match.type !== 'platform');
   return isDirectReport ? null : match;
 }
 
@@ -4603,6 +4659,7 @@ wss.on('connection', (ws) => {
           const startup = phaseTimer();
           killAllChildren();
           WORKSPACE = dir;
+          armAgentsDirWatcher();
           // Before anything reads state that may have come from another path.
           healWorkspaceIfMoved(dir);
           // A workspace switch (including re-selecting the same one) is the
@@ -4701,6 +4758,7 @@ wss.on('connection', (ws) => {
             // Kill all running processes when creating/switching workspace
             killAllChildren();
             WORKSPACE = dir;
+            armAgentsDirWatcher();
             loadRoutineState();
             saveRecentWorkspace(dir);
 
@@ -7761,6 +7819,7 @@ async function runUniversalSearch(msg) {
 // ===== START =====
 
 function startServer(options = {}) {
+  armAgentsDirWatcher();
   const port = options.port != null ? options.port : PORT;
   return new Promise((resolve) => {
     server.listen(port, () => {
@@ -7820,7 +7879,7 @@ module.exports = { startServer };
 // tests can point the module-level WORKSPACE at a temp fixture directory.
 module.exports._internal = {
   // workspace pointer (test fixture wiring only)
-  setWorkspace(dir) { WORKSPACE = dir; invalidateAgentCache(); },
+  setWorkspace(dir) { WORKSPACE = dir; invalidateAgentCache(); armAgentsDirWatcher(); },
   getWorkspace() { return WORKSPACE; },
   // scheduler
   getNextRun, executeRoutine, routineState,

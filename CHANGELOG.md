@@ -19,6 +19,9 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Fixed
 
+- **Agents the org chart shows on your team are now actually delegable:** an agent file without a `reportsTo` line was displayed under your orchestrator and listed in its own team roster, but the delegation engine refused the handoff and told the orchestrator to route through a leader that did not exist. One membership rule now governs the chart, the roster, and the delegation engine together.
+- **Editing agent files outside Rundock now reaches running agents:** hand edits (your editor, git, a sync client) update the sidebar and chart within seconds, and live agents now pick up the new roster on their next message instead of holding a stale one until they happened to restart.
+- **Reopening a conversation where Doc created agents no longer shows raw file internals:** the first paint of a reopened conversation rendered the agent file's frontmatter as message text; it now renders exactly like the live view did.
 - **A specialist's handback now carries everything it produced, not just its sign-off:** when a specialist worked across several messages and then handed back, the agent who delegated received only the final message, so a full analysis could arrive as a one-line goodbye and you ended up copying the real work across by hand. The handback now includes every message from the delegation, and if it is ever too long to pass whole, the receiving agent is told exactly what was trimmed and where to read the rest.
 - **Agents no longer claim to run work "in parallel" they cannot run:** delegation runs one specialist at a time, but team leads were never told, so they promised simultaneous work that quietly never happened. Leads now know the rule, and when one turn tries to hand work to several specialists at once, the extra handoffs are queued and named instead of silently vanishing: the lead is told exactly which ones still need sequencing.
 

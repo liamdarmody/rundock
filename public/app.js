@@ -924,7 +924,8 @@ const EFFECT_EXECUTORS = {
     if (!convo) return;
     convo.messages.push({ role: 'agent', content: ef.text, agentId: ef.agentId, timestamp: new Date().toISOString() });
     convo.lastAgentId = ef.agentId;
-    convo.lastMessagePreview = stripMd(ef.text).substring(0, 80);
+    // Markers stripped first or a Doc turn's preview reads "<!-- RUNDOCK:SA...".
+    convo.lastMessagePreview = stripMd(stripRundockMarkers(ef.text || '')).trim().substring(0, 80);
   },
   'mark-unread': (convoId) => {
     unread.markMessage(convoId);
@@ -2869,7 +2870,11 @@ function renderSessionHistory(d) {
       const ht = msg.timestamp ? new Date(msg.timestamp) : null;
       const htStr = ht && !isNaN(ht.getTime()) ? ht.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '';
       const htSpan = htStr ? `<span class="msg-time">${htStr}</span>` : '';
-      div.innerHTML = `<div class="msg-sender" style="color:${msgAgent?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${msgAgent?.colour||'var(--accent)'}">${msgAgent?.icon||'?'}</div> ${msgAgent?.displayName||'Agent'}${htSpan}</div><div class="msg-bubble">${formatMd(msg.content)}</div>`;
+      // Strip RUNDOCK markers before rendering: the stored copy below strips
+      // them (line ~2906), but this first-paint fragment rendered the raw
+      // wire text, so a rehydrated Doc turn leaked its SAVE_AGENT payload as
+      // visible frontmatter until the user navigated away and back.
+      div.innerHTML = `<div class="msg-sender" style="color:${msgAgent?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${msgAgent?.colour||'var(--accent)'}">${msgAgent?.icon||'?'}</div> ${msgAgent?.displayName||'Agent'}${htSpan}</div><div class="msg-bubble">${formatMd(stripRundockMarkers(msg.content || '').trim())}</div>`;
     }
     frag.appendChild(div);
   }

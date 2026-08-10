@@ -53,6 +53,10 @@ const RULES = [
   { label: 'private workspace content reference', re: /\b(vault|private workspace) (conversation|transcript|note|entry)\b/i },
   { label: 'workspace conversation id', re: /\bconversation 1[0-9]{12}\b/i },
   { label: 'internal process phrase', re: /adversarial (sweep|review round)|handoff file per run|completion report per run/i },
+  // Board vocabulary (priority/size markers) is planning language, not public
+  // language. Narrow by construction: parenthesised or hash-tagged forms only,
+  // never a bare token like p1, which appears legitimately in code.
+  { label: 'internal priority/size marker', re: /\((?:p[0-3])\)|#priority\/p[0-3]|#size\/(?:xs|s|m|l|xl)\b|\bsize `?(?:xs|m|l|xl)`?, priority\b/ },
   // An external tool named as the JUSTIFICATION for a design choice. Naming
   // formats we interoperate with describes the system and belongs in the code;
   // naming a tool as authority describes how the decision was reached, which is

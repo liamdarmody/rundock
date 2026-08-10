@@ -15,7 +15,8 @@
     "release": "node scripts/release.js",
     "test:e2e": "playwright test",
     "check:refs": "node scripts/check-internal-refs.js",
-    "screenshots": "node scripts/screenshots/run.mjs"
+    "screenshots": "node scripts/screenshots/run.mjs",
+    "smoke": "node scripts/smoke/run.mjs"
   },
   "dependencies": {
     "electron-updater": "^6.8.9",
@@ -47,6 +48,7 @@
       "public/**/*",
       "scaffold/**/*",
       "scripts/**/*",
+      "!scripts/smoke/**",
       "!scripts/screenshots/**",
       "!scripts/update-harness/**",
       "node_modules/**/*",
