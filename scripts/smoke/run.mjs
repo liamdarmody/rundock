@@ -137,6 +137,10 @@ async function sendInNewConversation(text) {
   await page.click('#send-btn');
 }
 
+// Stub-scripted steps only make sense with the stub on PATH: live mode has
+// no scenario file, so the sentinels would never arrive. Live mode runs
+// boot, the real-model delegation, and the artifact contracts.
+if (!LIVE) {
 // ── S1: direct turn ─────────────────────────────────────────────────────
 await sendInNewConversation('SMOKE-S1 direct turn please');
 const s1 = await waitFor(() => page.locator('.msg-bubble', { hasText: 'SMOKE-S1-REPLY' }).count().then(c => c > 0));
@@ -193,8 +197,10 @@ record('S5 clicking Allow resolves the hook request', !!(highResult && highResul
 const s5ev = readEvents(workspace).some(e => e.e === 'permission' && e.d && e.d.decision === 'allow');
 record('S5 permission event recorded', s5ev);
 
+}
+
 // ── S6: the events log is skinny ────────────────────────────────────────
-const leak = readEvents(workspace).some(e => JSON.stringify(e).includes('SMOKE-S1 direct turn'));
+const leak = readEvents(workspace).some(e => /SMOKE-S1 direct turn|draft a one-line reply/i.test(JSON.stringify(e)));
 record('S6 events log carries structure, never message content', !leak);
 
 // ── LIVE (optional): one real-model delegation turn ─────────────────────
