@@ -18,3 +18,6 @@ playwright-report/
 screenshots-out/
 # Local, private banned-token overrides for the sanitization gate (never committed)
 scripts/screenshots/.banned-tokens.json
+
+# Release gate record (per-machine, references a local SHA)
+.release-gate.json

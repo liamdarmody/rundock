@@ -4,6 +4,14 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** Foundations
+
+### Changed
+
+- **Releases are validated before they exist:** every release candidate now passes a full gauntlet (the complete test suite with coverage, end-to-end browser tests, the release smoke including a real-model run, packaging, and internal-reference hygiene) before its version tag can be created, and publishing is a single verified command. You see this as fewer, better-tested releases rather than a new button, and it is the first piece of a release built on stronger foundations.
+
 ## 0.11.6: Team Integrity (2026-08-11)
 
 > **Updating from 0.11.5:** this is the first release delivered by the new updater. Rundock shows the download with real progress in the sidebar, then asks before restarting: Restart now installs immediately, Later keeps a quiet reminder.
