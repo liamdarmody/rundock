@@ -5176,7 +5176,11 @@ wss.on('connection', (ws) => {
             }
           }
           fs.writeFileSync(filePath, content, 'utf-8');
-          // Send updated agent list
+          // Invalidate before rediscovering: the roster cache was populated
+          // at the top of this handler, so without this the agents message
+          // would answer with the recruit still order-less and the client
+          // would not show the join until a later refresh.
+          invalidateAgentCache();
           ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents() }));
         }
       }
