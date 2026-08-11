@@ -8014,7 +8014,7 @@ module.exports._internal = {
   parseSessionHistory, getSessionJsonlPath,
   // spawn plumbing
   wireProcessHandlers, handleDelegation, handleScopeReturn,
-  handleChatSpawnError, resolveClaudeBin, spawnClaude,
+  handleChatSpawnError, resolveClaudeBin, spawnClaude, killProcessTree,
   getBareArgs, getSpawnEnv, getDisallowedTools, getPermissionMode,
   getAllowedToolsInteractive, getAllowedToolsLegacy, modelArgs,
   killAllChildren, cleanOrphanedProcesses, loadPidFile, savePidFile, pidRecordAlive, processCommand,
