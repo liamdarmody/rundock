@@ -86,6 +86,13 @@ describe('static + JSON endpoints', () => {
     assert.ok(tree.find(e => e.name === 'notes.md'));
   });
 
+  test('/favicon.svg is served as svg', async () => {
+    const res = await get('/favicon.svg');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.headers.get('content-type'), 'image/svg+xml');
+    assert.ok(res.body.includes('<svg'), 'svg body served');
+  });
+
   test('unknown route is 404', async () => {
     const res = await get('/definitely-not-a-route');
     assert.strictEqual(res.status, 404);
@@ -199,6 +206,22 @@ describe('permission bridge', () => {
     const res = await pending;
     assert.strictEqual(res.status, 200);
     assert.deepStrictEqual(JSON.parse(res.body), { allow: true });
+  });
+
+  test('an unattributable request (no conversation_id, unmatched session) still raises a card', async () => {
+    // L10: a request with no conversation_id and a session id no live process
+    // owns cannot be attributed. It must NOT be pinned to whatever
+    // conversation is on screen; it is logged, and the card goes out with an
+    // empty conversation so the user can still answer it.
+    const since = client.messages.length;
+    const pending = postJson('/api/permission-request', {
+      tool_name: 'Bash', tool_input: { command: 'true' }, session_id: 'sess-nobody-owns',
+    });
+    const { msg: card } = await client.waitFor(m => m.type === 'control_request', { since, label: 'unattributed card' });
+    assert.strictEqual(card._conversationId, '', 'never misattributed to an open conversation');
+    client.send({ type: 'permission_response', requestId: card.request_id, allow: false, conversationId: '' });
+    const res = await pending;
+    assert.deepStrictEqual(JSON.parse(res.body), { allow: false });
   });
 
   test('deny resolves with {allow:false}', async () => {

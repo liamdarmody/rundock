@@ -54,9 +54,14 @@ const AREA_DEFS = [
   ['server.js', 'System prompt + roster builders', /^function buildSystemPrompt\(/, /^\/\/ ===== AGENT DISCOVERY =====/],
   ['server.js', 'Workspace analysis (Seven Signals)', /^function analyzeWorkspace\(/, /^function muteHooks\(/],
   ['server.js', 'Workspace mode detection + scaffolding', /^function muteHooks\(/, /^const server = http\.createServer/],
-  ['server.js', 'Transcripts + persistence helpers', /^function loadTranscript\(/, /^function safeSend\(/],
-  ['server.js', 'Conversation / state persistence', /^function readConversations\(/, /^function readState\(/],
-  ['server.js', 'HTTP request router (incl. permission bridge)', /^const server = http\.createServer/, /^function loadTranscript\(/],
+  // Slice 1 migrations: these two areas moved to lib/store/ and keep their
+  // floors under the same labels; the interim root area covers what the move
+  // left behind (signal layer + the appendTranscript/formatTranscript
+  // composition) until the signals slice gives it a permanent home.
+  ['lib/store/transcripts.js', 'Transcripts + persistence helpers', /^function transcriptDir\(/, /^module\.exports/],
+  ['lib/store/persistence.js', 'Conversation / state persistence', /^function rundockDir\(/, /^module\.exports/],
+  ['server.js', 'Signals + transcript composition (root remainder)', /^const EVENTS_RETENTION_MONTHS/, /^function safeSend\(/],
+  ['server.js', 'HTTP request router (incl. permission bridge)', /^const server = http\.createServer/, /^\/\/ Transcript primitives \(convoTranscripts cache/],
   ['server.js', 'WebSocket message handlers', /^wss\.on\('connection'/, /^function discoverSkills\(/],
   ['server.js', 'Spawn plumbing (spawnClaude, resolveClaudeBin, errors)', /^function resolveClaudeBin\(/, /^\/\/ ===== CODEX RUNTIME =====/],
   ['server.js', 'Codex runtime (status, turns, delegate wiring)', /^\/\/ ===== CODEX RUNTIME =====/, /^\/\/ Graceful shutdown/],
@@ -66,6 +71,7 @@ const AREA_DEFS = [
 const OVERALL_FILES = [
   'server.js', 'codex.js', 'codex-appserver.js', 'search.js',
   'lib/delegation/markers.js', 'lib/delegation/handback.js', 'lib/delegation/state.js',
+  'lib/config.js', 'lib/store/persistence.js', 'lib/store/transcripts.js',
 ];
 
 // ---------------------------------------------------------------------------
