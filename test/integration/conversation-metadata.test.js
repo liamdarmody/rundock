@@ -179,13 +179,10 @@ describe('add_to_team', () => {
     assert.match(content, new RegExp(`^type: specialist\\norder: ${expectedOrder}$`, 'm'),
       'order written directly after the type field');
 
-    // CHARACTERISED GAP (carded): the agents message answered here is built
-    // from the roster cache populated at the top of the same handler, so it
-    // still reports the recruit as order-less. The client only sees the real
-    // order on a later roster refresh. Pinned as-is; the fix flips this
-    // assertion to `5`.
+    // The agents message answers with the FRESH roster: the recruit's new
+    // order is on the wire immediately, not deferred to a later refresh.
     const doc = res.agents.find(a => a.id === 'doc');
-    assert.strictEqual(doc.order, null);
+    assert.strictEqual(doc.order, expectedOrder);
   });
 });
 
