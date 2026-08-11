@@ -22,6 +22,15 @@ const { resolveMarkers } = require('./lib/delegation/markers.js');
 const { createHandbackBuilder } = require('./lib/delegation/handback.js');
 const { createDelegationRecord, attachDelegationRecord } = require('./lib/delegation/state.js');
 const config = require('./lib/config.js');
+const {
+  rundockDir, readConversations, writeConversations,
+  readLists, writeLists, deleteListEverywhere,
+  readState, writeState,
+} = require('./lib/store/persistence.js');
+const {
+  convoTranscripts, transcriptDir,
+  loadTranscript, saveTranscript, buildToolSummary,
+} = require('./lib/store/transcripts.js');
 
 const PORT = process.env.PORT || 3000;
 let ACTUAL_PORT = PORT; // Updated after server.listen() with the real listening port
@@ -235,95 +244,8 @@ function saveRecentWorkspace(dir) {
   fs.writeFileSync(RECENT_FILE, JSON.stringify(recent.slice(0, 10), null, 2));
 }
 
-// Rundock session persistence (.rundock/ in workspace root)
-function rundockDir() { return path.join(WORKSPACE, '.rundock'); }
-
-function readConversations() {
-  try {
-    const file = path.join(rundockDir(), 'conversations.json');
-    const list = JSON.parse(fs.readFileSync(file, 'utf-8'));
-    // One-time migration: status: 'done' -> status: 'archived'. The UI renamed
-    // Done to Archive; the data model follows so the rest of the code can
-    // assume 'archived' without a backwards-compat fallback. Idempotent:
-    // already-migrated workspaces hit no writes and no log lines.
-    let migrated = 0;
-    for (const c of list) {
-      if (c.status === 'done') {
-        c.status = 'archived';
-        migrated++;
-      }
-    }
-    if (migrated > 0) {
-      try {
-        // Snapshot the pre-migration file once before the first write so a
-        // manual recovery path exists if anything later goes wrong. Skips on
-        // every subsequent migration attempt since the backup is preserved.
-        const backupPath = file + '.pre-archive-backup';
-        if (!fs.existsSync(backupPath)) {
-          fs.copyFileSync(file, backupPath);
-        }
-        writeConversations(list);
-        console.log(`[migrate] conversations.json: ${migrated} done -> archived`);
-      } catch (err) {
-        // Migration is safe to retry: the in-memory list is already migrated
-        // for this session, and the next workspace open will attempt the
-        // write again. Do not throw; the rest of read should still return.
-        console.error('[migrate] persist failed:', err && err.message ? err.message : err);
-      }
-    }
-    return list;
-  } catch (e) { return []; }
-}
-
-function writeConversations(list) {
-  const dir = rundockDir();
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'conversations.json'), JSON.stringify(list, null, 2));
-}
-
-// Conversation lists (user-named, many-to-many groupings shown as sidebar
-// pills). The registry lives in .rundock/lists.json; membership lives on each
-// conversation entry (listIds) so it rides the existing conversation
-// persistence. Deleting a list removes the registry entry and strips the id
-// from every conversation, never touching the conversations themselves.
-function readLists() {
-  try {
-    const list = JSON.parse(fs.readFileSync(path.join(rundockDir(), 'lists.json'), 'utf-8'));
-    return Array.isArray(list) ? list.filter(l => l && typeof l.id === 'string' && typeof l.name === 'string') : [];
-  } catch (e) { return []; }
-}
-
-function writeLists(lists) {
-  const dir = rundockDir();
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'lists.json'), JSON.stringify(lists, null, 2));
-}
-
-function deleteListEverywhere(listId) {
-  writeLists(readLists().filter(l => l.id !== listId));
-  const convos = readConversations();
-  let changed = false;
-  for (const c of convos) {
-    if (Array.isArray(c.listIds) && c.listIds.includes(listId)) {
-      c.listIds = c.listIds.filter(id => id !== listId);
-      changed = true;
-    }
-  }
-  if (changed) writeConversations(convos);
-}
-
-function readState() {
-  try {
-    const file = path.join(rundockDir(), 'state.json');
-    return JSON.parse(fs.readFileSync(file, 'utf-8'));
-  } catch (e) { return {}; }
-}
-
-function writeState(state) {
-  const dir = rundockDir();
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify(state, null, 2));
-}
+// Session persistence (.rundock/ conversations, lists, state) lives in
+// lib/store/persistence.js.
 
 // Search helper: extract a snippet around the query match
 function extractSnippet(text, query, contextChars = 60) {
@@ -2606,7 +2528,6 @@ const wss = new WebSocketServer({
 
 // Module-level process tracking: survives WebSocket reconnects
 const chatProcesses = new Map(); // conversationId -> { process, buffer, processId, agentId, responseText }
-const convoTranscripts = new Map(); // conversationId -> [{ role: 'user'|'agent', agent: string, text: string }]
 
 // Circuit breaker: consecutive agent auto-resume events with no user message.
 // Prevents infinite delegation loops (e.g. orchestrator -> specialist -> orchestrator -> specialist ...).
@@ -2625,100 +2546,9 @@ function resetAutoResume(convoId) {
 const connectedClients = new Set(); // All active WebSocket connections
 const disconnectBuffer = []; // Messages queued while no clients are connected
 
-// Conversation transcript helpers
-function transcriptDir() { return path.join(rundockDir(), 'transcripts'); }
-
-// Best-effort recovery of a corrupt (e.g. truncated) transcript JSON array.
-// A transcript file is normally overwritten wholesale on the next append, so a
-// mid-write truncation that JSON.parse rejects must NOT be masked as an empty
-// array: doing so lets the next append clobber the file and silently wipe all
-// prior history. This salvages as much history as possible instead.
-// Attempt 1 balances any string/brackets left open by the truncation; attempt
-// 2 keeps only the complete leading objects. Returns [] only if nothing at all
-// can be recovered.
-function recoverTranscriptData(raw) {
-  if (typeof raw !== 'string' || raw.trim() === '') return [];
-  const stack = [];
-  let inString = false, escaped = false, lastCompleteObjEnd = -1;
-  for (let i = 0; i < raw.length; i++) {
-    const ch = raw[i];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (ch === '\\') escaped = true;
-      else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') inString = true;
-    else if (ch === '{' || ch === '[') stack.push(ch);
-    else if (ch === '}' || ch === ']') {
-      stack.pop();
-      // A complete top-level object just closed (only the outer array remains).
-      if (ch === '}' && stack.length === 1 && stack[0] === '[') lastCompleteObjEnd = i;
-    }
-  }
-  let patched = raw;
-  if (inString) patched += '"';
-  for (let i = stack.length - 1; i >= 0; i--) patched += stack[i] === '{' ? '}' : ']';
-  try {
-    const data = JSON.parse(patched);
-    if (Array.isArray(data)) return data;
-  } catch { /* fall through to complete-object salvage */ }
-  if (lastCompleteObjEnd >= 0) {
-    try {
-      const data = JSON.parse(raw.slice(0, lastCompleteObjEnd + 1) + ']');
-      if (Array.isArray(data)) return data;
-    } catch { /* nothing recoverable */ }
-  }
-  return [];
-}
-
-function loadTranscript(convoId) {
-  if (convoTranscripts.has(convoId)) return convoTranscripts.get(convoId);
-  const file = path.join(transcriptDir(), `${convoId}.json`);
-  let raw;
-  try {
-    raw = fs.readFileSync(file, 'utf-8');
-  } catch (e) {
-    // File absent (or otherwise unreadable): legitimately empty history.
-    const empty = [];
-    convoTranscripts.set(convoId, empty);
-    return empty;
-  }
-  try {
-    const data = JSON.parse(raw);
-    convoTranscripts.set(convoId, data);
-    return data;
-  } catch (e) {
-    // File exists but is corrupt. Salvage rather than mask as empty, so the
-    // next append does not overwrite recoverable history.
-    const recovered = recoverTranscriptData(raw);
-    convoTranscripts.set(convoId, recovered);
-    return recovered;
-  }
-}
-
-function saveTranscript(convoId) {
-  if (!WORKSPACE) return;
-  const transcript = convoTranscripts.get(convoId);
-  if (!transcript) return;
-  const dir = transcriptDir();
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, `${convoId}.json`), JSON.stringify(transcript, null, 2));
-}
-
-function buildToolSummary(toolCalls) {
-  if (!toolCalls || toolCalls.length === 0) return '';
-  const seen = new Set();
-  const parts = [];
-  for (const tc of toolCalls) {
-    const key = tc.arg ? `${tc.tool}: ${tc.arg}` : tc.tool;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    parts.push(tc.arg ? `[${tc.tool} ${tc.arg}]` : `[${tc.tool}]`);
-    if (parts.length >= 10) break;
-  }
-  return parts.join(' ');
-}
+// Transcript primitives (convoTranscripts cache, load/save/salvage,
+// buildToolSummary) live in lib/store/transcripts.js. appendTranscript
+// below composes them with the signal layer and the search reconcile.
 
 // ── Signal layer (Build A) ─────────────────────────────────────────────────
 // Local, append-only, skinny events at server-layer convergence points, so
