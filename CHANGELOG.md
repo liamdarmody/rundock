@@ -4,7 +4,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## 0.11.6: Team Integrity (2026-08-13)
+## 0.11.6: Team Integrity (2026-08-11)
 
 > **Updating from 0.11.5:** this is the first release delivered by the new updater. Rundock shows the download with real progress in the sidebar, then asks before restarting: Restart now installs immediately, Later keeps a quiet reminder.
 
