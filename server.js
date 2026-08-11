@@ -6474,7 +6474,7 @@ module.exports._internal = {
   setWorkspace(dir) { setWorkspaceRoot(dir); invalidateAgentCache(); armAgentsDirWatcher(); },
   getWorkspace() { return WORKSPACE; },
   // scheduler
-  getNextRun, executeRoutine, routineState,
+  getNextRun, executeRoutine, routineState, startScheduler,
   loadRoutineState, saveRoutineState, recordRoutineRun,
   // agent + skill discovery / parsing
   discoverAgents, invalidateAgentCache, discoverSkills, parseSkillFile,

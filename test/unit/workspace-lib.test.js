@@ -55,6 +55,18 @@ describe('lib/workspace module seams', () => {
     assert.deepStrictEqual(boundary.readBoundaryGrants(), [], 'grants never leak across workspaces');
   });
 
+  test('a grant that cannot persist warns and leaves state unchanged', () => {
+    // .rundock exists as a FILE, so creating the permissions path fails; the
+    // grant writer must swallow the error (a broken workspace never crashes
+    // the permission flow) and grant nothing.
+    const dir = makeWorkspace({});
+    fs.writeFileSync(path.join(dir, '.rundock'), 'not a directory');
+    srv.setWorkspace(dir);
+    boundary.addBoundaryGrant(path.join(dir, 'somewhere'));
+    assert.deepStrictEqual(boundary.readBoundaryGrants(), [], 'no grant was recorded');
+    assert.strictEqual(boundary.boundaryGrantCovers(path.join(dir, 'somewhere')), false);
+  });
+
   test('analysis reads skill files through the injected parseSkillFile', () => {
     const dir = makeWorkspace({ skills: { 'my-skill': '---\nname: My Skill\n---\nreal body' } });
     const prev = analysis.wireAnalysisDeps({
