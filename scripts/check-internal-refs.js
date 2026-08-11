@@ -57,6 +57,11 @@ const RULES = [
   // language. Narrow by construction: parenthesised or hash-tagged forms only,
   // never a bare token like p1, which appears legitimately in code.
   { label: 'internal priority/size marker', re: /\((?:p[0-3])\)|#priority\/p[0-3]|#size\/(?:xs|s|m|l|xl)\b|\bsize `?(?:xs|m|l|xl)`?, priority\b/ },
+  // Internal programme phase names are planning language too. "Phase" alone
+  // is a legitimate English word; the internal form is Phase + a bare
+  // letter/digit token (with or without a joining colon or dash). One leak
+  // shipped in a merge commit before this rule existed.
+  { label: 'internal programme phase name (e.g. Phase 0, Phase S)', re: /\bPhase[ -](?:[0-9]|[A-Z])\b(?![a-z])/ },
   // An external tool named as the JUSTIFICATION for a design choice. Naming
   // formats we interoperate with describes the system and belongs in the code;
   // naming a tool as authority describes how the decision was reached, which is

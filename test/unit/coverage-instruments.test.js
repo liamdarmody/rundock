@@ -1,6 +1,6 @@
 'use strict';
-// Phase 0 instruments: the coverage tool becomes an enforcement gate, and the
-// packaged-contents gate learns to see nested requires.
+// Instrument before moving: the coverage tool becomes an enforcement gate,
+// and the packaged-contents gate learns to see nested requires.
 //
 // Why: the decomposition programme moves code out of server.js into lib/.
 // Three instruments must hold through every move or the programme flies
