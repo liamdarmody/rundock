@@ -10,7 +10,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Changed
 
-- **Releases are validated before they exist:** every release candidate now passes a full gauntlet (the complete test suite with coverage, end-to-end browser tests, the release smoke including a real-model run, packaging, and internal-reference hygiene) before its version tag can be created, and publishing is a single verified command. You see this as fewer, better-tested releases rather than a new button, and it is the first piece of a release built on stronger foundations.
+- **Releases are validated before they exist:** every release candidate now passes a full gauntlet (the complete test suite with coverage, end-to-end browser tests, the release smoke including a real-model run, scripted user journeys for first-run onboarding and vault imports, type checking, packaging, and internal-reference hygiene) before its version tag can be created, and publishing is a single verified command. You see this as fewer, better-tested releases rather than a new button, and it is the first piece of a release built on stronger foundations.
 
 ## 0.11.6: Team Integrity (2026-08-11)
 

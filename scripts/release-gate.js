@@ -98,9 +98,14 @@ function buildSteps(live) {
     { name: 'suite+coverage', cmd: ['npm', ['run', 'test:coverage']] },
     { name: 'e2e', cmd: ['npm', ['run', 'test:e2e']] },
     { name: 'smoke (stub)', cmd: ['npm', ['run', 'smoke']] },
+    // User-shaped journeys with disk-verified evals: the onboarding road a
+    // new user actually walks, and the structured vault that must never be
+    // scaffolded over. Persona failures block the cut like any other step.
+    { name: 'personas (stub)', cmd: ['npm', ['run', 'smoke:personas']] },
   ];
   if (live) {
     steps.push({ name: 'smoke (live)', cmd: ['npm', ['run', 'smoke', '--', '--live']] });
+    steps.push({ name: 'personas (live)', cmd: ['npm', ['run', 'smoke:personas', '--', '--live']] });
   }
   // Unsigned unpacked build + real boot check: exercises electron-builder
   // config, the afterPack require-guard, and the packaged binary actually
