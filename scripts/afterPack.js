@@ -9,6 +9,16 @@
 
 const { execSync } = require('child_process');
 
+// Every local module the server requires, as repo-relative paths. The
+// character class includes `/`: until it did, `require('./lib/...')` paths
+// were invisible to the packaged-contents gate, so the lib/ modules the
+// decomposition programme creates were silently unprotected.
+function extractLocalRequires(src) {
+  return [...src.matchAll(/require\('\.\/([\w/-]+\.js)'\)/g)].map(m => m[1]);
+}
+
+exports.extractLocalRequires = extractLocalRequires;
+
 exports.default = async function afterPack(context) {
   // Packaged-contents gate (all platforms). The 0.10.0 macOS build shipped
   // without codex.js because the build.files whitelist was never updated
@@ -20,7 +30,7 @@ exports.default = async function afterPack(context) {
   const path = require('path');
   const asar = require(require.resolve('@electron/asar', { paths: [require.resolve('electron-builder')] }));
   const serverSrc = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf-8');
-  const required = [...serverSrc.matchAll(/require\('\.\/([\w-]+\.js)'\)/g)].map(m => m[1]);
+  const required = extractLocalRequires(serverSrc);
   const resourcesDir = process.platform === 'darwin'
     ? `${context.appOutDir}/${context.packager.appInfo.productFilename}.app/Contents/Resources`
     : `${context.appOutDir}/resources`;
