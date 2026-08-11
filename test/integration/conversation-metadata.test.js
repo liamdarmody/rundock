@@ -165,12 +165,19 @@ describe('add_to_team', () => {
     // invalidation (in production, the agents-dir watcher's next poll).
     h.internal.invalidateAgentCache();
 
+    // The recruit joins at max(existing orders) + 1 across the WHOLE roster,
+    // platform agent included (the scaffolded guide holds a deliberately high
+    // order so it sits last, and recruits land after it).
+    const roster = await request({ type: 'get_agents' }, m => m.type === 'agents', 'roster before add');
+    const expectedOrder = Math.max(0, ...roster.agents.filter(a => a.order !== null).map(a => a.order)) + 1;
+
     const res = await request({ type: 'add_to_team', agentId: 'doc' }, m => m.type === 'agents', 'agents after add');
 
-    // Disk is the source of truth and is correct immediately: standardTeam
-    // occupies orders 1-4, so the recruit takes 5, written after `type:`.
+    // Disk is the source of truth and is correct immediately, written after
+    // the `type:` field.
     const content = fs.readFileSync(path.join(agentsDir, 'doc.md'), 'utf-8');
-    assert.match(content, /^type: specialist\norder: 5$/m, 'order written directly after the type field');
+    assert.match(content, new RegExp(`^type: specialist\\norder: ${expectedOrder}$`, 'm'),
+      'order written directly after the type field');
 
     // CHARACTERISED GAP (carded): the agents message answered here is built
     // from the roster cache populated at the top of the same handler, so it
