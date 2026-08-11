@@ -1110,8 +1110,15 @@ function discoverAgents() {
         const bodyMatch = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?([\s\S]*)/);
         let instructions = bodyMatch ? bodyMatch[1].trim() : '';
 
-        // If this is the default agent, merge instructions from CLAUDE.md
-        if (isDefault && fs.existsSync(claudeMdPath)) {
+        // Default agent: CLAUDE.md fills in ONLY when the agent file has no
+        // body of its own. The old code REPLACED the authored body outright,
+        // so every scaffolded order-0 orchestrator showed workspace
+        // boilerplate as its instructions and none of the file Doc wrote
+        // (found in 0.11.6 pre-publish testing: the profile appeared "cut
+        // off" exactly at CLAUDE.md's last line). The runtime is unaffected
+        // either way: it loads the agent file and CLAUDE.md separately; this
+        // field feeds the profile and the roster self-descriptions.
+        if (isDefault && !instructions.trim() && fs.existsSync(claudeMdPath)) {
           instructions = readNormalisedFile(claudeMdPath).substring(0, AGENT_INSTRUCTIONS_MAX);
         }
 
