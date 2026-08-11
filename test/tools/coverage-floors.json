@@ -1,0 +1,30 @@
+{
+  "generatedAt": "2026-08-11T14:33:06.952Z",
+  "commit": "975317db49f412aaf6b3c15cf668432df142d01c",
+  "tolerance": 0.25,
+  "floors": {
+    "OVERALL server.js": 88.9,
+    "OVERALL codex.js": 100,
+    "OVERALL codex-appserver.js": 94.2,
+    "OVERALL search.js": 98.4,
+    "OVERALL lib/delegation/markers.js": 100,
+    "OVERALL lib/delegation/handback.js": 100,
+    "OVERALL lib/delegation/state.js": 100,
+    "Delegation / orchestration engine": 90.5,
+    "- wireProcessHandlers (stream-json + interception)": 100,
+    "- handleScopeReturn": 87.3,
+    "- handleDelegation": 86.7,
+    "Scheduler (getNextRun + startScheduler + executeRoutine)": 89.9,
+    "Agent discovery + frontmatter parsing": 98.9,
+    "Skill discovery": 98.5,
+    "System prompt + roster builders": 98.9,
+    "Workspace analysis (Seven Signals)": 97.3,
+    "Workspace mode detection + scaffolding": 96.9,
+    "Transcripts + persistence helpers": 99,
+    "Conversation / state persistence": 100,
+    "HTTP request router (incl. permission bridge)": 97,
+    "WebSocket message handlers": 70.9,
+    "Spawn plumbing (spawnClaude, resolveClaudeBin, errors)": 74.3,
+    "Codex runtime (status, turns, delegate wiring)": 89
+  }
+}

@@ -66,6 +66,32 @@ jobs:
       - name: Run tests
         run: npm test
 
+  # Coverage floors: the suite runs WITH coverage and the per-area floors in
+  # test/tools/coverage-floors.json are enforced. Deleting a covered test, or
+  # moving code without carrying its area definition, fails here. Floors
+  # ratchet up, never down (--write-floors refuses to lower one).
+  coverage:
+    name: Coverage floors
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install runtime dependencies
+        run: npm ci --omit=dev
+
+      - name: Install test-only DOM dependency
+        run: npm install --no-save jsdom@29.1.1
+
+      - name: Run suite with coverage and enforce floors
+        run: npm run test:coverage
+
   # E2E smoke suite (browser-driven, Playwright). Protects the client layer
   # the Node suite cannot observe: named regression tests for the two
   # escaped bugs (anchor re-flash, nav-state desync) plus palette golden
