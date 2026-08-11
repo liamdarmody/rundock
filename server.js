@@ -87,7 +87,9 @@ const ALLOWED_TOOLS_LEGACY_BASE = 'Bash,WebFetch,WebSearch';
 // an explicit --model (see modelArgs + spawnClaude) keeps model selection
 // predictable instead of inheriting whatever Claude Code resolves from the user's
 // environment (e.g. a Pro subscription resolving the invalid model name "pro").
-const DEFAULT_MODEL = 'sonnet';
+// The value itself lives in lib/config.js so lib/agents/discovery.js resolves
+// the same default without reaching back into the root.
+const { DEFAULT_MODEL } = config;
 function modelArgs(agent) {
   return ['--model', (agent && agent.model) || DEFAULT_MODEL];
 }
