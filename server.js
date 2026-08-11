@@ -21,10 +21,19 @@ const { resolvePermissionConvoId } = require('./permission-routing.js');
 const { resolveMarkers } = require('./lib/delegation/markers.js');
 const { createHandbackBuilder } = require('./lib/delegation/handback.js');
 const { createDelegationRecord, attachDelegationRecord } = require('./lib/delegation/state.js');
+const config = require('./lib/config.js');
 
 const PORT = process.env.PORT || 3000;
 let ACTUAL_PORT = PORT; // Updated after server.listen() with the real listening port
-let WORKSPACE = process.env.WORKSPACE || null;
+// WORKSPACE mirrors lib/config's workspace root during the decomposition:
+// this file's remaining read sites use the local variable, while extracted
+// lib/ modules read config.getWorkspace() at use time. EVERY assignment must
+// go through setWorkspaceRoot so the two can never drift.
+let WORKSPACE = config.getWorkspace();
+function setWorkspaceRoot(dir) {
+  WORKSPACE = dir;
+  config.setWorkspace(dir);
+}
 
 // Workspace boundary check. A bare `startsWith(resolve(WORKSPACE))`
 // lets a SIBLING directory sharing the name prefix pass (e.g. `<ws>-backup`
@@ -4732,7 +4741,7 @@ wss.on('connection', (ws) => {
         // Clear stale workspace pointer if the directory no longer exists
         if (WORKSPACE && !fs.existsSync(WORKSPACE)) {
           console.log(`[Workspace] Current workspace no longer exists: ${WORKSPACE}`);
-          WORKSPACE = null;
+          setWorkspaceRoot(null);
         }
         const wsData = {
           type: 'workspaces',
@@ -4769,7 +4778,7 @@ wss.on('connection', (ws) => {
           // Kill all running processes when switching workspace
           const startup = phaseTimer();
           killAllChildren();
-          WORKSPACE = dir;
+          setWorkspaceRoot(dir);
           armAgentsDirWatcher();
           // Before anything reads state that may have come from another path.
           healWorkspaceIfMoved(dir);
@@ -4868,7 +4877,7 @@ wss.on('connection', (ws) => {
             fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
             // Kill all running processes when creating/switching workspace
             killAllChildren();
-            WORKSPACE = dir;
+            setWorkspaceRoot(dir);
             armAgentsDirWatcher();
             loadRoutineState();
             saveRecentWorkspace(dir);
@@ -7951,7 +7960,7 @@ function startServer(options = {}) {
       console.log(`\n  Rundock running at http://localhost:${actualPort}`);
       if (WORKSPACE && !fs.existsSync(WORKSPACE)) {
         console.log(`  Workspace no longer exists: ${WORKSPACE}`);
-        WORKSPACE = null;
+        setWorkspaceRoot(null);
       }
       if (WORKSPACE) {
         loadRoutineState();
@@ -7988,7 +7997,7 @@ module.exports = { startServer };
 // tests can point the module-level WORKSPACE at a temp fixture directory.
 module.exports._internal = {
   // workspace pointer (test fixture wiring only)
-  setWorkspace(dir) { WORKSPACE = dir; invalidateAgentCache(); armAgentsDirWatcher(); },
+  setWorkspace(dir) { setWorkspaceRoot(dir); invalidateAgentCache(); armAgentsDirWatcher(); },
   getWorkspace() { return WORKSPACE; },
   // scheduler
   getNextRun, executeRoutine, routineState,
