@@ -97,9 +97,11 @@ function buildSteps(live) {
   if (live) {
     steps.push({ name: 'smoke (live)', cmd: ['npm', ['run', 'smoke', '--', '--live']] });
   }
-  // Unpacked build: exercises electron-builder config and the afterPack
-  // require-guard without producing installers.
-  steps.push({ name: 'packaging (unpacked)', cmd: ['node', ['scripts/build.js', '--dir']] });
+  // Unsigned unpacked build + real boot check: exercises electron-builder
+  // config, the afterPack require-guard, and the packaged binary actually
+  // starting. Signing stays the publish jobs' concern (and local codesign
+  // fails on xattr detritus anyway; proven 2026-08-11).
+  steps.push({ name: 'packaging (unpacked+boot)', cmd: ['node', ['scripts/smoke-packaged.mjs']] });
   return steps;
 }
 
@@ -150,7 +152,10 @@ async function runGate({ root = ROOT, live = true, exec = defaultExec, log = con
     try {
       exec(step.cmd[0], step.cmd[1]);
     } catch (err) {
-      return finish(false, `step "${step.name}" failed: ${err.message}`);
+      // execFileSync attaches the captured stdout; surface its tail so a
+      // failing step diagnoses itself instead of saying "Command failed".
+      const tail = err.stdout ? `\n--- last output ---\n${String(err.stdout).split('\n').slice(-25).join('\n')}` : '';
+      return finish(false, `step "${step.name}" failed: ${err.message}${tail}`);
     }
     const seconds = Math.round((Date.now() - stepStart) / 100) / 10;
     timings.push({ name: step.name, seconds });
