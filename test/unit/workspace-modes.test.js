@@ -158,7 +158,7 @@ describe('scaffoldWorkspace', () => {
 
     const settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf-8'));
     const matchers = settings.hooks.PreToolUse.map(e => e.matcher);
-    assert.deepStrictEqual(matchers.sort(), ['Bash', 'PowerShell', 'mcp__.*']);
+    assert.deepStrictEqual(matchers.sort(), ['Bash', 'PowerShell', 'Read|Write|Edit|MultiEdit|NotebookEdit|Glob|Grep', 'mcp__.*']);
     // launcher script exists and points at the permission hook
     const launcher = path.join(dir, '.rundock', 'permission-hook.sh');
     assert.ok(fs.existsSync(launcher));
@@ -190,7 +190,7 @@ describe('scaffoldWorkspace', () => {
     srv.scaffoldWorkspace(dir);
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
     const matchers = settings.hooks.PreToolUse.map(e => e.matcher);
-    assert.deepStrictEqual(matchers.sort(), ['Bash', 'PowerShell', 'mcp__.*']);
+    assert.deepStrictEqual(matchers.sort(), ['Bash', 'PowerShell', 'Read|Write|Edit|MultiEdit|NotebookEdit|Glob|Grep', 'mcp__.*']);
     for (const e of settings.hooks.PreToolUse) {
       assert.ok(!e.hooks[0].command.includes('/old/'), 'stale path rewritten');
     }
@@ -243,7 +243,7 @@ describe('scaffoldWorkspace', () => {
     srv.scaffoldWorkspace(dir, { platform: 'win32' });
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
     const matchers = settings.hooks.PreToolUse.map(e => e.matcher);
-    assert.deepStrictEqual(matchers.sort(), ['Bash', 'PowerShell', 'mcp__.*']);
+    assert.deepStrictEqual(matchers.sort(), ['Bash', 'PowerShell', 'Read|Write|Edit|MultiEdit|NotebookEdit|Glob|Grep', 'mcp__.*']);
     for (const e of settings.hooks.PreToolUse) {
       assert.strictEqual(e.hooks[0].command, `& "${launcher}"`);
       assert.strictEqual(e.hooks[0].shell, 'powershell', `${e.matcher} entry migrated to the pinned form`);

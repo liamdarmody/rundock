@@ -197,6 +197,47 @@ record('S5 clicking Allow resolves the hook request', !!(highResult && highResul
 const s5ev = readEvents(workspace).some(e => e.e === 'permission' && e.d && e.d.decision === 'allow');
 record('S5 permission event recorded', s5ev);
 
+
+// ── S7: the workspace boundary, incident replay through the real card ───
+// The real PreToolUse hook binary is invoked exactly as the runtime invokes
+// it, targeting a folder OUTSIDE the workspace. The card must appear, the
+// "Always allow this folder" click must resolve the hook with allow and
+// persist a per-workspace grant, and the second access must be silent.
+{
+  const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'smoke-outside-'));
+  const activeConvo = await page.evaluate(() => (window.activeConversation && window.activeConversation.id) || '');
+  const hookPath = path.join(ROOT, 'scripts', 'permission-hook.js');
+  const runHook = (toolInput) => new Promise((resolve) => {
+    const proc = spawn(process.execPath, [hookPath], {
+      cwd: workspace,
+      env: { ...env, RUNDOCK: '1', RUNDOCK_PORT: String(PORT), RUNDOCK_CONVO_ID: activeConvo, RUNDOCK_WORKSPACE: workspace },
+      stdio: ['pipe', 'pipe', 'ignore'],
+    });
+    let out = '';
+    proc.stdout.on('data', d => { out += d; });
+    proc.on('close', () => { try { resolve(JSON.parse(out)); } catch { resolve(null); } });
+    proc.stdin.write(JSON.stringify({ tool_name: 'Write', tool_input: toolInput, session_id: 'smoke-boundary' }));
+    proc.stdin.end();
+  });
+
+  const insideOut = await runHook({ file_path: path.join(workspace, 'inside.md'), content: 'x' });
+  record('S7 in-workspace write allowed instantly by the hook',
+    !!(insideOut && insideOut.hookSpecificOutput && insideOut.hookSpecificOutput.permissionDecision === 'allow'));
+
+  const pendingOutside = runHook({ file_path: path.join(outsideDir, 'export.md'), content: 'x' });
+  const folderBtn = await waitFor(() => page.locator('button', { hasText: 'Always allow this folder' }).first().isVisible().catch(() => false), 15000);
+  record('S7 outside-workspace write produces the boundary card', !!folderBtn);
+  if (folderBtn) await page.locator('button', { hasText: 'Always allow this folder' }).first().click();
+  const outsideOut = await Promise.race([pendingOutside, new Promise(r => setTimeout(() => r(null), 15000))]);
+  record('S7 folder approval resolves the hook with allow',
+    !!(outsideOut && outsideOut.hookSpecificOutput && outsideOut.hookSpecificOutput.permissionDecision === 'allow'));
+  const grantsFile = path.join(workspace, '.rundock', 'permissions.json');
+  const granted = fs.existsSync(grantsFile) && JSON.parse(fs.readFileSync(grantsFile, 'utf8')).allowedDirs.includes(outsideDir);
+  record('S7 grant persisted into the workspace, folder-level', granted);
+  const secondOut = await runHook({ file_path: path.join(outsideDir, 'export-two.md'), content: 'y' });
+  record('S7 granted folder allows silently on the next access',
+    !!(secondOut && secondOut.hookSpecificOutput && secondOut.hookSpecificOutput.permissionDecision === 'allow'));
+}
 }
 
 // ── S6: the events log is skinny ────────────────────────────────────────
