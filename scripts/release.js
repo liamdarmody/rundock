@@ -27,6 +27,8 @@ const { execFileSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
+const { GATE_FILE_NAME, readGateRecord } = require('./release-gate.js');
+
 const ROOT = path.join(__dirname, '..');
 const REPO = 'liamdarmody/rundock';
 
@@ -95,6 +97,83 @@ function preflight(version) {
   if (git(['tag', '-l', tag]).trim()) {
     fail('preflight', `Tag ${tag} already exists locally. Choose a new version or delete the tag.`);
   }
+}
+
+// The tag refuses to move without a gate pass on the exact current SHA.
+// The gate record (`.release-gate.json`) is written only by a fully green
+// `npm run release:gate` on a clean tree; a record for any other SHA, or one
+// gated without live smoke, is refused. Throws so it is unit-testable; the
+// main flow converts to fail().
+function requireGatePass(headSha, { root = ROOT } = {}) {
+  const record = readGateRecord(root);
+  if (!record || !record.sha) {
+    throw new Error(
+      `No release gate pass found (${GATE_FILE_NAME} missing or unreadable). ` +
+      `Run "npm run release:gate" on this candidate first; the tag refuses to move without it.`
+    );
+  }
+  if (record.sha !== headSha) {
+    throw new Error(
+      `The release gate passed on ${record.sha} but HEAD is ${headSha}. ` +
+      `Every commit invalidates the gate. Re-run "npm run release:gate" on the current candidate.`
+    );
+  }
+  if (!record.live) {
+    throw new Error(
+      `The gate on ${record.sha} ran without live smoke (--no-live). ` +
+      `Releases require the full gauntlet: re-run "npm run release:gate" without flags.`
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Publish subcommand
+// ---------------------------------------------------------------------------
+
+// Default GitHub API transport via the gh CLI. `api(method, path, body)`.
+function ghApi(method, apiPath, body) {
+  const args = ['api', '-X', method, apiPath];
+  if (body) {
+    for (const [key, value] of Object.entries(body)) {
+      // -F preserves JSON types (booleans stay booleans); -f would send strings.
+      args.push('-F', `${key}=${JSON.stringify(value)}`);
+    }
+  }
+  const out = execFileSync('gh', args, { cwd: ROOT, encoding: 'utf8' });
+  return out ? JSON.parse(out) : {};
+}
+
+// Publish the draft release for `version`, binding the tag BEFORE flipping
+// the draft flag. The 0.11.6 lesson mechanised: after a recut deletes a tag,
+// the draft's tag_name falls back to `untagged-*`, and publishing in that
+// state binds the release to the junk tag permanently. Order is the fix:
+// PATCH tag_name, VERIFY it stuck, only then PATCH draft=false.
+function publishRelease(version, { api = ghApi, log = (msg) => console.log(`[release:publish] ${msg}`) } = {}) {
+  const tag = `v${version}`;
+  const releases = api('GET', `repos/${REPO}/releases`);
+  const draft = (releases || []).find(r => r.draft && (
+    r.tag_name === tag || (r.name && r.name.startsWith(`${version}:`))
+  ));
+  if (!draft) {
+    throw new Error(
+      `No draft release found for ${version} (looked for tag_name ${tag} or a name starting "${version}:"). ` +
+      `Has the CI build finished and produced its draft?`
+    );
+  }
+
+  log(`Found draft ${draft.id} "${draft.name}" (tag_name currently "${draft.tag_name}")`);
+  const bound = api('PATCH', `repos/${REPO}/releases/${draft.id}`, { tag_name: tag });
+  if (!bound || bound.tag_name !== tag) {
+    throw new Error(
+      `Binding the tag failed: asked for tag_name ${tag}, release reports "${bound && bound.tag_name}". ` +
+      `Draft left untouched (still a draft); nothing was published.`
+    );
+  }
+  log(`Tag bound: ${tag}`);
+
+  const published = api('PATCH', `repos/${REPO}/releases/${draft.id}`, { draft: false });
+  log(`Published: ${published.html_url || `release ${draft.id}`}`);
+  return { id: draft.id, tag, url: published.html_url };
 }
 
 function setVersion(version) {
@@ -202,18 +281,43 @@ function commitTagPush(version) {
 // Guarded so the changelog helpers are requireable (by tests and by
 // scripts/release-notes.js) without starting a release.
 if (require.main === module) {
-  const version = getVersion();
-  preflight(version);
-  setVersion(version);
-  promoteUnreleasedChangelog(version);
-  commitTagPush(version);
+  if (process.argv[2] === 'publish') {
+    // npm run release -- publish <version>
+    // Publishes the reviewed draft, binding the tag before the draft flip.
+    const version = process.argv[3];
+    if (!version || !/^\d+\.\d+\.\d+$/.test(version)) {
+      fail('publish', 'Usage: npm run release -- publish <version> (e.g. npm run release -- publish 0.11.7)');
+    }
+    try {
+      const result = publishRelease(version);
+      console.log('');
+      log('done', `v${version} is live: ${result.url || `https://github.com/${REPO}/releases`}`);
+      log('done', 'Site download links resolve via /releases/latest; no bump needed.');
+    } catch (err) {
+      fail('publish', err.message);
+    }
+  } else {
+    const version = getVersion();
+    preflight(version);
+    // The gate governs the SHA being tagged: check it BEFORE the version-bump
+    // commit is created (that commit only adds package.json + CHANGELOG.md on
+    // top of the gated code).
+    try {
+      requireGatePass(git(['rev-parse', 'HEAD']).trim());
+    } catch (err) {
+      fail('gate', err.message);
+    }
+    setVersion(version);
+    promoteUnreleasedChangelog(version);
+    commitTagPush(version);
 
-  console.log('');
-  log('done', `Tagged v${version}. GitHub Actions is now building, signing, notarising, and publishing a DRAFT release.`);
-  log('done', `Watch the build:   https://github.com/${REPO}/actions`);
-  log('done', `Review + publish:  https://github.com/${REPO}/releases`);
-  log('done', `Then bump the Rundock Site download links to v${version}.`);
-  log('done', `If CI fails (e.g. expired Apple agreement): fix it and re-run the workflow on tag v${version}: no need to revert main.`);
+    console.log('');
+    log('done', `Tagged v${version}. GitHub Actions is now building, signing, notarising, and publishing a DRAFT release.`);
+    log('done', `Watch the build:   https://github.com/${REPO}/actions`);
+    log('done', `Review the draft:  https://github.com/${REPO}/releases`);
+    log('done', `Then publish with: npm run release -- publish ${version}  (binds the tag before flipping the draft flag)`);
+    log('done', `If CI fails (e.g. expired Apple agreement): fix it and re-run the workflow on tag v${version}: no need to revert main.`);
+  }
 }
 
-module.exports = { extractChangelogEntry, promoteUnreleasedChangelog };
+module.exports = { extractChangelogEntry, promoteUnreleasedChangelog, requireGatePass, publishRelease };

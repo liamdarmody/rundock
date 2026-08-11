@@ -18,11 +18,17 @@
 
 import { spawn, execFileSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
-const DIST = join(ROOT, 'dist');
+// The throwaway build lands OUTSIDE the repo tree on purpose: a repo under a
+// file-provider-synced folder (iCloud Documents) gets extended attributes
+// re-applied by the sync daemon faster than afterPack can strip them, and
+// codesign then fails on "detritus not allowed". A temp path is out of the
+// provider's reach, and this build is disposable by definition.
+const DIST = join(tmpdir(), 'rundock-smoke-packaged');
 const MARKER = '[Electron] Smoke test OK';
 const BOOT_TIMEOUT_MS = 120000;
 
@@ -53,12 +59,33 @@ function findBinary() {
 
 if (!skipBuild) {
   const target = process.platform === 'win32' ? '--win' : process.platform === 'darwin' ? '--mac' : '--linux';
-  console.log(`smoke-packaged: building unpacked app (electron-builder ${target} --dir)`);
-  execFileSync('npx', ['electron-builder', target, '--dir'], { cwd: ROOT, stdio: 'inherit' });
+  console.log(`smoke-packaged: building unpacked app (electron-builder ${target} --dir, unsigned)`);
+  // Signing is the publish jobs' concern, explicitly: on a dev Mac with a
+  // Developer ID cert in the keychain, electron-builder's identity
+  // auto-discovery would try to codesign this throwaway build (and fails on
+  // local xattr detritus). This gate answers one question only: does the app
+  // that packaging produces actually start?
+  execFileSync('npx', ['electron-builder', target, '--dir', `-c.directories.output=${DIST}`], {
+    cwd: ROOT,
+    stdio: 'inherit',
+    env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: 'false' },
+  });
 }
 
 const bin = findBinary();
 if (!bin) fail(`no packaged binary found under ${DIST}. Build first or drop --skip-build.`);
+
+// Apple Silicon refuses to map a framework whose Team ID differs from the
+// process. electron-builder's unsigned fallback signs the outer app ad-hoc
+// but leaves the Electron Framework on its upstream signature, so the boot
+// dies in dyld before main() runs. One deep ad-hoc pass makes every Mach-O
+// in the throwaway bundle consistent; the real releases never hit this
+// because CI deep-signs with the Developer ID.
+if (process.platform === 'darwin') {
+  const app = resolve(bin, '..', '..', '..');
+  console.log('smoke-packaged: deep ad-hoc re-sign for a consistent throwaway bundle');
+  execFileSync('codesign', ['--force', '--deep', '--sign', '-', app], { stdio: 'inherit' });
+}
 
 console.log(`smoke-packaged: launching ${bin}`);
 const child = spawn(bin, [], {

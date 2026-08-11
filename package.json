@@ -12,6 +12,7 @@
     "electron": "electron .",
     "build:mac": "electron-builder --mac",
     "dist": "node scripts/build.js",
+    "release:gate": "node scripts/release-gate.js",
     "release": "node scripts/release.js",
     "test:e2e": "playwright test",
     "check:refs": "node scripts/check-internal-refs.js",

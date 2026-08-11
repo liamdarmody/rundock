@@ -18,6 +18,18 @@ try {
 let mainWindow = null;
 let serverPort = null;
 
+// ===== SMOKE MODE ISOLATION =====
+
+// The packaged-boot check (scripts/smoke-packaged.mjs) must not contend with
+// a real running Rundock: the single-instance lock is keyed on userData, so
+// without this a smoke run on a machine where Rundock is open loses the lock
+// and exits 0 silently, before any boot code runs. A disposable userData,
+// set BEFORE the lock is requested, gives smoke runs their own lock scope
+// and keeps them from ever touching the user's real state.
+if (process.env.RUNDOCK_SMOKE_TEST === '1') {
+  app.setPath('userData', path.join(require('os').tmpdir(), 'rundock-smoke-userdata'));
+}
+
 // ===== SINGLE INSTANCE =====
 
 const gotLock = app.requestSingleInstanceLock();
