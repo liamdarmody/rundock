@@ -137,7 +137,7 @@ function getBareArgs() {
 
 // Returns spawn env with workspace mode flag for the permission hook.
 function getSpawnEnv(convoId) {
-  const env = { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(ACTUAL_PORT) };
+  const env = { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(ACTUAL_PORT), RUNDOCK_WORKSPACE: WORKSPACE || '' };
   if (convoId) env.RUNDOCK_CONVO_ID = convoId;
   // Never let spawned agent processes inherit the test runner's coverage
   // collection: a child killed mid-turn (e.g. a superseded Codex exec)
@@ -160,6 +160,46 @@ function getSpawnEnv(convoId) {
 // Pending permission requests from PreToolUse hooks (keyed by requestId).
 // Each entry holds the HTTP response object so we can resolve it when the user decides.
 const pendingPermissionRequests = new Map();
+
+// ── Workspace boundary grants ──────────────────────────────────────────────
+// Standing folder-level permissions for file access OUTSIDE the workspace.
+// Spec: anything outside the workspace requires a permission card unless a
+// standing per-workspace grant covers it; grants are folder-level, never
+// machine-wide. Encoded INTO the workspace (.rundock/permissions.json) so
+// they are long-term, travel with the workspace, and apply with no browser
+// attached. A grant covers its subtree. The card's "Always allow this
+// folder" button is the only writer.
+function boundaryPermissionsPath() {
+  return WORKSPACE ? path.join(WORKSPACE, '.rundock', 'permissions.json') : null;
+}
+function readBoundaryGrants() {
+  try {
+    const file = boundaryPermissionsPath();
+    if (!file) return [];
+    const data = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    return Array.isArray(data.allowedDirs) ? data.allowedDirs : [];
+  } catch (e) { return []; }
+}
+function addBoundaryGrant(dir) {
+  try {
+    const file = boundaryPermissionsPath();
+    if (!file || typeof dir !== 'string' || !dir) return;
+    const normalised = path.resolve(dir);
+    const grants = readBoundaryGrants();
+    if (grants.includes(normalised)) return;
+    grants.push(normalised);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ allowedDirs: grants }, null, 2));
+    console.log(`[Permission] Standing folder grant added for this workspace: ${normalised}`);
+  } catch (e) {
+    console.warn(`[Permission] could not persist folder grant: ${e.message}`);
+  }
+}
+function boundaryGrantCovers(targetPath) {
+  if (typeof targetPath !== 'string' || !targetPath) return false;
+  const t = path.resolve(targetPath);
+  return readBoundaryGrants().some(d => t === d || t.startsWith(d + path.sep));
+}
 
 // Permission request timeout before auto-deny. 120s in production; the env
 // override exists solely so the test suite can exercise the timeout path
@@ -2245,6 +2285,17 @@ function scaffoldWorkspace(dir, opts = {}) {
       settingsLocal.hooks.PreToolUse.push(hookEntry('Bash'));
       dirty = true;
     }
+    // File tools route through the hook for the workspace boundary: the hook
+    // allows in-workspace targets instantly (no server round-trip) and sends
+    // out-of-workspace targets to the permission card unless a standing
+    // folder grant covers them. Before this matcher existed, Write and Edit
+    // were pre-approved EVERYWHERE under acceptEdits: an agent wrote the
+    // workspace CLAUDE.md into the user's home directory with zero friction.
+    const FILE_TOOLS_MATCHER = 'Read|Write|Edit|MultiEdit|NotebookEdit|Glob|Grep';
+    if (!hasMatcher(FILE_TOOLS_MATCHER)) {
+      settingsLocal.hooks.PreToolUse.push(hookEntry(FILE_TOOLS_MATCHER));
+      dirty = true;
+    }
     // On Windows (and wherever CLAUDE_CODE_USE_POWERSHELL_TOOL is on) Claude Code
     // runs shell commands through the PowerShell tool, not Bash. Without this
     // matcher those commands bypass the permission system entirely.
@@ -2394,12 +2445,25 @@ const server = http.createServer((req, res) => {
           console.warn(`[Permission] Unattributed request (conversation_id empty, session=${data.session_id || 'none'} unmatched): ${data.tool_name} requestId=${requestId}`);
         }
 
+        // Workspace boundary: a standing folder grant answers without a card,
+        // which also keeps granted folders working when no browser is open.
+        if (data.boundary && data.resolved_path && boundaryGrantCovers(data.resolved_path)) {
+          console.log(`[Permission] Standing folder grant covers ${data.resolved_path}: allowed without a card`);
+          recordEvent('permission', { conv: convoId || undefined, d: { tool: data.tool_name, decision: 'allow' } });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ allow: true, reason: 'standing-folder-grant' }));
+          return;
+        }
+
         // Store the pending HTTP response (resolved when user decides)
         pendingPermissionRequests.set(requestId, {
           res,
           conversationId: convoId,
           toolName: data.tool_name,
           toolInput: data.tool_input,
+          boundary: !!data.boundary,
+          resolvedPath: data.resolved_path || null,
+          grantDir: data.grant_dir || null,
           timer: setTimeout(() => {
             const pending = pendingPermissionRequests.get(requestId);
             if (pending) {
@@ -2425,7 +2489,8 @@ const server = http.createServer((req, res) => {
           request: {
             subtype: 'can_use_tool',
             tool_name: data.tool_name,
-            input: data.tool_input || {}
+            input: data.tool_input || {},
+            ...(data.boundary ? { boundary: true, resolved_path: data.resolved_path, grant_dir: data.grant_dir } : {})
           },
           _conversationId: convoId
         }));
@@ -4148,7 +4213,8 @@ wss.on('connection', (ws) => {
       request: {
         subtype: 'can_use_tool',
         tool_name: pending.toolName,
-        input: pending.toolInput || {}
+        input: pending.toolInput || {},
+        ...(pending.boundary ? { boundary: true, resolved_path: pending.resolvedPath, grant_dir: pending.grantDir } : {})
       },
       _conversationId: pending.conversationId
     }));
@@ -4514,6 +4580,9 @@ wss.on('connection', (ws) => {
         if (pending) {
           clearTimeout(pending.timer);
           pendingPermissionRequests.delete(msg.requestId);
+          // "Always allow this folder": the user chose a standing grant along
+          // with the approval. Folder-level, this workspace only.
+          if (msg.allow === true && msg.grantDir) addBoundaryGrant(msg.grantDir);
           if (pending.res) {
             // Hook-originated request: answer the held HTTP response.
             pending.res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -6204,7 +6273,7 @@ let _codexAppServerPid = null;       // current child pid (crash cleanup)
 // bits survive: the RUNDOCK marker, the port, and the coverage guard
 // (a SIGKILLed child mid-test would otherwise corrupt coverage merges).
 function codexAppServerEnv() {
-  const env = { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(ACTUAL_PORT) };
+  const env = { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(ACTUAL_PORT), RUNDOCK_WORKSPACE: WORKSPACE || '' };
   delete env.NODE_V8_COVERAGE;
   return env;
 }
@@ -7899,6 +7968,7 @@ module.exports._internal = {
   stripRundockMarkers, isSilentParkResponse, sanitizeSpecialistOutput,
   buildHandbackPayload, transcriptTurnsSince,
   recordEvent, normalizeDocsGapTopic, bumpSkillUsage,
+  boundaryGrantCovers, addBoundaryGrant, readBoundaryGrants,
   extractSnippet, buildToolSummary, isAuthError, isModelError,
   // rosters + prompts
   findDirectReportMatch, findOffRosterWorkspaceMatch, buildTeamRoster, buildPeerRoster,

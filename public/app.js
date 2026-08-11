@@ -2982,7 +2982,11 @@ function handlePermissionRequest(d, convoId) {
   // standing grant is session-wide); card-worthy requests render only in
   // the active conversation and QUEUE for background ones, where they used
   // to be silently dropped and auto-denied at the server timeout.
-  const decision = RundockPermissions.decidePermission(risk, key, alwaysAllowedTools);
+  // Workspace-boundary requests NEVER auto-allow client-side: standing
+  // folder grants are evaluated by the server before the card is sent, so a
+  // boundary request arriving here means no grant covers it and a human
+  // must decide.
+  const decision = req.boundary ? { action: 'card' } : RundockPermissions.decidePermission(risk, key, alwaysAllowedTools);
   const isActive = activeConversation?.id === convoId;
   const route = RundockPermissions.routePermissionRequest(decision, isActive);
   if (route === 'respond-allow') {
@@ -3017,12 +3021,21 @@ function renderPermissionCard(d, convoId) {
   const toolName = req.tool_name || 'Unknown';
   const input = req.input || {};
   const risk = classifyRisk(toolName, input);
-  const { summary, context, detail } = describeToolRequest(toolName, input);
+  let { summary, context, detail } = describeToolRequest(toolName, input);
   const key = toolAllowKey(toolName, input);
+  // Workspace-boundary requests get their own copy: the point is WHERE the
+  // access lands, not which tool wants it.
+  const boundary = req.boundary === true;
+  if (boundary) {
+    const reads = toolName === 'Read' || toolName === 'Glob' || toolName === 'Grep';
+    summary = `Wants to ${reads ? 'read' : 'write'} outside your workspace`;
+    context = 'Outside-workspace access needs your approval. "Always allow this folder" remembers it for this workspace only.';
+    detail = req.resolved_path || detail;
+  }
 
   // Store callback data for safe event handling (no inline onclick injection).
   // toolInput is echoed back in control_response (required by Claude Code).
-  pendingPermissions.set(requestId, { convoId, key, toolInput: input });
+  pendingPermissions.set(requestId, { convoId, key, toolInput: input, grantDir: boundary ? (req.grant_dir || null) : null });
 
   const icons = {
     low: '<svg class="permission-icon" width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5"/><path d="M6 8l1.5 1.5L10.5 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -3034,10 +3047,11 @@ function renderPermissionCard(d, convoId) {
   const card = document.createElement('div');
   card.className = 'msg msg-permission';
   card.id = 'perm-' + requestId;
+  const renderRisk = boundary ? 'high' : risk;
   card.innerHTML = `
-    <div class="permission-card risk-${risk}">
+    <div class="permission-card risk-${renderRisk}">
       <div class="permission-header">
-        ${icons[risk]}
+        ${icons[renderRisk]}
         <span class="permission-summary">${esc(summary)}</span>
       </div>
       ${context ? `<div class="permission-context">${esc(context)}</div>` : ''}
@@ -3046,7 +3060,9 @@ function renderPermissionCard(d, convoId) {
         : `<code class="permission-detail">${esc(detail)}</code>`}
       <div class="permission-actions">
         <button class="btn-perm btn-allow" data-perm-id="${esc(requestId)}" data-perm-action="allow">Allow</button>
-        ${RundockPermissions.offersAlwaysAllow(risk) ? `<button class="btn-perm btn-always" data-perm-id="${esc(requestId)}" data-perm-action="always">Always allow</button>` : ''}
+        ${boundary
+          ? `<button class="btn-perm btn-always" data-perm-id="${esc(requestId)}" data-perm-action="allow-folder">Always allow this folder</button>`
+          : (RundockPermissions.offersAlwaysAllow(risk) ? `<button class="btn-perm btn-always" data-perm-id="${esc(requestId)}" data-perm-action="always">Always allow</button>` : '')}
         <button class="btn-perm btn-deny" data-perm-id="${esc(requestId)}" data-perm-action="deny">Deny</button>
       </div>
     </div>
@@ -3057,7 +3073,7 @@ function renderPermissionCard(d, convoId) {
     btn.addEventListener('click', () => {
       const action = btn.dataset.permAction;
       const id = btn.dataset.permId;
-      respondPermission(id, action === 'deny' ? false : true, action === 'always');
+      respondPermission(id, action !== 'deny', action === 'always', action === 'allow-folder');
     });
   });
 
@@ -3083,7 +3099,7 @@ function renderPendingPermissionCards(convoId) {
   }
 }
 
-function respondPermission(requestId, allow, always) {
+function respondPermission(requestId, allow, always, allowFolder) {
   const pending = pendingPermissions.get(requestId);
   if (!pending || !ws) return;
   pendingPermissions.delete(requestId);
@@ -3095,6 +3111,7 @@ function respondPermission(requestId, allow, always) {
     type: 'permission_response',
     requestId: requestId,
     conversationId: pending.convoId,
+    ...(allowFolder && pending.grantDir ? { grantDir: pending.grantDir } : {}),
     allow: allow,
     toolInput: pending.toolInput || {}
   }));

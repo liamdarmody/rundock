@@ -57,7 +57,39 @@ function isProtectedClaudeEdit(toolName, toolInput) {
       || under(path.join(os.homedir(), '.claude', 'skills'));
 }
 
-module.exports = { isProtectedClaudeEdit, isMcpReadTool };
+// Workspace file-access boundary (spec: anything outside the workspace
+// requires a permission card unless a standing per-workspace folder grant
+// covers it; the server owns the grants). This function only CLASSIFIES:
+// inside targets are allowed instantly with no server round-trip, outside
+// targets flow to the permission card with the resolved path attached.
+// Grep/Glob with no explicit path scan the working directory and are inside
+// by construction. Symlinked escapes are not chased here (path resolution
+// only); Bash can also reach outside but is already carded on every call.
+const FILE_TOOL_PATH_FIELD = {
+  Read: 'file_path', Write: 'file_path', Edit: 'file_path', MultiEdit: 'file_path',
+  NotebookEdit: 'notebook_path', Glob: 'path', Grep: 'path',
+};
+function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = []) {
+  const field = FILE_TOOL_PATH_FIELD[toolName];
+  if (!field) return null;
+  const ti = toolInput || {};
+  const target = ti[field];
+  if (typeof target !== 'string' || !target) {
+    // Glob/Grep default to the working directory: inside by construction.
+    // A path-less Write/Edit is malformed; let the generic card handle it.
+    return (toolName === 'Glob' || toolName === 'Grep') ? { where: 'inside' } : null;
+  }
+  const resolvedPath = path.resolve(workspaceRoot, target);
+  const roots = [path.resolve(workspaceRoot), ...extraDirs.map(d => path.resolve(d))];
+  const under = (root) => resolvedPath === root || resolvedPath.startsWith(root + path.sep);
+  const inside = roots.some(under);
+  // The folder a standing grant would cover: the directory itself for the
+  // directory-scanning tools, the parent directory for file targets.
+  const grantDir = (toolName === 'Glob' || toolName === 'Grep') ? resolvedPath : path.dirname(resolvedPath);
+  return { where: inside ? 'inside' : 'outside', resolvedPath, grantDir };
+}
+
+module.exports = { isProtectedClaudeEdit, isMcpReadTool, classifyFileAccess };
 
 if (require.main === module) main();
 function main() {
@@ -70,8 +102,37 @@ process.stdin.on('end', () => {
     process.exit(0);
   }
 
-  // Code mode: auto-approve all commands (no permission card)
-  if (process.env.RUNDOCK_CODE_MODE === '1') {
+  let data;
+  try {
+    data = JSON.parse(input);
+  } catch (e) {
+    // Bad input: pass through
+    process.stdout.write(JSON.stringify({}));
+    process.exit(0);
+  }
+
+  // Workspace file-access boundary. Classified BEFORE the code-mode
+  // short-circuit on purpose: code mode trusts commands inside the
+  // workspace, it does not extend the workspace to the whole machine.
+  const wsRoot = process.env.RUNDOCK_WORKSPACE || process.cwd();
+  const extraDirs = (process.env.RUNDOCK_EXTRA_DIRS || '').split(path.delimiter).filter(Boolean);
+  const access = (typeof data.tool_name === 'string' && !isProtectedClaudeEdit(data.tool_name, data.tool_input))
+    ? classifyFileAccess(data.tool_name, data.tool_input, wsRoot, extraDirs)
+    : null;
+  if (access && access.where === 'inside') {
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'allow',
+        permissionDecisionReason: 'In-workspace file access'
+      }
+    }));
+    process.exit(0);
+  }
+
+  // Code mode: auto-approve all commands (no permission card). Out-of-
+  // workspace file access still cards above/below regardless of mode.
+  if (process.env.RUNDOCK_CODE_MODE === '1' && !(access && access.where === 'outside')) {
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
@@ -79,15 +140,6 @@ process.stdin.on('end', () => {
         permissionDecisionReason: 'Auto-approved: workspace is in Code mode'
       }
     }));
-    process.exit(0);
-  }
-
-  let data;
-  try {
-    data = JSON.parse(input);
-  } catch (e) {
-    // Bad input: pass through
-    process.stdout.write(JSON.stringify({}));
     process.exit(0);
   }
 
@@ -133,7 +185,10 @@ process.stdin.on('end', () => {
     tool_name: data.tool_name,
     tool_input: data.tool_input || {},
     session_id: data.session_id,
-    conversation_id: convoId
+    conversation_id: convoId,
+    ...(access && access.where === 'outside'
+      ? { boundary: true, resolved_path: access.resolvedPath, grant_dir: access.grantDir }
+      : {})
   });
 
   const req = http.request({
