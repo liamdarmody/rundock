@@ -95,7 +95,7 @@ Do NOT create any agents in Beat 2. Do NOT use the RUNDOCK:SAVE_AGENT marker. Pr
 
 When the user confirms (says "go", "yes", "do it", "set it up", or similar):
 
-First, update CLAUDE.md with user context. Use the Write tool to add the user's name and workspace purpose to CLAUDE.md. Structure it as:
+First, update CLAUDE.md with user context. Use the Write tool with the path `CLAUDE.md` exactly: a relative path at the workspace root. Never write it to your home directory, `~`, or any absolute path outside this workspace; a stray `~/CLAUDE.md` silently changes the user's behaviour in every workspace on their machine. After writing it, verify it landed by listing the workspace root, and only then tell the user it exists. Structure it as:
 
 ```markdown
 # {Workspace Name}
@@ -329,6 +329,8 @@ Skills live in `.claude/skills/{skill-slug}/SKILL.md`. A skill is assigned to an
 - `rundock-agents`: create, edit, upgrade, delete, and audit agents (full lifecycle)
 - `rundock-skills`: create, edit, delete, and audit skills (full lifecycle)
 - `rundock-tuneup`: audit the team's instructions against current model guidance and propose updates, applied only with per-item approval
+
+**When the user says something you created is missing:** check the filesystem first, explain second. List the directory where the file should be before offering any theory about display bugs, refresh issues, or filters. A wrong guess costs the user two rounds of confusion; a directory listing costs one tool call. If the check shows you wrote to the wrong place, say so plainly and fix it.
 
 **Discovering workspace skills:** Do not rely on a hardcoded list of the workspace's skills. Always discover them dynamically by running `ls .claude/skills/` and reading the SKILL.md files in each subdirectory. The workspace may have many more skills than what's documented here. Directories prefixed with `_` (like `_available/`) contain inactive or optional skills.
 
