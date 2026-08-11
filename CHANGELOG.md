@@ -4,7 +4,9 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## 0.11.6: Team Integrity (2026-08-10)
+## 0.11.6: Team Integrity (2026-08-13)
+
+> **Updating from 0.11.5:** this is the first release delivered by the new updater. Rundock shows the download with real progress in the sidebar, then asks before restarting: Restart now installs immediately, Later keeps a quiet reminder.
 
 ### Added
 
@@ -26,7 +28,6 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 - **Reopening a conversation where Doc created agents no longer shows raw file internals:** the first paint of a reopened conversation rendered the agent file's frontmatter as message text; it now renders exactly like the live view did.
 - **A specialist's handback now carries everything it produced, not just its sign-off:** when a specialist worked across several messages and then handed back, the agent who delegated received only the final message, so a full analysis could arrive as a one-line goodbye and you ended up copying the real work across by hand. The handback now includes every message from the delegation, and if it is ever too long to pass whole, the receiving agent is told exactly what was trimmed and where to read the rest.
 - **Agents no longer claim to run work "in parallel" they cannot run:** delegation runs one specialist at a time, but team leads were never told, so they promised simultaneous work that quietly never happened. Leads now know the rule, and when one turn tries to hand work to several specialists at once, the extra handoffs are queued and named instead of silently vanishing: the lead is told exactly which ones still need sequencing.
-
 - **Opening an existing organised vault no longer writes starter folders into it:** Rundock scaffolds its default folders for new and empty workspaces, but a well-organised vault that simply lacked a CLAUDE.md counted as empty, so onboarding could pollute a workspace you had already structured. Rundock now recognises your file structure as structure and leaves it alone; genuinely new or near-empty folders still get the full starter scaffold.
 - **An edit made outside Rundock right after opening a file can no longer be missed:** the watcher that pushes external changes into an open file had a startup gap where a change landing at just the wrong moment was absorbed silently and never shown. The watch is now armed against exactly the content you were sent, before you could possibly react to it.
 - **Skills declared on one line now count:** an agent file declaring `skills: [research, writing]` on a single line, or with a list indented by anything other than exactly two spaces, silently parsed as having no skills while looking perfectly correct. Both forms now parse; nothing in the wild was affected, this closes the trap before anyone falls in.
