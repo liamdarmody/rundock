@@ -1,0 +1,19 @@
+{
+  // Client-side type checking: same contract as tsconfig.server.json (JSDoc +
+  // checkJs, noEmit, explicit opt-in), with DOM globals available. Kept
+  // separate so server code can never silently depend on DOM types.
+  "compilerOptions": {
+    "checkJs": true,
+    "allowJs": true,
+    "noEmit": true,
+    "module": "commonjs",
+    "target": "es2022",
+    "lib": ["es2022", "dom"],
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "files": [
+    "types.d.ts",
+    "public/markers.js"
+  ]
+}

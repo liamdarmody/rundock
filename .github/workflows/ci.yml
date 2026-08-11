@@ -66,6 +66,29 @@ jobs:
       - name: Run tests
         run: npm test
 
+  # Type checking: JSDoc annotations + tsc --checkJs, zero build step.
+  # Shapes (types.d.ts) plus every opted-in module must satisfy both configs
+  # (server and client are separate so DOM globals never leak into server
+  # code). Needs the full dev install, unlike the test jobs.
+  typecheck:
+    name: Typecheck (JSDoc + checkJs)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies (incl. dev, for tsc)
+        run: npm ci
+
+      - name: Run both type-check configs
+        run: npm run typecheck
+
   # Coverage floors: the suite runs WITH coverage and the per-area floors in
   # test/tools/coverage-floors.json are enforced. Deleting a covered test, or
   # moving code without carrying its area definition, fails here. Floors

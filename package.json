@@ -16,6 +16,7 @@
     "release": "node scripts/release.js",
     "test:e2e": "playwright test",
     "check:refs": "node scripts/check-internal-refs.js",
+    "typecheck": "tsc -p tsconfig.server.json && tsc -p tsconfig.client.json",
     "screenshots": "node scripts/screenshots/run.mjs",
     "smoke": "node scripts/smoke/run.mjs",
     "stream:truth": "node scripts/stream-truth/run.mjs"
@@ -28,10 +29,12 @@
   "devDependencies": {
     "@highlightjs/cdn-assets": "^11.11.1",
     "@playwright/test": "^1.61.1",
+    "@types/node": "^26.2.0",
     "electron": "^42.7.0",
     "electron-builder": "^26.0.0",
     "ffmpeg-static": "^5.2.0",
     "jsdom": "^29.1.1",
+    "typescript": "^7.0.2",
     "v8-to-istanbul": "^9.3.0"
   },
   "build": {
