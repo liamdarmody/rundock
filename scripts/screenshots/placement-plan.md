@@ -12,7 +12,7 @@
 A curated proposal for where the generated assets should go and why. The
 pipeline produces more than any surface needs on purpose; this plan uses fewer,
 better images, each earning its place, and pairs them with copy where a feature
-is not self-evident. Proposal only; wiring the repos is Phase 2.
+is not self-evident. Proposal only; wiring the repos comes later.
 
 Principle: a still shows a state, a GIF shows a behaviour. Use a GIF only where
 the motion is the point (a drag, a live update, a reply streaming in, the org

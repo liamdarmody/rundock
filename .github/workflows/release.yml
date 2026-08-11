@@ -5,8 +5,8 @@ name: Release
 # provider creates that release as a DRAFT, so artefacts land for review and are
 # promoted to a public release manually (validate the draft first, then publish).
 #
-# Phase A scope: macOS (arm64 + x64) only. The windows and linux jobs below are
-# scaffolded but inactive, activated later by their platform cards.
+# Current scope: macOS (arm64 + x64) only. The windows and linux jobs below
+# are scaffolded but inactive, activated when their platforms ship.
 #
 # Required repo secrets (documented in the maintainer's release-setup notes):
 #   CSC_LINK            base64 of the Developer ID Application .p12

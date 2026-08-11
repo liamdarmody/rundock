@@ -1,0 +1,30 @@
+{
+  // Server-side type checking: JSDoc annotations + checkJs, zero build step.
+  // tsc runs --noEmit as a CI gate; shipped files stay byte-identical source.
+  // Zero-build portability is a product requirement, so annotations live in
+  // ordinary comments and this config is the entire toolchain.
+  //
+  // Two configs exist (server/client) because one config would leak DOM
+  // globals into server code. Opt-in is via the explicit files list below,
+  // reviewable per PR: extracted modules first, then the mid-size modules,
+  // monoliths last (their error count is a burn-down metric, not a gate,
+  // until decomposition shrinks them).
+  "compilerOptions": {
+    "checkJs": true,
+    "allowJs": true,
+    "noEmit": true,
+    "module": "commonjs",
+    "target": "es2022",
+    "lib": ["es2022"],
+    "types": ["node"],
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "files": [
+    "types.d.ts",
+    "lib/delegation/markers.js",
+    "lib/delegation/handback.js",
+    "lib/delegation/state.js",
+    "permission-routing.js"
+  ]
+}

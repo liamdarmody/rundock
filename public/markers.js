@@ -21,12 +21,13 @@
 //   - The frontmatter fallback (fenced, then raw) applies only when the
 //     marker scan produced zero save/delete actions; delegation and return
 //     markers do not suppress it.
-(function (root, factory) {
+(/** @param {any} root @param {() => object} factory */ function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.RundockMarkers = factory();
 }(typeof self !== 'undefined' ? self : this, function () {
 
   // Strip a single cosmetic code fence wrapping a save block's content.
+  /** @param {string} content */
   function stripCosmeticFence(content) {
     return content.replace(/^```[^\n]*\n/, '').replace(/\n```\s*$/, '').trim();
   }
@@ -38,6 +39,7 @@
   //     delegation: { targetAgent, context } | null,
   //     hasReturn: boolean,
   //   }
+  /** @param {string} text */
   function scanMarkers(text) {
     const actions = [];
     const t = typeof text === 'string' ? text : '';
@@ -86,6 +88,7 @@
   // YAML frontmatter without the marker wrapper. Fenced blocks are tried
   // first; raw frontmatter blocks only when fenced extraction found nothing.
   // Returns [{ name, content }].
+  /** @param {string} text @returns {{ name: string, content: string }[]} */
   function extractFrontmatterAgents(text) {
     const t = typeof text === 'string' ? text : '';
     const found = [];
@@ -115,6 +118,7 @@
 
   // Remove marker syntax from display text: RETURN markers, whole
   // SAVE_AGENT/SAVE_SKILL blocks, and DELETE lines.
+  /** @param {string} t */
   function stripMarkers(t) {
     return t
       .replace(/<!-- RUNDOCK:RETURN -->/g, '')
@@ -125,6 +129,7 @@
 
   // Remove a DELEGATE marker AND everything after it: once an orchestrator
   // delegates, any trailing text belongs to the handoff, not the user.
+  /** @param {string} t */
   function stripDelegateTail(t) {
     return t.replace(/<!-- RUNDOCK:DELEGATE agent=[\w-]+ -->\n?[\s\S]*/g, '');
   }

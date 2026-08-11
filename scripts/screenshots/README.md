@@ -81,7 +81,7 @@ not expect a clean git diff to tell you whether a GIF actually changed.
   against an earlier release and NOT copied into the output folder: check the
   release stated at the top of it before relying on its reasoning.
 
-## Phase 2 (not built yet)
+## Not built yet: automated placement
 
 Auto-opening PRs into the Rundock repo README/`docs/`, the Rundock Site, and the
 docs site, triggered on release. Queue it once the placements in `MANIFEST.md`
