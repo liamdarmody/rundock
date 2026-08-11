@@ -664,6 +664,23 @@ function agentsDirSignature(dir) {
     return null; // directory missing: a later appearance counts as a change
   }
 }
+// Setup is complete the moment a real (non-platform) agent is on the team,
+// HOWEVER its file arrived: the save_agent marker path, an agent using the
+// Write tool, or a user dropping a file in place. This used to live only in
+// the save_agent handler, so a team created any other way left the workspace
+// "setup pending" forever, with the client offering "Set up your team" to a
+// user who already had one.
+function maybeCompleteSetup(agentList) {
+  try {
+    const state = readState();
+    if (state.setupComplete) return;
+    if ((agentList || []).some(a => a.status === 'onTeam' && a.type !== 'platform')) {
+      writeState({ ...state, setupComplete: true, setupCompletedAt: new Date().toISOString(), version: 1 });
+      console.log('[Setup] Marked complete');
+    }
+  } catch (e) { /* state write is best-effort; the next convergence retries */ }
+}
+
 function armAgentsDirWatcher() {
   if (_agentsWatchTimer) { clearInterval(_agentsWatchTimer); _agentsWatchTimer = null; }
   if (!WORKSPACE) return;
@@ -675,6 +692,7 @@ function armAgentsDirWatcher() {
     _agentsDirSig = sig;
     invalidateAgentCache();
     flagRosterRefresh();
+    maybeCompleteSetup(discoverAgents());
     console.log('[Roster] agents directory changed on disk; live orchestrators flagged');
   }, AGENTS_WATCH_POLL_MS);
   if (_agentsWatchTimer.unref) _agentsWatchTimer.unref();
@@ -5207,13 +5225,7 @@ wss.on('connection', (ws) => {
             ws.send(JSON.stringify({ type: 'agents', agents: updatedAgents }));
             ws.send(JSON.stringify({ type: 'skills', skills: discoverSkills(updatedAgents) }));
             flagRosterRefresh();
-            if (!existed) {
-              const state = readState();
-              if (!state.setupComplete && updatedAgents.some(a => a.status === 'onTeam' && a.type !== 'platform')) {
-                writeState({ ...state, setupComplete: true, setupCompletedAt: new Date().toISOString(), version: 1 });
-                console.log(`[Setup] Marked complete`);
-              }
-            }
+            if (!existed) maybeCompleteSetup(updatedAgents);
           }
         }
       }
@@ -7975,7 +7987,7 @@ module.exports._internal = {
   extractSelfDescription, buildSystemPrompt,
   // workspace analysis / scaffolding
   detectWorkspaceMode, isEmptyWorkspace, analyzeWorkspace,
-  scaffoldDefaults, scaffoldWorkspace, muteHooks, discoverWorkspaces,
+  scaffoldDefaults, scaffoldWorkspace, muteHooks, discoverWorkspaces, maybeCompleteSetup,
   readMcpServerNames, getFileTree, fileKind, validateAgentSlug, isInsideWorkspace, isSafeCreatePath,
   // persistence
   readConversations, writeConversations, readState, writeState,

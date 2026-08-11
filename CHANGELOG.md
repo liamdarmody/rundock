@@ -8,6 +8,10 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 **Name:** Foundations
 
+### Fixed
+
+- **Setup completes when your team exists, however it was created:** the workspace used to leave "setup pending" only when agents were created through the standard onboarding flow. A team created any other way (an agent writing the files directly, or you dropping agent files into place) now completes setup too, within a couple of seconds of the files appearing.
+
 ### Changed
 
 - **Releases are validated before they exist:** every release candidate now passes a full gauntlet (the complete test suite with coverage, end-to-end browser tests, the release smoke including a real-model run, scripted user journeys for first-run onboarding and vault imports, type checking, packaging, and internal-reference hygiene) before its version tag can be created, and publishing is a single verified command. You see this as fewer, better-tested releases rather than a new button, and it is the first piece of a release built on stronger foundations.

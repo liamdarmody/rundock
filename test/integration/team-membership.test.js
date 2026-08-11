@@ -114,3 +114,46 @@ describe('one team-membership rule', () => {
     assert.ok(flagged, 'live orchestrator flagged for roster refresh after an external edit to .claude/agents');
   });
 });
+
+describe('setup completes when the team exists, however the files arrived', () => {
+  // The setupComplete flip lived only in the save_agent WS handler (the
+  // marker path). A Doc that creates the team with the Write tool, or a user
+  // who drops agent files in place, got a working team while the workspace
+  // stayed "setup pending" forever: the client kept offering "Set up your
+  // team" and onboarding routing never exited setup mode. Found by the live
+  // New User persona (a creation turn saying "Writing a file...") plus code
+  // reading, 2026-08-11.
+  const statePath = () => path.join(h.workspaceDir, '.rundock', 'state.json');
+  const readSetup = () => {
+    try { return JSON.parse(fs.readFileSync(statePath(), 'utf8')).setupComplete; }
+    catch { return undefined; }
+  };
+  const seedPending = () => {
+    const state = (() => { try { return JSON.parse(fs.readFileSync(statePath(), 'utf8')); } catch { return {}; } })();
+    fs.writeFileSync(statePath(), JSON.stringify({ ...state, setupComplete: false }));
+  };
+
+  test('an agent file written straight to disk flips setup within one watcher poll', async () => {
+    seedPending();
+    fs.writeFileSync(path.join(h.workspaceDir, '.claude', 'agents', 'dropped-in.md'),
+      '---\nname: dropped-in\ndisplayName: Dropped In\nrole: Hand-authored\ntype: specialist\norder: 6\nreportsTo: roo\n---\nYou are Dropped In.\n');
+    const flipped = await h.waitUntil(() => readSetup() === true, { timeout: 6000 });
+    assert.ok(flipped, 'setupComplete flips when the on-disk team gains a non-platform agent');
+  });
+
+  test('a platform-only roster never flips setup', () => {
+    seedPending();
+    const flip = h.internal.maybeCompleteSetup;
+    assert.strictEqual(typeof flip, 'function', 'the flip is one extracted helper');
+    flip([
+      { id: 'rundock-guide', status: 'onTeam', type: 'platform' },
+      { id: 'other-platform', status: 'onTeam', type: 'platform' },
+    ]);
+    assert.strictEqual(readSetup(), false, 'platform agents alone are not a team');
+    flip([
+      { id: 'rundock-guide', status: 'onTeam', type: 'platform' },
+      { id: 'cos', status: 'onTeam', type: 'orchestrator' },
+    ]);
+    assert.strictEqual(readSetup(), true, 'a real team member flips it');
+  });
+});
