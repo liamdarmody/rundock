@@ -135,6 +135,7 @@ describe('release gate: the run', () => {
     assert.match(joined, /smoke/, 'stub smoke runs');
     assert.match(joined, /--live/, 'live smoke runs');
     assert.match(joined, /check:refs/, 'hygiene gate runs');
+    assert.match(joined, /stream:truth/, 'stream-truth check runs (stub vs captured runtime)');
     assert.match(joined, /smoke-packaged/, 'packaging runs (unsigned unpacked build + boot check)');
   });
 

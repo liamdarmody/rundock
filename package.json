@@ -17,7 +17,8 @@
     "test:e2e": "playwright test",
     "check:refs": "node scripts/check-internal-refs.js",
     "screenshots": "node scripts/screenshots/run.mjs",
-    "smoke": "node scripts/smoke/run.mjs"
+    "smoke": "node scripts/smoke/run.mjs",
+    "stream:truth": "node scripts/stream-truth/run.mjs"
   },
   "dependencies": {
     "electron-updater": "^6.8.9",
