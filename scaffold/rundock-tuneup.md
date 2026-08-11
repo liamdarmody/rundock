@@ -1,5 +1,5 @@
 ---
-name: Rundock Tuneup
+name: Instruction Tuneup
 description: Audit the team's instructions against current model guidance and propose updates, item by item, with the user approving every change.
 ---
 
