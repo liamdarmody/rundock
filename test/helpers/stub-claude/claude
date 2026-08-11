@@ -17,13 +17,17 @@
 // workspace). Scenario format:
 //   { "rules": [ { "match": { "agent": "chief-of-staff",
 //                             "promptIncludes": "hooks" | ["a","b"],
-//                             "promptExcludes": "x" },
+//                             "promptExcludes": "x",
+//                             "resume": true },  // gate on --resume presence
 //                  "delayMs": 0,
 //                  "singleChunk": false,
 //                  "isError": false,
 //                  "crash": 1,   // exit with this code WITHOUT emitting a result
 //                                // envelope: simulates an abnormal mid-turn death
 //                                // (CLI crash / OOM / auth expiry). No `turn` runs.
+//                  "stderr": "...",     // written to stderr before a crash exit
+//                  "crashTail": "...",  // final stdout fragment, no newline,
+//                                       // left in the server's line buffer
 //                  "turn": [ { "text": "..." },
 //                            { "agentTool": { "subagent_type": "penn", "prompt": "..." } },
 //                            { "tool": { "name": "Read", "input": {...} } },
@@ -103,6 +107,9 @@ function loadRules() {
 function matches(rule, prompt) {
   const m = rule.match || {};
   if (m.agent !== undefined && m.agent !== AGENT) return false;
+  // Gate a rule on whether this spawn is a --resume: lets a scenario crash
+  // the resumed process while answering its fresh retry normally.
+  if (m.resume !== undefined && m.resume !== (RESUME != null)) return false;
   const includes = m.promptIncludes == null ? [] : [].concat(m.promptIncludes);
   for (const s of includes) if (!prompt.includes(s)) return false;
   const excludes = m.promptExcludes == null ? [] : [].concat(m.promptExcludes);
@@ -204,11 +211,20 @@ function handleUserMessage(content) {
   };
   if (rule.spawnChild) spawnGrandchild();
   if (rule.crash != null) {
-    // Abnormal death: exit non-zero without emitting a result envelope, so the
+    // Abnormal death: exit without emitting a result envelope, so the
     // server's close handler runs with no result for this turn.
+    // `stderr` models CLI error output (e.g. a failed --resume complaining
+    // about the session); `crashTail` writes a final stdout fragment WITHOUT
+    // a trailing newline, so it is still sitting in the server's line buffer
+    // when the process dies.
     const code = typeof rule.crash === 'number' ? rule.crash : 1;
-    if (rule.delayMs) setTimeout(() => process.exit(code), rule.delayMs);
-    else process.exit(code);
+    const die = () => {
+      if (rule.stderr) process.stderr.write(String(rule.stderr));
+      if (rule.crashTail) process.stdout.write(String(rule.crashTail));
+      process.exit(code);
+    };
+    if (rule.delayMs) setTimeout(die, rule.delayMs);
+    else die();
     return;
   }
   const delay = rule.delayMs || 0;
