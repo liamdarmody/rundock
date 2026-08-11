@@ -49,9 +49,17 @@ const AREA_DEFS = [
   ['server.js', '  - handleScopeReturn', /^function handleScopeReturn/, /^function handleDelegation/],
   ['server.js', '  - handleDelegation', /^function handleDelegation/, /^wss\.on\('connection'/],
   ['server.js', 'Scheduler (getNextRun + startScheduler + executeRoutine)', /^function startScheduler\(/, /^function analyzeWorkspace/],
-  ['server.js', 'Agent discovery + frontmatter parsing', /^\/\/ ===== AGENT DISCOVERY =====/, /^function startScheduler\(/],
+  // Slice 2 migrations: discovery + frontmatter parsing and the system
+  // prompt / roster builders moved to lib/agents/ and keep their floors
+  // under the same labels. The prompt area now genuinely contains the
+  // roster builders (in the root they sat above the area's start anchor).
+  // The interim root area covers what the move left behind (the codex
+  // probe cache shared with the settings runtime probe, the skill and
+  // file-list caches, and the open-file watch) until their own slices.
+  ['lib/agents/discovery.js', 'Agent discovery + frontmatter parsing', /^let _agentCache/, /^module\.exports/],
   ['server.js', 'Skill discovery', /^function discoverSkills\(/, /^function getFileTree\(/],
-  ['server.js', 'System prompt + roster builders', /^function buildSystemPrompt\(/, /^\/\/ ===== AGENT DISCOVERY =====/],
+  ['lib/agents/prompt.js', 'System prompt + roster builders', /^const unwired/, /^module\.exports/],
+  ['server.js', 'Codex probe + root caches + open-file watch (remainder)', /^let _codexDetectCache/, /^\/\/ ===== SCHEDULER =====/],
   ['server.js', 'Workspace analysis (Seven Signals)', /^function analyzeWorkspace\(/, /^function muteHooks\(/],
   ['server.js', 'Workspace mode detection + scaffolding', /^function muteHooks\(/, /^const server = http\.createServer/],
   // Slice 1 migrations: these two areas moved to lib/store/ and keep their
@@ -72,6 +80,7 @@ const OVERALL_FILES = [
   'server.js', 'codex.js', 'codex-appserver.js', 'search.js',
   'lib/delegation/markers.js', 'lib/delegation/handback.js', 'lib/delegation/state.js',
   'lib/config.js', 'lib/store/persistence.js', 'lib/store/transcripts.js',
+  'lib/agents/discovery.js', 'lib/agents/prompt.js',
 ];
 
 // ---------------------------------------------------------------------------
