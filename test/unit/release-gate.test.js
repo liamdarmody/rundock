@@ -133,6 +133,7 @@ describe('release gate: the run', () => {
     assert.match(joined, /test:coverage/, 'suite runs WITH coverage');
     assert.match(joined, /test:e2e/, 'e2e runs');
     assert.match(joined, /smoke/, 'stub smoke runs');
+    assert.match(joined, /smoke:personas/, 'persona journeys run');
     assert.match(joined, /--live/, 'live smoke runs');
     assert.match(joined, /check:refs/, 'hygiene gate runs');
     assert.match(joined, /stream:truth/, 'stream-truth check runs (stub vs captured runtime)');
