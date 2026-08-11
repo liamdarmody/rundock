@@ -48,7 +48,10 @@ const AREA_DEFS = [
   ['server.js', '  - wireProcessHandlers (stream-json + interception)', /^function wireProcessHandlers\(/, /^function handleScopeReturn/],
   ['server.js', '  - handleScopeReturn', /^function handleScopeReturn/, /^function handleDelegation/],
   ['server.js', '  - handleDelegation', /^function handleDelegation/, /^wss\.on\('connection'/],
-  ['server.js', 'Scheduler (getNextRun + startScheduler + executeRoutine)', /^function startScheduler\(/, /^function analyzeWorkspace/],
+  // Slice 3 retarget: the scheduler's old end anchor (analyzeWorkspace)
+  // moved to lib/workspace/; the area now runs to the HTTP server, with
+  // only pointer comments in between.
+  ['server.js', 'Scheduler (getNextRun + startScheduler + executeRoutine)', /^function startScheduler\(/, /^const server = http\.createServer/],
   // Slice 2 migrations: discovery + frontmatter parsing and the system
   // prompt / roster builders moved to lib/agents/ and keep their floors
   // under the same labels. The prompt area now genuinely contains the
@@ -60,8 +63,13 @@ const AREA_DEFS = [
   ['server.js', 'Skill discovery', /^function discoverSkills\(/, /^function getFileTree\(/],
   ['lib/agents/prompt.js', 'System prompt + roster builders', /^const unwired/, /^module\.exports/],
   ['server.js', 'Codex probe + root caches + open-file watch (remainder)', /^let _codexDetectCache/, /^\/\/ ===== SCHEDULER =====/],
-  ['server.js', 'Workspace analysis (Seven Signals)', /^function analyzeWorkspace\(/, /^function muteHooks\(/],
-  ['server.js', 'Workspace mode detection + scaffolding', /^function muteHooks\(/, /^const server = http\.createServer/],
+  // Slice 3 migrations: analysis and scaffolding moved to lib/workspace/
+  // and keep their floors under the same labels. Boundary grants get their
+  // own NEW area: in the root they sat outside every area span and were
+  // only floored via the file overall.
+  ['lib/workspace/analysis.js', 'Workspace analysis (Seven Signals)', /^const unwired/, /^module\.exports/],
+  ['lib/workspace/scaffold.js', 'Workspace mode detection + scaffolding', /^const ROOT_DIR/, /^module\.exports/],
+  ['lib/workspace/boundary.js', 'Workspace boundary grants', /^function boundaryPermissionsPath\(/, /^module\.exports/],
   // Slice 1 migrations: these two areas moved to lib/store/ and keep their
   // floors under the same labels; the interim root area covers what the move
   // left behind (signal layer + the appendTranscript/formatTranscript
@@ -81,6 +89,7 @@ const OVERALL_FILES = [
   'lib/delegation/markers.js', 'lib/delegation/handback.js', 'lib/delegation/state.js',
   'lib/config.js', 'lib/store/persistence.js', 'lib/store/transcripts.js',
   'lib/agents/discovery.js', 'lib/agents/prompt.js',
+  'lib/workspace/boundary.js', 'lib/workspace/analysis.js', 'lib/workspace/scaffold.js',
 ];
 
 // ---------------------------------------------------------------------------
