@@ -10,6 +10,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Fixed
 
+- **Opening a workspace no longer risks a spurious agent restart moments later:** when Rundock updates its own built-in agent or skill files during workspace open, that write was briefly mistaken for an external edit, which could restart a busy agent mid-conversation about two seconds in. The server's own writes are now recognised as its own.
 - **Setup completes when your team exists, however it was created:** the workspace used to leave "setup pending" only when agents were created through the standard onboarding flow. A team created any other way (an agent writing the files directly, or you dropping agent files into place) now completes setup too, within a couple of seconds of the files appearing.
 
 ### Changed

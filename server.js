@@ -681,6 +681,18 @@ function maybeCompleteSetup(agentList) {
   } catch (e) { /* state write is best-effort; the next convergence retries */ }
 }
 
+// The server's own writers (the boot/switch scaffold sync of managed files)
+// call this after finishing, so the poller never mistakes a boot write for an
+// external edit. Without it, the arm-then-scaffold order at every workspace
+// entry point produced one guaranteed tick ~2s in that flagged every live
+// orchestrator for roster refresh; whichever conversation's follow-up landed
+// next was killed-and-respawned instead of reused (the CI spawn-count flake
+// on main, 2026-08-11).
+function rebaselineAgentsWatcher() {
+  if (!WORKSPACE) return;
+  _agentsDirSig = agentsDirSignature(path.join(WORKSPACE, '.claude', 'agents'));
+}
+
 function armAgentsDirWatcher() {
   if (_agentsWatchTimer) { clearInterval(_agentsWatchTimer); _agentsWatchTimer = null; }
   if (!WORKSPACE) return;
@@ -2182,7 +2194,12 @@ function scaffoldWorkspace(dir, opts = {}) {
     // a caller that primed the cache before this sync (the workspace-open path
     // does exactly that) would keep reading stale agents and the platform
     // skills would show as unassigned until a reload.
-    if (wroteManagedFile) invalidateAgentCache();
+    if (wroteManagedFile) {
+      invalidateAgentCache();
+      // These writes are the server's own, not external edits: refresh the
+      // watcher baseline so the next poll stays quiet.
+      if (dir === WORKSPACE) rebaselineAgentsWatcher();
+    }
 
     // Create .rundock/ directory for session persistence
     const rundockPath = path.join(dir, '.rundock');
