@@ -61,7 +61,7 @@ jobs:
       - name: Install test-only DOM dependency
         # The editor round-trip suite boots the real editor under jsdom.
         # Version must match package.json/package-lock.json.
-        run: npm install --no-save jsdom@29.1.1
+        run: npm install --no-save --ignore-scripts jsdom@29.1.1
 
       - name: Run tests
         run: npm test
@@ -110,7 +110,7 @@ jobs:
         run: npm ci --omit=dev
 
       - name: Install test-only DOM dependency
-        run: npm install --no-save jsdom@29.1.1
+        run: npm install --no-save --ignore-scripts jsdom@29.1.1
 
       - name: Run suite with coverage and enforce floors
         run: npm run test:coverage

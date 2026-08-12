@@ -44,7 +44,7 @@ jobs:
         # The editor round-trip suite boots the real editor under jsdom, a
         # devDependency the lean install omits. Same pinned install as CI;
         # without it the gate fails on ERR_MODULE_NOT_FOUND.
-        run: npm install --no-save jsdom@29.1.1
+        run: npm install --no-save --ignore-scripts jsdom@29.1.1
       - name: Run tests
         run: npm test
 
