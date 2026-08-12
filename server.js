@@ -526,6 +526,14 @@ schedulerLib.wireSchedulerDeps({
   spawnClaude, getBareArgs, modelArgs, getSpawnEnv,
   getWssClients: () => wss.clients,
 });
+const httpRouter = require('./lib/http-router.js');
+httpRouter.wireHttpRouterDeps({
+  // Live state BY IDENTITY: the accessors return the root's own maps.
+  chatProcesses: () => chatProcesses,
+  pendingPermissionRequests: () => pendingPermissionRequests,
+  isInsideWorkspace, safeSend, getFileTreeCached,
+  getPermissionTimeoutMs: () => PERMISSION_TIMEOUT_MS,
+});
 
 // ===== AGENT HELPERS =====
 
@@ -782,224 +790,7 @@ function watchOpenFile(ws, relPath, fullPath) {
 
 // ===== HTTP SERVER =====
 
-const server = http.createServer((req, res) => {
-  if (req.url === '/' || req.url === '/index.html' || req.url.startsWith('/?') || req.url.startsWith('/index.html?')) {
-    res.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache, no-store, must-revalidate' });
-    res.end(fs.readFileSync(path.join(__dirname, 'public', 'index.html')));
-  } else if (req.url === '/favicon.svg') {
-    res.writeHead(200, { 'Content-Type': 'image/svg+xml' });
-    res.end(fs.readFileSync(path.join(__dirname, 'public', 'favicon.svg')));
-  } else if (req.url === '/marked.min.js') {
-    res.writeHead(200, { 'Content-Type': 'application/javascript' });
-    res.end(fs.readFileSync(path.join(__dirname, 'node_modules', 'marked', 'lib', 'marked.umd.js')));
-  } else if (req.url === '/app.js') {
-    res.writeHead(200, { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-cache, no-store, must-revalidate' });
-    res.end(fs.readFileSync(path.join(__dirname, 'public', 'app.js')));
-  } else if (req.url === '/api/agents') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(discoverAgents()));
-  } else if (req.url === '/api/files') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(getFileTreeCached()));
-  } else if (req.url.startsWith('/workspace-file?path=')) {
-    // Binary transport for the file-type registry's image and PDF viewers.
-    // Allowlist-only; bytes are served raw (the WS read_file path utf-8
-    // normalises and would corrupt them). Boundary guard mirrors /api/file.
-    // decodeURIComponent throws a URIError on malformed escapes (e.g. a lone
-    // '%'); guard it so one bad request cannot take the process down.
-    let filePath;
-    try { filePath = decodeURIComponent(req.url.split('path=')[1]); }
-    catch { res.writeHead(400); res.end('Bad request'); return; }
-    const fullPath = path.resolve(WORKSPACE, filePath);
-    const mime = BINARY_FILE_TYPES[path.extname(fullPath).toLowerCase()];
-    if (mime && isInsideWorkspace(fullPath) && fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
-      res.writeHead(200, {
-        'Content-Type': mime,
-        'X-Content-Type-Options': 'nosniff',
-        'Content-Disposition': 'inline',
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-      });
-      res.end(fs.readFileSync(fullPath));
-    } else {
-      res.writeHead(404);
-      res.end('File not found');
-    }
-  // Review-sidecar writes: the WS save_file path expects existing parent
-  // directories; sidecars live under .rundock/reviews/ which is created on
-  // first use. Constrained to exactly that directory, flat filenames only.
-  } else if (req.method === 'POST' && req.url === '/api/review-sidecar') {
-    let body = '';
-    let tooBig = false;
-    // Cap the accumulated body: an unbounded string is a memory/disk DoS
-    // primitive. Review sidecars are small; 4 MB is generous headroom.
-    const SIDECAR_MAX_BYTES = 4 * 1024 * 1024;
-    req.on('data', chunk => {
-      if (tooBig) return;
-      body += chunk;
-      if (body.length > SIDECAR_MAX_BYTES) {
-        tooBig = true;
-        body = ''; // release; stop accumulating (remaining chunks are ignored)
-        res.writeHead(413, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Sidecar too large' }));
-      }
-    });
-    req.on('end', () => {
-      if (tooBig) return;
-      try {
-        const data = JSON.parse(body);
-        const relPath = String(data.path || '');
-        if (!/^\.rundock\/reviews\/[\w.-]+\.json$/.test(relPath) || typeof data.content !== 'string') {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Invalid sidecar request' }));
-          return;
-        }
-        const fullPath = path.resolve(WORKSPACE, relPath);
-        if (!isInsideWorkspace(fullPath)) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Invalid path' }));
-          return;
-        }
-        fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-        fs.writeFileSync(fullPath, data.content, 'utf-8');
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ saved: true }));
-      } catch (e) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Invalid request' }));
-      }
-    });
-
-  } else if (req.url.startsWith('/api/file?path=')) {
-    // Guard decodeURIComponent: a malformed escape (lone '%') throws a
-    // URIError that would otherwise crash the process (no top-level handler).
-    let filePath;
-    try { filePath = decodeURIComponent(req.url.split('path=')[1]); }
-    catch { res.writeHead(400); res.end('Bad request'); return; }
-    const fullPath = path.resolve(WORKSPACE, filePath);
-    if (isInsideWorkspace(fullPath) && fs.existsSync(fullPath)) {
-      res.writeHead(200, { 'Content-Type': 'text/plain' });
-      res.end(fs.readFileSync(fullPath, 'utf-8'));
-    } else {
-      res.writeHead(404);
-      res.end('File not found');
-    }
-
-  // Permission hook endpoint: receives tool requests from the PreToolUse hook script,
-  // forwards them to the browser as permission cards, and holds the connection open
-  // until the user clicks Allow or Deny (or the 120s timeout fires).
-  } else if (req.method === 'POST' && req.url === '/api/permission-request') {
-    let body = '';
-    req.on('data', chunk => { body += chunk; });
-    req.on('end', () => {
-      try {
-        const data = JSON.parse(body);
-        const requestId = 'perm-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-        // Attribute the request to its conversation. Prefer the hook-supplied
-        // id; if empty, resolve from the session's running process so an id-less
-        // request is never misattributed to whatever conversation is on screen
-        // (L10). Log the genuinely-unattributable case so it is observable.
-        const convoId = resolvePermissionConvoId(data.conversation_id, data.session_id, chatProcesses);
-        if (!convoId) {
-          console.warn(`[Permission] Unattributed request (conversation_id empty, session=${data.session_id || 'none'} unmatched): ${data.tool_name} requestId=${requestId}`);
-        }
-
-        // Workspace boundary: a standing folder grant answers without a card,
-        // which also keeps granted folders working when no browser is open.
-        if (data.boundary && data.resolved_path && boundaryGrantCovers(data.resolved_path)) {
-          console.log(`[Permission] Standing folder grant covers ${data.resolved_path}: allowed without a card`);
-          recordEvent('permission', { conv: convoId || undefined, d: { tool: data.tool_name, decision: 'allow' } });
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ allow: true, reason: 'standing-folder-grant' }));
-          return;
-        }
-
-        // Store the pending HTTP response (resolved when user decides)
-        pendingPermissionRequests.set(requestId, {
-          res,
-          conversationId: convoId,
-          toolName: data.tool_name,
-          toolInput: data.tool_input,
-          boundary: !!data.boundary,
-          resolvedPath: data.resolved_path || null,
-          grantDir: data.grant_dir || null,
-          timer: setTimeout(() => {
-            const pending = pendingPermissionRequests.get(requestId);
-            if (pending) {
-              pendingPermissionRequests.delete(requestId);
-              console.log(`[Permission] Auto-denied (timeout): ${data.tool_name} convo=${convoId} requestId=${requestId}`);
-              recordEvent('permission', { conv: convoId, d: { tool: data.tool_name, decision: 'timeout' } });
-              // Send denied indicator to browser
-              safeSend(JSON.stringify({
-                type: 'permission_timeout',
-                requestId,
-                _conversationId: convoId
-              }));
-              res.writeHead(200, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ allow: false, reason: 'timeout' }));
-            }
-          }, PERMISSION_TIMEOUT_MS)
-        });
-
-        // Forward to browser as a control_request (existing permission card UI handles this)
-        safeSend(JSON.stringify({
-          type: 'control_request',
-          request_id: requestId,
-          request: {
-            subtype: 'can_use_tool',
-            tool_name: data.tool_name,
-            input: data.tool_input || {},
-            ...(data.boundary ? { boundary: true, resolved_path: data.resolved_path, grant_dir: data.grant_dir } : {})
-          },
-          _conversationId: convoId
-        }));
-
-        console.log(`[Permission] Hook request: ${data.tool_name} convo=${convoId} requestId=${requestId}`);
-      } catch (e) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Invalid request' }));
-      }
-    });
-
-  } else if (/^\/[\w-]+\.m?js$/.test(req.url)) {
-    // Top-level client modules under public/ (code-language.js, markers.js,
-    // and future extracted modules). The pattern allows no slashes and no
-    // dots outside the extension, so traversal cannot be expressed; the
-    // realpath prefix check guards anything that somehow gets past it.
-    // Regression note: code-language.js shipped in 0.10.0 with a script tag
-    // but no route, so browsers 404ed it and a defensive fallback in app.js
-    // silently masked the loss. The index-html-to-route test pins every
-    // script tag to a live route now.
-    const publicRoot = path.resolve(__dirname, 'public');
-    const filePath = path.resolve(publicRoot, req.url.slice(1));
-    if (filePath.startsWith(publicRoot + path.sep) && fs.existsSync(filePath)) {
-      res.writeHead(200, { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-cache, no-store, must-revalidate' });
-      res.end(fs.readFileSync(filePath));
-    } else {
-      res.writeHead(404);
-      res.end('Not found');
-    }
-  } else if (/^\/(editor|vendor|viewers)\/[\w./-]+\.(m?js|css)$/.test(req.url)) {
-    // Static JS/MJS/CSS files for the Tiptap editor module, its vendor bundle,
-    // vendored assets (e.g. highlight.js), and the file-type registry. Path is
-    // constrained to /editor/..., /vendor/... and /viewers/... under public/,
-    // with only .js/.mjs/.css extensions and only
-    // word chars + dot/slash/hyphen in the path. The realpath check below blocks
-    // any directory traversal that somehow gets past the regex.
-    const publicRoot = path.resolve(__dirname, 'public');
-    const filePath = path.resolve(publicRoot, req.url.slice(1));
-    if (filePath.startsWith(publicRoot + path.sep) && fs.existsSync(filePath)) {
-      const contentType = filePath.endsWith('.css') ? 'text/css' : 'application/javascript';
-      res.writeHead(200, { 'Content-Type': contentType, 'Cache-Control': 'no-cache, no-store, must-revalidate' });
-      res.end(fs.readFileSync(filePath));
-    } else {
-      res.writeHead(404);
-      res.end('Not found');
-    }
-  } else {
-    res.writeHead(404);
-    res.end('Not found');
-  }
-});
+const server = http.createServer(httpRouter.handleHttpRequest);
 
 // ===== WEBSOCKET SERVER =====
 
@@ -3960,14 +3751,7 @@ const VIEWABLE_FILE_RE = /\.(md|txt|json|html?|svg|png|jpe?g|gif|webp|pdf)$/i;
 // The /workspace-file allowlist: binary types only. Everything else either
 // rides the WS text path or is not served at all; this endpoint must never
 // become a generic file server for the workspace.
-const BINARY_FILE_TYPES = {
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.pdf': 'application/pdf',
-};
+// BINARY_FILE_TYPES (the viewer mime allowlist) lives in lib/http-router.js.
 
 // Classify a file for its tree icon: a .md whose frontmatter carries the
 // kanban-plugin key is a board, other .md are notes, and the rest by extension.
