@@ -44,7 +44,7 @@
     "OVERALL lib/scheduler.js": 100.0,
     "OVERALL lib/http-router.js": 98.5,
     "HTTP server + WS bootstrap (root remainder)": 97.9,
-    "WS connection + chat shim (root remainder)": 92.8,
+    "WS connection + chat shim (root remainder)": 100,
     "OVERALL lib/runtime/claude.js": 99.3,
     "OVERALL lib/protocol/handlers/index.js": 100,
     "OVERALL lib/protocol/handlers/workspace.js": 100,
