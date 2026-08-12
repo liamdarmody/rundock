@@ -29,7 +29,7 @@ const CLIENT_FILES = [
   // File-view registry + review modules
   'viewers/registry.js', 'viewers/text-anchor.js', 'viewers/sidecar-controller.js', 'viewers/artifact-review.js',
   // Extracted view modules
-  'views/skills.js', 'views/settings.js',
+  'views/skills.js', 'views/settings.js', 'views/team.js', 'views/profile.js',
 ];
 
 function isClientEntry(url) {
