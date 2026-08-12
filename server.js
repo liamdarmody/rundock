@@ -100,19 +100,10 @@ const DISALLOWED_TOOLS = DISALLOWED_TOOLS_KNOWLEDGE;
 const ALLOWED_TOOLS_INTERACTIVE_BASE = 'Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,ToolSearch,Agent,Skill';
 const ALLOWED_TOOLS_LEGACY_BASE = 'Bash,WebFetch,WebSearch';
 
-// Default model for any agent that does not declare one in its frontmatter, and
-// for the synthesised orchestrator and Doc. Sonnet is the balanced choice and is
-// available on every paid plan; complex agents opt up to a stronger model via `model: opus`
-// in their frontmatter, quick agents opt down to `model: haiku`. Always passing
-// an explicit --model (see modelArgs + spawnClaude) keeps model selection
-// predictable instead of inheriting whatever Claude Code resolves from the user's
-// environment (e.g. a Pro subscription resolving the invalid model name "pro").
-// The value itself lives in lib/config.js so lib/agents/discovery.js resolves
-// the same default without reaching back into the root.
+// DEFAULT_MODEL lives in lib/config.js (shared with lib/agents and
+// lib/runtime/claude.js, where modelArgs and spawnClaude apply it); the
+// root re-reads it only for the _internal export.
 const { DEFAULT_MODEL } = config;
-function modelArgs(agent) {
-  return ['--model', (agent && agent.model) || DEFAULT_MODEL];
-}
 
 // readMcpServerNames lives in lib/workspace/analysis.js (used only by the
 // workspace analysis).
@@ -143,50 +134,8 @@ function getPermissionMode() {
   return 'acceptEdits';
 }
 
-// Returns startup args that configure workspace context without using --bare.
-// Previously used --bare for faster startup, but --bare skips keychain/OAuth reads
-// which causes "Not logged in" errors for users who authenticate via `claude login`.
-// We now pass context flags explicitly without --bare so auth works normally.
-function getBareArgs() {
-  if (!WORKSPACE) return [];
-  const args = [];
-  // Ensure CLAUDE.md discovery for the workspace
-  args.push('--add-dir', WORKSPACE);
-  // Load hooks (permission system) from settings.local.json
-  const settingsPath = path.join(WORKSPACE, '.claude', 'settings.local.json');
-  if (fs.existsSync(settingsPath)) {
-    args.push('--settings', settingsPath);
-  }
-  // Load MCP server access from .mcp.json
-  const mcpPath = path.join(WORKSPACE, '.mcp.json');
-  if (fs.existsSync(mcpPath)) {
-    args.push('--mcp-config', mcpPath);
-  }
-  return args;
-}
-
-// Returns spawn env with workspace mode flag for the permission hook.
-function getSpawnEnv(convoId) {
-  const env = { ...process.env, TERM: 'dumb', RUNDOCK: '1', RUNDOCK_PORT: String(ACTUAL_PORT), RUNDOCK_WORKSPACE: WORKSPACE || '' };
-  if (convoId) env.RUNDOCK_CONVO_ID = convoId;
-  // Never let spawned agent processes inherit the test runner's coverage
-  // collection: a child killed mid-turn (e.g. a superseded Codex exec)
-  // leaves truncated coverage JSON that corrupts the runner's merge and
-  // intermittently fails npm run test:coverage.
-  delete env.NODE_V8_COVERAGE;
-  // In the packaged app there is no system `node`, so the PreToolUse permission
-  // hook is run with Rundock's bundled runtime (process.execPath) behaving as
-  // Node via ELECTRON_RUN_AS_NODE. The hook is a child of the spawned claude
-  // process and inherits this env. Without it, on a machine with no Node the
-  // hook can't run at all and the permission system silently does nothing.
-  if (process.env.RUNDOCK_ELECTRON) env.ELECTRON_RUN_AS_NODE = '1';
-  try {
-    const state = readState();
-    if (state.workspaceMode === 'code') env.RUNDOCK_CODE_MODE = '1';
-  } catch (e) { /* default knowledge mode */ }
-  return env;
-}
-
+// getBareArgs and getSpawnEnv live in lib/runtime/claude.js (spawn
+// plumbing); the workspace root and listening port are read at use time.
 // Pending permission requests from PreToolUse hooks (keyed by requestId).
 // Each entry holds the HTTP response object so we can resolve it when the user decides.
 const pendingPermissionRequests = new Map();
@@ -503,6 +452,18 @@ const {
 agentsPrompt.wirePromptDeps({ discoverSkills, detectCodexCached });
 workspaceAnalysis.wireAnalysisDeps({ parseSkillFile });
 workspaceScaffold.wireScaffoldDeps({ invalidateAgentCache, rebaselineAgentsWatcher });
+// ===== SPAWN PLUMBING (lib/runtime/claude.js) =====
+// modelArgs/getBareArgs/getSpawnEnv, the child-pid registry, resolveClaudeBin,
+// killProcessTree, and spawnClaude. Only the listening port is wired in:
+// everything else the module needs is lib-owned or read at use time.
+const claudeRuntime = require('./lib/runtime/claude.js');
+const {
+  modelArgs, getBareArgs, getSpawnEnv,
+  resolveClaudeBin, killProcessTree, spawnClaude,
+  registerChildPid, unregisterChildPid,
+  loadPidFile, savePidFile, pidOf, pidRecordAlive, processCommand,
+} = claudeRuntime;
+claudeRuntime.wireClaudeRuntimeDeps({ getActualPort: () => ACTUAL_PORT });
 const codexGlue = require('./lib/runtime/codex-glue.js');
 const {
   shutdownCodexAppServer,
@@ -3894,89 +3855,9 @@ function getFileTreeCached() {
 
 // ===== PROCESS CLEANUP (S4) =====
 
-// PID file: track all spawned Claude Code process PIDs so orphans can be cleaned up
-// on restart if the parent crashes without running exit handlers.
-function pidFilePath() {
-  if (!WORKSPACE) return null;
-  return path.join(rundockDir(), 'child-pids.json');
-}
-
-function loadPidFile() {
-  const p = pidFilePath();
-  if (!p) return [];
-  try { return JSON.parse(fs.readFileSync(p, 'utf-8')); } catch (e) { return []; }
-}
-
-function savePidFile(pids) {
-  const p = pidFilePath();
-  if (!p) return;
-  try {
-    fs.mkdirSync(path.dirname(p), { recursive: true });
-    fs.writeFileSync(p, JSON.stringify(pids));
-  } catch (e) {}
-}
-
-// Pid records carry the command they were spawned as, so a pid the OS has
-// since recycled onto an unrelated process is not signalled. The file used to
-// hold bare integers with no way to tell the difference; those are still read
-// for one upgrade, and simply lack the recycling guard.
-function pidOf(rec) { return typeof rec === 'number' ? rec : (rec && rec.pid); }
-
-// Read a process's command line.
-//
-// Deliberately `args=` and not `comm=`. On Linux `comm` is the THREAD name from
-// /proc, not the executable: Node 24 renames its main thread to "MainThread",
-// so every record would have been judged foreign and discarded, defeating the
-// tracking this guard exists to protect. Node 22 on the same machine reports
-// "node". The command line is stable across both, and across macOS, where
-// `comm` gives a full path instead.
-function processCommand(pid) {
-  if (process.platform === 'win32') return null; // no cheap equivalent; skip the check
-  try {
-    const { execFileSync } = require('child_process');
-    return execFileSync('ps', ['-p', String(pid), '-o', 'args='], {
-      encoding: 'utf-8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-  } catch (e) { return null; } // not running, or ps unavailable
-}
-
-/** Running AND still the process we spawned, rather than a recycled pid. */
-function pidRecordAlive(rec) {
-  const pid = pidOf(rec);
-  if (!pid) return false;
-  try { process.kill(pid, 0); } catch (e) { return false; }
-  const expected = typeof rec === 'object' && rec ? rec.cmd : null;
-  if (!expected) return true; // legacy record, or a platform without the check
-  const actual = processCommand(pid);
-  if (actual == null) return true; // cannot tell; assume ours rather than leak it
-  return commandsMatch(actual, expected);
-}
-
-// Does this command line still look like the thing we spawned?
-//
-// Deliberately loose: the guard only has to tell "the process we started" from
-// "something unrelated that inherited this id". Command-line formatting varies
-// by platform and by runtime version, and a strict comparison has already
-// broken once that way. Being too permissive means a redundant signal to a
-// process that is probably ours; being too strict means untracked processes
-// leaking forever, which is the failure this whole area exists to prevent.
-function commandsMatch(actual, expected) {
-  const e = path.basename(String(expected || '').trim());
-  const a = String(actual || '').trim();
-  if (!e || !a) return true;
-  return a.includes(e);
-}
-
-function registerChildPid(pid, cmd) {
-  const records = loadPidFile();
-  if (records.some(r => pidOf(r) === pid)) return;
-  records.push({ pid, at: Date.now(), cmd: cmd ? path.basename(cmd) : null });
-  savePidFile(records);
-}
-
-function unregisterChildPid(pid) {
-  savePidFile(loadPidFile().filter(r => pidOf(r) !== pid));
-}
+// The child-pid registry (pid file, recycling guard, register/unregister)
+// lives in lib/runtime/claude.js with spawnClaude, its writer. The cleanup
+// machinery below reads and prunes the same file through the lib module.
 
 // Stop whatever executes a conversation entry. Claude entries own a child
 // process and get the signal; Codex entries are process-less (their turns
@@ -4116,118 +3997,8 @@ function handleChatSpawnError(err, convoId) {
   }
 }
 
-// Resolve the Claude binary path lazily and cache it. Independent of
-// Electron's findClaude so Path B users (running `node server.js` directly
-// without Electron) get correct .cmd resolution on Windows too. On lookup
-// failure, returns the literal 'claude' so spawn's 'error' event surfaces the
-// real ENOENT rather than masking it. The absolute path lets Node execute
-// .cmd files on Windows without `shell: true`, which would expose args
-// (containing user and system prompts) to command-injection risk.
-let _resolvedClaudeBin = null;
-function resolveClaudeBin() {
-  if (_resolvedClaudeBin) return _resolvedClaudeBin;
-  const isWindows = process.platform === 'win32';
-  try {
-    const { execSync } = require('child_process');
-    const lookupCmd = isWindows ? 'where.exe claude' : 'which claude';
-    // PROBE_STDIO closes stdin: on Windows a version/which probe against an
-    // open piped stdin can hang for its full timeout (verified live for
-    // codex, Findings 4/5); the claude probes take the same precaution.
-    const output = execSync(lookupCmd, { timeout: 5000, encoding: 'utf-8', stdio: codexRuntime.PROBE_STDIO }).trim();
-    if (!output) return (_resolvedClaudeBin = 'claude');
-    if (isWindows) {
-      const candidates = output.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-      const exe = candidates.find(c => c.toLowerCase().endsWith('.exe'));
-      const cmd = candidates.find(c => c.toLowerCase().endsWith('.cmd'));
-      _resolvedClaudeBin = exe || cmd || candidates[0] || 'claude';
-    } else {
-      _resolvedClaudeBin = output;
-    }
-    return _resolvedClaudeBin;
-  } catch {
-    return (_resolvedClaudeBin = 'claude');
-  }
-}
-
-// Spawn a Claude Code process with PID tracking for crash cleanup.
-// Drop-in replacement for spawn('claude', ...) that registers/unregisters PIDs.
-// Signal a spawned process AND everything it started.
-//
-// An agent CLI spawns its own children: an MCP server per configured entry,
-// plus tool subprocesses. Those are grandchildren we hold no handle on and
-// never record, so signalling one pid leaves them running and reparented,
-// holding memory until the machine restarts.
-//
-// On POSIX the children are spawned detached, which puts each in its own
-// process group whose id equals the leader's pid, so a negative pid signals
-// the whole group. Windows has no process groups; taskkill /T walks the tree
-// instead. Windows also has no real signal semantics (Node maps kill() onto
-// TerminateProcess), so the graceful and forceful paths are the same there.
-function killProcessTree(target, signal = 'SIGTERM') {
-  const pid = typeof target === 'number' ? target : (target && target.pid);
-  if (!pid) return;
-  // Floor: kill at least the process itself, so no path here can end up doing
-  // less than the single-pid kill this replaced.
-  const killJustThis = () => {
-    try {
-      if (typeof target === 'number') process.kill(pid, signal);
-      else target.kill(signal);
-    } catch (e) { /* already dead */ }
-  };
-
-  if (process.platform === 'win32') {
-    // Windows has no process groups; taskkill walks the tree instead. It is
-    // spawned rather than awaited, so a missing binary arrives as an error
-    // EVENT and never reaches a try/catch: without the listener below a
-    // failure would kill nothing at all, which is worse than what this
-    // replaced. Order matters, since killing the parent first would orphan
-    // the children out of taskkill's reach.
-    let killer = null;
-    try {
-      killer = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
-      killer.on('error', killJustThis);
-    } catch (e) {
-      killJustThis();
-    }
-    return;
-  }
-
-  // Negative pid = the whole process group. Fails with ESRCH if the group is
-  // already gone, or EPERM if the child was never detached; fall back to the
-  // single process so this is never worse than the old behaviour.
-  try { process.kill(-pid, signal); return; } catch (e) {}
-  killJustThis();
-}
-
-function spawnClaude(args, options, onError) {
-  // Safety net: never spawn Claude Code without an explicit --model. Call sites
-  // pass the agent's model (see modelArgs); this guards any path that doesn't,
-  // so the model can never silently fall back to the user's environment.
-  if (!args.includes('--model')) args = ['--model', DEFAULT_MODEL, ...args];
-  // detached puts the child at the head of its own process group so its whole
-  // subtree can be signalled together. Safe for terminal users: the server
-  // installs its own SIGINT and SIGTERM handlers and kills children explicitly,
-  // so Ctrl-C never depended on the terminal reaching them by group.
-  const proc = spawn(resolveClaudeBin(), args, { ...options, detached: process.platform !== 'win32' });
-  if (proc.pid) {
-    registerChildPid(proc.pid, resolveClaudeBin());
-    proc.on('close', () => unregisterChildPid(proc.pid));
-  }
-  // Always attach a baseline 'error' listener so an unhandled error event
-  // cannot propagate out of the WebSocket message handler and tear down the
-  // connection. Caller-provided onError does the user-facing surfacing; this
-  // wrapper guarantees the listener exists and that the callback runs inside
-  // try/catch.
-  proc.on('error', (err) => {
-    try {
-      console.error(`[spawnClaude] spawn error code=${err.code || ''} msg=${err.message}`);
-      if (typeof onError === 'function') onError(err);
-    } catch (e) {
-      console.error('[spawnClaude] onError handler threw:', e);
-    }
-  });
-  return proc;
-}
+// resolveClaudeBin, killProcessTree, and spawnClaude live in
+// lib/runtime/claude.js (spawn plumbing).
 
 // ===== RUNTIME STATUS =====
 // The Codex runtime glue (shared app-server lifecycle, turns, delegate
