@@ -111,6 +111,58 @@ describe('handler seams (stub ctx, capture ws)', () => {
     }
   });
 
+  test('set_workspace rolls the root back and answers when the open path throws', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-handlers-'));
+    const rolledBack = [];
+    const invalidated = [];
+    const ctx = {
+      signals: { phaseTimer: () => { throw new Error('prepare exploded'); } },
+      runtime: { killAllChildren: () => {} },
+      workspace: { setWorkspaceRoot: (d) => { rolledBack.push(d); config.setWorkspace(d); } },
+      agents: { invalidateAgentCache: () => invalidated.push('agents') },
+      store: { clearSearchFailure: () => invalidated.push('search') },
+    };
+    try {
+      const ws = captureWs();
+      table.set_workspace(ctx, ws, { type: 'set_workspace', path: dir });
+      assert.strictEqual(ws.sent.length, 1, 'exactly one reply, never silence');
+      assert.strictEqual(ws.sent[0].type, 'workspace_error');
+      assert.match(ws.sent[0].message, /^Could not open workspace: prepare exploded$/);
+      assert.deepStrictEqual(rolledBack, [original], 'the previous root was restored');
+      assert.deepStrictEqual(invalidated, ['agents', 'search'], 'caches cleared after rollback');
+      assert.strictEqual(config.getWorkspace(), original, 'no half-switch persists');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('set_workspace still answers when even the rollback throws', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-handlers-'));
+    const ctx = {
+      signals: { phaseTimer: () => { throw new Error('prepare exploded'); } },
+      runtime: { killAllChildren: () => {} },
+      workspace: { setWorkspaceRoot: () => { throw new Error('rollback exploded too'); } },
+      agents: { invalidateAgentCache: () => {} },
+      store: { clearSearchFailure: () => {} },
+    };
+    try {
+      const ws = captureWs();
+      table.set_workspace(ctx, ws, { type: 'set_workspace', path: dir });
+      assert.strictEqual(ws.sent.length, 1, 'the reply survives a failed rollback');
+      assert.strictEqual(ws.sent[0].type, 'workspace_error');
+      assert.match(ws.sent[0].message, /^Could not open workspace: prepare exploded$/,
+        'the ORIGINAL failure is reported, not the rollback failure');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('create_path routes its guard through ctx.workspace', () => {
     const table = buildDispatch();
     const original = config.getWorkspace();

@@ -99,24 +99,16 @@ test('legacy close flush: a non-JSON fragment degrades to a raw message, never a
   await client.waitFor(m => m.type === 'system' && m.subtype === 'done' && m._conversationId === convoId, { since, label: 'done after raw flush' });
 });
 
-test('a handler throwing inside the message loop is contained: the connection keeps serving', async () => {
-  // set_workspace into a directory whose .rundock is a FILE throws in the
-  // handler (the carded silent-no-reply gap). This test pins CONTAINMENT
-  // only: the loop's catch swallows the throw and the connection stays
-  // usable. It deliberately does NOT pin the missing error reply, so the
-  // carded fix (answer with a workspace_error) lands without touching this.
-  const fs = require('node:fs');
-  const os = require('node:os');
-  const path = require('node:path');
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rundock-broken-ws-'));
-  fs.writeFileSync(path.join(dir, '.rundock'), 'a file, not a directory');
-  try {
-    const since = client.messages.length;
-    client.send({ type: 'set_workspace', path: dir });
-    client.send({ type: 'get_workspaces' });
-    const { msg } = await client.waitFor(m => m.type === 'workspaces', { since, label: 'loop alive after handler throw' });
-    assert.ok(msg, 'the message loop survived the throwing handler');
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+test('a throw inside the message loop is contained: the connection keeps serving', async () => {
+  // The loop's catch is the last line of defence for ANY throw between
+  // parse and dispatch. Drive it with a frame that is not JSON at all: the
+  // parse throws before any handler runs, which keeps this pin independent
+  // of every handler's own error handling (the original construction used
+  // the broken-.rundock set_workspace throw, which the handler now answers
+  // properly instead of throwing).
+  const since = client.messages.length;
+  client.ws.send('this is not json {');
+  client.send({ type: 'get_workspaces' });
+  const { msg } = await client.waitFor(m => m.type === 'workspaces', { since, label: 'loop alive after parse throw' });
+  assert.ok(msg, 'the message loop survived the malformed frame');
 });
