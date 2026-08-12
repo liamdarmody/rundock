@@ -191,10 +191,11 @@ describe('P1 regressions', () => {
 
   test('pick_folder: folder picker is async (non-blocking), not execSync', () => {
     // The pick_folder handler must use the async execFile, not execSync, so the
-    // native dialog does not block the event loop for up to 60s.
-    const src = fs.readFileSync(path.join(__dirname, '../../server.js'), 'utf-8');
-    const start = src.indexOf("msg.type === 'pick_folder'");
-    const block = src.slice(start, src.indexOf("msg.type === 'create_workspace'", start));
+    // native dialog does not block the event loop for up to 60s. The handler
+    // lives in lib/protocol/handlers/workspace.js (slice: WS handlers).
+    const src = fs.readFileSync(path.join(__dirname, '../../lib/protocol/handlers/workspace.js'), 'utf-8');
+    const start = src.indexOf('function handlePickFolder');
+    const block = src.slice(start, src.indexOf('function handleCreateWorkspace', start));
     assert.ok(!/execSync/.test(block), 'pick_folder must not use execSync (blocking)');
     assert.ok(/execFile\(/.test(block), 'pick_folder must use async execFile');
   });
@@ -272,8 +273,10 @@ describe('P2/P3 regressions', () => {
     // Post-fix: get_conversations persists at most once per load (only when
     // something changed) and skips reconciling a conversation with a live
     // process (its activeAgentId is a legitimate live delegate).
-    const src = fs.readFileSync(path.join(__dirname, '../../server.js'), 'utf-8');
-    const start = src.indexOf("msg.type === 'get_conversations'");
+    // The handler lives in lib/protocol/handlers/conversations.js (slice: WS
+    // handlers); the live process map is injected as ctx.processes.
+    const src = fs.readFileSync(path.join(__dirname, '../../lib/protocol/handlers/conversations.js'), 'utf-8');
+    const start = src.indexOf('function handleGetConversations');
     const end = src.indexOf('stripMdServer', start);
     const block = src.slice(start, end);
     // exactly one writeConversations in the reconcile block, and it is guarded
@@ -281,7 +284,7 @@ describe('P2/P3 regressions', () => {
       'get_conversations must persist at most once per load');
     assert.match(block, /if \(convosChanged\) writeConversations\(cleaned\)/,
       'the single write must be conditional on a change');
-    assert.match(block, /!chatProcesses\.has\(c\.id\)/,
+    assert.match(block, /!ctx\.processes\.has\(c\.id\)/,
       'reconciliation must skip conversations with a live process');
   });
 
@@ -374,7 +377,8 @@ describe('P2/P3 regressions', () => {
     assert.deepStrictEqual(killed, ['content-lead', 'chief-of-staff'],
       'both the parent and the grandparent orchestrator must be reaped on nested cancel');
     // Assert the production cancel handler walks originalEntry.delegation.
-    const src = fs.readFileSync(path.join(__dirname, '../../server.js'), 'utf-8');
+    // (The handler lives in lib/protocol/handlers/process-control.js.)
+    const src = fs.readFileSync(path.join(__dirname, '../../lib/protocol/handlers/process-control.js'), 'utf-8');
     assert.match(src, /d = parent\.delegation;/, 'cancel must ascend the parent chain');
   });
 
@@ -397,7 +401,8 @@ describe('additional regressions', () => {
     // creates the file..." asserts the FIRST agents broadcast includes the new
     // agent. Here we assert the source order directly: the handler body
     // invalidates the cache before it calls discoverAgents() for the broadcast.
-    const src = fs.readFileSync(path.join(__dirname, '../../server.js'), 'utf-8');
+    // (The handler lives in lib/protocol/handlers/team.js.)
+    const src = fs.readFileSync(path.join(__dirname, '../../lib/protocol/handlers/team.js'), 'utf-8');
     const start = src.indexOf("type: 'agent_saved'");
     const end = src.indexOf("type: 'agents'", start);
     const between = src.slice(start, end);
