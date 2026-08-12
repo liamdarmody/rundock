@@ -40,6 +40,7 @@
     "WebSocket message handlers": 96.3,
     "Spawn plumbing (spawnClaude, resolveClaudeBin, errors)": 98.1,
     "Runtime status + server permission bridge (root remainder)": 100,
-    "Codex glue (app-server lifecycle, turns, delegate wiring)": 96
+    "Codex glue (app-server lifecycle, turns, delegate wiring)": 96,
+    "OVERALL lib/scheduler.js": 100.0
   }
 }

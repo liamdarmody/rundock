@@ -48,10 +48,12 @@ const AREA_DEFS = [
   ['server.js', '  - wireProcessHandlers (stream-json + interception)', /^function wireProcessHandlers\(/, /^function handleScopeReturn/],
   ['server.js', '  - handleScopeReturn', /^function handleScopeReturn/, /^function handleDelegation/],
   ['server.js', '  - handleDelegation', /^function handleDelegation/, /^wss\.on\('connection'/],
-  // Slice 3 retarget: the scheduler's old end anchor (analyzeWorkspace)
-  // moved to lib/workspace/; the area now runs to the HTTP server, with
-  // only pointer comments in between.
-  ['server.js', 'Scheduler (getNextRun + startScheduler + executeRoutine)', /^function startScheduler\(/, /^const server = http\.createServer/],
+  // Slice 6 migration: the scheduler moved to lib/scheduler.js and keeps
+  // its floor under the same label. The area now genuinely contains the
+  // routine-state persistence (loadRoutineState/saveRoutineState/
+  // recordRoutineRun), which in the root sat outside every area span and
+  // was only floored via the file overall.
+  ['lib/scheduler.js', 'Scheduler (getNextRun + startScheduler + executeRoutine)', /^const unwired/, /^module\.exports/],
   // Slice 2 migrations: discovery + frontmatter parsing and the system
   // prompt / roster builders moved to lib/agents/ and keep their floors
   // under the same labels. The prompt area now genuinely contains the
@@ -62,7 +64,10 @@ const AREA_DEFS = [
   ['lib/agents/discovery.js', 'Agent discovery + frontmatter parsing', /^let _agentCache/, /^module\.exports/],
   ['server.js', 'Skill discovery', /^function discoverSkills\(/, /^function getFileTree\(/],
   ['lib/agents/prompt.js', 'System prompt + roster builders', /^const unwired/, /^module\.exports/],
-  ['server.js', 'Codex probe + root caches + open-file watch (remainder)', /^let _codexDetectCache/, /^\/\/ ===== SCHEDULER =====/],
+  // Slice 6 retarget: the area's old end anchor (the SCHEDULER banner)
+  // moved to lib/scheduler.js; the area now runs to the HTTP server, with
+  // only pointer comments in between.
+  ['server.js', 'Codex probe + root caches + open-file watch (remainder)', /^let _codexDetectCache/, /^const server = http\.createServer/],
   // Slice 3 migrations: analysis and scaffolding moved to lib/workspace/
   // and keep their floors under the same labels. Boundary grants get their
   // own NEW area: in the root they sat outside every area span and were
@@ -99,7 +104,7 @@ const OVERALL_FILES = [
   'lib/config.js', 'lib/store/persistence.js', 'lib/store/transcripts.js',
   'lib/agents/discovery.js', 'lib/agents/prompt.js',
   'lib/workspace/boundary.js', 'lib/workspace/analysis.js', 'lib/workspace/scaffold.js',
-  'lib/signals.js', 'lib/runtime/codex-glue.js',
+  'lib/signals.js', 'lib/runtime/codex-glue.js', 'lib/scheduler.js',
 ];
 
 // ---------------------------------------------------------------------------
