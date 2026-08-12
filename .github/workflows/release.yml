@@ -62,7 +62,19 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
       - name: Install dependencies (incl. dev, for Playwright)
-        run: npm ci
+        # The full install runs network postinstalls (electron, ffmpeg-static)
+        # that npm's own fetch retries do not cover; registry socket hang-ups
+        # have killed this step three times. Retry the whole install with a
+        # clean node_modules between attempts.
+        run: |
+          for attempt in 1 2 3; do
+            if npm ci; then exit 0; fi
+            echo "npm ci failed (attempt $attempt); cleaning and retrying in 20s"
+            rm -rf node_modules
+            sleep 20
+          done
+          echo "npm ci failed on all 3 attempts"
+          exit 1
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
       - name: Run E2E suite
@@ -88,7 +100,19 @@ jobs:
           node-version-file: '.nvmrc'
 
       - name: Install dependencies
-        run: npm ci
+        # The full install runs network postinstalls (electron, ffmpeg-static)
+        # that npm's own fetch retries do not cover; registry socket hang-ups
+        # have killed this step three times. Retry the whole install with a
+        # clean node_modules between attempts.
+        run: |
+          for attempt in 1 2 3; do
+            if npm ci; then exit 0; fi
+            echo "npm ci failed (attempt $attempt); cleaning and retrying in 20s"
+            rm -rf node_modules
+            sleep 20
+          done
+          echo "npm ci failed on all 3 attempts"
+          exit 1
 
       - name: Decode App Store Connect API key
         env:
@@ -145,7 +169,19 @@ jobs:
           node-version-file: '.nvmrc'
 
       - name: Install dependencies
-        run: npm ci
+        # The full install runs network postinstalls (electron, ffmpeg-static)
+        # that npm's own fetch retries do not cover; registry socket hang-ups
+        # have killed this step three times. Retry the whole install with a
+        # clean node_modules between attempts.
+        run: |
+          for attempt in 1 2 3; do
+            if npm ci; then exit 0; fi
+            echo "npm ci failed (attempt $attempt); cleaning and retrying in 20s"
+            rm -rf node_modules
+            sleep 20
+          done
+          echo "npm ci failed on all 3 attempts"
+          exit 1
 
       - name: Extract release name and notes from the changelog
         shell: bash
