@@ -44,10 +44,17 @@ const FLOOR_TOLERANCE = 0.25;
 // lib/, the SAME slice PR updates its file here, and the area keeps its
 // floor.
 const AREA_DEFS = [
-  ['server.js', 'Delegation / orchestration engine', /^function wireProcessHandlers\(/, /^wss\.on\('connection'/],
-  ['server.js', '  - wireProcessHandlers (stream-json + interception)', /^function wireProcessHandlers\(/, /^function handleScopeReturn/],
-  ['server.js', '  - handleScopeReturn', /^function handleScopeReturn/, /^function handleDelegation/],
-  ['server.js', '  - handleDelegation', /^function handleDelegation/, /^wss\.on\('connection'/],
+  // Slice 10 migration: the delegation / scope-return engine moved to
+  // lib/delegation/engine.js and keeps its floors under the same labels.
+  // The overall area now genuinely contains handleEndDelegation (the
+  // end_delegation glue, which in the root lived inside the WS connection
+  // handler's shim) and the handleDelegation sub-area gained
+  // spawnResumedProcess's span end (the function sits between
+  // handleScopeReturn and handleDelegation, unchanged from the root order).
+  ['lib/delegation/engine.js', 'Delegation / orchestration engine', /^function wireProcessHandlers\(/, /^module\.exports/],
+  ['lib/delegation/engine.js', '  - wireProcessHandlers (stream-json + interception)', /^function wireProcessHandlers\(/, /^function handleScopeReturn/],
+  ['lib/delegation/engine.js', '  - handleScopeReturn', /^function handleScopeReturn/, /^function handleDelegation/],
+  ['lib/delegation/engine.js', '  - handleDelegation', /^function handleDelegation/, /^function handleEndDelegation/],
   // Slice 6 migration: the scheduler moved to lib/scheduler.js and keeps
   // its floor under the same label. The area now genuinely contains the
   // routine-state persistence (loadRoutineState/saveRoutineState/
@@ -117,6 +124,7 @@ const AREA_DEFS = [
 const OVERALL_FILES = [
   'server.js', 'codex.js', 'codex-appserver.js', 'search.js',
   'lib/delegation/markers.js', 'lib/delegation/handback.js', 'lib/delegation/state.js',
+  'lib/delegation/engine.js',
   'lib/runtime/claude.js',
   'lib/config.js', 'lib/store/persistence.js', 'lib/store/transcripts.js',
   'lib/agents/discovery.js', 'lib/agents/prompt.js',
