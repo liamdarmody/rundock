@@ -91,7 +91,14 @@ const AREA_DEFS = [
   // connection state that lived below the router.
   ['lib/http-router.js', 'HTTP request router (incl. permission bridge)', /^const unwired/, /^module\.exports/],
   ['server.js', 'HTTP server + WS bootstrap (root remainder)', /^const server = http\.createServer/, /^function appendTranscript\(/],
-  ['server.js', 'WebSocket message handlers', /^wss\.on\('connection'/, /^function discoverSkills\(/],
+  // Slice 9 migration: the WS message handlers moved to
+  // lib/protocol/handlers/ (six modules behind a dispatch table), floored
+  // whole-file via their OVERALL entries below. The root remainder area
+  // covers what deliberately stayed between the same anchors: the
+  // connection handler with the dispatch wiring, the kill-window chat shim
+  // (the pinned follow-up write-condition block), the delegate and
+  // end_delegation glue, and flush_buffer.
+  ['server.js', 'WS connection + chat shim (root remainder)', /^wss\.on\('connection'/, /^function discoverSkills\(/],
   // Slice 5 migration: the Codex glue (app-server lifecycle, turns,
   // delegate wiring) moved to lib/runtime/codex-glue.js. The root
   // remainder area covers what deliberately stayed: getRuntimeStatus with
@@ -116,6 +123,10 @@ const OVERALL_FILES = [
   'lib/workspace/boundary.js', 'lib/workspace/analysis.js', 'lib/workspace/scaffold.js',
   'lib/signals.js', 'lib/runtime/codex-glue.js', 'lib/scheduler.js',
   'lib/http-router.js',
+  'lib/protocol/handlers/index.js', 'lib/protocol/handlers/workspace.js',
+  'lib/protocol/handlers/conversations.js', 'lib/protocol/handlers/history.js',
+  'lib/protocol/handlers/team.js', 'lib/protocol/handlers/files.js',
+  'lib/protocol/handlers/process-control.js',
 ];
 
 // ---------------------------------------------------------------------------
