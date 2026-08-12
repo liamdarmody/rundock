@@ -43,6 +43,7 @@
     "Codex glue (app-server lifecycle, turns, delegate wiring)": 96,
     "OVERALL lib/scheduler.js": 100.0,
     "OVERALL lib/http-router.js": 98.5,
-    "HTTP server + WS bootstrap (root remainder)": 97.9
+    "HTTP server + WS bootstrap (root remainder)": 97.9,
+    "OVERALL lib/runtime/claude.js": 99.3
   }
 }

@@ -97,9 +97,11 @@ const AREA_DEFS = [
   // remainder area covers what deliberately stayed: getRuntimeStatus with
   // its probe caches (settings machinery that sat mid-span) and
   // requestServerPermission (the generic bridge, injected into the glue).
-  // The spawn-plumbing end anchor retargets to the remainder banner (its
-  // old end, the CODEX RUNTIME banner, moved with the glue).
-  ['server.js', 'Spawn plumbing (spawnClaude, resolveClaudeBin, errors)', /^function resolveClaudeBin\(/, /^\/\/ ===== RUNTIME STATUS =====/],
+  // The spawn plumbing (args/env trio, child-pid registry, resolveClaudeBin,
+  // killProcessTree, spawnClaude) moved to lib/runtime/claude.js; the area
+  // follows it, whole-file, and now also sees the trio and the registry,
+  // which in the root sat outside every area span (file-overall only).
+  ['lib/runtime/claude.js', 'Spawn plumbing (spawnClaude, resolveClaudeBin, errors)', /^const unwired/, /^module\.exports/],
   ['server.js', 'Runtime status + server permission bridge (root remainder)', /^\/\/ ===== RUNTIME STATUS =====/, /^\/\/ Graceful shutdown/],
   ['lib/runtime/codex-glue.js', 'Codex glue (app-server lifecycle, turns, delegate wiring)', /^let _resolvedCodexBin/, /^module\.exports/],
 ];
@@ -108,6 +110,7 @@ const AREA_DEFS = [
 const OVERALL_FILES = [
   'server.js', 'codex.js', 'codex-appserver.js', 'search.js',
   'lib/delegation/markers.js', 'lib/delegation/handback.js', 'lib/delegation/state.js',
+  'lib/runtime/claude.js',
   'lib/config.js', 'lib/store/persistence.js', 'lib/store/transcripts.js',
   'lib/agents/discovery.js', 'lib/agents/prompt.js',
   'lib/workspace/boundary.js', 'lib/workspace/analysis.js', 'lib/workspace/scaffold.js',

@@ -83,3 +83,48 @@ describe('agent subprocess trees', () => {
       + `The modelled MCP process (pid ${kidPid}) outlived the server's own cleanup.`);
   });
 });
+
+describe('orphan cleanup on launch', () => {
+  // cleanOrphanedProcesses is what boot runs against a previous session's
+  // pid file. Three record fates: a dead pid is forgotten (continue), a live
+  // pid is signalled, and a signalled pid still alive on the immediate
+  // re-check stays tracked so a later launch can try again.
+  test('signals live records, keeps SIGTERM survivors, forgets the dead', async () => {
+    const { spawn } = require('child_process');
+    const fs = require('fs');
+    const path = require('path');
+    const pidFile = path.join(h.workspaceDir, '.rundock', 'child-pids.json');
+    const priorContent = fs.existsSync(pidFile) ? fs.readFileSync(pidFile, 'utf-8') : null;
+
+    // A record whose process has exited (and been reaped): skipped, forgotten.
+    const dead = spawn(process.execPath, ['-e', '']);
+    await new Promise(res => dead.on('exit', res));
+    // A record whose process ignores SIGTERM: signalled, observed still
+    // alive, kept for the next launch. The child prints once its handler is
+    // installed; signalling before that would hit the default action and
+    // kill it (a boot race, not the behaviour under test).
+    const ignorer = spawn(process.execPath,
+      ['-e', 'process.on("SIGTERM", () => {}); console.log("armed"); setInterval(() => {}, 1000);'],
+      { stdio: ['ignore', 'pipe', 'ignore'] });
+    try {
+      await new Promise((res) => ignorer.stdout.once('data', res));
+      fs.mkdirSync(path.dirname(pidFile), { recursive: true });
+      fs.writeFileSync(pidFile, JSON.stringify([
+        { pid: dead.pid, at: Date.now(), cmd: 'node' },
+        { pid: ignorer.pid, at: Date.now(), cmd: 'node' },
+      ]));
+
+      h.internal.cleanOrphanedProcesses();
+
+      assert.ok(h.pidAlive(ignorer.pid),
+        'the SIGTERM-ignoring orphan survives one signal (cleanup must not assume delivery worked)');
+      const remaining = JSON.parse(fs.readFileSync(pidFile, 'utf-8'));
+      assert.deepStrictEqual(remaining.map(r => r.pid), [ignorer.pid],
+        'the survivor stays tracked for the next launch; the dead record is forgotten');
+    } finally {
+      try { ignorer.kill('SIGKILL'); } catch (e) {}
+      if (priorContent == null) { try { fs.rmSync(pidFile, { force: true }); } catch (e) {} }
+      else fs.writeFileSync(pidFile, priorContent);
+    }
+  });
+});

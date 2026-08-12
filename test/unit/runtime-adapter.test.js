@@ -14,6 +14,7 @@ const path = require('node:path');
 const ROOT = path.join(__dirname, '..', '..');
 const serverSrc = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf-8');
 const glueSrc = fs.readFileSync(path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), 'utf-8');
+const claudeSrc = fs.readFileSync(path.join(ROOT, 'lib', 'runtime', 'claude.js'), 'utf-8');
 const docSrc = fs.readFileSync(path.join(ROOT, 'docs', 'RUNTIME-ADAPTER.md'), 'utf-8');
 
 describe('runtime adapter contract: the documented seams exist', () => {
@@ -36,7 +37,7 @@ describe('runtime adapter contract: the documented seams exist', () => {
   });
 
   test('the server routes both runtimes through the documented spawn seams', () => {
-    assert.match(serverSrc, /function spawnClaude/, 'Claude spawn seam');
+    assert.match(claudeSrc, /function spawnClaude/, 'Claude spawn seam (lib/runtime/claude.js)');
     assert.match(glueSrc, /function getCodexAppServer/, 'Codex shared-server seam (lib/runtime/codex-glue.js)');
     assert.match(glueSrc, /function startCodexTurn/, 'Codex turn seam (lib/runtime/codex-glue.js)');
     assert.match(serverSrc, /runtime\s*===\s*'codex'|runtime:\s*'codex'/, 'runtime routing by frontmatter field');
