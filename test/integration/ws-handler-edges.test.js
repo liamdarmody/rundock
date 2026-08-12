@@ -117,11 +117,26 @@ describe('team CRUD edges', () => {
     assert.strictEqual((file.match(/^order:\s/gm) || []).length, 1, 'exactly one order line');
   });
 
-  // NOTE (discovered during this characterisation): add_to_team on an agent
-  // whose frontmatter has a description but no type line writes the order
-  // OUTSIDE the frontmatter (the fallback regex jumps the closing fence into
-  // the body), so the join silently does nothing. Deliberately NOT pinned
-  // here: pinning would freeze a bug. The red-first fix ships separately.
+  test('add_to_team on a name+description-only agent lands the order INSIDE the frontmatter', async () => {
+    // Discovered during the handler characterisation: the old fallback regex
+    // jumped the closing fence and wrote `order:` into the BODY, so discovery
+    // never saw it and the join silently did nothing.
+    const body = 'You are a minimal bench agent.\n\nNo type line above, on purpose.\n';
+    fs.writeFileSync(path.join(h.workspaceDir, '.claude', 'agents', 'edge-minimal.md'),
+      `---\nname: Edge Minimal\ndescription: Minimal bench agent.\n---\n${body}`);
+    h.internal.invalidateAgentCache();
+    const updated = (await request({ type: 'add_to_team', agentId: 'edge-minimal' },
+      m => m.type === 'agents', 'agents after minimal join')).agents;
+    const joined = updated.find(a => a.id === 'edge-minimal');
+    assert.ok(joined, 'the agent is discovered');
+    assert.ok(Number.isInteger(joined.order) && joined.order > 0,
+      'the roster broadcast shows the agent ON the team (order assigned)');
+    const file = fs.readFileSync(path.join(h.workspaceDir, '.claude', 'agents', 'edge-minimal.md'), 'utf-8');
+    const fm = file.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+    assert.ok(fm, 'frontmatter still well-formed');
+    assert.match(fm[1], /^order: \d+$/m, 'order landed INSIDE the frontmatter');
+    assert.strictEqual(fm[2], body, 'the body is untouched');
+  });
 
   test('save_agent with type but no order gains an order after the type line', async () => {
     const res = await request({
