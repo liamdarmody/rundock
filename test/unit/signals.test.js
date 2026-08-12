@@ -68,6 +68,17 @@ describe('recordEvent', () => {
     });
   });
 
+  test('a skill-usage sidecar write failure is swallowed, never thrown', () => {
+    const dir = makeWorkspace({ agents: [] });
+    srv.setWorkspace(dir);
+    // Sabotage: .rundock/state is a file, so mkdir/write must fail.
+    fs.mkdirSync(path.join(dir, '.rundock'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.rundock', 'state'), 'not a dir');
+    assert.doesNotThrow(() => {
+      srv.bumpSkillUsage('any-skill');
+    });
+  });
+
   test('retention: files older than six months are pruned when a new month begins', async () => {
     const dir = makeWorkspace({ agents: [] });
     srv.setWorkspace(dir);

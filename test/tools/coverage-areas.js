@@ -76,7 +76,8 @@ const AREA_DEFS = [
   // composition) until the signals slice gives it a permanent home.
   ['lib/store/transcripts.js', 'Transcripts + persistence helpers', /^function transcriptDir\(/, /^module\.exports/],
   ['lib/store/persistence.js', 'Conversation / state persistence', /^function rundockDir\(/, /^module\.exports/],
-  ['server.js', 'Signals + transcript composition (root remainder)', /^const EVENTS_RETENTION_MONTHS/, /^function safeSend\(/],
+  ['lib/signals.js', 'Signal layer (events, retention, skill usage, docs-gap)', /^const EVENTS_RETENTION_MONTHS/, /^module\.exports/],
+  ['server.js', 'Transcript composition (root remainder)', /^function appendTranscript\(/, /^function safeSend\(/],
   ['server.js', 'HTTP request router (incl. permission bridge)', /^const server = http\.createServer/, /^\/\/ Transcript primitives \(convoTranscripts cache/],
   ['server.js', 'WebSocket message handlers', /^wss\.on\('connection'/, /^function discoverSkills\(/],
   ['server.js', 'Spawn plumbing (spawnClaude, resolveClaudeBin, errors)', /^function resolveClaudeBin\(/, /^\/\/ ===== CODEX RUNTIME =====/],
@@ -90,6 +91,7 @@ const OVERALL_FILES = [
   'lib/config.js', 'lib/store/persistence.js', 'lib/store/transcripts.js',
   'lib/agents/discovery.js', 'lib/agents/prompt.js',
   'lib/workspace/boundary.js', 'lib/workspace/analysis.js', 'lib/workspace/scaffold.js',
+  'lib/signals.js',
 ];
 
 // ---------------------------------------------------------------------------
