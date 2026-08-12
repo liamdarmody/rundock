@@ -83,7 +83,14 @@ const AREA_DEFS = [
   ['lib/store/persistence.js', 'Conversation / state persistence', /^function rundockDir\(/, /^module\.exports/],
   ['lib/signals.js', 'Signal layer (events, retention, skill usage, docs-gap)', /^const EVENTS_RETENTION_MONTHS/, /^module\.exports/],
   ['server.js', 'Transcript composition (root remainder)', /^function appendTranscript\(/, /^function safeSend\(/],
-  ['server.js', 'HTTP request router (incl. permission bridge)', /^const server = http\.createServer/, /^\/\/ Transcript primitives \(convoTranscripts cache/],
+  // Slice 7 migration: the request router moved to lib/http-router.js and
+  // keeps its floor under the same label (the area also gains the
+  // BINARY_FILE_TYPES map, whose single user is the router's binary
+  // transport). The root remainder area covers what deliberately stayed:
+  // the HTTP server itself, the WebSocket server bootstrap, and the
+  // connection state that lived below the router.
+  ['lib/http-router.js', 'HTTP request router (incl. permission bridge)', /^const unwired/, /^module\.exports/],
+  ['server.js', 'HTTP server + WS bootstrap (root remainder)', /^const server = http\.createServer/, /^function appendTranscript\(/],
   ['server.js', 'WebSocket message handlers', /^wss\.on\('connection'/, /^function discoverSkills\(/],
   // Slice 5 migration: the Codex glue (app-server lifecycle, turns,
   // delegate wiring) moved to lib/runtime/codex-glue.js. The root
@@ -105,6 +112,7 @@ const OVERALL_FILES = [
   'lib/agents/discovery.js', 'lib/agents/prompt.js',
   'lib/workspace/boundary.js', 'lib/workspace/analysis.js', 'lib/workspace/scaffold.js',
   'lib/signals.js', 'lib/runtime/codex-glue.js', 'lib/scheduler.js',
+  'lib/http-router.js',
 ];
 
 // ---------------------------------------------------------------------------

@@ -41,6 +41,8 @@
     "Spawn plumbing (spawnClaude, resolveClaudeBin, errors)": 98.1,
     "Runtime status + server permission bridge (root remainder)": 100,
     "Codex glue (app-server lifecycle, turns, delegate wiring)": 96,
-    "OVERALL lib/scheduler.js": 100.0
+    "OVERALL lib/scheduler.js": 100.0,
+    "OVERALL lib/http-router.js": 98.5,
+    "HTTP server + WS bootstrap (root remainder)": 97.9
   }
 }
