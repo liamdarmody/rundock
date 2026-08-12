@@ -1,9 +1,9 @@
 {
-  "generatedAt": "2026-08-12T08:42:58.546Z",
-  "commit": "6a8ac6670257e9d633b0603ca4084a9ba8427dfe",
+  "generatedAt": "2026-08-12T10:56:52.837Z",
+  "commit": "02979838abc82da8163eb288f1af3f30f1001cae",
   "tolerance": 0.25,
   "floors": {
-    "OVERALL server.js": 96.3,
+    "OVERALL server.js": 96.6,
     "OVERALL codex.js": 100,
     "OVERALL codex-appserver.js": 95,
     "OVERALL search.js": 98.4,
@@ -19,6 +19,7 @@
     "OVERALL lib/workspace/analysis.js": 97.4,
     "OVERALL lib/workspace/scaffold.js": 96.9,
     "OVERALL lib/signals.js": 100,
+    "OVERALL lib/runtime/codex-glue.js": 96.3,
     "Delegation / orchestration engine": 96,
     "- wireProcessHandlers (stream-json + interception)": 100,
     "- handleScopeReturn": 95.3,
@@ -38,6 +39,7 @@
     "HTTP request router (incl. permission bridge)": 98,
     "WebSocket message handlers": 96.3,
     "Spawn plumbing (spawnClaude, resolveClaudeBin, errors)": 98.1,
-    "Codex runtime (status, turns, delegate wiring)": 96.4
+    "Runtime status + server permission bridge (root remainder)": 100,
+    "Codex glue (app-server lifecycle, turns, delegate wiring)": 96
   }
 }
