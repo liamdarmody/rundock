@@ -37,13 +37,20 @@
     "Signal layer (events, retention, skill usage, docs-gap)": 100,
     "Transcript composition (root remainder)": 100,
     "HTTP request router (incl. permission bridge)": 98,
-    "WebSocket message handlers": 96.3,
     "Spawn plumbing (spawnClaude, resolveClaudeBin, errors)": 98.1,
     "Runtime status + server permission bridge (root remainder)": 100,
     "Codex glue (app-server lifecycle, turns, delegate wiring)": 96,
     "OVERALL lib/scheduler.js": 100.0,
     "OVERALL lib/http-router.js": 98.5,
     "HTTP server + WS bootstrap (root remainder)": 97.9,
-    "OVERALL lib/runtime/claude.js": 99.3
+    "WS connection + chat shim (root remainder)": 92.8,
+    "OVERALL lib/runtime/claude.js": 99.3,
+    "OVERALL lib/protocol/handlers/index.js": 100,
+    "OVERALL lib/protocol/handlers/workspace.js": 100,
+    "OVERALL lib/protocol/handlers/conversations.js": 100,
+    "OVERALL lib/protocol/handlers/history.js": 93.0,
+    "OVERALL lib/protocol/handlers/team.js": 98.9,
+    "OVERALL lib/protocol/handlers/files.js": 97.5,
+    "OVERALL lib/protocol/handlers/process-control.js": 99.2
   }
 }
