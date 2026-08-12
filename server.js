@@ -482,9 +482,8 @@ codexGlue.wireCodexGlueDeps({
 });
 
 schedulerLib.wireSchedulerDeps({
-  // Root spawn plumbing until its own extraction slice; the client set is
-  // read through an accessor because wss is created later at boot.
-  spawnClaude, getBareArgs, modelArgs, getSpawnEnv,
+  // The client set is read through an accessor: wss is created later at
+  // boot. The spawn plumbing is a direct lib require inside the scheduler.
   getWssClients: () => wss.clients,
 });
 const httpRouter = require('./lib/http-router.js');
