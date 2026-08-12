@@ -125,6 +125,25 @@ describe('P0 regressions: data-loss and stuck-pipeline', () => {
     assert.strictEqual(realParent.delegation, null);
     srv.chatProcesses.delete(convoId);
   });
+
+  test('spawn-error surfacing: EACCES and unknown codes carry their own copy', () => {
+    // The ENOENT wording is pinned above and in the delegate-restore test;
+    // these are the two remaining branches of the code-specific copy.
+    captureOn();
+    srv.handleChatSpawnError({ code: 'EACCES', message: 'permission denied' }, 'wording-eacces');
+    const eacces = captured.find(m => m.subtype === 'info');
+    assert.ok(eacces && /permission denied\. Check your install\./.test(eacces.content),
+      'EACCES gets the permission wording, not the generic one');
+    assert.ok(captured.some(m => m.subtype === 'done'),
+      'done always fires so the client clears its thinking state');
+
+    captureOn();
+    srv.handleChatSpawnError({ code: 'EMFILE', message: 'too many open files' }, 'wording-generic');
+    const generic = captured.find(m => m.subtype === 'info');
+    assert.ok(generic && generic.content.includes("Couldn't start Claude Code: too many open files"),
+      'unknown codes surface the raw message with the version-check hint');
+    assert.ok(generic.content.includes('claude --version'), 'the hint names the check to run');
+  });
 });
 
 describe('P1 regressions', () => {
