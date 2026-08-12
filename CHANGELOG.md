@@ -10,6 +10,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Fixed
 
+- **Opening a broken workspace now tells you what is wrong:** choosing a folder whose `.rundock` entry is a file (not the directory Rundock expects) used to leave the app hanging on a spinner with no reply, half-switched away from your previous workspace. Rundock now refuses up front with a message naming the problem file, and any other failure during a workspace switch rolls back to the workspace you were in and reports the error.
 - **"Add to team" now works for minimal agents:** an agent file with only a name and description gained its team position OUTSIDE the file's settings block, where Rundock never saw it, so the join silently did nothing. The position now lands in the right place and the agent appears on the team immediately.
 - **Adding an agent to your team shows their place immediately:** the roster sent back after "Add to team" was built from a snapshot taken just before the join, so the new member could appear still off-team until a later refresh. The response now reflects the join at once.
 - **Opening a workspace no longer risks a spurious agent restart moments later:** when Rundock updates its own built-in agent or skill files during workspace open, that write was briefly mistaken for an external edit, which could restart a busy agent mid-conversation about two seconds in. The server's own writes are now recognised as its own.

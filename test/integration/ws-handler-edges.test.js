@@ -61,12 +61,30 @@ describe('workspace lifecycle edges', () => {
     }
   });
 
+  test('set_workspace into a workspace whose .rundock is a FILE answers an error and stays put', async () => {
+    // Discovered during the handler characterisation: the prepare steps
+    // threw into the message-loop catch AFTER the root had already switched,
+    // so the client got NO reply and the server was left half-switched.
+    const before = h.internal.getWorkspace();
+    const dir = makeTempDir('rundock-test-brokenrd-');
+    fs.writeFileSync(path.join(dir, 'notes.md'), '# not empty\n');
+    fs.writeFileSync(path.join(dir, '.rundock'), 'a file, not a directory');
+    try {
+      const res = await request({ type: 'set_workspace', path: dir },
+        m => m.type === 'workspace_error', 'workspace_error broken .rundock');
+      assert.match(res.message, /\.rundock/, 'the error names the broken .rundock');
+      assert.strictEqual(h.internal.getWorkspace(), before,
+        'the previous workspace remains active: no half-switch');
+    } finally {
+      h.internal.setWorkspace(h.workspaceDir);
+    }
+  });
+
   test('set_workspace_mode surfaces a persistence failure as a workspace_error', async () => {
     // .rundock as a FILE makes writeState throw (the slice-3 trick). The
-    // switch itself happens through the internal seam: the WS open path
-    // cannot enter a workspace whose .rundock is a file (its prepare steps
-    // throw into the message-loop catch and answer nothing; recorded as a
-    // discovered edge, not driven here).
+    // switch happens through the internal seam because the WS open path now
+    // REFUSES a workspace whose .rundock is a file (see the broken-.rundock
+    // test above).
     const dir = makeTempDir('rundock-test-badmode-');
     fs.writeFileSync(path.join(dir, 'notes.md'), '# not empty\n');
     try {
