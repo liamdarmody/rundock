@@ -140,4 +140,68 @@ describe('handler seams (stub ctx, capture ws)', () => {
     table.get_skills(ctx, ws, { type: 'get_skills' });
     assert.deepStrictEqual(ws.sent, [{ type: 'skills', skills: [{ id: 'linting', name: 'Linting' }] }]);
   });
+
+  test('save_agent and save_skill answer Invalid path when the boundary guard refuses', () => {
+    // The guard is injected (ctx.workspace.isInsideWorkspace); a refusal must
+    // produce the error card, write nothing, and skip the roster broadcast.
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-handlers-'));
+    try {
+      config.setWorkspace(dir);
+      const ctx = {
+        workspace: { isInsideWorkspace: () => false },
+        agents: { validateAgentSlug: () => true },
+      };
+      const wsA = captureWs();
+      table.save_agent(ctx, wsA, { type: 'save_agent', name: 'sneaky', content: 'x' });
+      assert.deepStrictEqual(wsA.sent, [{ type: 'agent_error', message: 'Invalid path.' }]);
+      const wsS = captureWs();
+      table.save_skill(ctx, wsS, { type: 'save_skill', name: 'sneaky', content: 'x' });
+      assert.deepStrictEqual(wsS.sent, [{ type: 'skill_error', message: 'Invalid path.' }]);
+      // The agents DIR is pre-created before the guard runs (pre-existing
+      // behaviour); the refusal must still write no agent file and no skill.
+      assert.ok(!fs.existsSync(path.join(dir, '.claude', 'agents', 'sneaky.md')), 'no agent file written');
+      assert.ok(!fs.existsSync(path.join(dir, '.claude', 'skills', 'sneaky')), 'no skill dir created');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('cancel seams (stub ctx)', () => {
+  test('cancel with no active or an idle process is a silent no-op', () => {
+    const table = buildDispatch();
+    const sent = [];
+    const ctx = { processes: new Map(), pendingPermissions: new Map(), broadcast: (m) => sent.push(m) };
+    table.cancel(ctx, captureWs(), { type: 'cancel', conversationId: 'nope' });
+    assert.deepStrictEqual(sent, [], 'nothing to cancel, nothing broadcast');
+    const idle = { idle: true, exited: false, processId: 'p1', agentId: 'penn' };
+    ctx.processes.set('c-idle', idle);
+    table.cancel(ctx, captureWs(), { type: 'cancel', conversationId: 'c-idle' });
+    assert.deepStrictEqual(sent, [], 'an idle process is not cancelled');
+    assert.ok(!idle.cancelled, 'the idle entry is untouched');
+  });
+
+  test('cancel reaps a parked intercepted orchestrator (orchestratorEntry) AND the parent chain', () => {
+    const table = buildDispatch();
+    const fakeProc = () => ({ pid: 999999901, killed: [], kill(sig) { this.killed.push(sig); } });
+    const grandparent = { agentId: 'cos', exited: false, process: fakeProc() };
+    const orch = { agentId: 'orch', exited: false, process: fakeProc() };
+    const parent = { agentId: 'lead', exited: false, process: fakeProc(),
+      delegation: { originalEntry: grandparent, orchestratorEntry: null } };
+    const child = { agentId: 'sub', exited: false, idle: false, processId: 'p9', agentId2: null,
+      process: fakeProc(), toolCalls: [], turnStartTime: 1,
+      delegation: { originalEntry: parent, orchestratorEntry: orch } };
+    const sent = [];
+    const ctx = { processes: new Map([['c9', child]]), pendingPermissions: new Map(), broadcast: (m) => sent.push(JSON.parse(m)) };
+    table.cancel(ctx, captureWs(), { type: 'cancel', conversationId: 'c9' });
+    assert.ok(child.cancelled && child.exited, 'the delegate is cancelled');
+    assert.ok(orch.exited && orch.cancelled, 'the parked intercepted orchestrator is reaped');
+    assert.ok(parent.exited && parent.cancelled, 'the parked parent is reaped');
+    assert.ok(grandparent.exited && grandparent.cancelled, 'the grandparent is reaped through the chain');
+    assert.ok(!ctx.processes.has('c9'), 'the entry is removed');
+    assert.deepStrictEqual(sent.map(m => m.subtype), ['cancelled', 'done'], 'client unblocks in order');
+  });
 });
