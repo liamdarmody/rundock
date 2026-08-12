@@ -115,6 +115,19 @@ jobs:
       - name: Run suite with coverage and enforce floors
         run: npm run test:coverage
 
+      # The floor gate names the tripped area but not the lines. The lcov is
+      # the per-line evidence a floor investigation needs (load-repro +
+      # lcov-diff is the standing method), so it ships as an artifact on
+      # every run, pass or fail.
+      - name: Upload lcov for floor diagnosis
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: coverage.lcov
+          retention-days: 7
+          if-no-files-found: ignore
+
   # E2E smoke suite (browser-driven, Playwright). Protects the client layer
   # the Node suite cannot observe: named regression tests for the two
   # escaped bugs (anchor re-flash, nav-state desync) plus palette golden
