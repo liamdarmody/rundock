@@ -222,11 +222,17 @@ describe('P1 regressions', () => {
       'the follow-up write cancels the pending auto-return');
     // The kill sites still flag pendingKill before the 500ms timer: now
     // centralised in scheduleScopeReturnKill (the kill-window state machine),
-    // armed from every scope-return/auto-return marker site.
+    // armed from every scope-return/auto-return marker site. Slice 10 split
+    // the call sites: the machine and the chat shim's arming site stay in
+    // server.js, the engine's three marker sites live in
+    // lib/delegation/engine.js (armed through the injected capability).
     assert.match(src, /function scheduleScopeReturnKill\(e, convoId\) \{\s*\n\s*e\.pendingKill = true;/,
       'the shared kill scheduler flags pendingKill');
-    assert.ok((src.match(/scheduleScopeReturnKill\(e, convoId\)/g) || []).length >= 4,
-      'each scope-return/auto-return kill window arms the shared scheduler');
+    assert.ok((src.match(/scheduleScopeReturnKill\(e, convoId\)/g) || []).length >= 1,
+      'the chat shim arms the shared scheduler from the root');
+    const engineSrc = fs.readFileSync(path.join(__dirname, '../../lib/delegation/engine.js'), 'utf-8');
+    assert.ok((engineSrc.match(/scheduleScopeReturnKill\(e, convoId\)/g) || []).length >= 3,
+      'each engine scope-return/auto-return kill window arms the shared scheduler');
     // The kill timer no-ops if pendingKill was cleared inside the window.
     assert.ok((src.match(/if \(!e\.exited && e\.pendingKill\)/g) || []).length >= 1,
       'the 500ms kill timer guards on pendingKill so a cancelled auto-return does not fire');
@@ -260,7 +266,8 @@ describe('P1 regressions', () => {
     // (asserts the orchestrator is respawned and a live process remains). Here
     // we assert the source: the loop guard respawns the orchestrator when the
     // interception already killed it, rather than returning with nothing alive.
-    const src = fs.readFileSync(path.join(__dirname, '../../server.js'), 'utf-8');
+    // Slice 10: the engine (and this guard) lives in lib/delegation/engine.js.
+    const src = fs.readFileSync(path.join(__dirname, '../../lib/delegation/engine.js'), 'utf-8');
     const start = src.indexOf('preventing loop:');
     const region = src.slice(start, start + 700);
     assert.match(region, /spawnResumedProcess\(convoId, orchestratorAgentId, msg\._parentSessionId/,
@@ -301,8 +308,9 @@ describe('P2/P3 regressions', () => {
       emitted.push(obj.type);
     }
     assert.deepStrictEqual(emitted, [], 'no lines after the kill trigger should be emitted');
-    // Assert the production loop carries the per-line guard.
-    const src = fs.readFileSync(path.join(__dirname, '../../server.js'), 'utf-8');
+    // Assert the production loop carries the per-line guard. Slice 10: the
+    // stdout loop (wireProcessHandlers) lives in lib/delegation/engine.js.
+    const src = fs.readFileSync(path.join(__dirname, '../../lib/delegation/engine.js'), 'utf-8');
     assert.match(src, /for \(const line of lines\) \{\s*\n\s*if \(entry\.exited\) break;/,
       'stdout loop must break per-line on exited');
   });
