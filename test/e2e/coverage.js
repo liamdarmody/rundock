@@ -28,6 +28,8 @@ const CLIENT_FILES = [
   'palette-model.js', 'code-language.js', 'conversation-state.js',
   // File-view registry + review modules
   'viewers/registry.js', 'viewers/text-anchor.js', 'viewers/sidecar-controller.js', 'viewers/artifact-review.js',
+  // Extracted view modules
+  'views/skills.js',
 ];
 
 function isClientEntry(url) {

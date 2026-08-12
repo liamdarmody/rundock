@@ -145,12 +145,14 @@ describe('path traversal guards', () => {
     }
   });
 
-  test('/editor, /vendor and /viewers static routes reject traversal and unknown extensions', async () => {
+  test('/editor, /vendor, /viewers and /views static routes reject traversal and unknown extensions', async () => {
     assert.strictEqual((await get('/editor/../server.js')).status, 404);
     assert.strictEqual((await get('/vendor/x.png')).status, 404);
     assert.strictEqual((await get('/editor/%2e%2e/server.js')).status, 404);
     assert.strictEqual((await get('/viewers/../server.js')).status, 404);
     assert.strictEqual((await get('/viewers/x.png')).status, 404);
+    assert.strictEqual((await get('/views/../server.js')).status, 404);
+    assert.strictEqual((await get('/views/x.png')).status, 404);
   });
 
   test('/viewers/registry.js is served as javascript (the file-type registry module)', async () => {
@@ -158,6 +160,14 @@ describe('path traversal guards', () => {
     assert.strictEqual(res.status, 200);
     assert.ok(res.body.includes('classify'), 'registry module content served');
   });
+
+  test('/views/skills.js is served as javascript (the first extracted view module)', async () => {
+    const res = await get('/views/skills.js');
+    assert.strictEqual(res.status, 200);
+    assert.match(res.headers.get('content-type') || '', /javascript/);
+    assert.ok(res.body.includes('RundockSkillsView'), 'skills view module content served');
+  });
+
 
   test('WS read_file is guarded the same way as /api/file', async () => {
     const outside = path.join(h.workspaceDir, '..', `ws-secret-${Date.now()}.md`);
