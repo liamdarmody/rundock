@@ -99,6 +99,137 @@ test('RETURN from a sub-delegate auto-continues the living orchestrator with the
   h.reapConvo(convoId);
 });
 
+// ---------------------------------------------------------------------------
+// Deterministic pins for the delegate-close arms that flipped with the CI
+// schedule (the two identical main-run floor trips at 95.4/93.2). Each arm
+// below was covered only when unrelated tests won a timing race; these
+// constructions drive them by design. The circuit breaker is armed by
+// pre-setting the per-conversation resume count through the identity-exported
+// map, so ONE close crosses the threshold: no multi-hop timing chain.
+// ---------------------------------------------------------------------------
+
+test('skip-level RETURN with the resume budget spent trips the breaker: auto-pause, no auto-continue', async () => {
+  const convoId = h.freshConvoId('skipbrk');
+  await startOrchestrator(convoId, 'skipbrk-setup');
+  h.writeScenario([
+    { match: { agent: 'content-lead', promptIncludes: 'skipbrk task' },
+      turn: [{ agentTool: { subagent_type: 'content-analyst', prompt: 'skipbrk sub brief' } }] },
+    { match: { agent: 'content-analyst', promptIncludes: 'skipbrk sub brief' },
+      turn: [{ text: 'Outside my scope. <!-- RUNDOCK:RETURN -->' }] },
+  ]);
+
+  // Two resumes already spent: the skip-level restore's increment is the third.
+  h.internal.agentAutoResumeCount.set(convoId, h.internal.MAX_CONSECUTIVE_AGENT_RESUMES - 1);
+
+  const since = client.messages.length;
+  client.send({ type: 'delegate', conversationId: convoId, targetAgent: 'content-lead', context: 'skipbrk task' });
+
+  const { index: subResultIdx } = await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'content-analyst', { since, label: 'sub-delegate result' });
+  await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch' && m._conversationId === convoId && m.toAgent === 'chief-of-staff', { since: subResultIdx, label: 'skip-level switch back' });
+  const { msg: paused, index: pausedIdx } = await client.waitFor(
+    m => m.type === 'assistant' && m._conversationId === convoId && /Auto-paused: \d+ consecutive agent handoffs/.test(m.message?.content || ''),
+    { since: subResultIdx, label: 'auto-pause card' });
+  assert.match(paused.message.content, /Agents involved: content-analyst/, 'the skip-level breaker wording names the chain');
+  await client.waitFor(m => m.type === 'system' && m.subtype === 'done' && m._conversationId === convoId, { since: subResultIdx, label: 'done after pause' });
+
+  const started = client.messages.slice(pausedIdx).find(
+    m => m.type === 'system' && m.subtype === 'process_started' && m._conversationId === convoId && m.autoContinue);
+  assert.ok(!started, 'a tripped breaker never auto-continues');
+  const entry = h.internal.chatProcesses.get(convoId);
+  assert.strictEqual(entry.idle, true, 'the orchestrator is parked idle for the user');
+  assert.strictEqual(h.internal.agentAutoResumeCount.get(convoId), 0, 'the breaker resets the budget');
+  h.reapConvo(convoId);
+});
+
+test('end_delegation after a delegate follow-up auto-continues the parked parent with the pending request', async () => {
+  const convoId = h.freshConvoId('wsret');
+  await startOrchestrator(convoId, 'wsret-setup');
+  h.writeScenario([
+    { match: { agent: 'content-lead', promptIncludes: 'wsret task' }, turn: [{ text: 'Delegate here, staying in the conversation.' }] },
+    { match: { agent: 'content-lead', promptIncludes: 'wsret-followup' }, turn: [{ text: 'Follow-up handled by the delegate.' }] },
+    { match: { agent: 'chief-of-staff', promptIncludes: 'The specialist just returned because the user asked' },
+      turn: [{ text: 'Routing wsret onward.' }] },
+  ]);
+
+  client.send({ type: 'delegate', conversationId: convoId, targetAgent: 'content-lead', context: 'wsret task' });
+  await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'content-lead', { label: 'delegate first result' });
+
+  // A user follow-up to the LIVE delegate sets receivedFollowUp on its entry
+  // (the arm's gate) and becomes the pending request the parent must route.
+  const since1 = client.messages.length;
+  client.send({ type: 'chat', conversationId: convoId, agent: 'content-lead', content: 'wsret-followup please' });
+  await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'content-lead' && /Follow-up handled/.test(m.result || ''), { since: since1, label: 'follow-up result' });
+  assert.strictEqual(h.internal.chatProcesses.get(convoId).receivedFollowUp, true, 'the follow-up armed the auto-continue gate');
+
+  const since2 = client.messages.length;
+  client.send({ type: 'end_delegation', conversationId: convoId });
+  await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch' && m._conversationId === convoId && m.toAgent === 'chief-of-staff', { since: since2, label: 'restore switch' });
+  await client.waitFor(m => m.type === 'system' && m.subtype === 'process_started' && m._conversationId === convoId && m._agent === 'chief-of-staff' && m.autoContinue, { since: since2, label: 'auto-continue on the parked parent' });
+  await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'chief-of-staff' && /Routing wsret onward/.test(m.result || ''), { since: since2, label: 'routing answer' });
+  h.reapConvo(convoId);
+});
+
+test('end_delegation after a follow-up with the resume budget spent trips the OTHER breaker wording', async () => {
+  const convoId = h.freshConvoId('wsbrk');
+  await startOrchestrator(convoId, 'wsbrk-setup');
+  h.writeScenario([
+    { match: { agent: 'content-lead', promptIncludes: 'wsbrk task' }, turn: [{ text: 'Delegate here.' }] },
+    { match: { agent: 'content-lead', promptIncludes: 'wsbrk-followup' }, turn: [{ text: 'Follow-up done.' }] },
+  ]);
+
+  client.send({ type: 'delegate', conversationId: convoId, targetAgent: 'content-lead', context: 'wsbrk task' });
+  await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'content-lead', { label: 'delegate first result' });
+  const since1 = client.messages.length;
+  client.send({ type: 'chat', conversationId: convoId, agent: 'content-lead', content: 'wsbrk-followup please' });
+  await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'content-lead' && /Follow-up done/.test(m.result || ''), { since: since1, label: 'follow-up result' });
+
+  // The chat follow-up RESET the budget, so spend it now, after the reset.
+  h.internal.agentAutoResumeCount.set(convoId, h.internal.MAX_CONSECUTIVE_AGENT_RESUMES - 1);
+
+  const since2 = client.messages.length;
+  client.send({ type: 'end_delegation', conversationId: convoId });
+  await client.waitFor(m => m.type === 'system' && m.subtype === 'agent_switch' && m._conversationId === convoId && m.toAgent === 'chief-of-staff', { since: since2, label: 'restore switch' });
+  const { msg: paused, index: pausedIdx } = await client.waitFor(
+    m => m.type === 'assistant' && m._conversationId === convoId && /Auto-paused: \d+ consecutive agent handoffs/.test(m.message?.content || ''),
+    { since: since2, label: 'auto-pause card' });
+  assert.match(paused.message.content, /Last specialist: content-lead/, 'the delegate-return breaker wording names the specialist');
+  await client.waitFor(m => m.type === 'system' && m.subtype === 'done' && m._conversationId === convoId, { since: since2, label: 'done after pause' });
+  const started = client.messages.slice(pausedIdx).find(
+    m => m.type === 'system' && m.subtype === 'process_started' && m._conversationId === convoId && m.autoContinue);
+  assert.ok(!started, 'a tripped breaker never auto-continues');
+  h.reapConvo(convoId);
+});
+
+test('a delegate closing after its original is gone cleans up and unblocks, restoring nothing', async () => {
+  const convoId = h.freshConvoId('wsgone');
+  await startOrchestrator(convoId, 'wsgone-setup');
+  h.writeScenario([
+    { match: { agent: 'content-lead', promptIncludes: 'wsgone task' }, turn: [{ text: 'Delegate here.' }] },
+  ]);
+  client.send({ type: 'delegate', conversationId: convoId, targetAgent: 'content-lead', context: 'wsgone task' });
+  await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'content-lead', { label: 'delegate result' });
+
+  // The parked original dies out from under the delegation (identity access
+  // through the live map: this is the exact state a crashed parent leaves).
+  // Kill the real process too: once the entry leaves the map at close time,
+  // reapConvo can no longer reach it, and a leaked stub child would hold the
+  // test process's event loop open past the suite.
+  const delegateEntry = h.internal.chatProcesses.get(convoId);
+  assert.ok(delegateEntry.delegation && delegateEntry.delegation.originalEntry, 'delegation carries the parked original');
+  const goneOriginal = delegateEntry.delegation.originalEntry;
+  try { goneOriginal.process.kill('SIGKILL'); } catch (e) {}
+  goneOriginal.exited = true;
+
+  const since = client.messages.length;
+  client.send({ type: 'end_delegation', conversationId: convoId });
+  await client.waitFor(m => m.type === 'system' && m.subtype === 'done' && m._conversationId === convoId && m._agent === 'content-lead', { since, label: 'done after orphan close' });
+  const switched = client.messages.slice(since).find(
+    m => m.type === 'system' && m.subtype === 'agent_switch' && m._conversationId === convoId);
+  assert.ok(!switched, 'nothing to restore: no agent_switch is announced');
+  assert.ok(!h.internal.chatProcesses.has(convoId), 'the conversation entry is removed');
+  h.reapConvo(convoId);
+});
+
 test('agent CRUD while a delegation is live flags the delegate AND the parked parent', async () => {
   const convoId = h.freshConvoId('crudflag');
   await startOrchestrator(convoId, 'crudflag-setup');
