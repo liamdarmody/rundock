@@ -1,7 +1,8 @@
 'use strict';
 // Characterisation: spawn plumbing (resolveClaudeBin, spawnClaude,
-// killProcessTree), pinned as it behaves today, before it moves out of
-// server.js.
+// killProcessTree). Written before the move to lib/runtime/claude.js; the
+// pins drive the moved code through server.js's identity re-exports, so
+// they held across the move unchanged.
 //
 // resolveClaudeBin memoises its first answer for the life of the process, and
 // the harness boot gate already forces that first call (asserting the stub
