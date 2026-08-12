@@ -80,8 +80,16 @@ const AREA_DEFS = [
   ['server.js', 'Transcript composition (root remainder)', /^function appendTranscript\(/, /^function safeSend\(/],
   ['server.js', 'HTTP request router (incl. permission bridge)', /^const server = http\.createServer/, /^\/\/ Transcript primitives \(convoTranscripts cache/],
   ['server.js', 'WebSocket message handlers', /^wss\.on\('connection'/, /^function discoverSkills\(/],
-  ['server.js', 'Spawn plumbing (spawnClaude, resolveClaudeBin, errors)', /^function resolveClaudeBin\(/, /^\/\/ ===== CODEX RUNTIME =====/],
-  ['server.js', 'Codex runtime (status, turns, delegate wiring)', /^\/\/ ===== CODEX RUNTIME =====/, /^\/\/ Graceful shutdown/],
+  // Slice 5 migration: the Codex glue (app-server lifecycle, turns,
+  // delegate wiring) moved to lib/runtime/codex-glue.js. The root
+  // remainder area covers what deliberately stayed: getRuntimeStatus with
+  // its probe caches (settings machinery that sat mid-span) and
+  // requestServerPermission (the generic bridge, injected into the glue).
+  // The spawn-plumbing end anchor retargets to the remainder banner (its
+  // old end, the CODEX RUNTIME banner, moved with the glue).
+  ['server.js', 'Spawn plumbing (spawnClaude, resolveClaudeBin, errors)', /^function resolveClaudeBin\(/, /^\/\/ ===== RUNTIME STATUS =====/],
+  ['server.js', 'Runtime status + server permission bridge (root remainder)', /^\/\/ ===== RUNTIME STATUS =====/, /^\/\/ Graceful shutdown/],
+  ['lib/runtime/codex-glue.js', 'Codex glue (app-server lifecycle, turns, delegate wiring)', /^let _resolvedCodexBin/, /^module\.exports/],
 ];
 
 // Whole files reported (and floored) as OVERALL lines.
@@ -91,7 +99,7 @@ const OVERALL_FILES = [
   'lib/config.js', 'lib/store/persistence.js', 'lib/store/transcripts.js',
   'lib/agents/discovery.js', 'lib/agents/prompt.js',
   'lib/workspace/boundary.js', 'lib/workspace/analysis.js', 'lib/workspace/scaffold.js',
-  'lib/signals.js',
+  'lib/signals.js', 'lib/runtime/codex-glue.js',
 ];
 
 // ---------------------------------------------------------------------------
