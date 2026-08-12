@@ -498,8 +498,8 @@ const {
   startScheduler, getNextRun, executeRoutine,
 } = schedulerLib;
 // Hand lib/agents its root-owned dependencies (see the module headers).
-// routineState goes over BY IDENTITY: the scheduler mutates it in place.
-agentsDiscovery.setRoutineState(routineState);
+// (routineState needs no wiring: discovery requires lib/scheduler.js
+// directly and reads the module-owned state at use time.)
 agentsPrompt.wirePromptDeps({ discoverSkills, detectCodexCached });
 workspaceAnalysis.wireAnalysisDeps({ parseSkillFile });
 workspaceScaffold.wireScaffoldDeps({ invalidateAgentCache, rebaselineAgentsWatcher });

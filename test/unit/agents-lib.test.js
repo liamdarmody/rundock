@@ -6,11 +6,12 @@
 //    existing characterization suite keeps exercising the moved code.
 // 2. LIVE WORKSPACE: discovery reads getWorkspace() at use time, never a
 //    value captured at require time.
-// 3. NAMED INJECTION: root-owned state the modules need arrives through named
-//    wiring functions, by identity: routineState (root-owned until the
-//    scheduler slice) into discovery; discoverSkills and detectCodexCached
+// 3. NAMED INJECTION / SHARED STATE: discoverSkills and detectCodexCached
 //    (both stay in the root: skill discovery has its own area, and the codex
-//    probe cache is shared with the settings runtime probe) into prompt.
+//    probe cache is shared with the settings runtime probe) arrive in prompt
+//    through named wiring; routineState is owned by lib/scheduler.js and
+//    discovery reads that one live object directly (no wiring), so root
+//    mutations via the _internal re-export are visible by identity.
 const { test, describe, after } = require('node:test');
 const assert = require('node:assert');
 
@@ -55,7 +56,7 @@ describe('lib/agents module seams', () => {
     assert.ok(!names.includes('alpha'), 'workspace A agent gone after switch');
   });
 
-  test('routineState is injected by identity: root mutations are visible to discovery', () => {
+  test('routineState is shared by identity: root mutations are visible to discovery', () => {
     useWorkspace({
       agents: {
         cos: agentFile({
