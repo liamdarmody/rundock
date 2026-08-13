@@ -30,7 +30,7 @@ const CLIENT_FILES = [
   'viewers/registry.js', 'viewers/text-anchor.js', 'viewers/sidecar-controller.js', 'viewers/artifact-review.js',
   // Extracted view modules
   'views/skills.js', 'views/settings.js', 'views/team.js', 'views/profile.js', 'views/files.js',
-  'views/conversations.js', 'views/chat.js',
+  'views/conversations.js', 'views/chat.js', 'views/palette.js',
 ];
 
 function isClientEntry(url) {
