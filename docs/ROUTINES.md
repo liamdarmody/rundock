@@ -275,5 +275,5 @@ A few specific things that go wrong silently.
 ## Pointers
 
 - [AGENTS.md](AGENTS.md): the agent frontmatter reference, including a brief on the `routines:` array that points back here.
-- [ARCHITECTURE.md](ARCHITECTURE.md): where the scheduler sits in the server's process model and what `.rundock/` does and does not persist.
+- [ARCHITECTURE.md](../ARCHITECTURE.md): where the scheduler sits in the server's process model and what `.rundock/` does and does not persist.
 - The agent files in `.claude/agents/`: the canonical reference for what works in practice.

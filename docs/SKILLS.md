@@ -164,5 +164,5 @@ A handful of specific things that go wrong silently with skill files.
 ## Pointers
 
 - [AGENTS.md](AGENTS.md): the agent frontmatter reference, the `skills:` array format, and how agents are matched to skills.
-- [ARCHITECTURE.md](ARCHITECTURE.md): where skill discovery sits in the server's startup and how the two source locations interact.
+- [ARCHITECTURE.md](../ARCHITECTURE.md): where skill discovery sits in the server's startup and how the two source locations interact.
 - The skill files in `.claude/skills/`: the canonical reference for what works in practice.

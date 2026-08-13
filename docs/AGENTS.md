@@ -232,6 +232,6 @@ A few specific things that go wrong silently, in roughly the order of frequency.
 
 ## Pointers
 
-- [ARCHITECTURE.md](ARCHITECTURE.md): the process model, workspace directory, and codebase structure.
-- [CONTRIBUTING.md](CONTRIBUTING.md): dev environment setup and code conventions.
+- [ARCHITECTURE.md](../ARCHITECTURE.md): the process model, workspace directory, and codebase structure.
+- [CONTRIBUTING.md](../CONTRIBUTING.md): dev environment setup and code conventions.
 - The agent files in `.claude/agents/`: the canonical reference for what works in practice.
