@@ -1,0 +1,61 @@
+/* Design tokens. The first stylesheet in the cascade, and the only file the
+   rest of the styling is allowed to take its colours, type sizes and layout
+   metrics from.
+
+   Load order is the contract: this file, then base, then components, then
+   views. Everything downstream resolves var(--x) against what is declared
+   here, so if this file arrives late or not at all, the app paints unstyled.
+   test/e2e/theme.spec.js asserts these tokens resolve at DOMContentLoaded for
+   exactly that reason.
+
+   THE LIGHT THEME OVERRIDES ON body, NOT ON :root. That is deliberate (the
+   theme is a class the app toggles on body) and it has one consequence worth
+   knowing before you debug something odd: anything that styles <html> itself
+   resolves against the :root block below and therefore always gets the dark
+   value, whatever theme is showing. Today the only such rule is the canvas
+   background, which the app's own full-height chrome covers, so it is
+   invisible. Do not style <html> expecting it to follow the theme. */
+
+:root {
+  --base: #1A1A1A; --surface: #212121; --elevated: #272727;
+  /* The window chrome (top bar + rail) sits BEHIND the content, so it is
+     recessed rather than level with it. Deliberately its own token, not a
+     shift of --surface: that is used in eleven places including every hover
+     state and the composer, and moving it to gain one edge would move all of
+     them. --base to --surface was a 6-point luma step, too soft to delineate
+     the rail once its border was removed; chrome to --surface is 14. */
+  --chrome: #131313;
+  --card: #333333; --border: #3D3D3D;
+  --text-1: #F0EDE8; --text-2: #9A9590;
+  --accent: #E87A5A; --accent-hover: #F09070; --accent-glow: rgba(232,122,90,0.12);
+  --success: #6BC67E; --attention: #E8A84C; --working: #7AA2E8; --idle: #7A756E;
+  --heading: 22px; --title: 18px; --body: 14px; --caption: 12px; --label: 11px;
+  --org-name: 20px; --org-role: 15px;
+}
+
+body.light {
+  --base: #F5F2ED; --surface: #FAF8F5; --elevated: #FFFFFF;
+  /* Same direction in light: the chrome recedes. Light theme has no headroom
+     to lighten the panel (--surface is already near-white), so darkening the
+     chrome is the only lever, and it happens to be the same one. */
+  --chrome: #E8E4DC;
+  --card: #F0EDE8; --border: #E5E0D8;
+  --text-1: #1A1A1A; --text-2: #7A756E;
+  --accent-glow: rgba(232,122,90,0.08);
+}
+
+/* The window chrome reserves an inset on each side and the platform supplies
+   the values: macOS traffic lights sit left, Windows caption buttons sit
+   right. Both are 0 in a browser and on Linux, which is the same path.
+   There is deliberately NO per-platform CSS anywhere; chrome-insets.js is the
+   only platform-aware code. See Window-Chrome-Topbar-Spec. */
+/* The bar is as tall as the rail is wide, so the chrome's corner is a true
+   square rather than an arbitrary rectangle, and the rail's icons sit on the
+   same rhythm as the bar above them. */
+/* --tb-cluster is the width of our own controls in the right gutter (a 30px
+   Help button plus 8px padding). The gutter each side is then the LARGER of
+   the two sides' total occupancy, which is what keeps the middle column
+   centred on the WINDOW rather than on the leftover space. */
+:root { --chrome-inset-left: 0px; --chrome-inset-right: 0px; --nav-rail-width: 60px; --topbar-height: 50px; --content-radius: 12px;
+        --tb-cluster: 38px;
+        --chrome-gutter: max(var(--chrome-inset-left), calc(var(--chrome-inset-right) + var(--tb-cluster))); }
