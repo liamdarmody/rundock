@@ -23,6 +23,8 @@ const {
   agentStreamingMessageHtml,
   thinkingIndicatorHtml,
   userBubbleHtml,
+  delegationDividerHtml,
+  permissionResolvedHtml,
 } = require('../../public/chat-markup.js');
 
 const AGENT = { colour: '#f00', icon: 'D', displayName: 'Dev' };
@@ -144,17 +146,67 @@ test('userBubbleHtml renders a bare bubble with no sender line', () => {
 
 // ── module shape ────────────────────────────────────────────────────────────
 
-test('module exports exactly its six helpers and nothing else', () => {
+test('module exports exactly its eight helpers and nothing else', () => {
   // The surface is enumerated so adding a public helper is a deliberate edit
   // to this test rather than a side effect.
   assert.deepStrictEqual(Object.keys(require('../../public/chat-markup.js')).sort(), [
     'agentMessageHtml',
     'agentSenderHtml',
     'agentStreamingMessageHtml',
+    'delegationDividerHtml',
     'msgTimeHtml',
+    'permissionResolvedHtml',
     'thinkingIndicatorHtml',
     'userBubbleHtml',
   ]);
+});
+
+// ── delegationDividerHtml ───────────────────────────────────────────────────
+
+test('delegationDividerHtml matches the markup buildDelegationDivider held', () => {
+  assert.strictEqual(
+    delegationDividerHtml(AGENT, false),
+    '<div class="delegation-line"></div><div class="delegation-badge" style="color:#f00"><span class="avatar xs" style="background:#f00">D</span>Dev joined</div><div class="delegation-line"></div>'
+  );
+});
+
+test('delegationDividerHtml says resumed on a return leg and joined otherwise', () => {
+  assert.ok(delegationDividerHtml(AGENT, true).includes('Dev resumed'));
+  assert.ok(delegationDividerHtml(AGENT, false).includes('Dev joined'));
+});
+
+test('delegationDividerHtml falls back the same way the sender line does', () => {
+  const html = delegationDividerHtml(null, false);
+  assert.ok(html.includes('color:var(--accent)'));
+  assert.ok(html.includes('>?</span>Agent joined'));
+});
+
+// ── permissionResolvedHtml ──────────────────────────────────────────────────
+
+test('permissionResolvedHtml renders the timeout card byte-identically', () => {
+  // This is the exact string the WS permission_timeout branch wrote before the
+  // builder existed. It has no trailing text, so no separator is emitted.
+  assert.strictEqual(
+    permissionResolvedHtml(false, '✕ Timed out', ''),
+    '<div class="permission-resolved denied"><span>✕ Timed out</span></div>'
+  );
+});
+
+test('permissionResolvedHtml separates label from summary when both are present', () => {
+  assert.strictEqual(
+    permissionResolvedHtml(true, '✓', 'ESC(ran a command)'),
+    '<div class="permission-resolved allowed"><span>✓</span> ESC(ran a command)</div>'
+  );
+});
+
+test('permissionResolvedHtml picks the class from the decision, not the label', () => {
+  assert.ok(permissionResolvedHtml(true, 'x', '').includes('permission-resolved allowed'));
+  assert.ok(permissionResolvedHtml(false, 'x', '').includes('permission-resolved denied'));
+});
+
+test('permissionResolvedHtml does not escape its text, which arrives escaped', () => {
+  // The click path passes esc(summary); escaping again would show entities.
+  assert.ok(permissionResolvedHtml(true, '✓', '&amp;').includes('&amp;'));
 });
 
 // ── the invariant that keeps this module the only source ────────────────────
@@ -190,7 +242,13 @@ test('no chat message markup is written outside chat-markup.js', () => {
   // carry an id the helpers have no reason to take, and a class rename breaks
   // them loudly because the stylesheet stops applying. Production authoring is
   // what drifts silently, and that is what this guards.
-  const TOKENS = ['class="msg-sender"', 'class="msg-bubble', 'class="streaming-text"'];
+  const TOKENS = [
+    'class="msg-sender"', 'class="msg-bubble', 'class="streaming-text"',
+    // Added after the resolved permission card was found written two different
+    // ways, in app.js and views/chat.js: the same defect as the bubbles, one
+    // component over, which the original token list did not cover.
+    'class="permission-resolved', 'class="delegation-',
+  ];
   const publicDir = path.join(__dirname, '..', '..', 'public');
   const owner = path.join(publicDir, 'chat-markup.js');
 

@@ -452,10 +452,7 @@ function handle(d) {
       break;
     }
     case 'permission_timeout': {
-      const card = document.getElementById('perm-' + d.requestId);
-      if (card) {
-        card.innerHTML = `<div class="permission-resolved denied"><span>✕ Timed out</span></div>`;
-      }
+      resolvePermissionCard(d.requestId, false, '✕ Timed out', false);
       pendingPermissions.delete(d.requestId);
       // Expired: a copy queued for a background conversation must never be
       // rendered (and answered) after the server has auto-denied it.
@@ -677,19 +674,6 @@ function executeEffects(convoId, effects) {
     if (run) run(convoId, ef);
     else console.warn('[Effects] Unknown effect type:', ef.type);
   }
-}
-// Flush a deferred "resumed" badge into the message stream.
-// Build a delegation divider element. Used by live agent_switch, in-memory replay, and history replay.
-function buildDelegationDivider(agentData, isReturn, opts = {}) {
-  const divider = document.createElement('div');
-  divider.className = 'msg-delegation' + (opts.historyClass ? ' history-msg' : '');
-  if (opts.noAnimation) divider.style.animation = 'none';
-  const label = isReturn ? 'resumed' : 'joined';
-  const colour = agentData?.colour || 'var(--accent)';
-  const icon = agentData?.icon || '?';
-  const name = agentData?.displayName || 'Agent';
-  divider.innerHTML = `<div class="delegation-line"></div><div class="delegation-badge" style="color:${colour}"><span class="avatar xs" style="background:${colour}">${icon}</span>${name} ${label}</div><div class="delegation-line"></div>`;
-  return divider;
 }
 
 function isStaleProcess(d, convoId) {

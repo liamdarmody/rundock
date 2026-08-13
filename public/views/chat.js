@@ -21,8 +21,13 @@
 // the DOMContentLoaded scroll listener writes it. Helpers reached the same
 // way: esc, formatMd, formatTimeAgo, stripRundockMarkers, getConvoState,
 // persistConversation, renderConvoList, updateUnreadBadge, updateWorkingBadge,
-// buildDelegationDivider, tryMessageAnchor, and the classic-script globals
-// RundockPermissions and RundockConversationState.
+// tryMessageAnchor, and the classic-script globals RundockPermissions,
+// RundockConversationState and RundockChatMarkup.
+//
+// buildDelegationDivider moved the other way, from app.js into this module,
+// once the markup came out of it: it renders a thread element, and both of its
+// other callers (the agent_switch effect executor in app.js, in-memory replay
+// in the conversations view) reach it through the root republication.
 //
 // alwaysAllowedTools is the one piece of view-local state: the session-level
 // "always allow" grant set has no reader outside the permission cards, and a
@@ -284,6 +289,18 @@ function addAgentMsg(text,agentId,anim=true,timestamp=null) {
 }
 function addUserMsg(text,anim=true) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg msg-user'; if(!anim)d.style.animation='none'; d.innerHTML=RundockChatMarkup.userBubbleHtml(esc(text)); m.appendChild(d); scrollBottom(true); }
 function addSystemMsg(text) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg-system'; d.textContent=text; m.appendChild(d); scrollBottom(); }
+
+// Build a delegation divider element. Used by live agent_switch (the effect
+// executor in app.js), in-memory replay in the conversations view, and history
+// replay below. It lived in app.js until the markup came out of it; it is
+// chat thread rendering, so it belongs with the rest of the thread.
+function buildDelegationDivider(agentData, isReturn, opts = {}) {
+  const divider = document.createElement('div');
+  divider.className = 'msg-delegation' + (opts.historyClass ? ' history-msg' : '');
+  if (opts.noAnimation) divider.style.animation = 'none';
+  divider.innerHTML = RundockChatMarkup.delegationDividerHtml(agentData, isReturn);
+  return divider;
+}
 
 // Recovery card shown when the Claude Code sign-in expires (401). Replaces the
 // raw error blob with a clear explanation and the steps to reconnect.
@@ -684,19 +701,26 @@ function respondPermission(requestId, allow, always, allowFolder) {
   }
 
   // Replace the card with a resolved indicator
-  const card = document.getElementById('perm-' + requestId);
-  if (card) {
-    const summary = card.querySelector('.permission-summary')?.textContent || '';
-    const detail = card.querySelector('.permission-detail')?.textContent || '';
-    const label = allow ? (always ? '✓ Always' : '✓') : '✕';
-    card.innerHTML = `<div class="permission-resolved ${allow ? 'allowed' : 'denied'}">
-      <span>${label}</span> ${esc(summary)}
-    </div>`;
-  }
+  resolvePermissionCard(requestId, allow, allow ? (always ? '✓ Always' : '✓') : '✕', true);
 
   // Resume thinking indicator
   const t = document.getElementById('thinking-indicator');
   if (t) t.style.display = '';
+}
+
+// Replace an answered permission card with its resolved indicator. Shared with
+// the WS permission_timeout branch in app.js, which answers the same card when
+// the server auto-denies it: that branch used to write its own markup, which
+// had drifted to a different shape from this one.
+//
+// keepSummary decides whether the card's own summary text is carried into the
+// resolved state. The user-answered path keeps it so the thread still reads as
+// a record of what was approved; the timeout path never showed it.
+function resolvePermissionCard(requestId, allowed, label, keepSummary) {
+  const card = document.getElementById('perm-' + requestId);
+  if (!card) return;
+  const summary = keepSummary ? (card.querySelector('.permission-summary')?.textContent || '') : '';
+  card.innerHTML = RundockChatMarkup.permissionResolvedHtml(allowed, label, summary ? esc(summary) : '');
 }
 
 function formatToolName(name) {
@@ -761,11 +785,12 @@ function scrollBottom(force) {
 return {
   dispatchMessage, sendMessage, startProcessing, finishProcessing,
   cancelProcessing, handleActiveProcesses, addAgentMsg, addUserMsg,
-  addSystemMsg, renderAuthErrorCard, copyAuthCmd, agentDisplayName,
+  addSystemMsg, buildDelegationDivider, renderAuthErrorCard, copyAuthCmd, agentDisplayName,
   renderCodexQuotaCard, renderCodexGuidanceCard, renderCodexErrorPill,
   addToolMsg, createHistoryDivider, renderSessionHistory, classifyRisk,
   describeToolRequest, toolAllowKey, handlePermissionRequest,
   renderPermissionCard, renderPendingPermissionCards, respondPermission,
+  resolvePermissionCard,
   formatToolName, formatToolShort, buildActivitySummary, scrollBottom,
 };
 }));
