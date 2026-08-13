@@ -183,6 +183,13 @@ test('no chat message markup is written outside chat-markup.js', () => {
   // These are markup tokens, spelt with `class="`, so selector reads like
   // querySelector('.msg-bubble') and classList.remove('streaming-text') are
   // untouched: finding a node is not authoring one.
+  //
+  // Scope is public/ deliberately. Two e2e specs build a bare bubble inside
+  // page.evaluate to exercise CSS (table scrolling, number-only replies) and
+  // are left alone: they are fixtures standing in for a rendered thread, they
+  // carry an id the helpers have no reason to take, and a class rename breaks
+  // them loudly because the stylesheet stops applying. Production authoring is
+  // what drifts silently, and that is what this guards.
   const TOKENS = ['class="msg-sender"', 'class="msg-bubble', 'class="streaming-text"'];
   const publicDir = path.join(__dirname, '..', '..', 'public');
   const owner = path.join(publicDir, 'chat-markup.js');
