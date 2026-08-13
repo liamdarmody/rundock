@@ -598,7 +598,7 @@ const EFFECT_EXECUTORS = {
     const a = agents.find(x => x.id === ef.agentId) || activeConversation?.agent || agents[0];
     const m = document.getElementById('messages'), el = document.createElement('div');
     el.className = 'msg msg-agent';
-    el.innerHTML = `<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.displayName||'Agent'}<span class="msg-time">${new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></div><div class="msg-bubble"><span class="streaming-text"></span></div>`;
+    el.innerHTML = RundockChatMarkup.agentStreamingMessageHtml(a, '', RundockChatMarkup.msgTimeHtml(new Date()));
     m.appendChild(el);
     state.currentStreamingMsg = el;
   },
@@ -615,7 +615,7 @@ const EFFECT_EXECUTORS = {
       const a = agents.find(x => x.id === ef.agentId) || activeConversation?.agent || agents[0];
       const m = document.getElementById('messages'), el = document.createElement('div');
       el.className = 'msg msg-agent'; el.id = 'thinking-indicator';
-      el.innerHTML = `<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.displayName||'Agent'}</div><div class="msg-bubble thinking-bubble"><div class="thinking-pulse" style="background:${a?.colour||'var(--accent)'}"></div><div><div class="thinking-label">Thinking</div><div class="thinking-status" id="thinking-status"></div></div></div>`;
+      el.innerHTML = RundockChatMarkup.thinkingIndicatorHtml(a);
       m.appendChild(el);
       scrollBottom();
       status = el.querySelector('#thinking-status');
