@@ -20,7 +20,7 @@ Routines are a Rundock concept. The `routines:` array is read by Rundock's sched
 
 ## Frontmatter reference
 
-Each entry in the `routines:` array is a YAML object with four fields. The parser is `parseRoutines` in `server.js`. It splits the array on `  - name:` markers, reads each indented `key: value` line within a block, and pushes the result if a `name` was found. Anything else in the block is silently dropped.
+Each entry in the `routines:` array is a YAML object with four fields. The parser is `parseRoutines` in `lib/agents/discovery.js`. It splits the array on `  - name:` markers, reads each indented `key: value` line within a block, and pushes the result if a `name` was found. Anything else in the block is silently dropped.
 
 | Field | Type | Scope | Required | Purpose | Example |
 |---|---|---|---|---|---|
@@ -58,7 +58,6 @@ Examples that look correct but silently never fire:
 schedule: 0 5 * * *                # cron: not supported
 schedule: every day at 9:00        # missing leading zero on the hour
 schedule: every weekday at 18:00   # "weekday" is not a recognised day
-schedule: every Monday at 09:00    # capital M does not match
 schedule: every day @ 05:00        # only "at" is recognised
 ```
 
@@ -74,11 +73,13 @@ The scheduler ticks every 60 seconds. On each tick:
 2. For every routine on every agent, the scheduler computes `getNextRun(schedule, lastRun)`.
 3. If the next run time has come due (the current time has passed it), Rundock fires the routine.
 
-Each routine has a `lastRun` guard. Daily routines do not re-fire the same calendar day; weekly routines do not re-fire on the same weekday they last ran on. The guard is held in memory on the server.
+Each routine has a `lastRun` guard. Daily routines do not re-fire once they have run at or after their scheduled hour that calendar day; weekly routines do not re-fire on the same weekday they last ran on. The guard is persisted to `.rundock/routine-state.json` in the workspace, so it survives a restart and a routine is not fired twice by one.
 
-**Routines fire only while Rundock is running.** There is no persistent layer. If Rundock is closed, the scheduler is not running, and any routine whose schedule comes due during that window is missed. When Rundock starts again, it does not catch up: it begins computing next-run times from the current time forward, with no record of what it missed.
+**Routines fire only while Rundock is running, but a missed slot is caught up the same day.** If Rundock is closed at 05:00 and you open it at 09:00, the 05:00 routine fires shortly after launch. A next-run time that has already passed stays on today rather than rolling forward to tomorrow, and the scheduler fires anything already due on its next tick.
 
-A second consequence of in-memory state: when Rundock restarts, the `lastRun` guard is wiped. If a routine was already fired earlier in the day, and Rundock restarts before the next tick rolls past midnight, the daily-schedule branch may fire the routine a second time when it would otherwise be suppressed. This rarely matters in practice (most morning briefings are idempotent), but it is honest to flag.
+The catch-up window is the calendar day for daily routines and the weekday for weekly ones. Closed all of Tuesday means Tuesday's daily run is lost: you get one run on Wednesday, not two. Closed all of Friday means a Friday weekly routine waits until the following Friday.
+
+Catch-up means routines run late, not on time. A 05:00 briefing on a machine opened at 09:00 runs at 09:00. If the timing matters rather than the fact that it ran, see the always-on options below.
 
 The scheduler runs each routine by spawning a headless Claude Code subprocess with the routine's prompt as the input message. The agent slug is passed so Claude Code loads the correct system prompt. The subprocess runs with `--dangerously-skip-permissions` because there is no user available to approve tool calls in real time.
 
@@ -86,7 +87,7 @@ If you want routines to fire while you are away from your computer, see [Always-
 
 ## Always-on routines: VPS or Claude routines
 
-The constraint is real. Rundock's scheduler runs in-process, so routines only fire while the Rundock server is up on your machine. If you close your laptop at night, anything scheduled for 04:00 does not run. There are two practical ways around this, and each has a real cost: one is a small monthly fee plus initial setup time, the other is a separate subscription tier on a different scheduling system. Pick the one that matches the routine you are trying to run.
+The constraint is real, though narrower than it looks. Rundock's scheduler runs in-process, so routines only fire while the Rundock server is up on your machine. Same-day catch-up covers the common case: close the laptop at night, open it in the morning, and the 04:00 routine runs when you open it. What it cannot do is run at 04:00, or run at all on a day you never open Rundock. There are two practical ways around this, and each has a real cost: one is a small monthly fee plus initial setup time, the other is a separate subscription tier on a different scheduling system. Pick the one that matches the routine you are trying to run.
 
 ### Option 1: Run Rundock on a VPS
 
@@ -126,7 +127,11 @@ For reference, Liam runs Rundock on a VPS and schedules context-heavy routines o
 
 ### When not to bother
 
-If you only run routines you keep Rundock open through anyway, neither option is worth the setup cost. The orchestrator's morning briefing fires at 05:00, but if you do not open Rundock until 09:00, you have already missed the slot, and Rundock does not catch up: the next-run calculation rolls forward to 05:00 the following day. There is no queue of missed runs replayed at startup. The practical path on a laptop-only setup is to schedule routines for times Rundock is reliably running (mid-morning, lunchtime, end of day) and accept that overnight cadences need one of the two always-on options above.
+Neither option is worth the setup cost for most laptop-only setups, and same-day catch-up is why. The orchestrator's morning briefing is scheduled for 05:00; if you open Rundock at 09:00, it runs at 09:00. The daily note is written and the inbox triaged by the time you have made coffee, which is usually what the routine was for.
+
+Two cases genuinely need an always-on host. The first is when the hour itself matters and not merely that the work happened: a briefing that must be sitting there at 05:00 cannot be produced by a machine that boots at 09:00. The second is a day you never open Rundock at all, because a daily routine missed for a whole calendar day is not replayed the next day.
+
+If neither applies, schedule routines for whenever you tend to be at the machine and let catch-up absorb the rest.
 
 ## Where routine output goes
 
@@ -135,7 +140,7 @@ When a routine fires, the spawned Claude Code subprocess produces output on stdo
 What Rundock does record:
 
 - The routine's `lastRun` timestamp.
-- The routine's `status` (`running`, `completed`, or `failed`, based on the subprocess exit code).
+- The routine's `status` (`running`, `completed`, `failed`, or `interrupted`). The first three follow the subprocess exit code; `interrupted` is written on startup when a run was still marked `running` when the process died, so a routine killed mid-run is distinguishable from one that failed.
 - The routine's `duration` in seconds.
 
 These three fields update in the Routines panel and on the agent profile in real time over the WebSocket.
