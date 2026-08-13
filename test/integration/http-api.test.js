@@ -196,6 +196,13 @@ describe('path traversal guards', () => {
     assert.ok(res.body.includes('RundockFilesView'), 'files view module content served');
   });
 
+  test('/views/conversations.js is served as javascript (the conversations view module)', async () => {
+    const res = await get('/views/conversations.js');
+    assert.strictEqual(res.status, 200);
+    assert.match(res.headers.get('content-type') || '', /javascript/);
+    assert.ok(res.body.includes('RundockConversationsView'), 'conversations view module content served');
+  });
+
 
   test('WS read_file is guarded the same way as /api/file', async () => {
     const outside = path.join(h.workspaceDir, '..', `ws-secret-${Date.now()}.md`);
