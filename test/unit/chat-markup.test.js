@@ -242,7 +242,13 @@ test('no chat message markup is written outside chat-markup.js', () => {
   // carry an id the helpers have no reason to take, and a class rename breaks
   // them loudly because the stylesheet stops applying. Production authoring is
   // what drifts silently, and that is what this guards.
-  const TOKENS = ['class="msg-sender"', 'class="msg-bubble', 'class="streaming-text"'];
+  const TOKENS = [
+    'class="msg-sender"', 'class="msg-bubble', 'class="streaming-text"',
+    // Added after the resolved permission card was found written two different
+    // ways, in app.js and views/chat.js: the same defect as the bubbles, one
+    // component over, which the original token list did not cover.
+    'class="permission-resolved', 'class="delegation-',
+  ];
   const publicDir = path.join(__dirname, '..', '..', 'public');
   const owner = path.join(publicDir, 'chat-markup.js');
 
