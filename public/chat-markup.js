@@ -1,5 +1,7 @@
 'use strict';
-// The single source of chat message markup. Pure string builders: no DOM, no
+// The single source of chat thread markup: agent and user messages, the
+// thinking indicator, delegation dividers and resolved permission cards.
+// Pure string builders: no DOM, no
 // globals, no clock. Callers create the element, set innerHTML from one of
 // these, and own every side effect.
 //
@@ -21,6 +23,8 @@
 //                     its innerHTML on every frame of a response
 //   #thinking-status  ensure-tool-status and update-tool-status write the
 //                     current tool name into it by id
+//   .permission-*     the resolved card reads .permission-summary out of the
+//                     card it is replacing, so the two shapes are a pair
 // Renaming any of them means changing those readers in the same commit.
 //
 // Load-order and naming note. Unlike the modules under public/views/, this one
@@ -29,10 +33,11 @@
 // resolve moved functions as bare window properties. Nothing resolves these
 // names that way: every call site is ordinary module code written against
 // this API, so one namespaced global is enough and the client's global surface
-// does not grow by six more names.
+// does not grow by eight more names.
 //
 // Behaviour contract pinned by test/unit/chat-markup.test.js, whose expected
-// strings were produced by evaluating the original seven literals.
+// strings were produced by evaluating the original literals at every call site
+// this module replaced.
 (/** @param {any} root @param {() => object} factory */ function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.RundockChatMarkup = factory();
@@ -95,6 +100,27 @@
     return `<div class="msg-bubble">${escapedHtml}</div>`;
   }
 
+  // The rule between two agents in a thread: a hairline either side of a badge
+  // naming who took over. `joined` on a handoff, `resumed` when an orchestrator
+  // takes the thread back.
+  /** @param {AgentLike} agent @param {boolean} [isReturn] */
+  function delegationDividerHtml(agent, isReturn) {
+    const colour = agent?.colour || 'var(--accent)';
+    return `<div class="delegation-line"></div><div class="delegation-badge" style="color:${colour}"><span class="avatar xs" style="background:${colour}">${agent?.icon || '?'}</span>${agent?.displayName || 'Agent'} ${isReturn ? 'resumed' : 'joined'}</div><div class="delegation-line"></div>`;
+  }
+
+  // What a permission card becomes once it has been answered, whether the user
+  // answered it or the server timed it out. The class comes from the decision
+  // rather than the label, because the label varies ('✓', '✓ Always', '✕',
+  // '✕ Timed out') while the styling only cares whether it was allowed.
+  //
+  // `text` arrives already escaped and the separating space is emitted only
+  // when there is text, so the timeout card renders exactly as it always did.
+  /** @param {boolean} allowed @param {string} label @param {string} [text] */
+  function permissionResolvedHtml(allowed, label, text) {
+    return `<div class="permission-resolved ${allowed ? 'allowed' : 'denied'}"><span>${label}</span>${text ? ' ' + text : ''}</div>`;
+  }
+
   return {
     msgTimeHtml,
     agentSenderHtml,
@@ -102,5 +128,7 @@
     agentStreamingMessageHtml,
     thinkingIndicatorHtml,
     userBubbleHtml,
+    delegationDividerHtml,
+    permissionResolvedHtml,
   };
 }));
