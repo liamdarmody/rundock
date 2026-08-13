@@ -376,7 +376,6 @@ function renderCodexErrorPill(convoId, d) {
   const name = agentDisplayName(d._agent);
   addSystemMsg(`${name}'s runtime hit a problem and this turn stopped.` + (d.detail ? ` Codex: ${d.detail}` : ''));
 }
-function addToolMsg(name) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg-tool'; d.innerHTML=`<span class="msg-tool-icon">&#x2192;</span> Using ${esc(name)}`; m.appendChild(d); scrollBottom(); return d; }
 // ===== SESSION HISTORY =====
 
 function createHistoryDivider() {
@@ -787,7 +786,7 @@ return {
   cancelProcessing, handleActiveProcesses, addAgentMsg, addUserMsg,
   addSystemMsg, buildDelegationDivider, renderAuthErrorCard, copyAuthCmd, agentDisplayName,
   renderCodexQuotaCard, renderCodexGuidanceCard, renderCodexErrorPill,
-  addToolMsg, createHistoryDivider, renderSessionHistory, classifyRisk,
+  createHistoryDivider, renderSessionHistory, classifyRisk,
   describeToolRequest, toolAllowKey, handlePermissionRequest,
   renderPermissionCard, renderPendingPermissionCards, respondPermission,
   resolvePermissionCard,

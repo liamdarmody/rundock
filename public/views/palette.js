@@ -321,8 +321,6 @@ function paletteOpenSkill(skillId) {
 // scroll to it. Text-content matching (normalised) survives the markdown
 // rendering that separates the jsonl source from the DOM.
 
-function normAnchorText(t) { return RundockPalette.normAnchorText(t); }
-
 function tryMessageAnchor(convoId) {
   if (!pendingMessageAnchor || pendingMessageAnchor.convoId !== convoId) return;
   const anchor = pendingMessageAnchor;
@@ -353,6 +351,6 @@ return {
   paletteSnippetPlain, renderPalette, paletteItemHtml, renderPaletteStatus,
   hoverPaletteItem, updatePaletteSelection, movePaletteSelection,
   openPaletteResult, paletteOpenFile, paletteOpenConversation,
-  paletteOpenSkill, normAnchorText, tryMessageAnchor,
+  paletteOpenSkill, tryMessageAnchor,
 };
 }));
