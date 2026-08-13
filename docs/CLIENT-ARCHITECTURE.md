@@ -1,7 +1,8 @@
 # The browser client
 
-Written for your first day. It explains how `public/` is put together, why it is
-put together that way, and which parts look like mistakes but are not.
+Read this before changing anything in `public/`. It explains how the client is
+put together, why it is put together that way, and which parts look like
+mistakes but are not.
 
 The short version: there is no build step, the client is a set of classic
 scripts, and modules publish their functions onto the global object on purpose.
