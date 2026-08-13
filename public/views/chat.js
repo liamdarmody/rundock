@@ -701,19 +701,26 @@ function respondPermission(requestId, allow, always, allowFolder) {
   }
 
   // Replace the card with a resolved indicator
-  const card = document.getElementById('perm-' + requestId);
-  if (card) {
-    const summary = card.querySelector('.permission-summary')?.textContent || '';
-    const detail = card.querySelector('.permission-detail')?.textContent || '';
-    const label = allow ? (always ? '✓ Always' : '✓') : '✕';
-    card.innerHTML = `<div class="permission-resolved ${allow ? 'allowed' : 'denied'}">
-      <span>${label}</span> ${esc(summary)}
-    </div>`;
-  }
+  resolvePermissionCard(requestId, allow, allow ? (always ? '✓ Always' : '✓') : '✕', true);
 
   // Resume thinking indicator
   const t = document.getElementById('thinking-indicator');
   if (t) t.style.display = '';
+}
+
+// Replace an answered permission card with its resolved indicator. Shared with
+// the WS permission_timeout branch in app.js, which answers the same card when
+// the server auto-denies it: that branch used to write its own markup, which
+// had drifted to a different shape from this one.
+//
+// keepSummary decides whether the card's own summary text is carried into the
+// resolved state. The user-answered path keeps it so the thread still reads as
+// a record of what was approved; the timeout path never showed it.
+function resolvePermissionCard(requestId, allowed, label, keepSummary) {
+  const card = document.getElementById('perm-' + requestId);
+  if (!card) return;
+  const summary = keepSummary ? (card.querySelector('.permission-summary')?.textContent || '') : '';
+  card.innerHTML = RundockChatMarkup.permissionResolvedHtml(allowed, label, summary ? esc(summary) : '');
 }
 
 function formatToolName(name) {
@@ -783,6 +790,7 @@ return {
   addToolMsg, createHistoryDivider, renderSessionHistory, classifyRisk,
   describeToolRequest, toolAllowKey, handlePermissionRequest,
   renderPermissionCard, renderPendingPermissionCards, respondPermission,
+  resolvePermissionCard,
   formatToolName, formatToolShort, buildActivitySummary, scrollBottom,
 };
 }));

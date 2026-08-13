@@ -452,10 +452,7 @@ function handle(d) {
       break;
     }
     case 'permission_timeout': {
-      const card = document.getElementById('perm-' + d.requestId);
-      if (card) {
-        card.innerHTML = `<div class="permission-resolved denied"><span>✕ Timed out</span></div>`;
-      }
+      resolvePermissionCard(d.requestId, false, '✕ Timed out', false);
       pendingPermissions.delete(d.requestId);
       // Expired: a copy queued for a background conversation must never be
       // rendered (and answered) after the server has auto-denied it.
