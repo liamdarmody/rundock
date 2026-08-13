@@ -465,14 +465,20 @@ describe('re-gate R1/R2: stream-inactivity watchdog and keepalive glue (source i
   // half of each fix is pinned at source level, the same bracket pattern as
   // the pairs above.
   const appSrc = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'app.js'), 'utf-8');
+  // The watchdog moved with startProcessing into the chat view module; the
+  // keepalive glue is WS dispatch and stayed in app.js. Two sources, one
+  // invariant each, so neither scan can pass by looking at the wrong file.
+  const chatSrc = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'views', 'chat.js'), 'utf-8');
 
   test('startProcessing watchdog decides on the LIVE state via getConvoState, never the captured object', () => {
     // The reducer returns fresh state objects and the glue reassigns
     // convoState[convoId]; a watchdog closing over the object captured when
     // the interval was armed would see lastStreamActivity freeze and
     // auto-finish every turn longer than the idle limit mid-stream.
-    const m = appSrc.match(/state\.processingTimeout = setInterval\(\(\) => \{([\s\S]*?)\n\s*\}, 10000\);/);
+    const m = chatSrc.match(/state\.processingTimeout = setInterval\(\(\) => \{([\s\S]*?)\n\s*\}, 10000\);/);
     assert.ok(m, 'watchdog interval found in startProcessing');
+    assert.ok(!/state\.processingTimeout = setInterval\(/.test(appSrc),
+      'startProcessing lives in the chat view module; a copy left in app.js would mean the move was partial');
     const body = m[1];
     assert.ok(body.includes('getConvoState(convoId)'),
       'the watchdog must re-read the live state each tick (reducer reassignment orphans a captured object)');
