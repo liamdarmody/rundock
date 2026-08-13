@@ -13,6 +13,8 @@
 // `a?.colour || 'var(--accent)'` branches that the call sites relied on.
 const { test } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const {
   msgTimeHtml,
@@ -153,6 +155,58 @@ test('module exports exactly its six helpers and nothing else', () => {
     'thinkingIndicatorHtml',
     'userBubbleHtml',
   ]);
+});
+
+// ── the invariant that keeps this module the only source ────────────────────
+
+// Walk the hand-written client scripts. The vendored trees are third-party
+// and the editor bundle is generated, so neither is ours to hold to this rule.
+function clientScripts(dir, out = []) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      if (['vendor', 'editor'].includes(entry.name)) continue;
+      clientScripts(path.join(dir, entry.name), out);
+    } else if (entry.name.endsWith('.js') && !entry.name.endsWith('.min.js')) {
+      out.push(path.join(dir, entry.name));
+    }
+  }
+  return out;
+}
+
+test('no chat message markup is written outside chat-markup.js', () => {
+  // The failure this prevents: someone adds a chat surface, copies a bubble
+  // literal to get going, and the client is back to rendering the same agent
+  // two different ways with nothing to catch it. That is exactly how the
+  // three byte-identical thinking bubbles came to exist, one per extraction
+  // slice.
+  //
+  // These are markup tokens, spelt with `class="`, so selector reads like
+  // querySelector('.msg-bubble') and classList.remove('streaming-text') are
+  // untouched: finding a node is not authoring one.
+  const TOKENS = ['class="msg-sender"', 'class="msg-bubble', 'class="streaming-text"'];
+  const publicDir = path.join(__dirname, '..', '..', 'public');
+  const owner = path.join(publicDir, 'chat-markup.js');
+
+  const files = clientScripts(publicDir);
+  assert.ok(files.length >= 15, `sanity: scanned ${files.length} client scripts`);
+  assert.ok(files.includes(owner), 'sanity: the owning module is in scope');
+
+  const offenders = [];
+  for (const file of files) {
+    if (file === owner) continue;
+    const src = fs.readFileSync(file, 'utf-8');
+    for (const token of TOKENS) {
+      if (src.includes(token)) offenders.push(`${path.relative(publicDir, file)} writes ${token}`);
+    }
+  }
+  assert.deepStrictEqual(offenders, [], 'chat markup belongs in chat-markup.js only');
+
+  // And the owner really does hold all three, so the assertion above cannot
+  // pass by the tokens having been renamed out of existence.
+  const ownerSrc = fs.readFileSync(owner, 'utf-8');
+  for (const token of TOKENS) {
+    assert.ok(ownerSrc.includes(token), `chat-markup.js should still write ${token}`);
+  }
 });
 
 test('the helpers are pure: no DOM, no globals, no clock read', () => {
