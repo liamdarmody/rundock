@@ -88,4 +88,19 @@ describe('electron-builder files whitelist', () => {
       assert.ok(fs.existsSync(path.join(root, f)), `${f} referenced by index.html does not exist`);
     }
   });
+
+  test('client stylesheets referenced by index.html are packaged', () => {
+    // Same gate as the scripts above, for <link> tags. A stylesheet missing
+    // from the packaged app does not throw on boot the way a missing module
+    // does: the app opens looking wrong, which is a worse failure to diagnose
+    // and one no smoke test would name.
+    const html = fs.readFileSync(path.join(root, 'public', 'index.html'), 'utf-8');
+    const hrefs = [...html.matchAll(/<link[^>]+href="\/([\w./-]+\.css)"/g)]
+      .map(m => `public/${m[1]}`);
+    assert.ok(hrefs.includes('public/styles/tokens.css'), 'sanity: the token sheet is linked');
+    for (const f of hrefs) {
+      assert.ok(covered(f), `index.html links /${f.replace('public/', '')} but build.files does not package it`);
+      assert.ok(fs.existsSync(path.join(root, f)), `${f} linked by index.html does not exist`);
+    }
+  });
 });
