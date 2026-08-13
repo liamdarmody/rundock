@@ -65,6 +65,35 @@ describe('static + JSON endpoints', () => {
     }
   });
 
+  test('every local stylesheet link in index.html resolves to a live route', async () => {
+    // The <script> sibling above exists because a script tag without a route
+    // shipped once and a defensive fallback hid it. A stylesheet has no
+    // fallback and fails more quietly still: the page renders, unstyled or
+    // half-styled, and nothing throws. The styling is moving out of
+    // index.html into linked files, so this class becomes reachable for the
+    // first time and is closed here before the first file moves.
+    const html = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'index.html'), 'utf-8');
+    const hrefs = [...html.matchAll(/<link[^>]+href="(\/[^"]+\.css)"/g)].map(m => m[1]);
+    assert.ok(hrefs.length >= 1, `sanity: found ${hrefs.length} local stylesheets`);
+    assert.ok(hrefs.includes('/styles/tokens.css'), 'sanity: the token sheet is linked');
+    for (const href of hrefs) {
+      const res = await get(href);
+      assert.strictEqual(res.status, 200, `${href} must serve (link tag without a route)`);
+      assert.match(res.headers.get('content-type') || '', /text\/css/, `${href} content type`);
+    }
+  });
+
+  test('the /styles/ route serves css and refuses to leave public/', async () => {
+    assert.strictEqual((await get('/styles/tokens.css')).status, 200);
+    assert.strictEqual((await get('/styles/no-such-sheet.css')).status, 404);
+    // Traversal, both spelled out and encoded. The route pattern forbids the
+    // first and the realpath prefix check stops anything that gets past it.
+    assert.strictEqual((await get('/styles/../../server.js')).status, 404);
+    assert.strictEqual((await get('/styles/..%2F..%2Fserver.js')).status, 404);
+    // Only .css and .js may be served from it; nothing else is addressable.
+    assert.strictEqual((await get('/styles/tokens.txt')).status, 404);
+  });
+
   test('top-level module route rejects unknown files and non-module paths', async () => {
     assert.strictEqual((await get('/no-such-module.js')).status, 404);
     // Traversal cannot be expressed in the route pattern (no slashes or

@@ -15,15 +15,43 @@ const root = path.join(__dirname, '..', '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf-8'));
 const files = pkg.build && pkg.build.files || [];
 
-// A whitelist entry covers a root-level file if it names it exactly or is a
-// directory glob whose prefix contains it (e.g. public/**/* covers
-// public/code-language.js).
+// Does build.files package this path?
+//
+// electron-builder applies the list IN ORDER and a later entry overrides an
+// earlier one, so a leading `!` excludes what a previous glob included. This
+// used to be a plain `.some()` over positive matches, which meant negation
+// entries were invisible to it: `public/**/*` followed by `!public/styles/**`
+// read as covered, and the guard would have stayed green while the packaged
+// app shipped with no stylesheets. build.files already carries three negations
+// today, so the hole was real rather than hypothetical. Found on 2026-08-13
+// while proving the stylesheet guard below could fail; it could not.
 function covered(relPath) {
-  return files.some(entry => {
-    if (entry === relPath) return true;
-    const dir = entry.split('/**')[0];
-    return entry.includes('**') && relPath.startsWith(dir + '/');
-  });
+  let included = false;
+  for (const entry of files) {
+    const negated = entry.startsWith('!');
+    const pattern = negated ? entry.slice(1) : entry;
+    if (matches(pattern, relPath)) included = !negated;
+  }
+  return included;
+}
+
+// The glob shapes build.files uses: an exact path, or a directory prefix
+// followed by `/**`, `/**/*`, or `/**/*.ext`.
+//
+// The extension is honoured rather than ignored. A first cut treated
+// `public/**/*.css` as covering everything under public/, so excluding the
+// stylesheets appeared to exclude the scripts too and the red proof pointed at
+// the wrong test. A matcher that over-matches makes the guard fail for reasons
+// that are not true, which is its own kind of useless.
+function matches(pattern, relPath) {
+  if (pattern === relPath) return true;
+  const at = pattern.indexOf('/**');
+  if (at === -1) return false;
+  const dir = pattern.slice(0, at);
+  if (!relPath.startsWith(dir + '/')) return false;
+  const tail = pattern.slice(at + 3);              // '', '/*', '/*.css'
+  const ext = /^\/\*(\.[\w.]+)$/.exec(tail);
+  return ext ? relPath.endsWith(ext[1]) : true;
 }
 
 function localRequires(file) {
@@ -58,6 +86,21 @@ describe('electron-builder files whitelist', () => {
     for (const f of srcs) {
       assert.ok(covered(f), `index.html loads /${f.replace('public/', '')} but build.files does not package it`);
       assert.ok(fs.existsSync(path.join(root, f)), `${f} referenced by index.html does not exist`);
+    }
+  });
+
+  test('client stylesheets referenced by index.html are packaged', () => {
+    // Same gate as the scripts above, for <link> tags. A stylesheet missing
+    // from the packaged app does not throw on boot the way a missing module
+    // does: the app opens looking wrong, which is a worse failure to diagnose
+    // and one no smoke test would name.
+    const html = fs.readFileSync(path.join(root, 'public', 'index.html'), 'utf-8');
+    const hrefs = [...html.matchAll(/<link[^>]+href="\/([\w./-]+\.css)"/g)]
+      .map(m => `public/${m[1]}`);
+    assert.ok(hrefs.includes('public/styles/tokens.css'), 'sanity: the token sheet is linked');
+    for (const f of hrefs) {
+      assert.ok(covered(f), `index.html links /${f.replace('public/', '')} but build.files does not package it`);
+      assert.ok(fs.existsSync(path.join(root, f)), `${f} linked by index.html does not exist`);
     }
   });
 });
