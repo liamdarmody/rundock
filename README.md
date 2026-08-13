@@ -90,6 +90,7 @@ To pull updates later, run `npm run update` in the install directory.
 ## Tech docs
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): the process model, workspace directory, and codebase structure.
+- [CLIENT-ARCHITECTURE.md](docs/CLIENT-ARCHITECTURE.md): how `public/` works. No build step, classic scripts, why modules publish onto the global object, and which settings are load-bearing.
 - [AGENTS.md](docs/AGENTS.md): the agent file format reference. Frontmatter fields, the markdown body, workspace modes, and a complete example.
 - [SKILLS.md](docs/SKILLS.md): the skill file format, discovery, and the assignment model.
 - [ROUTINES.md](docs/ROUTINES.md): the schedule format, scheduler behaviour, and where output goes.

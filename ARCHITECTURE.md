@@ -30,6 +30,8 @@ The browser is the visual interface. It renders the org chart, the conversation 
 
 The client opens a single WebSocket to the server on load and uses HTTP for static assets and a small number of synchronous endpoints (workspace picker, permission decisions, agent listing). All ongoing conversation traffic flows over the WebSocket.
 
+How `public/` is put together, and why it has no build step, is its own page: [CLIENT-ARCHITECTURE.md](docs/CLIENT-ARCHITECTURE.md). Read it before changing anything in `public/`.
+
 ### The Node.js server
 
 `server.js` is the single server entry point. It does seven things, in roughly this order of importance.
@@ -116,13 +118,19 @@ A handful of source files, three production dependencies, no bundler.
 
 | File | Approximate size | What it owns |
 |---|---|---|
-| `server.js` | ~5,100 lines | HTTP and WebSocket server. Agent and skill discovery. Frontmatter parsing. Subprocess spawn and stdin/stdout bridging. Delegation interception. Conversation persistence. Routine scheduler. Permission mediation. Universal search wiring (engine lifecycle, reconcile triggers, the `search_universal` and `search_conversations` handlers, grep fallback). |
-| `search.js` | ~750 lines | The universal search engine: SQLite FTS5 index over workspace files and conversation transcripts, query sanitisation, fuzzy title scoring. Pure module: no WebSocket, no globals, fully unit-testable. See Universal search, below. |
-| `codex.js` | ~200 lines | Codex runtime support: binary/auth/Windows-sandbox detection, thread-id hygiene, error classification, rollout-file resolution. Pure module, fully unit-testable. |
-| `codex-appserver.js` | ~640 lines | The Codex app-server protocol client and supervisor: one long-lived `codex app-server` process serves every Codex conversation (JSON-RPC over stdio), with streamed turns, first-class approval requests, interrupt, crash restart, and pinned policy invariants. Pure module, fully unit-testable against the protocol stub. |
-| `public/app.js` | ~4,400 lines | Single-page client. WebSocket client. Conversation rendering. Streaming token display. Org chart. Sidebar. File browser. Settings drawer. Permission card UI. Search palette (Cmd+K). |
-| `public/editor/` | ~2,600 lines | The rich markdown editor (Tiptap-based): tables with byte-exact source preservation, CriticMarkup review annotations, the review panel, and the round-trip pipeline. |
-| `public/index.html` | ~900 lines | Layout, CSS, and markup. Nav rail, sidebar, main panel, search palette. No external stylesheet. |
+| `server.js` | ~2,970 lines | HTTP and WebSocket server, composition root, and the wiring that binds the modules below. Subprocess supervision, skill discovery, universal search wiring, permission mediation. |
+| `lib/` | ~6,200 lines | Most of what `server.js` used to hold, extracted into focused modules: `agents/` (discovery, frontmatter parsing, system prompts), `delegation/` (the orchestrator handoff engine, markers, state, handback), `runtime/` (Claude and Codex spawn plumbing), `protocol/handlers/` (one module per WebSocket message family), `workspace/` (boundary, analysis, scaffolding), `store/` (persistence, transcripts), plus `lib/scheduler.js`, `lib/http-router.js`, `lib/config.js`, `lib/signals.js`. |
+| `search.js` | ~1,070 lines | The universal search engine: SQLite FTS5 index over workspace files and conversation transcripts, query sanitisation, fuzzy title scoring. Pure module: no WebSocket, no globals, fully unit-testable. See Universal search, below. |
+| `codex.js` | ~250 lines | Codex runtime support: binary/auth/Windows-sandbox detection, thread-id hygiene, error classification, rollout-file resolution. Pure module, fully unit-testable. |
+| `codex-appserver.js` | ~760 lines | The Codex app-server protocol client and supervisor: one long-lived `codex app-server` process serves every Codex conversation (JSON-RPC over stdio), with streamed turns, first-class approval requests, interrupt, crash restart, and pinned policy invariants. Pure module, fully unit-testable against the protocol stub. |
+| `public/app.js` | ~1,745 lines | The client's composition root: boot, WebSocket client, view routing, shared state, and five enumerated rendering retentions. Not the whole client any more. |
+| `public/views/` | ~4,365 lines | Nine view modules (files, chat, conversations, find, palette, team, settings, skills, profile). Each is node-requireable and republishes its surface onto the global object. |
+| `public/` standalone modules | ~2,170 lines | Fourteen pure, unit-tested modules shared across views: markers, permissions, conversation-state, palette-model, chat-markup, unread-state, and others. |
+| `public/viewers/` | ~1,790 lines | The file-type viewer registry and the artifact review loop. |
+| `public/editor/` | ~5,740 lines | The rich markdown editor (Tiptap-based): tables with byte-exact source preservation, CriticMarkup review annotations, the review panel, and the round-trip pipeline. |
+| `public/index.html` | ~1,400 lines | Layout, CSS, and markup. Nav rail, sidebar, main panel, search palette. No external stylesheet. |
+
+How `public/` is organised, and the rules that keep it that way, is documented in [docs/CLIENT-ARCHITECTURE.md](docs/CLIENT-ARCHITECTURE.md).
 
 **Production dependencies:** `ws` for WebSocket, `marked` for markdown rendering in conversation messages, `electron-updater` for the packaged app. Nothing else.
 
@@ -130,13 +138,13 @@ A handful of source files, three production dependencies, no bundler.
 
 **Where things are:**
 
-- Agent discovery: `discoverAgents` in `server.js`. Reads `.claude/agents/*.md`, parses frontmatter, classifies each agent as `onTeam` (has `order`), `available` (has `type` but no order), or `raw` (neither, a bare Claude Code agent).
-- Frontmatter parsing: `parseAgentFrontmatter`, `parseCapabilities`, `parseRoutines`, `parsePrompts`, `parseSkills` in `server.js`. Hand-rolled YAML subset, intentionally lenient.
+- Agent discovery: `discoverAgents` in `lib/agents/discovery.js`. Reads `.claude/agents/*.md`, parses frontmatter, classifies each agent as `onTeam` (has `order`), `available` (has `type` but no order), or `raw` (neither, a bare Claude Code agent).
+- Frontmatter parsing: `parseAgentFrontmatter`, `parseCapabilities`, `parseRoutines`, `parsePrompts`, `parseSkills` in `lib/agents/discovery.js`. Hand-rolled YAML subset, intentionally lenient.
 - Skill discovery: `discoverSkills` in `server.js`. Scans both `.claude/skills/` and `System/Playbooks/`. Matches skills to agents via the explicit `skills:` array first, then falls back to body-text scanning for the slug.
-- Subprocess spawn: `spawn` calls in `server.js` configured with `getBareArgs()` for workspace context flags and `getSpawnEnv()` for environment variables (workspace mode, conversation ID).
-- Delegation interception: search `server.js` for `agent_switch` and `delegateProcess`. The interception happens inside the stream-json line handler.
-- Markdown editor in the client: search `public/app.js` for the Tiptap initialisation. Used for inline editing of agent files, skill files, and other markdown.
-- Search engine: `search.js` (the whole file; its header comment records the design decisions). Server wiring: `ensureSearchEngine`, `reconcileSearchBeforeQuery`, `runUniversalSearch` in `server.js`. Client palette: search `public/app.js` for `openPalette`.
+- Subprocess spawn: `lib/runtime/claude.js`, which owns `getBareArgs()` for workspace context flags and `getSpawnEnv()` for environment variables (workspace mode, conversation ID). Codex spawns go through `lib/runtime/codex-glue.js`.
+- Delegation interception: `lib/delegation/engine.js`. The interception happens inside the stream-json line handler; `lib/delegation/markers.js` holds the marker grammar and `lib/delegation/state.js` the scope-return bookkeeping.
+- Markdown editor in the client: `public/views/files.js`, which owns the Tiptap lifecycle. Used for inline editing of agent files, skill files, and other markdown.
+- Search engine: `search.js` (the whole file; its header comment records the design decisions). Server wiring: `ensureSearchEngine`, `reconcileSearchBeforeQuery`, `runUniversalSearch` in `server.js`. Client palette: `public/views/palette.js`.
 
 ## Delegation interception, briefly
 
@@ -170,7 +178,7 @@ The engine is exercised by `test/unit/search-*.test.js` (including a 10k-message
 The licence invites you to fork Rundock and audit it. If you take that up, the claims on the trust page reduce to a small set of named places; this is the ten-minute guided path.
 
 - **"Every risky action asks the human first."** The permission decision path spans three layers, and all three are inspectable: the PreToolUse hook script (`scripts/`: what Claude Code consults before any tool runs), the server bridge (`server.js`: `/api/permission-request` for hook-originated requests, `requestServerPermission` for server-originated ones, both with a hard timeout that fails closed), and the client decision module **`public/permissions.js`**: the risk classification, the low-risk read-only auto-approve policy, and the rule that high-risk requests never offer a standing "Always allow" all live there, unit-tested and findable by name.
-- **"Codex agents are sandboxed, and where the sandbox cannot protect you, you approve each action."** The sandbox request and the never-bypassed flags are pinned in `test/integration/spawn-argv-freeze.test.js` (no full-access sandbox, approvals reviewer is always the user, no experimental API surface). Approval requests arrive over the app-server protocol and route through the same permission cards: `handleCodexApproval` in `server.js`, decisions mapped in one place. Platform status detection (installed / signed in / Windows sandbox) is presence-only evidence: `detectCodex` and `hasWindowsSandboxConfig` in `codex.js` never read credential files, only check they exist.
+- **"Codex agents are sandboxed, and where the sandbox cannot protect you, you approve each action."** The sandbox request and the never-bypassed flags are pinned in `test/integration/spawn-argv-freeze.test.js` (no full-access sandbox, approvals reviewer is always the user, no experimental API surface). Approval requests arrive over the app-server protocol and route through the same permission cards: `handleCodexApproval` in `lib/runtime/codex-glue.js`, decisions mapped in one place. Platform status detection (installed / signed in / Windows sandbox) is presence-only evidence: `detectCodex` and `hasWindowsSandboxConfig` in `codex.js` never read credential files, only check they exist.
 - **"Rundock itself makes no outbound network calls."** The dependency footprint is three production packages (`package.json`); the runtimes (Claude Code, Codex CLI) are separate tools you installed and authenticated yourself, spawned as subprocesses: `spawnClaude` and `getCodexAppServer` in `server.js` are the only spawn sites.
 - **"Agents cannot impersonate teammates."** The off-roster delegation block lives in the delegation interception path (`server.js`, search for the blocked-handoff notice); the orchestrator-runtime enforcement is in agent discovery.
 
