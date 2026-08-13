@@ -210,6 +210,13 @@ describe('path traversal guards', () => {
     assert.ok(res.body.includes('RundockChatView'), 'chat view module content served');
   });
 
+  test('/views/palette.js is served as javascript (the search palette overlay module)', async () => {
+    const res = await get('/views/palette.js');
+    assert.strictEqual(res.status, 200);
+    assert.match(res.headers.get('content-type') || '', /javascript/);
+    assert.ok(res.body.includes('RundockPaletteView'), 'palette view module content served');
+  });
+
 
   test('WS read_file is guarded the same way as /api/file', async () => {
     const outside = path.join(h.workspaceDir, '..', `ws-secret-${Date.now()}.md`);
