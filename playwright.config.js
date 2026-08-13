@@ -13,7 +13,17 @@ module.exports = defineConfig({
   // because they need the same fixtures and server, but they assert nothing on
   // their own: they capture state for a human to compare across two builds.
   // See test/e2e/style-snapshot.tool.js.
-  testIgnore: '**/*.tool.js',
+  //
+  // What excludes them from CI is the NAME, not a rule: Playwright's default
+  // testMatch collects only *.spec.js and *.test.js, so a *.tool.js file is
+  // never picked up. This shipped in 0.11.7 with a testIgnore entry that read
+  // as the mechanism and was in fact dead: removing it changes nothing, and
+  // relying on it would have been a rule nobody could see was inert.
+  //
+  // RUN_TOOLS=1 points testMatch AT the tools, so a hand run collects the
+  // instruments and nothing else. Without it they cannot be run at all, which
+  // is what the first attempt shipped.
+  testMatch: process.env.RUN_TOOLS ? '**/*.tool.js' : undefined,
   workers: 1,
   fullyParallel: false,
   // 60s is a ceiling, not a wait: green tests are unaffected (typical spec

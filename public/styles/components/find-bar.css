@@ -4,14 +4,14 @@
    panel area so it floats over whichever view is active. Match highlights
    below apply to both <mark class="find-match"> (conversation, legacy file
    preview) and .find-match decoration spans inside the markdown editor. */
-.find-bar { position: absolute; top: 12px; right: 16px; z-index: 100; display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.25); }
+.find-bar { position: absolute; top: 12px; right: 16px; z-index: 100; display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: 0 4px 16px rgba(0,0,0,0.25); }
 .find-bar.hidden { display: none; }
 .find-bar input { background: transparent; border: none; outline: none; color: var(--text-1); font-size: var(--body); min-width: 180px; padding: 4px 6px; font-family: inherit; }
 .find-bar input::placeholder { color: var(--text-3); }
 .find-count { font-size: var(--caption); color: var(--text-2); font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; min-width: 56px; text-align: right; padding: 0 4px; }
-.find-count.no-results { color: #E85A5A; }
+.find-count.no-results { color: var(--danger); }
 .find-count:empty { display: none; }
-.find-btn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; background: transparent; color: var(--text-2); border: none; border-radius: 4px; cursor: pointer; transition: background 0.15s ease, color 0.15s ease; }
+.find-btn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; background: transparent; color: var(--text-2); border: none; border-radius: var(--radius-sm); cursor: pointer; transition: background var(--duration-base) ease, color var(--duration-base) ease; }
 .find-btn:hover { background: var(--accent-glow); color: var(--accent); }
 .find-btn:disabled { opacity: 0.35; cursor: default; pointer-events: none; }
 .find-btn svg { display: block; }

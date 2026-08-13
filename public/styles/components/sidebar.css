@@ -16,26 +16,26 @@
 .sidebar-resize-handle.dragging { border-right-color: var(--accent); }
 .sidebar > div { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 .sidebar-header { padding: 24px 16px 8px; position: relative; }
-.files-add-btn { position: absolute; top: 18px; right: 10px; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 6px; color: var(--text-2); }
+.files-add-btn { position: absolute; top: 18px; right: 10px; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: var(--radius-md); color: var(--text-2); }
 .files-add-btn:hover { color: var(--text-1); background: var(--elevated); }
-.files-menu { position: fixed; z-index: 200; min-width: 180px; padding: 4px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.25); display: flex; flex-direction: column; }
-.files-menu-item { display: flex; align-items: center; gap: 9px; text-align: left; padding: 7px 10px; border-radius: 6px; color: var(--text-1); font-size: var(--body); }
+.files-menu { position: fixed; z-index: 200; min-width: 180px; padding: 4px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: 0 4px 16px rgba(0,0,0,0.25); display: flex; flex-direction: column; }
+.files-menu-item { display: flex; align-items: center; gap: 9px; text-align: left; padding: 7px 10px; border-radius: var(--radius-md); color: var(--text-1); font-size: var(--body); }
 .files-menu-item svg { flex: 0 0 auto; color: var(--text-2); }
 .files-menu-item:hover { background: var(--elevated); }
 .files-menu-item:hover svg { color: var(--text-1); }
-.files-menu-item.danger:hover { color: var(--danger, #E85A5A); }
+.files-menu-item.danger:hover { color: var(--danger, var(--danger)); }
 .files-menu-divider { height: 1px; background: var(--border); margin: 4px 6px; }
 .files-menu-field { padding: 2px; }
-.files-menu-field input { width: 100%; background: var(--elevated); border: 1px solid var(--accent); border-radius: 6px; color: var(--text-1); font-size: var(--body); padding: 6px 8px; outline: none; }
+.files-menu-field input { width: 100%; background: var(--elevated); border: 1px solid var(--accent); border-radius: var(--radius-md); color: var(--text-1); font-size: var(--body); padding: 6px 8px; outline: none; }
 .sidebar-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); }
 
 /* Compact agent status list */
 .agent-status-list { flex: 1; overflow-y: auto; padding: 8px; }
-.agent-status-item { display: flex; align-items: center; gap: 8px; padding: 10px 8px; border-radius: 8px; cursor: pointer; transition: background 0.15s ease; }
+.agent-status-item { display: flex; align-items: center; gap: 8px; padding: 10px 8px; border-radius: var(--radius-lg); cursor: pointer; transition: background var(--duration-base) ease; }
 .agent-status-item:hover { background: var(--elevated); }
 .agent-status-item.active { background: var(--elevated); }
-.avatar { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; color: white; flex-shrink: 0; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.12), 0 0 0 1px rgba(0,0,0,0.06); }
-.avatar.sm { width: 24px; height: 24px; font-size: 12px; }
+.avatar { width: 32px; height: 32px; border-radius: var(--radius-circle); display: flex; align-items: center; justify-content: center; font-size: var(--body); color: white; flex-shrink: 0; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.12), 0 0 0 1px rgba(0,0,0,0.06); }
+.avatar.sm { width: 24px; height: 24px; font-size: var(--caption); }
 .avatar.xs { width: 18px; height: 18px; font-size: 9px; }
 .agent-status-name { flex: 1; font-size: 13px; font-weight: 500; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .agent-status-state { font-size: var(--caption); font-weight: 500; color: var(--idle); flex-shrink: 0; }
@@ -47,15 +47,15 @@
 
 /* Conversation list */
 .convo-list { flex: 1; overflow-y: auto; padding: 8px; }
-.convo-item { display: flex; flex-direction: column; gap: 3px; padding: 12px 8px 12px 5px; border-radius: 8px; cursor: pointer; transition: background 0.15s ease; position: relative; }
+.convo-item { display: flex; flex-direction: column; gap: 3px; padding: 12px 8px 12px 5px; border-radius: var(--radius-lg); cursor: pointer; transition: background var(--duration-base) ease; position: relative; }
 .convo-item:hover { background: var(--elevated); }
 .convo-item.active { background: var(--accent-glow); }
 .convo-item.active:hover { background: rgba(232,122,90,0.18); }
-.convo-delete { position: absolute; top: 8px; right: 6px; width: 24px; height: 24px; border: none; background: transparent; color: var(--text-3); cursor: pointer; border-radius: 4px; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.15s ease, color 0.15s ease; font-size: 14px; padding: 0; z-index: 1; }
+.convo-delete { position: absolute; top: 8px; right: 6px; width: 24px; height: 24px; border: none; background: transparent; color: var(--text-3); cursor: pointer; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity var(--duration-base) ease, color var(--duration-base) ease; font-size: var(--body); padding: 0; z-index: 1; }
 .convo-item:hover .convo-delete { opacity: 1; }
 .convo-item:hover > .convo-title { padding-right: 24px; }
 .convo-delete:hover { color: var(--danger, #e55); background: var(--surface); }
-.convo-pin { position: absolute; top: 8px; right: 6px; width: 24px; height: 24px; border: none; background: transparent; color: var(--text-3); cursor: pointer; border-radius: 4px; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.15s ease, color 0.15s ease; padding: 0; z-index: 1; }
+.convo-pin { position: absolute; top: 8px; right: 6px; width: 24px; height: 24px; border: none; background: transparent; color: var(--text-3); cursor: pointer; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity var(--duration-base) ease, color var(--duration-base) ease; padding: 0; z-index: 1; }
 .convo-item:hover .convo-pin { opacity: 1; }
 .convo-item:hover .convo-pin-indicator { opacity: 0; }
 .convo-item:hover .convo-title-row { padding-right: 24px; }
@@ -68,7 +68,7 @@
 /* Sidebar filter pills (conversations sidebar only). No divider: the bordered
    pills anchor the top of the list on their own (WhatsApp-style). */
 .sidebar-pills { padding: 8px 8px 10px; display: flex; gap: 6px; flex-shrink: 0; }
-.pill { font-size: var(--caption); font-weight: 500; padding: 4px 13px; border-radius: 999px; cursor: pointer; border: 1px solid var(--border); background: transparent; color: var(--text-2); transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease; line-height: 1.5; font-family: inherit; }
+.pill { font-size: var(--caption); font-weight: 500; padding: 4px 13px; border-radius: 999px; cursor: pointer; border: 1px solid var(--border); background: transparent; color: var(--text-2); transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease, color var(--duration-fast) ease; line-height: 1.5; font-family: inherit; }
 .pill:hover { border-color: var(--text-2); color: var(--text-1); }
 .pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .pill.active { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -84,18 +84,18 @@
    grammar from the design system: opaque --elevated surface, 1px --border,
    shadow-3, 10px radius, tooltip-style backdrop blur. Closes on click or Esc. */
 .convo-menu { position: fixed; z-index: 1000; min-width: 180px; max-width: 260px; background: var(--elevated); border: 1px solid var(--border); border-radius: 10px; padding: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
-.convo-menu-item { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; padding: 7px 10px; border: none; background: transparent; color: var(--text-1); font-size: var(--caption); font-weight: 500; font-family: inherit; border-radius: 6px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.convo-menu-item { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; padding: 7px 10px; border: none; background: transparent; color: var(--text-1); font-size: var(--caption); font-weight: 500; font-family: inherit; border-radius: var(--radius-md); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .convo-menu-item:hover { background: var(--card); }
 .convo-menu-check { width: 14px; flex-shrink: 0; color: var(--accent); }
 /* Small-input composer pattern (matches .review-input in the editor's review
    panel): the container is the field, border goes accent on focus-within, and
    the circular submit button lives INSIDE the field: faded while empty,
    accent-filled once there is text. */
-.convo-menu-input { display: flex; align-items: center; gap: 4px; margin: 4px; padding: 2px 2px 2px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.convo-menu-input { display: flex; align-items: center; gap: 4px; margin: 4px; padding: 2px 2px 2px 10px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); }
 .convo-menu-input:focus-within { border-color: var(--accent); }
 .convo-menu-input input { flex: 1; min-width: 0; border: none; background: transparent; padding: 4px 0; color: var(--text-1); font-size: var(--caption); font-family: inherit; outline: none; }
 .convo-menu-input input::placeholder { color: var(--text-2); }
-.convo-menu-send { width: 24px; height: 24px; border: none; border-radius: 50%; background: transparent; color: var(--text-2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; cursor: pointer; padding: 0; transition: all 0.25s ease; }
+.convo-menu-send { width: 24px; height: 24px; border: none; border-radius: var(--radius-circle); background: transparent; color: var(--text-2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; cursor: pointer; padding: 0; transition: all 0.25s ease; }
 .convo-menu-send svg { width: 13px; height: 13px; }
 .convo-menu-send:disabled { opacity: 0.3; cursor: default; }
 .convo-menu-send.active { background: var(--accent); color: #fff; box-shadow: 0 2px 8px rgba(232, 122, 90, 0.3); }
@@ -104,7 +104,7 @@
 /* Archive sidebar action (replaces delete on persisted, not-yet-archived items).
    Mirrors .convo-delete shape; hover uses a neutral bright text colour rather
    than danger red because archiving is non-destructive. */
-.convo-archive { position: absolute; top: 8px; right: 6px; width: 24px; height: 24px; border: none; background: transparent; color: var(--text-3); cursor: pointer; border-radius: 4px; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.15s ease, color 0.15s ease; padding: 0; z-index: 1; }
+.convo-archive { position: absolute; top: 8px; right: 6px; width: 24px; height: 24px; border: none; background: transparent; color: var(--text-3); cursor: pointer; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity var(--duration-base) ease, color var(--duration-base) ease; padding: 0; z-index: 1; }
 .convo-item:hover .convo-archive { opacity: 1; }
 .convo-archive:hover { color: var(--text-1); background: var(--surface); }
 
@@ -124,7 +124,7 @@
   color: var(--text-1);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   white-space: nowrap;
   pointer-events: none;
   z-index: 100;
@@ -133,7 +133,7 @@
 
 /* WhatsApp-style recency label, right-aligned in the meta row. */
 .convo-time { margin-left: auto; font-size: var(--label); color: var(--text-2); opacity: 0.7; }
-.sidebar-label-unread { display: inline-block; width: 6px; height: 6px; background: var(--accent); border-radius: 50%; margin-left: 6px; vertical-align: middle; }
+.sidebar-label-unread { display: inline-block; width: 6px; height: 6px; background: var(--accent); border-radius: var(--radius-circle); margin-left: 6px; vertical-align: middle; }
 .convo-pin-indicator { width: 12px; height: 12px; color: var(--accent); flex-shrink: 0; opacity: 0.7; margin-left: 4px; }
 .convo-title-row { display: flex; align-items: center; gap: 0; min-width: 0; }
 .convo-title-row .convo-title { flex: 1; min-width: 0; }
@@ -144,14 +144,14 @@
    pulses, unread holds still. A halo ring on the working dot was tried for
    an extra single-frame distinction and reviewed as too much; motion is the
    accepted separator. */
-.convo-unread { width: 8px; height: 8px; min-width: 8px; background: var(--success); border-radius: 50%; }
-.convo-working { width: 8px; height: 8px; min-width: 8px; background: var(--success); border-radius: 50%; margin-left: auto; animation: orgPulse 2s ease-in-out infinite; }
-.nav-badge { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--attention); border-radius: 50%; pointer-events: none; }
-.nav-badge-working { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--success); border-radius: 50%; pointer-events: none; animation: orgPulse 2s ease-in-out infinite; }
+.convo-unread { width: 8px; height: 8px; min-width: 8px; background: var(--success); border-radius: var(--radius-circle); }
+.convo-working { width: 8px; height: 8px; min-width: 8px; background: var(--success); border-radius: var(--radius-circle); margin-left: auto; animation: orgPulse 2s ease-in-out infinite; }
+.nav-badge { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--attention); border-radius: var(--radius-circle); pointer-events: none; }
+.nav-badge-working { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--success); border-radius: var(--radius-circle); pointer-events: none; animation: orgPulse 2s ease-in-out infinite; }
 
 /* File tree */
 .file-tree { flex: 1; overflow-y: auto; padding: 8px; min-height: 0; }
-.folder-item { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; cursor: pointer; font-size: var(--body); font-weight: 600; color: var(--text-1); user-select: none; }
+.folder-item { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: var(--radius-lg); cursor: pointer; font-size: var(--body); font-weight: 600; color: var(--text-1); user-select: none; }
 .folder-item:hover { background: var(--elevated); }
 .folder-icon { font-size: 10px; color: var(--text-2); width: 12px; text-align: center; }
 .file-children { padding-left: 20px; position: relative; }
@@ -161,19 +161,19 @@
    indentation stays easy to follow. */
 .file-children::before { content: ''; position: absolute; left: 15px; top: 0; bottom: 0; width: 1px; background: var(--border); }
 .file-children.collapsed { display: none; }
-.file-item { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; cursor: pointer; font-size: var(--body); color: var(--text-1); }
+.file-item { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: var(--radius-lg); cursor: pointer; font-size: var(--body); color: var(--text-1); }
 .file-item:hover { background: var(--elevated); }
 .file-item.active { background: var(--elevated); }
 .file-item-icon { width: 14px; height: 14px; color: var(--text-2); }
 
 /* Add button */
 .convo-footer { height: 76px; border-top: 1px solid var(--border); background: var(--surface); flex-shrink: 0; display: flex; align-items: center; padding: 0 8px; }
-.add-btn { display: flex; align-items: center; justify-content: flex-start; gap: 8px; padding: 10px 8px; margin: 0; width: 100%; border-radius: 8px; font-size: var(--body); font-weight: 500; color: var(--text-2); border: 1px solid transparent; transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease; }
+.add-btn { display: flex; align-items: center; justify-content: flex-start; gap: 8px; padding: 10px 8px; margin: 0; width: 100%; border-radius: var(--radius-lg); font-size: var(--body); font-weight: 500; color: var(--text-2); border: 1px solid transparent; transition: background var(--duration-base) ease, border-color var(--duration-base) ease, color var(--duration-base) ease; }
 .add-btn:hover { color: var(--accent); background: var(--accent-glow); border-color: rgba(232,122,90,0.3); }
 
 
 /* Routine sidebar items */
-.routine-item { display: flex; align-items: center; gap: 8px; padding: 8px; font-size: var(--caption); border-radius: 8px; transition: background 0.15s ease; cursor: default; }
+.routine-item { display: flex; align-items: center; gap: 8px; padding: 8px; font-size: var(--caption); border-radius: var(--radius-lg); transition: background var(--duration-base) ease; cursor: default; }
 .routine-item:hover { background: var(--elevated); }
 .routine-name { flex: 1; color: var(--text-1); font-weight: 500; font-size: var(--body); }
 .avatar.xxs { width: 20px; height: 20px; font-size: 9px; }
@@ -184,7 +184,7 @@
 .sidebar-empty-text { font-size: var(--caption); color: var(--text-2); line-height: 1.6; margin-bottom: 12px; }
 
 /* Agent action buttons (available agents) */
-.agent-action-btn { font-size: var(--caption); font-weight: 500; flex-shrink: 0; padding: 4px 8px; border-radius: 6px; }
+.agent-action-btn { font-size: var(--caption); font-weight: 500; flex-shrink: 0; padding: 4px 8px; border-radius: var(--radius-md); }
 .agent-action-btn.onboard { color: var(--accent); background: var(--accent-glow); }
 .agent-action-btn.add { color: var(--success); background: rgba(107,198,126,0.1); }
 .agent-status-desc { font-size: var(--caption); color: var(--text-2); display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

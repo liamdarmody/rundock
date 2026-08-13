@@ -8,10 +8,13 @@
 // cannot prove that on their own: regrouping rules changes their order, and
 // order is what a cascade is made of.
 //
-//   SNAP_OUT=/tmp/a.json npx playwright test test/e2e/style-snapshot.tool.js
+//   RUN_TOOLS=1 SNAP_OUT=/tmp/a.json npx playwright test test/e2e/style-snapshot.tool.js
 //   ...change the stylesheets...
-//   SNAP_OUT=/tmp/b.json npx playwright test test/e2e/style-snapshot.tool.js
+//   RUN_TOOLS=1 SNAP_OUT=/tmp/b.json npx playwright test test/e2e/style-snapshot.tool.js
 //   ...then diff a.json against b.json.
+//
+// RUN_TOOLS is required because the testIgnore rule that keeps this out of CI
+// would otherwise make it unrunnable.
 //
 // Read the diff against a CONTROL, never against zero. Two runs of the SAME
 // build differ by about one element, because a little of what the seeded
