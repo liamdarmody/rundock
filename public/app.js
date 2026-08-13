@@ -19,6 +19,8 @@
  * 14. SETTINGS ...................... moved to views/settings.js
  * 15. WORKSPACE PICKER .............. handleWorkspaces, showWorkspacePicker
  * 16. EVENT LISTENERS & INIT ........ keydown, resize, connect()
+ * 17. IN-VIEW FIND BAR .............. moved to views/find.js (findState, initFindBar() call stay)
+ * 18. UNIVERSAL SEARCH PALETTE ...... moved to views/palette.js (open/sel flags, group limit stay)
  * ─────────────────────────────────────────────
  */
 
