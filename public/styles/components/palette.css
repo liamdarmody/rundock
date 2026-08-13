@@ -1,0 +1,90 @@
+/* The universal search palette (Cmd+K).
+
+   Includes the anchor-flash animation, which applies in the chat view. It
+   lives here because the palette is the only thing that triggers it, as the
+   original comment beside it says. */
+
+/* Hallmark · component: command-palette · genre: modern-minimal (inherits app) · theme: Rundock tokens
+ * states: default · hover · focus · active/selected · disabled(n/a) · loading · error · empty/recent
+ * tokens: consumes existing :root vars only: no new palette colours; the
+ * overlay scrim and shadows use rgba per the codebase's existing convention
+ */
+/* ===== Universal search palette (Cmd+K) ===== */
+/* The palette opens where the search field is, not in the middle of the
+   screen: the field appears to expand in place rather than summon a separate
+   surface. padding-top places the panel's top exactly on the field's top,
+   which is (bar height - field height) / 2. */
+/* Light dim, no blur. The scrim's job changed when the panel stopped floating
+   in the middle of the screen: it is now anchored to the field that opened it,
+   and the anchor does the explaining a scrim used to do. Blur specifically
+   means "what is behind is unavailable", which is modal vocabulary this panel
+   no longer speaks. It is also real work, rasterising and blurring everything
+   behind on every frame.
+   A light dim rather than none, because the panel still captures the keyboard:
+   arrows navigate, Enter opens, Escape closes. 0.18 says "your keyboard lives
+   here now" without claiming the app is blocked. 0.42 was modal weight, and
+   over the LIGHT theme it washed the whole interface grey. */
+/* The palette must open exactly where the search field sits: one control in
+   two states. The field is grid-centred inside the bar's content box (the
+   bar keeps a 1px transparent bottom border, so that box is 1px short) and
+   then nudged down 2px for visual centring against the window's top
+   highlight; this padding re-derives that same position: (content box minus
+   field minus nudge) / 2 plus the nudge. If the field's margin-top changes,
+   change the 2px here with it; the e2e suite pins the two to the pixel. */
+.palette-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.18); z-index: 200; display: flex; align-items: flex-start; justify-content: center; padding: calc((var(--topbar-height) - 1px - 36px - 2px) / 2 + 2px) 16px 16px; }
+/* Same width expression as the field, via the same gutter variable, so the
+   two are the same object in two states and the panel cannot overlap the
+   window controls any more than the field could. */
+.palette { width: min(680px, calc(100vw - 2 * var(--chrome-gutter) - 32px)); max-height: min(72vh, 640px); display: flex; flex-direction: column; background: var(--elevated); border: 1px solid var(--border); box-shadow: 0 18px 50px rgba(0,0,0,0.4), 0 2px 8px rgba(0,0,0,0.2); overflow: hidden; animation: palette-in 160ms cubic-bezier(0.16, 1, 0.3, 1); transform-origin: top center; border-radius: 12px; }
+/* Grows downward out of the field rather than sliding in from above. */
+@keyframes palette-in { from { opacity: 0.4; transform: scaleY(0.88); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .palette { animation: none; } }
+/* Exactly the field's height, so the text does not jump as the field is
+   replaced. flex-shrink:0 because it is a flex child of a column and would
+   otherwise collapse under the results list. */
+.palette-input-row { display: flex; align-items: center; gap: 10px; height: 36px; flex-shrink: 0; padding: 0 14px; border-bottom: 1px solid var(--border); }
+.palette-input-row svg.palette-glass { width: 14px; height: 14px; color: var(--text-2); flex-shrink: 0; }
+.palette-input { flex: 1; font-size: 13px; color: var(--text-1); background: none; border: none; outline: none; min-width: 0; }
+.palette-input::placeholder { color: var(--text-2); opacity: 0.7; }
+/* Fixed height, and no scrollbar. overflow-x: auto painted a horizontal
+   scrollbar under the filter pills whenever they came close to the panel's
+   width, which on a narrow window is most of the time. The row can still
+   scroll if the pills genuinely do not fit, but the bar itself is hidden:
+   it is chrome inside chrome, and it was stealing vertical space from the
+   results as well as looking like a mistake. */
+.palette-scope-row { display: flex; align-items: center; gap: 6px; height: 37px; flex-shrink: 0; padding: 0 12px; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none; }
+.palette-scope-row::-webkit-scrollbar { display: none; }
+.palette-scope { font-size: var(--caption); font-weight: 500; color: var(--text-2); padding: 4px 10px; border-radius: 999px; border: 1px solid transparent; cursor: pointer; white-space: nowrap; transition: color 0.15s ease, background 0.15s ease; }
+.palette-scope:hover { color: var(--text-1); background: var(--card); }
+.palette-scope:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.palette-scope.active { color: var(--accent); background: var(--accent-glow); border-color: transparent; }
+.palette-results { flex: 1; overflow-y: auto; padding: 6px 6px 10px; scroll-padding: 40px; }
+.palette-group-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); padding: 12px 12px 5px; display: flex; align-items: center; gap: 6px; }
+.palette-group-count { font-weight: 500; letter-spacing: 0; text-transform: none; opacity: 0.75; }
+.palette-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+/* Hover and selected are two different FILLS, not one fill plus a hairline:
+   neutral card for the pointer, the same accent-glow the sidebar's active
+   row uses for the keyboard selection. .selected is declared after :hover
+   at equal specificity, so when the mouse rests on the selected row the
+   selection fill wins by source order. */
+.palette-item:hover { background: var(--card); }
+.palette-item.selected { background: var(--accent-glow); }
+.palette-item-icon { width: 26px; height: 26px; border-radius: 7px; background: var(--card); color: var(--text-2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 13px; }
+.palette-item.selected .palette-item-icon { color: var(--text-1); }
+.palette-item-body { flex: 1; min-width: 0; }
+.palette-item-title { font-size: var(--body); font-weight: 500; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.palette-item-meta { font-size: var(--caption); color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+.palette-item-meta mark, .palette-item-title mark { background: var(--accent-glow); color: var(--accent); border-radius: 2px; padding: 0 1px; }
+.palette-item-kbd { font-size: var(--label); color: var(--text-2); opacity: 0; flex-shrink: 0; }
+.palette-item.selected .palette-item-kbd { opacity: 1; }
+.palette-empty { padding: 28px 20px; text-align: center; color: var(--text-2); font-size: var(--body); line-height: 1.6; }
+.palette-empty .palette-empty-sub { font-size: var(--caption); opacity: 0.8; margin-top: 4px; }
+.palette-status { padding: 5px 14px; font-size: var(--label); color: var(--text-2); border-top: 1px solid var(--border); display: flex; gap: 14px; user-select: none; }
+.palette-status .spin { display: inline-block; animation: palette-spin 0.8s linear infinite; }
+@keyframes palette-spin { to { transform: rotate(360deg); } }
+/* Applies in the chat view: search-result clicks flash the matched message.
+   Lives with the palette CSS because the palette is the only thing that
+   triggers it. The class is removed by app.js once the flash completes. */
+.msg.anchor-flash > .msg-bubble { animation: anchor-flash 1.6s ease; }
+@keyframes anchor-flash { 0%, 45% { box-shadow: 0 0 0 2px var(--accent); background: var(--accent-glow); } 100% { box-shadow: none; } }
+@media (prefers-reduced-motion: reduce) { .msg.anchor-flash > .msg-bubble { animation: none; box-shadow: 0 0 0 2px var(--accent); } }

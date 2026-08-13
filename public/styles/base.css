@@ -1,0 +1,55 @@
+/* Resets, the app shell containers, the main pane, view-panel primitives,
+   scrollbars and the shared empty-state type.
+
+   Gathered from five places in the original single stylesheet. Everything
+   here applies across views; anything belonging to one view lives under
+   views/ instead. */
+
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease; }
+html, body { height: 100%; font-family: 'Inter', system-ui, -apple-system, sans-serif; background: var(--base); color: var(--text-1); -webkit-font-smoothing: antialiased; }
+button { border: none; background: none; cursor: pointer; font-family: inherit; color: inherit; }
+input { border: none; background: none; font-family: inherit; color: inherit; outline: none; }
+.hidden { display: none !important; }
+
+/* .app is a COLUMN: the top bar spans the full width and the three original
+   panes sit in the body row beneath it. min-height: 0 on the body row is
+   load-bearing, not decorative: without it a flex child refuses to shrink
+   below its content and the sidebar and main panes stop scrolling. */
+/* background, not just layout: the content panel's rounded corners reveal
+   whatever sits behind them, so this must be the chrome or the notch would
+   not match the rail and bar it is cut out of. */
+.app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; background: var(--chrome); }
+.app-body { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+
+/* Main panel */
+.main { flex: 1; display: flex; flex-direction: column; background: var(--elevated); overflow: hidden; position: relative; }
+.main-view-transition { animation: viewFadeIn 0.15s ease; }
+@keyframes viewFadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: transparent; border-radius: 3px; transition: background 0.2s ease; }
+*:hover > ::-webkit-scrollbar-thumb, *:hover::-webkit-scrollbar-thumb { background: var(--border); }
+.messages::-webkit-scrollbar-thumb { background: transparent; }
+.messages:hover::-webkit-scrollbar-thumb { background: var(--border); }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+
+/* Empty state CTA */
+.empty-cta { padding: 10px 24px; background: var(--accent); color: white; font-size: var(--body); font-weight: 600; border-radius: 8px; transition: background 0.15s ease; cursor: pointer; }
+.empty-cta:hover { background: var(--accent-hover); }
+
+/* View panels */
+.view-panel { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+.view-centered { align-items: center; justify-content: center; gap: 16px; }
+.view-scroll { overflow-y: auto; }
+
+
+/* Empty state title (shared) */
+.empty-title { font-size: var(--heading); font-weight: 700; color: var(--text-1); }
+.empty-subtitle { font-size: var(--body); font-weight: 400; color: var(--text-2); }
+.empty-icon { color: var(--text-2); opacity: 0.4; }
+
+/* Org chart empty/platform */

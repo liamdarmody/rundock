@@ -9,6 +9,11 @@ const PORT = Number(process.env.E2E_PORT || 34517);
 
 module.exports = defineConfig({
   testDir: 'test/e2e',
+  // *.tool.js are hand-run instruments, not tests. They live beside the specs
+  // because they need the same fixtures and server, but they assert nothing on
+  // their own: they capture state for a human to compare across two builds.
+  // See test/e2e/style-snapshot.tool.js.
+  testIgnore: '**/*.tool.js',
   workers: 1,
   fullyParallel: false,
   // 60s is a ceiling, not a wait: green tests are unaffected (typical spec

@@ -1,0 +1,24 @@
+/* The left nav rail and its items. */
+
+/* No border-right: the boundary is drawn by the chrome/content step and the
+   panel's rounded corner. A leftover vertical rule contradicts that, and it
+   also made the 60x60 corner read as 59px plus a line.
+   9px top and bottom matches the 9px the 42px icons already sit in
+   horizontally, so each icon occupies a square 60x60 cell on the same module
+   as the bar above. */
+.nav-rail { width: var(--nav-rail-width); background: var(--chrome); display: flex; flex-direction: column; align-items: center; padding: 9px 0; flex-shrink: 0; z-index: 2; }
+/* padding-top 0, not 4: the rail's own 9px IS the grid inset, and 4 more
+   would quietly make it 13. */
+.nav-main { display: flex; flex-direction: column; gap: 4px; flex: 1; align-items: center; }
+.nav-bottom { display: flex; flex-direction: column; gap: 4px; align-items: center; }
+.nav-item { position: relative; width: 42px; height: 42px; display: flex; align-items: center; justify-content: center; border-radius: 12px; color: var(--text-2); transition: all 0.2s ease; }
+.nav-item:hover { color: var(--text-1); background: var(--surface); }
+.nav-item.active { color: var(--accent); background: var(--accent-glow); }
+.nav-item[data-tooltip]::after { content: attr(data-tooltip); position: absolute; left: calc(100% + 6px); top: 50%; transform: translateY(-50%) translateX(-4px); opacity: 0; pointer-events: none; white-space: nowrap; font-size: 12px; font-weight: 500; letter-spacing: 0.01em; color: var(--text-1); background: var(--elevated); padding: 4px 10px; border-radius: 6px; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); z-index: 100; transition: opacity 150ms ease, transform 150ms ease; transition-delay: 0ms; }
+.nav-item[data-tooltip]:hover::after { opacity: 1; transform: translateY(-50%) translateX(0); transition-delay: 400ms; }
+.nav-item svg { width: 21px; height: 21px; }
+.nav-item .icon-filled { display: none; }
+.nav-item.active .icon-outline { display: none; }
+.nav-item.active .icon-filled { display: block; }
+
+/* Sidebar */
