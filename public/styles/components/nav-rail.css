@@ -11,10 +11,10 @@
    would quietly make it 13. */
 .nav-main { display: flex; flex-direction: column; gap: 4px; flex: 1; align-items: center; }
 .nav-bottom { display: flex; flex-direction: column; gap: 4px; align-items: center; }
-.nav-item { position: relative; width: 42px; height: 42px; display: flex; align-items: center; justify-content: center; border-radius: 12px; color: var(--text-2); transition: all 0.2s ease; }
+.nav-item { position: relative; width: 42px; height: 42px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-xl); color: var(--text-2); transition: all var(--duration-slow) ease; }
 .nav-item:hover { color: var(--text-1); background: var(--surface); }
 .nav-item.active { color: var(--accent); background: var(--accent-glow); }
-.nav-item[data-tooltip]::after { content: attr(data-tooltip); position: absolute; left: calc(100% + 6px); top: 50%; transform: translateY(-50%) translateX(-4px); opacity: 0; pointer-events: none; white-space: nowrap; font-size: 12px; font-weight: 500; letter-spacing: 0.01em; color: var(--text-1); background: var(--elevated); padding: 4px 10px; border-radius: 6px; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); z-index: 100; transition: opacity 150ms ease, transform 150ms ease; transition-delay: 0ms; }
+.nav-item[data-tooltip]::after { content: attr(data-tooltip); position: absolute; left: calc(100% + 6px); top: 50%; transform: translateY(-50%) translateX(-4px); opacity: 0; pointer-events: none; white-space: nowrap; font-size: var(--caption); font-weight: 500; letter-spacing: 0.01em; color: var(--text-1); background: var(--elevated); padding: 4px 10px; border-radius: var(--radius-md); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); z-index: 100; transition: opacity var(--duration-base) ease, transform var(--duration-base) ease; transition-delay: 0ms; }
 .nav-item[data-tooltip]:hover::after { opacity: 1; transform: translateY(-50%) translateX(0); transition-delay: 400ms; }
 .nav-item svg { width: 21px; height: 21px; }
 .nav-item .icon-filled { display: none; }

@@ -43,8 +43,11 @@ const THEMED = [
 // should not have.
 const INVARIANT = [
   '--accent', '--accent-hover', '--success', '--attention', '--working', '--idle',
+  '--danger',
   '--heading', '--title', '--body', '--caption', '--label',
   '--nav-rail-width', '--topbar-height', '--content-radius',
+  '--radius-sm', '--radius-md', '--radius-lg', '--radius-xl', '--radius-circle',
+  '--duration-fast', '--duration-base', '--duration-slow',
 ];
 
 const NAV_SECTIONS = ['conversations', 'team', 'files', 'skills', 'settings'];

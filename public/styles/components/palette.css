@@ -35,7 +35,7 @@
 /* Same width expression as the field, via the same gutter variable, so the
    two are the same object in two states and the panel cannot overlap the
    window controls any more than the field could. */
-.palette { width: min(680px, calc(100vw - 2 * var(--chrome-gutter) - 32px)); max-height: min(72vh, 640px); display: flex; flex-direction: column; background: var(--elevated); border: 1px solid var(--border); box-shadow: 0 18px 50px rgba(0,0,0,0.4), 0 2px 8px rgba(0,0,0,0.2); overflow: hidden; animation: palette-in 160ms cubic-bezier(0.16, 1, 0.3, 1); transform-origin: top center; border-radius: 12px; }
+.palette { width: min(680px, calc(100vw - 2 * var(--chrome-gutter) - 32px)); max-height: min(72vh, 640px); display: flex; flex-direction: column; background: var(--elevated); border: 1px solid var(--border); box-shadow: 0 18px 50px rgba(0,0,0,0.4), 0 2px 8px rgba(0,0,0,0.2); overflow: hidden; animation: palette-in 160ms cubic-bezier(0.16, 1, 0.3, 1); transform-origin: top center; border-radius: var(--radius-xl); }
 /* Grows downward out of the field rather than sliding in from above. */
 @keyframes palette-in { from { opacity: 0.4; transform: scaleY(0.88); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .palette { animation: none; } }
@@ -54,14 +54,14 @@
    results as well as looking like a mistake. */
 .palette-scope-row { display: flex; align-items: center; gap: 6px; height: 37px; flex-shrink: 0; padding: 0 12px; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none; }
 .palette-scope-row::-webkit-scrollbar { display: none; }
-.palette-scope { font-size: var(--caption); font-weight: 500; color: var(--text-2); padding: 4px 10px; border-radius: 999px; border: 1px solid transparent; cursor: pointer; white-space: nowrap; transition: color 0.15s ease, background 0.15s ease; }
+.palette-scope { font-size: var(--caption); font-weight: 500; color: var(--text-2); padding: 4px 10px; border-radius: 999px; border: 1px solid transparent; cursor: pointer; white-space: nowrap; transition: color var(--duration-base) ease, background var(--duration-base) ease; }
 .palette-scope:hover { color: var(--text-1); background: var(--card); }
 .palette-scope:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .palette-scope.active { color: var(--accent); background: var(--accent-glow); border-color: transparent; }
 .palette-results { flex: 1; overflow-y: auto; padding: 6px 6px 10px; scroll-padding: 40px; }
 .palette-group-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); padding: 12px 12px 5px; display: flex; align-items: center; gap: 6px; }
 .palette-group-count { font-weight: 500; letter-spacing: 0; text-transform: none; opacity: 0.75; }
-.palette-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+.palette-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius-lg); cursor: pointer; }
 /* Hover and selected are two different FILLS, not one fill plus a hairline:
    neutral card for the pointer, the same accent-glow the sidebar's active
    row uses for the keyboard selection. .selected is declared after :hover

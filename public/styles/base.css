@@ -5,7 +5,7 @@
    here applies across views; anything belonging to one view lives under
    views/ instead. */
 
-*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease; }
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; transition: background-color var(--duration-slow) ease, border-color var(--duration-slow) ease, color var(--duration-slow) ease; }
 html, body { height: 100%; font-family: 'Inter', system-ui, -apple-system, sans-serif; background: var(--base); color: var(--text-1); -webkit-font-smoothing: antialiased; }
 button { border: none; background: none; cursor: pointer; font-family: inherit; color: inherit; }
 input { border: none; background: none; font-family: inherit; color: inherit; outline: none; }
@@ -23,14 +23,14 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 
 /* Main panel */
 .main { flex: 1; display: flex; flex-direction: column; background: var(--elevated); overflow: hidden; position: relative; }
-.main-view-transition { animation: viewFadeIn 0.15s ease; }
+.main-view-transition { animation: viewFadeIn var(--duration-base) ease; }
 @keyframes viewFadeIn { from { opacity: 0; } to { opacity: 1; } }
 
 
 
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: transparent; border-radius: 3px; transition: background 0.2s ease; }
+::-webkit-scrollbar-thumb { background: transparent; border-radius: 3px; transition: background var(--duration-slow) ease; }
 *:hover > ::-webkit-scrollbar-thumb, *:hover::-webkit-scrollbar-thumb { background: var(--border); }
 .messages::-webkit-scrollbar-thumb { background: transparent; }
 .messages:hover::-webkit-scrollbar-thumb { background: var(--border); }
@@ -38,7 +38,7 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 
 
 /* Empty state CTA */
-.empty-cta { padding: 10px 24px; background: var(--accent); color: white; font-size: var(--body); font-weight: 600; border-radius: 8px; transition: background 0.15s ease; cursor: pointer; }
+.empty-cta { padding: 10px 24px; background: var(--accent); color: white; font-size: var(--body); font-weight: 600; border-radius: var(--radius-lg); transition: background var(--duration-base) ease; cursor: pointer; }
 .empty-cta:hover { background: var(--accent-hover); }
 
 /* View panels */

@@ -23,16 +23,16 @@
 .u-collapsed-row { display: flex; align-items: center; gap: 7px; height: 22px; width: 100%; }
 .u-collapsed-pct { font-size: 10.5px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .u-row { display: flex; align-items: flex-start; gap: 9px; }
-.u-dot { width: 7px; height: 7px; min-width: 7px; border-radius: 50%; background: var(--success); flex-shrink: 0; margin-top: 4px; }
+.u-dot { width: 7px; height: 7px; min-width: 7px; border-radius: var(--radius-circle); background: var(--success); flex-shrink: 0; margin-top: 4px; }
 .u-collapsed-row .u-dot { margin-top: 0; }
 .u-text { flex: 1; min-width: 0; font-size: 11.5px; color: var(--text-2); line-height: 1.55; overflow-wrap: anywhere; text-align: left; }
 .u-text.ready { color: var(--text-1); }
 .u-text b { color: var(--text-1); font-weight: 600; }
-.u-pct { flex-shrink: 0; font-size: 11px; color: var(--text-1); font-variant-numeric: tabular-nums; font-weight: 500; margin-top: 1px; }
+.u-pct { flex-shrink: 0; font-size: var(--label); color: var(--text-1); font-variant-numeric: tabular-nums; font-weight: 500; margin-top: 1px; }
 .u-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; padding-left: 16px; }
 .u-restart-btn { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; color: var(--accent); padding: 0; }
 .u-restart-btn svg { width: 12px; height: 12px; }
-.u-collapse-link { font-size: 11px; color: var(--text-2); opacity: 0.8; padding: 0; }
+.u-collapse-link { font-size: var(--label); color: var(--text-2); opacity: 0.8; padding: 0; }
 .u-ring { flex-shrink: 0; }
 .u-ring svg { display: block; }
 .u-ring.indet { animation: uSpin 900ms linear infinite; transform-origin: 50% 50%; }

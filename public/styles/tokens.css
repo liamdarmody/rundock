@@ -29,8 +29,29 @@
   --text-1: #F0EDE8; --text-2: #9A9590;
   --accent: #E87A5A; --accent-hover: #F09070; --accent-glow: rgba(232,122,90,0.12);
   --success: #6BC67E; --attention: #E8A84C; --working: #7AA2E8; --idle: #7A756E;
+  /* The status set had no red, so every destructive and error surface reached
+     for a hex of its own and they drifted: three near-identical reds were in
+     the stylesheets when this token was added. This is the one. */
+  --danger: #E85A5A;
   --heading: 22px; --title: 18px; --body: 14px; --caption: 12px; --label: 11px;
   --org-name: 20px; --org-role: 15px;
+
+  /* Corner radius. These five absorbed 101 of the 130 radius declarations in
+     the stylesheets. The 29 left over are 10px, 2px, 100px, 7px, 3px, 999px,
+     5px, 20px, 14px and 16px: two spellings of a pill, and a set of one-offs
+     that landed a step away from a scale nobody had written down. They are
+     deliberate visual changes rather than substitutions, so they are not
+     touched here. Pick by the size of the thing: sm for chips and inputs, md
+     for menu rows, lg for cards and buttons, xl for the large panels inside
+     the window chrome. */
+  --radius-sm: 4px; --radius-md: 6px; --radius-lg: 8px; --radius-xl: 12px;
+  --radius-circle: 50%;
+
+  /* Motion. base is the default for anything that changes on hover or focus;
+     fast is for something already in view that must not feel laggy; slow is
+     for a surface arriving or leaving. Longer than slow is an animation with
+     its own reason, and it states that reason where it is written. */
+  --duration-fast: 0.12s; --duration-base: 0.15s; --duration-slow: 0.2s;
 }
 
 body.light {
