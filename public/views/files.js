@@ -43,10 +43,6 @@ function loadTiptapEditorModule() {
   if (!_tiptapEditorModule) _tiptapEditorModule = import('/editor/index.js');
   return _tiptapEditorModule;
 }
-function isMarkdownPath(path) {
-  return typeof path === 'string' && /\.(md|mdx)$/i.test(path);
-}
-
 function loadViewersModule() {
   if (!_viewersModule) _viewersModule = import('/viewers/registry.js').then(m => { _viewersModuleResolved = m; return m; });
   return _viewersModule;
@@ -837,7 +833,7 @@ function editorGoBack() {
 
 
 return {
-  loadTiptapEditorModule, isMarkdownPath, loadViewersModule,
+  loadTiptapEditorModule, loadViewersModule,
   destroyActiveFileViewer, destroyActiveArtifactReview,
   attachArtifactReviewForCurrentFile, initTiptapEditor, onTiptapEditorUpdate,
   saveTiptapFile, saveFileGuarded, hideExternalEditConflict,
