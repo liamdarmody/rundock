@@ -25,7 +25,7 @@ const LCOV_OUT = path.join(RAW_DIR, 'coverage-client.lcov');
 // editor's vendored Tiptap build are third-party and excluded).
 const CLIENT_FILES = [
   'app.js', 'markers.js', 'permissions.js', 'conversation-list.js',
-  'palette-model.js', 'code-language.js', 'conversation-state.js',
+  'palette-model.js', 'code-language.js', 'conversation-state.js', 'chat-markup.js',
   // File-view registry + review modules
   'viewers/registry.js', 'viewers/text-anchor.js', 'viewers/sidecar-controller.js', 'viewers/artifact-review.js',
   // Extracted view modules

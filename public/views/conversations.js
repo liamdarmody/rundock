@@ -830,7 +830,7 @@ function openConversation(id, withAnchor) {
     if(state.streamingRawText) {
       const el = document.createElement('div');
       el.className = 'msg msg-agent';
-      el.innerHTML = `<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.displayName||'Agent'}<span class="msg-time">${new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></div><div class="msg-bubble"><span class="streaming-text">${formatMd(state.streamingRawText)}</span></div>`;
+      el.innerHTML = RundockChatMarkup.agentStreamingMessageHtml(a, formatMd(state.streamingRawText), RundockChatMarkup.msgTimeHtml(new Date()));
       m2.appendChild(el);
       state.currentStreamingMsg = el;
       state.hasStreamingBubble = true; // keep the reducer's bubble flag in sync with this out-of-band creation
@@ -839,7 +839,7 @@ function openConversation(id, withAnchor) {
     // If we have snapshot text, the stream is active and the bubble is unnecessary.
     if(!state.streamingRawText) {
       const d=document.createElement('div'); d.className='msg msg-agent'; d.id='thinking-indicator';
-      d.innerHTML=`<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.displayName||'Agent'}</div><div class="msg-bubble thinking-bubble"><div class="thinking-pulse" style="background:${a?.colour||'var(--accent)'}"></div><div><div class="thinking-label">Thinking</div><div class="thinking-status" id="thinking-status"></div></div></div>`;
+      d.innerHTML=RundockChatMarkup.thinkingIndicatorHtml(a);
       m2.appendChild(d);
     }
   } else {

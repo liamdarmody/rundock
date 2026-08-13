@@ -139,7 +139,7 @@ function startProcessing(convoId) {
     const activeId = state.activeAgentId || convo?.agentId;
     const a = (activeId && agents.find(x => x.id === activeId)) || convo?.agent || agents[0];
     const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg msg-agent'; d.id='thinking-indicator';
-    d.innerHTML=`<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.displayName||'Agent'}</div><div class="msg-bubble thinking-bubble"><div class="thinking-pulse" style="background:${a?.colour||'var(--accent)'}"></div><div><div class="thinking-label">Thinking</div><div class="thinking-status" id="thinking-status"></div></div></div>`;
+    d.innerHTML=RundockChatMarkup.thinkingIndicatorHtml(a);
     m.appendChild(d); scrollBottom();
   }
   // Show working status on the active agent (delegate or conversation agent)
@@ -279,12 +279,10 @@ function addAgentMsg(text,agentId,anim=true,timestamp=null) {
   const a=agents.find(x=>x.id===agentId)||activeConversation?.agent||agents[0],m=document.getElementById('messages'),d=document.createElement('div');
   d.className='msg msg-agent'; if(!anim)d.style.animation='none';
   const t = timestamp ? new Date(timestamp) : new Date();
-  const timeStr = isNaN(t.getTime()) ? '' : t.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-  const timeSpan = timeStr ? `<span class="msg-time">${timeStr}</span>` : '';
-  d.innerHTML=`<div class="msg-sender" style="color:${a?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${a?.colour||'var(--accent)'}">${a?.icon||'?'}</div> ${a?.displayName||'Agent'}${timeSpan}</div><div class="msg-bubble">${formatMd(text)}</div>`;
+  d.innerHTML=RundockChatMarkup.agentMessageHtml(a, formatMd(text), RundockChatMarkup.msgTimeHtml(t));
   m.appendChild(d); scrollBottom(); return d;
 }
-function addUserMsg(text,anim=true) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg msg-user'; if(!anim)d.style.animation='none'; d.innerHTML=`<div class="msg-bubble">${esc(text)}</div>`; m.appendChild(d); scrollBottom(true); }
+function addUserMsg(text,anim=true) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg msg-user'; if(!anim)d.style.animation='none'; d.innerHTML=RundockChatMarkup.userBubbleHtml(esc(text)); m.appendChild(d); scrollBottom(true); }
 function addSystemMsg(text) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg-system'; d.textContent=text; m.appendChild(d); scrollBottom(); }
 
 // Recovery card shown when the Claude Code sign-in expires (401). Replaces the
@@ -431,7 +429,7 @@ function renderSessionHistory(d) {
     div.style.animation = 'none';
     if (msg.role === 'user') {
       div.className = 'msg msg-user history-msg';
-      div.innerHTML = `<div class="msg-bubble">${esc(msg.content)}</div>`;
+      div.innerHTML = RundockChatMarkup.userBubbleHtml(esc(msg.content));
     } else {
       // Use per-message agentId if available (from multi-session merge), fall back to default
       const msgAgent = msg.agentId ? (agents.find(a => a.id === msg.agentId) || defaultAgent) : defaultAgent;
@@ -443,13 +441,11 @@ function renderSessionHistory(d) {
       lastAgentId = msg.agentId || lastAgentId;
       div.className = 'msg msg-agent history-msg';
       const ht = msg.timestamp ? new Date(msg.timestamp) : null;
-      const htStr = ht && !isNaN(ht.getTime()) ? ht.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '';
-      const htSpan = htStr ? `<span class="msg-time">${htStr}</span>` : '';
       // Strip RUNDOCK markers before rendering: the stored copy below strips
       // them (line ~2906), but this first-paint fragment rendered the raw
       // wire text, so a rehydrated Doc turn leaked its SAVE_AGENT payload as
       // visible frontmatter until the user navigated away and back.
-      div.innerHTML = `<div class="msg-sender" style="color:${msgAgent?.colour||'var(--accent)'}"><div class="avatar xs" style="background:${msgAgent?.colour||'var(--accent)'}">${msgAgent?.icon||'?'}</div> ${msgAgent?.displayName||'Agent'}${htSpan}</div><div class="msg-bubble">${formatMd(stripRundockMarkers(msg.content || '').trim())}</div>`;
+      div.innerHTML = RundockChatMarkup.agentMessageHtml(msgAgent, formatMd(stripRundockMarkers(msg.content || '').trim()), RundockChatMarkup.msgTimeHtml(ht));
     }
     frag.appendChild(div);
   }
