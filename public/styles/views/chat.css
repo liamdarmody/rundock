@@ -1,0 +1,156 @@
+/* The chat surface: header, message list, bubbles, auth and runtime notices,
+   tool rows, permission cards, composer and prompt chips, plus the delegation
+   divider.
+
+   The content INSIDE a bubble is components/message-content.css. */
+
+/* Chat */
+.chat-header { padding: 16px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+.chat-back { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 8px; color: var(--text-2); transition: all 0.15s ease; flex-shrink: 0; cursor: pointer; }
+.chat-back:hover { color: var(--text-1); background: var(--card); }
+.chat-title-input { font-size: var(--body); font-weight: 600; width: 100%; background: transparent; border: 1px solid transparent; border-radius: 4px; padding: 2px 6px; margin: -2px -6px; transition: all 0.15s ease; color: var(--text-1); }
+.chat-title-input:hover { border-color: var(--border); }
+.chat-title-input:focus { border-color: var(--accent); background: var(--card); }
+.chat-convo-status { font-size: var(--caption); font-weight: 600; padding: 3px 10px; border-radius: 6px; cursor: pointer; transition: all 0.15s ease; flex-shrink: 0; }
+.chat-convo-status.active-convo { background: rgba(107,198,126,0.12); color: var(--success); }
+.chat-convo-status.active-convo:hover { background: rgba(107,198,126,0.22); }
+.chat-convo-status.archived-convo { background: var(--card); color: var(--text-2); }
+.chat-convo-status.archived-convo:hover { background: var(--elevated); color: var(--text-1); }
+.chat-convo-status .action-label { display: none; }
+.chat-convo-status:hover .state-label { display: none; }
+.chat-convo-status:hover .action-label { display: inline; }
+.chat-status { font-size: var(--caption); color: var(--idle); font-weight: 500; display: none; }
+.chat-status.working { color: var(--success); display: inline; margin-left: 6px; }
+.messages { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+.msg { max-width: 85%; animation: fadeIn 0.2s ease; }
+.msg-user { align-self: flex-end; }
+.msg-agent { align-self: flex-start; }
+.msg-sender { font-size: var(--caption); font-weight: 600; margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+.msg-time { font-size: var(--label); color: var(--text-2); font-weight: 400; margin-left: auto; }
+.msg-bubble { padding: 12px 16px; border-radius: 16px; font-size: var(--body); line-height: 1.55; word-wrap: break-word; }
+.msg-agent .msg-bubble { background: var(--card); border-top-left-radius: 4px; box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
+.msg-user .msg-bubble { background: var(--accent-glow); border: 1px solid rgba(232,122,90,0.15); border-bottom-right-radius: 4px; white-space: pre-wrap; }
+.history-msg { opacity: 0.6; }
+.history-msg:hover { opacity: 0.85; }
+.msg-system { align-self: center; font-size: var(--caption); color: var(--text-2); padding: 4px 12px; background: var(--card); border-radius: 20px; }
+.auth-error-card { align-self: stretch; max-width: 560px; margin: 8px auto; padding: 14px 16px; background: rgba(232,168,76,0.08); border: 1px solid var(--attention); border-radius: 10px; animation: fadeIn 0.2s ease; }
+.auth-error-title { font-weight: 600; font-size: var(--body); color: var(--attention); margin-bottom: 6px; }
+.auth-error-body { font-size: var(--body); line-height: 1.6; color: var(--text-1); }
+.auth-error-steps { margin: 8px 0 4px; padding-left: 20px; font-size: var(--body); line-height: 1.7; color: var(--text-1); }
+.auth-error-steps code { background: var(--elevated); padding: 1px 6px; border-radius: 4px; font-family: 'SF Mono','Fira Code','Consolas',monospace; font-size: 13px; }
+.auth-error-copy { margin-left: 6px; background: none; border: 1px solid var(--border); color: var(--text-2); cursor: pointer; padding: 1px 8px; border-radius: 4px; font-size: 11px; }
+.auth-error-copy:hover { color: var(--text-1); border-color: var(--text-2); }
+.auth-error-foot { margin-top: 8px; font-size: var(--caption); color: var(--text-2); }
+.auth-error-foot a { color: var(--working); }
+/* Codex runtime surfaces */
+.codex-error-detail { margin-top: 8px; font-family: 'SF Mono','Fira Code','Consolas',monospace; font-size: 11px; color: var(--text-2); word-break: break-word; }
+.codex-firstrun-card { align-self: center; max-width: 480px; margin: 8px auto; padding: 14px 16px; background: rgba(122,162,232,0.07); border: 1px solid rgba(122,162,232,0.35); border-radius: 12px; font-size: var(--caption); line-height: 1.6; color: var(--text-1); animation: fadeIn 0.2s ease; }
+.codex-firstrun-title { font-weight: 600; font-size: var(--caption); color: var(--working); margin-bottom: 4px; }
+.codex-firstrun-dismiss { margin-top: 8px; padding: 4px 12px; font-size: var(--label); font-weight: 600; border-radius: 6px; background: transparent; color: var(--text-2); border: 1px solid var(--border); cursor: pointer; }
+.codex-firstrun-dismiss:hover { color: var(--text-1); border-color: var(--text-2); }
+.runtime-chip { display: inline-flex; align-items: center; gap: 6px; font-size: var(--caption); color: var(--text-2); }
+.runtime-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+.runtime-default { font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-2); border: 1px solid var(--border); padding: 1px 6px; border-radius: 4px; margin-right: 4px; }
+.runtime-guidance { padding: 0 16px 14px; font-size: var(--caption); color: var(--text-2); line-height: 1.6; }
+.runtime-guidance code { font-family: 'SF Mono','Fira Code','Consolas',monospace; font-size: 11px; background: var(--elevated); padding: 2px 6px; border-radius: 4px; color: var(--text-1); }
+/* Tool activity: state sits in an outlined icon ring at the start of the
+   chip rather than a coloured edge, so the radius is uniform and the done
+   state genuinely recolours (the old border-only version left the glyph
+   blue forever). */
+.msg-tool { align-self: flex-start; max-width: 85%; padding: 7px 12px 7px 8px; background: var(--card); border-radius: 8px; font-size: var(--caption); color: var(--text-2); display: flex; align-items: center; gap: 8px; animation: fadeIn 0.2s ease; }
+.msg-tool-icon { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--working); color: var(--working); display: flex; align-items: center; justify-content: center; font-size: 8.5px; flex-shrink: 0; background: transparent; }
+.msg-tool.done .msg-tool-icon { border-color: var(--success); color: var(--success); }
+/* Activity summary */
+.activity-summary { margin-top: 8px; font-size: var(--caption); color: var(--text-2); }
+.activity-summary summary { cursor: pointer; user-select: none; padding: 4px 0; list-style: none; opacity: 0.6; transition: opacity 0.15s ease; }
+.activity-summary summary::-webkit-details-marker { display: none; }
+.activity-summary summary:hover { opacity: 1; }
+.activity-summary summary::before { content: '\25B8  '; }
+.activity-summary[open] summary::before { content: '\25BE  '; }
+.activity-list { padding: 6px 0 2px; display: flex; flex-direction: column; gap: 2px; }
+.activity-row { display: flex; align-items: baseline; gap: 10px; font-size: var(--label); line-height: 1.5; }
+.activity-time { color: var(--text-2); min-width: 48px; text-align: right; font-variant-numeric: tabular-nums; opacity: 0.5; }
+.activity-tool { color: var(--text-1); font-weight: 500; opacity: 0.7; }
+/* Permission prompt cards */
+.msg-permission { align-self: flex-start; max-width: 85%; animation: fadeIn 0.2s ease; }
+.permission-card { background: var(--card); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.permission-card.risk-low { border: 1px solid var(--border); }
+.permission-card.risk-medium { border: 1px solid var(--border); }
+.permission-card.risk-high { border: 1px solid var(--attention); }
+.permission-header { display: flex; align-items: center; gap: 8px; font-size: var(--body); font-weight: 500; }
+.risk-low .permission-header { color: var(--text-1); }
+.risk-medium .permission-header { color: var(--text-1); }
+.risk-high .permission-header { color: var(--attention); }
+.permission-icon { flex-shrink: 0; }
+.risk-low .permission-icon { color: var(--text-2); }
+.risk-medium .permission-icon { color: var(--text-1); }
+.risk-high .permission-icon { color: var(--attention); }
+.permission-context { font-size: var(--caption); color: var(--text-2); margin-top: -4px; padding-left: 24px; }
+.permission-detail { display: block; background: var(--elevated); padding: 8px 12px; border-radius: 6px; font-size: 13px; font-family: 'SF Mono','Fira Code','Consolas',monospace; color: var(--text-2); word-break: break-all; line-height: 1.4; overflow: hidden; max-height: 80px; }
+.permission-detail-collapse { font-size: var(--caption); color: var(--text-3); }
+.permission-detail-collapse summary { cursor: pointer; padding: 4px 0; color: var(--text-2); opacity: 0.8; }
+.permission-detail-collapse summary:hover { opacity: 1; }
+.permission-detail-collapse .permission-detail { max-height: none; margin-top: 6px; }
+.permission-actions { display: flex; gap: 8px; align-items: center; }
+.btn-perm { padding: 6px 16px; border-radius: 8px; font-size: var(--caption); font-weight: 500; cursor: pointer; border: 1px solid var(--border); transition: all 0.15s ease; }
+.btn-allow { background: var(--success); color: #1a1a1a; border-color: var(--success); }
+.btn-allow:hover { filter: brightness(1.1); }
+.btn-always { background: transparent; color: var(--success); border-color: var(--success); }
+.btn-always:hover { background: rgba(107,198,126,0.12); }
+.btn-deny { background: transparent; color: var(--text-2); }
+.btn-deny:hover { background: var(--elevated); color: var(--text-1); }
+.permission-resolved { font-size: var(--caption); padding: 6px 12px; border-radius: 8px; display: flex; align-items: flex-start; gap: 6px; flex-wrap: wrap; }
+.permission-resolved-detail { color: var(--text-3); }
+.permission-resolved .permission-detail-collapse { width: 100%; margin-top: 2px; }
+.permission-resolved.allowed { background: rgba(107,198,126,0.12); color: var(--success); }
+.permission-resolved.denied { background: rgba(232,122,90,0.12); color: var(--accent); }
+.permission-resolved.auto-allowed { background: rgba(107,198,126,0.06); color: var(--text-2); font-style: italic; }
+.chat-input { padding: 16px 24px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+.chat-input textarea { flex: 1; padding: 12px 16px; background: var(--card); border-radius: 8px; font-size: var(--body); border: 1px solid transparent; transition: all 0.2s ease; resize: none; overflow-y: auto; min-height: 44px; max-height: 200px; line-height: 1.5; font-family: inherit; color: var(--text-1); outline: none; }
+.chat-input textarea::-webkit-scrollbar { display: none; }
+/* Text inputs take the accent on their BORDER, not a 2px offset outline.
+   This is not a softer exception invented for the composer: it is the rule
+   the app already follows in four other places (.chat-title-input,
+   .tb-link-input, .ws-picker-input, .convo-menu-input). The composer was the
+   odd one out, first with a box-shadow glow and then briefly with the button
+   treatment.
+   Why text inputs differ from buttons at all: :focus-visible ALWAYS matches on
+   an element that expects typing, whatever focused it, so a text input cannot
+   distinguish mouse from keyboard the way a button can. A 2px offset outline
+   therefore fires on every click, which on a surface this large reads as an
+   error state. The caret is already an unambiguous focus indicator here; the
+   border only has to confirm it.
+   The design system needs the matching clause; see the drift card. */
+/* Focus shifts weight, not hue: a 1px neutral ring where the border was
+   transparent. The caret is the primary signal; the ring only confirms it. */
+.chat-input textarea:focus { box-shadow: 0 0 0 1px var(--text-2); }
+.chat-input textarea::placeholder { color: var(--text-2); }
+.chat-input textarea:disabled { opacity: 0.5; }
+.send-btn { width: 42px; height: 42px; background: var(--card); color: var(--text-2); border-radius: 50%; display: flex; align-items: center; justify-content: center; transition: all 0.25s ease; flex-shrink: 0; }
+.send-btn.active { background: var(--accent); color: white; box-shadow: 0 2px 8px rgba(232,122,90,0.3); }
+.send-btn.active:hover { background: var(--accent-hover); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(232,122,90,0.4); }
+.send-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+.send-btn.cancel { background: rgba(232,93,93,0.15); color: #e85d5d; cursor: pointer; opacity: 1; }
+.send-btn.cancel:hover { background: rgba(232,93,93,0.25); }
+.cancelled-badge { display: inline-block; font-size: 11px; color: #e85d5d; background: rgba(232,93,93,0.12); padding: 2px 8px; border-radius: 4px; margin-top: 8px; }
+.send-btn svg { width: 18px; height: 18px; }
+
+/* Chat prompts */
+.chat-prompts { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; padding: 48px 24px; gap: 16px; }
+.chat-prompts-avatar { width: 56px; height: 56px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; }
+.chat-prompts-title { font-size: var(--heading); font-weight: 700; color: var(--text-1); }
+.chat-prompts-list { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; max-width: 480px; margin-top: 8px; }
+.prompt-pill { background: var(--card); border: 1px solid var(--border); border-radius: 20px; padding: 8px 16px; font-size: var(--body); color: var(--text-1); cursor: pointer; transition: all 0.15s ease; }
+.prompt-pill:hover { border-color: var(--accent); background: var(--accent-glow); }
+/* Welcome bubble with inline prompt pills */
+.chat-prompts-inline { flex: none; padding: 0 0 0 44px; justify-content: flex-start; align-items: flex-start; }
+.chat-prompts-inline .chat-prompts-list { justify-content: flex-start; margin-top: 0; }
+.msg-welcome .msg-bubble p { margin: 0 0 8px 0; }
+.msg-welcome .msg-bubble p:last-child { margin-bottom: 0; }
+
+
+.msg-delegation { display: flex; align-items: center; gap: 12px; padding: 12px 0; margin: 8px 0; }
+.delegation-line { flex: 1; height: 1px; background: var(--border); }
+.delegation-badge { display: flex; align-items: center; gap: 6px; font-size: var(--caption); font-weight: 600; white-space: nowrap; }
+.section-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); margin-bottom: 8px; text-align: left; }
+

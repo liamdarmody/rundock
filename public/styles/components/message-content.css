@@ -1,0 +1,67 @@
+/* What renders INSIDE a chat bubble: the thinking indicator, markdown output,
+   code blocks and tables.
+
+   Separate from views/chat.css because this styles agent-authored content
+   rather than the chat surface around it. public/chat-markup.js is the only
+   file allowed to emit the markup these rules target. */
+
+/* Thinking */
+.thinking-bubble { min-height: 24px; display: flex; align-items: center; gap: 12px; }
+.thinking-pulse { width: 24px; height: 24px; border-radius: 50%; animation: agentPulse 1.8s ease-in-out infinite; flex-shrink: 0; }
+.thinking-label { font-size: var(--caption); color: var(--text-2); }
+.thinking-status { font-size: var(--caption); color: var(--text-2); transition: opacity 0.2s ease; }
+@keyframes agentPulse { 0%,100% { opacity: 0.3; transform: scale(0.9); } 50% { opacity: 0.8; transform: scale(1.05); } }
+
+/* Markdown rendering (chat bubbles, file preview, profile) */
+.msg-bubble h1,.msg-bubble h2,.msg-bubble h3,.msg-bubble h4 { margin: 14px 0 4px; line-height: 1.3; }
+.msg-bubble *:first-child { margin-top: 0; }
+.msg-bubble h1 { font-size: 17px; } .msg-bubble h2 { font-size: 15px; } .msg-bubble h3 { font-size: var(--body); font-weight: 600; } .msg-bubble h4 { font-size: var(--body); font-weight: 600; }
+.msg-bubble p { margin: 0 0 8px; } .msg-bubble p:last-child { margin-bottom: 0; }
+/* 32px, not 20px: the list marker is drawn inside this padding, so a marker
+   wider than it is drawn outside the bubble. Measured at 14px Inter, decimal
+   markers are 10.0px for "1.", 21.0px for "99.", 29.8px for "999." and 35.5px
+   for "4471.", so the old 20px was already half a pixel short of a list simply
+   counting to 99. 32px carries any list numbered into the hundreds. Beyond
+   that is left alone deliberately: a reply that is ONLY a number no longer
+   reaches here at all (see the list renderer in app.js), so what remains is a
+   genuine list with a four-digit start, which is rare enough not to be worth
+   indenting every ordinary list to accommodate. */
+.msg-bubble ul,.msg-bubble ol { margin: 2px 0 8px; padding-left: 32px; }
+.msg-bubble ul { list-style: disc; } .msg-bubble ol { list-style: decimal; }
+.msg-bubble li { margin-bottom: 2px; line-height: 1.5; }
+.msg-bubble li > p { margin: 0 0 2px; }
+.msg-bubble li > p:last-child { margin-bottom: 0; }
+.msg-bubble li > ul,.msg-bubble li > ol { margin: 2px 0 2px; }
+.msg-bubble > :last-child { margin-bottom: 0; }
+.msg-bubble p + ul,.msg-bubble p + ol { margin-top: -4px; }
+.msg-bubble code { background: var(--elevated); padding: 2px 6px; border-radius: 4px; font-size: 13px; font-family: 'SF Mono','Fira Code','Consolas',monospace; }
+.msg-bubble pre { background: var(--elevated); padding: 12px 16px; border-radius: 8px; overflow-x: auto; margin: 8px 0; }
+.msg-bubble pre code:not(.hljs) { background: none; padding: 0; display: block; line-height: 1.5; }
+/* Code block with header (language label + copy button) and syntax highlighting */
+.code-block-wrapper { margin: 8px 0; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
+.code-block-header { display: flex; justify-content: space-between; align-items: center; background: var(--card); padding: 4px 12px 4px 16px; min-height: 32px; }
+.code-lang { font-size: 12px; color: var(--text-2); font-family: 'SF Mono','Fira Code','Consolas',monospace; }
+.copy-code-btn { background: none; border: none; color: var(--text-2); cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; justify-content: center; line-height: 0; transition: color 0.15s; }
+.copy-code-btn:hover { color: var(--text-1); }
+.copy-code-btn.copied { color: var(--success); }
+.code-block-wrapper pre { margin: 0; padding: 0; background: transparent; border-radius: 0; overflow: visible; }
+.code-block-wrapper pre code.hljs { display: block; padding: 12px 16px; overflow-x: auto; font-size: 13px; line-height: 1.5; font-family: 'SF Mono','Fira Code','Consolas',monospace; }
+.msg-bubble strong { font-weight: 600; }
+.msg-bubble em { font-style: italic; }
+.msg-bubble del { text-decoration: line-through; color: var(--text-2); }
+.msg-bubble blockquote { border-left: 3px solid var(--accent); padding-left: 16px; color: var(--text-2); margin: 8px 0; }
+/* Wide tables scroll horizontally inside the bubble instead of stretching it:
+   the wrapper caps at the bubble width and scrolls; the table sizes to its
+   content (min-width:100% so narrow tables still fill the bubble). */
+.msg-bubble .md-table-wrap { overflow-x: auto; max-width: 100%; min-width: 0; margin: 8px 0; }
+.msg-bubble table { border-collapse: collapse; margin: 0; width: auto; min-width: 100%; font-size: var(--body); }
+.msg-bubble th,.msg-bubble td { padding: 7px 12px; border: 1px solid var(--border); text-align: left; }
+.msg-bubble th { background: var(--card); font-weight: 600; }
+.msg-bubble hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+.msg-bubble a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.msg-bubble img { max-width: 100%; border-radius: 8px; margin: 8px 0; }
+.msg-bubble mark { background: rgba(232,122,90,0.2); color: var(--text-1); padding: 1px 4px; border-radius: 3px; }
+.msg-bubble .wikilink { color: var(--accent); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.msg-bubble .md-tag { background: var(--card); color: var(--accent); padding: 2px 8px; border-radius: 4px; font-size: var(--caption); font-weight: 500; }
+.msg-bubble input[type="checkbox"] { margin-right: 8px; accent-color: var(--accent); }
+
