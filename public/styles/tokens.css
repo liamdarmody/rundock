@@ -45,11 +45,8 @@
      and the settings mode toggle). Each of those nine is a ONE PIXEL VISIBLE
      CHANGE, made deliberately, not a substitution of equal values.
 
-     Two earlier versions of this comment were wrong, which is worth leaving
-     here. The first said the leftovers were "not touched here" and stayed put
-     while they were touched. The second said eight when the diff contained
-     nine, which meant the comment could not be used to show every change had
-     been reviewed. Both were caught in review rather than by me.
+     This comment states what the code does. If it stops matching, it is the
+     comment that is wrong.
 
      Ten remain deliberately off the scale, because moving them by two pixels
      or more changes how a surface reads rather than tidying it: 10px on five

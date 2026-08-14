@@ -58,8 +58,23 @@ const RADIUS = /border-radius:\s*([^;}\n]+)/g;
 const TIMED = /\b(?:transition|animation)(?:-duration)?:\s*([^;}\n]+)/g;
 const TIME = /\b\d*\.?\d+m?s\b/g;
 
+// Blank out comments, keeping newlines so reported line numbers stay true.
+//
+// A literal written INSIDE a comment is not drift, and counting it has a nasty
+// property: explaining a value raises its own allowance, so documenting drift
+// creates room for more drift. That is the exact inverse of the point. It
+// shipped once, when a comment saying "#1a1a1a is dark text on a bright fill"
+// pushed that file's allowance from one to two.
+function stripComments(src) {
+  const blanked = (m) => m.replace(/[^\n]/g, ' ');
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, blanked)      // css and js block comments
+    .replace(/<!--[\s\S]*?-->/g, blanked)       // html comments
+    .replace(/(^|[^:\w])\/\/[^\n]*/g, (m, p) => p + m.slice(p.length).replace(/./g, ' '));
+}
+
 function findings(rel) {
-  const src = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
+  const src = stripComments(fs.readFileSync(path.join(ROOT, rel), 'utf-8'));
   const lines = src.split('\n');
   const found = [];
   const at = (idx) => src.slice(0, idx).split('\n').length;
@@ -176,4 +191,4 @@ function main() {
 }
 
 if (require.main === module) process.exit(main());
-module.exports = { scan, counts, findings, surfaces };
+module.exports = { scan, counts, findings, surfaces, stripComments };

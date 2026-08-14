@@ -46,7 +46,8 @@ const INVARIANT = [
   '--danger',
   '--heading', '--title', '--body', '--caption', '--label',
   '--nav-rail-width', '--topbar-height', '--content-radius',
-  '--radius-sm', '--radius-md', '--radius-lg', '--radius-xl', '--radius-circle',
+  '--radius-xs', '--radius-sm', '--radius-md', '--radius-lg', '--radius-xl',
+  '--radius-pill', '--radius-circle',
   '--duration-fast', '--duration-base', '--duration-slow',
 ];
 

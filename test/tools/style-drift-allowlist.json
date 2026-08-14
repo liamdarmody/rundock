@@ -40,7 +40,7 @@
   "public/styles/components/find-bar.css": {
     "why": "#1a1a1a here is dark text on a BRIGHT status fill (--attention, --success), which is correct in both themes. An earlier note in this file called it a bug and a hardcoded copy of the dark theme's --base; that was wrong, and tokenising it would make it light-on-light in light mode. Deliberate, and noted as such in the CSS. Also one shadow black and one attention tint. Alpha tints of colours that already have tokens (accent 232,122,90; success 107,198,126; working 122,162,232; attention 232,168,76). Each is a token re-typed as raw channels, so editing the token no longer moves them. Waiting on a decision about how a tint of a token is written: color-mix() and relative colour syntax both work in Electron and both change the computed value, so it is a visual change rather than a substitution. The danger tints were converted in the polish pass and are gone from this file.",
     "allow": {
-      "#1a1a1a": 2,
+      "#1a1a1a": 1,
       "rgba(0,0,0,0.25)": 1,
       "rgba(232,168,76,0.4)": 1
     }
@@ -99,7 +99,7 @@
   "public/styles/views/chat.css": {
     "why": "Permission and status cards. Every red here became --danger or a color-mix tint of it in the polish pass; what remains is success, working and attention tints, one shadow black, 16px/20px/10px radii, and one 0.25s transition. #1a1a1a here is dark text on a BRIGHT status fill (--attention, --success), which is correct in both themes. An earlier note in this file called it a bug and a hardcoded copy of the dark theme's --base; that was wrong, and tokenising it would make it light-on-light in light mode. Deliberate, and noted as such in the CSS.",
     "allow": {
-      "#1a1a1a": 2,
+      "#1a1a1a": 1,
       "rgba(107,198,126,0.12)": 3,
       "rgba(107,198,126,0.22)": 1,
       "rgba(0,0,0,0.06)": 1,
