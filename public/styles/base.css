@@ -6,7 +6,14 @@
    views/ instead. */
 
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; transition: background-color var(--duration-slow) ease, border-color var(--duration-slow) ease, color var(--duration-slow) ease; }
-html, body { height: 100%; font-family: 'Inter', system-ui, -apple-system, sans-serif; background: var(--base); color: var(--text-1); -webkit-font-smoothing: antialiased; }
+/* The canvas colour comes from BODY, not from html.
+   The light theme overrides its tokens on body, so --base read at :root is
+   the dark value whatever theme is showing, and `html` carrying the
+   background painted the canvas dark in light mode. With html left
+   transparent, CSS propagates body's background to the canvas instead, and
+   body resolves the theme correctly. */
+html { height: 100%; }
+body { height: 100%; font-family: 'Inter', system-ui, -apple-system, sans-serif; background: var(--base); color: var(--text-1); -webkit-font-smoothing: antialiased; }
 button { border: none; background: none; cursor: pointer; font-family: inherit; color: inherit; }
 input { border: none; background: none; font-family: inherit; color: inherit; outline: none; }
 .hidden { display: none !important; }

@@ -27,13 +27,13 @@
 .msg-agent { align-self: flex-start; }
 .msg-sender { font-size: var(--caption); font-weight: 600; margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
 .msg-time { font-size: var(--label); color: var(--text-2); font-weight: 400; margin-left: auto; }
-.msg-bubble { padding: 12px 16px; border-radius: 16px; font-size: var(--body); line-height: 1.55; word-wrap: break-word; }
+.msg-bubble { padding: 12px 16px; border-radius: var(--radius-bubble); font-size: var(--body); line-height: 1.55; word-wrap: break-word; }
 .msg-agent .msg-bubble { background: var(--card); border-top-left-radius: 4px; box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
 .msg-user .msg-bubble { background: var(--accent-glow); border: 1px solid rgba(232,122,90,0.15); border-bottom-right-radius: 4px; white-space: pre-wrap; }
 .history-msg { opacity: 0.6; }
 .history-msg:hover { opacity: 0.85; }
-.msg-system { align-self: center; font-size: var(--caption); color: var(--text-2); padding: 4px 12px; background: var(--card); border-radius: 20px; }
-.auth-error-card { align-self: stretch; max-width: 560px; margin: 8px auto; padding: 14px 16px; background: rgba(232,168,76,0.08); border: 1px solid var(--attention); border-radius: 10px; animation: fadeIn var(--duration-slow) ease; }
+.msg-system { align-self: center; font-size: var(--caption); color: var(--text-2); padding: 4px 12px; background: var(--card); border-radius: var(--radius-pill); }
+.auth-error-card { align-self: stretch; max-width: 560px; margin: 8px auto; padding: 14px 16px; background: rgba(232,168,76,0.08); border: 1px solid var(--attention); border-radius: var(--radius-xl); animation: fadeIn var(--duration-slow) ease; }
 .auth-error-title { font-weight: 600; font-size: var(--body); color: var(--attention); margin-bottom: 6px; }
 .auth-error-body { font-size: var(--body); line-height: 1.6; color: var(--text-1); }
 .auth-error-steps { margin: 8px 0 4px; padding-left: 20px; font-size: var(--body); line-height: 1.7; color: var(--text-1); }
@@ -146,7 +146,7 @@
 .chat-prompts-avatar { width: 56px; height: 56px; border-radius: var(--radius-circle); display: flex; align-items: center; justify-content: center; font-size: 24px; }
 .chat-prompts-title { font-size: var(--heading); font-weight: 700; color: var(--text-1); }
 .chat-prompts-list { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; max-width: 480px; margin-top: 8px; }
-.prompt-pill { background: var(--card); border: 1px solid var(--border); border-radius: 20px; padding: 8px 16px; font-size: var(--body); color: var(--text-1); cursor: pointer; transition: all var(--duration-base) ease; }
+.prompt-pill { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-pill); padding: 8px 16px; font-size: var(--body); color: var(--text-1); cursor: pointer; transition: all var(--duration-base) ease; }
 .prompt-pill:hover { border-color: var(--accent); background: var(--accent-glow); }
 /* Welcome bubble with inline prompt pills */
 .chat-prompts-inline { flex: none; padding: 0 0 0 44px; justify-content: flex-start; align-items: flex-start; }
