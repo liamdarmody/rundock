@@ -16,7 +16,10 @@
 .find-btn:disabled { opacity: 0.35; cursor: default; pointer-events: none; }
 .find-btn svg { display: block; }
 mark.find-match,
-.tiptap-editor .ProseMirror .find-match { background: rgba(232, 168, 76, 0.4); color: inherit; padding: 1px 0; border-radius: 2px; }
+.tiptap-editor .ProseMirror .find-match { background: rgba(232, 168, 76, 0.4); color: inherit; padding: 1px 0; border-radius: var(--radius-xs); }
 mark.find-match.current,
+/* #1a1a1a is dark text on a BRIGHT status fill, and is correct in both
+   themes for that reason. It is not a hardcoded copy of the dark theme's
+   --base: tokenising it would make it light-on-light in light mode. */
 .tiptap-editor .ProseMirror .find-match.current { background: var(--attention); color: #1a1a1a; }
 

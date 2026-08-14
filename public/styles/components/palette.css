@@ -54,7 +54,7 @@
    results as well as looking like a mistake. */
 .palette-scope-row { display: flex; align-items: center; gap: 6px; height: 37px; flex-shrink: 0; padding: 0 12px; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none; }
 .palette-scope-row::-webkit-scrollbar { display: none; }
-.palette-scope { font-size: var(--caption); font-weight: 500; color: var(--text-2); padding: 4px 10px; border-radius: 999px; border: 1px solid transparent; cursor: pointer; white-space: nowrap; transition: color var(--duration-base) ease, background var(--duration-base) ease; }
+.palette-scope { font-size: var(--caption); font-weight: 500; color: var(--text-2); padding: 4px 10px; border-radius: var(--radius-pill); border: 1px solid transparent; cursor: pointer; white-space: nowrap; transition: color var(--duration-base) ease, background var(--duration-base) ease; }
 .palette-scope:hover { color: var(--text-1); background: var(--card); }
 .palette-scope:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .palette-scope.active { color: var(--accent); background: var(--accent-glow); border-color: transparent; }
@@ -69,12 +69,12 @@
    selection fill wins by source order. */
 .palette-item:hover { background: var(--card); }
 .palette-item.selected { background: var(--accent-glow); }
-.palette-item-icon { width: 26px; height: 26px; border-radius: 7px; background: var(--card); color: var(--text-2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 13px; }
+.palette-item-icon { width: 26px; height: 26px; border-radius: var(--radius-md); background: var(--card); color: var(--text-2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 13px; }
 .palette-item.selected .palette-item-icon { color: var(--text-1); }
 .palette-item-body { flex: 1; min-width: 0; }
 .palette-item-title { font-size: var(--body); font-weight: 500; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .palette-item-meta { font-size: var(--caption); color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
-.palette-item-meta mark, .palette-item-title mark { background: var(--accent-glow); color: var(--accent); border-radius: 2px; padding: 0 1px; }
+.palette-item-meta mark, .palette-item-title mark { background: var(--accent-glow); color: var(--accent); border-radius: var(--radius-xs); padding: 0 1px; }
 .palette-item-kbd { font-size: var(--label); color: var(--text-2); opacity: 0; flex-shrink: 0; }
 .palette-item.selected .palette-item-kbd { opacity: 1; }
 .palette-empty { padding: 28px 20px; text-align: center; color: var(--text-2); font-size: var(--body); line-height: 1.6; }

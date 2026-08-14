@@ -44,8 +44,12 @@
      touched here. Pick by the size of the thing: sm for chips and inputs, md
      for menu rows, lg for cards and buttons, xl for the large panels inside
      the window chrome. */
-  --radius-sm: 4px; --radius-md: 6px; --radius-lg: 8px; --radius-xl: 12px;
-  --radius-circle: 50%;
+  --radius-xs: 3px; --radius-sm: 4px; --radius-md: 6px; --radius-lg: 8px;
+  --radius-xl: 12px;
+  /* A pill and a circle are intents, not measurements. The pill was written
+     as both 100px and 999px in different files, which look identical on a
+     short control and diverge the moment one is tall. */
+  --radius-pill: 999px; --radius-circle: 50%;
 
   /* Motion. base is the default for anything that changes on hover or focus;
      fast is for something already in view that must not feel laggy; slow is

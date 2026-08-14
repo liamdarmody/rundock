@@ -54,7 +54,7 @@
 .convo-delete { position: absolute; top: 8px; right: 6px; width: 24px; height: 24px; border: none; background: transparent; color: var(--text-3); cursor: pointer; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity var(--duration-base) ease, color var(--duration-base) ease; font-size: var(--body); padding: 0; z-index: 1; }
 .convo-item:hover .convo-delete { opacity: 1; }
 .convo-item:hover > .convo-title { padding-right: 24px; }
-.convo-delete:hover { color: var(--danger, #e55); background: var(--surface); }
+.convo-delete:hover { color: var(--danger); background: var(--surface); }
 .convo-pin { position: absolute; top: 8px; right: 6px; width: 24px; height: 24px; border: none; background: transparent; color: var(--text-3); cursor: pointer; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity var(--duration-base) ease, color var(--duration-base) ease; padding: 0; z-index: 1; }
 .convo-item:hover .convo-pin { opacity: 1; }
 .convo-item:hover .convo-pin-indicator { opacity: 0; }
@@ -68,7 +68,7 @@
 /* Sidebar filter pills (conversations sidebar only). No divider: the bordered
    pills anchor the top of the list on their own (WhatsApp-style). */
 .sidebar-pills { padding: 8px 8px 10px; display: flex; gap: 6px; flex-shrink: 0; }
-.pill { font-size: var(--caption); font-weight: 500; padding: 4px 13px; border-radius: 999px; cursor: pointer; border: 1px solid var(--border); background: transparent; color: var(--text-2); transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease, color var(--duration-fast) ease; line-height: 1.5; font-family: inherit; }
+.pill { font-size: var(--caption); font-weight: 500; padding: 4px 13px; border-radius: var(--radius-pill); cursor: pointer; border: 1px solid var(--border); background: transparent; color: var(--text-2); transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease, color var(--duration-fast) ease; line-height: 1.5; font-family: inherit; }
 .pill:hover { border-color: var(--text-2); color: var(--text-1); }
 .pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .pill.active { background: var(--accent); border-color: var(--accent); color: #fff; }

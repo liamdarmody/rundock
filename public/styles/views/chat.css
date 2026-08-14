@@ -93,6 +93,9 @@
 .permission-detail-collapse .permission-detail { max-height: none; margin-top: 6px; }
 .permission-actions { display: flex; gap: 8px; align-items: center; }
 .btn-perm { padding: 6px 16px; border-radius: var(--radius-lg); font-size: var(--caption); font-weight: 500; cursor: pointer; border: 1px solid var(--border); transition: all var(--duration-base) ease; }
+/* #1a1a1a is dark text on a BRIGHT status fill, and is correct in both
+   themes for that reason. It is not a hardcoded copy of the dark theme's
+   --base: tokenising it would make it light-on-light in light mode. */
 .btn-allow { background: var(--success); color: #1a1a1a; border-color: var(--success); }
 .btn-allow:hover { filter: brightness(1.1); }
 .btn-always { background: transparent; color: var(--success); border-color: var(--success); }
@@ -130,9 +133,9 @@
 .send-btn.active { background: var(--accent); color: white; box-shadow: 0 2px 8px rgba(232,122,90,0.3); }
 .send-btn.active:hover { background: var(--accent-hover); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(232,122,90,0.4); }
 .send-btn:disabled { opacity: 0.3; cursor: not-allowed; }
-.send-btn.cancel { background: rgba(232,93,93,0.15); color: #e85d5d; cursor: pointer; opacity: 1; }
-.send-btn.cancel:hover { background: rgba(232,93,93,0.25); }
-.cancelled-badge { display: inline-block; font-size: var(--label); color: #e85d5d; background: rgba(232,93,93,0.12); padding: 2px 8px; border-radius: var(--radius-sm); margin-top: 8px; }
+.send-btn.cancel { background: color-mix(in srgb, var(--danger) 15%, transparent); color: var(--danger); cursor: pointer; opacity: 1; }
+.send-btn.cancel:hover { background: color-mix(in srgb, var(--danger) 25%, transparent); }
+.cancelled-badge { display: inline-block; font-size: var(--label); color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); padding: 2px 8px; border-radius: var(--radius-sm); margin-top: 8px; }
 .send-btn svg { width: 18px; height: 18px; }
 
 /* Chat prompts */
