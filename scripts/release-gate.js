@@ -90,6 +90,10 @@ function defaultExec(cmd, args = []) {
 function buildSteps(live) {
   const steps = [
     { name: 'hygiene', cmd: ['npm', ['run', 'check:refs']] },
+    // Cheap and file-only, so it sits beside hygiene rather than in the
+    // expensive half: a release that reintroduces a hardcoded colour fails
+    // before anything is built.
+    { name: 'style drift', cmd: ['npm', ['run', 'lint:styles']] },
     // Fails fast if the installed runtime has moved past the committed
     // stream capture, or the stub has drifted from it: no candidate gets
     // validated against a stale model of the stream.

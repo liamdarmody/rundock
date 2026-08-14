@@ -1,0 +1,221 @@
+{
+  "public/editor/styles.js": {
+    "why": "The editor's runtime-injected stylesheet, and the largest single pocket of drift: 77 literals, of which #E87A5A appears 26 times and IS --accent. The file already uses var(--...) 78 times, so it can read tokens; these are simply the places that did not. Alpha tints of colours that already have tokens (accent 232,122,90; success 107,198,126; working 122,162,232; attention 232,168,76). Each is the token re-typed as raw channels, so editing the token no longer moves them. Waiting on a decision about how a tint of a token is written: colour-mix() or relative colour syntax both work in Electron, and both change the computed value, so it is a visual change rather than a substitution. It also carries #E06C6C, one of five near-identical reds in the codebase (#E85A5A, now --danger; #e85d5d; #d9534f; #E06C6C; #e55). Waiting on the polish pass choosing one and deleting the rest. Plus radius values a step off the scale (--radius-sm 4, md 6, lg 8, xl 12). waiting on the polish pass, which moves them onto it; each move is a visible change. And animation durations, not transition durations. these are timed to what the animation says (a slow pulse, a spinner, a flash) rather than to the interaction scale, so they are deliberate and permanent rather than debt.",
+    "allow": {
+      "#E87A5A": 26,
+      "#E06C6C": 5,
+      "#fff": 1,
+      "#1A1A1A": 1,
+      "rgba(232,122,90,0.12)": 1,
+      "rgba(107,198,126,0.16)": 2,
+      "rgba(107,198,126,0.6)": 1,
+      "rgba(224,108,108,0.14)": 2,
+      "rgba(232,176,90,0.22)": 1,
+      "rgba(232,122,90,0.15)": 5,
+      "rgba(224,108,108,0.10)": 1,
+      "rgba(107,198,126,0.14)": 2,
+      "rgba(232,122,90,0.25)": 1,
+      "rgba(232,122,90,0.35)": 1,
+      "rgba(232,122,90,0.2)": 1,
+      "rgba(128,128,128,0.12)": 1,
+      "rgba(232,122,90,0.3)": 1,
+      "rgba(232,122,90,0.4)": 1,
+      "rgba(0,0,0,0.35)": 1,
+      "3px": 4,
+      "100px": 3,
+      "2px": 2,
+      "8px": 4,
+      "6px": 1,
+      "4px": 1,
+      "1.2s": 3,
+      "160ms": 2,
+      "0.25s": 1,
+      "0.15s": 1
+    }
+  },
+  "public/styles/base.css": {
+    "why": "A single 3px radius on a scrollbar thumb. Radius values a step off the scale (--radius-sm 4, md 6, lg 8, xl 12). Waiting on the polish pass, which moves them onto it; each move is a visible change.",
+    "allow": {
+      "3px": 1
+    }
+  },
+  "public/styles/components/connection-bar.css": {
+    "why": "Alpha tints of colours that already have tokens (accent 232,122,90; success 107,198,126; working 122,162,232; attention 232,168,76). Each is the token re-typed as raw channels, so editing the token no longer moves them. Waiting on a decision about how a tint of a token is written: colour-mix() or relative colour syntax both work in Electron, and both change the computed value, so it is a visual change rather than a substitution.",
+    "allow": {
+      "rgba(107,198,126,0.1)": 1,
+      "rgba(232,90,90,0.1)": 1,
+      "rgba(122,162,232,0.1)": 1
+    }
+  },
+  "public/styles/components/find-bar.css": {
+    "why": "A hardcoded copy of the dark theme's --base. This one is a BUG rather than debt: it does not follow the theme, so it is wrong in light mode. Tokenising it is a visible fix and belongs in the polish pass. Also a shadow black and an attention tint. Alpha tints of colours that already have tokens (accent 232,122,90; success 107,198,126; working 122,162,232; attention 232,168,76). Each is the token re-typed as raw channels, so editing the token no longer moves them. Waiting on a decision about how a tint of a token is written: colour-mix() or relative colour syntax both work in Electron, and both change the computed value, so it is a visual change rather than a substitution.",
+    "allow": {
+      "#1a1a1a": 1,
+      "rgba(0,0,0,0.25)": 1,
+      "rgba(232,168,76,0.4)": 1,
+      "2px": 1
+    }
+  },
+  "public/styles/components/floating-toolbar.css": {
+    "why": "Shadow blacks. There is no elevation scale, so every surface picked its own alpha and nine different ones are now in use across the app. Waiting on a shadow scale in tokens.css. This file alone uses five different blacks across its light and dark shadow pairs, which is the clearest argument for the scale. Plus one absolute white and two 5px radii. Absolute white or black, chosen for contrast against a coloured fill rather than as a theme colour. Deliberate: a token here would make it follow the theme, which is the opposite of what it is for.",
+    "allow": {
+      "#fff": 1,
+      "rgba(0,0,0,0.10)": 8,
+      "rgba(0,0,0,0.16)": 5,
+      "rgba(0,0,0,0.05)": 1,
+      "rgba(0,0,0,0.06)": 2,
+      "5px": 2
+    }
+  },
+  "public/styles/components/message-content.css": {
+    "why": "An accent tint, a 3px radius, and a 1.8s agent pulse. Animation durations, not transition durations. These are timed to what the animation says (a slow pulse, a spinner, a flash) rather than to the interaction scale, so they are deliberate and permanent rather than debt.",
+    "allow": {
+      "rgba(232,122,90,0.2)": 1,
+      "3px": 1,
+      "1.8s": 1
+    }
+  },
+  "public/styles/components/palette.css": {
+    "why": "Shadow blacks. There is no elevation scale, so every surface picked its own alpha and nine different ones are now in use across the app. Waiting on a shadow scale in tokens.css. Plus 999px and 7px radii and three animation durations. Animation durations, not transition durations. These are timed to what the animation says (a slow pulse, a spinner, a flash) rather than to the interaction scale, so they are deliberate and permanent rather than debt.",
+    "allow": {
+      "rgba(0,0,0,0.18)": 1,
+      "rgba(0,0,0,0.4)": 1,
+      "rgba(0,0,0,0.2)": 1,
+      "999px": 1,
+      "7px": 1,
+      "2px": 1,
+      "160ms": 1,
+      "0.8s": 1,
+      "1.6s": 1
+    }
+  },
+  "public/styles/components/sidebar.css": {
+    "why": "Shadow blacks. There is no elevation scale, so every surface picked its own alpha and nine different ones are now in use across the app. Waiting on a shadow scale in tokens.css. Plus #e55, one of five near-identical reds in the codebase (#E85A5A, now --danger; #e85d5d; #d9534f; #E06C6C; #e55). Waiting on the polish pass choosing one and deleting the rest. Plus two absolute whites, accent and success tints, a 999px pill, a 10px radius, and two 2s status animations.",
+    "allow": {
+      "#e55": 1,
+      "#fff": 2,
+      "rgba(0,0,0,0.08)": 1,
+      "rgba(0,0,0,0.25)": 1,
+      "rgba(0,0,0,0.12)": 1,
+      "rgba(0,0,0,0.06)": 1,
+      "rgba(232,122,90,0.18)": 1,
+      "rgba(0,0,0,0.15)": 2,
+      "rgba(232,122,90,0.3)": 2,
+      "rgba(107,198,126,0.1)": 1,
+      "999px": 1,
+      "10px": 1,
+      "0.25s": 1,
+      "2s": 2
+    }
+  },
+  "public/styles/components/topbar.css": {
+    "why": "A single 7px radius on the search field. Radius values a step off the scale (--radius-sm 4, md 6, lg 8, xl 12). Waiting on the polish pass, which moves them onto it; each move is a visible change.",
+    "allow": {
+      "7px": 1
+    }
+  },
+  "public/styles/components/update-strip.css": {
+    "why": "A 900ms progress animation. Animation durations, not transition durations. These are timed to what the animation says (a slow pulse, a spinner, a flash) rather than to the interaction scale, so they are deliberate and permanent rather than debt.",
+    "allow": {
+      "900ms": 1
+    }
+  },
+  "public/styles/views/chat.css": {
+    "why": "Permission and status cards, which is where the red problem is most visible: #e85d5d twice plus three rgba(232,93,93,...) tints of the same colour, none of them --danger. One of five near-identical reds in the codebase (#E85A5A, now --danger; #e85d5d; #d9534f; #E06C6C; #e55). Waiting on the polish pass choosing one and deleting the rest. Also a hardcoded copy of the dark theme's --base. this one is a bug rather than debt: it does not follow the theme, so it is wrong in light mode. tokenising it is a visible fix and belongs in the polish pass. Alpha tints of colours that already have tokens (accent 232,122,90; success 107,198,126; working 122,162,232; attention 232,168,76). Each is the token re-typed as raw channels, so editing the token no longer moves them. Waiting on a decision about how a tint of a token is written: colour-mix() or relative colour syntax both work in Electron, and both change the computed value, so it is a visual change rather than a substitution.",
+    "allow": {
+      "#1a1a1a": 1,
+      "#e85d5d": 2,
+      "rgba(107,198,126,0.12)": 3,
+      "rgba(107,198,126,0.22)": 1,
+      "rgba(0,0,0,0.06)": 1,
+      "rgba(232,122,90,0.15)": 1,
+      "rgba(232,168,76,0.08)": 1,
+      "rgba(122,162,232,0.07)": 1,
+      "rgba(122,162,232,0.35)": 1,
+      "rgba(232,122,90,0.12)": 1,
+      "rgba(107,198,126,0.06)": 1,
+      "rgba(232,122,90,0.3)": 1,
+      "rgba(232,122,90,0.4)": 1,
+      "rgba(232,93,93,0.15)": 1,
+      "rgba(232,93,93,0.25)": 1,
+      "rgba(232,93,93,0.12)": 1,
+      "16px": 1,
+      "20px": 2,
+      "10px": 1,
+      "0.25s": 1
+    }
+  },
+  "public/styles/views/editor.css": {
+    "why": "Callout accents, one hue per callout type (note, tip, warning, danger, quote, example), which is a palette of its own that no token set covers. Alpha tints of colours that already have tokens (accent 232,122,90; success 107,198,126; working 122,162,232; attention 232,168,76). Each is the token re-typed as raw channels, so editing the token no longer moves them. Waiting on a decision about how a tint of a token is written: colour-mix() or relative colour syntax both work in Electron, and both change the computed value, so it is a visual change rather than a substitution. It also carries #d9534f and #A07AE8, a purple with no token at all, four 100px pills and three absolute whites.",
+    "allow": {
+      "#A07AE8": 3,
+      "#fff": 3,
+      "#d9534f": 2,
+      "rgba(232,168,76,0.32)": 1,
+      "rgba(232,122,90,0.55)": 1,
+      "rgba(122,162,232,0.08)": 5,
+      "rgba(232,168,76,0.08)": 3,
+      "rgba(107,198,126,0.08)": 3,
+      "rgba(232,90,90,0.08)": 2,
+      "rgba(160,122,232,0.08)": 2,
+      "rgba(232,122,90,0.04)": 1,
+      "rgba(232,122,90,0.10)": 1,
+      "rgba(232,168,76,0.10)": 1,
+      "rgba(232,168,76,0.35)": 1,
+      "rgba(107,198,126,0.15)": 1,
+      "rgba(122,117,110,0.15)": 1,
+      "rgba(122,162,232,0.20)": 3,
+      "rgba(107,198,126,0.20)": 1,
+      "rgba(232,168,76,0.20)": 1,
+      "rgba(232,90,90,0.20)": 1,
+      "rgba(160,122,232,0.20)": 1,
+      "2px": 2,
+      "100px": 4,
+      "3px": 1,
+      "0.3s": 1
+    }
+  },
+  "public/styles/views/org-chart.css": {
+    "why": "Shadow blacks. There is no elevation scale, so every surface picked its own alpha and nine different ones are now in use across the app. Waiting on a shadow scale in tokens.css. Plus 10px and 14px radii and a 2s working pulse.",
+    "allow": {
+      "rgba(0,0,0,0.15)": 1,
+      "rgba(0,0,0,0.12)": 1,
+      "rgba(0,0,0,0.08)": 1,
+      "rgba(0,0,0,0.2)": 1,
+      "10px": 1,
+      "14px": 1,
+      "2s": 1
+    }
+  },
+  "public/styles/views/profile.css": {
+    "why": "An accent tint and a shadow black. Shadow blacks. There is no elevation scale, so every surface picked its own alpha and nine different ones are now in use across the app. Waiting on a shadow scale in tokens.css.",
+    "allow": {
+      "rgba(232,122,90,0.2)": 1,
+      "rgba(0,0,0,0.08)": 1
+    }
+  },
+  "public/styles/views/settings.css": {
+    "why": "Two shadow blacks and 10px and 7px radii. Shadow blacks. There is no elevation scale, so every surface picked its own alpha and nine different ones are now in use across the app. Waiting on a shadow scale in tokens.css.",
+    "allow": {
+      "rgba(0,0,0,0.08)": 1,
+      "rgba(0,0,0,0.18)": 1,
+      "10px": 1,
+      "7px": 1
+    }
+  },
+  "public/styles/views/skills.css": {
+    "why": "14px and 10px radii on the skill rows. Radius values a step off the scale (--radius-sm 4, md 6, lg 8, xl 12). Waiting on the polish pass, which moves them onto it; each move is a visible change.",
+    "allow": {
+      "14px": 1,
+      "10px": 1
+    }
+  },
+  "public/views/find.js": {
+    "why": "Search-match highlight colours, set from JavaScript because they are applied to ranges the CSS cannot select. Tints of attention and accent, plus absolute black for text on the highlight. Absolute white or black, chosen for contrast against a coloured fill rather than as a theme colour. Deliberate: a token here would make it follow the theme, which is the opposite of what it is for. Waiting on the JS-set style cleanup, which is tracked separately.",
+    "allow": {
+      "#000": 1,
+      "rgba(232,168,76,0.30)": 1,
+      "rgba(232,122,90,0.55)": 1
+    }
+  }
+}
