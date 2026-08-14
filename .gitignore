@@ -29,4 +29,4 @@ scripts/screenshots/.banned-tokens.json
 # they contain the reviewer's written findings, and the hygiene check has no
 # business policing a reviewer's punctuation.
 .independent-review/*
-!.independent-review/ledger.jsonl
+!.independent-review/*.jsonl

@@ -43,7 +43,7 @@
     "max_parallel": 2
   },
   "ledger": {
-    "path": ".independent-review/ledger.jsonl"
+    "path": ".independent-review/"
   },
   "findings": {
     "max_required_change_chars": 600
