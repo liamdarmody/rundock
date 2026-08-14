@@ -106,3 +106,24 @@ describe('the drift allowlist is a document, not a dump', () => {
     }
   });
 });
+
+describe('an allowlist reason describes only what it still allows', () => {
+  // A reason that names a literal the entry no longer carries is worse than no
+  // reason: it reads as an unpaid debt and hides that the debt was settled.
+  // Five entries drifted that way in one slice, all of them missed by me and
+  // caught in review, which is why this is now mechanical.
+  const LITERAL = /#[0-9a-fA-F]{3,8}\b|\b\d+px\b|\b\d*\.?\d+m?s\b/g;
+
+  test('no reason names a literal that is not in its allow list', () => {
+    const stale = [];
+    for (const [file, entry] of Object.entries(ALLOW)) {
+      for (const lit of entry.why.match(LITERAL) || []) {
+        if (!(lit in entry.allow)) stale.push(`${file}: reason names ${lit}, which it no longer allows`);
+      }
+    }
+    assert.deepStrictEqual(
+      stale, [],
+      'describe what is there, or say it in words rather than naming a value that has gone',
+    );
+  });
+});

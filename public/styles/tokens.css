@@ -37,12 +37,19 @@
   --org-name: 20px; --org-role: 15px;
 
   /* Corner radius. The scale absorbed 101 of the 130 radius declarations in the
-     stylesheets when it was introduced, and the polish pass brought eight more
-     onto it: 5px to 4px, 7px to 6px, and 2px to 3px. Each of those eight is a
-     ONE PIXEL VISIBLE CHANGE, made deliberately, not a substitution of equal
-     values. An earlier version of this comment said the leftovers were "not
-     touched here" and stayed put while they were touched, which is how a
-     comment starts lying.
+     stylesheets when it was introduced, and the polish pass brought NINE more
+     onto it: 2px to 3px in four places (the find-match highlight, the palette's
+     match marks, the editor's find overlay, and the wikilink focus ring), 5px
+     to 4px in two (the link popover's input and its apply and unlink buttons),
+     and 7px to 6px in three (the top-bar icon buttons, the palette item icon,
+     and the settings mode toggle). Each of those nine is a ONE PIXEL VISIBLE
+     CHANGE, made deliberately, not a substitution of equal values.
+
+     Two earlier versions of this comment were wrong, which is worth leaving
+     here. The first said the leftovers were "not touched here" and stayed put
+     while they were touched. The second said eight when the diff contained
+     nine, which meant the comment could not be used to show every change had
+     been reviewed. Both were caught in review rather than by me.
 
      Ten remain deliberately off the scale, because moving them by two pixels
      or more changes how a surface reads rather than tidying it: 10px on five

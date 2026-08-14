@@ -97,7 +97,7 @@ const CSS = `
   vertical-align: 0.35em;
   padding: 0 4px;
   margin-left: 2px;
-  border-radius: 100px;
+  border-radius: var(--radius-pill);
   background: var(--accent-glow, rgba(232, 122, 90, 0.15));
   color: var(--accent);
   cursor: default;
@@ -163,7 +163,7 @@ const CSS = `
   right: 24px;
   z-index: 5;
   padding: 4px 12px;
-  border-radius: 100px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--border);
   background: var(--card);
   color: var(--text-2);
@@ -291,7 +291,7 @@ const CSS = `
   letter-spacing: 0.06em;
   text-transform: uppercase;
   padding: 1px 7px;
-  border-radius: 100px;
+  border-radius: var(--radius-pill);
   background: rgba(107, 198, 126, 0.14);
   color: var(--success);
 }

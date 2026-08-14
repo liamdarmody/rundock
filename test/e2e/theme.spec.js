@@ -275,3 +275,38 @@ test('the app renders in its own copy of Inter, fetched from nowhere', async ({ 
   // catches a fetch the static scan cannot see.
   expect(external, 'the client must not fetch from other origins').toEqual([]);
 });
+
+test('the editor stylesheet, injected at runtime, can see the tokens it uses', async ({ page }) => {
+  // public/editor/styles.js is a <style> element built in JavaScript and
+  // appended to the head when the editor first opens, which is a different
+  // path from the <link> tags the rest of the styling arrives through. Eight
+  // var(--danger, #fallback) fallbacks were removed from that file on the
+  // grounds that --danger is always defined, and nothing proved the token
+  // actually resolves in the context those rules run in. This is that proof.
+  await page.goto('/');
+  await expect(page.locator('.convo-item').first()).toBeVisible();
+  await page.locator('.nav-item[data-nav="files"]').click();
+  // Named, not first: the first .file-item sits inside a collapsed folder and
+  // is not clickable. wikilink-line.md is what test/e2e/editor.spec.js opens.
+  await page.locator('.file-item', { hasText: 'wikilink-line.md' }).first().click();
+  await expect(page.locator('.ProseMirror').first()).toBeVisible();
+
+  const seen = await page.evaluate(() => {
+    const injected = [...document.querySelectorAll('style')]
+      .some(s => s.textContent.includes('.tiptap-editor'));
+    // Resolve the tokens the way a rule inside the editor would.
+    const host = document.querySelector('.ProseMirror');
+    const cs = getComputedStyle(host);
+    return {
+      injected,
+      danger: cs.getPropertyValue('--danger').trim(),
+      accent: cs.getPropertyValue('--accent').trim(),
+      pill: cs.getPropertyValue('--radius-pill').trim(),
+    };
+  });
+
+  expect(seen.injected, 'the editor stylesheet must actually be in the document').toBe(true);
+  expect(seen.danger, '--danger must resolve where the editor rules apply').toBe('#E85A5A');
+  expect(seen.accent, '--accent must resolve where the editor rules apply').toBe('#E87A5A');
+  expect(seen.pill, '--radius-pill must resolve where the editor rules apply').toBe('999px');
+});

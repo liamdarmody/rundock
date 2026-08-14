@@ -1,6 +1,6 @@
 {
   "public/editor/styles.js": {
-    "why": "The editor's runtime-injected stylesheet, and the largest single pocket of drift: 77 literals, of which #E87A5A appears 26 times and IS --accent. The file already uses var(--...) 78 times, so it can read tokens; these are simply the places that did not. Alpha tints of colours that already have tokens (accent 232,122,90; success 107,198,126; working 122,162,232; attention 232,168,76). Each is the token re-typed as raw channels, so editing the token no longer moves them. Waiting on a decision about how a tint of a token is written: colour-mix() or relative colour syntax both work in Electron, and both change the computed value, so it is a visual change rather than a substitution. It also carries #E06C6C, one of five near-identical reds in the codebase (#E85A5A, now --danger; #e85d5d; #d9534f; #E06C6C; #e55). Waiting on the polish pass choosing one and deleting the rest. Plus radius values a step off the scale (--radius-sm 4, md 6, lg 8, xl 12). waiting on the polish pass, which moves them onto it; each move is a visible change. And animation durations, not transition durations. these are timed to what the animation says (a slow pulse, a spinner, a flash) rather than to the interaction scale, so they are deliberate and permanent rather than debt.",
+    "why": "The editor's runtime-injected stylesheet. Its 26 accent literals and its dead --danger fallbacks were resolved in the polish pass; what remains is tints, one absolute white, one dark-on-fill #1A1A1A, off-scale radii, and animation durations. Alpha tints of colours that already have tokens (accent 232,122,90; success 107,198,126; working 122,162,232; attention 232,168,76). Each is a token re-typed as raw channels, so editing the token no longer moves them. Waiting on a decision about how a tint of a token is written: color-mix() and relative colour syntax both work in Electron and both change the computed value, so it is a visual change rather than a substitution. The danger tints were converted in the polish pass and are gone from this file.",
     "allow": {
       "#fff": 1,
       "#1A1A1A": 1,
@@ -20,7 +20,6 @@
       "rgba(232,122,90,0.4)": 1,
       "rgba(0,0,0,0.35)": 1,
       "3px": 4,
-      "100px": 3,
       "2px": 2,
       "8px": 4,
       "6px": 1,
@@ -32,14 +31,14 @@
     }
   },
   "public/styles/components/connection-bar.css": {
-    "why": "Alpha tints of colours that already have tokens (accent 232,122,90; success 107,198,126; working 122,162,232; attention 232,168,76). Each is the token re-typed as raw channels, so editing the token no longer moves them. Waiting on a decision about how a tint of a token is written: colour-mix() or relative colour syntax both work in Electron, and both change the computed value, so it is a visual change rather than a substitution.",
+    "why": "Alpha tints of colours that already have tokens (accent 232,122,90; success 107,198,126; working 122,162,232; attention 232,168,76). Each is a token re-typed as raw channels, so editing the token no longer moves them. Waiting on a decision about how a tint of a token is written: color-mix() and relative colour syntax both work in Electron and both change the computed value, so it is a visual change rather than a substitution. The danger tints were converted in the polish pass and are gone from this file.",
     "allow": {
       "rgba(107,198,126,0.1)": 1,
       "rgba(122,162,232,0.1)": 1
     }
   },
   "public/styles/components/find-bar.css": {
-    "why": "#1a1a1a here is dark text on a BRIGHT status fill (--attention, --success), which is correct in both themes. An earlier note in this file called it a bug and a hardcoded copy of the dark theme's --base; that was wrong, and tokenising it would make it light-on-light in light mode. Deliberate, and noted as such in the CSS. Also a shadow black and an attention tint. Alpha tints of colours that already have tokens (accent 232,122,90; success 107,198,126; working 122,162,232; attention 232,168,76). Each is the token re-typed as raw channels, so editing the token no longer moves them. Waiting on a decision about how a tint of a token is written: colour-mix() or relative colour syntax both work in Electron, and both change the computed value, so it is a visual change rather than a substitution.",
+    "why": "#1a1a1a here is dark text on a BRIGHT status fill (--attention, --success), which is correct in both themes. An earlier note in this file called it a bug and a hardcoded copy of the dark theme's --base; that was wrong, and tokenising it would make it light-on-light in light mode. Deliberate, and noted as such in the CSS. Also one shadow black and one attention tint. Alpha tints of colours that already have tokens (accent 232,122,90; success 107,198,126; working 122,162,232; attention 232,168,76). Each is a token re-typed as raw channels, so editing the token no longer moves them. Waiting on a decision about how a tint of a token is written: color-mix() and relative colour syntax both work in Electron and both change the computed value, so it is a visual change rather than a substitution. The danger tints were converted in the polish pass and are gone from this file.",
     "allow": {
       "#1a1a1a": 2,
       "rgba(0,0,0,0.25)": 1,
@@ -47,7 +46,7 @@
     }
   },
   "public/styles/components/floating-toolbar.css": {
-    "why": "Shadow blacks. There is no elevation scale, so every surface picked its own alpha and nine different ones are now in use across the app. Waiting on a shadow scale in tokens.css. This file alone uses five different blacks across its light and dark shadow pairs, which is the clearest argument for the scale. Plus one absolute white and two 5px radii. Absolute white or black, chosen for contrast against a coloured fill rather than as a theme colour. Deliberate: a token here would make it follow the theme, which is the opposite of what it is for.",
+    "why": "Shadow blacks. There is no elevation scale, so every surface picked its own alpha. Waiting on a shadow scale in tokens.css. This file alone uses four different blacks across its light and dark shadow pairs, which is the clearest argument for the scale. Plus one absolute white. Absolute white or black, chosen for contrast against a coloured fill rather than as a theme colour. Deliberate: a token here would make it follow the theme, which is the opposite of what it is for.",
     "allow": {
       "#fff": 1,
       "rgba(0,0,0,0.10)": 8,
@@ -57,14 +56,14 @@
     }
   },
   "public/styles/components/message-content.css": {
-    "why": "An accent tint, a 3px radius, and a 1.8s agent pulse. Animation durations, not transition durations. These are timed to what the animation says (a slow pulse, a spinner, a flash) rather than to the interaction scale, so they are deliberate and permanent rather than debt.",
+    "why": "One accent tint and a 1.8s agent pulse. Animation durations, not transition durations. Timed to what the animation says (a pulse, a spinner, a flash) rather than to the interaction scale, so they are deliberate and permanent rather than debt.",
     "allow": {
       "rgba(232,122,90,0.2)": 1,
       "1.8s": 1
     }
   },
   "public/styles/components/palette.css": {
-    "why": "Shadow blacks. There is no elevation scale, so every surface picked its own alpha and nine different ones are now in use across the app. Waiting on a shadow scale in tokens.css. Plus 999px and 7px radii and three animation durations. Animation durations, not transition durations. These are timed to what the animation says (a slow pulse, a spinner, a flash) rather than to the interaction scale, so they are deliberate and permanent rather than debt.",
+    "why": "Shadow blacks. There is no elevation scale, so every surface picked its own alpha. Waiting on a shadow scale in tokens.css. Plus three animation durations. Animation durations, not transition durations. Timed to what the animation says (a pulse, a spinner, a flash) rather than to the interaction scale, so they are deliberate and permanent rather than debt.",
     "allow": {
       "rgba(0,0,0,0.18)": 1,
       "rgba(0,0,0,0.4)": 1,
@@ -75,7 +74,7 @@
     }
   },
   "public/styles/components/sidebar.css": {
-    "why": "Shadow blacks. There is no elevation scale, so every surface picked its own alpha and nine different ones are now in use across the app. Waiting on a shadow scale in tokens.css. Plus #e55, one of five near-identical reds in the codebase (#E85A5A, now --danger; #e85d5d; #d9534f; #E06C6C; #e55). Waiting on the polish pass choosing one and deleting the rest. Plus two absolute whites, accent and success tints, a 999px pill, a 10px radius, and two 2s status animations.",
+    "why": "Shadow blacks. There is no elevation scale, so every surface picked its own alpha. Waiting on a shadow scale in tokens.css. Plus two absolute whites, accent and success tints, a 10px radius, and two 2s status animations. Absolute white or black, chosen for contrast against a coloured fill rather than as a theme colour. Deliberate: a token here would make it follow the theme, which is the opposite of what it is for.",
     "allow": {
       "#fff": 2,
       "rgba(0,0,0,0.08)": 1,
@@ -92,13 +91,13 @@
     }
   },
   "public/styles/components/update-strip.css": {
-    "why": "A 900ms progress animation. Animation durations, not transition durations. These are timed to what the animation says (a slow pulse, a spinner, a flash) rather than to the interaction scale, so they are deliberate and permanent rather than debt.",
+    "why": "A 900ms progress animation. Animation durations, not transition durations. Timed to what the animation says (a pulse, a spinner, a flash) rather than to the interaction scale, so they are deliberate and permanent rather than debt.",
     "allow": {
       "900ms": 1
     }
   },
   "public/styles/views/chat.css": {
-    "why": "Permission and status cards, which is where the red problem is most visible: #e85d5d twice plus three rgba(232,93,93,...) tints of the same colour, none of them --danger. Resolved: every red is now --danger or a color-mix tint of it. Also a hardcoded copy of the dark theme's --base. this one is a bug rather than debt: it does not follow the theme, so it is wrong in light mode. tokenising it is a visible fix and belongs in the polish pass. Alpha tints of colours that already have tokens (accent 232,122,90; success 107,198,126; working 122,162,232; attention 232,168,76). Each is the token re-typed as raw channels, so editing the token no longer moves them. Waiting on a decision about how a tint of a token is written: colour-mix() or relative colour syntax both work in Electron, and both change the computed value, so it is a visual change rather than a substitution.",
+    "why": "Permission and status cards. Every red here became --danger or a color-mix tint of it in the polish pass; what remains is success, working and attention tints, one shadow black, 16px/20px/10px radii, and one 0.25s transition. #1a1a1a here is dark text on a BRIGHT status fill (--attention, --success), which is correct in both themes. An earlier note in this file called it a bug and a hardcoded copy of the dark theme's --base; that was wrong, and tokenising it would make it light-on-light in light mode. Deliberate, and noted as such in the CSS.",
     "allow": {
       "#1a1a1a": 2,
       "rgba(107,198,126,0.12)": 3,
@@ -119,7 +118,7 @@
     }
   },
   "public/styles/views/editor.css": {
-    "why": "Callout accents, one hue per callout type (note, tip, warning, danger, quote, example), which is a palette of its own that no token set covers. Alpha tints of colours that already have tokens (accent 232,122,90; success 107,198,126; working 122,162,232; attention 232,168,76). Each is the token re-typed as raw channels, so editing the token no longer moves them. Waiting on a decision about how a tint of a token is written: colour-mix() or relative colour syntax both work in Electron, and both change the computed value, so it is a visual change rather than a substitution. It also carries #d9534f and #A07AE8, a purple with no token at all, four 100px pills and three absolute whites.",
+    "why": "Callout accents, one hue per callout type (note, tip, warning, quote, example), which is a palette of its own that no token set covers, plus #A07AE8, a purple with no token at all, and three absolute whites. The danger callout and both pill spellings were resolved in the polish pass. Alpha tints of colours that already have tokens (accent 232,122,90; success 107,198,126; working 122,162,232; attention 232,168,76). Each is a token re-typed as raw channels, so editing the token no longer moves them. Waiting on a decision about how a tint of a token is written: color-mix() and relative colour syntax both work in Electron and both change the computed value, so it is a visual change rather than a substitution. The danger tints were converted in the polish pass and are gone from this file.",
     "allow": {
       "#A07AE8": 3,
       "#fff": 3,
@@ -143,7 +142,7 @@
     }
   },
   "public/styles/views/org-chart.css": {
-    "why": "Shadow blacks. There is no elevation scale, so every surface picked its own alpha and nine different ones are now in use across the app. Waiting on a shadow scale in tokens.css. Plus 10px and 14px radii and a 2s working pulse.",
+    "why": "Shadow blacks. There is no elevation scale, so every surface picked its own alpha. Waiting on a shadow scale in tokens.css. Plus 10px and 14px radii and a 2s working pulse. Radius values two or more pixels off the scale. Left deliberately: moving them changes how a surface reads rather than tidying it, so they are owner decisions. The nine one-pixel near-misses were moved onto the scale in the polish pass and are gone from this file.",
     "allow": {
       "rgba(0,0,0,0.15)": 1,
       "rgba(0,0,0,0.12)": 1,
@@ -155,14 +154,14 @@
     }
   },
   "public/styles/views/profile.css": {
-    "why": "An accent tint and a shadow black. Shadow blacks. There is no elevation scale, so every surface picked its own alpha and nine different ones are now in use across the app. Waiting on a shadow scale in tokens.css.",
+    "why": "One accent tint and one shadow black. Shadow blacks. There is no elevation scale, so every surface picked its own alpha. Waiting on a shadow scale in tokens.css.",
     "allow": {
       "rgba(232,122,90,0.2)": 1,
       "rgba(0,0,0,0.08)": 1
     }
   },
   "public/styles/views/settings.css": {
-    "why": "Two shadow blacks and 10px and 7px radii. Shadow blacks. There is no elevation scale, so every surface picked its own alpha and nine different ones are now in use across the app. Waiting on a shadow scale in tokens.css.",
+    "why": "Two shadow blacks and a 10px radius. Shadow blacks. There is no elevation scale, so every surface picked its own alpha. Waiting on a shadow scale in tokens.css. Radius values two or more pixels off the scale. Left deliberately: moving them changes how a surface reads rather than tidying it, so they are owner decisions. The nine one-pixel near-misses were moved onto the scale in the polish pass and are gone from this file.",
     "allow": {
       "rgba(0,0,0,0.08)": 1,
       "rgba(0,0,0,0.18)": 1,
@@ -170,14 +169,14 @@
     }
   },
   "public/styles/views/skills.css": {
-    "why": "14px and 10px radii on the skill rows. Radius values two or more pixels off the scale, left deliberately: moving them changes how the surface reads rather than tidying it, so they are owner decisions. The one-pixel near-misses (5px, 7px, 2px) were moved onto the scale in the polish pass as visible changes, and are gone from this list.",
+    "why": "14px and 10px radii on the skill rows and avatar. Radius values two or more pixels off the scale. Left deliberately: moving them changes how a surface reads rather than tidying it, so they are owner decisions. The nine one-pixel near-misses were moved onto the scale in the polish pass and are gone from this file.",
     "allow": {
       "14px": 1,
       "10px": 1
     }
   },
   "public/views/find.js": {
-    "why": "Search-match highlight colours, set from JavaScript because they are applied to ranges the CSS cannot select. Tints of attention and accent, plus absolute black for text on the highlight. Absolute white or black, chosen for contrast against a coloured fill rather than as a theme colour. Deliberate: a token here would make it follow the theme, which is the opposite of what it is for. Waiting on the JS-set style cleanup, which is tracked separately.",
+    "why": "Search-match highlight colours, set from JavaScript because they apply to ranges CSS cannot select. Tints of attention and accent, plus absolute black for text on the highlight. Absolute white or black, chosen for contrast against a coloured fill rather than as a theme colour. Deliberate: a token here would make it follow the theme, which is the opposite of what it is for. Waiting on the JS-set style cleanup, tracked separately.",
     "allow": {
       "#000": 1,
       "rgba(232,168,76,0.30)": 1,
