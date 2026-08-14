@@ -23,6 +23,12 @@ const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..', '..');
 
+// A ledger is a DIRECT child of the review directory. An earlier version used
+// `.*`, which crosses directory boundaries, so a round's findings renamed
+// notes.jsonl and force-added inside round-1/ would have been classified as an
+// acceptable ledger by every check in this file.
+const LEDGER = /^\.independent-review\/[^/]+\.jsonl$/;
+
 function tracked() {
   return execFileSync('git', ['ls-files'], { cwd: ROOT, encoding: 'utf-8' })
     .split('\n').filter(Boolean);
@@ -37,7 +43,7 @@ function isIgnored(rel) {
 
 describe('review artefacts', () => {
   test('every verdict ledger is tracked', () => {
-    const ledgers = tracked().filter(f => /^\.independent-review\/.*\.jsonl$/.test(f));
+    const ledgers = tracked().filter(f => LEDGER.test(f));
     assert.ok(ledgers.length > 0, 'at least one ledger must be tracked');
     for (const f of ledgers) {
       assert.strictEqual(isIgnored(f), false, `${f} is tracked but also matched by an ignore rule`);
@@ -59,7 +65,7 @@ describe('review artefacts', () => {
     assert.strictEqual(isIgnored('.independent-review/round-1/report.md'), true);
     const unexpected = tracked()
       .filter(f => f.startsWith('.independent-review/'))
-      .filter(f => !/\.jsonl$/.test(f));
+      .filter(f => !LEDGER.test(f));
     assert.deepStrictEqual(unexpected, [], 'only ledgers belong here');
   });
 
@@ -68,13 +74,15 @@ describe('review artefacts', () => {
     // acted on by anyone reading it, and a reviewer holding only a diff cannot
     // verify a value in it. Both were true when one was here.
     //
-    // Matched by SHAPE, not by the one filename that was here before. Pinning
-    // the historical name would pass for irconfig.json, review-harness.json or
-    // .reviewrc, which is the same rule being reintroduced under a different
-    // label. The pattern below covers config-shaped files whose name mentions
-    // review; its scope is deliberately narrow enough that an ordinary
-    // application config cannot trip it, and wide enough that renaming is not
-    // an escape.
+    // Matched by SHAPE rather than by the one filename that was here before,
+    // so review-harness.config.json or .independent-reviewrc are caught too.
+    //
+    // The limit, stated because an earlier comment claimed more than the
+    // pattern delivers: it keys on the word "review" in the filename. A config
+    // reintroduced as irconfig.json would NOT be caught. Widening it to every
+    // config-shaped file at the repository root was rejected as worse, since it
+    // would fail an ordinary application config for no reason a reader could
+    // guess. This catches renaming, not deliberate disguise.
     const CONFIG_SHAPED = /(^|\/)\.?[\w.-]*review[\w.-]*\.(config\.)?(json|ya?ml|toml|rc)$|(^|\/)\.[\w-]*reviewrc$/i;
     const configs = tracked().filter(f => CONFIG_SHAPED.test(f));
     assert.deepStrictEqual(configs, [], 'the review harness is not part of this project');
