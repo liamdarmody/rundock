@@ -246,3 +246,32 @@ test('no view leaves a token unresolved in either theme', async ({ page }) => {
     }
   }
 });
+
+// ── the typeface ─────────────────────────────────────────────────────────────
+
+test('the app renders in its own copy of Inter, fetched from nowhere', async ({ page }) => {
+  const external = [];
+  page.on('request', (r) => {
+    const u = r.url();
+    if (/^https?:\/\//.test(u) && !u.startsWith('http://localhost')) external.push(u);
+  });
+
+  await boot(page);
+  await page.evaluate(() => document.fonts.ready);
+
+  // Loaded, not merely declared: document.fonts reports what actually resolved,
+  // so a missing or unserved file fails here rather than silently falling back
+  // to San Francisco or Segoe, which is exactly how the Google-hosted version
+  // hid for as long as it did.
+  const loaded = await page.evaluate(() => [...document.fonts]
+    .filter(f => f.family === 'Inter' && f.status === 'loaded')
+    .map(f => f.style));
+  expect(loaded, 'the roman face must load').toContain('normal');
+
+  const usedByBody = await page.evaluate(() => getComputedStyle(document.body).fontFamily);
+  expect(usedByBody).toContain('Inter');
+
+  // Nothing at all may leave the machine. This watches real requests, so it
+  // catches a fetch the static scan cannot see.
+  expect(external, 'the client must not fetch from other origins').toEqual([]);
+});

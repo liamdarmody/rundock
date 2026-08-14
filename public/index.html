@@ -6,7 +6,8 @@
 <title>Rundock</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script src="/marked.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/d3-hierarchy@3.1.2/dist/d3-hierarchy.min.js"></script>
+<!-- d3-hierarchy: vendored locally (public/vendor/d3-hierarchy/) so the org chart works offline. -->
+<script src="/vendor/d3-hierarchy/d3-hierarchy.min.js"></script>
 <!-- highlight.js: vendored locally (public/vendor/highlight/) so code-block highlighting works offline. Light theme starts disabled; toggled with the app theme. -->
 <link id="hljs-dark" rel="stylesheet" href="/vendor/highlight/atom-one-dark.min.css">
 <link id="hljs-light" rel="stylesheet" href="/vendor/highlight/atom-one-light.min.css" disabled>
@@ -25,10 +26,9 @@
 <script src="/external-refresh-model.js"></script>
 <script src="/conversation-state.js"></script>
 <script src="/chat-markup.js"></script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <!-- Tokens first: everything below resolves var(--x) against this file. -->
 <link rel="stylesheet" href="/styles/tokens.css">
+<link rel="stylesheet" href="/styles/fonts.css">
 <link rel="stylesheet" href="/styles/base.css">
 <link rel="stylesheet" href="/styles/components/topbar.css">
 <link rel="stylesheet" href="/styles/components/nav-rail.css">
