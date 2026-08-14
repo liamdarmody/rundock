@@ -156,7 +156,7 @@
     }
   },
   "public/styles/views/settings.css": {
-    "why": "Two shadow blacks and a 10px radius. Shadow blacks. There is no elevation scale, so every surface picked its own alpha. Waiting on a shadow scale in tokens.css. Radius values two or more pixels off the scale. Left deliberately: moving them changes how a surface reads rather than tidying it, so they are owner decisions.",
+    "why": "Two shadow blacks. There is no elevation scale, so every surface picked its own alpha. Waiting on a shadow scale in tokens.css. The remaining radius is deliberately off the scale: it is the outer half of a concentric pair, with four pixels of padding around an inner at --radius-md, so inner equals outer minus padding and the curves agree. Concentricity beats scale membership, and it is recorded beside the rule and in tokens.css.",
     "allow": {
       "rgba(0,0,0,0.08)": 1,
       "rgba(0,0,0,0.18)": 1,

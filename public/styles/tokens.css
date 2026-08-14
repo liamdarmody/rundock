@@ -12,9 +12,15 @@
    theme is a class the app toggles on body) and it has one consequence worth
    knowing before you debug something odd: anything that styles <html> itself
    resolves against the :root block below and therefore always gets the dark
-   value, whatever theme is showing. Today the only such rule is the canvas
-   background, which the app's own full-height chrome covers, so it is
-   invisible. Do not style <html> expecting it to follow the theme. */
+   value, whatever theme is showing. Do not style <html> expecting it to follow
+   the theme; style body, and let it propagate.
+
+   That rule used to be broken by the only place it applied. The canvas
+   background was set on `html, body`, so the canvas painted the dark colour in
+   light mode. This comment said it was invisible because the app's chrome
+   covers the canvas, which was a claim nobody had measured, and it was wrong.
+   `html` is now left transparent so body's background propagates to the canvas
+   and follows the theme, asserted in test/e2e/theme.spec.js. */
 
 :root {
   --base: #1A1A1A; --surface: #212121; --elevated: #272727;
