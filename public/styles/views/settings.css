@@ -17,6 +17,11 @@
 .settings-btn:hover { border-color: var(--accent); color: var(--accent); }
 .settings-btn-primary { padding: 6px 14px; font-size: var(--caption); font-weight: 600; border-radius: var(--radius-md); background: var(--accent); color: white; border: none; transition: all var(--duration-base) ease; cursor: pointer; }
 .settings-btn-primary:hover { background: var(--accent-hover); }
+/* 10px is NOT off-scale drift. It is the outer half of a concentric pair:
+   four pixels of padding around an inner at --radius-md, so inner equals
+   outer minus padding and the two curves agree. Forcing this onto the
+   scale would mean changing the inner to fix one number. Concentricity
+   beats scale membership. */
 .mode-toggle { display: flex; background: var(--base); border: 1px solid var(--border); border-radius: 10px; padding: 4px; gap: 0; }
 .mode-toggle-btn { flex: 1; padding: 9px 16px; font-size: var(--caption); font-weight: 600; border-radius: var(--radius-md); border: 1px solid transparent; background: transparent; color: var(--text-2); transition: background var(--duration-base) ease, color var(--duration-base) ease, box-shadow var(--duration-base) ease; cursor: pointer; text-align: center; }
 .mode-toggle-btn:hover:not(.active) { color: var(--text-1); background: var(--elevated); }

@@ -97,7 +97,7 @@
     }
   },
   "public/styles/views/chat.css": {
-    "why": "Permission and status cards. Every red here became --danger or a color-mix tint of it in the polish pass; what remains is success, working and attention tints, one shadow black, 16px/20px/10px radii, and one 0.25s transition. #1a1a1a here is dark text on a BRIGHT status fill (--attention, --success), which is correct in both themes. An earlier note in this file called it a bug and a hardcoded copy of the dark theme's --base; that was wrong, and tokenising it would make it light-on-light in light mode. Deliberate, and noted as such in the CSS.",
+    "why": "Permission and status cards. Every red became --danger or a color-mix tint of it, the bubble radius became a named token, and the pills and the error card joined the scale. What remains is accent, success, working and attention tints, one shadow black, one dark-on-bright-fill text colour, and one transition duration. The dark text colour sits on a BRIGHT status fill and is correct in both themes; tokenising it would make it light-on-light in light mode. Tints are a token re-typed as raw channels, waiting on a decision about how a tint of a token is written, since color-mix and relative colour both change the computed value.",
     "allow": {
       "#1a1a1a": 1,
       "rgba(107,198,126,0.12)": 3,
@@ -111,9 +111,6 @@
       "rgba(107,198,126,0.06)": 1,
       "rgba(232,122,90,0.3)": 1,
       "rgba(232,122,90,0.4)": 1,
-      "16px": 1,
-      "20px": 2,
-      "10px": 1,
       "0.25s": 1
     }
   },
@@ -142,14 +139,12 @@
     }
   },
   "public/styles/views/org-chart.css": {
-    "why": "Shadow blacks. There is no elevation scale, so every surface picked its own alpha. Waiting on a shadow scale in tokens.css. Plus 10px and 14px radii and a 2s working pulse. Radius values two or more pixels off the scale. Left deliberately: moving them changes how a surface reads rather than tidying it, so they are owner decisions.",
+    "why": "Shadow blacks. There is no elevation scale, so every surface picked its own alpha. Waiting on a shadow scale in tokens.css. Plus a working pulse animation. The card and zoom radii joined the scale.",
     "allow": {
       "rgba(0,0,0,0.15)": 1,
       "rgba(0,0,0,0.12)": 1,
       "rgba(0,0,0,0.08)": 1,
       "rgba(0,0,0,0.2)": 1,
-      "10px": 1,
-      "14px": 1,
       "2s": 1
     }
   },
@@ -161,17 +156,10 @@
     }
   },
   "public/styles/views/settings.css": {
-    "why": "Two shadow blacks and a 10px radius. Shadow blacks. There is no elevation scale, so every surface picked its own alpha. Waiting on a shadow scale in tokens.css. Radius values two or more pixels off the scale. Left deliberately: moving them changes how a surface reads rather than tidying it, so they are owner decisions.",
+    "why": "Two shadow blacks. There is no elevation scale, so every surface picked its own alpha. Waiting on a shadow scale in tokens.css. The remaining radius is deliberately off the scale: it is the outer half of a concentric pair, with four pixels of padding around an inner at --radius-md, so inner equals outer minus padding and the curves agree. Concentricity beats scale membership, and it is recorded beside the rule and in tokens.css.",
     "allow": {
       "rgba(0,0,0,0.08)": 1,
       "rgba(0,0,0,0.18)": 1,
-      "10px": 1
-    }
-  },
-  "public/styles/views/skills.css": {
-    "why": "14px and 10px radii on the skill rows and avatar. Radius values two or more pixels off the scale. Left deliberately: moving them changes how a surface reads rather than tidying it, so they are owner decisions.",
-    "allow": {
-      "14px": 1,
       "10px": 1
     }
   },

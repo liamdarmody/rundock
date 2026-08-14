@@ -47,7 +47,7 @@ const INVARIANT = [
   '--heading', '--title', '--body', '--caption', '--label',
   '--nav-rail-width', '--topbar-height', '--content-radius',
   '--radius-xs', '--radius-sm', '--radius-md', '--radius-lg', '--radius-xl',
-  '--radius-pill', '--radius-circle',
+  '--radius-pill', '--radius-circle', '--radius-bubble',
   '--duration-fast', '--duration-base', '--duration-slow',
 ];
 
@@ -407,5 +407,75 @@ test('every color-mix tint renders the colour the literal it replaced rendered',
     }
     expect(Math.abs(r.got[3] - r.want[3]),
       `${r.label}: alpha differs`).toBeLessThanOrEqual(0.005);
+  }
+});
+
+test('the canvas follows the theme, which it did not until 0.11.7', async ({ page }) => {
+  // The light theme overrides its tokens on body, so --base read at :root is
+  // the dark value whatever theme is showing. While `html` carried the
+  // background, the canvas painted #1A1A1A in light mode too. Dropping html
+  // from that rule leaves it transparent, and CSS propagates body's background
+  // to the canvas instead.
+  //
+  // This was carried as "invisible" for two slices on the grounds that the
+  // app's own chrome covers the canvas. It was not invisible, it was unmeasured.
+  await boot(page);
+  for (const light of [false, true]) {
+    await setTheme(page, light);
+    const seen = await page.evaluate(() => {
+      const cs = getComputedStyle(document.body);
+      const m = /^#([0-9a-f]{6})$/i.exec(cs.getPropertyValue('--base').trim());
+      const n = m ? parseInt(m[1], 16) : null;
+      return {
+        html: getComputedStyle(document.documentElement).backgroundColor,
+        body: cs.backgroundColor,
+        wantBody: n === null ? null : `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`,
+      };
+    });
+    expect(seen.html, `html must stay transparent so body's background reaches the canvas (light=${light})`)
+      .toBe('rgba(0, 0, 0, 0)');
+    expect(seen.body, `the canvas colour must follow the theme (light=${light})`).toBe(seen.wantBody);
+  }
+});
+
+test('the two pill conversions really were no-ops, measured rather than asserted', async ({ page }) => {
+  // .msg-system and .prompt-pill were written with border-radius: 20px and are
+  // now --radius-pill (999px). That is only a no-op if 20px already exceeded
+  // half the rendered height, because border-radius clamps there.
+  //
+  // Those heights were measured once by hand and then stated in a comment,
+  // which is the same shape of claim as "zero painted properties differ" and
+  // "invisible", both of which were wrong earlier in this programme. Height
+  // depends on font metrics, line-height and padding, none of which are pinned
+  // anywhere, so the claim needs to be able to fail.
+  await boot(page);
+
+  const measured = await page.evaluate(() => {
+    const host = document.querySelector('.messages') || document.body;
+    const sample = (cls, text) => {
+      const live = document.querySelector('.' + cls);
+      if (live && live.getBoundingClientRect().height > 0) {
+        return { cls, height: live.getBoundingClientRect().height, source: 'live element' };
+      }
+      // No live instance in this view: build one in the same container so it
+      // inherits the same font metrics the real thing would.
+      const el = document.createElement('div');
+      el.className = cls;
+      el.textContent = text;
+      host.appendChild(el);
+      const h = el.getBoundingClientRect().height;
+      el.remove();
+      return { cls, height: h, source: 'probe in .messages' };
+    };
+    return [sample('msg-system', 'Previous session'), sample('prompt-pill', 'Summarise this file')];
+  });
+
+  for (const m of measured) {
+    expect(m.height, `.${m.cls} must render (${m.source})`).toBeGreaterThan(0);
+    // The condition that makes 20px a full pill: twice the radius covers the
+    // height. Stated as the inequality rather than as a remembered number.
+    expect(m.height,
+      `.${m.cls} renders ${m.height.toFixed(1)}px (${m.source}); a 20px radius only clamped to a pill while this stayed at or under 40px, so the switch to --radius-pill is no longer a no-op`,
+    ).toBeLessThanOrEqual(40);
   }
 });

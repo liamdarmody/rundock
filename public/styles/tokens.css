@@ -12,9 +12,15 @@
    theme is a class the app toggles on body) and it has one consequence worth
    knowing before you debug something odd: anything that styles <html> itself
    resolves against the :root block below and therefore always gets the dark
-   value, whatever theme is showing. Today the only such rule is the canvas
-   background, which the app's own full-height chrome covers, so it is
-   invisible. Do not style <html> expecting it to follow the theme. */
+   value, whatever theme is showing. Do not style <html> expecting it to follow
+   the theme; style body, and let it propagate.
+
+   That rule used to be broken by the only place it applied. The canvas
+   background was set on `html, body`, so the canvas painted the dark colour in
+   light mode. This comment said it was invisible because the app's chrome
+   covers the canvas, which was a claim nobody had measured, and it was wrong.
+   `html` is now left transparent so body's background propagates to the canvas
+   and follows the theme, asserted in test/e2e/theme.spec.js. */
 
 :root {
   --base: #1A1A1A; --surface: #212121; --elevated: #272727;
@@ -48,22 +54,47 @@
      This comment states what the code does. If it stops matching, it is the
      comment that is wrong.
 
-     Ten remain deliberately off the scale, because moving them by two pixels
-     or more changes how a surface reads rather than tidying it: 10px on five
-     menus and cards, 14px on the org card and the skill avatar, 16px on
-     .msg-bubble, and 20px on .msg-system and .prompt-pill. .msg-bubble in
-     particular is the chat surface's signature. Those are owner decisions and
-     are listed in the drift allowlist with that reason.
+     Those ten were then decided individually, against measurement rather than
+     preference. Two turned out to be pills already: .msg-system renders 23px
+     tall and .prompt-pill 35px, so their 20px radius clamped to half the height
+     and always drew a fully round end, which is why --radius-pill renders them
+     identically. Five moved onto the scale by two pixels. One kept its value
+     and gained a name, --radius-bubble.
+
+     TWO remain off the scale on purpose, and only two: .convo-menu and
+     .mode-toggle at 10px. See the concentric rule below.
 
      Pick by the size of the thing: xs for text highlights, sm for chips and
      inputs, md for menu rows, lg for cards and buttons, xl for the large
-     panels inside the window chrome. */
+     panels inside the window chrome.
+
+     TWO RULES OUTRANK PICKING A STEP.
+
+     Concentric corners. When a rounded box sits inside another with padding p,
+     the inner radius is outer minus p, or the two curves visibly disagree.
+     .convo-menu and .mode-toggle are 10px with four pixels of padding around
+     inners at --radius-md, and 6 equals 10 minus 4. They are deliberately off
+     the scale and must stay there. Concentricity beats scale membership. Worth
+     knowing: the polish pass moved .mode-toggle-btn from 7px to 6px and
+     accidentally CREATED that agreement, having been off by one before. That
+     was luck, which is the argument for writing the rule down.
+
+     A radius larger than half the height is already a pill and renders
+     identically to --radius-pill. If you are reaching for a big number on a
+     short control, you want --radius-pill. */
   --radius-xs: 3px; --radius-sm: 4px; --radius-md: 6px; --radius-lg: 8px;
   --radius-xl: 12px;
   /* A pill and a circle are intents, not measurements. The pill was written
      as both 100px and 999px in different files, which look identical on a
      short control and diverge the moment one is tall. */
   --radius-pill: 999px; --radius-circle: 50%;
+
+  /* One named exception, and a decision rather than a leftover. The message
+     bubble is the only surface allowed to be rounder than the panel containing
+     it (--content-radius, 12px). Message bubbles are their own convention:
+     comparable products all run them rounder than their chrome, and a bubble on
+     the scale reads as a box. */
+  --radius-bubble: 16px;
 
   /* Motion. base is the default for anything that changes on hover or focus;
      fast is for something already in view that must not feel laggy; slow is
