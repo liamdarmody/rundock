@@ -50,13 +50,17 @@ describe('review artefacts', () => {
     assert.strictEqual(isIgnored('.independent-review/some-future-change.jsonl'), false);
   });
 
-  test('written findings are not tracked', () => {
-    // Round directories hold the reviewer's prose. It is not source, it does
-    // not survive review, and it would have to satisfy a hygiene check that
-    // has no business policing a reviewer's writing.
+  test('nothing but a ledger is tracked in the review directory', () => {
+    // Stated as an allowlist, not a blocklist. An earlier version banned .md
+    // and .txt, which let a finding through under any other name: a
+    // findings.json, a notes.rst, or a file with no extension at all would
+    // have been tracked while the test passed. Enumerating what may be there
+    // cannot be outflanked by a filename.
     assert.strictEqual(isIgnored('.independent-review/round-1/report.md'), true);
-    const prose = tracked().filter(f => /^\.independent-review\/.*\.(md|txt)$/.test(f));
-    assert.deepStrictEqual(prose, [], 'no prose from a review round may be tracked');
+    const unexpected = tracked()
+      .filter(f => f.startsWith('.independent-review/'))
+      .filter(f => !/\.jsonl$/.test(f));
+    assert.deepStrictEqual(unexpected, [], 'only ledgers belong here');
   });
 
   test('no configuration for absent tooling is tracked', () => {
@@ -71,7 +75,13 @@ describe('review artefacts', () => {
     // Acceptance criteria record a standard applied to one past change. They
     // are engineering evidence, and they belong with the harness rather than
     // in a public repository where nobody can act on them.
-    const criteria = tracked().filter(f => /criteria.*\.md$/i.test(f) || /^docs\/review\//.test(f));
+    //
+    // Matched by NAME, not by directory. An earlier version banned everything
+    // under docs/review/, which would have failed a future contributor adding
+    // a legitimate review-process guide there, for a reason neither this test's
+    // name nor its comment mentions. A rule wider than its stated intent is a
+    // trap for whoever trips it.
+    const criteria = tracked().filter(f => /criteria.*\.md$/i.test(f));
     assert.deepStrictEqual(criteria, []);
   });
 });
