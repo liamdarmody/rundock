@@ -94,6 +94,17 @@ describe('static + JSON endpoints', () => {
     assert.strictEqual((await get('/styles/tokens.txt')).status, 404);
   });
 
+  test('the vendored typeface serves as font/woff2', async () => {
+    const res = await get('/vendor/fonts/InterVariable.woff2');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.headers.get('content-type'), 'font/woff2');
+    const italic = await get('/vendor/fonts/InterVariable-Italic.woff2');
+    assert.strictEqual(italic.status, 200);
+    // The licence is not addressable over HTTP; it ships in the repo and the
+    // package, which is what the OFL requires.
+    assert.strictEqual((await get('/vendor/fonts/Inter-LICENSE.txt')).status, 404);
+  });
+
   test('top-level module route rejects unknown files and non-module paths', async () => {
     assert.strictEqual((await get('/no-such-module.js')).status, 404);
     // Traversal cannot be expressed in the route pattern (no slashes or

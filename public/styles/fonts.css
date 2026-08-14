@@ -1,0 +1,30 @@
+/* The typeface, served from this repo.
+
+   Rundock is local-first, so it does not fetch its font. See
+   public/vendor/fonts/README.md for provenance, licence and how to update.
+
+   One variable file per style covers every weight the stylesheets ask for
+   (400, 500, 600, 700) and every weight between. The italic file is a separate
+   face because the roman variable font contains no true italics: without it the
+   browser shears the roman into a synthetic oblique.
+
+   font-display: swap rather than block. The file is local, so it resolves well
+   inside the block period and nothing ever swaps in practice. The choice only
+   matters in the case where the file is missing, and there swap shows fallback
+   text immediately where block would show nothing for three seconds. */
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/vendor/fonts/InterVariable.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/vendor/fonts/InterVariable-Italic.woff2') format('woff2');
+}
