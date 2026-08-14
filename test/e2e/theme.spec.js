@@ -292,22 +292,48 @@ test('the editor stylesheet, injected at runtime, can see the tokens it uses', a
   await page.locator('.file-item', { hasText: 'wikilink-line.md' }).first().click();
   await expect(page.locator('.ProseMirror').first()).toBeVisible();
 
+  // Read the RENDERED colour of elements the de-fallbacked rules actually
+  // govern, not the token off the host.
+  //
+  // The first version of this test read getComputedStyle(host)
+  // .getPropertyValue('--danger') and asserted it resolved. That proves almost
+  // nothing: custom properties inherit, so it succeeds purely because
+  // tokens.css declares --danger on :root, whether or not the editor's injected
+  // stylesheet exists, parses, or still contains those rules. It would have
+  // passed with all eight declarations malformed. Checking the style tag by
+  // substring was a shape check, not a rendering one.
   const seen = await page.evaluate(() => {
-    const injected = [...document.querySelectorAll('style')]
-      .some(s => s.textContent.includes('.tiptap-editor'));
-    // Resolve the tokens the way a rule inside the editor would.
-    const host = document.querySelector('.ProseMirror');
-    const cs = getComputedStyle(host);
+    const host = document.querySelector('.tiptap-editor') || document.querySelector('.ProseMirror').closest('div');
+    const probe = (cls) => {
+      const el = document.createElement('span');
+      el.className = cls;
+      host.appendChild(el);
+      const c = getComputedStyle(el).color;
+      el.remove();
+      return c;
+    };
+    const wrap = document.createElement('span');
+    wrap.className = 'critic-substitution';
+    const inner = document.createElement('span');
+    inner.className = 'critic-sub-from';
+    wrap.appendChild(inner); host.appendChild(wrap);
+    const subFrom = getComputedStyle(inner).color;
+    wrap.remove();
     return {
-      injected,
-      danger: cs.getPropertyValue('--danger').trim(),
-      accent: cs.getPropertyValue('--accent').trim(),
-      pill: cs.getPropertyValue('--radius-pill').trim(),
+      hostFound: !!host,
+      criticDelete: probe('critic-delete'),
+      reviewSubFrom: probe('review-sub-from'),
+      criticSubFrom: subFrom,
+      plainSpan: probe('nothing-styles-me'),
     };
   });
 
-  expect(seen.injected, 'the editor stylesheet must actually be in the document').toBe(true);
-  expect(seen.danger, '--danger must resolve where the editor rules apply').toBe('#E85A5A');
-  expect(seen.accent, '--accent must resolve where the editor rules apply').toBe('#E87A5A');
-  expect(seen.pill, '--radius-pill must resolve where the editor rules apply').toBe('999px');
+  const DANGER = 'rgb(232, 90, 90)';
+  expect(seen.hostFound, 'the editor host must exist').toBe(true);
+  expect(seen.criticDelete, '.critic-delete must render --danger').toBe(DANGER);
+  expect(seen.reviewSubFrom, '.review-sub-from must render --danger').toBe(DANGER);
+  expect(seen.criticSubFrom, '.critic-substitution .critic-sub-from must render --danger').toBe(DANGER);
+  // A control: if an unstyled span also came back red, the assertions above
+  // would be measuring inheritance rather than the rules under test.
+  expect(seen.plainSpan, 'an unstyled span must NOT be red').not.toBe(DANGER);
 });
