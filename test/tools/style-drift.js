@@ -1,0 +1,179 @@
+#!/usr/bin/env node
+'use strict';
+// Style drift lint.
+//
+// A design token only works if it is the ONLY place its value is written. The
+// moment a colour, a radius or a duration is typed as a literal somewhere else,
+// changing the token stops changing the app, and the drift is invisible until
+// someone notices two things that should match no longer do. Rundock had four
+// near-identical reds by the time this was written, for exactly that reason.
+//
+// This flags a literal wherever one is written outside tokens.css, and refuses
+// to pass unless that literal is listed in style-drift-allowlist.json with a
+// reason and a count. It is a RATCHET: the counts are maxima, so drift can be
+// paid down but not accumulated.
+//
+//   node test/tools/style-drift.js            check, exit non-zero on drift
+//   node test/tools/style-drift.js --report   print what is there, exit 0
+//   node test/tools/style-drift.js --write    regenerate the counts (keeps reasons)
+//
+// Adding an entry to the allowlist is deliberately a code review, not a
+// formality: the reason field is the only part a person has to write, and it is
+// the only part worth reading.
+
+const fs = require('fs');
+const path = require('path');
+
+const ROOT = path.join(__dirname, '..', '..');
+const ALLOWLIST = path.join(__dirname, 'style-drift-allowlist.json');
+
+// Where styling can be written. tokens.css is the source of truth and is
+// exempt by definition; vendor/ is third-party and not ours to tidy.
+function surfaces() {
+  const out = [];
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
+      const rel = `${dir}/${e.name}`;
+      if (e.isDirectory()) walk(rel);
+      else if (e.name.endsWith('.css') && e.name !== 'tokens.css') out.push(rel);
+    }
+  };
+  walk('public/styles');
+  out.push('public/index.html', 'public/app.js', 'public/editor/styles.js');
+  for (const f of fs.readdirSync(path.join(ROOT, 'public/views'))) {
+    if (f.endsWith('.js')) out.push(`public/views/${f}`);
+  }
+  return out.sort();
+}
+
+// ── detectors ────────────────────────────────────────────────────────────────
+
+// A hex colour, but NOT an HTML numeric character reference. `&#8593;` is an
+// up arrow and its digits are all valid hex, so length cannot tell them apart:
+// the `&` is the only signal. index.html and three view modules are full of
+// them, and a scan without this rule reports arrow glyphs as colour drift.
+const HEX = /(^|[^&\w])(#[0-9a-fA-F]{3,8})\b/g;
+const FUNC = /\b(rgba?|hsla?)\(\s*[\d.]/g;
+const RADIUS = /border-radius:\s*([^;}\n]+)/g;
+const TIMED = /\b(?:transition|animation)(?:-duration)?:\s*([^;}\n]+)/g;
+const TIME = /\b\d*\.?\d+m?s\b/g;
+
+function findings(rel) {
+  const src = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
+  const lines = src.split('\n');
+  const found = [];
+  const at = (idx) => src.slice(0, idx).split('\n').length;
+
+  for (const m of src.matchAll(HEX)) {
+    found.push({ kind: 'colour', literal: m[2], line: at(m.index) });
+  }
+  for (const m of src.matchAll(FUNC)) {
+    // Re-read the whole call so the recorded literal is the value, not a prefix.
+    const tail = src.slice(m.index);
+    const close = tail.indexOf(')');
+    if (close === -1) continue;
+    found.push({ kind: 'colour', literal: tail.slice(0, close + 1).replace(/\s+/g, ''), line: at(m.index) });
+  }
+  for (const m of src.matchAll(RADIUS)) {
+    for (const v of m[1].match(/\b\d+px\b/g) || []) {
+      found.push({ kind: 'radius', literal: v, line: at(m.index) });
+    }
+  }
+  for (const m of src.matchAll(TIMED)) {
+    for (const v of m[1].match(TIME) || []) {
+      found.push({ kind: 'duration', literal: v, line: at(m.index) });
+    }
+  }
+  return found.map(f => ({ ...f, file: rel, text: (lines[f.line - 1] || '').trim().slice(0, 100) }));
+}
+
+function scan() {
+  const byFile = {};
+  for (const rel of surfaces()) {
+    const f = findings(rel);
+    if (f.length) byFile[rel] = f;
+  }
+  return byFile;
+}
+
+// ── modes ────────────────────────────────────────────────────────────────────
+
+function counts(byFile) {
+  const out = {};
+  for (const [file, items] of Object.entries(byFile)) {
+    out[file] = {};
+    for (const i of items) out[file][i.literal] = (out[file][i.literal] || 0) + 1;
+  }
+  return out;
+}
+
+function main() {
+  const mode = process.argv[2] || '--check';
+  const byFile = scan();
+  const total = Object.values(byFile).reduce((a, l) => a + l.length, 0);
+
+  if (mode === '--report') {
+    for (const [file, items] of Object.entries(byFile)) {
+      console.log(`\n${file}  (${items.length})`);
+      for (const i of items) console.log(`  ${i.line}: ${i.kind} ${i.literal}`);
+    }
+    console.log(`\nstyle-drift: ${total} literals across ${Object.keys(byFile).length} files`);
+    return 0;
+  }
+
+  const allow = JSON.parse(fs.readFileSync(ALLOWLIST, 'utf-8'));
+
+  if (mode === '--write') {
+    const next = counts(byFile);
+    for (const [file, lits] of Object.entries(next)) {
+      const why = allow[file] && allow[file].why;
+      next[file] = { why: why || 'TODO: say why these are not tokens yet, and what they wait on.', allow: lits };
+    }
+    fs.writeFileSync(ALLOWLIST, JSON.stringify(next, null, 2) + '\n');
+    console.log(`style-drift: wrote ${Object.keys(next).length} file entries`);
+    return 0;
+  }
+
+  const errors = [];
+  for (const [file, items] of Object.entries(counts(byFile))) {
+    const entry = allow[file];
+    if (!entry) {
+      errors.push(`${file}: not in the allowlist, and writes ${Object.values(items).reduce((a, b) => a + b, 0)} literals`);
+      continue;
+    }
+    for (const [lit, n] of Object.entries(items)) {
+      const cap = entry.allow[lit];
+      if (cap === undefined) {
+        const where = byFile[file].filter(f => f.literal === lit).map(f => f.line).join(', ');
+        errors.push(`${file}:${where}: ${lit} is not in the allowlist. Use a token from public/styles/tokens.css, or add it with a reason.`);
+      } else if (n > cap) {
+        errors.push(`${file}: ${lit} appears ${n} times, allowed ${cap}. The allowlist is a ratchet: counts come down, never up.`);
+      }
+    }
+  }
+  // A stale allowlist is drift of its own: an entry describing a literal that
+  // no longer exists reads as an unpaid debt and hides that it was paid.
+  for (const [file, entry] of Object.entries(allow)) {
+    const actual = counts(byFile)[file] || {};
+    for (const [lit, cap] of Object.entries(entry.allow)) {
+      if (actual[lit] === undefined) {
+        errors.push(`${file}: allowlist still lists ${lit} (${cap}), which is no longer written. Remove it.`);
+      } else if (actual[lit] < cap) {
+        errors.push(`${file}: allowlist allows ${cap} of ${lit} but only ${actual[lit]} remain. Lower it to ${actual[lit]}.`);
+      }
+    }
+  }
+
+  if (errors.length) {
+    console.error('style-drift: FAIL\n');
+    for (const e of errors) console.error('  ' + e);
+    console.error(`\n  ${errors.length} problem(s). Tokens live in public/styles/tokens.css.`);
+    console.error('  Paying drift down is a visual change: check it with test/e2e/style-snapshot.tool.js.');
+    return 1;
+  }
+  console.log(`style-drift: clean (${total} allowlisted literals across ${Object.keys(byFile).length} files)`);
+  return 0;
+}
+
+if (require.main === module) process.exit(main());
+module.exports = { scan, counts, findings, surfaces };

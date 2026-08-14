@@ -37,6 +37,9 @@ jobs:
         uses: actions/checkout@v5
       - name: Check for internal references
         run: node scripts/check-internal-refs.js
+      # Neither needs dependencies: both read the repo's own files.
+      - name: Check for style drift
+        run: node test/tools/style-drift.js
 
   test:
     name: Test (Node ${{ matrix.node }})
