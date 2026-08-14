@@ -30,7 +30,7 @@ jobs:
   # Fast, dependency-free guard: no internal run codenames, review-round or
   # priority labels, or private workspace paths leak into the public source.
   hygiene:
-    name: Hygiene (no internal references)
+    name: Hygiene (internal references, style drift)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
