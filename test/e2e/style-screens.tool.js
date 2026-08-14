@@ -18,6 +18,11 @@ const NAV = ['conversations', 'team', 'files', 'skills', 'settings'];
 const DIR = process.env.SHOT_DIR || '/tmp/shots';
 
 test('capture', async ({ page }) => {
+  // Belt and braces. The *.tool.js name already keeps this out of the default
+  // Playwright testMatch, but a naming convention is invisible to anyone
+  // reading only this file, and a tool that asserts nothing must not be able
+  // to report itself as a passing verification of anything.
+  test.skip(!process.env.RUN_TOOLS, 'instrument, not a test: run with RUN_TOOLS=1');
   test.setTimeout(240000);
   fs.mkdirSync(DIR, { recursive: true });
   await page.setViewportSize({ width: 1280, height: 800 });

@@ -95,7 +95,10 @@
 .btn-perm { padding: 6px 16px; border-radius: var(--radius-lg); font-size: var(--caption); font-weight: 500; cursor: pointer; border: 1px solid var(--border); transition: all var(--duration-base) ease; }
 /* #1a1a1a is dark text on a BRIGHT status fill, and is correct in both
    themes for that reason. It is not a hardcoded copy of the dark theme's
-   --base: tokenising it would make it light-on-light in light mode. */
+   --base: tokenising it would make it light-on-light in light mode.
+   This note is deliberately repeated at the other site of the same decision
+   (the other of chat.css .btn-allow and find-bar.css .find-match.current):
+   two occurrences, both worth explaining where they are read. */
 .btn-allow { background: var(--success); color: #1a1a1a; border-color: var(--success); }
 .btn-allow:hover { filter: brightness(1.1); }
 .btn-always { background: transparent; color: var(--success); border-color: var(--success); }

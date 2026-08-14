@@ -170,7 +170,7 @@
     }
   },
   "public/styles/views/skills.css": {
-    "why": "14px and 10px radii on the skill rows. Radius values a step off the scale (--radius-sm 4, md 6, lg 8, xl 12). Waiting on the polish pass, which moves them onto it; each move is a visible change.",
+    "why": "14px and 10px radii on the skill rows. Radius values two or more pixels off the scale, left deliberately: moving them changes how the surface reads rather than tidying it, so they are owner decisions. The one-pixel near-misses (5px, 7px, 2px) were moved onto the scale in the polish pass as visible changes, and are gone from this list.",
     "allow": {
       "14px": 1,
       "10px": 1

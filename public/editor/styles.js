@@ -52,7 +52,7 @@ const CSS = `
   top: 0;
   bottom: 0;
   width: 3px;
-  background: var(--accent, var(--accent));
+  background: var(--accent);
   pointer-events: none;
 }
 .tiptap-editor .ProseMirror.resize-cursor {
@@ -99,7 +99,7 @@ const CSS = `
   margin-left: 2px;
   border-radius: 100px;
   background: var(--accent-glow, rgba(232, 122, 90, 0.15));
-  color: var(--accent, var(--accent));
+  color: var(--accent);
   cursor: default;
 }
 .tiptap-editor .critic-comment::after {
@@ -124,11 +124,11 @@ const CSS = `
   padding: 0 2px;
 }
 @keyframes critic-flash-pulse {
-  0%, 60% { outline-color: var(--accent, var(--accent)); background-color: var(--accent-glow, rgba(232, 122, 90, 0.25)); }
+  0%, 60% { outline-color: var(--accent); background-color: var(--accent-glow, rgba(232, 122, 90, 0.25)); }
   100% { outline-color: transparent; }
 }
 .tiptap-editor .critic-flash {
-  outline: 2px solid var(--accent, var(--accent));
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-radius: 3px;
   animation: critic-flash-pulse 1.2s ease-out;
@@ -180,12 +180,12 @@ const CSS = `
 .review-pill.visible { display: inline-block; }
 /* Open items are pending work: the minimised state stays loud. */
 .review-pill.has-items {
-  border-color: var(--accent, var(--accent));
-  color: var(--accent, var(--accent));
+  border-color: var(--accent);
+  color: var(--accent);
   background: var(--accent-glow, rgba(232, 122, 90, 0.15));
 }
-.review-pill:hover { color: var(--accent, var(--accent)); border-color: var(--accent, var(--accent)); }
-.review-pill:focus-visible { outline: 2px solid var(--accent, var(--accent)); outline-offset: 2px; }
+.review-pill:hover { color: var(--accent); border-color: var(--accent); }
+.review-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* --- Review: sidebar ------------------------------------------------------ */
 /* The review panel is the same component grammar as the properties box:
@@ -240,7 +240,7 @@ const CSS = `
   border-left-color: var(--text-2);
 }
 .review-sidebar.edge-drag {
-  border-left-color: var(--accent, var(--accent));
+  border-left-color: var(--accent);
 }
 .review-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--border); }
 .review-title { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); }
@@ -256,7 +256,7 @@ const CSS = `
 .tiptap-editor .review-composing {
   background: var(--accent-glow, rgba(232, 122, 90, 0.2));
   border-radius: 2px;
-  box-shadow: 0 1px 0 var(--accent, var(--accent));
+  box-shadow: 0 1px 0 var(--accent);
 }
 
 .review-card {
@@ -276,7 +276,7 @@ const CSS = `
 }
 /* Card called out by clicking its inline construct. */
 @keyframes review-card-attention {
-  0%, 55% { border-color: var(--accent, var(--accent)); box-shadow: 0 0 0 1px var(--accent, var(--accent)); }
+  0%, 55% { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   100% { border-color: var(--border); box-shadow: none; }
 }
 .review-card.attention { animation: review-card-attention 1.2s ease-out; }
@@ -297,7 +297,7 @@ const CSS = `
 }
 .review-card.comment .review-badge {
   background: var(--accent-glow, rgba(232, 122, 90, 0.15));
-  color: var(--accent, var(--accent));
+  color: var(--accent);
 }
 /* A sidecar anchor whose passage left the document: visible and honest,
    never dropped. Muted, not alarming: the comment still reads fine. */
@@ -344,7 +344,7 @@ const CSS = `
   padding: 5px 5px 5px 10px;
   margin-top: 8px;
 }
-.review-input:focus-within { border-color: var(--accent, var(--accent)); }
+.review-input:focus-within { border-color: var(--accent); }
 .review-input textarea {
   flex: 1;
   min-width: 0;
@@ -376,12 +376,12 @@ const CSS = `
 .review-send svg { width: 14px; height: 14px; }
 .review-send:disabled { opacity: 0.3; cursor: default; }
 .review-send.active {
-  background: var(--accent, var(--accent));
+  background: var(--accent);
   color: #fff;
   box-shadow: 0 2px 8px rgba(232, 122, 90, 0.3);
 }
 .review-send.active:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(232, 122, 90, 0.4); }
-.review-send:focus-visible { outline: 2px solid var(--accent, var(--accent)); outline-offset: 1px; }
+.review-send:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 @media (prefers-reduced-motion: reduce) {
   .review-send, .review-send.active:hover { transition: none; transform: none; }
 }
@@ -398,16 +398,16 @@ const CSS = `
   transition: all 0.15s ease;
 }
 .review-btn:hover { color: var(--text-1); border-color: var(--text-2); }
-.review-btn:focus-visible, .review-close:focus-visible { outline: 2px solid var(--accent, var(--accent)); outline-offset: 1px; }
+.review-btn:focus-visible, .review-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .review-card:focus-within { border-color: var(--text-2); }
 .review-btn.accept:hover { background: rgba(107, 198, 126, 0.16); color: var(--success); border-color: var(--success); }
 .review-btn.reject:hover { background: rgba(224, 108, 108, 0.14); color: var(--danger); border-color: var(--danger); }
-.review-btn.resolve:hover { background: var(--accent-glow, rgba(232, 122, 90, 0.15)); color: var(--accent, var(--accent)); border-color: var(--accent, var(--accent)); }
-.review-btn.primary { background: var(--accent, var(--accent)); border-color: var(--accent, var(--accent)); color: #1A1A1A; }
+.review-btn.resolve:hover { background: var(--accent-glow, rgba(232, 122, 90, 0.15)); color: var(--accent); border-color: var(--accent); }
+.review-btn.primary { background: var(--accent); border-color: var(--accent); color: #1A1A1A; }
 .review-btn.primary:hover { opacity: 0.9; }
 .review-composer {
   background: var(--card);
-  border: 1px solid var(--accent, var(--accent));
+  border: 1px solid var(--accent);
   border-radius: 8px;
   padding: 10px 12px;
   margin-bottom: 12px;
@@ -417,7 +417,7 @@ const CSS = `
 .review-composer-title { font-size: 12px; font-weight: 600; }
 .review-composer-close { background: none; border: none; color: var(--text-2); font-size: 15px; line-height: 1; cursor: pointer; padding: 0 2px; }
 .review-composer-close:hover { color: var(--text-1); }
-.review-composer-close:focus-visible { outline: 2px solid var(--accent, var(--accent)); outline-offset: 1px; }
+.review-composer-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .review-composer .review-input { margin-top: 2px; background: var(--base, transparent); }
 
 /* Narrow panes: the sidebar becomes a pinned overlay instead of a column,
@@ -457,9 +457,9 @@ const CSS = `
 .floating-toolbar .tb-comment svg { display: block; }
 .floating-toolbar .tb-comment:hover {
   background: var(--accent-glow, rgba(232, 122, 90, 0.15));
-  color: var(--accent, var(--accent));
+  color: var(--accent);
 }
-.floating-toolbar .tb-comment:focus-visible { outline: 2px solid var(--accent, var(--accent)); outline-offset: -2px; }
+.floating-toolbar .tb-comment:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 `;
 
 export function injectEditorStyles() {

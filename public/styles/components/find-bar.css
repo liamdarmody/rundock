@@ -20,6 +20,9 @@ mark.find-match,
 mark.find-match.current,
 /* #1a1a1a is dark text on a BRIGHT status fill, and is correct in both
    themes for that reason. It is not a hardcoded copy of the dark theme's
-   --base: tokenising it would make it light-on-light in light mode. */
+   --base: tokenising it would make it light-on-light in light mode.
+   This note is deliberately repeated at the other site of the same decision
+   (the other of chat.css .btn-allow and find-bar.css .find-match.current):
+   two occurrences, both worth explaining where they are read. */
 .tiptap-editor .ProseMirror .find-match.current { background: var(--attention); color: #1a1a1a; }
 

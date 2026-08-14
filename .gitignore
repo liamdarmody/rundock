@@ -21,3 +21,8 @@ scripts/screenshots/.banned-tokens.json
 
 # Release gate record (per-machine, references a local SHA)
 .release-gate.json
+
+# Independent review ledger: reviewer prose, not shipped code. It is evidence
+# of a review rather than part of the product, and the hygiene check must not
+# police a reviewer's writing style.
+.independent-review/

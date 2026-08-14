@@ -36,14 +36,24 @@
   --heading: 22px; --title: 18px; --body: 14px; --caption: 12px; --label: 11px;
   --org-name: 20px; --org-role: 15px;
 
-  /* Corner radius. These five absorbed 101 of the 130 radius declarations in
-     the stylesheets. The 29 left over are 10px, 2px, 100px, 7px, 3px, 999px,
-     5px, 20px, 14px and 16px: two spellings of a pill, and a set of one-offs
-     that landed a step away from a scale nobody had written down. They are
-     deliberate visual changes rather than substitutions, so they are not
-     touched here. Pick by the size of the thing: sm for chips and inputs, md
-     for menu rows, lg for cards and buttons, xl for the large panels inside
-     the window chrome. */
+  /* Corner radius. The scale absorbed 101 of the 130 radius declarations in the
+     stylesheets when it was introduced, and the polish pass brought eight more
+     onto it: 5px to 4px, 7px to 6px, and 2px to 3px. Each of those eight is a
+     ONE PIXEL VISIBLE CHANGE, made deliberately, not a substitution of equal
+     values. An earlier version of this comment said the leftovers were "not
+     touched here" and stayed put while they were touched, which is how a
+     comment starts lying.
+
+     Ten remain deliberately off the scale, because moving them by two pixels
+     or more changes how a surface reads rather than tidying it: 10px on five
+     menus and cards, 14px on the org card and the skill avatar, 16px on
+     .msg-bubble, and 20px on .msg-system and .prompt-pill. .msg-bubble in
+     particular is the chat surface's signature. Those are owner decisions and
+     are listed in the drift allowlist with that reason.
+
+     Pick by the size of the thing: xs for text highlights, sm for chips and
+     inputs, md for menu rows, lg for cards and buttons, xl for the large
+     panels inside the window chrome. */
   --radius-xs: 3px; --radius-sm: 4px; --radius-md: 6px; --radius-lg: 8px;
   --radius-xl: 12px;
   /* A pill and a circle are intents, not measurements. The pill was written
