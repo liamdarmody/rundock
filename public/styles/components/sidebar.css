@@ -23,7 +23,7 @@
 .files-menu-item svg { flex: 0 0 auto; color: var(--text-2); }
 .files-menu-item:hover { background: var(--elevated); }
 .files-menu-item:hover svg { color: var(--text-1); }
-.files-menu-item.danger:hover { color: var(--danger, var(--danger)); }
+.files-menu-item.danger:hover { color: var(--danger); }
 .files-menu-divider { height: 1px; background: var(--border); margin: 4px 6px; }
 .files-menu-field { padding: 2px; }
 .files-menu-field input { width: 100%; background: var(--elevated); border: 1px solid var(--accent); border-radius: var(--radius-md); color: var(--text-1); font-size: var(--body); padding: 6px 8px; outline: none; }

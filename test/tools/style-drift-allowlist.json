@@ -142,7 +142,7 @@
     }
   },
   "public/styles/views/org-chart.css": {
-    "why": "Shadow blacks. There is no elevation scale, so every surface picked its own alpha. Waiting on a shadow scale in tokens.css. Plus 10px and 14px radii and a 2s working pulse. Radius values two or more pixels off the scale. Left deliberately: moving them changes how a surface reads rather than tidying it, so they are owner decisions. The nine one-pixel near-misses were moved onto the scale in the polish pass and are gone from this file.",
+    "why": "Shadow blacks. There is no elevation scale, so every surface picked its own alpha. Waiting on a shadow scale in tokens.css. Plus 10px and 14px radii and a 2s working pulse. Radius values two or more pixels off the scale. Left deliberately: moving them changes how a surface reads rather than tidying it, so they are owner decisions.",
     "allow": {
       "rgba(0,0,0,0.15)": 1,
       "rgba(0,0,0,0.12)": 1,
@@ -161,7 +161,7 @@
     }
   },
   "public/styles/views/settings.css": {
-    "why": "Two shadow blacks and a 10px radius. Shadow blacks. There is no elevation scale, so every surface picked its own alpha. Waiting on a shadow scale in tokens.css. Radius values two or more pixels off the scale. Left deliberately: moving them changes how a surface reads rather than tidying it, so they are owner decisions. The nine one-pixel near-misses were moved onto the scale in the polish pass and are gone from this file.",
+    "why": "Two shadow blacks and a 10px radius. Shadow blacks. There is no elevation scale, so every surface picked its own alpha. Waiting on a shadow scale in tokens.css. Radius values two or more pixels off the scale. Left deliberately: moving them changes how a surface reads rather than tidying it, so they are owner decisions.",
     "allow": {
       "rgba(0,0,0,0.08)": 1,
       "rgba(0,0,0,0.18)": 1,
@@ -169,7 +169,7 @@
     }
   },
   "public/styles/views/skills.css": {
-    "why": "14px and 10px radii on the skill rows and avatar. Radius values two or more pixels off the scale. Left deliberately: moving them changes how a surface reads rather than tidying it, so they are owner decisions. The nine one-pixel near-misses were moved onto the scale in the polish pass and are gone from this file.",
+    "why": "14px and 10px radii on the skill rows and avatar. Radius values two or more pixels off the scale. Left deliberately: moving them changes how a surface reads rather than tidying it, so they are owner decisions.",
     "allow": {
       "14px": 1,
       "10px": 1

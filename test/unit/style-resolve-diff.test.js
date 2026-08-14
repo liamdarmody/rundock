@@ -6,8 +6,12 @@
 // its behaviour is pinned here, so if it ever starts lying it does so loudly.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const { resolve, declarations, diff } = require('../tools/style-resolve-diff.js');
+const { surfaces } = require('../tools/style-drift.js');
+const ROOT = path.join(__dirname, '..', '..');
 
 const T = new Map([
   ['--accent', '#E87A5A'],
@@ -138,10 +142,42 @@ describe('the eight removed --danger fallbacks still resolve', () => {
     }
   });
 
-  test('no declaration anywhere still carries a --danger fallback', () => {
-    // A fallback that can never fire reads as though it might.
-    const d = declarations('WORKTREE');
-    const survivors = [...d.entries()].filter(([, v]) => /var\(\s*--danger\s*,/.test(v));
-    assert.deepStrictEqual(survivors.map(([k]) => k), []);
+  test('no declaration anywhere still carries a self-referential or dead fallback', () => {
+    // Read SOURCE, not resolved values.
+    //
+    // The first version of this test called declarations(), which returns
+    // values with every var() already substituted, and then grepped those for
+    // /var\(--danger,/. Resolution removes exactly that syntax, so the pattern
+    // could never match and the assertion could never fail.
+    //
+    // It was not a hypothetical waste. That vacuous check is precisely what
+    // should have caught `color: var(--danger, var(--danger))` sitting in
+    // sidebar.css, which an independent reviewer found instead. Rewriting
+    // #E85A5A to var(--accent) and var(--danger) had hit the hex INSIDE
+    // existing fallbacks, and the earlier cleanup caught the accent case and
+    // never looked for the danger one.
+    const files = surfaces();
+    const offenders = [];
+    for (const rel of files) {
+      const src = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
+      for (const m of src.matchAll(/var\(\s*(--[\w-]+)\s*,\s*([^()]*?var\(\s*(--[\w-]+)\s*\)[^()]*?|[^()]*?)\)/g)) {
+        const [token, fallback, innerToken] = [m[1], m[2].trim(), m[3]];
+        if (innerToken === token) offenders.push(`${rel}: ${m[0]} is its own fallback`);
+      }
+    }
+    assert.deepStrictEqual(offenders, []);
+  });
+
+  test('that check can actually fail', () => {
+    // Proving it here rather than by hand, because the version it replaces was
+    // shipped unproven and was inert.
+    const sample = '.a { color: var(--danger, var(--danger)); }';
+    const found = [...sample.matchAll(/var\(\s*(--[\w-]+)\s*,\s*([^()]*?var\(\s*(--[\w-]+)\s*\)[^()]*?|[^()]*?)\)/g)]
+      .filter(m => m[3] === m[1]);
+    assert.strictEqual(found.length, 1, 'the pattern must match a self-referential fallback');
+    const clean = '.a { color: var(--danger); } .b { color: var(--x, #fff); }';
+    const none = [...clean.matchAll(/var\(\s*(--[\w-]+)\s*,\s*([^()]*?var\(\s*(--[\w-]+)\s*\)[^()]*?|[^()]*?)\)/g)]
+      .filter(m => m[3] === m[1]);
+    assert.strictEqual(none.length, 0, 'and must not match an ordinary fallback');
   });
 });
