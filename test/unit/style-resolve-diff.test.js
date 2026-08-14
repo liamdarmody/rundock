@@ -76,16 +76,30 @@ describe('reading declarations out of the repo', () => {
     }
   });
 
-  test('it reports the change that the computed-style snapshot could not see', () => {
-    // Adding --danger altered eight declarations, every one of them in a
-    // :hover, an error state, or a review-mode rule. The snapshot tool reported
-    // zero because it only ever captures default states. This is the guard
-    // against believing that report again.
-    const r = diff('181bfa4', '638f8b7');
-    const reds = r.changed.filter(c => /#E85A5A/i.test(c.to) && /#E06C6C|#e55|#d9534f/i.test(c.from));
-    assert.strictEqual(reds.length, 8, 'the eight red unifications must be visible');
-    for (const c of reds) {
-      assert.match(c.key, /:hover|invalid|critic|review/, `${c.key} should be an interactive or error state`);
+  test('a fallback stops applying the moment its token gains a value', () => {
+    // The mechanism behind the missed change, pinned WITHOUT reaching for git
+    // history. An earlier version of this test diffed two real commits and
+    // passed locally while failing in CI, because the checkout is shallow and
+    // those objects do not exist there. A unit test that depends on repository
+    // history is testing the checkout, not the code.
+    //
+    // Three references were written as var(--danger, #fallback) while --danger
+    // did not exist, so each rendered its own fallback. Defining the token
+    // changed all three at once, in :hover, error and review-mode rules that
+    // the computed-style snapshot never enters.
+    const before = new Map();
+    const after = new Map([['--danger', '#E85A5A']]);
+    for (const fallback of ['#E06C6C', '#e55', '#d9534f']) {
+      const decl = `var(--danger, ${fallback})`;
+      assert.strictEqual(resolve(decl, before), fallback, 'without the token, the fallback renders');
+      assert.strictEqual(resolve(decl, after), '#E85A5A', 'with the token, the fallback is dead');
+      assert.notStrictEqual(resolve(decl, before), resolve(decl, after));
     }
+  });
+
+  test('diffing two refs is a hand-run mode, and says so when it cannot', () => {
+    // Ref mode needs history, which CI does not fetch. It must fail loudly
+    // rather than return an empty diff that reads as "nothing changed".
+    assert.throws(() => diff('0000000000000000000000000000000000000000', 'WORKTREE'));
   });
 });
