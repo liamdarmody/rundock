@@ -75,12 +75,23 @@ function filesAt(ref) {
   return list.filter(f => (f.startsWith('public/styles/') && f.endsWith('.css')) || EXTRA.includes(f));
 }
 
-// Token values in force at a ref. index.html is read too, because before the
-// tokens moved to their own file that is where they lived, so a diff spanning
-// that move still resolves both sides.
+// Custom property values in force at a ref.
+//
+// index.html is read because before the tokens moved to their own file that is
+// where they lived, so a diff spanning that move resolves both sides. EVERY
+// scanned file is read too, because not all custom properties are global:
+// --callout-color is declared on the callout classes themselves, and reading
+// only tokens.css reported eleven declarations as unresolved when nine of them
+// were component-scoped and perfectly fine.
+//
+// The limitation this accepts: scope is ignored, so a property declared on one
+// component resolves everywhere. That is coarse, but it is coarse CONSISTENTLY
+// on both sides of a diff, which is what this tool compares. It is why the tool
+// reports what changed rather than what any given element computes.
 function tokensAt(ref) {
   const t = new Map();
-  for (const file of ['public/styles/tokens.css', 'public/index.html']) {
+  const files = ['public/styles/tokens.css', 'public/index.html', ...filesAt(ref)];
+  for (const file of files) {
     const src = readAt(ref, file);
     if (!src) continue;
     for (const m of src.matchAll(/(--[\w-]+)\s*:\s*([^;}]+)/g)) {

@@ -103,3 +103,45 @@ describe('reading declarations out of the repo', () => {
     assert.throws(() => diff('0000000000000000000000000000000000000000', 'WORKTREE'));
   });
 });
+
+describe('the eight removed --danger fallbacks still resolve', () => {
+  // Eight declarations were written var(--danger, #fallback) while --danger did
+  // not exist, so each rendered its own fallback: five #E06C6C in the editor's
+  // injected stylesheet, two #d9534f in editor.css, one #e55 in sidebar.css.
+  // Removing a fallback is safe only if the token resolves everywhere those
+  // rules apply, and until this test nothing said so for five of the eight.
+  //
+  // The e2e suite proves three of them RENDER correctly inside the runtime
+  // injected stylesheet, which is the part a static check cannot see. This
+  // covers all eight, including a :hover rule and two files the e2e test never
+  // touches, which is the part e2e cannot reach without driving every state.
+  const FORMERLY_FALLBACK = [
+    ['public/editor/styles.js', '.tiptap-editor .critic-delete', 'color'],
+    ['public/editor/styles.js', '.tiptap-editor .critic-substitution .critic-sub-from', 'color'],
+    ['public/editor/styles.js', '.review-sub-from', 'color'],
+    ['public/editor/styles.js', '.review-btn.reject:hover', 'color'],
+    ['public/editor/styles.js', '.review-btn.reject:hover', 'border-color'],
+    ['public/styles/views/editor.css', '.tiptap-editor .ProseMirror .callout-edit.callout-edit-invalid', 'border-color'],
+    ['public/styles/components/sidebar.css', '.convo-delete:hover', 'color'],
+    ['public/styles/components/sidebar.css', '.files-menu-item.danger:hover', 'color'],
+  ];
+
+  test('all eight resolve to the danger token, with none left unresolved', () => {
+    const d = declarations('WORKTREE');
+    assert.strictEqual(FORMERLY_FALLBACK.length, 8, 'the count in the comment must match the list');
+    for (const [file, sel, prop] of FORMERLY_FALLBACK) {
+      const key = `${file}|${sel}|${prop}`;
+      const value = d.get(key);
+      assert.ok(value !== undefined, `${key} is gone: if the rule moved, move this entry with it`);
+      assert.match(value, /#E85A5A/i, `${key} resolves to ${value}, not the danger token`);
+      assert.ok(!value.includes('<<UNRESOLVED>>'), `${key} resolves to nothing`);
+    }
+  });
+
+  test('no declaration anywhere still carries a --danger fallback', () => {
+    // A fallback that can never fire reads as though it might.
+    const d = declarations('WORKTREE');
+    const survivors = [...d.entries()].filter(([, v]) => /var\(\s*--danger\s*,/.test(v));
+    assert.deepStrictEqual(survivors.map(([k]) => k), []);
+  });
+});

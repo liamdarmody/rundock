@@ -53,9 +53,15 @@ test('capture', async ({ page }) => {
     await shot(`${theme}-convo-hover`);
 
     // The sidebar add menu carries the other destructive surface.
+    //
+    // Switch BEFORE counting. Every sidebar is in the DOM at once and only one
+    // is shown, so counting from another view happens to return 1 and the block
+    // runs by accident rather than by design. The day that changes, this would
+    // silently stop capturing and the tool would report a smaller set without
+    // complaining.
+    await page.evaluate(() => switchNav('files'));
     const add = page.locator('.files-add-btn').first();
     if (await add.count()) {
-      await page.evaluate(() => switchNav('files'));
       await add.click({ force: true }).catch(() => {});
       await shot(`${theme}-files-menu`);
       await page.keyboard.press('Escape').catch(() => {});
