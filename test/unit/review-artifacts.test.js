@@ -67,7 +67,16 @@ describe('review artefacts', () => {
     // A config file for software that is not in this repository cannot be
     // acted on by anyone reading it, and a reviewer holding only a diff cannot
     // verify a value in it. Both were true when one was here.
-    const configs = tracked().filter(f => /(^|\/)independent-review\.config\.json$/.test(f));
+    //
+    // Matched by SHAPE, not by the one filename that was here before. Pinning
+    // the historical name would pass for irconfig.json, review-harness.json or
+    // .reviewrc, which is the same rule being reintroduced under a different
+    // label. The pattern below covers config-shaped files whose name mentions
+    // review; its scope is deliberately narrow enough that an ordinary
+    // application config cannot trip it, and wide enough that renaming is not
+    // an escape.
+    const CONFIG_SHAPED = /(^|\/)\.?[\w.-]*review[\w.-]*\.(config\.)?(json|ya?ml|toml|rc)$|(^|\/)\.[\w-]*reviewrc$/i;
+    const configs = tracked().filter(f => CONFIG_SHAPED.test(f));
     assert.deepStrictEqual(configs, [], 'the review harness is not part of this project');
   });
 
