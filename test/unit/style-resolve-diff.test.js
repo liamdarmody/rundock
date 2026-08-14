@@ -6,8 +6,12 @@
 // its behaviour is pinned here, so if it ever starts lying it does so loudly.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const { resolve, declarations, diff } = require('../tools/style-resolve-diff.js');
+const { surfaces } = require('../tools/style-drift.js');
+const ROOT = path.join(__dirname, '..', '..');
 
 const T = new Map([
   ['--accent', '#E87A5A'],
@@ -101,5 +105,79 @@ describe('reading declarations out of the repo', () => {
     // Ref mode needs history, which CI does not fetch. It must fail loudly
     // rather than return an empty diff that reads as "nothing changed".
     assert.throws(() => diff('0000000000000000000000000000000000000000', 'WORKTREE'));
+  });
+});
+
+describe('the eight removed --danger fallbacks still resolve', () => {
+  // Eight declarations were written var(--danger, #fallback) while --danger did
+  // not exist, so each rendered its own fallback: five #E06C6C in the editor's
+  // injected stylesheet, two #d9534f in editor.css, one #e55 in sidebar.css.
+  // Removing a fallback is safe only if the token resolves everywhere those
+  // rules apply, and until this test nothing said so for five of the eight.
+  //
+  // The e2e suite proves three of them RENDER correctly inside the runtime
+  // injected stylesheet, which is the part a static check cannot see. This
+  // covers all eight, including a :hover rule and two files the e2e test never
+  // touches, which is the part e2e cannot reach without driving every state.
+  const FORMERLY_FALLBACK = [
+    ['public/editor/styles.js', '.tiptap-editor .critic-delete', 'color'],
+    ['public/editor/styles.js', '.tiptap-editor .critic-substitution .critic-sub-from', 'color'],
+    ['public/editor/styles.js', '.review-sub-from', 'color'],
+    ['public/editor/styles.js', '.review-btn.reject:hover', 'color'],
+    ['public/editor/styles.js', '.review-btn.reject:hover', 'border-color'],
+    ['public/styles/views/editor.css', '.tiptap-editor .ProseMirror .callout-edit.callout-edit-invalid', 'border-color'],
+    ['public/styles/components/sidebar.css', '.convo-delete:hover', 'color'],
+    ['public/styles/components/sidebar.css', '.files-menu-item.danger:hover', 'color'],
+  ];
+
+  test('all eight resolve to the danger token, with none left unresolved', () => {
+    const d = declarations('WORKTREE');
+    assert.strictEqual(FORMERLY_FALLBACK.length, 8, 'the count in the comment must match the list');
+    for (const [file, sel, prop] of FORMERLY_FALLBACK) {
+      const key = `${file}|${sel}|${prop}`;
+      const value = d.get(key);
+      assert.ok(value !== undefined, `${key} is gone: if the rule moved, move this entry with it`);
+      assert.match(value, /#E85A5A/i, `${key} resolves to ${value}, not the danger token`);
+      assert.ok(!value.includes('<<UNRESOLVED>>'), `${key} resolves to nothing`);
+    }
+  });
+
+  test('no declaration anywhere still carries a self-referential or dead fallback', () => {
+    // Read SOURCE, not resolved values.
+    //
+    // The first version of this test called declarations(), which returns
+    // values with every var() already substituted, and then grepped those for
+    // /var\(--danger,/. Resolution removes exactly that syntax, so the pattern
+    // could never match and the assertion could never fail.
+    //
+    // It was not a hypothetical waste. That vacuous check is precisely what
+    // should have caught `color: var(--danger, var(--danger))` sitting in
+    // sidebar.css, which an independent reviewer found instead. Rewriting
+    // #E85A5A to var(--accent) and var(--danger) had hit the hex INSIDE
+    // existing fallbacks, and the earlier cleanup caught the accent case and
+    // never looked for the danger one.
+    const files = surfaces();
+    const offenders = [];
+    for (const rel of files) {
+      const src = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
+      for (const m of src.matchAll(/var\(\s*(--[\w-]+)\s*,\s*([^()]*?var\(\s*(--[\w-]+)\s*\)[^()]*?|[^()]*?)\)/g)) {
+        const [token, fallback, innerToken] = [m[1], m[2].trim(), m[3]];
+        if (innerToken === token) offenders.push(`${rel}: ${m[0]} is its own fallback`);
+      }
+    }
+    assert.deepStrictEqual(offenders, []);
+  });
+
+  test('that check can actually fail', () => {
+    // Proving it here rather than by hand, because the version it replaces was
+    // shipped unproven and was inert.
+    const sample = '.a { color: var(--danger, var(--danger)); }';
+    const found = [...sample.matchAll(/var\(\s*(--[\w-]+)\s*,\s*([^()]*?var\(\s*(--[\w-]+)\s*\)[^()]*?|[^()]*?)\)/g)]
+      .filter(m => m[3] === m[1]);
+    assert.strictEqual(found.length, 1, 'the pattern must match a self-referential fallback');
+    const clean = '.a { color: var(--danger); } .b { color: var(--x, #fff); }';
+    const none = [...clean.matchAll(/var\(\s*(--[\w-]+)\s*,\s*([^()]*?var\(\s*(--[\w-]+)\s*\)[^()]*?|[^()]*?)\)/g)]
+      .filter(m => m[3] === m[1]);
+    assert.strictEqual(none.length, 0, 'and must not match an ordinary fallback');
   });
 });

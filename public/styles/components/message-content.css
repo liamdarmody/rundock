@@ -60,7 +60,7 @@
 .msg-bubble hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
 .msg-bubble a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .msg-bubble img { max-width: 100%; border-radius: var(--radius-lg); margin: 8px 0; }
-.msg-bubble mark { background: rgba(232,122,90,0.2); color: var(--text-1); padding: 1px 4px; border-radius: 3px; }
+.msg-bubble mark { background: rgba(232,122,90,0.2); color: var(--text-1); padding: 1px 4px; border-radius: var(--radius-xs); }
 .msg-bubble .wikilink { color: var(--accent); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 .msg-bubble .md-tag { background: var(--card); color: var(--accent); padding: 2px 8px; border-radius: var(--radius-sm); font-size: var(--caption); font-weight: 500; }
 .msg-bubble input[type="checkbox"] { margin-right: 8px; accent-color: var(--accent); }

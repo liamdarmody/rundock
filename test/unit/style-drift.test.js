@@ -106,3 +106,55 @@ describe('the drift allowlist is a document, not a dump', () => {
     }
   });
 });
+
+describe('an allowlist reason describes only what it still allows', () => {
+  // A reason that names a literal the entry no longer carries is worse than no
+  // reason: it reads as an unpaid debt and hides that the debt was settled.
+  // Five entries drifted that way in one slice, all of them missed by me and
+  // caught in review, which is why this is now mechanical.
+  const LITERAL = /#[0-9a-fA-F]{3,8}\b|\b\d+px\b|\b\d*\.?\d+m?s\b/g;
+
+  test('no reason names a literal that is not in its allow list', () => {
+    const stale = [];
+    for (const [file, entry] of Object.entries(ALLOW)) {
+      for (const lit of entry.why.match(LITERAL) || []) {
+        if (!(lit in entry.allow)) stale.push(`${file}: reason names ${lit}, which it no longer allows`);
+      }
+    }
+    assert.deepStrictEqual(
+      stale, [],
+      'describe what is there, or say it in words rather than naming a value that has gone',
+    );
+  });
+});
+
+describe('a literal written in a comment is not drift', () => {
+  // Counting comments had a property worth naming: explaining a value raised
+  // its own allowance, so documenting drift created room for more drift. That
+  // is the inverse of the point, and it shipped: a comment reading "#1a1a1a is
+  // dark text on a bright fill" pushed that file's allowance from one to two.
+  const { stripComments } = require('../tools/style-drift.js');
+
+  test('a css block comment contributes no literals', () => {
+    const found = withFixture('/* #BADA55 and 7px and 2s */\n.a { color: var(--accent); }', findings);
+    assert.deepStrictEqual(found, []);
+  });
+
+  test('the declaration beside the comment is still caught', () => {
+    const found = withFixture('/* explaining #BADA55 */\n.a { color: #BADA55; }', findings);
+    assert.deepStrictEqual(found.map(f => f.literal), ['#BADA55']);
+  });
+
+  test('stripping preserves line numbers so a report still points at the right line', () => {
+    const src = '/* a\n b\n c */\n.a { color: #BADA55; }';
+    assert.strictEqual(stripComments(src).split('\n').length, src.split('\n').length);
+    const found = withFixture(src, findings);
+    assert.strictEqual(found[0].line, 4);
+  });
+
+  test('a url is not mistaken for a line comment', () => {
+    // The // stripper must not eat the rest of a line containing https://.
+    const found = withFixture('.a { background: url(https://x/y.png); border-radius: 7px; }', findings);
+    assert.deepStrictEqual(found.map(f => f.literal), ['7px']);
+  });
+});

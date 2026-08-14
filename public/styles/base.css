@@ -30,7 +30,7 @@ input { border: none; background: none; font-family: inherit; color: inherit; ou
 
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: transparent; border-radius: 3px; transition: background var(--duration-slow) ease; }
+::-webkit-scrollbar-thumb { background: transparent; border-radius: var(--radius-xs); transition: background var(--duration-slow) ease; }
 *:hover > ::-webkit-scrollbar-thumb, *:hover::-webkit-scrollbar-thumb { background: var(--border); }
 .messages::-webkit-scrollbar-thumb { background: transparent; }
 .messages:hover::-webkit-scrollbar-thumb { background: var(--border); }

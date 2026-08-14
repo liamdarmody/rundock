@@ -68,7 +68,7 @@ body.light .tb-search { background: var(--card); }
 
 body.palette-open .tb-search { visibility: hidden; }
 .tb-right { grid-column: 3; justify-self: end; display: flex; align-items: center; gap: 2px; padding-right: calc(var(--chrome-inset-right) + 8px); }
-.tb-btn { width: 30px; height: 30px; border-radius: 7px; display: flex; align-items: center; justify-content: center; color: var(--text-2); position: relative; }
+.tb-btn { width: 30px; height: 30px; border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; color: var(--text-2); position: relative; }
 .tb-btn:hover { color: var(--text-1); background: var(--surface); }
 .tb-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .tb-btn svg { width: 17px; height: 17px; }

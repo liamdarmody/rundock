@@ -46,7 +46,8 @@ const INVARIANT = [
   '--danger',
   '--heading', '--title', '--body', '--caption', '--label',
   '--nav-rail-width', '--topbar-height', '--content-radius',
-  '--radius-sm', '--radius-md', '--radius-lg', '--radius-xl', '--radius-circle',
+  '--radius-xs', '--radius-sm', '--radius-md', '--radius-lg', '--radius-xl',
+  '--radius-pill', '--radius-circle',
   '--duration-fast', '--duration-base', '--duration-slow',
 ];
 
@@ -274,4 +275,137 @@ test('the app renders in its own copy of Inter, fetched from nowhere', async ({ 
   // Nothing at all may leave the machine. This watches real requests, so it
   // catches a fetch the static scan cannot see.
   expect(external, 'the client must not fetch from other origins').toEqual([]);
+});
+
+test('the editor stylesheet, injected at runtime, can see the tokens it uses', async ({ page }) => {
+  // public/editor/styles.js is a <style> element built in JavaScript and
+  // appended to the head when the editor first opens, which is a different
+  // path from the <link> tags the rest of the styling arrives through.
+  //
+  // What this proves, precisely: THREE of the five formerly-fallback rules in
+  // that injected file render the resolved --danger. It does not cover the
+  // .review-btn.reject:hover pair in the same file, nor the two in editor.css
+  // and one in sidebar.css, which would need every state driven. All eight are
+  // covered statically by test/unit/style-resolve-diff.test.js. An earlier
+  // version of this comment claimed to prove all eight, which it never did.
+  await page.goto('/');
+  await expect(page.locator('.convo-item').first()).toBeVisible();
+  await page.locator('.nav-item[data-nav="files"]').click();
+  // Named, not first: the first .file-item sits inside a collapsed folder and
+  // is not clickable. wikilink-line.md is what test/e2e/editor.spec.js opens.
+  await page.locator('.file-item', { hasText: 'wikilink-line.md' }).first().click();
+  await expect(page.locator('.ProseMirror').first()).toBeVisible();
+
+  // Read the RENDERED colour of elements the de-fallbacked rules actually
+  // govern, not the token off the host.
+  //
+  // The first version of this test read getComputedStyle(host)
+  // .getPropertyValue('--danger') and asserted it resolved. That proves almost
+  // nothing: custom properties inherit, so it succeeds purely because
+  // tokens.css declares --danger on :root, whether or not the editor's injected
+  // stylesheet exists, parses, or still contains those rules. It would have
+  // passed with all eight declarations malformed. Checking the style tag by
+  // substring was a shape check, not a rendering one.
+  const seen = await page.evaluate(() => {
+    const host = document.querySelector('.tiptap-editor') || document.querySelector('.ProseMirror').closest('div');
+    const probe = (cls) => {
+      const el = document.createElement('span');
+      el.className = cls;
+      host.appendChild(el);
+      const c = getComputedStyle(el).color;
+      el.remove();
+      return c;
+    };
+    const wrap = document.createElement('span');
+    wrap.className = 'critic-substitution';
+    const inner = document.createElement('span');
+    inner.className = 'critic-sub-from';
+    wrap.appendChild(inner); host.appendChild(wrap);
+    const subFrom = getComputedStyle(inner).color;
+    wrap.remove();
+    return {
+      hostFound: !!host,
+      criticDelete: probe('critic-delete'),
+      reviewSubFrom: probe('review-sub-from'),
+      criticSubFrom: subFrom,
+      plainSpan: probe('nothing-styles-me'),
+    };
+  });
+
+  const DANGER = 'rgb(232, 90, 90)';
+  expect(seen.hostFound, 'the editor host must exist').toBe(true);
+  expect(seen.criticDelete, '.critic-delete must render --danger').toBe(DANGER);
+  expect(seen.reviewSubFrom, '.review-sub-from must render --danger').toBe(DANGER);
+  expect(seen.criticSubFrom, '.critic-substitution .critic-sub-from must render --danger').toBe(DANGER);
+  // A control: if an unstyled span also came back red, the assertions above
+  // would be measuring inheritance rather than the rules under test.
+  expect(seen.plainSpan, 'an unstyled span must NOT be red').not.toBe(DANGER);
+});
+
+test('every color-mix tint renders the colour the literal it replaced rendered', async ({ page }) => {
+  // AC-5 asked for the channel values either side of each substitution, and
+  // nothing computed them. The allowlist prose asserted the tints were safe;
+  // an assertion in prose cannot fail.
+  //
+  // color-mix is resolved by the browser, so this has to run in one. Each pair
+  // is the literal that was there before and the expression that replaced it.
+  const PAIRS = [
+    ['rgba(232,90,90,0.1)',  'color-mix(in srgb, var(--danger) 10%, transparent)', 'connection-bar disconnected'],
+    ['rgba(232,90,90,0.08)', 'color-mix(in srgb, var(--danger) 8%, transparent)',  'danger callout background'],
+    ['rgba(232,90,90,0.20)', 'color-mix(in srgb, var(--danger) 20%, transparent)', 'danger callout border'],
+  ];
+  // These three replaced a DIFFERENT red (232,93,93) as part of unifying the
+  // reds, so they are expected to differ by exactly that, and the expectation
+  // is written as the new red rather than the old one.
+  const UNIFIED = [
+    ['rgba(232,90,90,0.15)', 'color-mix(in srgb, var(--danger) 15%, transparent)', 'cancel button'],
+    ['rgba(232,90,90,0.25)', 'color-mix(in srgb, var(--danger) 25%, transparent)', 'cancel button hover'],
+    ['rgba(232,90,90,0.12)', 'color-mix(in srgb, var(--danger) 12%, transparent)', 'cancelled badge'],
+  ];
+
+  await boot(page);
+  const resolve = (pairs) => page.evaluate((list) => {
+    // Compare CHANNELS, not serialisations. Chromium reports an rgba() literal
+    // as "rgba(232, 90, 90, 0.1)" and the equivalent color-mix as
+    // "color(srgb 0.909804 0.352941 0.352941 / 0.1)". Those are the same
+    // colour: 0.909804 x 255 is 232. A string comparison would call an exact
+    // match a failure.
+    const channels = (s) => {
+      let m = /^rgba?\(([^)]+)\)$/.exec(s);
+      if (m) {
+        const p = m[1].split(',').map(v => parseFloat(v));
+        return [p[0], p[1], p[2], p.length > 3 ? p[3] : 1];
+      }
+      m = /^color\(srgb ([\d.]+) ([\d.]+) ([\d.]+)(?: \/ ([\d.]+))?\)$/.exec(s);
+      if (m) return [+m[1] * 255, +m[2] * 255, +m[3] * 255, m[4] === undefined ? 1 : +m[4]];
+      return null;
+    };
+    return list.map(([expected, expr, label]) => {
+      const a = document.createElement('div');
+      const b = document.createElement('div');
+      a.style.backgroundColor = expected;
+      b.style.backgroundColor = expr;
+      document.body.append(a, b);
+      const want = channels(getComputedStyle(a).backgroundColor);
+      const got = channels(getComputedStyle(b).backgroundColor);
+      const rawGot = getComputedStyle(b).backgroundColor;
+      a.remove(); b.remove();
+      return { label, want, got, rawGot };
+    });
+  }, pairs);
+
+  for (const r of [...(await resolve(PAIRS)), ...(await resolve(UNIFIED))]) {
+    expect(r.want, `${r.label}: the literal must parse`).not.toBeNull();
+    expect(r.got, `${r.label}: the tint must parse, got ${r.rawGot}`).not.toBeNull();
+    // Separate tolerances, because the channels are not on the same scale.
+    // RGB runs 0 to 255 and 0.6 is sub-rounding; alpha runs 0 to 1, where 0.6
+    // is most of the range. A single tolerance of 0.6 let a tint written at
+    // 14% pass as 10%, which the red proof caught.
+    for (let i = 0; i < 3; i++) {
+      expect(Math.abs(r.got[i] - r.want[i]),
+        `${r.label}: rgb channel ${i} differs by more than rounding`).toBeLessThanOrEqual(0.6);
+    }
+    expect(Math.abs(r.got[3] - r.want[3]),
+      `${r.label}: alpha differs`).toBeLessThanOrEqual(0.005);
+  }
 });
