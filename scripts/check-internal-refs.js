@@ -74,7 +74,25 @@ const RULES = [
     label: 'external tool cited as design rationale (state the reason itself)',
     re: /\b(following|per|as in|mirrors?|matching|copying|like)\s+(Obsidian|Notion|Cursor|VS ?Code|Linear)\b|\b(Obsidian|Notion|Cursor|VS ?Code|Linear)('s)?\s+(convention|precedent|rule|behaviou?r)\b/i,
   },
-  { label: 'owner-attributed decision note', re: /\(Liam[ ,]|Liam 20[0-9]{2}|decision,? Liam/ },
+  // Owner-attributed decisions. The name itself is legitimate here: it is in
+  // the LICENSE, the README byline, and the example agent files. What does not
+  // belong is who authorised something, which describes how work was approved
+  // rather than what the software does. An earlier version matched only the
+  // parenthesised and dated forms, and "Liam authorised proceeding" walked
+  // straight through it into a tracked file.
+  {
+    label: 'owner-attributed decision note',
+    re: /\(Liam[ ,]|Liam 20[0-9]{2}|decision,? Liam|\bLiam (authoris|approv|decid|direct|instruct|confirm|request|sign)\w*\b|\bper Liam\b|\bLiam's (call|decision|instruction|approval)\b/i,
+  },
+  // Planning arithmetic about how the work is MANAGED: budgets and their
+  // revisions. Deliberately narrow. A factual count like "3 of 3 rounds" is
+  // the harness recording what happened and is the entire point of a ledger,
+  // so it must not trip this. The first version of this rule caught exactly
+  // that, which is a rule wider than its stated intent.
+  {
+    label: 'internal process budget',
+    re: /\b(programme|program|round|review) budget\b|\bbudget from [0-9]+ to [0-9]+\b/i,
+  },
   // Style rule: no em or en dashes anywhere. Use a colon, comma, full stop, or
   // restructure. Genuinely intentional dashes (a splitter char class, the
   // prompt that defines the rule) carry an inline internal-refs-allow marker.
