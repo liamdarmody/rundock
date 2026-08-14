@@ -16,6 +16,20 @@
 // RUN_TOOLS is required because the testIgnore rule that keeps this out of CI
 // would otherwise make it unrunnable.
 //
+// WHAT THIS CANNOT SEE, which matters more than what it can.
+//
+// Every capture is of elements in their DEFAULT state. Nothing is hovered,
+// focused, disabled, or in an error state, so a rule that only applies in one
+// of those states is invisible here. Slice 3 of the styling work reported
+// "zero painted properties differ" from this tool and was right about its own
+// 209 substitutions, while the same change altered 8 declarations across 6
+// selectors, all of them :hover, error or review-mode rules.
+//
+// Use test/tools/style-resolve-diff.js alongside this. It resolves var()
+// statically between two git refs and sees every rule regardless of state. Its
+// header records three failed attempts to extend THIS tool to cover states in
+// the browser, so that ground does not get walked again.
+//
 // Read the diff against a CONTROL, never against zero. Two runs of the SAME
 // build differ by about one element, because a little of what the seeded
 // workspace renders varies. A treatment diff that matches the control's own
