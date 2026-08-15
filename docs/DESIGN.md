@@ -147,9 +147,15 @@ costing the user time.
 
 ## Layout
 
-`--nav-rail-width`, `--topbar-height`, `--content-radius` and `--tb-cluster` are
-measurements the shell depends on, not a spacing scale. Read them; do not
-restate their values.
+These are measurements the application shell depends on, not a spacing scale.
+Read them; do not restate their values.
+
+| Token | Value | What it is for |
+|---|---|---|
+| `--nav-rail-width` | 60px | The icon rail's width. Anything positioning against the rail reads this rather than assuming |
+| `--topbar-height` | 50px | The title bar's height, and the offset for anything that sits below it |
+| `--content-radius` | 12px | The rounding where the main pane meets the shell. Kept separate from the radius scale because it is one specific joint, not a size choice |
+| `--tb-cluster` | 38px | The width the platform's window controls occupy. Used to keep the title bar's contents clear of them |
 
 `--chrome-inset-left` and `--chrome-inset-right` are set from JavaScript because
 only the running platform knows them: macOS puts its traffic lights on the left,
