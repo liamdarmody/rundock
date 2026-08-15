@@ -103,10 +103,12 @@ prevent.
 | `--body` | 14px | Default |
 | `--caption` | 12px | Secondary and metadata |
 | `--label` | 11px | Small caps labels, badges |
+| `--org-name` | 20px | An agent's name on an org chart node |
+| `--org-role` | 15px | An agent's role under their name on the same node |
 
-`--org-name` (20px) and `--org-role` (15px) belong to the org chart, which sizes
-itself against node geometry rather than the page scale. They are named for
-where they are used so nobody reaches for them elsewhere.
+The last two belong to the org chart, which sizes itself against node geometry
+rather than the page scale. They are named for where they are used so nobody
+reaches for them elsewhere.
 
 ## Radius
 
@@ -156,11 +158,13 @@ Read them; do not restate their values.
 | `--topbar-height` | 50px | The title bar's height, and the offset for anything that sits below it |
 | `--content-radius` | 12px | The rounding where the main pane meets the shell. Kept separate from the radius scale because it is one specific joint, not a size choice |
 | `--tb-cluster` | 38px | The width the platform's window controls occupy. Used to keep the title bar's contents clear of them |
+| `--chrome-inset-left` | 0px, then set at runtime | Space the platform reserves on the left of the title bar |
+| `--chrome-inset-right` | 0px, then set at runtime | Space the platform reserves on the right of the title bar |
+| `--chrome-gutter` | derived | One usable gutter from both insets, so layout code never branches on platform |
 
-`--chrome-inset-left` and `--chrome-inset-right` are set from JavaScript because
-only the running platform knows them: macOS puts its traffic lights on the left,
-Windows puts its caption buttons on the right. `--chrome-gutter` derives one
-usable gutter from both so layout code does not branch on platform.
+The last three carry a default here and are overwritten from JavaScript, because
+only the running platform knows the real values: macOS puts its traffic lights
+on the left, Windows puts its caption buttons on the right.
 
 **There is no spacing scale.** Padding and margins are written as literals
 today. That is a known gap rather than a decision, and inventing a private scale
