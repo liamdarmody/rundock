@@ -11,7 +11,7 @@ Every Rundock skill file lives in one of two places:
 
 Both locations are scanned. Both use a folder named after the slug, with a single definition file inside. Flat files at `.claude/skills/<slug>.md` are not supported. The folder shape exists so a skill can keep references, sub-files, and assets next to its definition without polluting the skills root.
 
-The folder name is the skill's slug. The slug is what an agent's `skills:` array references, what the body-text scanner looks for, and what Rundock uses to deduplicate between the two source locations. Use lowercase letters, numbers, and hyphens only. No spaces, no underscores in the slug.
+The folder name is the skill's slug. The slug is what an agent's `skills:` array references, what the body-text scanner looks for, and what is injected into the agent's prompt. **Nothing deduplicates slugs across the two source locations**: the same slug in both appears twice in the Skills view, as two separate skills. Use lowercase letters, numbers, and hyphens only. No spaces, no underscores in the slug.
 
 ## Frontmatter reference
 
@@ -22,14 +22,14 @@ Universal fields work with any tool that supports the Claude agent and skill for
 | Field | Type | Scope | Required | Description | Example |
 |---|---|---|---|---|---|
 | `name` | string | Universal | Recommended | Display name for the skill, shown on the agent profile and in the skill list. If omitted or equal to the slug, Rundock title-cases the slug (with brand-word overrides like LinkedIn, Notion, MCP). Plain prose is fine, not just a slug-style identifier. | `name: Skill Discovery` |
-| `description` | string | Universal | Recommended | One-paragraph description of what the skill does and when to use it. The orchestrator uses this to decide whether to route work to an agent that owns this skill, so write it as a routing signal, not a tagline. Folded YAML scalars (`>`) and indented multi-line forms are supported. | `description: Scan recent work surfaces for repeated manual patterns and propose new skills to build, ranked by leverage.` |
+| `description` | string | Universal | Recommended | One-paragraph description of what the skill does and when to use it. Shown in Rundock's interface, and read by the agent when it opens the skill file. **Rundock does not send this to the model**, so it is documentation rather than a routing signal, but write it as though someone has to choose between this skill and a neighbour. Folded YAML scalars (`>`) and indented multi-line forms are supported. | `description: Scan recent work surfaces for repeated manual patterns and propose new skills to build, ranked by leverage.` |
 | `allowed-tools` | array | Universal (Claude Code) | No | Tools Claude Code is allowed to invoke while running this skill. Rundock does not read this field; Claude Code does, when the skill is loaded into a subprocess. Leaving it off lets the spawned agent inherit its workspace-mode tool defaults. | `allowed-tools: [Read, Write, Bash]` |
 | `model` | string | Universal (Claude Code) | No | Model override for this skill. Same caveat as `allowed-tools`: Rundock does not read it, Claude Code may. In practice none of the live skills set this and behaviour follows the invoking agent's model. | `model: opus` |
 | `displayName` | string | Rundock-only | No | Not parsed. Rundock derives display name from `name` and the slug. Listed here only to flag that the field is not honoured even though the convention exists for agents. | (do not use) |
 | `icon` | string | Rundock-only | No | Not parsed. Skills inherit the icon of their assigned agents in the UI. | (do not use) |
 | `colour` | string (hex) | Rundock-only | No | Not parsed. Skills inherit accent colours from their assigned agents. | (do not use) |
 
-The minimal valid skill frontmatter is just `name` and `description`. Both can be omitted entirely (the slug becomes the display name and the description is empty), but a skill without a description is invisible to the orchestrator's routing decisions, so always write one.
+The minimal valid skill frontmatter is just `name` and `description`. Both can be omitted entirely: the slug becomes the display name and the description is empty. A skill with no description still works exactly the same way, because what reaches the model is the slug. The cost of leaving it out is paid by people, in Rundock's interface and in review.
 
 ## The body
 
@@ -43,7 +43,7 @@ Reference files. A skill can keep supporting documents next to it: examples, tem
 
 Cross-skill references. Skills can mention other skills by slug to suggest follow-on work. The body of `spec-driven-dev` mentions `task-breakdown` and `incremental-impl`, for example. The orchestrator does not chain skills automatically; the agent decides whether to invoke a follow-on, based on the body's guidance.
 
-Routing language. The first paragraph of the body should make the skill's trigger obvious. The orchestrator weighs the skill's `description` field against the user's request, but the agent itself reads the body and decides whether to enter the skill. Open with a clear "Use this skill when..." statement so the agent has unambiguous entry criteria.
+Routing language. The first paragraph of the body should make the skill's trigger obvious, and this matters more than it looks, because **the slug and the body are the only things the model ever sees**. Rundock injects a bare list of slugs into the agent's prompt (`Skills: alpha, beta`) and nothing else: no description, no summary. The agent decides whether to open a skill from its slug, then decides whether to follow it from the body. Open with a clear "Use this skill when..." statement, and name the skill so the slug alone carries a hint.
 
 Boundaries. Most skills should explicitly state what they do NOT do. A skill that proposes candidates but does not create files. A skill that drafts but does not publish. A skill that audits but does not fix. The boundary is what keeps a skill leaf-shaped: declare it.
 
@@ -57,9 +57,16 @@ Rundock matches skills to agents in two passes, in this order.
 
 In the UI, an assigned skill displays a "Used by" row on its profile page listing every agent it is attached to, with each agent's display name, role, icon, and colour. Multiple agents on the same skill is normal: `git-workflow` is owned by Dev but other specialists may reference it.
 
-Unassigned skills are still callable. If `discoverSkills` finds a skill that no agent owns by either pass, it is registered with `status: 'unassigned'`. The orchestrator can still route work to an unassigned skill if its `description` field matches the request strongly enough. The skill simply does not appear under any agent's profile until it is assigned.
+Unassigned skills are still discovered and displayed. If `discoverSkills` finds a skill that no agent owns by either pass, it is registered with `status: 'unassigned'` and appears in the Skills view without an owner. **It is not offered to any agent**, because a skill reaches an agent only through that agent's own slug list. An unassigned skill is inert until something assigns it.
 
-Platform skills (slugs prefixed with `rundock-`) are gated to platform agents (currently only Doc). Non-platform agents will not see them in either pass. Non-platform skills are gated to non-platform agents and Doc will not see them. This split keeps Rundock's own management skills out of the user's specialists and keeps user skills out of Doc.
+**Only agents that are on the team are considered, in either pass.** An agent whose status is `available` or `raw` is skipped entirely, so it gets no skills however it declares them. This catches people out: the `skills:` array is sitting right there in the file and appears to do nothing.
+
+**The `rundock-` prefix gates in both directions**, and each direction is a separate rule:
+
+- A **platform** agent (currently only Doc) is offered `rundock-` skills and nothing else. Give Doc a normal skill and it is skipped.
+- A **non-platform** agent is offered everything except `rundock-` skills. Give a specialist `rundock-agents` and it is skipped.
+
+Neither case warns. The skill simply does not attach. The split keeps Rundock's own management skills out of the user's specialists and keeps user skills out of Doc.
 
 ## Workspace mode
 
@@ -151,11 +158,13 @@ A handful of specific things that go wrong silently with skill files.
 
 **Flat skill files are not discovered.** A file at `.claude/skills/my-skill.md` is invisible to Rundock. The discovery loop only walks subdirectories of `.claude/skills/` and `System/Playbooks/`, looking for `SKILL.md` and `PLAYBOOK.md` respectively. The skill must live at `.claude/skills/<slug>/SKILL.md` (or the Playbooks equivalent) to be picked up.
 
+**`System/Playbooks/` is discovered but not editable, and not loadable by the agent.** Rundock walks it, shows what it finds, and injects those slugs into the agent's prompt alongside the rest. But the agent's own runtime resolves a skill from `.claude/skills/`, so a playbook-sourced skill is **named to the agent and cannot be opened by it**: the agent is told it has something it cannot reach. Saving or deleting one in Rundock does not touch it either, because both operations write to `.claude/skills/<slug>/`, so an edit creates a second skill with the same slug rather than changing the original, and nothing deduplicates the two. Treat `System/Playbooks/` as read-only history and put new skills in `.claude/skills/`.
+
 **Same slug in both source locations.** Rundock scans `System/Playbooks/` first, then `.claude/skills/`. If both sources contain a folder with the same slug, both are loaded as separate skill records, with the same id and slug but different `source` and `filePath` fields. The UI will show two skills with identical names. Pick one location and stick to it. The convention going forward is `.claude/skills/`; the Playbooks path exists for older workspace layouts.
 
 **Frontmatter typos fail silently.** A misspelled `descripton` or `naem` is silently ignored. The skill loads with empty values for those fields and slugs back to title-cased defaults. If a skill looks generic or untriggerable in the org chart, check the field names against the table above.
 
-**Inline `skills:` arrays on the agent side do not parse.** Rundock's `parseSkills` only matches the block form (`skills:` followed by indented `- slug` lines). The flow-style `skills: [a, b]` parses as an empty array. The skill will not attach explicitly and will fall through to body-text scan, where it may or may not match. Always use the block form on the agent side.
+**Both `skills:` forms parse.** `parseSkills` tries the flow form (`skills: [alpha, beta]`) first and falls back to the block form (`skills:` followed by indented `- slug` lines). Quotes around entries are stripped either way. An earlier version of this page said the flow form parsed as an empty array; it does not, and never did.
 
 **Slug case sensitivity.** The skill slug is whatever the directory name is. Rundock lowercases slugs before matching (both in the explicit `skills:` array compare and in the body-text regex), so `Hook-Generator` in an agent's `skills:` would match a `hook-generator` directory. But case-mismatched slugs make the codebase harder to read. Keep all slugs lowercase end to end.
 
