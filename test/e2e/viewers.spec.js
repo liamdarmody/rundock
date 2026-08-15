@@ -493,6 +493,12 @@ test('a callout edits in place and saves byte-honestly', async ({ page }) => {
   await callout.locator('.callout-edit-btn').click();
   const ta = callout.locator('textarea.callout-edit');
   await expect(ta).toBeVisible();
+  // The editor finishes opening in a requestAnimationFrame that focuses the
+  // textarea. Typing before that lands can be swallowed, and then the blur
+  // commits the ORIGINAL text, which is valid, so the editor closes and the
+  // test fails somewhere later looking like a mystery. Measured at roughly one
+  // run in ten before this wait. Focus is the signal that opening finished.
+  await expect(ta).toBeFocused();
   await expect(ta).toHaveValue(/\[!abstract\]\+ Today at a glance/);
   // Edit the body and commit.
   await ta.fill('> [!abstract]+ Today at a glance\n> Three meetings now.');
@@ -519,6 +525,12 @@ test('opening and blurring a callout without an edit does not change the documen
   await callout.locator('.callout-edit-btn').click();
   const ta = callout.locator('textarea.callout-edit');
   await expect(ta).toBeVisible();
+  // The editor finishes opening in a requestAnimationFrame that focuses the
+  // textarea. Typing before that lands can be swallowed, and then the blur
+  // commits the ORIGINAL text, which is valid, so the editor closes and the
+  // test fails somewhere later looking like a mystery. Measured at roughly one
+  // run in ten before this wait. Focus is the signal that opening finished.
+  await expect(ta).toBeFocused();
   await expect(ta).toBeFocused();
   await page.locator('#editor-filename').click();
   await expect(callout.locator('textarea')).toHaveCount(0);
@@ -537,13 +549,28 @@ test('an invalid callout edit is flagged, not silently discarded', async ({ page
   await callout.locator('.callout-edit-btn').click();
   const ta = callout.locator('textarea.callout-edit');
   await expect(ta).toBeVisible();
+  // The editor finishes opening in a requestAnimationFrame that focuses the
+  // textarea. Typing before that lands can be swallowed, and then the blur
+  // commits the ORIGINAL text, which is valid, so the editor closes and the
+  // test fails somewhere later looking like a mystery. Measured at roughly one
+  // run in ten before this wait. Focus is the signal that opening finished.
+  await expect(ta).toBeFocused();
   // Type an invalid callout head (no [!type]) and try to commit by blurring.
   await ta.fill('not a valid callout head\n> body');
   await page.locator('#editor-filename').click();
   // The editor stays open with the typed text preserved and a rejection signal.
+  // The flag is not on a timer: it used to be removed after 600ms, so this
+  // assertion raced it and lost whenever the machine was busy, which is how a
+  // real failure would have been re-run rather than read.
   await expect(ta).toBeVisible();
   await expect(ta).toHaveClass(/callout-edit-invalid/);
   await expect(ta).toHaveValue(/not a valid callout head/);
+  // Still flagged well after the old timer would have cleared it.
+  await page.waitForTimeout(900);
+  await expect(ta).toHaveClass(/callout-edit-invalid/);
+  // Typing is what clears it: the rejection has been seen and is being fixed.
+  await ta.press('a');
+  await expect(ta).not.toHaveClass(/callout-edit-invalid/);
   // Escape cancels cleanly, reverting to the rendered box.
   await ta.press('Escape');
   await expect(callout.locator('textarea')).toHaveCount(0);
@@ -557,6 +584,12 @@ test('an external change while a callout editor is open is not clobbered on blur
   await callout.locator('.callout-edit-btn').click();
   const ta = callout.locator('textarea.callout-edit');
   await expect(ta).toBeVisible();
+  // The editor finishes opening in a requestAnimationFrame that focuses the
+  // textarea. Typing before that lands can be swallowed, and then the blur
+  // commits the ORIGINAL text, which is valid, so the editor closes and the
+  // test fails somewhere later looking like a mystery. Measured at roughly one
+  // run in ten before this wait. Focus is the signal that opening finished.
+  await expect(ta).toBeFocused();
   await ta.fill('> [!abstract]+ Today at a glance\n> Stale edit from the textarea.');
   // Simulate the node changing underneath the open editor (a live refresh).
   await page.evaluate(() => {
