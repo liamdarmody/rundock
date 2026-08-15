@@ -20,6 +20,33 @@
 // Adding an entry to the allowlist is deliberately a code review, not a
 // formality: the reason field is the only part a person has to write, and it is
 // the only part worth reading.
+//
+// ── If this lint just failed you ────────────────────────────────────────────
+//
+// One of two things is true, and they need different answers.
+//
+//   1. A token already covers the value. This is the common case, and the real
+//      question was which token rather than whether. docs/DESIGN.md names every
+//      one of them with what it is for.
+//
+//   2. The value is genuinely new. Then the question is whether it should be a
+//      token: one use is a literal, a pattern is a token, and a value with a
+//      meaning rather than just an appearance is almost always a token.
+//
+// Adding it to the allowlist is the LAST option, not the first, and it means
+// writing down why in the same edit. Some literals genuinely belong there:
+// shadow alphas (there is no elevation scale yet), dark text on a bright status
+// fill (deliberately not theme-following), and one-off tints of a colour that
+// already has a token. Those are decisions, and the allowlist records them so
+// the next person does not "fix" them.
+//
+// What this lint does NOT check, so you know where you are on your own:
+// spacing and sizing have no scale, so padding and margins are literals
+// everywhere. Match what surrounds you rather than inventing a private scale in
+// one file.
+//
+// Comments are stripped before anything is counted. They used to be included,
+// which meant explaining a value raised its own allowance.
 
 const fs = require('fs');
 const path = require('path');
