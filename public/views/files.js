@@ -368,7 +368,7 @@ function buildTree(items,container) {
   for(const item of items) {
     if(item.type==='folder') {
       const open=expandedFolders.has(item.path);
-      const f=document.createElement('div'); f.className='folder-item'; f.innerHTML=`${treeIconSvg(open?TREE_ICONS.folderOpen:TREE_ICONS.folder)} ${esc(item.name)}`;
+      const f=document.createElement('div'); f.className='folder-item'; f.innerHTML=`${treeIconSvg(open?TREE_ICONS.folderOpen:TREE_ICONS.folder)}<span class="file-item-name">${esc(item.name)}</span>`;
       f.dataset.path=item.path;
       f.onclick=()=>{const ch=f.nextElementSibling,svg=f.querySelector('svg.file-item-icon');const collapsed=ch.classList.toggle('collapsed');if(collapsed)expandedFolders.delete(item.path);else expandedFolders.add(item.path);if(svg)svg.innerHTML=collapsed?TREE_ICONS.folder:TREE_ICONS.folderOpen;};
       f.oncontextmenu=(e)=>{e.preventDefault();openRowContextMenu(e,item.path,'folder');};
@@ -376,7 +376,7 @@ function buildTree(items,container) {
       const ch=document.createElement('div'); ch.className=open?'file-children':'file-children collapsed'; buildTree(item.children,ch); container.appendChild(ch);
     } else {
       const fi=document.createElement('div'); fi.className='file-item';
-      fi.innerHTML=`${treeIconSvg(TREE_ICONS[item.kind]||TREE_ICONS.file)} ${esc(item.name)}`;
+      fi.innerHTML=`${treeIconSvg(TREE_ICONS[item.kind]||TREE_ICONS.file)}<span class="file-item-name">${esc(item.name)}</span>`;
       fi.dataset.path = item.path;
       fi.onclick=()=>{document.querySelectorAll('.file-item').forEach(x=>x.classList.remove('active'));fi.classList.add('active');editorReturnView='editor';fileHistory=[];ws.send(JSON.stringify({type:'read_file',path:item.path}));showView('editor');};
       fi.oncontextmenu=(e)=>{e.preventDefault();openRowContextMenu(e,item.path,'file');};
