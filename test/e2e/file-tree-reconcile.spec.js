@@ -106,7 +106,7 @@ test('expansion, selection and scroll all survive a structural change', async ({
     };
   });
 
-  // AC-3, and all of it for the same reason: these nodes were never replaced.
+  // All of it survives for one reason: these nodes were never replaced.
   expect(after.rowTag).toBe('survivor');
   expect(after.folderTag).toBe('folder');
   expect(after.stillActive).toBe(true);
@@ -270,12 +270,12 @@ test('the tree never carries state across a workspace switch', async ({ page }) 
 });
 
 test('an inline text field in the tree survives a structural change', async ({ page }) => {
-  // AC-3 names an in-progress inline RENAME. There is no rename affordance in
+  // There is no rename affordance in
   // this tree: the row context menu offers creation rows, copy path, copy
   // wikilink and reveal in Finder, and nothing else. The nearest real thing,
   // and the tree's only inline text entry, is naming a file as it is created,
   // so that is what gets tested. Keyboard focus rides along with it, which is
-  // the other half of AC-3 that nothing else here covers.
+  // the other property nothing else here covers.
   await openFiles(page);
   await pushTree(page, bigTree());
 
@@ -317,7 +317,7 @@ test('the same generated sequences reconcile correctly in the real DOM', async (
   //
   // So the very sequences the unit suite runs are pushed through the real
   // renderer here, and the resulting DOM is read back and compared with the
-  // tree the server sent. This is AC-2 for the half the user can see.
+  // tree the server sent, covering the half of this the user can see.
   //
   // Structure and order only: a kind change is a one-line update covered by
   // its own test above, and reading a glyph back to a kind would test the icon

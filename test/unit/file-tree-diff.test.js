@@ -14,7 +14,7 @@ const { buildTree, mulberry32, randomEntries, mutate, sequence } = require('../h
 
 describe('file tree diff', () => {
   test('an unchanged tree produces no operations at all', () => {
-    // AC-6. This is what lets the skip-if-unchanged guard be deleted: the
+    // This is what lets the skip-if-unchanged guard be deleted: the
     // common case costs nothing without a special case for it.
     const tree = buildTree(randomEntries(mulberry32(1)));
     assert.deepStrictEqual(diffTree(tree, tree), []);
@@ -23,8 +23,9 @@ describe('file tree diff', () => {
   });
 
   test('one new file in a large tree costs one operation', () => {
-    // AC-8: proportional to the change, not the tree. Stated as an operation
-    // count because a timing assertion would be a flake waiting to happen.
+    // The cost is proportional to the change, not to the tree. Stated as an
+    // operation count because a timing assertion would be a flake waiting to
+    // happen.
     const entries = randomEntries(mulberry32(7), { dirs: 40, files: 400 });
     const before = buildTree(entries);
     const home = entries.find(e => e.isDir).path;   // a real folder, wherever it landed
@@ -111,11 +112,12 @@ describe('file tree diff', () => {
   });
 
   test('generated sequences of changes always reconcile exactly', () => {
-    // AC-2, and the reason this module is pure. 300 seeds, each applying up to
+    // The reason this module is pure. 300 seeds, each applying up to
     // four structural changes, asserting the operation list turns the old tree
     // into the new one byte for byte.
     let totalOps = 0;
     let mutatedRounds = 0;
+    let typeReplacements = 0;   // a path that stayed put and changed what it is
 
     for (let seed = 1; seed <= 300; seed++) {
       // Through the shared entry point, so the browser suite can run these
@@ -125,6 +127,9 @@ describe('file tree diff', () => {
 
       const ops = diffTree(before, after);
       totalOps += ops.length;
+
+      const removed = new Set(ops.filter(o => o.op === 'remove').map(o => o.path));
+      typeReplacements += ops.filter(o => o.op === 'insert' && removed.has(o.path)).length;
 
       let applied;
       try {
@@ -145,5 +150,10 @@ describe('file tree diff', () => {
     // assertion above would pass while proving nothing at all.
     assert.ok(mutatedRounds > 250, `only ${mutatedRounds} of 300 rounds changed anything`);
     assert.ok(totalOps > 300, `only ${totalOps} operations across 300 rounds`);
+    // The replace-on-type-change branch has to be among what was generated,
+    // not merely available to be generated. Without this, dropping that
+    // mutation from the shared generator would leave the branch untested and
+    // every assertion here would still pass.
+    assert.ok(typeReplacements > 5, `type replacements never generated (${typeReplacements})`);
   });
 });

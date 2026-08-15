@@ -89,7 +89,7 @@ const under = (p, prefix) => p === prefix || p.startsWith(prefix + '/');
 /** One random structural change, returning a new flat entry list. */
 function mutate(rnd, entries, seq) {
   const files = entries.filter(e => !e.isDir);
-  const choice = Math.floor(rnd() * 6);
+  const choice = Math.floor(rnd() * 7);
 
   if (choice === 0) {                                    // create a file
     const parent = pick(rnd, dirsOf(entries));
@@ -123,6 +123,20 @@ function mutate(rnd, entries, seq) {
     const moved = target ? `${target}/${name}` : name;
     if (entries.some(e => e.path === moved)) return entries;
     return entries.map(e => (e === victim ? { ...e, path: moved } : e));
+  }
+  if (choice === 5 && entries.length) {
+    // A path stays put and becomes a different KIND of thing: delete a note
+    // called `archive` and make a folder with that name. The reconciler has a
+    // branch for exactly this, replacing rather than updating, and without
+    // this mutation no generated sequence ever reached it. It was covered by
+    // one hand-written case that never touched the real renderer.
+    const victim = pick(rnd, entries);
+    if (victim.isDir) {
+      // Becoming a file takes everything underneath it.
+      return entries.filter(e => !under(e.path, victim.path))
+        .concat([{ path: victim.path, isDir: false, kind: pick(rnd, KINDS) }]);
+    }
+    return entries.map(e => (e === victim ? { path: e.path, isDir: true } : e));
   }
   if (files.length) {                                    // a note becomes a board
     const victim = pick(rnd, files);
