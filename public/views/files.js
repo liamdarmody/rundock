@@ -329,13 +329,95 @@ function closeOpenFile() {
   document.querySelectorAll('.file-item.active').forEach((el) => el.classList.remove('active'));
 }
 
-// Folder paths the user (or a wikilink reveal) has opened. renderFileTree
-// rebuilds the DOM from scratch, so without this every re-render collapsed
-// the whole tree back to its default.
-const expandedFolders = new Set();
+// The tree as it is currently drawn, which is what an incoming push is
+// compared against. Deliberately not cachedFileTree: that belongs to wikilink
+// resolution, is assigned at a different moment, and tying rendering to it
+// would couple two things that only look alike.
+let renderedTree = null;
 
+// Which folders are open is no longer tracked anywhere. It lives in the DOM,
+// on the class, because the node holding it is never destroyed. The Set that
+// used to shadow it existed only to survive the rebuild that no longer
+// happens.
 function renderFileTree(tree) {
-  const c=document.getElementById('file-tree');
+  const c = document.getElementById('file-tree');
+  const next = tree || [];
+
+  // Reconciliation needs a drawn tree to reconcile against. Entering or
+  // leaving the empty state replaces the container wholesale, and an empty
+  // container has nothing worth preserving, so those stay full builds.
+  const canPatch = next.length && renderedTree && renderedTree.length && c.firstElementChild;
+  if (canPatch) {
+    try {
+      patchTree(c, RundockFileTreeDiff.diffTree(renderedTree, next));
+      renderedTree = next;
+      return;
+    } catch (e) {
+      // A patch that does not fit the DOM means the two have drifted apart.
+      // Falling through to a full rebuild is always correct, and it is the
+      // behaviour this whole change replaces, so the worst case is the old
+      // one rather than a sidebar quietly disagreeing with the disk.
+      console.warn('[FileTree] reconcile failed, rebuilding:', e && e.message);
+    }
+  }
+  renderedTree = next;
+  rebuildFileTree(c, next);
+}
+
+/**
+ * Execute a diff against the live DOM. Throws rather than skipping when an
+ * operation does not fit: the caller turns that into a rebuild, and a silently
+ * dropped operation would leave the tree wrong with nothing to notice it.
+ */
+function patchTree(rootEl, ops) {
+  for (const op of ops) {
+    const container = treeContainerEl(rootEl, op.parent);
+    if (!container) throw new Error(`no container for "${op.parent}"`);
+
+    if (op.op === 'insert') {
+      const frag = document.createDocumentFragment();
+      buildTree([op.node], frag);
+      // A folder occupies two elements, its row and the children box beneath
+      // it, so positions are counted in rows and never in child nodes.
+      const rows = treeRows(container);
+      container.insertBefore(frag, rows[op.index] || null);
+      continue;
+    }
+
+    const row = treeRows(container).find(el => el.dataset.path === op.path);
+    if (!row) throw new Error(`no row "${op.path}" in "${op.parent}"`);
+
+    if (op.op === 'remove') {
+      const kids = row.nextElementSibling;
+      if (row.classList.contains('folder-item') && kids && kids.classList.contains('file-children')) {
+        kids.remove();
+      }
+      row.remove();
+    } else if (op.op === 'update') {
+      const svg = row.querySelector('svg.file-item-icon');
+      if (svg) svg.innerHTML = TREE_ICONS[op.kind] || TREE_ICONS.file;
+    } else {
+      throw new Error(`unknown operation "${op.op}"`);
+    }
+  }
+}
+
+/** Direct child rows of a container, in order. Excludes the children boxes. */
+function treeRows(containerEl) {
+  return Array.from(containerEl.children).filter(el =>
+    el.classList.contains('folder-item') || el.classList.contains('file-item'));
+}
+
+/** The element that holds a path's children, or the root for the empty path. */
+function treeContainerEl(rootEl, parentPath) {
+  if (!parentPath) return rootEl;
+  const q = parentPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const row = rootEl.querySelector(`.folder-item[data-path="${q}"]`);
+  const kids = row && row.nextElementSibling;
+  return kids && kids.classList.contains('file-children') ? kids : null;
+}
+
+function rebuildFileTree(c, tree) {
   const editorEmpty=document.getElementById('editor-empty');
   c.innerHTML='';
   if(!tree||!tree.length) {
@@ -367,13 +449,12 @@ function paletteFileIcon(kind) {
 function buildTree(items,container) {
   for(const item of items) {
     if(item.type==='folder') {
-      const open=expandedFolders.has(item.path);
-      const f=document.createElement('div'); f.className='folder-item'; f.innerHTML=`${treeIconSvg(open?TREE_ICONS.folderOpen:TREE_ICONS.folder)}<span class="file-item-name">${esc(item.name)}</span>`;
+      const f=document.createElement('div'); f.className='folder-item'; f.innerHTML=`${treeIconSvg(TREE_ICONS.folder)}<span class="file-item-name">${esc(item.name)}</span>`;
       f.dataset.path=item.path;
-      f.onclick=()=>{const ch=f.nextElementSibling,svg=f.querySelector('svg.file-item-icon');const collapsed=ch.classList.toggle('collapsed');if(collapsed)expandedFolders.delete(item.path);else expandedFolders.add(item.path);if(svg)svg.innerHTML=collapsed?TREE_ICONS.folder:TREE_ICONS.folderOpen;};
+      f.onclick=()=>{const ch=f.nextElementSibling,svg=f.querySelector('svg.file-item-icon');const collapsed=ch.classList.toggle('collapsed');if(svg)svg.innerHTML=collapsed?TREE_ICONS.folder:TREE_ICONS.folderOpen;};
       f.oncontextmenu=(e)=>{e.preventDefault();openRowContextMenu(e,item.path,'folder');};
       container.appendChild(f);
-      const ch=document.createElement('div'); ch.className=open?'file-children':'file-children collapsed'; buildTree(item.children,ch); container.appendChild(ch);
+      const ch=document.createElement('div'); ch.className='file-children collapsed'; buildTree(item.children,ch); container.appendChild(ch);
     } else {
       const fi=document.createElement('div'); fi.className='file-item';
       fi.innerHTML=`${treeIconSvg(TREE_ICONS[item.kind]||TREE_ICONS.file)}<span class="file-item-name">${esc(item.name)}</span>`;
@@ -748,8 +829,8 @@ function highlightFileInSidebar(filePath) {
     if (node.classList && node.classList.contains('file-children') && node.classList.contains('collapsed')) {
       node.classList.remove('collapsed');
       const folder = node.previousElementSibling;
-      // Remember it, so a later structural change does not undo the reveal.
-      if (folder && folder.dataset && folder.dataset.path) expandedFolders.add(folder.dataset.path);
+      // No bookkeeping needed to make the reveal stick: a structural change
+      // patches the tree around this node instead of replacing it.
       // Swap the folder's icon to the open-folder SVG, matching the manual
       // click-expand path. The earlier selector (.folder-icon) matched nothing
       // and injected a text chevron into an <svg>, so the icon stayed closed.

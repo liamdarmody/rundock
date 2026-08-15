@@ -390,15 +390,12 @@ function handle(d) {
       if(convoId && !isStaleProcess(d, convoId)) handleResult(d, convoId);
       break;
     case 'file_tree': {
-      // The client asks for the tree after every file-writing tool call and
-      // every agent turn, but an agent editing file CONTENTS does not change
-      // the tree at all. Re-rendering identical data tore down the DOM and
-      // collapsed every folder, losing any wikilink reveal and any folder the
-      // user had opened by hand. Compare first and skip when nothing moved.
-      const nextTreeJson = JSON.stringify(d.tree);
+      // Handed over unconditionally. The tree reconciles against what is
+      // already drawn, so an unchanged push produces no operations and touches
+      // no DOM. The comparison that used to guard this call was standing in
+      // for that, back when rendering meant destroying the tree and rebuilding
+      // it, and it only ever hid the cheap case.
       cachedFileTree = d.tree;
-      if (nextTreeJson === cachedFileTreeJson) break;
-      cachedFileTreeJson = nextTreeJson;
       renderFileTree(d.tree);
       break;
     }
@@ -1049,9 +1046,6 @@ function syncTitleBarOverlay(isLight) {
 // Set when a workspace opens, cleared once the client has rendered it.
 let workspaceOpenStartedAt = null;
 let cachedFileTree = null;
-// Serialised copy of the last rendered tree, so an unchanged push can be
-// skipped without walking the structure again.
-let cachedFileTreeJson = null;
 
 // Tree icons keyed by the server-provided file kind, matching the creation
 // menu's entity icons (a board file shows the kanban icon, a note the note
