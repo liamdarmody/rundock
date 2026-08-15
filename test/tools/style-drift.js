@@ -20,6 +20,16 @@
 // Adding an entry to the allowlist is deliberately a code review, not a
 // formality: the reason field is the only part a person has to write, and it is
 // the only part worth reading.
+//
+// ── If this lint just failed you ────────────────────────────────────────────
+//
+// docs/DESIGN.md, "The drift lint", is the source of truth for what to do
+// about it, and for which literals are deliberate and why. The short version:
+// a token usually already covers the value, and adding an allowlist entry is
+// the last option rather than the first.
+//
+// Comments are stripped before anything is counted. They used to be included,
+// which meant explaining a value raised its own allowance.
 
 const fs = require('fs');
 const path = require('path');

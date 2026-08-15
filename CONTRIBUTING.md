@@ -60,6 +60,33 @@ Before opening a PR:
 - **UK spelling** in user-facing strings, comments, and documentation.
 - **No internal references.** Comments, tests, and docs should read as plain descriptive language to any external contributor. Do not leave in run codenames, review-round or priority labels (e.g. `P0-1`, `Review R1`, `KAN2`, `HARDEN1`), private workspace paths, or owner-attributed decision notes. `npm run check:refs` scans the repo for these and runs in CI as the `Hygiene` job; it must pass before merge. If a match is a false positive, reword the line, or as a last resort add an inline `internal-refs-allow` marker. To catch these before you commit, install the optional local hook: `git config core.hooksPath scripts/hooks`.
 
+### Design conventions
+
+Rundock's interface is built from a fixed set of tokens: colours, type sizes,
+radii and durations, all declared in `public/styles/tokens.css`. Read
+[DESIGN.md](docs/DESIGN.md) before writing CSS. It names every token with what
+it is for, which is usually the question you actually have.
+
+- **Use a token, do not invent a value.** `npm run lint:styles` fails when a
+  colour, radius or duration literal appears outside `tokens.css` and is not
+  explicitly allowed. It runs in CI and in the release gate.
+- **Reach for meaning, not appearance.** `--danger` is for destructive actions
+  and errors, not for things that happen to be red. Tokens chosen for their
+  colour rather than their purpose are how a palette drifts.
+- **Two rules decide a radius**, and they outrank the scale: an element inside a
+  rounded container gets `inner = outer - padding`, and a radius over half the
+  height is already a pill.
+- **Both themes, every time.** Declare on `:root` and override on `body.light`.
+  A token declared only in the light theme is undefined in dark, and an
+  undefined custom property inherits silently rather than erroring.
+- **Some literals are deliberate.** Shadow alphas, dark text on bright fills and
+  one-off tints are recorded with their reasons in
+  `test/tools/style-drift-allowlist.json`. Do not tidy them away; if you think
+  one is wrong, change the reason in the same edit.
+- **No styles in `index.html`.** Stylesheets live under `public/styles/`, and
+  their link order in `index.html` is the cascade, so moving a link is a real
+  change even when no rule text changes.
+
 ### Changelog entry standards
 
 Every entry in `CHANGELOG.md` should follow the same shape so release notes read consistently from version to version. The mechanics of the `## Unreleased` heading are covered in Conventions above; this section covers the content.

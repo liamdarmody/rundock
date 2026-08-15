@@ -94,6 +94,7 @@ To pull updates later, run `npm run update` in the install directory.
 - [AGENTS.md](docs/AGENTS.md): the agent file format reference. Frontmatter fields, the markdown body, workspace modes, and a complete example.
 - [SKILLS.md](docs/SKILLS.md): the skill file format, discovery, and the assignment model.
 - [ROUTINES.md](docs/ROUTINES.md): the schedule format, scheduler behaviour, and where output goes.
+- [DESIGN.md](docs/DESIGN.md): the design standard. Every token with its purpose and usage rule, the two rules that decide a radius, and what is deliberately left untokenised.
 - [CONTRIBUTING.md](CONTRIBUTING.md): dev setup, code structure, conventions, changelog standards.
 - [CHANGELOG.md](CHANGELOG.md): release history.
 - [LICENSE](LICENSE): PolyForm Perimeter 1.0.0.
