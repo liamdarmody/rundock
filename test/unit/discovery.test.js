@@ -300,6 +300,29 @@ describe('parseSkillFile / discoverSkills', () => {
     assert.strictEqual(bySlug['hook-generator'].status, 'assigned');
   });
 
+  test('body-text skill matching survives a CRLF checkout', () => {
+    // Every other read in discovery goes through readNormalisedFile. The body
+    // read for this second pass did not, and matched frontmatter with a
+    // newline-only pattern, so on a Windows checkout the match failed, the
+    // body came back empty, and body-text matching silently assigned nothing.
+    // Explicit `skills:` entries kept working, which is what made it invisible:
+    // a Windows contributor sees half the mechanism work and no error at all.
+    useWorkspace({
+      agents: {
+        'content-lead': agentFile({
+          name: 'content-lead', displayName: 'Penn', type: 'specialist', order: 1,
+          body: 'Penn reaches for content-linter when a draft needs checking.',
+        }).replace(/\n/g, '\r\n'),
+      },
+      skills: {
+        'content-linter': '---\ndescription: Lints content\n---\nbody',
+      },
+    });
+    const bySlug = Object.fromEntries(srv.discoverSkills().map(s => [s.slug, s]));
+    assert.deepStrictEqual(bySlug['content-linter'].assignedAgents.map(a => a.id), ['content-lead']);
+    assert.strictEqual(bySlug['content-linter'].status, 'assigned');
+  });
+
   test('discoverSkills: rundock-* skills only assign to platform agents and vice versa', () => {
     useWorkspace({
       agents: {

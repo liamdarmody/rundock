@@ -1604,7 +1604,11 @@ function discoverSkills(existingAgents) {
   const agentBody = {};
   for (const agent of agents.filter(a => a.status === 'onTeam' && a.fileName)) {
     try {
-      const content = fs.readFileSync(path.join(agentsDir, agent.fileName), 'utf-8');
+      // Normalised, like every other read in discovery. A raw read here meant
+      // the newline-only frontmatter pattern below missed on a CRLF checkout,
+      // so the body came back empty and this whole pass silently matched
+      // nothing on Windows while explicit assignments carried on working.
+      const content = readNormalisedFile(path.join(agentsDir, agent.fileName));
       const bodyMatch = content.match(/^---\n[\s\S]*?\n---\n([\s\S]*)/);
       agentBody[agent.id] = bodyMatch ? bodyMatch[1].toLowerCase() : '';
     } catch (e) { agentBody[agent.id] = ''; }
