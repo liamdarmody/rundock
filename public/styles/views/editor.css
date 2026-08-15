@@ -202,7 +202,11 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .tiptap-editor .ProseMirror .callout-edit-btn:hover { opacity: 1; background: color-mix(in srgb, var(--callout-color) 16%, transparent); }
 .tiptap-editor .ProseMirror .callout.callout-editing { padding-top: 10px; }
 .tiptap-editor .ProseMirror .callout-edit { width: 100%; box-sizing: border-box; resize: none; background: var(--elevated); border: 1px solid var(--callout-color); border-radius: var(--radius-md); color: var(--text-1); font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 13px; line-height: 1.5; padding: 8px 10px; outline: none; }
-/* Rejected edit (an invalid callout head): a brief red flash instead of a
-   silent revert, so the typed text is kept and the reason is visible. */
-.tiptap-editor .ProseMirror .callout-edit.callout-edit-invalid { border-color: var(--danger); box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 30%, transparent); animation: callout-edit-shake 0.3s ease; }
+/* Rejected edit (an invalid callout head): the typed text is kept and the
+   reason stays visible, instead of a silent revert.
+   Two classes, because they answer different questions. The border says the
+   text will not save and holds until the text changes. The shake happens once
+   and is taken off again so a second rejection can replay it. */
+.tiptap-editor .ProseMirror .callout-edit.callout-edit-invalid { border-color: var(--danger); box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 30%, transparent); }
+.tiptap-editor .ProseMirror .callout-edit.callout-edit-shaking { animation: callout-edit-shake 0.3s ease; }
 @keyframes callout-edit-shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-3px); } 75% { transform: translateX(3px); } }

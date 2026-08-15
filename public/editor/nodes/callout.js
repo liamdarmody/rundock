@@ -355,6 +355,10 @@ export const Callout = Node.create({
         dom.appendChild(ta);
         const grow = () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; };
         ta.addEventListener('input', grow);
+        // Typing is the signal that the rejection has been seen and is being
+        // dealt with, so the flag clears on the next keystroke rather than on
+        // a timer.
+        ta.addEventListener('input', () => ta.classList.remove('callout-edit-invalid'));
         requestAnimationFrame(() => { grow(); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); });
         let done = false;
         const finish = (save) => {
@@ -368,9 +372,18 @@ export const Callout = Node.create({
               // Invalid callout head: do not silently discard the typed text.
               // Flag the rejection and keep the editor open so the user can fix
               // it or press Escape to cancel.
+              // The rejection is two separate things, and conflating them was
+              // wrong in both directions. The STATE is that the text will not
+              // save, and it lasts until the text changes, because a warning
+              // that clears itself after half a second is close to no warning:
+              // look away and the box goes back to normal with the edit still
+              // unsaved. The SHAKE is a one-off, and it has to be taken off
+              // again or a second rejection would not replay it, since
+              // re-adding a class the element already has restarts nothing.
               ta.classList.add('callout-edit-invalid');
+              ta.classList.add('callout-edit-shaking');
               requestAnimationFrame(() => ta.focus());
-              setTimeout(() => ta.classList.remove('callout-edit-invalid'), 600);
+              setTimeout(() => ta.classList.remove('callout-edit-shaking'), 600);
               return;
             }
             const pos = typeof getPos === 'function' ? getPos() : null;
