@@ -383,4 +383,41 @@ describe('getFileTree', () => {
   test('unreadable dir returns []', () => {
     assert.deepStrictEqual(srv.getFileTree('/nonexistent/nowhere'), []);
   });
+
+  test('every level is sorted the way the tree reconciler assumes', () => {
+    // The client diffs one tree snapshot against another and emits no move
+    // operation, because it takes for granted that both snapshots order every
+    // level the same way: folders first, then by name. That assumption lives
+    // in public/file-tree-diff.js and the thing it depends on lives here, with
+    // a module boundary and a network hop in between and nothing connecting
+    // them. If this sort ever changed, the client would not reorder anything
+    // and the tree would quietly disagree with the disk.
+    //
+    // So the comparator is restated here and checked against the real output.
+    // It is a duplicate, deliberately: the point is to fail when the two stop
+    // matching, which is exactly what a shared helper would prevent it from
+    // noticing.
+    const dir = makeWorkspace({ files: {
+      'zebra.md': 'x', 'Apple.md': 'x', 'mango.md': 'x',
+      'zoo/a.md': 'x', 'alpha/b.md': 'x', 'Beta/c.md': 'x',
+      'alpha/nested/deep.md': 'x', 'alpha/aaa.md': 'x',
+    } });
+
+    const ordered = (nodes) => {
+      const expected = nodes.slice().sort((a, b) => (
+        a.type === 'folder' && b.type !== 'folder' ? -1
+          : a.type !== 'folder' && b.type === 'folder' ? 1
+            : a.name.localeCompare(b.name)
+      ));
+      assert.deepStrictEqual(nodes.map(n => n.name), expected.map(n => n.name));
+      for (const n of nodes) if (n.type === 'folder') ordered(n.children);
+    };
+
+    const tree = srv.getFileTree(dir);
+    ordered(tree);
+    // Guard the guard: a tree with no folders, or only one level, would pass
+    // the check above while proving nothing about either rule.
+    assert.ok(tree.some(n => n.type === 'folder') && tree.some(n => n.type === 'file'));
+    assert.ok(tree.find(n => n.name === 'alpha').children.some(n => n.type === 'folder'));
+  });
 });

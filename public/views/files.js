@@ -418,11 +418,21 @@ function treeRows(containerEl) {
     el.classList.contains('folder-item') || el.classList.contains('file-item'));
 }
 
-/** The element that holds a path's children, or the root for the empty path. */
+/**
+ * The element that holds a path's children, or the root for the empty path.
+ *
+ * Compares dataset values rather than building a selector out of a path. An
+ * earlier version escaped only the backslash and the quote, which left every
+ * other character CSS treats as syntax: a file called `notes [draft].md` threw
+ * a DOMException, and because the caller turns a throw into a rebuild, those
+ * names would have quietly lost the whole benefit of this change. Square
+ * brackets in filenames are ordinary in a vault. This is also the lookup
+ * pattern the rest of the file already uses.
+ */
 function treeContainerEl(rootEl, parentPath) {
   if (!parentPath) return rootEl;
-  const q = parentPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  const row = rootEl.querySelector(`.folder-item[data-path="${q}"]`);
+  const row = Array.from(rootEl.querySelectorAll('.folder-item'))
+    .find(el => el.dataset.path === parentPath);
   const kids = row && row.nextElementSibling;
   return kids && kids.classList.contains('file-children') ? kids : null;
 }

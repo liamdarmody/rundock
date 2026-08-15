@@ -13,6 +13,9 @@
 // "rebuilt and made to look the same", which is the distinction the whole
 // change is about and the one that a screenshot cannot see.
 const { test, expect } = require('@playwright/test');
+const fs = require('node:fs');
+const path = require('node:path');
+const { sequence } = require('../helpers/tree-fixtures.js');
 
 async function openFiles(page) {
   await page.goto('/');
@@ -177,6 +180,69 @@ test('a kind change swaps the icon and keeps the row', async ({ page }) => {
   expect(await row.evaluate(el => el.dataset.tag)).toBe('same-row');
 });
 
+test('a real file written to disk leaves expansion, selection and scroll intact', async ({ page }) => {
+  // The whole claim, end to end, with nothing synthesised.
+  //
+  // The other tests hand the client a tree to make the shape of a change
+  // precise. This one writes a file to the workspace directory the way an
+  // agent does, lets the server walk the disk and push the result, and checks
+  // that everything the user had set up is still there afterwards. Written
+  // because a review pointed out, correctly, that the test doing a real change
+  // was not the test setting up any state, so the highest-risk claim in the
+  // change was never actually exercised.
+  await openFiles(page);
+
+  const workspace = await page.evaluate(() => currentWorkspacePath);
+  expect(workspace).toBeTruthy();
+
+  // Real content, so the list has somewhere to scroll. Written before the
+  // state is set up, so the scroll and selection below survive one real push
+  // rather than being established after the last one.
+  const bulk = path.join(workspace, 'bulk');
+  fs.mkdirSync(bulk, { recursive: true });
+  for (let i = 0; i < 30; i++) fs.writeFileSync(path.join(bulk, `b${String(i).padStart(2, '0')}.md`), 'x');
+  await page.evaluate(() => ws.send(JSON.stringify({ type: 'get_files' })));
+  await expect(page.locator('#file-tree .folder-item[data-path="bulk"]')).toHaveCount(1);
+
+  // Expand a real folder, select a real file, scroll the real list.
+  await page.locator('#file-tree .folder-item[data-path="bulk"]').click();
+  await page.locator('#file-tree .file-item[data-path="bulk/b04.md"]').click();
+  await expect(page.locator('#file-tree .file-item[data-path="bulk/b04.md"]')).toHaveClass(/active/);
+  await page.evaluate(() => { document.querySelector('#file-tree').scrollTop = 200; });
+  const scrollBefore = await page.evaluate(() => document.querySelector('#file-tree').scrollTop);
+  expect(scrollBefore).toBeGreaterThan(0);
+
+  await page.evaluate(() => {
+    document.querySelector('#file-tree .file-item[data-path="bulk/b04.md"]').dataset.tag = 'selected-row';
+    document.querySelector('#file-tree .folder-item[data-path="bulk"]').dataset.tag = 'open-folder';
+  });
+
+  // The structural change: a file appears on disk, mid-folder, and the server
+  // finds it on its own.
+  fs.writeFileSync(path.join(bulk, 'b04a-arrived.md'), 'x');
+  await page.evaluate(() => ws.send(JSON.stringify({ type: 'get_files' })));
+  await expect(page.locator('#file-tree .file-item[data-path="bulk/b04a-arrived.md"]')).toHaveCount(1);
+
+  const after = await page.evaluate(() => {
+    const tree = document.querySelector('#file-tree');
+    const row = tree.querySelector('.file-item[data-path="bulk/b04.md"]');
+    const dir = tree.querySelector('.folder-item[data-path="bulk"]');
+    return {
+      rowTag: row && row.dataset.tag,
+      folderTag: dir && dir.dataset.tag,
+      active: !!(row && row.classList.contains('active')),
+      open: !dir.nextElementSibling.classList.contains('collapsed'),
+      scrollTop: tree.scrollTop,
+    };
+  });
+
+  expect(after.rowTag).toBe('selected-row');   // the same elements, not replacements
+  expect(after.folderTag).toBe('open-folder');
+  expect(after.active).toBe(true);
+  expect(after.open).toBe(true);
+  expect(after.scrollTop).toBe(scrollBefore);
+});
+
 test('the tree never carries state across a workspace switch', async ({ page }) => {
   // Paths are matched as plain strings with nothing scoping them to a
   // workspace, and a new workspace is scaffolded from a template, so the two
@@ -240,6 +306,60 @@ test('an inline text field in the tree survives a structural change', async ({ p
   expect(state.tag).toBe('mid-edit');     // the same element, not a replacement
   expect(state.value).toBe('half-typed-name');
   expect(state.focused).toBe(true);
+});
+
+test('the same generated sequences reconcile correctly in the real DOM', async ({ page }) => {
+  // The unit suite proves the operation list is right. It says nothing about
+  // the code that executes it: the DOM patcher is a second, independent
+  // implementation of the same semantics, and container-scoped removals,
+  // ascending insert indices, and a folder being two elements rather than one
+  // are all restated there by hand.
+  //
+  // So the very sequences the unit suite runs are pushed through the real
+  // renderer here, and the resulting DOM is read back and compared with the
+  // tree the server sent. This is AC-2 for the half the user can see.
+  //
+  // Structure and order only: a kind change is a one-line update covered by
+  // its own test above, and reading a glyph back to a kind would test the icon
+  // table rather than the patcher.
+  await openFiles(page);
+
+  const shape = (nodes) => nodes.map(n => (
+    n.type === 'folder'
+      ? { type: 'folder', path: n.path, children: shape(n.children) }
+      : { type: 'file', path: n.path }
+  ));
+
+  let compared = 0;
+  for (let seed = 1; seed <= 40; seed++) {
+    const { before, after, changed } = sequence(seed);
+    if (!changed) continue;
+
+    await pushTree(page, before);
+    await pushTree(page, after);
+
+    const drawn = await page.evaluate(() => {
+      const read = (container) => {
+        const out = [];
+        for (const el of Array.from(container.children)) {
+          if (el.classList.contains('folder-item')) {
+            const box = el.nextElementSibling;
+            out.push({ type: 'folder', path: el.dataset.path, children: read(box) });
+          } else if (el.classList.contains('file-item')) {
+            out.push({ type: 'file', path: el.dataset.path });
+          }
+        }
+        return out;
+      };
+      return read(document.querySelector('#file-tree'));
+    });
+
+    expect(drawn, `seed ${seed}`).toEqual(shape(after));
+    compared++;
+  }
+
+  // Guard the guard: skipping every seed would pass while proving nothing.
+  expect(compared).toBeGreaterThan(30);
 });
 
 test('a tree the patch cannot fit falls back to a rebuild rather than drifting', async ({ page }) => {
