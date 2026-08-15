@@ -169,7 +169,14 @@
 .file-item { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: var(--radius-lg); cursor: pointer; font-size: var(--body); color: var(--text-1); }
 .file-item:hover { background: var(--elevated); }
 .file-item.active { background: var(--elevated); }
-.file-item-icon { width: 14px; height: 14px; color: var(--text-2); }
+/* A tree row is a flex container, so when it runs out of width something in it
+   has to give. It must not be the icon. The name carries the shrinking: it
+   needs min-width:0 because a flex item will not shrink below its content
+   otherwise, and the overflow trio to end in an ellipsis rather than a clip.
+   Both rules are load-bearing together. Without flex-shrink:0 the SVG absorbed
+   the overflow, down to 0px at four levels deep. */
+.file-item-icon { width: 14px; height: 14px; color: var(--text-2); flex-shrink: 0; }
+.file-item-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Add button */
 .convo-footer { height: 76px; border-top: 1px solid var(--border); background: var(--surface); flex-shrink: 0; display: flex; align-items: center; padding: 0 8px; }
