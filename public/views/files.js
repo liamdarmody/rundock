@@ -334,6 +334,14 @@ function closeOpenFile() {
 // resolution, is assigned at a different moment, and tying rendering to it
 // would couple two things that only look alike.
 let renderedTree = null;
+// Which workspace the drawn tree belongs to. Without this, switching
+// workspaces patches the new tree onto the old one's DOM: paths are matched as
+// plain strings with nothing scoping them to a workspace, and a fresh
+// workspace is scaffolded from a template, so the shared paths look like
+// survivors and carry their expanded state across from somewhere the user has
+// never been. Checked where the decision is made rather than reset by whoever
+// happens to handle the switch, so a new caller cannot forget it.
+let renderedWorkspace = null;
 
 // Which folders are open is no longer tracked anywhere. It lives in the DOM,
 // on the class, because the node holding it is never destroyed. The Set that
@@ -346,7 +354,8 @@ function renderFileTree(tree) {
   // Reconciliation needs a drawn tree to reconcile against. Entering or
   // leaving the empty state replaces the container wholesale, and an empty
   // container has nothing worth preserving, so those stay full builds.
-  const canPatch = next.length && renderedTree && renderedTree.length && c.firstElementChild;
+  const sameWorkspace = renderedWorkspace === currentWorkspacePath;
+  const canPatch = sameWorkspace && next.length && renderedTree && renderedTree.length && c.firstElementChild;
   if (canPatch) {
     try {
       patchTree(c, RundockFileTreeDiff.diffTree(renderedTree, next));
@@ -361,6 +370,7 @@ function renderFileTree(tree) {
     }
   }
   renderedTree = next;
+  renderedWorkspace = currentWorkspacePath;
   rebuildFileTree(c, next);
 }
 

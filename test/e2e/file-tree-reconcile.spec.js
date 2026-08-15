@@ -177,6 +177,71 @@ test('a kind change swaps the icon and keeps the row', async ({ page }) => {
   expect(await row.evaluate(el => el.dataset.tag)).toBe('same-row');
 });
 
+test('the tree never carries state across a workspace switch', async ({ page }) => {
+  // Paths are matched as plain strings with nothing scoping them to a
+  // workspace, and a new workspace is scaffolded from a template, so the two
+  // trees share paths. Patching one onto the other would let a folder the
+  // user expanded here arrive pre-expanded somewhere they have never been.
+  await openFiles(page);
+  await pushTree(page, bigTree());
+  await page.locator('#file-tree .folder-item[data-path="deep"]').click();
+  await page.evaluate(() => {
+    document.querySelector('#file-tree .folder-item[data-path="deep"]').dataset.tag = 'old-workspace';
+  });
+
+  // The same shape arriving as a different workspace.
+  await page.evaluate((t) => {
+    currentWorkspacePath = '/somewhere/else';
+    ws.onmessage({ data: JSON.stringify({ type: 'file_tree', tree: t }) });
+  }, bigTree());
+
+  const after = await page.evaluate(() => {
+    const dir = document.querySelector('#file-tree .folder-item[data-path="deep"]');
+    return { tag: dir.dataset.tag, collapsed: dir.nextElementSibling.classList.contains('collapsed') };
+  });
+  expect(after.tag).toBe(undefined);      // rebuilt, so the old node is gone
+  expect(after.collapsed).toBe(true);     // and it is closed, as a fresh tree is
+});
+
+test('an inline text field in the tree survives a structural change', async ({ page }) => {
+  // AC-3 names an in-progress inline RENAME. There is no rename affordance in
+  // this tree: the row context menu offers creation rows, copy path, copy
+  // wikilink and reveal in Finder, and nothing else. The nearest real thing,
+  // and the tree's only inline text entry, is naming a file as it is created,
+  // so that is what gets tested. Keyboard focus rides along with it, which is
+  // the other half of AC-3 that nothing else here covers.
+  await openFiles(page);
+  await pushTree(page, bigTree());
+
+  await page.locator('#file-tree .file-item[data-path="root-a.md"]').click({ button: 'right' });
+  await page.locator('.files-menu-item').first().click();
+  const input = page.locator('.files-menu-field input');
+  await expect(input).toBeVisible();
+  await input.fill('half-typed-name');
+  await input.focus();
+
+  await page.evaluate(() => {
+    const el = document.querySelector('.files-menu-field input');
+    el.dataset.tag = 'mid-edit';
+  });
+
+  // A file appears elsewhere while the field is open.
+  await pushTree(page, bigTree([file('deep/interrupting.md')]));
+  await expect(page.locator('#file-tree .file-item[data-path="deep/interrupting.md"]')).toHaveCount(1);
+
+  const state = await page.evaluate(() => {
+    const el = document.querySelector('.files-menu-field input');
+    return {
+      tag: el && el.dataset.tag,
+      value: el && el.value,
+      focused: el === document.activeElement,
+    };
+  });
+  expect(state.tag).toBe('mid-edit');     // the same element, not a replacement
+  expect(state.value).toBe('half-typed-name');
+  expect(state.focused).toBe(true);
+});
+
 test('a tree the patch cannot fit falls back to a rebuild rather than drifting', async ({ page }) => {
   await openFiles(page);
   await pushTree(page, bigTree());
