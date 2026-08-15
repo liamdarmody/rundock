@@ -33,6 +33,18 @@
   --chrome: #131313;
   --card: #333333; --border: #3D3D3D;
   --text-1: #F0EDE8; --text-2: #9A9590;
+  /* Tertiary text: the dimmest tone that still reads. Nine declarations
+     referenced --text-3 while it was declared nowhere, going back to 0.5.0,
+     and an undeclared var() is invalid at computed-value time, so all nine
+     silently inherited whatever colour surrounded them instead of stepping
+     down from --text-2.
+     Chosen against contrast rather than by eye. Both values clear 3:1, the
+     threshold for interface text and controls, on every surface they can land
+     on INCLUDING the worst case of --elevated: dark 3.59/3.32/3.08 on
+     base/surface/elevated, light 3.23/3.40/3.60. Anything dimmer failed
+     somewhere, and every site using this is a secondary affordance where
+     failing quietly is exactly what already happened. */
+  --text-3: #767169;
   --accent: #E87A5A; --accent-hover: #F09070; --accent-glow: rgba(232,122,90,0.12);
   --success: #6BC67E; --attention: #E8A84C; --working: #7AA2E8; --idle: #7A756E;
   /* The status set had no red, so every destructive and error surface reached
@@ -110,7 +122,7 @@ body.light {
      chrome is the only lever, and it happens to be the same one. */
   --chrome: #E8E4DC;
   --card: #F0EDE8; --border: #E5E0D8;
-  --text-1: #1A1A1A; --text-2: #7A756E;
+  --text-1: #1A1A1A; --text-2: #7A756E; --text-3: #8C867E;
   --accent-glow: rgba(232,122,90,0.08);
 }
 
