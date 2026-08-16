@@ -1,13 +1,18 @@
 {
-  "runtimeVersion": "2.1.227",
-  "capturedAt": "2026-08-11T14:14:29.270Z",
+  "runtimeVersion": "2.1.232",
+  "capturedAt": "2026-08-15T23:02:30.321Z",
   "scenarios": {
     "text-turn": {
       "raw": [
         "system:init",
         "system:status",
+        "rate_limit_event",
         "stream_event:message_start",
         "stream_event:content_block_start(thinking)",
+        "system:thinking_tokens",
+        "stream_event:content_block_delta(thinking_delta)",
+        "system:thinking_tokens",
+        "stream_event:content_block_delta(thinking_delta)",
         "system:thinking_tokens",
         "stream_event:content_block_delta(thinking_delta)",
         "system:thinking_tokens",
@@ -24,7 +29,6 @@
         "stream_event:content_block_stop",
         "stream_event:message_delta",
         "stream_event:message_stop",
-        "rate_limit_event",
         "result:success"
       ],
       "normalized": [
@@ -62,14 +66,6 @@
         "system:status",
         "stream_event:message_start",
         "stream_event:content_block_start(thinking)",
-        "system:thinking_tokens",
-        "stream_event:content_block_delta(thinking_delta)",
-        "system:thinking_tokens",
-        "stream_event:content_block_delta(thinking_delta)",
-        "system:thinking_tokens",
-        "stream_event:content_block_delta(thinking_delta)",
-        "system:thinking_tokens",
-        "stream_event:content_block_delta(thinking_delta)",
         "system:thinking_tokens",
         "stream_event:content_block_delta(thinking_delta)",
         "system:thinking_tokens",
