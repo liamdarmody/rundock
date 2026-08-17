@@ -25,7 +25,7 @@ const {
   changelogReady,
   GATE_FILE_NAME,
 } = require('../../scripts/release-gate.js');
-const { requireGatePass, publishRelease } = require('../../scripts/release.js');
+const { requireGatePass, publishRelease, ghApiArgs } = require('../../scripts/release.js');
 
 let root;
 beforeEach(() => {
@@ -284,5 +284,35 @@ describe('publish binds the tag before flipping the draft flag', () => {
     const result = publishRelease('0.11.7', { api });
     assert.strictEqual(result.tag, 'v0.11.7');
     assert.ok(api.calls.some(c => c.method === 'PATCH' && c.body && c.body.draft === false));
+  });
+});
+
+describe('the gh transport encodes values by type', () => {
+  // The publish tests inject a fake api, so nothing exercised the real
+  // argument construction. That is exactly where the bug was: strings were
+  // JSON.stringify'd and passed through -F, so tag_name arrived as "v0.11.7"
+  // WITH quote marks and the release's tag binding became garbage. It was
+  // caught while publishing 0.11.7, by the verification in publishRelease,
+  // which is the only reason it did not ship that way.
+  test('a string is sent raw through -f, not quoted through -F', () => {
+    const args = ghApiArgs('PATCH', 'repos/o/r/releases/1', { tag_name: 'v0.11.7' });
+    assert.ok(args.includes('-f'), 'strings go through -f');
+    assert.ok(args.includes('tag_name=v0.11.7'), `expected a bare value, got: ${args.join(' ')}`);
+    assert.ok(!args.some(a => a.includes('"')), `no argument should carry quote marks: ${args.join(' ')}`);
+  });
+
+  test('a boolean keeps its type through -F', () => {
+    // draft=false has to arrive as a boolean, not as the word "false", or the
+    // release never leaves draft.
+    const args = ghApiArgs('PATCH', 'repos/o/r/releases/1', { draft: false });
+    assert.ok(args.includes('-F'), 'non-strings go through -F');
+    assert.ok(args.includes('draft=false'));
+  });
+
+  test('a mixed body encodes each value by its own type', () => {
+    const args = ghApiArgs('PATCH', 'repos/o/r/releases/1', { tag_name: 'v1.2.3', draft: false });
+    const joined = args.join(' ');
+    assert.match(joined, /-f tag_name=v1\.2\.3/);
+    assert.match(joined, /-F draft=false/);
   });
 });
