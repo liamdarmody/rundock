@@ -131,15 +131,31 @@ function requireGatePass(headSha, { root = ROOT } = {}) {
 // ---------------------------------------------------------------------------
 
 // Default GitHub API transport via the gh CLI. `api(method, path, body)`.
-function ghApi(method, apiPath, body) {
+// The gh argument list for one API call. Split out from ghApi so the encoding
+// can be tested without a network call: the bug this exists to prevent was in
+// the encoding, and the publish tests inject a fake transport, so nothing ever
+// exercised the real arguments.
+function ghApiArgs(method, apiPath, body) {
   const args = ['api', '-X', method, apiPath];
   if (body) {
     for (const [key, value] of Object.entries(body)) {
-      // -F preserves JSON types (booleans stay booleans); -f would send strings.
-      args.push('-F', `${key}=${JSON.stringify(value)}`);
+      // Strings go through -f, everything else through -F.
+      //
+      // -F preserves JSON types, which is what booleans need: draft=false has
+      // to arrive as a boolean, not as the word "false". But -F with a
+      // JSON.stringify'd STRING sends the quote marks as part of the value, so
+      // tag_name arrived as "v0.11.7" WITH quotes and the tag binding silently
+      // became garbage. Caught publishing 0.11.7 by the verification below,
+      // which is the only reason it did not ship that way.
+      if (typeof value === 'string') args.push('-f', `${key}=${value}`);
+      else args.push('-F', `${key}=${JSON.stringify(value)}`);
     }
   }
-  const out = execFileSync('gh', args, { cwd: ROOT, encoding: 'utf8' });
+  return args;
+}
+
+function ghApi(method, apiPath, body) {
+  const out = execFileSync('gh', ghApiArgs(method, apiPath, body), { cwd: ROOT, encoding: 'utf8' });
   return out ? JSON.parse(out) : {};
 }
 
@@ -320,4 +336,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { extractChangelogEntry, promoteUnreleasedChangelog, requireGatePass, publishRelease };
+module.exports = { extractChangelogEntry, promoteUnreleasedChangelog, requireGatePass, publishRelease, ghApiArgs };
