@@ -22,13 +22,13 @@ scripts/screenshots/.banned-tokens.json
 # Release gate record (per-machine, references a local SHA)
 .release-gate.json
 
-# Review ledgers are TRACKED, one per set of acceptance criteria, which is why
-# the pattern is a wildcard. Each holds hashes, counts, model names and finding
-# fingerprints and no prose, so they are safe here and can be read later to
-# answer how many rounds a change needed and whether a verdict was overridden.
-# Each row carries the hash of the criteria it was judged against, so a verdict
-# stays verifiable even though those criteria are not in this repository.
+# Review records are NOT tracked. They were, and the reason they stopped is
+# worth keeping: each row cites the hash of the criteria it was judged against,
+# and those criteria are not in this repository, so no reader with only a clone
+# can resolve the hash to anything. A record nobody outside can verify is not a
+# record, it is an artefact of somebody else's process.
 #
-# The round directories are NOT tracked: they hold written findings.
-.independent-review/*
-!.independent-review/*.jsonl
+# They live with the criteria they cite, and the fact of review stays here in
+# the form a reader can actually use: the pull request states the verdict, the
+# models and what was judged, in prose.
+.independent-review/
