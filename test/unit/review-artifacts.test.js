@@ -2,32 +2,31 @@
 // What review artefacts this repository keeps, and what it refuses to keep.
 //
 // Rundock is public. Some changes here are checked by a review harness that is
-// not part of this project and is not needed to build, test or release it. Two
-// rules follow, and both are easy to undo by accident:
+// not part of this project and is not needed to build, test or release it.
+// NOTHING that harness produces is tracked here.
 //
-//   1. The verdict ledgers stay. They are hashes, counts, model names and
-//      finding fingerprints, with no prose, and each row carries the hash of
-//      the criteria it was judged against, so a verdict stays verifiable even
-//      though those criteria are not here.
-//   2. Nothing else does. Configuration for software that is absent, and
-//      documents recording a standard applied to one past change, are not
-//      actionable by anyone reading this repository and would need maintaining
-//      for no reader.
+// This reverses an earlier rule, and the reason is worth keeping, because the
+// earlier rule was stated confidently and was wrong in a way that reads as
+// right. It kept the verdict ledgers on the grounds that each row carries the
+// hash of the criteria it was judged against, "so a verdict stays verifiable
+// even though those criteria are not here". Those two halves contradict each
+// other. A hash is only verifiable against the document it hashes, and that
+// document is not in this repository, so no reader with a clone can resolve a
+// single row. What was kept was the FEELING of an audit trail.
 //
-// The second rule has no natural enforcement: a file added under a plausible
-// name simply sits there. Hence this.
+// The test that replaces it is the same shape as the one it replaces: state
+// the rule, not the files that happen to exist today.
+//
+// What a reader of this repository gets instead is the part they can actually
+// use. Every pull request says what was judged, by which models, and what the
+// verdict was, in prose, in the language of the change rather than the
+// language of the board.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const { execFileSync } = require('node:child_process');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..', '..');
-
-// A ledger is a DIRECT child of the review directory. An earlier version used
-// `.*`, which crosses directory boundaries, so a round's findings renamed
-// notes.jsonl and force-added inside round-1/ would have been classified as an
-// acceptable ledger by every check in this file.
-const LEDGER = /^\.independent-review\/[^/]+\.jsonl$/;
 
 function tracked() {
   return execFileSync('git', ['ls-files'], { cwd: ROOT, encoding: 'utf-8' })
@@ -42,31 +41,23 @@ function isIgnored(rel) {
 }
 
 describe('review artefacts', () => {
-  test('every verdict ledger is tracked', () => {
-    const ledgers = tracked().filter(f => LEDGER.test(f));
-    assert.ok(ledgers.length > 0, 'at least one ledger must be tracked');
-    for (const f of ledgers) {
-      assert.strictEqual(isIgnored(f), false, `${f} is tracked but also matched by an ignore rule`);
+  test('nothing under the review directory is tracked', () => {
+    const found = tracked().filter(f => f.startsWith('.independent-review/'));
+    assert.deepStrictEqual(found, [], 'review output belongs with the criteria it cites, not here');
+  });
+
+  // Asserts the RULE rather than the files that exist today, so a later
+  // artefact under a plausible name cannot arrive tracked. The three shapes
+  // cover what the harness actually writes: a verdict ledger, a round's
+  // findings, and whatever a future version names its output.
+  test('a review artefact added later would be ignored, whatever it is called', () => {
+    for (const rel of [
+      '.independent-review/some-future-change.jsonl',
+      '.independent-review/round-1/report.md',
+      '.independent-review/anything-at-all',
+    ]) {
+      assert.strictEqual(isIgnored(rel), true, `${rel} must be ignored`);
     }
-  });
-
-  test('a ledger added later would also be tracked, not ignored', () => {
-    // The rule is a wildcard, so this asserts the RULE rather than the files
-    // that happen to exist today.
-    assert.strictEqual(isIgnored('.independent-review/some-future-change.jsonl'), false);
-  });
-
-  test('nothing but a ledger is tracked in the review directory', () => {
-    // Stated as an allowlist, not a blocklist. An earlier version banned .md
-    // and .txt, which let a finding through under any other name: a
-    // findings.json, a notes.rst, or a file with no extension at all would
-    // have been tracked while the test passed. Enumerating what may be there
-    // cannot be outflanked by a filename.
-    assert.strictEqual(isIgnored('.independent-review/round-1/report.md'), true);
-    const unexpected = tracked()
-      .filter(f => f.startsWith('.independent-review/'))
-      .filter(f => !LEDGER.test(f));
-    assert.deepStrictEqual(unexpected, [], 'only ledgers belong here');
   });
 
   test('no configuration for absent tooling is tracked', () => {
@@ -100,5 +91,17 @@ describe('review artefacts', () => {
     // trap for whoever trips it.
     const criteria = tracked().filter(f => /criteria.*\.md$/i.test(f));
     assert.deepStrictEqual(criteria, []);
+  });
+
+  // The build journal left for the same reason, and left a shaped hole: it is
+  // the one artefact here that a future session is most likely to recreate,
+  // because appending to it was a written ritual for a while. Ignoring the
+  // directory does not stop a file arriving at docs/ under a new name, so the
+  // rule is stated against the repository's own standard rather than against
+  // one filename: a tracked file may not carry board card ids, which is
+  // enforced by scripts/check-internal-refs.js and is what caught this one.
+  test('the build journal has not come back', () => {
+    const journals = tracked().filter(f => /build-ledger|build-journal/i.test(f));
+    assert.deepStrictEqual(journals, [], 'the build journal is a working log, not reference material');
   });
 });

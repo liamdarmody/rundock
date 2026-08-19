@@ -40,6 +40,13 @@ const SKIP = [
 // these precise so ordinary code never trips them.
 const RULES = [
   { label: 'priority/process label (e.g. P0-1)', re: /\bP[0-9]-[0-9]\b/ },
+  // Board card ids, the same class as the rule above but in the shape the
+  // release cards actually use. The P0-1 rule was written for one board's
+  // vocabulary and did not generalise, so a build journal carrying ten
+  // instances of R0-01 through R0-04 passed this checker for a day. A card id
+  // means nothing to a reader outside the board it came from: name the change,
+  // not its tracking number.
+  { label: 'board card id (e.g. R0-01, R1-02)', re: /\b[A-Z][0-9]-[0-9]{2}\b/ },
   { label: 'review-round label (e.g. Review R1)', re: /\bReview R[0-9]\b/i },
   { label: 'review-round + priority label (e.g. R2 P3-1)', re: /\bR[0-9] P[0-9](-[0-9])?\b/ },
   { label: 'review-round label (e.g. round-2 regressions)', re: /\bround-?[0-9] regress/i },
