@@ -12,6 +12,8 @@
 // would pass against the broken stylesheet.
 const { test, expect } = require('@playwright/test');
 
+const UNREVIEWED = 'unreviewed-sections.md';
+
 async function openNote(page, name) {
   await page.goto('/');
   await expect(page.locator('.convo-item').first()).toBeVisible();
@@ -37,26 +39,50 @@ async function layout(page) {
       text: (el.textContent || '').slice(0, 30),
       ...box(el),
     }));
+    const cs = getComputedStyle(props);
     return {
       reviewActive: pane.classList.contains('review-active'),
       properties,
       blocks,
+      // The order a reader sees, as a comparable value rather than geometry.
+      // Comparing the whole sequence is what catches a block that moved into
+      // the middle of the document; checking only the first block does not.
+      sequence: blocks.map((b) => `${b.tag}|${b.text}`),
       // A block overlaps the panel when their vertical ranges intersect.
       overlapping: blocks.filter((b) => b.top < properties.bottom && b.bottom > properties.top),
       paneScrolls: pane.scrollHeight > pane.clientHeight,
+      // Clipping to the rounded corners was deliberate. The fix trades
+      // `hidden` for `clip`, and both of those clip; `visible` would not.
+      panelClip: {
+        overflowX: cs.overflowX,
+        overflowY: cs.overflowY,
+        radius: parseFloat(cs.borderTopLeftRadius),
+      },
     };
   });
+}
+
+// The preconditions the defect needs. Asserted wherever a layout is judged, so
+// a fixture that quietly stops reproducing them fails loudly instead of passing
+// for the wrong reason. A shortened note is the likeliest way to lose them.
+function expectDefectConditions(l) {
+  expect(l.paneScrolls).toBe(true);
+  expect(l.blocks.filter((b) => b.tag === 'HR').length).toBeGreaterThan(1);
+}
+
+// Every block sits at or below the one before it: nothing jumped the queue.
+function expectVisuallyOrdered(blocks) {
+  for (let i = 1; i < blocks.length; i += 1) {
+    expect(blocks[i].top).toBeGreaterThanOrEqual(blocks[i - 1].top);
+  }
 }
 
 test('the body starts below the properties panel while review mode is on', async ({ page }) => {
   await openNote(page, 'reviewed-sections');
   const l = await layout(page);
 
-  // The conditions the defect needs, asserted so a fixture that quietly stops
-  // reproducing them fails loudly instead of passing for the wrong reason.
   expect(l.reviewActive).toBe(true);
-  expect(l.paneScrolls).toBe(true);
-  expect(l.blocks.filter((b) => b.tag === 'HR').length).toBeGreaterThan(1);
+  expectDefectConditions(l);
 
   expect(l.overlapping).toEqual([]);
   expect(l.blocks[0].tag).toBe('H1');
@@ -65,20 +91,40 @@ test('the body starts below the properties panel while review mode is on', async
 
 test('the body stays in document order below the panel', async ({ page }) => {
   await openNote(page, 'reviewed-sections');
-  const { blocks } = await layout(page);
+  const l = await layout(page);
 
-  // Every block sits at or below the one before it: nothing has jumped the queue.
-  for (let i = 1; i < blocks.length; i += 1) {
-    expect(blocks[i].top).toBeGreaterThanOrEqual(blocks[i - 1].top);
-  }
-  expect(blocks[0].text).toContain('Reviewed Sections');
+  expectDefectConditions(l);
+  expectVisuallyOrdered(l.blocks);
+  expect(l.blocks[0].text).toContain('Reviewed Sections');
+});
+
+// The panel's row collapsed because `overflow: hidden` made it a scroll
+// container. The cheap way to "fix" that is to drop the overflow entirely,
+// which would also drop the corner clipping the panel was given on purpose.
+// This pins both halves: still clipping, still not a scroll container.
+test('the panel still clips to its rounded corners, without scrolling', async ({ page }) => {
+  await openNote(page, 'reviewed-sections');
+  const { panelClip } = await layout(page);
+
+  expect(panelClip.radius).toBeGreaterThan(0);
+  // `clip` clips to the padding box exactly as `hidden` did. Unlike `hidden`,
+  // `auto` and `scroll`, it establishes no scroll container, which is what
+  // lets the auto-sized grid row measure the panel's real height again.
+  expect(panelClip.overflowX).toBe('clip');
+  expect(panelClip.overflowY).toBe('clip');
 });
 
 test('adding the first comment does not change the rendered order', async ({ page }) => {
+  // The bytes as authored, before the interface touches the file.
+  const onDiskBefore = await (await page.request.get(`/api/file?path=${UNREVIEWED}`)).text();
+
   await openNote(page, 'unreviewed-sections');
   const before = await layout(page);
   expect(before.reviewActive).toBe(false);
   expect(before.overlapping).toEqual([]);
+  // The same preconditions the reviewed-note tests assert. Without these a
+  // shortened fixture would let this test pass without exercising the defect.
+  expectDefectConditions(before);
 
   await page.locator('.ProseMirror p', { hasText: 'first paragraph' }).first().click({ clickCount: 3 });
   await page.locator('.tb-comment').first().click();
@@ -90,6 +136,38 @@ test('adding the first comment does not change the rendered order', async ({ pag
   const after = await layout(page);
   expect(after.reviewActive).toBe(true);
   expect(after.overlapping).toEqual([]);
+  expectDefectConditions(after);
   expect(after.blocks[0].tag).toBe('H1');
   expect(after.blocks[0].top).toBeGreaterThanOrEqual(after.properties.bottom);
+
+  // The whole sequence, not just the first block: a block that swapped places
+  // with another in the middle of the document would survive a first-block
+  // check untouched.
+  expect(after.sequence).toEqual(before.sequence);
+  expectVisuallyOrdered(after.blocks);
+
+  // The byte-preservation guarantee, checked where the interface actually
+  // exercises it, rather than on a static in-memory round-trip. Without this,
+  // a comment-add that rewrote or re-escaped the body would pass every other
+  // assertion here.
+  await expect(page.locator('#editor-status')).toHaveText('Saved', { timeout: 10000 });
+  await expect
+    .poll(async () => (await (await page.request.get(`/api/file?path=${UNREVIEWED}`)).text()))
+    .toContain('\n---\ncomments:');
+
+  const onDiskAfter = await (await page.request.get(`/api/file?path=${UNREVIEWED}`)).text();
+  const endmatterAt = onDiskAfter.indexOf('\n---\ncomments:');
+  expect(endmatterAt).toBeGreaterThan(0);
+
+  // Everything before the endmatter block: frontmatter and body. Adding a
+  // comment inserts CriticMarkup at the comment site and must change nothing
+  // else, so stripping that one annotation has to give back the exact bytes.
+  //
+  // The slice stops AT the newline the match starts on, because that newline
+  // is the endmatter's own opening delimiter rather than the body's last byte.
+  // The body already ends in a newline of its own; taking both would count the
+  // blank line that separates the two blocks as if the body had grown one.
+  const outside = onDiskAfter.slice(0, endmatterAt);
+  const stripped = outside.replace(/\{==([\s\S]*?)==\}\{>>[\s\S]*?<<\}\{#[^}]*\}/g, '$1');
+  expect(stripped).toBe(onDiskBefore);
 });

@@ -89,11 +89,6 @@ function buildFixture() {
   fs.writeFileSync(path.join(workspace, 'wikilink-line.md'),
     '# Links\n\nSee also: [[Roadmap-2026]] and [[Missing Note]].\n');
 
-  // A note in the shape that broke the review layout: leading frontmatter, a
-  // body carrying several thematic breaks, and a review endmatter block. The
-  // properties panel, the body and the review sidebar must each keep their
-  // own place when review mode is on. Written as a template so the thematic
-  // breaks read as themselves rather than as escaped bytes.
   // The shape that broke the review layout: leading frontmatter, a body with
   // several thematic breaks, and a review endmatter block. It is deliberately
   // long: the properties panel only loses its place once the editor pane has
