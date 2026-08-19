@@ -4,6 +4,14 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** Editor Hardening
+
+### Fixed
+
+- **A long document under review keeps its properties panel out of the text:** opening a note with frontmatter and adding a review comment could draw the heading and the first paragraphs on top of the properties box, so both were unreadable and the file looked corrupted. The document on disk was never touched: the review sidebar rearranges the page into two columns, and in that arrangement the properties box was allowed to claim far less height than it actually needed. It now takes the room it uses, and the body starts below it as it always did. Short notes were never affected, which is why this looked intermittent.
+
 ## 0.11.7: Foundations & File Tree Stability (2026-08-17)
 
 ### Fixed
