@@ -67,7 +67,14 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
    (.wikilink, .callout), and the floating toolbar all live here. */
 .tiptap-editor-pane { flex: 1; overflow-y: auto; padding: 24px 32px; position: relative; }
 .tiptap-editor-pane.hidden { display: none; }
-.tiptap-editor-pane .properties { display: none; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); margin-bottom: 16px; overflow: hidden; }
+/* `clip` rather than `hidden`, and the difference is not cosmetic. `hidden`
+   makes this panel a scroll container, and a scroll container contributes only
+   its borders to the height of an auto-sized grid row. Review mode turns the
+   pane into a grid, so the panel's row collapsed to the border-plus-margin
+   18px while the panel kept its real height, and it painted over the top of
+   the body text. `clip` clips to the same rounded box and creates no scroll
+   container, so the row measures the panel's content. */
+.tiptap-editor-pane .properties { display: none; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); margin-bottom: 16px; overflow: clip; }
 .tiptap-editor-pane .properties.visible { display: block; }
 .tiptap-editor-pane .properties-header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
 .tiptap-editor-pane .properties-header .label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); }

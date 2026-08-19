@@ -62,3 +62,54 @@ first acceptance criterion, not a courtesy.
 2. The four hardening cards are not the only entries tagged for this release on
    the board. The release tag appears throughout, including on shipped work. The
    four that gate the build are the ones sitting in the Ready column.
+
+---
+
+## 2026-08-19: R0-01 diagnosis
+
+**Card:** R0-01, body content renders above the properties panel after review
+comments are added. **Slice:** root cause found and measured. No fix written yet.
+
+**Root cause.** `.tiptap-editor-pane .properties` carries `overflow: hidden`
+(`public/styles/views/editor.css:70`). Turning review mode on makes the pane a
+grid (`public/editor/styles.js:147`), and `overflow: hidden` makes the panel a
+scroll container, so in the block axis it contributes only its borders to the
+size of its auto-sized grid row. The row collapses to 18px, being 2px of border
+plus the panel's 16px margin, while the panel keeps its real 300px height. It
+therefore overflows its own row and paints across the editor, which is correctly
+placed in the row below. What a reader sees is the heading and the paragraphs
+before the first thematic break sitting on top of the properties panel.
+
+The thematic breaks are innocent. They only make the symptom look like a
+segmentation defect, because the panel happens to be about as tall as the body
+above the first break, so the overlap ends where that break begins. Both parse
+steps were verified correct on a document of this shape before the layout was
+examined.
+
+**Measured, not reasoned.** With the real document open and one comment added,
+the pane's resolved `grid-template-rows` read `18px 8241.78px 0px …`. Toggling
+the panel's `overflow` between `hidden` and `clip` in the live page flipped row
+one between 18px and 316px, repeatedly, in both directions. `overflow: clip`
+clips exactly as before, corner radius intact, and does not make a scroll
+container, so the row sizes from content again: the panel then measured
+124-424 with the editor starting at 440, its 16px margin below, and zero
+overlapping blocks.
+
+**Why it needs a long document.** The row collapses only once the pane's content
+overflows the pane's own scroll height. A short note lays out correctly, which is
+why the first reproduction attempt on a synthetic three-section fixture came back
+clean and looked like an absence of the defect rather than an absence of length.
+
+**Next:** add the regression test at the shape named on the card (frontmatter,
+several body thematic breaks, comment endmatter, long enough for the pane to
+scroll), watch it fail, then change `overflow: hidden` to `overflow: clip` and
+watch it pass. Then the round-trip assertion: adding a comment must not change
+rendered order, and must leave every byte outside the endmatter block untouched.
+
+**Invariants:** the byte-for-byte round-trip guarantee; token discipline and the
+style drift lint; both themes; no build step.
+
+**Surprises:** the card's own diagnosis order pointed at parse and segmentation
+first, and both were sound. The cost of following it was small because the parse
+check is quick; the lesson is that a symptom described in document terms was a
+layout fault, and the geometry should have been measured first.

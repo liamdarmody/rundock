@@ -89,6 +89,77 @@ function buildFixture() {
   fs.writeFileSync(path.join(workspace, 'wikilink-line.md'),
     '# Links\n\nSee also: [[Roadmap-2026]] and [[Missing Note]].\n');
 
+  // A note in the shape that broke the review layout: leading frontmatter, a
+  // body carrying several thematic breaks, and a review endmatter block. The
+  // properties panel, the body and the review sidebar must each keep their
+  // own place when review mode is on. Written as a template so the thematic
+  // breaks read as themselves rather than as escaped bytes.
+  // The shape that broke the review layout: leading frontmatter, a body with
+  // several thematic breaks, and a review endmatter block. It is deliberately
+  // long: the properties panel only loses its place once the editor pane has
+  // more content than it can show at once, so a short note passes either way.
+  const sectionedBody = [];
+  for (let s = 1; s <= 4; s += 1) {
+    sectionedBody.push('---', '', `## Section ${s}`, '');
+    for (let i = 1; i <= 6; i += 1) {
+      sectionedBody.push(`Paragraph ${i} of section ${s}, carrying enough text to give the pane real height to scroll through.`, '');
+    }
+  }
+  fs.writeFileSync(path.join(workspace, 'reviewed-sections.md'), [
+    '---',
+    'title: Reviewed Sections',
+    'date: 2026-08-18',
+    'status: FROZEN. Amendments only, with named reasons.',
+    'related:',
+    '  - "[[Roadmap-2026]]"',
+    '  - "[[Missing Note]]"',
+    'tags:',
+    '  - product',
+    '  - ux',
+    '---',
+    '',
+    '# Reviewed Sections',
+    '',
+    'The {==first paragraph==}{>>does this still read as the opening?<<}{#c1}, which sits above the first thematic break.',
+    '',
+    'The second paragraph, still above the first thematic break.',
+    '',
+    ...sectionedBody,
+    '---',
+    'comments:',
+    '  c1:',
+    '    by: liam',
+    '    at: "2026-08-18T10:00:00Z"',
+    'review:',
+    '  status: in-review',
+    '  at: "2026-08-18T10:00:00Z"',
+    '',
+  ].join('\n'));
+
+  // The same shape with no review data yet, so a test can add the first
+  // comment and watch what that does to the rendered order.
+  fs.writeFileSync(path.join(workspace, 'unreviewed-sections.md'), [
+    '---',
+    'title: Unreviewed Sections',
+    'date: 2026-08-18',
+    'status: FROZEN. Amendments only, with named reasons.',
+    'related:',
+    '  - "[[Roadmap-2026]]"',
+    '  - "[[Missing Note]]"',
+    'tags:',
+    '  - product',
+    '  - ux',
+    '---',
+    '',
+    '# Unreviewed Sections',
+    '',
+    'The first paragraph, which sits above the first thematic break.',
+    '',
+    'The second paragraph, still above the first thematic break.',
+    '',
+    ...sectionedBody,
+  ].join('\n'));
+
   // A briefing-style note: foldable + nested callouts and frontmatter
   // wikilinks.
   fs.writeFileSync(path.join(workspace, 'briefing.md'), [
