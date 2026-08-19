@@ -113,3 +113,78 @@ style drift lint; both themes; no build step.
 first, and both were sound. The cost of following it was small because the parse
 check is quick; the lesson is that a symptom described in document terms was a
 layout fault, and the geometry should have been measured first.
+
+---
+
+## 2026-08-19: R0-01 done
+
+**Card:** R0-01, body content renders above the properties panel after review
+comments are added. **Slice:** merged. Card complete.
+
+**What shipped.** `overflow: hidden` to `overflow: clip` on
+`.tiptap-editor-pane .properties`, plus the regression cover: three browser
+tests and a unit round-trip suite at the document shape that reproduces the
+defect.
+
+**Review.** An earlier round rejected the change on five test-strength
+findings, all fair, none disputing the fix itself. All five were applied:
+the corner clipping gained an automated check, the comment test gained the
+preconditions the defect needs, a superseded fixture comment was deleted,
+the order-unchanged claim now compares the whole rendered block sequence
+rather than only the first block, and the byte-preservation guarantee is now
+checked where the interface actually exercises it rather than on a static
+in-memory round-trip. The re-review returned PASS at round 1 of 3, reviewer
+on a different model, zero blocking findings, all five criteria met.
+
+**Fail-without-fix evidence, recorded here rather than inferred from the
+tests.** With the stylesheet reverted to `overflow: hidden`, three of the
+four browser tests in `review-layout.spec.js` fail: the panel-overlap test,
+the corner-clipping test, and the add-a-comment test. Before the five
+findings were applied it was two of three. The remaining test, the
+document-order one, passes either way, because blocks stay ordered relative
+to each other even while the panel paints across them; the overlap test is
+what catches that case.
+
+**Byte assertion proven non-vacuous.** The round-trip check caught a one-byte
+boundary error in its own first draft, mistaking the newline that opens the
+endmatter for the body's last byte. An assertion that detects a single byte
+of drift is comparing bytes rather than passing by construction.
+
+**Verification.** CI run 32289587305, green across hygiene, typecheck, Node
+22, Node 24, coverage floors, and E2E at 134 passed.
+
+**Surprise, and it cost most of the session.** A filesystem sandbox was
+enabled on the workspace midway through. It broke, in order: git identity,
+port binding, Chromium, `ps`, `kill`, and the review harness. Only the first
+two were filesystem problems. Chromium cannot start under it at all, because
+it registers a Mach port with the bootstrap server and that is refused; no
+path grant addresses this. The browser gate now runs in CI instead, which is
+a better place for it than any developer machine.
+
+`ps` remains blocked, and this is worth carrying forward rather than
+forgetting: `processCommand` in `lib/runtime/claude.js` shells out to `ps`,
+catches the failure, and returns null, so the pid-recycling guard degrades to
+assuming a record is ours. Under the sandbox the app would signal a recycled
+pid. The code behaves as designed for a missing `ps`; the sandbox silently
+disables a safety guard. One unit test fails locally as a result
+(`test/unit/pid-file.test.js`, 1630 of 1631). CI passes it on both Node
+versions, which is what proves it environmental. The test was not skipped.
+
+**Advisories not actioned, and why.** The review raised six advisory
+findings alongside its PASS. They were not folded into this change, because
+amending a diff after it passes review means merging code no independent
+party has seen. Three deserve a follow-up: the fixture selector matches by
+substring, so `reviewed-sections` also matches `unreviewed-sections` and
+resolves correctly only because `r` sorts before `u`; the document-order test
+does not assert that review mode is active, which is why it passes against
+the broken stylesheet; and the comment test mutates its fixture, so it is not
+idempotent if run twice against one server.
+
+**Next:** R0-02, long URLs in review comment replies overflow the card. Ahead
+of it, one unplanned card: the captured Claude CLI contract is stale, at
+2.1.232 against an installed 2.1.235, so `npm run stream:truth` fails. That
+is the drift class that produced the 0.11.6 interception regression, and a
+stale stub weakens every suite that depends on it.
+
+**Invariants:** unchanged. Byte-for-byte round-trip, style drift lint, both
+themes, no build step.
