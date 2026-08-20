@@ -339,7 +339,7 @@ export function attachReviewPanel({ paneElement, editor = null, surface = null, 
     for (const r of item.replies) {
       const reply = el('div', 'review-reply');
       reply.appendChild(authorBadge(r));
-      reply.appendChild(el('span', null, r.body || ''));
+      reply.appendChild(el('span', 'review-reply-body', r.body || ''));
       card.appendChild(reply);
     }
 

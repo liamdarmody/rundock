@@ -330,6 +330,15 @@ const CSS = `
 }
 .review-reply .review-by { margin-left: 0; flex-shrink: 0; }
 .review-reply .review-by::after { content: ':'; }
+/* The reply body is a flex item, so its automatic minimum size is its
+   min-content width: without this it cannot shrink below the longest
+   unbreakable run, and a long URL pushes the whole card open.
+   'anywhere' rather than 'break-word' is the load-bearing part, and the two
+   look identical in a diff. Only 'anywhere' reduces the min-content
+   contribution that sets that automatic minimum; 'break-word' leaves it at
+   the full run width. The E2E suite measures the break-word substitute, so
+   this is checked rather than asserted here. */
+.review-reply-body { overflow-wrap: anywhere; }
 /* Review text entry: the conversations-input grammar at card scale: a
    growing textarea with an embedded circular send button that activates
    when there is text. No button row, so narrow panels keep full input

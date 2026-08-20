@@ -85,6 +85,56 @@ function sectionedBodyLines() {
   return lines;
 }
 
+// The reported shape for the reply-overflow defect: a comment carrying a
+// REPLY whose body is a long URL. Root comment bodies already wrapped; reply
+// bodies did not, so the URL painted straight out through the side of the card.
+//
+// The unbroken run matters more than the total length. A URL made of short
+// hyphenated words has break opportunities at every hyphen, so it wraps once
+// the box is allowed to shrink and a weaker fix looks like it worked. The run
+// here has none, which is what makes the difference between `anywhere` and
+// `break-word` observable at all.
+// The longest substring a browser may not break inside. The spec asserts this
+// is wider than the card, so the fixture cannot quietly stop reproducing the
+// defect by having its URL shortened. The URL is built FROM it rather than
+// repeating the same literal, so the two cannot drift apart.
+const LONG_REPLY_UNBREAKABLE_RUN = 'k'.repeat(110);
+
+// example.com is the domain reserved for documentation (RFC 2606), so this
+// fixture names no real host.
+const LONG_REPLY_URL = 'https://panel.example.com/vps/1234567/settings?token='
+  + LONG_REPLY_UNBREAKABLE_RUN;
+
+function reviewedReplies() {
+  return [
+    '---',
+    'title: Reviewed Replies',
+    'date: 2026-08-20',
+    '---',
+    '',
+    '# Reviewed Replies',
+    '',
+    'The {==first paragraph==}{>>does this still read as the opening?<<}{#c1}, which sits above the break.',
+    '',
+    'A second paragraph, so the note has a body either side of the anchor.',
+    '',
+    '---',
+    'comments:',
+    '  c1:',
+    '    by: liam',
+    '    at: "2026-08-20T10:00:00Z"',
+    '  c2:',
+    '    by: liam',
+    '    at: "2026-08-20T10:05:00Z"',
+    '    re: c1',
+    '    body: "' + LONG_REPLY_URL + '"',
+    'review:',
+    '  status: in-review',
+    '  at: "2026-08-20T10:00:00Z"',
+    '',
+  ].join('\n');
+}
+
 function buildFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rundock-e2e-'));
   const workspace = path.join(root, 'workspace');
@@ -176,6 +226,8 @@ function buildFixture() {
   // definition before each run. One definition, two readers: duplicating the
   // content into the spec would create a second source that drifts.
   fs.writeFileSync(path.join(workspace, 'unreviewed-sections.md'), unreviewedSections(sectionedBody));
+  // A reviewed note carrying a reply, for the long-URL wrapping regression.
+  fs.writeFileSync(path.join(workspace, 'reviewed-replies.md'), reviewedReplies());
   // A briefing-style note: foldable + nested callouts and frontmatter
   // wikilinks.
   fs.writeFileSync(path.join(workspace, 'briefing.md'), [
@@ -316,4 +368,11 @@ function buildFixture() {
   return { root, workspace, home };
 }
 
-module.exports = { buildFixture, unreviewedSections, sectionedBodyLines };
+module.exports = {
+  buildFixture,
+  unreviewedSections,
+  sectionedBodyLines,
+  reviewedReplies,
+  LONG_REPLY_URL,
+  LONG_REPLY_UNBREAKABLE_RUN,
+};

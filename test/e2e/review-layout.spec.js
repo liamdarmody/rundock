@@ -13,7 +13,12 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { test, expect } = require('@playwright/test');
-const { unreviewedSections, sectionedBodyLines } = require('./fixture.js');
+const {
+  unreviewedSections,
+  sectionedBodyLines,
+  LONG_REPLY_URL,
+  LONG_REPLY_UNBREAKABLE_RUN,
+} = require('./fixture.js');
 
 const UNREVIEWED = 'unreviewed-sections.md';
 
@@ -200,4 +205,255 @@ test('adding the first comment does not change the rendered order', async ({ pag
   const outside = onDiskAfter.slice(0, endmatterAt);
   const stripped = outside.replace(/\{==([\s\S]*?)==\}\{>>[\s\S]*?<<\}\{#[^}]*\}/g, '$1');
   expect(stripped).toBe(onDiskBefore);
+});
+
+// ---------------------------------------------------------------------------
+// A reply carrying a long URL overflowed the side of its card.
+//
+// Root comment bodies wrap (`.review-card-body`, overflow-wrap: anywhere).
+// Reply bodies were a classless <span> in a flex row, so nothing reached
+// them: with the flex default `min-width: auto` the item could not shrink
+// below the longest unbreakable run, and the box grew wider than the card.
+//
+// These tests measure PAINTED TEXT, not the element box, and the distinction
+// is the point. A change that only lets the box shrink leaves the box inside
+// the card while the glyphs keep painting through the card wall, so a test
+// that asked the box whether it fit would pass against a fix that fixes
+// nothing.
+//
+// The last test is the one that keeps the diagnosis honest. This defect sits
+// in an area where a layout fault once wore a parser's clothes and the
+// written diagnosis cost a session, so the cause is not asserted in prose
+// anywhere: it is re-measured on every run. The unfixed element is driven
+// through the declarations it used to carry and its width is compared
+// against its own min-content width. If the real cause were something other
+// than the min-content contribution pinning a flex item open, that
+// comparison would not hold, and it would fail as a mismatch rather than as
+// a passing boolean.
+// ---------------------------------------------------------------------------
+
+// Mirrors SIDEBAR_MIN in public/editor/panels/review.js. The narrowest the
+// panel goes is the hardest case, so the test takes it rather than the default.
+const SIDEBAR_MIN = 220;
+
+async function openReplyNote(page, theme) {
+  // Set before any app script runs, so the panel is built at this width and
+  // in this theme rather than resized afterwards. The theme is pinned rather
+  // than toggled because an unset preference falls back to the runner's OS
+  // setting, which is not a property a test should vary on.
+  await page.addInitScript(([width, t]) => {
+    try {
+      localStorage.setItem('rundock.reviewSidebarWidth', String(width));
+      localStorage.setItem('rundock-theme', t);
+    } catch { /* private mode */ }
+  }, [SIDEBAR_MIN, theme]);
+  await openNote(page, 'reviewed-replies.md');
+}
+
+async function replyLayout(page, unbreakableRun) {
+  return page.evaluate((run) => {
+    const card = document.querySelector('.review-card');
+    const reply = document.querySelector('.review-reply');
+    // The fallback matters: on an unfixed build the class does not exist, and
+    // this test must FAIL on the measurement rather than error on a selector.
+    const body = reply.querySelector('.review-reply-body')
+      || [...reply.children].find((c) => !c.classList.contains('review-by'));
+    const by = reply.querySelector('.review-by');
+    const rootBody = document.querySelector('.review-card-body');
+
+    const cs = getComputedStyle(card);
+    const cardRect = card.getBoundingClientRect();
+    const cardContentRight = cardRect.right
+      - parseFloat(cs.paddingRight) - parseFloat(cs.borderRightWidth);
+    const cardContentWidth = cardRect.width
+      - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+      - parseFloat(cs.borderLeftWidth) - parseFloat(cs.borderRightWidth);
+
+    // Where the glyphs actually end. One rect per painted line, so this also
+    // says whether the text wrapped at all.
+    const paintedRects = (el) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      return [...range.getClientRects()];
+    };
+    const bodyRects = paintedRects(body);
+    const textRight = Math.max(...bodyRects.map((r) => r.right));
+
+    // How wide the unbreakable run WANTS to be, in this card's own font. If
+    // this ever stops exceeding the card, the fixture has stopped reproducing
+    // the defect and every assertion below would pass for the wrong reason.
+    const probe = document.createElement('span');
+    probe.textContent = run;
+    probe.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;left:-9999px';
+    probe.style.font = getComputedStyle(body).font;
+    document.body.appendChild(probe);
+    const runWidth = probe.getBoundingClientRect().width;
+    probe.remove();
+
+    return {
+      light: document.body.classList.contains('light'),
+      // The APPLIED width preference, not the rendered box: the panel paints
+      // a few pixels wider than the value it was given, so measuring the box
+      // would assert a number that has no meaning in the clamp.
+      appliedWidth: parseInt(getComputedStyle(document.getElementById('tiptap-editor-pane'))
+        .getPropertyValue('--review-sidebar-width'), 10),
+      cardContentWidth: Math.round(cardContentWidth),
+      runWidth: Math.round(runWidth),
+      lines: bodyRects.length,
+      textOverflowPx: Math.round(textRight - cardContentRight),
+      rootBodyOverflowPx: Math.round(
+        Math.max(...paintedRects(rootBody).map((r) => r.right)) - cardContentRight),
+      // A label that wrapped or was clipped would be a regression of its own.
+      byWidth: Math.round(by.getBoundingClientRect().width),
+      byLines: paintedRects(by).length,
+      byClipped: by.scrollWidth > by.clientWidth + 1,
+      bodyText: body.textContent,
+    };
+  }, unbreakableRun);
+}
+
+// The fixture still reproduces the defect. Asserted wherever a layout is
+// judged, so a shortened URL fails loudly instead of passing vacuously.
+// The reply body text is asserted in full, which also proves the endmatter
+// `re:` entry actually rendered as a reply rather than being dropped: no
+// reply, no element, and every assertion below fails at the selector.
+function expectReplyDefectConditions(l) {
+  expect(l.appliedWidth).toBe(SIDEBAR_MIN);
+  expect(l.bodyText).toBe(LONG_REPLY_URL);
+  // Unbreakable by construction, and wider than the space it has to live in.
+  expect(LONG_REPLY_UNBREAKABLE_RUN).not.toMatch(/[\s\-/?&=_.]/);
+  expect(l.runWidth).toBeGreaterThan(l.cardContentWidth);
+}
+
+for (const theme of ['dark', 'light']) {
+  test(`a reply's long URL stays inside the card at the narrowest panel width (${theme})`, async ({ page }) => {
+    await openReplyNote(page, theme);
+    const l = await replyLayout(page, LONG_REPLY_UNBREAKABLE_RUN);
+
+    expect(l.light).toBe(theme === 'light');
+    expectReplyDefectConditions(l);
+
+    // The defect, measured: text painting past the card's content edge.
+    expect(l.textOverflowPx).toBeLessThanOrEqual(0);
+    // And it got there by wrapping, not by being clipped or shrunk away.
+    expect(l.lines).toBeGreaterThan(1);
+  });
+}
+
+test('the reply fix leaves the root body and the author label alone', async ({ page }) => {
+  await openReplyNote(page, 'dark');
+  const l = await replyLayout(page, LONG_REPLY_UNBREAKABLE_RUN);
+  expectReplyDefectConditions(l);
+
+  // Root bodies already wrapped. The fix must not have been paid for by them.
+  expect(l.rootBodyOverflowPx).toBeLessThanOrEqual(0);
+  // The label is flex-shrink: 0 on purpose. A reply body that shrank the
+  // label instead of wrapping itself would satisfy the test above and still
+  // be wrong, so this pins the label as its own condition.
+  expect(l.byWidth).toBeGreaterThan(0);
+  expect(l.byLines).toBe(1);
+  expect(l.byClipped).toBe(false);
+});
+
+// A regression test must fail against the unfixed stylesheet, not merely
+// claim that it would. This drives the reply body through the declarations a
+// plausible wrong fix would leave behind and measures each one, so "anywhere
+// is the part that matters" is an assertion rather than a belief.
+//
+// `break-word` is the dangerous one: it reads as a synonym, passes review by
+// eye, and leaves the defect exactly where it was, because it does not reduce
+// the flex item's min-content contribution and so cannot lower the automatic
+// minimum size that made the item too wide in the first place.
+test('only the shipped declaration wraps the reply; the near-misses do not', async ({ page }) => {
+  await openReplyNote(page, 'dark');
+  const l = await replyLayout(page, LONG_REPLY_UNBREAKABLE_RUN);
+  expectReplyDefectConditions(l);
+
+  const variants = await page.evaluate(() => {
+    const card = document.querySelector('.review-card');
+    const body = document.querySelector('.review-reply-body');
+    const cs = getComputedStyle(card);
+    const cardContentRight = card.getBoundingClientRect().right
+      - parseFloat(cs.paddingRight) - parseFloat(cs.borderRightWidth);
+    const measure = () => {
+      const range = document.createRange();
+      range.selectNodeContents(body);
+      const rects = [...range.getClientRects()];
+      return {
+        lines: rects.length,
+        bodyWidth: Math.round(body.getBoundingClientRect().width),
+        // Both edges, because they can disagree, and the disagreement is the
+        // reason this suite measures glyphs rather than boxes.
+        boxOverflowPx: Math.round(body.getBoundingClientRect().right - cardContentRight),
+        textOverflowPx: Math.round(Math.max(...rects.map((r) => r.right)) - cardContentRight),
+      };
+    };
+    const under = (css) => { body.style.cssText = css; return measure(); };
+
+    // The element's own min-content width, measured under the wrapping rules
+    // it had BEFORE the fix. This is the number the diagnosis is about: a
+    // flex item's automatic minimum size is its min-content contribution, and
+    // `overflow-wrap: anywhere` works by lowering it. Measured on a detached
+    // probe so the live element is never left in a half-styled state.
+    const probe = document.createElement('span');
+    probe.textContent = body.textContent;
+    probe.style.cssText = 'position:absolute;visibility:hidden;left:-9999px;'
+      + 'width:min-content;overflow-wrap:normal';
+    probe.style.font = getComputedStyle(body).font;
+    document.body.appendChild(probe);
+    const minContentPx = Math.round(probe.getBoundingClientRect().width);
+    probe.remove();
+    const out = {
+      minContentPx,
+      cardContentWidth: Math.round(
+        card.getBoundingClientRect().width
+        - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+        - parseFloat(cs.borderLeftWidth) - parseFloat(cs.borderRightWidth)),
+      shipped: under(''),
+      // What the element had before this change: no rule reached it at all.
+      preFix: under('overflow-wrap: normal'),
+      // The synonym that is not one.
+      breakWord: under('overflow-wrap: break-word'),
+      // Shrinking the box without letting the text wrap: the box fits, the
+      // glyphs do not. This is the case the painted-text measurement exists
+      // to catch, and a box-based test would call it fixed.
+      shrinkOnly: under('overflow-wrap: normal; min-width: 0'),
+    };
+    body.style.cssText = '';
+    return out;
+  });
+
+  // The shipped rule contains the text.
+  expect(variants.shipped.textOverflowPx).toBeLessThanOrEqual(0);
+  expect(variants.shipped.lines).toBeGreaterThan(1);
+
+  // Every near-miss lets it out. If one of these ever stops overflowing, the
+  // fix has stopped being load-bearing and this file should be re-reasoned
+  // rather than re-baselined.
+  expect(variants.preFix.textOverflowPx).toBeGreaterThan(0);
+  expect(variants.breakWord.textOverflowPx).toBeGreaterThan(0);
+  expect(variants.shrinkOnly.textOverflowPx).toBeGreaterThan(0);
+
+  // The trap, stated as an assertion rather than a warning: shrinking the box
+  // without letting the text wrap puts the BOX inside the card while the
+  // glyphs stay 600-odd pixels outside it. Any future test here that measures
+  // the element rectangle would pass on this and ship the bug.
+  expect(variants.shrinkOnly.boxOverflowPx).toBeLessThanOrEqual(0);
+  expect(variants.shrinkOnly.textOverflowPx)
+    .toBeGreaterThan(variants.shrinkOnly.boxOverflowPx);
+
+  // The diagnosis itself, as a measurement that can come out false.
+  //
+  // "A flex item pinned open by its own min-content contribution" is a claim
+  // with a number attached: unfixed, the item's width should BE its
+  // min-content width, and that width should exceed the space it has. Both
+  // are compared against quantities measured on this page rather than against
+  // constants copied from one machine, so the check is meaningful on any
+  // renderer. A cause that was not the min-content contribution would show up
+  // here as a mismatch rather than as a quietly passing boolean.
+  expect(Math.abs(variants.preFix.bodyWidth - variants.minContentPx))
+    .toBeLessThanOrEqual(2);
+  expect(variants.preFix.bodyWidth).toBeGreaterThan(variants.cardContentWidth);
+  // And the fix works by lowering exactly that: the item now fits the card.
+  expect(variants.shipped.bodyWidth).toBeLessThanOrEqual(variants.cardContentWidth + 1);
 });
