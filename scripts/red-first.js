@@ -50,6 +50,24 @@ const LIMITATION =
   'Reverting proves the tests notice this change. It cannot prove they assert '
   + 'the right thing: a test can discriminate a fix and still measure a proxy.';
 
+// Test-count summaries, in the two shapes this project and its neighbours
+// actually emit. Parsing is best effort by nature: an unrecognised reporter
+// yields null, which is recorded as null. A count invented from output nobody
+// could read is worse than no count, because the record is the thing a reviewer
+// is asked to trust.
+const COUNT_PATTERNS = {
+  pass: [/(?:^|\s)(?:#|\u2139)\s*pass\s+(\d+)/m, /(\d+)\s+passing\b/],
+  fail: [/(?:^|\s)(?:#|\u2139)\s*fail\s+(\d+)/m, /(\d+)\s+failing\b/],
+};
+
+function countFrom(text, kind) {
+  for (const re of COUNT_PATTERNS[kind]) {
+    const m = text.match(re);
+    if (m) return Number(m[1]);
+  }
+  return null;
+}
+
 function git(repo, args) {
   return execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
 }
@@ -100,9 +118,10 @@ function restoreTo(repo, ref, files) {
  *            failedWithoutChange: boolean|null, source: string[], tests: string[],
  *            limitation: string}}
  */
-function redFirst({ repo, base = 'main', tests, log = () => {} }) {
+function redFirst({ repo, base = 'main', tests, log = () => {}, runner = null }) {
   const result = (outcome, reason, extra = {}) => ({
     outcome, reason, passedWithChange: null, failedWithoutChange: null,
+    testsPassedWithChange: null, testsFailedWithoutChange: null,
     source: [], tests: [], limitation: LIMITATION, ...extra,
   });
 
@@ -130,13 +149,32 @@ function redFirst({ repo, base = 'main', tests, log = () => {} }) {
       + 'nothing to take away', { source: [], tests: testFiles });
   }
 
-  const run = () => spawnSync(tests, { cwd: repo, shell: true, stdio: 'ignore' }).status === 0;
+  // The runner is injectable so a test can make the reverted run throw while
+  // the first run passes, which is the only way to reach the restore by the
+  // path a real failure would take. The first version of that test used a
+  // command that always failed, so it never got past the first run and would
+  // have passed with the restore deleted.
+  const run = runner
+    ? () => ({ ok: !!runner(), pass: null, fail: null })
+    : () => {
+      // NODE_TEST_CONTEXT must not reach the child. A nested `node --test`
+      // that inherits it reports its failures and still exits 0, so a suite
+      // that should be red comes back green: the one failure mode this tool
+      // cannot afford, reachable whenever red-first is driven from inside a
+      // test.
+      const env = { ...process.env };
+      delete env.NODE_TEST_CONTEXT;
+      const r = spawnSync(tests, { cwd: repo, shell: true, encoding: 'utf8', env });
+      const text = `${r.stdout || ''}${r.stderr || ''}`;
+      return { ok: r.status === 0, pass: countFrom(text, 'pass'), fail: countFrom(text, 'fail') };
+    };
 
   // WITH the change first. A suite failing for its own reasons makes a failure
   // without the change meaningless, and reporting that as proof would turn a
   // broken suite into evidence.
   log('running the tests with the change');
-  const passedWithChange = run();
+  const withChange = run();
+  const passedWithChange = withChange.ok;
   if (!passedWithChange) {
     return result('inconclusive', 'the tests do not pass with the change in '
       + 'place, so a failure without it proves nothing',
@@ -145,15 +183,37 @@ function redFirst({ repo, base = 'main', tests, log = () => {} }) {
 
   log('restoring the source, keeping the tests');
   let failedWithoutChange = null;
+  let withoutChange = { ok: null, pass: null, fail: null };
+
+  // try/finally does not survive a signal: Node's default handling terminates
+  // without unwinding, which would abandon the tree mid-revert. Registering a
+  // listener is what disables that default, and the listener restores before
+  // exiting in case the finally is never reached. Both paths call the same
+  // function, and restoring an already-restored tree is a no-op.
+  const onSignal = () => {
+    try { restoreTo(repo, 'HEAD', sourceFiles); } catch (e) { /* exiting anyway */ }
+    process.exit(130);
+  };
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
+
   try {
     restoreTo(repo, mergeBase, sourceFiles);
-    failedWithoutChange = !run();
+    withoutChange = run();
+    failedWithoutChange = !withoutChange.ok;
   } finally {
     // Unconditional. A tool that can leave a repository half-reverted is worse
     // than no tool, because the next person debugs a tree nobody put there on
     // purpose.
     restoreTo(repo, 'HEAD', sourceFiles);
+    process.off('SIGINT', onSignal);
+    process.off('SIGTERM', onSignal);
   }
+
+  const counts = {
+    testsPassedWithChange: withChange.pass,
+    testsFailedWithoutChange: withoutChange.fail,
+  };
 
   if (git(repo, ['status', '--porcelain'])) {
     return result('refused', 'the tree did not come back clean after restoring; '
@@ -164,11 +224,11 @@ function redFirst({ repo, base = 'main', tests, log = () => {} }) {
     return result('not-discriminating', 'the tests pass with the source '
       + 'reverted, so they do not discriminate this change and would have gone '
       + 'green against the defect they were written for',
-    { passedWithChange: true, failedWithoutChange: false, source: sourceFiles, tests: testFiles });
+    { passedWithChange: true, failedWithoutChange: false, source: sourceFiles, tests: testFiles, ...counts });
   }
 
   return result('proven', 'the tests fail without the change and pass with it',
-    { passedWithChange: true, failedWithoutChange: true, source: sourceFiles, tests: testFiles });
+    { passedWithChange: true, failedWithoutChange: true, source: sourceFiles, tests: testFiles, ...counts });
 }
 
 /**
@@ -191,6 +251,11 @@ function recordOutcome(repo, outcome) {
   record.redFirst = {
     outcome: outcome.outcome,
     reason: outcome.reason,
+    // AC-6 names test counts. File counts are a different quantity and were
+    // written here first, which is the proxy-for-the-property fault this whole
+    // check exists to catch, committed inside the check itself.
+    testsPassedWithChange: outcome.testsPassedWithChange,
+    testsFailedWithoutChange: outcome.testsFailedWithoutChange,
     sourceFiles: outcome.source.length,
     testFiles: outcome.tests.length,
     limitation: outcome.limitation,
