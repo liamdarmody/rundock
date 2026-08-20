@@ -1,5 +1,14 @@
 name: CI
 
+# A push or pull request titles its own run from the commit subject or the pull
+# request title. A manually dispatched run has neither, so it appeared in the
+# runs list as the bare workflow name, indistinguishable from every other
+# dispatch. Name those by what identifies them: the branch and who started it.
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch'
+      && format('CI on {0} (dispatched by {1})', github.ref_name, github.actor)
+      || '' }}
+
 # Runs the test suite on every push to main and every pull request, so no change
 # to the server (a formerly untested ~4.3k-line monolith) merges without the
 # regression net passing. --omit=dev installs just the runtime deps (ws) and
@@ -32,6 +41,10 @@ jobs:
   hygiene:
     name: Hygiene (internal references, style drift)
     runs-on: ubuntu-latest
+    # Ceiling, not a wait. Observed maxima this session are far below it, so a
+    # healthy run is unaffected and only a stuck one is cut short. Without any
+    # timeout the default is six hours, which a hung browser install nearly spent.
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -44,6 +57,10 @@ jobs:
   test:
     name: Test (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    # Ceiling, not a wait. Observed maxima this session are far below it, so a
+    # healthy run is unaffected and only a stuck one is cut short. Without any
+    # timeout the default is six hours, which a hung browser install nearly spent.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -76,6 +93,10 @@ jobs:
   typecheck:
     name: Typecheck (JSDoc + checkJs)
     runs-on: ubuntu-latest
+    # Ceiling, not a wait. Observed maxima this session are far below it, so a
+    # healthy run is unaffected and only a stuck one is cut short. Without any
+    # timeout the default is six hours, which a hung browser install nearly spent.
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -99,6 +120,10 @@ jobs:
   coverage:
     name: Coverage floors
     runs-on: ubuntu-latest
+    # Ceiling, not a wait. Observed maxima this session are far below it, so a
+    # healthy run is unaffected and only a stuck one is cut short. Without any
+    # timeout the default is six hours, which a hung browser install nearly spent.
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -143,6 +168,10 @@ jobs:
   e2e:
     name: E2E
     runs-on: ubuntu-latest
+    # Ceiling, not a wait. Observed maxima this session are far below it, so a
+    # healthy run is unaffected and only a stuck one is cut short. Without any
+    # timeout the default is six hours, which a hung browser install nearly spent.
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -169,7 +198,24 @@ jobs:
           exit 1
 
       - name: Install Chromium
-        run: npx playwright install --with-deps chromium
+        # Retried on the same reasoning as the install step above, and for a
+        # measured reason: this step hung twice on 2026-08-19, once for over
+        # twenty minutes, with the job otherwise healthy. `--with-deps` shells
+        # out to apt as well as fetching from the browser CDN, so it has two
+        # independent ways to stall while the process stays alive.
+        #
+        # The per-attempt `timeout` is what makes the retry mean anything. A
+        # bare retry loop around a HANG never reaches its second attempt: the
+        # first one simply never returns. The job ceiling would eventually cut
+        # it, but as a failure rather than a recovery.
+        run: |
+          for attempt in 1 2 3; do
+            if timeout 300 npx playwright install --with-deps chromium; then exit 0; fi
+            echo "Chromium install failed or stalled (attempt $attempt); retrying in 15s"
+            sleep 15
+          done
+          echo "Chromium install failed on all 3 attempts"
+          exit 1
 
       - name: Run E2E suite
         run: npm run test:e2e

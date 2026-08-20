@@ -90,6 +90,13 @@ jobs:
     name: Build macOS (arm64 + x64)
     needs: [test, e2e, smoke]
     runs-on: macos-latest
+    # Declares the protected release environment, which is where the signing
+    # secrets now live. They were repository secrets, readable by ANY workflow
+    # in this repo including one added on a pull request branch. The
+    # environment restricts them to tags matching the release pattern and
+    # holds the job for a reviewer, so a workflow on a branch cannot reach
+    # them at all.
+    environment: release
     steps:
       - name: Checkout
         uses: actions/checkout@v5
