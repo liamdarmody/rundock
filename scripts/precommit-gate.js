@@ -85,6 +85,31 @@ function currentTree(root = ROOT) {
   return git(['write-tree'], root);
 }
 
+/**
+ * Content the checks would read but the record would not name.
+ *
+ * The checks run against the WORKING DIRECTORY; the record hashes the INDEX.
+ * Those are the same tree only while nothing is unstaged. Stage a file, edit it
+ * again without staging, and the checks validate the newer content while the
+ * record names the older staged tree. `git commit` then commits the index, and
+ * verify() admits it, because the index has not moved. The gate would have
+ * certified a tree it never checked, which is the exact guarantee it exists to
+ * provide.
+ *
+ * So refuse when they diverge rather than hashing one and testing the other.
+ * Untracked files count: a new test file the checks would happily run is not in
+ * the index and would not be in the record.
+ *
+ * Returns the offending paths, empty when the two agree.
+ */
+function workingTreeDrift(root = ROOT) {
+  const lines = git(['status', '--porcelain'], root).split('\n').filter(Boolean);
+  return lines
+    // Column two is the working tree against the index; '??' is untracked.
+    .filter(line => line.startsWith('??') || (line[1] && line[1] !== ' '))
+    .map(line => line.slice(3));
+}
+
 function readRecord(file = RECORD) {
   if (!fs.existsSync(file)) return null;
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
@@ -139,6 +164,15 @@ function run() {
     process.exit(1);
   }
 
+  const drift = workingTreeDrift();
+  if (drift.length) {
+    console.error('[precommit] refusing: the working tree does not match what is staged, so the checks');
+    console.error('           would read one tree and the record would name another. Stage or stash:');
+    for (const file of drift.slice(0, 10)) console.error(`             ${file}`);
+    if (drift.length > 10) console.error(`             ...and ${drift.length - 10} more`);
+    process.exit(1);
+  }
+
   for (const step of STEPS) {
     process.stdout.write(`[precommit] ${step.name}... `);
     try {
@@ -183,4 +217,4 @@ if (require.main === module) {
   else run();
 }
 
-module.exports = { refusal, buildRecord, writeRecord, readRecord, currentTree, defaultBranch, RECORD, STEPS };
+module.exports = { refusal, buildRecord, writeRecord, readRecord, currentTree, defaultBranch, workingTreeDrift, RECORD, STEPS };

@@ -257,3 +257,72 @@ describe('the entry points, against a throwaway repository', () => {
     }
   });
 });
+
+describe('the tree that was checked is the tree that gets recorded', () => {
+  const PASSING = {
+    test: 'node -e "0"', typecheck: 'node -e "0"',
+    'lint:styles': 'node -e "0"', 'check:refs': 'node -e "0"',
+  };
+
+  test('an unstaged edit is refused, because the checks would read a different tree', () => {
+    // The gap this closes: STEPS run against the working directory while the
+    // record hashes the index. Stage, edit again without staging, and the
+    // checks validate content the record does not name. Committing then puts
+    // the older staged version in, and verify() admits it because the index
+    // never moved: a tree certified without ever being checked.
+    const { dir } = repoWithScripts(PASSING);
+    try {
+      fs.writeFileSync(path.join(dir, 'a.txt'), 'edited after staging\n');
+      const { code, out } = spawnGate([], dir);
+      assert.notStrictEqual(code, 0, 'drift between working tree and index is refused');
+      assert.match(out, /does not match what is staged/);
+      assert.match(out, /a\.txt/, 'and it names the file');
+      assert.ok(!fs.existsSync(path.join(dir, '.precommit-gate.json')), 'no record is written');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('an untracked file is refused too: the checks would read it, the record would not name it', () => {
+    const { dir } = repoWithScripts(PASSING);
+    try {
+      fs.writeFileSync(path.join(dir, 'new-test.js'), '// never staged\n');
+      const { code, out } = spawnGate([], dir);
+      assert.notStrictEqual(code, 0);
+      assert.match(out, /new-test\.js/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('the real entry point refuses to run on the default branch', () => {
+    // run() carries its own branch check, separate from refusal()'s. Covering
+    // only the shared decision left this copy untested.
+    const { dir, run } = repoWithScripts(PASSING);
+    try {
+      run('commit', '-q', '-m', 'initial');
+      run('checkout', '-q', '-B', 'main');
+      const { code, out } = spawnGate([], dir);
+      assert.notStrictEqual(code, 0, 'the gate refuses on the default branch');
+      assert.match(out, /refusing to run on main/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a record written on one branch is refused after switching to another', () => {
+    // The wrong-branch case, end to end rather than hand-built: a real record,
+    // a real checkout, and the refusal the fixture only assumed.
+    const { dir, run } = repoWithScripts(PASSING);
+    try {
+      assert.strictEqual(spawnGate([], dir).code, 0, 'record written on fix/card');
+      run('commit', '-q', '-m', 'initial');
+      run('checkout', '-q', '-b', 'fix/other-card');
+      const { code, out } = spawnGate(['--verify'], dir);
+      assert.notStrictEqual(code, 0);
+      assert.match(out, /is for branch "fix\/card"/, 'the refusal names the branch the record belongs to');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
