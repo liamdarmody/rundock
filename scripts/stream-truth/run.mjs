@@ -27,7 +27,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
-const { reduceToGrammar, normalize, checkStreamInvariants, diffGrammars } = require('./grammar.js');
+const { reduceToGrammar, normalize, stableGrammar, checkStreamInvariants, diffGrammars } = require('./grammar.js');
 
 const { SCENARIOS } = require('./scenarios.js');
 
@@ -94,7 +94,9 @@ async function capture() {
     if (invariantErrors.length) {
       fail(`real CLI ${version} broke stream invariants on "${scenario.name}":\n  - ${invariantErrors.join('\n  - ')}\nThe runtime's stream contract has CHANGED; server decision points must be re-verified before this capture is committed.`);
     }
-    captured.scenarios[scenario.name] = { raw: grammar, normalized: normalize(grammar) };
+    // `invariants` rather than `raw`: the noise the invariants never read is
+    // removed, so a re-capture only differs when something real moved.
+    captured.scenarios[scenario.name] = { invariants: stableGrammar(grammar), normalized: normalize(grammar) };
     console.log(`[stream-truth] ${scenario.name}: captured ${grammar.length} grammar tokens, invariants hold`);
   }
   fs.writeFileSync(CAPTURE_FILE, JSON.stringify(captured, null, 2) + '\n');
@@ -124,7 +126,7 @@ async function check() {
     const expected = captured.scenarios[scenario.name];
     if (!expected) { console.error(`[stream-truth] FAIL: no capture for "${scenario.name}"`); failed = true; continue; }
 
-    const invariantErrors = checkStreamInvariants(expected.raw);
+    const invariantErrors = checkStreamInvariants(expected.invariants);
     if (invariantErrors.length) {
       console.error(`[stream-truth] FAIL: committed capture for "${scenario.name}" violates invariants: ${invariantErrors.join('; ')}`);
       failed = true;
