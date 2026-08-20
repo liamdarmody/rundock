@@ -9,7 +9,8 @@
 // controls that are descendants of the editable, and they are where an
 // unhandled Tab lands first in a callout-bearing note, so a check accepting
 // any descendant passes on the broken build at exactly the sites this suite
-// covers. Tightening it took the unfixed-build failures from seven to ten.
+// covers. Identity is the assertion that can tell those apart; containment
+// cannot, which is why it is not used here.
 //
 // The fixtures are a pair, identical but for a callout, because this was first
 // reported as a callout defect and is not one. Running every assertion over
