@@ -17,6 +17,7 @@ const os = require('node:os');
 const { classifyFileAccess } = require('../../scripts/permission-hook.js');
 const { _internal: srv } = require('../../server.js');
 const { makeWorkspace, cleanup } = require('../helpers/workspace.js');
+const claudeRuntime = require('../../lib/runtime/claude.js');
 
 after(cleanup);
 
@@ -81,5 +82,34 @@ describe('boundary grants (server-side, persisted in the workspace)', () => {
     srv.setWorkspace(dir2);
     assert.strictEqual(srv.boundaryGrantCovers('/Users/x/Exports/file.md'), false,
       'the previous workspace grant must not leak');
+  });
+});
+
+describe('agent scratch files', () => {
+  test('writing scratch and reading it back raises no approval card', () => {
+    // The sequence from the field: an agent writes a working file, then reads
+    // it back a step later, and the read raised an outside-the-workspace card
+    // for a file the agent had just created. Scratch now resolves inside the
+    // workspace, so both halves classify as inside and neither prompts.
+    const ws = makeWorkspace({});
+    srv.setWorkspace(ws);
+    const scratch = claudeRuntime.scratchDir();
+    assert.ok(scratch, 'a workspace yields a scratch directory');
+    const file = path.join(scratch, 'some_project_scratch', 'render.html');
+
+    for (const tool of ['Write', 'Read']) {
+      const access = classifyFileAccess(tool, { file_path: file }, ws, []);
+      assert.strictEqual(access.where, 'inside', `${tool} of scratch must not prompt`);
+    }
+  });
+
+  test('the operating system temp directory would still have prompted', () => {
+    // The counterpart, so the test above is shown to be about WHERE the file
+    // is rather than about scratch files being special. This is the behaviour
+    // that produced the original reports, and it is correct: that path really
+    // is outside the workspace.
+    const ws = makeWorkspace({});
+    const outside = path.join(os.tmpdir(), 'some_project_scratch', 'render.html');
+    assert.strictEqual(classifyFileAccess('Read', { file_path: outside }, ws, []).where, 'outside');
   });
 });

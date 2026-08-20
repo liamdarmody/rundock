@@ -460,7 +460,7 @@ const claudeRuntime = require('./lib/runtime/claude.js');
 const {
   modelArgs, getBareArgs, getSpawnEnv,
   resolveClaudeBin, killProcessTree, spawnClaude,
-  registerChildPid, unregisterChildPid,
+  registerChildPid, unregisterChildPid, pruneScratch,
   loadPidFile, savePidFile, pidOf, pidRecordAlive, processCommand,
 } = claudeRuntime;
 claudeRuntime.wireClaudeRuntimeDeps({ getActualPort: () => ACTUAL_PORT });
@@ -2867,6 +2867,11 @@ function startServer(options = {}) {
         boot.mark('heal');
         cleanOrphanedProcesses();
         boot.mark('orphans');
+        // Scratch from earlier runs. Age-bounded rather than emptied outright,
+        // so a second Rundock open on the same workspace cannot delete files
+        // the first is still using.
+        pruneScratch();
+        boot.mark('scratch');
         reportStartup(`workspace preset from environment: ${boot.summary()}`);
       }
       // Release conversations nobody has touched for a while: each holds an
