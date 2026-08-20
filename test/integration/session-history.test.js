@@ -38,6 +38,15 @@ function toolLine(name, timestamp) {
   return { message: { role: 'assistant', content: [{ type: 'tool_use', name, input: {} }] }, timestamp: timestamp || null };
 }
 
+function toolResultLine(text, timestamp) {
+  // Shaped as Claude Code writes it: user role, ARRAY content. The parser
+  // admits user entries only when their content is a string, so these never
+  // reach the merge pool. The regression test below includes them anyway, so
+  // that if that filter is ever relaxed the absorption walk does not silently
+  // start stopping at the first tool result and lose the rest of the turn.
+  return { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', content: text }] }, timestamp: timestamp || null };
+}
+
 function writeTranscript(convoId, entries) {
   const dir = path.join(h.workspaceDir, '.rundock', 'transcripts');
   fs.mkdirSync(dir, { recursive: true });
@@ -222,8 +231,10 @@ describe('get_session_history: multi-session merge', () => {
       userLine('Please tidy this workspace', '2026-08-13T09:00:00Z'),
       assistantLine(first, '2026-08-13T09:00:10Z'),
       toolLine('Read', '2026-08-13T09:00:11Z'),
+      toolResultLine('file contents here', '2026-08-13T09:00:12Z'),
       assistantLine(second, '2026-08-13T09:00:20Z'),
       toolLine('Edit', '2026-08-13T09:00:21Z'),
+      toolResultLine('edit applied', '2026-08-13T09:00:22Z'),
       assistantLine(third, '2026-08-13T09:00:30Z'),
     ]);
     // One transcript entry per TURN, holding the turn's whole text, which is
