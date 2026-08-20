@@ -31,7 +31,7 @@
 // instead of backing them up.
 import { Extension } from '../../vendor/tiptap-bundle.mjs';
 
-export const TabGuard = Extension.create({
+export const TabGuardExtension = Extension.create({
   name: 'tabGuard',
 
   // Below the default of 100, so this is the last handler consulted.
