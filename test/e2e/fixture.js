@@ -164,6 +164,12 @@ function reviewedFormatting() {
     '',
     'A highlight: {==**highlighted bold**==}{>>please check<<}{#c1} here.',
     '',
+    // Literal-looking syntax, which is the trade-off case: an author who meant
+    // asterisks as asterisks. `2 * 3` survives because CommonMark needs a
+    // non-space after the opener; `**wrapped**` does not, and is reinterpreted.
+    // Both are asserted, so the boundary is recorded rather than assumed.
+    'A literal: {++2 * 3 and **wrapped**++}{#s4} here.',
+    '',
     '---',
     'suggestions:',
     '  s1:',
@@ -173,6 +179,9 @@ function reviewedFormatting() {
     '    by: liam',
     '    at: "2026-08-20T10:00:00Z"',
     '  s3:',
+    '    by: liam',
+    '    at: "2026-08-20T10:00:00Z"',
+    '  s4:',
     '    by: liam',
     '    at: "2026-08-20T10:00:00Z"',
     'comments:',

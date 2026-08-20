@@ -183,6 +183,31 @@ export function createReviewController({ editor, endmatter, author = 'me', now =
   // Parsed INLINE, because every one of these sites is inside a paragraph. A
   // block parse would wrap the replacement in a paragraph of its own and split
   // the sentence around it.
+  // THE TRADE-OFF, named rather than left implicit.
+  //
+  // Not every string reaching here is markdown source. Two provenances share
+  // these attributes. A construct PARSED FROM THE FILE carries the raw bytes
+  // between its delimiters, which are markdown. A construct created in the UI
+  // carries text captured with `doc.textBetween` (see suggestReplace and the
+  // comment anchor), which is RENDERED text: markup already resolved away.
+  //
+  // So a rejected substitution restores characters a person selected, and if
+  // that selection contained an asterisk or a backtick they meant literally,
+  // parsing now reinterprets it as formatting where a text node would have
+  // kept it literal. That cost is real and it is accepted, for a reason:
+  //
+  // the wire format does not escape. serializeSegment writes
+  // `{~~${from}~>${to}~~}` raw, so those characters land in the file verbatim
+  // and the NEXT load parses them as markdown regardless of what this function
+  // does. Before this change, accepting in-session produced literal text while
+  // accepting the same construct after a reload produced markup: the same
+  // document, two answers, decided by whether anyone had reopened the file.
+  // Parsing here makes those agree. It does not introduce the reinterpretation,
+  // it stops it from depending on timing.
+  //
+  // Escaping at capture time would preserve literal characters properly and is
+  // the better long-term answer, but it changes the wire format and what a
+  // construct means on disk, which is a larger change than a defect fix.
   function replaceRangeWithText(from, to, text) {
     if (!text) {
       editor.chain().command(({ tr }) => { tr.delete(from, to); return true; }).run();

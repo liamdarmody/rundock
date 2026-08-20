@@ -95,8 +95,11 @@ test('accepting an insert writes its content as markdown', async ({ page }) => {
 
   const body = await savedBody(page);
   expect(body).toContain('An insert: **inserted bold** and `tick` here.');
-  expect(body).not.toContain('\\*');
-  expect(body).not.toContain('{++');
+  // Scoped to this construct's own line: the fixture carries a second insert,
+  // untouched by this test, whose delimiters are legitimately still present.
+  const line = body.split('\n').find((l) => l.startsWith('An insert:'));
+  expect(line).not.toContain('\\*');
+  expect(line).not.toContain('{++');
 });
 
 test('rejecting a delete restores its content as markdown', async ({ page }) => {
@@ -142,7 +145,47 @@ test('the whole document survives every verdict without a single escape', async 
   expect(body).toContain('An insert: **inserted bold** and `tick` here.');
   expect(body).toContain('A delete: **doomed bold** here.');
   expect(body).toContain('A highlight: **highlighted bold** here.');
-  expect(body).not.toMatch(/\\[*`[\]]/);
-  // No CriticMarkup survives once every construct has a verdict.
-  expect(body).not.toMatch(/\{(~~|\+\+|--|==|>>)/);
+  // The four lines this test gave a verdict to carry no escapes. The fixture's
+  // literal-syntax construct is deliberately left undecided here and has its
+  // own test, so the document as a whole still holds one CriticMarkup run.
+  for (const prefix of ['A substitution:', 'An insert:', 'A delete:', 'A highlight:']) {
+    const l = body.split('\n').find((x) => x.startsWith(prefix));
+    expect(l).not.toMatch(/\\[*`[\]]/);
+    expect(l).not.toMatch(/\{(~~|\+\+|--|==|>>)/);
+  }
+});
+
+// The trade-off case, recorded as a test rather than left to be discovered.
+//
+// Not every replacement is markdown source. A construct created in the UI
+// captures RENDERED text, so an author who typed an asterisk meaning an
+// asterisk gets it back as one. Parsing the replacement means such a character
+// is now read as syntax where it forms syntax.
+//
+// The outcome is finer than "escaping is bad", which is worth stating because
+// the defect this change fixes was an escaping bug. Escaping is CORRECT for a
+// character that is genuinely literal: the serialiser writes a backslash and
+// the file renders the asterisk the author wanted. The old behaviour was wrong
+// because EVERYTHING was literal, so intended markup was escaped too. Now the
+// two are told apart, and this test pins where CommonMark draws that line.
+test('literal syntax is preserved by escaping it; syntax that forms markup becomes markup', async ({ page }) => {
+  await restoreFixture(page);
+  await openNote(page);
+  await actOnCard(page, '2 * 3', 'Accept');
+
+  const body = await savedBody(page);
+
+  // A spaced asterisk is arithmetic, not emphasis: CommonMark needs a
+  // non-space after the opening run. It stays literal, and it stays literal by
+  // being escaped, which is the serialiser doing its job rather than failing.
+  expect(body).toContain('2 \\* 3');
+  // Which means the reader still sees the asterisk they typed.
+  await expect(page.locator('.ProseMirror p', { hasText: '2 * 3' })).toHaveCount(1);
+
+  // A paired run does form emphasis, so it is read as emphasis. This is the
+  // accepted cost of treating replacements as markdown, stated plainly rather
+  // than discovered later: an author who wants literal double asterisks has to
+  // escape them, exactly as they would anywhere else in the document.
+  expect(body).toContain('**wrapped**');
+  await expect(page.locator('.ProseMirror strong', { hasText: 'wrapped' })).toHaveCount(1);
 });
