@@ -39,8 +39,18 @@ function repo({ source, testFile, added = {}, baseSource = 'module.exports.a = (
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'red-first-'));
   const git = (...args) => execFileSync('git', args, { cwd: dir, stdio: 'ignore' });
   git('init', '-q');
+  // Name the branch explicitly. `git init` takes its branch name from
+  // init.defaultBranch, so a fixture that says nothing gets whatever the host
+  // is configured for: main on a developer machine that set it, master on CI
+  // where nothing did. Every test in this file passed locally and every one
+  // failed in CI with "fatal: Not a valid object name main". A fixture must
+  // not read the machine it runs on.
+  git('symbolic-ref', 'HEAD', 'refs/heads/main');
   git('config', 'user.email', 't@example.com');
   git('config', 'user.name', 'T');
+  // Likewise rename detection, which some developers enable globally and which
+  // changes what `git diff --name-only` reports.
+  git('config', 'diff.renames', 'false');
   fs.mkdirSync(path.join(dir, 'test'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'lib.js'), baseSource);
   fs.writeFileSync(path.join(dir, 'test', 'check.js'), baseTest);
