@@ -135,6 +135,66 @@ function reviewedReplies() {
   ].join('\n');
 }
 
+// A note whose review constructs all carry MARKDOWN in their replacement text.
+// This is the shape that broke on accept: the replacement went into the
+// document as literal characters, so the serialiser escaped it on save and
+// `**bold**` came back as backslash-asterisk-asterisk. Every construct is
+// represented because they share one code path and each reaches it differently:
+// a substitution supplies `to` on accept and `from` on reject, an insert
+// supplies its content, a delete supplies its content on REJECT, and resolving
+// a comment supplies the text its paired highlight was wrapping.
+//
+// Exported as a function because the specs MUTATE this file: accepting a
+// suggestion rewrites it. Each spec restores it from this definition first, so
+// a second run judges the fixture rather than the first run's leftovers.
+function reviewedFormatting() {
+  return [
+    '---',
+    'title: Escaping',
+    'date: 2026-08-20',
+    '---',
+    '',
+    '# Escaping',
+    '',
+    'A substitution: {~~plain text~>**bold** and `code` and [[Roadmap-2026]]~~}{#s1} here.',
+    '',
+    'An insert: {++**inserted bold** and `tick`++}{#s2} here.',
+    '',
+    'A delete: {--**doomed bold**--}{#s3} here.',
+    '',
+    'A highlight: {==**highlighted bold**==}{>>please check<<}{#c1} here.',
+    '',
+    // Literal-looking syntax, which is the trade-off case: an author who meant
+    // asterisks as asterisks. `2 * 3` survives because CommonMark needs a
+    // non-space after the opener; `**wrapped**` does not, and is reinterpreted.
+    // Both are asserted, so the boundary is recorded rather than assumed.
+    'A literal: {++2 * 3 and **wrapped**++}{#s4} here.',
+    '',
+    '---',
+    'suggestions:',
+    '  s1:',
+    '    by: liam',
+    '    at: "2026-08-20T10:00:00Z"',
+    '  s2:',
+    '    by: liam',
+    '    at: "2026-08-20T10:00:00Z"',
+    '  s3:',
+    '    by: liam',
+    '    at: "2026-08-20T10:00:00Z"',
+    '  s4:',
+    '    by: liam',
+    '    at: "2026-08-20T10:00:00Z"',
+    'comments:',
+    '  c1:',
+    '    by: liam',
+    '    at: "2026-08-20T10:00:00Z"',
+    'review:',
+    '  status: in-review',
+    '  at: "2026-08-20T10:00:00Z"',
+    '',
+  ].join('\n');
+}
+
 function buildFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rundock-e2e-'));
   const workspace = path.join(root, 'workspace');
@@ -228,6 +288,9 @@ function buildFixture() {
   fs.writeFileSync(path.join(workspace, 'unreviewed-sections.md'), unreviewedSections(sectionedBody));
   // A reviewed note carrying a reply, for the long-URL wrapping regression.
   fs.writeFileSync(path.join(workspace, 'reviewed-replies.md'), reviewedReplies());
+  // A reviewed note whose constructs carry markdown, for the accept-escaping
+  // regression.
+  fs.writeFileSync(path.join(workspace, 'escaping.md'), reviewedFormatting());
   // A briefing-style note: foldable + nested callouts and frontmatter
   // wikilinks.
   fs.writeFileSync(path.join(workspace, 'briefing.md'), [
@@ -375,4 +438,5 @@ module.exports = {
   reviewedReplies,
   LONG_REPLY_URL,
   LONG_REPLY_UNBREAKABLE_RUN,
+  reviewedFormatting,
 };
