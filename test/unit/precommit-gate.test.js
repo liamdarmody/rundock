@@ -17,7 +17,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const {
-  refusal, buildRecord, writeRecord, readRecord, currentTree,
+  refusal, buildRecord, writeRecord, readRecord, currentTree, defaultBranch,
 } = require('../../scripts/precommit-gate.js');
 
 const TREE = 'a'.repeat(40);
@@ -321,6 +321,42 @@ describe('the tree that was checked is the tree that gets recorded', () => {
       const { code, out } = spawnGate(['--verify'], dir);
       assert.notStrictEqual(code, 0);
       assert.match(out, /is for branch "fix\/card"/, 'the refusal names the branch the record belongs to');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the default branch is read from the remote, not assumed', () => {
+  // Every other repository here is a bare `git init` with no origin, so only
+  // the catch-fallback ran and the remote-reading line was dead to the suite:
+  // replacing it with `return 'main'` would have left every test passing. A
+  // project whose default branch is not called main would have been told to
+  // "branch first" while already on a branch, or worse, allowed to commit
+  // straight to its trunk.
+  test('a remote HEAD pointing at trunk resolves to trunk, not main', () => {
+    const { dir, run } = tempRepo();
+    try {
+      run('commit', '-q', '-m', 'initial');
+      // A remote that exists locally is enough: the lookup reads the
+      // remote-tracking ref, and never talks to a server.
+      run('remote', 'add', 'origin', dir);
+      run('update-ref', 'refs/remotes/origin/trunk', 'HEAD');
+      run('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk');
+
+      assert.strictEqual(defaultBranch(dir), 'trunk',
+        'the remote HEAD is read, and the origin/ prefix stripped');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('with no remote at all it falls back to main', () => {
+    // The other half, kept explicit so the fallback is a stated behaviour
+    // rather than the only one anything ever reached.
+    const { dir } = tempRepo();
+    try {
+      assert.strictEqual(defaultBranch(dir), 'main');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
