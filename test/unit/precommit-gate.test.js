@@ -12,7 +12,13 @@
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
-const { refusal } = require('../../scripts/precommit-gate.js');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+const {
+  refusal, buildRecord, writeRecord, readRecord, currentTree,
+} = require('../../scripts/precommit-gate.js');
 
 const TREE = 'a'.repeat(40);
 const OTHER_TREE = 'b'.repeat(40);
@@ -67,6 +73,79 @@ describe('the pre-commit gate', () => {
     ];
     for (const why of cases) {
       assert.match(why.message, /npm run precommit/, `${why.code} names the command that fixes it`);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The mechanism, against real git
+// ---------------------------------------------------------------------------
+
+// The tests above drive the pure decision with hand-built values, which proves
+// the decision and nothing else. The claim this guard actually rests on lives
+// in the parts that touch reality: that a record written by the gate is read
+// back as the same record, and that the tree hash MOVES when something is
+// staged on top of a checked tree. A field renamed on one side only, or a
+// write-tree taken before the index refresh, would leave every test above green
+// while the guard quietly matched nothing. So this exercises the real functions
+// against a real repository.
+function tempRepo() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'precommit-gate-'));
+  const run = (...args) => execFileSync('git', args, { cwd: dir, stdio: 'ignore' });
+  run('init', '-q');
+  run('config', 'user.email', 'test@example.com');
+  run('config', 'user.name', 'Test');
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'first\n');
+  run('add', '-A');
+  return { dir, run };
+}
+
+describe('the record and the tree hash, against a real repository', () => {
+  test('a record written by the gate reads back as the same record', () => {
+    const { dir } = tempRepo();
+    const file = path.join(dir, '.precommit-gate.json');
+    try {
+      const written = buildRecord({ tree: currentTree(dir), branch: 'fix/card', at: '2026-08-20T00:00:00.000Z' });
+      writeRecord(written, file);
+      assert.deepStrictEqual(readRecord(file), written);
+      // Named explicitly: these are the fields refusal() compares, and a
+      // rename on one side is the failure this test exists for.
+      assert.ok(readRecord(file).tree);
+      assert.ok(readRecord(file).branch);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('staging a further edit changes the tree, so the record goes stale', () => {
+    const { dir, run } = tempRepo();
+    try {
+      const before = currentTree(dir);
+      const record = buildRecord({ tree: before, branch: 'fix/card', at: '2026-08-20T00:00:00.000Z' });
+      // The same tree, unchanged: the gate admits it.
+      assert.strictEqual(
+        refusal({ record, tree: currentTree(dir), branch: 'fix/card', mainBranch: 'main' }),
+        null,
+      );
+
+      fs.writeFileSync(path.join(dir, 'a.txt'), 'second\n');
+      run('add', '-A');
+      const after = currentTree(dir);
+
+      assert.notStrictEqual(after, before, 'write-tree moves when content is staged on top');
+      const why = refusal({ record, tree: after, branch: 'fix/card', mainBranch: 'main' });
+      assert.strictEqual(why.code, 'stale-record');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a missing record file reads as no record, rather than throwing', () => {
+    const { dir } = tempRepo();
+    try {
+      assert.strictEqual(readRecord(path.join(dir, 'nope.json')), null);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });

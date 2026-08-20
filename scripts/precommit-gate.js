@@ -54,14 +54,14 @@ const STEPS = [
   { name: 'check:refs', args: ['run', 'check:refs'] },
 ];
 
-function git(args) {
-  return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim();
+function git(args, root = ROOT) {
+  return execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
 }
 
 /** The default branch, read from the remote rather than assumed to be `main`. */
-function defaultBranch() {
+function defaultBranch(root = ROOT) {
   try {
-    return git(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']).replace(/^origin\//, '');
+    return git(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], root).replace(/^origin\//, '');
   } catch {
     return 'main';
   }
@@ -74,14 +74,31 @@ function defaultBranch() {
  * that, a file touched but unchanged can report as modified and produce a
  * different hash for identical content.
  */
-function currentTree() {
-  try { execFileSync('git', ['update-index', '-q', '--refresh'], { cwd: ROOT, stdio: 'ignore' }); } catch { /* refresh is best effort */ }
-  return git(['write-tree']);
+function currentTree(root = ROOT) {
+  try { execFileSync('git', ['update-index', '-q', '--refresh'], { cwd: root, stdio: 'ignore' }); } catch { /* refresh is best effort */ }
+  return git(['write-tree'], root);
 }
 
-function readRecord() {
-  if (!fs.existsSync(RECORD)) return null;
-  try { return JSON.parse(fs.readFileSync(RECORD, 'utf8')); } catch { return null; }
+function readRecord(file = RECORD) {
+  if (!fs.existsSync(file)) return null;
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+}
+
+/**
+ * The record, written by the one path that writes it.
+ *
+ * Extracted so tests exercise the SAME writer the gate uses. A test that
+ * hand-builds the JSON proves the reader can read the test's idea of a record,
+ * which is not the claim: a field renamed on one side only would leave such a
+ * test green while the guard silently stopped matching anything.
+ */
+function writeRecord(record, file = RECORD) {
+  fs.writeFileSync(file, JSON.stringify(record, null, 2) + '\n');
+}
+
+/** The record `run()` would write for this tree and branch. */
+function buildRecord({ tree, branch, at }) {
+  return { tree, branch, at, steps: STEPS.map(s => s.name) };
 }
 
 /**
@@ -119,12 +136,21 @@ function run() {
   for (const step of STEPS) {
     process.stdout.write(`[precommit] ${step.name}... `);
     try {
-      execFileSync('npm', step.args, { cwd: ROOT, stdio: ['ignore', 'ignore', 'pipe'] });
+      execFileSync('npm', step.args, { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
       console.log('ok');
     } catch (err) {
       console.log('FAILED');
-      const detail = err.stderr ? String(err.stderr).trim().split('\n').slice(-12).join('\n') : '';
-      if (detail) console.error(detail);
+      // BOTH streams. The node test runner writes which test failed and why to
+      // STDOUT, and tsc writes its diagnostics there too; stderr carries only
+      // npm's "lifecycle script failed" boilerplate. Capturing stderr alone
+      // left the developer with a bare "test failed" and nothing to act on,
+      // which removes the read-the-result step on the one path where reading
+      // the result is the entire point.
+      const detail = [err.stdout, err.stderr]
+        .map(stream => (stream ? String(stream).trim() : ''))
+        .filter(Boolean)
+        .join('\n');
+      if (detail) console.error(detail.split('\n').slice(-25).join('\n'));
       console.error(`[precommit] ${step.name} failed. No record written, so the commit stays blocked.`);
       process.exit(1);
     }
@@ -132,8 +158,8 @@ function run() {
 
   // Written only after every step passed, so the record's existence IS the
   // result being read. There is no separate "did you look at it" step to skip.
-  const record = { tree: currentTree(), branch, at: new Date().toISOString(), steps: STEPS.map(s => s.name) };
-  fs.writeFileSync(RECORD, JSON.stringify(record, null, 2) + '\n');
+  const record = buildRecord({ tree: currentTree(), branch, at: new Date().toISOString() });
+  writeRecord(record);
   console.log(`[precommit] PASS. Record written for tree ${record.tree.slice(0, 12)} on ${branch}.`);
 }
 
@@ -151,4 +177,4 @@ if (require.main === module) {
   else run();
 }
 
-module.exports = { refusal, RECORD };
+module.exports = { refusal, buildRecord, writeRecord, readRecord, currentTree, defaultBranch, RECORD, STEPS };
