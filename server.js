@@ -62,6 +62,12 @@ let WORKSPACE = config.getWorkspace();
 function setWorkspaceRoot(dir) {
   WORKSPACE = dir;
   config.setWorkspace(dir);
+  // Clear stale scratch whenever a workspace becomes ACTIVE, not only when one
+  // is preset at boot. A workspace chosen or switched in the interface arrives
+  // here and never touches the boot path, so scratch in it would otherwise
+  // accumulate with nothing ever clearing it. Housekeeping must never be able
+  // to break a switch, hence the guard.
+  try { pruneScratch(); } catch (e) { /* not worth failing a switch over */ }
 }
 
 // Workspace boundary check. A bare `startsWith(resolve(WORKSPACE))`
@@ -460,7 +466,7 @@ const claudeRuntime = require('./lib/runtime/claude.js');
 const {
   modelArgs, getBareArgs, getSpawnEnv,
   resolveClaudeBin, killProcessTree, spawnClaude,
-  registerChildPid, unregisterChildPid,
+  registerChildPid, unregisterChildPid, pruneScratch,
   loadPidFile, savePidFile, pidOf, pidRecordAlive, processCommand,
 } = claudeRuntime;
 claudeRuntime.wireClaudeRuntimeDeps({ getActualPort: () => ACTUAL_PORT });
@@ -2867,6 +2873,11 @@ function startServer(options = {}) {
         boot.mark('heal');
         cleanOrphanedProcesses();
         boot.mark('orphans');
+        // Scratch from earlier runs. Age-bounded rather than emptied outright,
+        // so a second Rundock open on the same workspace cannot delete files
+        // the first is still using.
+        pruneScratch();
+        boot.mark('scratch');
         reportStartup(`workspace preset from environment: ${boot.summary()}`);
       }
       // Release conversations nobody has touched for a while: each holds an

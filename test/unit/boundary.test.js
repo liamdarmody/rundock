@@ -17,6 +17,7 @@ const os = require('node:os');
 const { classifyFileAccess } = require('../../scripts/permission-hook.js');
 const { _internal: srv } = require('../../server.js');
 const { makeWorkspace, cleanup } = require('../helpers/workspace.js');
+const claudeRuntime = require('../../lib/runtime/claude.js');
 
 after(cleanup);
 
@@ -81,5 +82,81 @@ describe('boundary grants (server-side, persisted in the workspace)', () => {
     srv.setWorkspace(dir2);
     assert.strictEqual(srv.boundaryGrantCovers('/Users/x/Exports/file.md'), false,
       'the previous workspace grant must not leak');
+  });
+});
+
+describe('agent scratch files', () => {
+  test('writing scratch and reading it back raises no approval card', () => {
+    // The sequence from the field: an agent writes a working file, then reads
+    // it back a step later, and the read raised an outside-the-workspace card
+    // for a file the agent had just created. Scratch now resolves inside the
+    // workspace, so both halves classify as inside and neither prompts.
+    const ws = makeWorkspace({});
+    srv.setWorkspace(ws);
+    // Derive the path from the environment a spawned agent ACTUALLY receives,
+    // not from the helper. Asking the helper would pass even if the spawn env
+    // pointed somewhere else entirely, which is the thing worth knowing.
+    const env = claudeRuntime.getSpawnEnv('convo-scratch');
+    assert.ok(env.TMPDIR, 'the spawn env carries a temp directory');
+    assert.strictEqual(env.TEMP, env.TMPDIR, 'all three names agree');
+    assert.strictEqual(env.TMP, env.TMPDIR, 'all three names agree');
+
+    const file = path.join(env.TMPDIR, 'some_project_scratch', 'render.html');
+    for (const tool of ['Write', 'Read']) {
+      const access = classifyFileAccess(tool, { file_path: file }, ws, []);
+      assert.strictEqual(access.where, 'inside', `${tool} of scratch must not prompt`);
+    }
+  });
+
+  test('scratch is excluded from version control without outside help', () => {
+    // AC-3 asserted rather than reasoned. The scaffold does add the parent
+    // directory to the workspace's .gitignore, but only when it runs, so a
+    // workspace created earlier, or one whose .gitignore has since been
+    // edited, would start committing working files. The directory excluding
+    // itself is what makes this true regardless.
+    const ws = makeWorkspace({});
+    srv.setWorkspace(ws);
+    const dir = claudeRuntime.getSpawnEnv(null).TMPDIR;
+    const marker = path.join(dir, '.gitignore');
+    assert.ok(fs.existsSync(marker), 'the scratch directory carries its own ignore file');
+    assert.strictEqual(fs.readFileSync(marker, 'utf-8').trim(), '*',
+      'it excludes everything inside it, itself included');
+  });
+
+  test('activating a workspace clears stale scratch, through the real switch path', () => {
+    // The wiring, not the function. Every other test here calls the prune
+    // directly, so all of them would still pass if the call were removed from
+    // the switch path and nothing ever ran it. This one goes through the
+    // server's own workspace activation, which is the way a workspace becomes
+    // active for a person using the application.
+    const ws = makeWorkspace({});
+    srv.setWorkspace(ws);
+    const dir = claudeRuntime.getSpawnEnv(null).TMPDIR;
+
+    const stale = path.join(dir, 'stale-project');
+    fs.mkdirSync(stale, { recursive: true });
+    const staleFile = path.join(stale, 'render.html');
+    fs.writeFileSync(staleFile, 'old');
+    const fresh = path.join(dir, 'fresh.html');
+    fs.writeFileSync(fresh, 'new');
+    const longAgo = (Date.now() - (30 * 24 * 60 * 60 * 1000)) / 1000;
+    fs.utimesSync(staleFile, longAgo, longAgo);
+    fs.utimesSync(stale, longAgo, longAgo);
+
+    // Activate it again, the way the interface does.
+    srv.setWorkspace(ws);
+
+    assert.strictEqual(fs.existsSync(stale), false, 'activation ran the prune');
+    assert.strictEqual(fs.existsSync(fresh), true, 'recent scratch untouched');
+  });
+
+  test('the operating system temp directory would still have prompted', () => {
+    // The counterpart, so the test above is shown to be about WHERE the file
+    // is rather than about scratch files being special. This is the behaviour
+    // that produced the original reports, and it is correct: that path really
+    // is outside the workspace.
+    const ws = makeWorkspace({});
+    const outside = path.join(os.tmpdir(), 'some_project_scratch', 'render.html');
+    assert.strictEqual(classifyFileAccess('Read', { file_path: outside }, ws, []).where, 'outside');
   });
 });
