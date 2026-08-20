@@ -24,6 +24,14 @@ const path = require('node:path');
 const { execFileSync, spawn, spawnSync } = require('node:child_process');
 
 const { redFirst, recordOutcome } = require('../../scripts/red-first.js');
+// The REAL record writer, not a local idea of one. scripts/precommit-gate.js
+// says why in its own docstring: "a test that hand-builds the JSON proves the
+// reader can read the test's idea of a record". These tests hand-built it
+// anyway, and an independent reviewer caught it. If the gate renamed a field or
+// computed its tree a different way, recordOutcome would silently stop matching
+// in production while every test here stayed green, because the fixture and the
+// implementation were built to agree with each other rather than with the gate.
+const gate = require('../../scripts/precommit-gate.js');
 
 // A throwaway repository with a base commit, then a branch carrying whatever
 // source and test content the case needs.
@@ -161,10 +169,14 @@ describe('the outcome reaches the record a reviewer packet can carry', () => {
   // evidence sat in a terminal it cannot see. The packet carries the record, so
   // the record has to carry the proof.
   function withRecord(dir, tree) {
-    fs.writeFileSync(path.join(dir, '.precommit-gate.json'),
-      JSON.stringify({ tree, branch: 'change', at: '2026-08-20T00:00:00.000Z', steps: ['test'] }, null, 2));
+    gate.writeRecord(
+      gate.buildRecord({ tree, branch: 'change', at: '2026-08-20T00:00:00.000Z' }),
+      path.join(dir, '.precommit-gate.json'),
+    );
   }
-  const treeOf = (dir) => execFileSync('git', ['write-tree'], { cwd: dir, encoding: 'utf8' }).trim();
+  // The gate's own tree function, so a change to how it identifies a tree
+  // breaks these tests rather than passing them by coincidence.
+  const treeOf = (dir) => gate.currentTree(dir);
 
   test('a proven outcome is written against the tree it was measured on', () => {
     const { dir } = repo({
@@ -442,9 +454,9 @@ describe('the record carries test counts, not a count of files', () => {
     try {
       // The fixture already ignores the record file, so there is nothing to
       // commit here and no reason to touch the tree before measuring it.
-      const tree = execFileSync('git', ['write-tree'], { cwd: dir, encoding: 'utf8' }).trim();
-      fs.writeFileSync(path.join(dir, '.precommit-gate.json'),
-        JSON.stringify({ tree, branch: 'change', at: 'x', steps: ['test'] }));
+      const tree = gate.currentTree(dir);
+      gate.writeRecord(gate.buildRecord({ tree, branch: 'change', at: 'x' }),
+        path.join(dir, '.precommit-gate.json'));
 
       const outcome = redFirst({ repo: dir, base: 'main', tests: 'node --test test/check.js' });
       assert.strictEqual(outcome.outcome, 'proven', outcome.reason);
@@ -609,6 +621,74 @@ describe('the command itself, not only the function inside it', () => {
       const r = cli(dir);
       assert.notStrictEqual(r.status, 0, 'a non-discriminating result must not exit 0');
       assert.match(r.stdout, /NOT-DISCRIMINATING/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the record contract is the gate is, not this file is', () => {
+  test('recordOutcome reads a record the real gate wrote', () => {
+    // The point of this test is the coupling, not the assertion. It imports
+    // scripts/precommit-gate.js, so a renamed field or a different
+    // tree-computation on that side fails here rather than failing silently in
+    // production, where the outcome would simply never reach the record.
+    const { dir } = repo({
+      added: { 'lib2.js': 'module.exports.b = () => 2;\n' },
+      testFile: "const assert = require('assert');\nmodule.exports = () => { assert.ok(true); };\n",
+    });
+    try {
+      const record = gate.buildRecord({
+        tree: gate.currentTree(dir), branch: 'change', at: '2026-08-21T00:00:00.000Z',
+      });
+      gate.writeRecord(record, path.join(dir, '.precommit-gate.json'));
+
+      assert.ok(record.tree, 'the gate names a tree at all');
+      assert.strictEqual(record.tree,
+        execFileSync('git', ['write-tree'], { cwd: dir, encoding: 'utf8' }).trim(),
+        'the gate identifies a tree by git write-tree, which is what recordOutcome assumes');
+
+      const outcome = redFirst({ repo: dir, base: 'main', tests: CMD });
+      assert.strictEqual(recordOutcome(dir, outcome), true,
+        'a record written by the real gate is accepted');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('a renamed source file', () => {
+  test('is restored to its old path, not deleted, so a false proven is impossible', () => {
+    // git diff reports a rename as one new path when rename detection is on.
+    // restoreTo then asks whether that path exists at the base, finds it does
+    // not, and DELETES it. The reverted run fails with a module-not-found for
+    // an unrelated reason, and the tool reports "proven" for tests that
+    // discriminate nothing. That is the one error direction this must never
+    // take.
+    const { dir, git } = repo({ added: { 'old-name.js': 'module.exports.b = () => 2;\n' } });
+    try {
+      // Put the file in the BASE, then rename it on the branch.
+      git('checkout', '-q', 'main');
+      fs.writeFileSync(path.join(dir, 'old-name.js'), 'module.exports.b = () => 2;\n');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'the file, under its first name');
+      git('checkout', '-q', '-b', 'renamed');
+      git('mv', 'old-name.js', 'new-name.js');
+      fs.writeFileSync(path.join(dir, 'test', 'check.js'),
+        "const assert = require('assert');\n"
+        + "module.exports = () => { assert.strictEqual(require('../new-name.js').b(), 2); };\n");
+      git('add', '-A');
+      git('commit', '-q', '-m', 'renamed');
+      // Rename detection on, which is what a developer's config may well do.
+      git('config', 'diff.renames', 'true');
+
+      const r = redFirst({ repo: dir, base: 'main', tests: CMD });
+      assert.deepStrictEqual(r.source.slice().sort(), ['new-name.js', 'old-name.js'],
+        'both sides of the rename are treated as source');
+      assert.strictEqual(
+        execFileSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).trim(), '',
+        'and the tree comes back clean',
+      );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

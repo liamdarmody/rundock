@@ -142,7 +142,14 @@ function redFirst({ repo, base = 'main', tests, log = () => {}, runner = null })
   }
 
   const mergeBase = git(repo, ['merge-base', base, 'HEAD']);
-  const changed = git(repo, ['diff', '--name-only', mergeBase, 'HEAD'])
+  // --no-renames, and it is not a detail. With rename detection on, a renamed
+  // file is reported once, under its NEW path. restoreTo then asks whether that
+  // path exists at the base, finds it does not, and deletes it. The reverted
+  // run fails with a module-not-found for an unrelated reason, and the tool
+  // reports "proven" for tests that discriminate nothing: the one error
+  // direction it must never take. Forced off here rather than trusted to the
+  // developer's diff.renames config.
+  const changed = git(repo, ['diff', '--no-renames', '--name-only', mergeBase, 'HEAD'])
     .split('\n').filter(Boolean);
   const testFiles = changed.filter(isTest);
   const sourceFiles = changed.filter(f => !isTest(f));
@@ -198,6 +205,16 @@ function redFirst({ repo, base = 'main', tests, log = () => {}, runner = null })
   // listener is what disables that default, and the listener restores before
   // exiting in case the finally is never reached. Both paths call the same
   // function, and restoring an already-restored tree is a no-op.
+  //
+  // KNOWN GAP, stated rather than implied. `run` uses spawnSync, which blocks
+  // the event loop, so this handler cannot execute until that child returns.
+  // A terminal interrupt reaches the whole process group and the child dies
+  // too, so the common case works. A test command that TRAPS or ignores
+  // SIGINT, or detaches from the group, leaves the tree reverted for as long
+  // as it keeps running. Closing that needs an async spawn plus an explicit
+  // kill of the child, which changes this function's signature. Raised by an
+  // independent reviewer as an advisory on the final permitted round and left
+  // for the approver to schedule rather than refactored unreviewed.
   const onSignal = () => {
     try { restoreTo(repo, 'HEAD', sourceFiles); } catch (e) { /* exiting anyway */ }
     process.exit(130);
