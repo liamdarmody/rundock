@@ -32,6 +32,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { waitFor } from './wait-for.mjs';
 
 const require = createRequire(import.meta.url);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -52,15 +53,6 @@ function record(step, ok, detail) {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${step}${detail ? `  (${detail})` : ''}`);
 }
 
-async function waitFor(pred, timeout = 30000, interval = 200) {
-  const deadline = Date.now() + timeout;
-  for (;;) {
-    const v = await pred();
-    if (v) return v;
-    if (Date.now() >= deadline) return null;
-    await new Promise(r => setTimeout(r, interval));
-  }
-}
 
 function readState(workspace) {
   try { return JSON.parse(fs.readFileSync(path.join(workspace, '.rundock', 'state.json'), 'utf8')); }
