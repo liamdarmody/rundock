@@ -123,6 +123,33 @@ describe('agent scratch files', () => {
       'it excludes everything inside it, itself included');
   });
 
+  test('activating a workspace clears stale scratch, through the real switch path', () => {
+    // The wiring, not the function. Every other test here calls the prune
+    // directly, so all of them would still pass if the call were removed from
+    // the switch path and nothing ever ran it. This one goes through the
+    // server's own workspace activation, which is the way a workspace becomes
+    // active for a person using the application.
+    const ws = makeWorkspace({});
+    srv.setWorkspace(ws);
+    const dir = claudeRuntime.getSpawnEnv(null).TMPDIR;
+
+    const stale = path.join(dir, 'stale-project');
+    fs.mkdirSync(stale, { recursive: true });
+    const staleFile = path.join(stale, 'render.html');
+    fs.writeFileSync(staleFile, 'old');
+    const fresh = path.join(dir, 'fresh.html');
+    fs.writeFileSync(fresh, 'new');
+    const longAgo = (Date.now() - (30 * 24 * 60 * 60 * 1000)) / 1000;
+    fs.utimesSync(staleFile, longAgo, longAgo);
+    fs.utimesSync(stale, longAgo, longAgo);
+
+    // Activate it again, the way the interface does.
+    srv.setWorkspace(ws);
+
+    assert.strictEqual(fs.existsSync(stale), false, 'activation ran the prune');
+    assert.strictEqual(fs.existsSync(fresh), true, 'recent scratch untouched');
+  });
+
   test('the operating system temp directory would still have prompted', () => {
     // The counterpart, so the test above is shown to be about WHERE the file
     // is rather than about scratch files being special. This is the behaviour
