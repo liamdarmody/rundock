@@ -81,14 +81,25 @@ async function caretAt(page, needle) {
 
 async function afterKey(page) {
   return page.evaluate(() => {
-    const ed = document.querySelector('.ProseMirror').editor;
+    const pm = document.querySelector('.ProseMirror');
     const active = document.activeElement;
     return {
-      // The whole point: is focus still inside the document being edited.
-      focusInEditor: active.classList.contains('ProseMirror')
-        || !!active.closest('.ProseMirror'),
+      // The editable host ITSELF, not merely something inside it.
+      //
+      // "Inside .ProseMirror" is too weak to be evidence here, and weak in the
+      // exact direction that would hide this defect. A callout renders
+      // focusable controls, a fold summary and an edit button, and those are
+      // DESCENDANTS of the editable. They are also where an unhandled Tab
+      // lands first in a callout-bearing note. So a check that accepted any
+      // descendant would go green on the unfixed build at precisely the sites
+      // this suite exists to cover, and would report the callout note as
+      // healthy while the caret sat on a button.
+      focusIsEditorItself: active === pm,
+      // Named separately so a failure says which way it went.
+      focusOnCalloutControl: !!active.closest('.callout'),
+      focusLeftDocument: !pm.contains(active) && active !== pm,
       activeTag: active.tagName,
-      markdown: ed.storage.markdown.getMarkdown(),
+      markdown: pm.editor.storage.markdown.getMarkdown(),
     };
   });
 }
@@ -113,7 +124,9 @@ for (const { file, label, withCallout } of NOTES) {
         const after = await afterKey(page);
 
         // The defect, and the whole point of the card.
-        expect(after.focusInEditor).toBe(true);
+        expect(after.focusIsEditorItself).toBe(true);
+        expect(after.focusOnCalloutControl).toBe(false);
+        expect(after.focusLeftDocument).toBe(false);
 
         // Whether the document may change is not the same question, and it is
         // derived rather than assumed. Shift-Tab on a top-level list item is a
@@ -137,13 +150,13 @@ for (const { file, label, withCallout } of NOTES) {
 
     await page.keyboard.press('Tab');
     const indented = await afterKey(page);
-    expect(indented.focusInEditor).toBe(true);
+    expect(indented.focusIsEditorItself).toBe(true);
     expect(indented.markdown).not.toBe(before.markdown);
     await expect(page.locator('.ProseMirror li ul, .ProseMirror li ol')).toHaveCount(1);
 
     await page.keyboard.press('Shift+Tab');
     const outdented = await afterKey(page);
-    expect(outdented.focusInEditor).toBe(true);
+    expect(outdented.focusIsEditorItself).toBe(true);
     // Back where it started, which also proves Shift+Tab is still reaching
     // liftListItem rather than being swallowed by the guard.
     expect(outdented.markdown).toBe(before.markdown);
