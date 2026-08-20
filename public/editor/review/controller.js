@@ -167,13 +167,44 @@ export function createReviewController({ editor, endmatter, author = 'me', now =
 
   // Returns the range the replacement occupies in the new document, so the
   // UI can flash exactly what changed (zero-width for pure deletions).
+  //
+  // The replacement is MARKDOWN SOURCE, not literal characters. Every string
+  // that reaches here was read out of the file: a substitution's `to`, an
+  // insert's content, the text a highlight was wrapping. In the file those
+  // bytes are markdown, so `**bold**` means bold and `[[Note]]` means a
+  // wikilink, and accepting a suggestion has to put back what the author
+  // wrote.
+  //
+  // Inserting them as a text node instead made them literal, which corrupted
+  // the file on the next save: the serialiser sees an asterisk that is not
+  // markup and escapes it, so `**bold**` came back as `\*\*bold\*\*`. It also
+  // left wikilinks as dead text that happened to survive as bytes.
+  //
+  // Parsed INLINE, because every one of these sites is inside a paragraph. A
+  // block parse would wrap the replacement in a paragraph of its own and split
+  // the sentence around it.
   function replaceRangeWithText(from, to, text) {
-    editor.chain().command(({ tr, state }) => {
-      if (text) tr.replaceWith(from, to, state.schema.text(text));
-      else tr.delete(from, to);
-      return true;
-    }).run();
-    return { from, to: from + (text ? text.length : 0) };
+    if (!text) {
+      editor.chain().command(({ tr }) => { tr.delete(from, to); return true; }).run();
+      return { from, to: from };
+    }
+    // The string goes in AS MARKDOWN. The markdown extension intercepts
+    // string content on insert and parses it, which lands the replacement as
+    // real marks and nodes: strong, code, a wikilink. Handing it pre-rendered
+    // HTML instead does the opposite of what it looks like, because the
+    // extension is configured `html: false`, so the tags are parsed as
+    // markdown text and escaped into the file as entities.
+    //
+    // It parses inline and does not open a new block: verified on a paragraph
+    // mid-sentence, which is the only shape these call sites produce.
+    const before = editor.state.doc.content.size;
+    editor.chain().insertContentAt({ from, to }, text).run();
+    // The flash range is measured, not predicted: a replacement's length in
+    // the document is not its length in markdown source (`**bold**` is eight
+    // characters and four of content), so the document is asked how much it
+    // grew rather than told.
+    const inserted = editor.state.doc.content.size - before + (to - from);
+    return { from, to: from + Math.max(0, inserted) };
   }
 
   function ensureSuggestionEntry(id, node) {
