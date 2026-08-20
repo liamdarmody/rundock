@@ -93,14 +93,34 @@ describe('agent scratch files', () => {
     // workspace, so both halves classify as inside and neither prompts.
     const ws = makeWorkspace({});
     srv.setWorkspace(ws);
-    const scratch = claudeRuntime.scratchDir();
-    assert.ok(scratch, 'a workspace yields a scratch directory');
-    const file = path.join(scratch, 'some_project_scratch', 'render.html');
+    // Derive the path from the environment a spawned agent ACTUALLY receives,
+    // not from the helper. Asking the helper would pass even if the spawn env
+    // pointed somewhere else entirely, which is the thing worth knowing.
+    const env = claudeRuntime.getSpawnEnv('convo-scratch');
+    assert.ok(env.TMPDIR, 'the spawn env carries a temp directory');
+    assert.strictEqual(env.TEMP, env.TMPDIR, 'all three names agree');
+    assert.strictEqual(env.TMP, env.TMPDIR, 'all three names agree');
 
+    const file = path.join(env.TMPDIR, 'some_project_scratch', 'render.html');
     for (const tool of ['Write', 'Read']) {
       const access = classifyFileAccess(tool, { file_path: file }, ws, []);
       assert.strictEqual(access.where, 'inside', `${tool} of scratch must not prompt`);
     }
+  });
+
+  test('scratch is excluded from version control without outside help', () => {
+    // AC-3 asserted rather than reasoned. The scaffold does add the parent
+    // directory to the workspace's .gitignore, but only when it runs, so a
+    // workspace created earlier, or one whose .gitignore has since been
+    // edited, would start committing working files. The directory excluding
+    // itself is what makes this true regardless.
+    const ws = makeWorkspace({});
+    srv.setWorkspace(ws);
+    const dir = claudeRuntime.getSpawnEnv(null).TMPDIR;
+    const marker = path.join(dir, '.gitignore');
+    assert.ok(fs.existsSync(marker), 'the scratch directory carries its own ignore file');
+    assert.strictEqual(fs.readFileSync(marker, 'utf-8').trim(), '*',
+      'it excludes everything inside it, itself included');
   });
 
   test('the operating system temp directory would still have prompted', () => {

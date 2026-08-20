@@ -62,6 +62,12 @@ let WORKSPACE = config.getWorkspace();
 function setWorkspaceRoot(dir) {
   WORKSPACE = dir;
   config.setWorkspace(dir);
+  // Clear stale scratch whenever a workspace becomes ACTIVE, not only when one
+  // is preset at boot. A workspace chosen or switched in the interface arrives
+  // here and never touches the boot path, so scratch in it would otherwise
+  // accumulate with nothing ever clearing it. Housekeeping must never be able
+  // to break a switch, hence the guard.
+  try { pruneScratch(); } catch (e) { /* not worth failing a switch over */ }
 }
 
 // Workspace boundary check. A bare `startsWith(resolve(WORKSPACE))`
