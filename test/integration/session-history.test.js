@@ -282,6 +282,43 @@ describe('get_session_history: multi-session merge', () => {
     assert.strictEqual(res.messages[2].content, shared);
   });
 
+  test('an echo occurring late in the first turn still leaves the reply separate', async () => {
+    // Sharper than the case above, and the one that decides how far the walk
+    // advances after a match. Here the repeated phrase sits well past the
+    // sixty characters used to recognise a stretch, so a walk that stepped
+    // forward only by that head would still be inside the first agent's text
+    // and would match the echo there, absorbing a reply that belongs to
+    // someone else. Stepping past the whole stretch is what rules it out.
+    const convoId = 'sh-multiblock-4';
+    const echoed = 'and that is the recommendation I would make here.';
+    const firstTurn = 'Opening remarks that comfortably exceed the sixty characters used to '
+      + `recognise a stretch, followed by the phrase in question, ${echoed} Then a further `
+      + 'sentence so the echo is not at the end either.';
+    writeSession('sess-late-echo', [
+      userLine('Both of you weigh in', '2026-08-13T12:00:00Z'),
+      assistantLine(firstTurn, '2026-08-13T12:00:05Z'),
+      assistantLine(echoed, '2026-08-13T12:00:10Z'),
+    ]);
+    writeTranscript(convoId, [
+      { role: 'user', text: 'Both of you weigh in', timestamp: '2026-08-13T12:00:00Z' },
+      { role: 'agent', agent: 'cos', text: firstTurn, timestamp: '2026-08-13T12:00:05Z' },
+      { role: 'agent', agent: 'penn', text: echoed, timestamp: '2026-08-13T12:00:10Z' },
+    ]);
+
+    const res = await getHistory({
+      conversationId: convoId,
+      sessionIds: [{ sessionId: 'sess-late-echo' }],
+    });
+
+    assert.strictEqual(res.messages.length, 3);
+    assert.deepStrictEqual(res.messages.map(m => m.agentId), [null, 'cos', 'penn']);
+    assert.strictEqual(res.messages[1].content, firstTurn, 'nothing absorbed into the first turn');
+    assert.strictEqual(res.messages[2].content, echoed);
+    // Present once as its own turn, not duplicated into the bubble before it.
+    const occurrences = res.messages.filter(m => m.content === echoed).length;
+    assert.strictEqual(occurrences, 1, 'the reply appears exactly once');
+  });
+
   test('a following agent turn is not swallowed into the one before it', async () => {
     // The guard on the change above. Two agents replying in sequence with no
     // user message between them is ordinary, and absorbing every assistant
