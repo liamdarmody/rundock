@@ -18,6 +18,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const {
   refusal, buildRecord, writeRecord, readRecord, currentTree, defaultBranch,
+  isReleaseCommit, RELEASE_FOOTPRINT,
 } = require('../../scripts/precommit-gate.js');
 
 const TREE = 'a'.repeat(40);
@@ -360,5 +361,52 @@ describe('the default branch is read from the remote, not assumed', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('the release commit is the one thing allowed on the default branch', () => {
+  // scripts/release.js bumps the version, promotes the changelog and commits
+  // straight to main. That is by design, and on the day this guard merged it
+  // stopped `npm run release` dead: the version was bumped, the changelog
+  // promoted, and the commit refused. A gate that blocks the release tool
+  // shipping beside it is not protecting anything.
+  const onMain = (staged) => refusal({
+    record: null, tree: TREE, branch: MAIN, mainBranch: MAIN, staged,
+  });
+
+  test('the release footprint is admitted', () => {
+    assert.strictEqual(onMain(['package.json', 'CHANGELOG.md']), null);
+    // Either alone is still the release commit's shape.
+    assert.strictEqual(onMain(['package.json']), null);
+    assert.strictEqual(onMain(['CHANGELOG.md']), null);
+  });
+
+  test('anything else alongside it is still refused', () => {
+    // The exception is the footprint, not the presence of a version bump. A
+    // source file riding along is exactly what this guard exists to stop.
+    assert.strictEqual(onMain(['package.json', 'server.js']).code, 'on-default-branch');
+    assert.strictEqual(onMain(['CHANGELOG.md', 'lib/agents/prompt.js']).code, 'on-default-branch');
+    assert.strictEqual(onMain(['server.js']).code, 'on-default-branch');
+  });
+
+  test('an empty staging area is not a release commit', () => {
+    // Nothing staged means nothing to vouch for, and admitting it would let
+    // an empty or amend-shaped commit through on the default branch.
+    assert.strictEqual(onMain([]).code, 'on-default-branch');
+    assert.strictEqual(isReleaseCommit([]), false);
+  });
+
+  test('on a feature branch the footprint still faces the normal checks', () => {
+    // The exception is about the DEFAULT branch. Elsewhere a changelog edit is
+    // an ordinary commit and needs a record like any other.
+    const why = refusal({
+      record: null, tree: TREE, branch: BRANCH, mainBranch: MAIN,
+      staged: ['CHANGELOG.md'],
+    });
+    assert.strictEqual(why.code, 'no-record');
+  });
+
+  test('the footprint is exactly the two files release.js touches', () => {
+    assert.deepStrictEqual([...RELEASE_FOOTPRINT].sort(), ['CHANGELOG.md', 'package.json']);
   });
 });
