@@ -103,3 +103,83 @@ test('getSpawnEnv carries the use-time workspace and the wired port together', (
       'the env followed the switch with no re-wiring');
   });
 });
+
+// ── Scratch stays inside the workspace ─────────────────────────────────────
+//
+// An agent that writes a scratch file to the operating system temp directory
+// and reads it back trips the outside-the-workspace approval card, for a file
+// it created itself seconds earlier. The card is correct; putting the file
+// there was the mistake. Pointing the platform temp directory at a path inside
+// the workspace fixes the whole class by construction, including for tools and
+// skills this project did not write, because they ask the platform rather than
+// reading any guidance.
+
+test('a spawned agent resolves the platform temp directory inside the workspace', () => {
+  const rt = freshClaudeRuntime();
+  rt.wireClaudeRuntimeDeps({ getActualPort: () => 4444 });
+  withTwoWorkspaces((config, wsA) => {
+    config.setWorkspace(wsA);
+    const env = rt.getSpawnEnv('convo-1');
+    // All three, because the platform reads a different one per operating
+    // system: TMPDIR on macOS and Linux, TEMP and TMP on Windows. Setting only
+    // the one this machine happens to use would leave the other platforms
+    // writing outside the workspace with nothing to catch it.
+    for (const key of ['TMPDIR', 'TEMP', 'TMP']) {
+      assert.ok(env[key], `${key} must be set`);
+      assert.ok(env[key].startsWith(wsA + path.sep),
+        `${key} must resolve inside the workspace, got ${env[key]}`);
+    }
+    assert.ok(fs.existsSync(env.TMPDIR), 'the directory exists before a child needs it');
+  });
+});
+
+test('the scratch directory follows a workspace switch', () => {
+  const rt = freshClaudeRuntime();
+  rt.wireClaudeRuntimeDeps({ getActualPort: () => 4444 });
+  withTwoWorkspaces((config, wsA, wsB) => {
+    config.setWorkspace(wsA);
+    assert.ok(rt.getSpawnEnv(null).TMPDIR.startsWith(wsA + path.sep));
+    config.setWorkspace(wsB);
+    assert.ok(rt.getSpawnEnv(null).TMPDIR.startsWith(wsB + path.sep),
+      'resolved at use time, not captured at wiring');
+  });
+});
+
+test('with no workspace the real temp directory is left alone', () => {
+  const rt = freshClaudeRuntime();
+  rt.wireClaudeRuntimeDeps({ getActualPort: () => 4444 });
+  const env = rt.getSpawnEnv(null);
+  // Redirecting to a path built from an empty workspace would be worse than
+  // not redirecting: it would write to an unpredictable place rather than a
+  // contained one. Better to leave the platform default standing.
+  assert.strictEqual(env.TMPDIR, process.env.TMPDIR);
+});
+
+test('pruning clears stale scratch and leaves recent scratch alone', () => {
+  const rt = freshClaudeRuntime();
+  rt.wireClaudeRuntimeDeps({ getActualPort: () => 4444 });
+  withTwoWorkspaces((config, wsA) => {
+    config.setWorkspace(wsA);
+    const dir = rt.getSpawnEnv(null).TMPDIR;
+    const stale = path.join(dir, 'stale.html');
+    const fresh = path.join(dir, 'fresh.html');
+    fs.writeFileSync(stale, 'x');
+    fs.writeFileSync(fresh, 'x');
+    const longAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+    fs.utimesSync(stale, longAgo / 1000, longAgo / 1000);
+
+    rt.pruneScratch();
+
+    assert.strictEqual(fs.existsSync(stale), false, 'a month-old file is cleared');
+    assert.strictEqual(fs.existsSync(fresh), true, 'a file from this session survives');
+  });
+});
+
+test('pruning a workspace that has no scratch directory is a quiet no-op', () => {
+  const rt = freshClaudeRuntime();
+  rt.wireClaudeRuntimeDeps({ getActualPort: () => 4444 });
+  withTwoWorkspaces((config, wsA) => {
+    config.setWorkspace(wsA);
+    assert.doesNotThrow(() => rt.pruneScratch());
+  });
+});
