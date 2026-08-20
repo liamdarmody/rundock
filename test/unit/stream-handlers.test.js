@@ -102,6 +102,29 @@ describe('response text accumulation', () => {
     assert.strictEqual(entry.responseText, 'Hello world');
   });
 
+  test('a turn interleaving text and tool calls accumulates every stretch, in order', () => {
+    // Pins the SHAPE the transcript writer receives for a long working turn,
+    // because a test elsewhere asserts how such a turn is rebuilt for display
+    // and had been assuming this shape rather than proving it. If the
+    // accumulator ever inserted a separator, or dropped a stretch after a tool
+    // call, that test would keep passing against a fixture reality no longer
+    // produces. This is the link between the two.
+    const entry = makeEntry();
+    srv.wireProcessHandlers(entry, 'convo-1', null, {});
+    push(entry, [
+      fx.textDelta('Let me gather the clutter first.'),
+      ...fx.toolUseFlow('Read', { file_path: 'a.md' }),
+      fx.textDelta('Now checking the settings file.'),
+      ...fx.toolUseFlow('Edit', { file_path: 'b.md' }),
+      fx.textDelta('Here is the summary worth keeping.'),
+    ]);
+    assert.strictEqual(
+      entry.responseText,
+      'Let me gather the clutter first.Now checking the settings file.Here is the summary worth keeping.',
+      'stretches are concatenated with no separator, and tool calls contribute nothing',
+    );
+  });
+
   test('a later assistant message does not clobber an earlier block (marker survives)', () => {
     // Post-fix behavior: the assistant message appends (deduped against the
     // delta stream) instead of replacing, so a marker streamed earlier in the

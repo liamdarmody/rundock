@@ -250,6 +250,38 @@ describe('get_session_history: multi-session merge', () => {
     assert.ok(agentMsg.content.indexOf(second) < agentMsg.content.indexOf(third));
   });
 
+  test('a following agent whose opening repeats an earlier phrase stays separate', async () => {
+    // The sharp case for the absorption rule. Agents sharing a house style
+    // reuse phrases, so a second agent's short reply can legitimately open
+    // with words that already appear inside the first agent's turn. A rule
+    // that asked only whether the text appears ANYWHERE in the turn would
+    // absorb it and attribute one agent's words to another. Requiring each
+    // stretch to appear AFTER the previous one is what prevents that.
+    const convoId = 'sh-multiblock-3';
+    const shared = 'Here is the summary worth keeping.';
+    writeSession('sess-echo', [
+      userLine('Both of you report back', '2026-08-13T11:00:00Z'),
+      assistantLine(`${shared} That was the first agent talking.`, '2026-08-13T11:00:05Z'),
+      assistantLine(shared, '2026-08-13T11:00:10Z'),
+    ]);
+    writeTranscript(convoId, [
+      { role: 'user', text: 'Both of you report back', timestamp: '2026-08-13T11:00:00Z' },
+      { role: 'agent', agent: 'cos', text: `${shared} That was the first agent talking.`, timestamp: '2026-08-13T11:00:05Z' },
+      { role: 'agent', agent: 'penn', text: shared, timestamp: '2026-08-13T11:00:10Z' },
+    ]);
+
+    const res = await getHistory({
+      conversationId: convoId,
+      sessionIds: [{ sessionId: 'sess-echo' }],
+    });
+
+    assert.strictEqual(res.messages.length, 3, 'the echoed reply is its own turn');
+    assert.deepStrictEqual(res.messages.map(m => m.agentId), [null, 'cos', 'penn']);
+    assert.strictEqual(res.messages[1].content, `${shared} That was the first agent talking.`,
+      "the first agent's bubble is exactly its own turn, with nothing absorbed");
+    assert.strictEqual(res.messages[2].content, shared);
+  });
+
   test('a following agent turn is not swallowed into the one before it', async () => {
     // The guard on the change above. Two agents replying in sequence with no
     // user message between them is ordinary, and absorbing every assistant
