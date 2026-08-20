@@ -149,7 +149,12 @@ jobs:
       # every run, pass or fail.
       - name: Upload lcov for floor diagnosis
         if: always()
-        uses: actions/upload-artifact@v4
+        # v7 rather than v4: v4 targets Node 20, which the runners now force
+        # onto Node 24 and warn about on every run. A warning nobody can act on
+        # trains people to ignore the warnings that matter. The inputs used
+        # here are unchanged across the majors between; what changed is
+        # artifact merging and overwrite behaviour, neither of which this uses.
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-lcov
           path: coverage.lcov
