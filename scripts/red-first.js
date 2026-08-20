@@ -40,11 +40,16 @@
 const { execFileSync, spawnSync } = require('node:child_process');
 const path = require('node:path');
 
-// Path fragments that mark a file as a test rather than the thing under test.
-// Deliberately generous: misreading source as test makes the check WEAKER,
-// since less is reverted, which surfaces as a false "not discriminating"
-// rather than as a false proof. The failure leans towards complaining.
-const TEST_MARKERS = ['test/', 'tests/', 'spec/', '__tests__/', '.test.', '.spec.'];
+// What marks a file as a test rather than the thing under test.
+//
+// Matched against whole path SEGMENTS, not as substrings. 'src/latest/x.js'
+// contains 'test/', because "latest/" ends in it, and so do contest/, attest/,
+// protest/ and fastest/. A source file misclassified that way is never
+// reverted, so the check silently runs against less than it claims to. The
+// error direction is a false complaint rather than a false proof, which is the
+// safe direction and still not a reason to leave it wrong.
+const TEST_DIRS = ['test', 'tests', 'spec', '__tests__'];
+const TEST_FILENAME_MARKERS = ['.test.', '.spec.'];
 
 const LIMITATION =
   'Reverting proves the tests notice this change. It cannot prove they assert '
@@ -73,7 +78,10 @@ function git(repo, args) {
 }
 
 function isTest(file) {
-  return TEST_MARKERS.some(m => file.includes(m));
+  const parts = file.split('/');
+  const name = parts.pop();
+  if (parts.some(segment => TEST_DIRS.includes(segment))) return true;
+  return TEST_FILENAME_MARKERS.some(m => name.includes(m));
 }
 
 function existsAt(repo, ref, file) {
@@ -291,4 +299,4 @@ function main() {
 
 if (require.main === module) process.exit(main());
 
-module.exports = { redFirst, recordOutcome, restoreTo, isTest, TEST_MARKERS, LIMITATION };
+module.exports = { redFirst, recordOutcome, restoreTo, isTest, TEST_DIRS, TEST_FILENAME_MARKERS, LIMITATION };

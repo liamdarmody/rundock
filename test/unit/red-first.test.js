@@ -21,7 +21,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync, spawn } = require('node:child_process');
+const { execFileSync, spawn, spawnSync } = require('node:child_process');
 
 const { redFirst, recordOutcome } = require('../../scripts/red-first.js');
 
@@ -514,6 +514,102 @@ describe('the test command does not inherit this runner is own context', () => {
         'the child must not see the parent test runner is context');
     } finally {
       fs.rmSync(probe, { force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('classifying a path as a test, by segment rather than by substring', () => {
+  test('a source directory whose name ends in "test" is not a test directory', () => {
+    // `'src/latest/module.js'.includes('test/')` is true, because "latest/"
+    // ends in "test/". So do contest/, attest/, protest/, fastest/. A source
+    // file misclassified this way is never reverted, so the check runs against
+    // less than it claims to.
+    const { dir } = repo({
+      added: {
+        'src/latest/module.js': 'module.exports.b = () => 2;\n',
+      },
+      testFile: "const assert = require('assert');\n"
+        + "module.exports = () => { assert.strictEqual(require('../src/latest/module.js').b(), 2); };\n",
+    });
+    try {
+      const r = redFirst({ repo: dir, base: 'main', tests: CMD });
+      assert.deepStrictEqual(r.source, ['src/latest/module.js'],
+        'a path containing "test/" inside a longer segment is source');
+      assert.deepStrictEqual(r.tests, ['test/check.js']);
+      assert.strictEqual(r.outcome, 'proven', r.reason);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a real test directory and a suffixed filename are still tests', () => {
+    const { dir } = repo({
+      source: 'module.exports.a = () => 1;\nmodule.exports.c = () => 3;\n',
+      added: {
+        'src/thing.test.js': '// a test by filename\n',
+        'spec/other.js': '// a test by directory\n',
+      },
+      testFile: "const assert = require('assert');\n"
+        + "module.exports = () => { assert.strictEqual(require('../lib.js').c(), 3); };\n",
+    });
+    try {
+      const r = redFirst({ repo: dir, base: 'main', tests: CMD });
+      assert.deepStrictEqual(r.source, ['lib.js']);
+      assert.deepStrictEqual(r.tests.slice().sort(),
+        ['spec/other.js', 'src/thing.test.js', 'test/check.js']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the command itself, not only the function inside it', () => {
+  // Every other test here calls redFirst() directly, which leaves main()
+  // unexercised: argv parsing, the exit-code contract the docstring promises,
+  // and the printed outcome. An independent reviewer pointed out that this is
+  // the same fault the file's own header lists among the seven it exists to
+  // prevent, "a pure decision function rather than the wiring around it",
+  // reproduced in the suite for the tool meant to catch it. If main() always
+  // returned 0, nothing here would have failed.
+  const script = path.join(__dirname, '..', '..', 'scripts', 'red-first.js');
+
+  function cli(dir) {
+    return spawnSync(process.execPath,
+      [script, '--repo', dir, '--base', 'main', '--tests', CMD],
+      { encoding: 'utf8' });
+  }
+
+  test('a discriminating change exits 0 and says so', () => {
+    const { dir } = repo({
+      added: { 'lib2.js': 'module.exports.b = () => 2;\n' },
+      testFile: "const assert = require('assert');\n"
+        + "module.exports = () => { assert.strictEqual(require('../lib2.js').b(), 2); };\n",
+    });
+    try {
+      const r = cli(dir);
+      assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+      assert.match(r.stdout, /PROVEN/);
+      assert.match(r.stdout, /cannot prove they assert the right thing/,
+        'the limit is printed with the pass, not only carried in the object');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a non-discriminating change exits non-zero and names itself', () => {
+    // "It failed" cannot distinguish a weak test from a broken suite, so the
+    // exit code carries the refusal and the output carries which one.
+    const { dir } = repo({
+      source: 'module.exports.a = () => 1;\nmodule.exports.b = () => 2;\n',
+      testFile: "const assert = require('assert');\n"
+        + "module.exports = () => { assert.strictEqual(typeof require('../lib.js').a, 'function'); };\n",
+    });
+    try {
+      const r = cli(dir);
+      assert.notStrictEqual(r.status, 0, 'a non-discriminating result must not exit 0');
+      assert.match(r.stdout, /NOT-DISCRIMINATING/);
+    } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
