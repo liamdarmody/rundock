@@ -22,6 +22,7 @@ import { tableExtensions, tableDirtyKey } from './nodes/table.js';
 import { criticExtensions } from './nodes/critic-marks.js';
 import { mathExtensions } from './nodes/math.js';
 import { FindExtension } from './plugins/find.js';
+import { TabGuardExtension } from './plugins/tab-guard.js';
 import { CodeCopyExtension } from './plugins/code-copy.js';
 
 export function createEditorInstance({ element, initialBody, onUpdate, onSelectionChange }) {
@@ -92,6 +93,8 @@ export function createEditorInstance({ element, initialBody, onUpdate, onSelecti
       ...mathExtensions,
       FindExtension,
       CodeCopyExtension,
+      // Last, and deliberately lowest priority. See tab-guard.js.
+      TabGuardExtension,
       Markdown.configure({
         // html:false closes the XSS surface that the prototype's regex
         // pre-processors required. Wikilink and Callout source-side parsing
