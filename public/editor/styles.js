@@ -331,19 +331,21 @@ const CSS = `
 .review-reply .review-by { margin-left: 0; flex-shrink: 0; }
 .review-reply .review-by::after { content: ':'; }
 /* The reply body wraps the way .review-card-body above does, with the same
-   'anywhere', and the reason is worth naming because the near-miss looks
-   identical in a diff. 'anywhere' is what reduces this flex item's
-   MIN-CONTENT contribution; 'break-word' does not, so with 'break-word' the
-   item's automatic minimum size stays as wide as the longest unbreakable run
-   and a URL still pushes the card open. Measured 2026-08-20: a 150-char
-   unbroken token gave a 997px item inside a 216px row.
-   'min-width: 0' is the flex-item guard, not the wrapping fix. On its own it
-   lets the BOX shrink while the text keeps painting straight out of the card
-   (measured: box inside by 13px, text outside by 804px), so it is insurance
-   for a future unbreakable inline child rather than the mechanism here.
+   'anywhere'. The reply body is a flex item, so its automatic minimum size
+   is its min-content width: without this it could not shrink below the
+   longest unbreakable run, and a URL pushed the whole card open.
+   'anywhere' rather than 'break-word' is the load-bearing part, and the two
+   look identical in a diff. Only 'anywhere' reduces the min-content
+   contribution that sets the automatic minimum size; 'break-word' leaves it
+   at the full run width, so the card still opens. The E2E suite proves this
+   by measuring the break-word substitute rather than trusting this comment.
+   Confirmed in a browser before the fix (2026-08-20), at the narrowest panel
+   width of 220px in both themes: the reply text painted 624px outside the
+   card, and 1px inside it afterwards, across nine wrapped lines. The written
+   diagnosis held; this was a layout fault and the parse was never involved.
    No backticks in this file: the stylesheet is a JS template literal, and a
    backtick in a comment ends the string. */
-.review-reply-body { min-width: 0; overflow-wrap: anywhere; }
+.review-reply-body { overflow-wrap: anywhere; }
 /* Review text entry: the conversations-input grammar at card scale: a
    growing textarea with an embedded circular send button that activates
    when there is text. No button row, so narrow panels keep full input
