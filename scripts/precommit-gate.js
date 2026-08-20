@@ -41,7 +41,13 @@ const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const ROOT = path.resolve(__dirname, '..');
+// The repository this acts on. Overridable ONLY so the entry points can be
+// exercised against a throwaway repository: without it, run() and verify()
+// can only ever touch the real checkout, so the wiring around the decision
+// function is untestable and a swapped field would pass every test.
+const ROOT = process.env.PRECOMMIT_GATE_ROOT
+  ? path.resolve(process.env.PRECOMMIT_GATE_ROOT)
+  : path.resolve(__dirname, '..');
 const RECORD = path.join(ROOT, '.precommit-gate.json');
 
 // The checks that belong on a commit: fast, deterministic, and the ones whose
@@ -126,7 +132,7 @@ function refusal({ record, tree, branch, mainBranch }) {
 }
 
 function run() {
-  const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']);
+  const branch = git(['branch', '--show-current']);
   const mainBranch = defaultBranch();
   if (branch === mainBranch) {
     console.error(`[precommit] refusing to run on ${mainBranch}: branch first, then run this again.`);
@@ -164,7 +170,7 @@ function run() {
 }
 
 function verify() {
-  const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']);
+  const branch = git(['branch', '--show-current']);
   const why = refusal({ record: readRecord(), tree: currentTree(), branch, mainBranch: defaultBranch() });
   if (why) {
     console.error(`[precommit] commit blocked: ${why.message}`);

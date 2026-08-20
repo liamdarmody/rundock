@@ -149,3 +149,111 @@ describe('the record and the tree hash, against a real repository', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// The entry points, spawned for real
+// ---------------------------------------------------------------------------
+
+// Everything above tests the decision and the git primitives. Neither is what
+// npm and the git hook actually call. run() and verify() are the wiring, and
+// wiring is where a swapped field or a record read from the wrong path lives:
+// both would leave every test above green while the guard admitted anything.
+// So these spawn the real script against a throwaway repository.
+const GATE = path.join(__dirname, '..', '..', 'scripts', 'precommit-gate.js');
+
+function spawnGate(args, root) {
+  const res = require('node:child_process').spawnSync(
+    process.execPath, [GATE, ...args],
+    { env: { ...process.env, PRECOMMIT_GATE_ROOT: root }, encoding: 'utf8' },
+  );
+  return { code: res.status, out: `${res.stdout || ''}${res.stderr || ''}` };
+}
+
+function repoWithScripts(scripts) {
+  const { dir, run } = tempRepo();
+  run('checkout', '-q', '-b', 'fix/card');
+  fs.writeFileSync(path.join(dir, 'package.json'),
+    JSON.stringify({ name: 'tmp', version: '1.0.0', scripts }, null, 2));
+  run('add', '-A');
+  return { dir, run };
+}
+
+describe('the entry points, against a throwaway repository', () => {
+  test('a failing step writes no record and exits non-zero', () => {
+    // The branch that matters most: a check failed, so nothing may vouch for
+    // this tree. If the loop stopped short-circuiting, the record would be
+    // written anyway and the guard would wave through an unverified commit.
+    const { dir } = repoWithScripts({
+      test: 'node -e "process.exit(1)"',
+      typecheck: 'node -e "0"', 'lint:styles': 'node -e "0"', 'check:refs': 'node -e "0"',
+    });
+    try {
+      const { code } = spawnGate([], dir);
+      assert.notStrictEqual(code, 0, 'a failing check fails the gate');
+      assert.ok(!fs.existsSync(path.join(dir, '.precommit-gate.json')),
+        'no record is written when a step failed');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('all steps passing writes a record for this tree and branch', () => {
+    const { dir } = repoWithScripts({
+      test: 'node -e "0"', typecheck: 'node -e "0"',
+      'lint:styles': 'node -e "0"', 'check:refs': 'node -e "0"',
+    });
+    try {
+      const { code } = spawnGate([], dir);
+      assert.strictEqual(code, 0);
+      const record = readRecord(path.join(dir, '.precommit-gate.json'));
+      assert.ok(record, 'a record is written');
+      assert.strictEqual(record.branch, 'fix/card');
+      assert.strictEqual(record.tree, currentTree(dir), 'and it names the tree that was checked');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('--verify admits a commit when the record matches', () => {
+    const { dir } = repoWithScripts({
+      test: 'node -e "0"', typecheck: 'node -e "0"',
+      'lint:styles': 'node -e "0"', 'check:refs': 'node -e "0"',
+    });
+    try {
+      assert.strictEqual(spawnGate([], dir).code, 0, 'gate passes first');
+      assert.strictEqual(spawnGate(['--verify'], dir).code, 0, 'and the commit is admitted');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('--verify refuses, and says why, when the tree moved after the checks', () => {
+    const { dir, run } = repoWithScripts({
+      test: 'node -e "0"', typecheck: 'node -e "0"',
+      'lint:styles': 'node -e "0"', 'check:refs': 'node -e "0"',
+    });
+    try {
+      assert.strictEqual(spawnGate([], dir).code, 0);
+      fs.writeFileSync(path.join(dir, 'a.txt'), 'changed after the checks\n');
+      run('add', '-A');
+      const { code, out } = spawnGate(['--verify'], dir);
+      assert.notStrictEqual(code, 0, 'a moved tree is refused');
+      assert.match(out, /something changed after the checks ran/,
+        'and the refusal names which of the three it was');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('--verify refuses when the checks have never been run', () => {
+    const { dir } = repoWithScripts({ test: 'node -e "0"' });
+    try {
+      const { code, out } = spawnGate(['--verify'], dir);
+      assert.notStrictEqual(code, 0);
+      assert.match(out, /have not been run/);
+      assert.match(out, /npm run precommit/, 'and names the command that fixes it');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
