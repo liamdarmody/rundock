@@ -195,6 +195,41 @@ function reviewedFormatting() {
   ].join('\n');
 }
 
+// Two notes for the Tab-key behaviour, identical but for the callout. Tab is
+// only interesting where a caret can sit, so each carries the four sites that
+// matter: a heading, a plain paragraph, a FIRST list item (which cannot nest,
+// having no previous sibling to nest under) and a later list item (which can),
+// plus a table, since Tab moves between cells there and must keep doing so.
+//
+// The pair exists because the defect was first reported as a callout problem.
+// Keeping a callout-free twin means the question "is the callout involved at
+// all" is answered by the suite rather than by argument.
+function tabSites({ withCallout }) {
+  return [
+    '---',
+    `title: Tab Sites ${withCallout ? 'With Callout' : 'Plain'}`,
+    '---',
+    '',
+    '# Tab Sites',
+    '',
+    'A standard paragraph.',
+    '',
+    ...(withCallout
+      ? ['> [!abstract]+ Today at a glance', '> Two meetings, one deadline.', '']
+      : []),
+    '## Tasks',
+    '',
+    '- First item',
+    '- Second item',
+    '- Third item',
+    '',
+    '| A | B |',
+    '| --- | --- |',
+    '| 1 | 2 |',
+    '',
+  ].join('\n');
+}
+
 function buildFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rundock-e2e-'));
   const workspace = path.join(root, 'workspace');
@@ -291,6 +326,9 @@ function buildFixture() {
   // A reviewed note whose constructs carry markdown, for the accept-escaping
   // regression.
   fs.writeFileSync(path.join(workspace, 'escaping.md'), reviewedFormatting());
+  // Tab-key behaviour, with and without a callout present.
+  fs.writeFileSync(path.join(workspace, 'tab-sites-callout.md'), tabSites({ withCallout: true }));
+  fs.writeFileSync(path.join(workspace, 'tab-sites-plain.md'), tabSites({ withCallout: false }));
   // A briefing-style note: foldable + nested callouts and frontmatter
   // wikilinks.
   fs.writeFileSync(path.join(workspace, 'briefing.md'), [
@@ -439,4 +477,5 @@ module.exports = {
   LONG_REPLY_URL,
   LONG_REPLY_UNBREAKABLE_RUN,
   reviewedFormatting,
+  tabSites,
 };
