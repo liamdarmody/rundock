@@ -77,7 +77,7 @@ Each routine has a `lastRun` guard. Daily routines do not re-fire once they have
 
 **Routines fire only while Rundock is running, but a missed slot is caught up the same day.** If Rundock is closed at 05:00 and you open it at 09:00, the 05:00 routine fires shortly after launch. A next-run time that has already passed stays on today rather than rolling forward to tomorrow, and the scheduler fires anything already due on its next tick.
 
-The catch-up window is the calendar day for daily routines and the weekday for weekly ones. Closed all of Tuesday means Tuesday's daily run is lost: you get one run on Wednesday, not two. Closed all of Friday means a Friday weekly routine waits until the following Friday.
+The catch-up window is the calendar day for daily routines and the weekday for weekly ones. (Pinned by `test/unit/doc-claims.test.js`: change the scheduler's window and that test fails, so this sentence and the behaviour move together.) Closed all of Tuesday means Tuesday's daily run is lost: you get one run on Wednesday, not two. Closed all of Friday means a Friday weekly routine waits until the following Friday.
 
 Catch-up means routines run late, not on time. A 05:00 briefing on a machine opened at 09:00 runs at 09:00. If the timing matters rather than the fact that it ran, see the always-on options below.
 
@@ -267,7 +267,7 @@ A few specific things that go wrong silently.
 
 **Capitalised weekdays never fire.** The schedule string is lowercased before matching, so `every Friday at 04:00` works in practice. But the parser only matches one full lowercased weekday word. `every Fri at 04:00`, `every Mon-Fri at 09:00`, and `every weekday at 18:00` do not match.
 
-**Rundock is closed when the schedule comes due.** The scheduler is in-process. If Rundock is not running at 05:00, the morning briefing does not fire and is not retried. There is no catch-up. Routines are best suited to cadences the user keeps Rundock running through; for routines that must never miss a slot, schedule them when Rundock is reliably open.
+**Rundock is closed for a whole day when the schedule comes due.** The scheduler is in-process, so a routine can only fire while Rundock is running. If Rundock is shut at 05:00 but opened later the same day, the morning briefing fires when you open it: that is the catch-up window described above. What is lost is a day Rundock is never opened at all, because the window is the calendar day and it does not carry over. Routines are best suited to cadences you keep Rundock running through; for one that must never miss a slot, schedule it when Rundock is reliably open.
 
 **Routines that need their output read.** Rundock does not capture the routine's stdout. If the agent does not write its output somewhere durable through tools (file system, Todoist, Notion, etc), the run produces nothing the user can find later. Always design routines so the agent writes a trace.
 
