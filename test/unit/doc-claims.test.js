@@ -94,17 +94,20 @@ describe('ROUTINES.md: same-day catch-up', () => {
   // on its next tick, because a past-due target deliberately STAYS today. The
   // previous behaviour rolled it to tomorrow, which meant a routine could only
   // fire in the single millisecond its time matched exactly.
-  const hh = (d) => String(d.getHours()).padStart(2, '0');
-  const mm = (d) => String(d.getMinutes()).padStart(2, '0');
+  // Midnight, deliberately. An earlier attempt built the target from the wall
+  // clock as "three hours ago" and returned early when that crossed midnight,
+  // which meant the three tests below asserted NOTHING whenever the suite ran
+  // between 00:00 and 02:59, while still reporting as passed. Continuous
+  // integration runs at whatever time it runs.
+  //
+  // 00:00 has already passed on every day, at every hour, so the past-due case
+  // is exercised on every run with no clock-dependent branch at all.
+  const MIDNIGHT = 'every day at 00:00';
+  const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 
   test('a daily routine whose time passed earlier today is still due today', () => {
     const now = new Date();
-    const earlier = new Date(now.getTime() - 3 * 60 * 60 * 1000);
-    // Guard: if the clock is within three hours of midnight, "earlier today"
-    // is yesterday and the case under test is not the one being exercised.
-    if (earlier.toDateString() !== now.toDateString()) return;
-
-    const next = getNextRun(`every day at ${hh(earlier)}:${mm(earlier)}`, null);
+    const next = getNextRun(MIDNIGHT, null);
     assert.ok(next, 'a past-due daily routine still has a next run');
     assert.strictEqual(next.toDateString(), now.toDateString(),
       'it stays TODAY rather than rolling to tomorrow, which is the catch-up');
@@ -113,11 +116,7 @@ describe('ROUTINES.md: same-day catch-up', () => {
 
   test('a weekly routine on its own weekday behaves the same', () => {
     const now = new Date();
-    const earlier = new Date(now.getTime() - 3 * 60 * 60 * 1000);
-    if (earlier.toDateString() !== now.toDateString()) return;
-
-    const weekday = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][now.getDay()];
-    const next = getNextRun(`every ${weekday} at ${hh(earlier)}:${mm(earlier)}`, null);
+    const next = getNextRun(`every ${WEEKDAYS[now.getDay()]} at 00:00`, null);
     assert.ok(next, 'a past-due weekly routine on its weekday still has a next run');
     assert.strictEqual(next.toDateString(), now.toDateString());
     assert.ok(next <= now);
@@ -127,13 +126,11 @@ describe('ROUTINES.md: same-day catch-up', () => {
   // double-fire. The two claims are pinned together because they are only
   // correct together.
   test('a routine that already ran today is suppressed rather than caught up', () => {
-    const now = new Date();
-    const earlier = new Date(now.getTime() - 3 * 60 * 60 * 1000);
-    if (earlier.toDateString() !== now.toDateString()) return;
-
-    const schedule = `every day at ${hh(earlier)}:${mm(earlier)}`;
-    const ranJustNow = new Date(now.getTime() - 60 * 1000).toISOString();
-    assert.strictEqual(getNextRun(schedule, ranJustNow), null,
+    // A run earlier TODAY, built from today's date rather than from an offset,
+    // so it cannot drift into yesterday near midnight.
+    const ranToday = new Date();
+    ranToday.setHours(1, 0, 0, 0);
+    assert.strictEqual(getNextRun(MIDNIGHT, ranToday.toISOString()), null,
       'having already run today, it is not due again');
   });
 
