@@ -102,6 +102,55 @@ describe('response text accumulation', () => {
     assert.strictEqual(entry.responseText, 'Hello world');
   });
 
+  test('the transcript writer stores a long multi-stretch turn whole', () => {
+    // The other half of the link. The test below pins what the accumulator
+    // produces; this pins that the writer stores it unchanged and reads it
+    // back the same. Without both, a rebuild test could rest on a fixture
+    // nothing in production actually creates.
+    //
+    // Length is deliberate: longer than the turn in the field report, whose
+    // closing stretch alone was 2,389 characters, and with the closing stretch
+    // last, since that is the part that went missing.
+    srv.setWorkspace(makeWorkspace({ agents: standardTeam() }));
+    const opening = 'Let me gather the clutter first.';
+    const middle = 'x'.repeat(1200);
+    const closing = `${'y'.repeat(1200)} Here is the summary worth keeping.`;
+    const whole = opening + middle + closing;
+    assert.ok(whole.length > 2400, 'the fixture is longer than the reported case');
+
+    const convoId = 'transcript-roundtrip-1';
+    srv.appendTranscript(convoId, 'agent', 'dev', whole);
+    const back = srv.loadTranscript(convoId);
+    const entry = back[back.length - 1];
+
+    assert.strictEqual(entry.text, whole, 'stored and read back byte for byte');
+    assert.ok(entry.text.endsWith('Here is the summary worth keeping.'),
+      'the closing stretch survives, which is the part that went missing');
+  });
+
+  test('a turn interleaving text and tool calls accumulates every stretch, in order', () => {
+    // Pins the SHAPE the transcript writer receives for a long working turn,
+    // because a test elsewhere asserts how such a turn is rebuilt for display
+    // and had been assuming this shape rather than proving it. If the
+    // accumulator ever inserted a separator, or dropped a stretch after a tool
+    // call, that test would keep passing against a fixture reality no longer
+    // produces. This is the link between the two.
+    const entry = makeEntry();
+    srv.wireProcessHandlers(entry, 'convo-1', null, {});
+    push(entry, [
+      fx.textDelta('Let me gather the clutter first.'),
+      ...fx.toolUseFlow('Read', { file_path: 'a.md' }),
+      fx.textDelta('Now checking the settings file.'),
+      ...fx.toolUseFlow('Edit', { file_path: 'b.md' }),
+      fx.textDelta('Here is the summary worth keeping.'),
+    ]);
+    assert.strictEqual(
+      entry.responseText,
+      'Let me gather the clutter first.Now checking the settings file.Here is the summary worth keeping.',
+      'stretches are concatenated with no separator, and tool calls contribute nothing',
+    );
+  });
+
   test('a later assistant message does not clobber an earlier block (marker survives)', () => {
     // Post-fix behavior: the assistant message appends (deduped against the
     // delta stream) instead of replacing, so a marker streamed earlier in the
