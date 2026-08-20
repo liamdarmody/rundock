@@ -13,7 +13,12 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { test, expect } = require('@playwright/test');
-const { unreviewedSections, sectionedBodyLines } = require('./fixture.js');
+const {
+  unreviewedSections,
+  sectionedBodyLines,
+  LONG_REPLY_URL,
+  LONG_REPLY_UNBREAKABLE_RUN,
+} = require('./fixture.js');
 
 const UNREVIEWED = 'unreviewed-sections.md';
 
@@ -200,4 +205,139 @@ test('adding the first comment does not change the rendered order', async ({ pag
   const outside = onDiskAfter.slice(0, endmatterAt);
   const stripped = outside.replace(/\{==([\s\S]*?)==\}\{>>[\s\S]*?<<\}\{#[^}]*\}/g, '$1');
   expect(stripped).toBe(onDiskBefore);
+});
+
+// ---------------------------------------------------------------------------
+// A reply carrying a long URL overflowed the side of its card.
+//
+// Root comment bodies wrap (`.review-card-body`, overflow-wrap: anywhere).
+// Reply bodies were a classless <span> in a flex row, so nothing reached them:
+// with the flex default `min-width: auto` the item could not shrink below the
+// longest unbreakable run, and the whole box grew wider than the card.
+//
+// These tests measure PAINTED TEXT, not the element box, and the distinction
+// is the whole point. `min-width: 0` alone lets the box shrink to fit while
+// the text keeps painting straight out through the card wall: measured on the
+// unfixed build, box inside the card by 13px, text outside it by 804px. A test
+// that asked the box whether it fit would have passed against that non-fix.
+// ---------------------------------------------------------------------------
+
+// Mirrors SIDEBAR_MIN in public/editor/panels/review.js. The narrowest the
+// panel goes is the hardest case, so the test takes it rather than the default.
+const SIDEBAR_MIN = 220;
+
+async function openReplyNote(page, theme) {
+  // Set before any app script runs, so the panel is built at this width and
+  // in this theme rather than resized afterwards. The theme is pinned rather
+  // than toggled because an unset preference falls back to the runner's OS
+  // setting, which is not a property a test should vary on.
+  await page.addInitScript(([width, t]) => {
+    try {
+      localStorage.setItem('rundock.reviewSidebarWidth', String(width));
+      localStorage.setItem('rundock-theme', t);
+    } catch { /* private mode */ }
+  }, [SIDEBAR_MIN, theme]);
+  await openNote(page, 'reviewed-replies.md');
+}
+
+async function replyLayout(page, unbreakableRun) {
+  return page.evaluate((run) => {
+    const card = document.querySelector('.review-card');
+    const reply = document.querySelector('.review-reply');
+    // The fallback matters: on an unfixed build the class does not exist, and
+    // this test must FAIL on the measurement rather than error on a selector.
+    const body = reply.querySelector('.review-reply-body')
+      || [...reply.children].find((c) => !c.classList.contains('review-by'));
+    const by = reply.querySelector('.review-by');
+    const rootBody = document.querySelector('.review-card-body');
+
+    const cs = getComputedStyle(card);
+    const cardRect = card.getBoundingClientRect();
+    const cardContentRight = cardRect.right
+      - parseFloat(cs.paddingRight) - parseFloat(cs.borderRightWidth);
+    const cardContentWidth = cardRect.width
+      - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+      - parseFloat(cs.borderLeftWidth) - parseFloat(cs.borderRightWidth);
+
+    // Where the glyphs actually end. One rect per painted line, so this also
+    // says whether the text wrapped at all.
+    const paintedRects = (el) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      return [...range.getClientRects()];
+    };
+    const bodyRects = paintedRects(body);
+    const textRight = Math.max(...bodyRects.map((r) => r.right));
+
+    // How wide the unbreakable run WANTS to be, in this card's own font. If
+    // this ever stops exceeding the card, the fixture has stopped reproducing
+    // the defect and every assertion below would pass for the wrong reason.
+    const probe = document.createElement('span');
+    probe.textContent = run;
+    probe.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;left:-9999px';
+    probe.style.font = getComputedStyle(body).font;
+    document.body.appendChild(probe);
+    const runWidth = probe.getBoundingClientRect().width;
+    probe.remove();
+
+    return {
+      light: document.body.classList.contains('light'),
+      // The APPLIED width preference, not the rendered box: the panel paints
+      // a few pixels wider than the value it was given, so measuring the box
+      // would assert a number that has no meaning in the clamp.
+      appliedWidth: parseInt(getComputedStyle(document.getElementById('tiptap-editor-pane'))
+        .getPropertyValue('--review-sidebar-width'), 10),
+      cardContentWidth: Math.round(cardContentWidth),
+      runWidth: Math.round(runWidth),
+      lines: bodyRects.length,
+      textOverflowPx: Math.round(textRight - cardContentRight),
+      rootBodyOverflowPx: Math.round(
+        Math.max(...paintedRects(rootBody).map((r) => r.right)) - cardContentRight),
+      // A label that wrapped or was clipped would be a regression of its own.
+      byWidth: Math.round(by.getBoundingClientRect().width),
+      byLines: paintedRects(by).length,
+      byClipped: by.scrollWidth > by.clientWidth + 1,
+      bodyText: body.textContent,
+    };
+  }, unbreakableRun);
+}
+
+// The fixture still reproduces the defect. Asserted wherever a layout is
+// judged, so a shortened URL fails loudly instead of passing vacuously.
+function expectReplyDefectConditions(l) {
+  expect(l.appliedWidth).toBe(SIDEBAR_MIN);
+  expect(l.bodyText).toBe(LONG_REPLY_URL);
+  // Unbreakable by construction, and wider than the space it has to live in.
+  expect(LONG_REPLY_UNBREAKABLE_RUN).not.toMatch(/[\s\-/?&=_.]/);
+  expect(l.runWidth).toBeGreaterThan(l.cardContentWidth);
+}
+
+for (const theme of ['dark', 'light']) {
+  test(`a reply's long URL stays inside the card at the narrowest panel width (${theme})`, async ({ page }) => {
+    await openReplyNote(page, theme);
+    const l = await replyLayout(page, LONG_REPLY_UNBREAKABLE_RUN);
+
+    expect(l.light).toBe(theme === 'light');
+    expectReplyDefectConditions(l);
+
+    // The defect, measured: text painting past the card's content edge.
+    expect(l.textOverflowPx).toBeLessThanOrEqual(0);
+    // And it got there by wrapping, not by being clipped or shrunk away.
+    expect(l.lines).toBeGreaterThan(1);
+  });
+}
+
+test('the reply fix leaves the root body and the author label alone', async ({ page }) => {
+  await openReplyNote(page, 'dark');
+  const l = await replyLayout(page, LONG_REPLY_UNBREAKABLE_RUN);
+  expectReplyDefectConditions(l);
+
+  // Root bodies already wrapped. The fix must not have been paid for by them.
+  expect(l.rootBodyOverflowPx).toBeLessThanOrEqual(0);
+  // The label is flex-shrink: 0 on purpose. A reply body that shrank the
+  // label instead of wrapping itself would satisfy the test above and still
+  // be wrong, so this pins the label as its own condition.
+  expect(l.byWidth).toBeGreaterThan(0);
+  expect(l.byLines).toBe(1);
+  expect(l.byClipped).toBe(false);
 });

@@ -330,6 +330,20 @@ const CSS = `
 }
 .review-reply .review-by { margin-left: 0; flex-shrink: 0; }
 .review-reply .review-by::after { content: ':'; }
+/* The reply body wraps the way .review-card-body above does, with the same
+   'anywhere', and the reason is worth naming because the near-miss looks
+   identical in a diff. 'anywhere' is what reduces this flex item's
+   MIN-CONTENT contribution; 'break-word' does not, so with 'break-word' the
+   item's automatic minimum size stays as wide as the longest unbreakable run
+   and a URL still pushes the card open. Measured 2026-08-20: a 150-char
+   unbroken token gave a 997px item inside a 216px row.
+   'min-width: 0' is the flex-item guard, not the wrapping fix. On its own it
+   lets the BOX shrink while the text keeps painting straight out of the card
+   (measured: box inside by 13px, text outside by 804px), so it is insurance
+   for a future unbreakable inline child rather than the mechanism here.
+   No backticks in this file: the stylesheet is a JS template literal, and a
+   backtick in a comment ends the string. */
+.review-reply-body { min-width: 0; overflow-wrap: anywhere; }
 /* Review text entry: the conversations-input grammar at card scale: a
    growing textarea with an embedded circular send button that activates
    when there is text. No button row, so narrow panels keep full input
