@@ -100,7 +100,9 @@ function sectionedBodyLines() {
 // repeating the same literal, so the two cannot drift apart.
 const LONG_REPLY_UNBREAKABLE_RUN = 'k'.repeat(110);
 
-const LONG_REPLY_URL = 'https://hpanel.hostinger.com/vps/1234567/settings?token='
+// example.com is the domain reserved for documentation (RFC 2606), so this
+// fixture names no real host.
+const LONG_REPLY_URL = 'https://panel.example.com/vps/1234567/settings?token='
   + LONG_REPLY_UNBREAKABLE_RUN;
 
 function reviewedReplies() {
