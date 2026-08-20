@@ -37,7 +37,7 @@
  * broken suite, and treating those alike is how a check stops being read.
  */
 
-const { execFileSync, spawnSync } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 const path = require('node:path');
 
 // What marks a file as a test rather than the thing under test.
@@ -126,7 +126,7 @@ function restoreTo(repo, ref, files) {
  *            failedWithoutChange: boolean|null, source: string[], tests: string[],
  *            limitation: string}}
  */
-function redFirst({ repo, base = 'main', tests, log = () => {}, runner = null }) {
+async function redFirst({ repo, base = 'main', tests, log = () => {}, runner = null }) {
   const result = (outcome, reason, extra = {}) => ({
     outcome, reason, passedWithChange: null, failedWithoutChange: null,
     testsPassedWithChange: null, testsFailedWithoutChange: null,
@@ -164,31 +164,61 @@ function redFirst({ repo, base = 'main', tests, log = () => {}, runner = null })
       + 'nothing to take away', { source: [], tests: testFiles });
   }
 
+  // The child is tracked so a signal handler can end it. This used to be
+  // spawnSync, which blocks the event loop for the whole life of the child, so
+  // the handler could not run until the child chose to exit. A test command
+  // that traps or ignores SIGINT therefore held the source reverted for as long
+  // as it kept running, while AC-4 claims restoration happens whatever happens.
+  // Documenting the gap did not discharge the criterion. An independent
+  // reviewer refused it twice, correctly.
+  let child = null;
+
+  const spawnRun = () => new Promise((resolve, reject) => {
+    // NODE_TEST_CONTEXT must not reach the child. A nested `node --test` that
+    // inherits it reports its failures and still exits 0, so a suite that
+    // should be red comes back green: the one failure mode this tool cannot
+    // afford, reachable whenever red-first is driven from inside a test.
+    const env = { ...process.env };
+    delete env.NODE_TEST_CONTEXT;
+
+    // detached puts the shell and everything it starts in their own process
+    // group, so ending it means ending the group rather than one shell that
+    // may have children of its own.
+    const kid = spawn(tests, { cwd: repo, shell: true, env, detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'] });
+    child = kid;
+    let text = '';
+    kid.stdout.on('data', (b) => { text += b.toString(); });
+    kid.stderr.on('data', (b) => { text += b.toString(); });
+    kid.on('error', (e) => { child = null; reject(e); });
+    kid.on('close', (code) => {
+      child = null;
+      resolve({ ok: code === 0, pass: countFrom(text, 'pass'), fail: countFrom(text, 'fail') });
+    });
+  });
+
   // The runner is injectable so a test can make the reverted run throw while
   // the first run passes, which is the only way to reach the restore by the
   // path a real failure would take. The first version of that test used a
   // command that always failed, so it never got past the first run and would
   // have passed with the restore deleted.
   const run = runner
-    ? () => ({ ok: !!runner(), pass: null, fail: null })
-    : () => {
-      // NODE_TEST_CONTEXT must not reach the child. A nested `node --test`
-      // that inherits it reports its failures and still exits 0, so a suite
-      // that should be red comes back green: the one failure mode this tool
-      // cannot afford, reachable whenever red-first is driven from inside a
-      // test.
-      const env = { ...process.env };
-      delete env.NODE_TEST_CONTEXT;
-      const r = spawnSync(tests, { cwd: repo, shell: true, encoding: 'utf8', env });
-      const text = `${r.stdout || ''}${r.stderr || ''}`;
-      return { ok: r.status === 0, pass: countFrom(text, 'pass'), fail: countFrom(text, 'fail') };
-    };
+    ? async () => ({ ok: !!(await runner()), pass: null, fail: null })
+    : spawnRun;
+
+  /** End the child and everything it started. Best effort by necessity. */
+  const endChild = () => {
+    const kid = child;
+    if (!kid || kid.killed || kid.exitCode !== null) return;
+    try { process.kill(-kid.pid, 'SIGTERM'); } catch (e) { /* group already gone */ }
+    try { process.kill(-kid.pid, 'SIGKILL'); } catch (e) { /* already dead */ }
+  };
 
   // WITH the change first. A suite failing for its own reasons makes a failure
   // without the change meaningless, and reporting that as proof would turn a
   // broken suite into evidence.
   log('running the tests with the change');
-  const withChange = run();
+  const withChange = await run();
   const passedWithChange = withChange.ok;
   if (!passedWithChange) {
     return result('inconclusive', 'the tests do not pass with the change in '
@@ -206,16 +236,14 @@ function redFirst({ repo, base = 'main', tests, log = () => {}, runner = null })
   // exiting in case the finally is never reached. Both paths call the same
   // function, and restoring an already-restored tree is a no-op.
   //
-  // KNOWN GAP, stated rather than implied. `run` uses spawnSync, which blocks
-  // the event loop, so this handler cannot execute until that child returns.
-  // A terminal interrupt reaches the whole process group and the child dies
-  // too, so the common case works. A test command that TRAPS or ignores
-  // SIGINT, or detaches from the group, leaves the tree reverted for as long
-  // as it keeps running. Closing that needs an async spawn plus an explicit
-  // kill of the child, which changes this function's signature. Raised by an
-  // independent reviewer as an advisory on the final permitted round and left
-  // for the approver to schedule rather than refactored unreviewed.
+  // The event loop stays free because the test command runs through an
+  // asynchronous spawn, so this handler executes while the child is still
+  // alive rather than waiting for it to agree to exit.
   const onSignal = () => {
+    // Kill the child FIRST. The restore is pointless while a test command is
+    // still writing to the tree, and a trapping child would otherwise outlive
+    // this process and keep working against a reverted source.
+    endChild();
     try { restoreTo(repo, 'HEAD', sourceFiles); } catch (e) { /* exiting anyway */ }
     process.exit(130);
   };
@@ -224,7 +252,7 @@ function redFirst({ repo, base = 'main', tests, log = () => {}, runner = null })
 
   try {
     restoreTo(repo, mergeBase, sourceFiles);
-    withoutChange = run();
+    withoutChange = await run();
     failedWithoutChange = !withoutChange.ok;
   } finally {
     // Unconditional. A tool that can leave a repository half-reverted is worse
@@ -289,14 +317,14 @@ function recordOutcome(repo, outcome) {
   return true;
 }
 
-function main() {
+async function main() {
   const argv = process.argv.slice(2);
   const arg = (name, fallback) => {
     const i = argv.indexOf(`--${name}`);
     return i === -1 ? fallback : argv[i + 1];
   };
   const repo = path.resolve(arg('repo', process.cwd()));
-  const outcome = redFirst({
+  const outcome = await redFirst({
     repo,
     base: arg('base', 'main'),
     tests: arg('tests', 'npm test'),
@@ -314,6 +342,11 @@ function main() {
   return 1;
 }
 
-if (require.main === module) process.exit(main());
+if (require.main === module) {
+  main().then((code) => process.exit(code), (err) => {
+    console.error(`[red-first] ${err && err.stack ? err.stack : err}`);
+    process.exit(1);
+  });
+}
 
 module.exports = { redFirst, recordOutcome, restoreTo, isTest, TEST_DIRS, TEST_FILENAME_MARKERS, LIMITATION };

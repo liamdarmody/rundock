@@ -79,14 +79,14 @@ function repo({ source, testFile, added = {}, baseSource = 'module.exports.a = (
 const CMD = 'node run.js';
 
 describe('red-first', () => {
-  test('a test that exercises the change is reported as proven', () => {
+  test('a test that exercises the change is reported as proven', async () => {
     const { dir } = repo({
       source: 'module.exports.a = () => 1;\nmodule.exports.b = () => 2;\n',
       testFile: "const assert = require('assert');\n"
         + "module.exports = () => { assert.strictEqual(require('../lib.js').b(), 2); };\n",
     });
     try {
-      const r = redFirst({ repo: dir, base: 'main', tests: CMD });
+      const r = await redFirst({ repo: dir, base: 'main', tests: CMD });
       assert.strictEqual(r.outcome, 'proven');
       assert.strictEqual(r.passedWithChange, true);
       assert.strictEqual(r.failedWithoutChange, true);
@@ -95,7 +95,7 @@ describe('red-first', () => {
     }
   });
 
-  test('a test that would pass with the change deleted is the finding', () => {
+  test('a test that would pass with the change deleted is the finding', async () => {
     // The pathology: an assertion on something that was already true.
     const { dir } = repo({
       source: 'module.exports.a = () => 1;\nmodule.exports.b = () => 2;\n',
@@ -103,7 +103,7 @@ describe('red-first', () => {
         + "module.exports = () => { assert.strictEqual(typeof require('../lib.js').a, 'function'); };\n",
     });
     try {
-      const r = redFirst({ repo: dir, base: 'main', tests: CMD });
+      const r = await redFirst({ repo: dir, base: 'main', tests: CMD });
       assert.strictEqual(r.outcome, 'not-discriminating');
       assert.strictEqual(r.failedWithoutChange, false);
       assert.match(r.reason, /pass(es)? with the source reverted|do not discriminate/i);
@@ -112,7 +112,7 @@ describe('red-first', () => {
     }
   });
 
-  test('a suite already failing with the change is inconclusive, not proof', () => {
+  test('a suite already failing with the change is inconclusive, not proof', async () => {
     // A failure without the change proves nothing if the suite fails with it.
     // Reporting that as success would turn a broken suite into evidence.
     const { dir } = repo({
@@ -120,7 +120,7 @@ describe('red-first', () => {
       testFile: "module.exports = () => { throw new Error('suite is broken'); };\n",
     });
     try {
-      const r = redFirst({ repo: dir, base: 'main', tests: CMD });
+      const r = await redFirst({ repo: dir, base: 'main', tests: CMD });
       assert.strictEqual(r.outcome, 'inconclusive');
       assert.strictEqual(r.passedWithChange, false);
     } finally {
@@ -128,10 +128,10 @@ describe('red-first', () => {
     }
   });
 
-  test('a change with no tests is not provable, and is not a pass', () => {
+  test('a change with no tests is not provable, and is not a pass', async () => {
     const { dir } = repo({ source: 'module.exports.a = () => 1;\nmodule.exports.b = () => 2;\n' });
     try {
-      const r = redFirst({ repo: dir, base: 'main', tests: CMD });
+      const r = await redFirst({ repo: dir, base: 'main', tests: CMD });
       assert.strictEqual(r.outcome, 'not-provable');
       assert.match(r.reason, /no tests/i);
     } finally {
@@ -139,13 +139,13 @@ describe('red-first', () => {
     }
   });
 
-  test('a change with no source is not provable either', () => {
+  test('a change with no source is not provable either', async () => {
     // Nothing to take away, so nothing to prove by taking it away.
     const { dir } = repo({
       testFile: "const assert = require('assert');\nmodule.exports = () => { assert.ok(true); };\n",
     });
     try {
-      const r = redFirst({ repo: dir, base: 'main', tests: CMD });
+      const r = await redFirst({ repo: dir, base: 'main', tests: CMD });
       assert.strictEqual(r.outcome, 'not-provable');
       assert.match(r.reason, /no source/i);
     } finally {
@@ -153,7 +153,7 @@ describe('red-first', () => {
     }
   });
 
-  test('a dirty tree is refused rather than rewritten', () => {
+  test('a dirty tree is refused rather than rewritten', async () => {
     const { dir } = repo({
       source: 'module.exports.a = () => 1;\nmodule.exports.b = () => 2;\n',
       testFile: "const assert = require('assert');\n"
@@ -161,7 +161,7 @@ describe('red-first', () => {
     });
     try {
       fs.writeFileSync(path.join(dir, 'lib.js'), '// edited, not committed\n');
-      const r = redFirst({ repo: dir, base: 'main', tests: CMD });
+      const r = await redFirst({ repo: dir, base: 'main', tests: CMD });
       assert.strictEqual(r.outcome, 'refused');
       assert.match(r.reason, /dirty|uncommitted/i);
       // And it did not touch the edit.
@@ -188,7 +188,7 @@ describe('the outcome reaches the record a reviewer packet can carry', () => {
   // breaks these tests rather than passing them by coincidence.
   const treeOf = (dir) => gate.currentTree(dir);
 
-  test('a proven outcome is written against the tree it was measured on', () => {
+  test('a proven outcome is written against the tree it was measured on', async () => {
     const { dir } = repo({
       source: 'module.exports.a = () => 1;\nmodule.exports.b = () => 2;\n',
       testFile: "const assert = require('assert');\n"
@@ -197,7 +197,7 @@ describe('the outcome reaches the record a reviewer packet can carry', () => {
     try {
       const tree = treeOf(dir);
       withRecord(dir, tree);
-      const outcome = redFirst({ repo: dir, base: 'main', tests: CMD });
+      const outcome = await redFirst({ repo: dir, base: 'main', tests: CMD });
       assert.strictEqual(recordOutcome(dir, outcome), true);
 
       const rec = JSON.parse(fs.readFileSync(path.join(dir, '.precommit-gate.json'), 'utf8'));
@@ -211,7 +211,7 @@ describe('the outcome reaches the record a reviewer packet can carry', () => {
     }
   });
 
-  test('a failing outcome is recorded too, so absence and failure stay different', () => {
+  test('a failing outcome is recorded too, so absence and failure stay different', async () => {
     // A packet that cannot tell "never run" from "run and found wanting"
     // invites the reader to assume the kinder one.
     const { dir } = repo({
@@ -221,7 +221,7 @@ describe('the outcome reaches the record a reviewer packet can carry', () => {
     });
     try {
       withRecord(dir, treeOf(dir));
-      const outcome = redFirst({ repo: dir, base: 'main', tests: CMD });
+      const outcome = await redFirst({ repo: dir, base: 'main', tests: CMD });
       recordOutcome(dir, outcome);
       const rec = JSON.parse(fs.readFileSync(path.join(dir, '.precommit-gate.json'), 'utf8'));
       assert.strictEqual(rec.redFirst.outcome, 'not-discriminating');
@@ -230,7 +230,7 @@ describe('the outcome reaches the record a reviewer packet can carry', () => {
     }
   });
 
-  test('a record for a different tree is refused rather than overwritten', () => {
+  test('a record for a different tree is refused rather than overwritten', async () => {
     // A result describes the tree it was measured on. Writing it onto another
     // tree's record would vouch for content nobody checked.
     const { dir } = repo({
@@ -239,7 +239,7 @@ describe('the outcome reaches the record a reviewer packet can carry', () => {
     });
     try {
       withRecord(dir, 'f'.repeat(40));
-      const outcome = redFirst({ repo: dir, base: 'main', tests: CMD });
+      const outcome = await redFirst({ repo: dir, base: 'main', tests: CMD });
       assert.strictEqual(recordOutcome(dir, outcome), false);
       const rec = JSON.parse(fs.readFileSync(path.join(dir, '.precommit-gate.json'), 'utf8'));
       assert.strictEqual(rec.redFirst, undefined, 'the stale record is left alone');
@@ -248,13 +248,13 @@ describe('the outcome reaches the record a reviewer packet can carry', () => {
     }
   });
 
-  test('with no record present there is nothing to fold into', () => {
+  test('with no record present there is nothing to fold into', async () => {
     const { dir } = repo({
       source: 'module.exports.a = () => 1;\nmodule.exports.b = () => 2;\n',
       testFile: "const assert = require('assert');\nmodule.exports = () => { assert.ok(true); };\n",
     });
     try {
-      const outcome = redFirst({ repo: dir, base: 'main', tests: CMD });
+      const outcome = await redFirst({ repo: dir, base: 'main', tests: CMD });
       assert.strictEqual(recordOutcome(dir, outcome), false);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -263,7 +263,7 @@ describe('the outcome reaches the record a reviewer packet can carry', () => {
 });
 
 describe('the record file must not dirty the tree it describes', () => {
-  test('a tracked gate record makes red-first refuse its own repository', () => {
+  test('a tracked gate record makes red-first refuse its own repository', async () => {
     // Learned by writing the fixture without a .gitignore: the record landed
     // as an untracked file, the tree was dirty, and red-first correctly
     // refused. Worth pinning, because the failure looks like a broken tool
@@ -278,7 +278,7 @@ describe('the record file must not dirty the tree it describes', () => {
       git('commit', '-q', '-m', 'stop ignoring the record');
       fs.writeFileSync(path.join(dir, '.precommit-gate.json'), '{}');
 
-      const r = redFirst({ repo: dir, base: 'main', tests: CMD });
+      const r = await redFirst({ repo: dir, base: 'main', tests: CMD });
       assert.strictEqual(r.outcome, 'refused');
       assert.match(r.reason, /uncommitted/i);
     } finally {
@@ -295,7 +295,7 @@ describe('source added by the change, with no version at the base', () => {
   // already existed, so none of them could reach it: the same shape of gap
   // this tool exists to catch, in the tool itself.
 
-  test('an added file is taken away by deleting it, and the tests go red', () => {
+  test('an added file is taken away by deleting it, and the tests go red', async () => {
     const { dir } = repo({
       added: {
         'lib2.js': 'module.exports.b = () => 2;\n',
@@ -304,7 +304,7 @@ describe('source added by the change, with no version at the base', () => {
         + "module.exports = () => { assert.strictEqual(require('../lib2.js').b(), 2); };\n",
     });
     try {
-      const r = redFirst({ repo: dir, base: 'main', tests: CMD });
+      const r = await redFirst({ repo: dir, base: 'main', tests: CMD });
       assert.strictEqual(r.outcome, 'proven', r.reason);
       assert.deepStrictEqual(r.source, ['lib2.js']);
     } finally {
@@ -312,7 +312,7 @@ describe('source added by the change, with no version at the base', () => {
     }
   });
 
-  test('the added file comes back, so the branch is not left short a file', () => {
+  test('the added file comes back, so the branch is not left short a file', async () => {
     // The restore path is the one that matters most here: a deleted file that
     // is not put back turns a diagnostic run into data loss on the branch.
     const { dir } = repo({
@@ -321,7 +321,7 @@ describe('source added by the change, with no version at the base', () => {
         + "module.exports = () => { assert.strictEqual(require('../lib2.js').b(), 2); };\n",
     });
     try {
-      redFirst({ repo: dir, base: 'main', tests: CMD });
+      await redFirst({ repo: dir, base: 'main', tests: CMD });
       assert.strictEqual(fs.existsSync(path.join(dir, 'lib2.js')), true, 'the added file is restored');
       assert.strictEqual(
         execFileSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).trim(), '',
@@ -332,7 +332,7 @@ describe('source added by the change, with no version at the base', () => {
     }
   });
 
-  test('a mix of added and modified source is handled in one run', () => {
+  test('a mix of added and modified source is handled in one run', async () => {
     const { dir } = repo({
       source: 'module.exports.a = () => 1;\nmodule.exports.c = () => 3;\n',
       added: { 'lib2.js': 'module.exports.b = () => 2;\n' },
@@ -343,7 +343,7 @@ describe('source added by the change, with no version at the base', () => {
         + "};\n",
     });
     try {
-      const r = redFirst({ repo: dir, base: 'main', tests: CMD });
+      const r = await redFirst({ repo: dir, base: 'main', tests: CMD });
       assert.strictEqual(r.outcome, 'proven', r.reason);
       assert.deepStrictEqual(r.source.slice().sort(), ['lib.js', 'lib2.js']);
       assert.strictEqual(
@@ -368,7 +368,7 @@ describe('the restore runs whatever happens, which is the claim AC-4 makes', () 
   // reverted run throw while the first run passes, which is the only way to
   // reach the restore by the path a real failure would take.
 
-  test('a throw from the reverted run still puts the source back', () => {
+  test('a throw from the reverted run still puts the source back', async () => {
     const { dir } = repo({
       added: { 'lib2.js': 'module.exports.b = () => 2;\n' },
       testFile: "const assert = require('assert');\nmodule.exports = () => { assert.ok(true); };\n",
@@ -380,7 +380,9 @@ describe('the restore runs whatever happens, which is the claim AC-4 makes', () 
         if (call === 1) return true;          // green with the change
         throw new Error('the runner blew up mid-revert');
       };
-      assert.throws(() => redFirst({ repo: dir, base: 'main', tests: CMD, runner }),
+      // assert.rejects, not assert.throws: the failure now arrives as a
+      // rejected promise, and assert.throws would pass while catching nothing.
+      await assert.rejects(() => redFirst({ repo: dir, base: 'main', tests: CMD, runner }),
         /blew up mid-revert/);
 
       assert.strictEqual(call, 2, 'the reverted run was actually reached');
@@ -459,7 +461,7 @@ describe('the record carries test counts, not a count of files', () => {
     return dir;
   }
 
-  test('both counts reach the record', () => {
+  test('both counts reach the record', async () => {
     const dir = countableRepo();
     try {
       // The fixture already ignores the record file, so there is nothing to
@@ -468,7 +470,7 @@ describe('the record carries test counts, not a count of files', () => {
       gate.writeRecord(gate.buildRecord({ tree, branch: 'change', at: 'x' }),
         path.join(dir, '.precommit-gate.json'));
 
-      const outcome = redFirst({ repo: dir, base: 'main', tests: 'node --test test/check.js' });
+      const outcome = await redFirst({ repo: dir, base: 'main', tests: 'node --test test/check.js' });
       assert.strictEqual(outcome.outcome, 'proven', outcome.reason);
       recordOutcome(dir, outcome);
 
@@ -480,7 +482,7 @@ describe('the record carries test counts, not a count of files', () => {
     }
   });
 
-  test('an unparsable summary records null rather than a guess', () => {
+  test('an unparsable summary records null rather than a guess', async () => {
     // A count invented from output nobody could read is worse than no count,
     // because the record is the thing the reviewer is asked to trust.
     const { dir } = repo({
@@ -489,7 +491,7 @@ describe('the record carries test counts, not a count of files', () => {
         + "module.exports = () => { assert.strictEqual(require('../lib2.js').b(), 2); };\n",
     });
     try {
-      const outcome = redFirst({ repo: dir, base: 'main', tests: CMD });
+      const outcome = await redFirst({ repo: dir, base: 'main', tests: CMD });
       assert.strictEqual(outcome.outcome, 'proven', outcome.reason);
       assert.strictEqual(outcome.testsPassedWithChange, null);
       assert.strictEqual(outcome.testsFailedWithoutChange, null);
@@ -500,10 +502,10 @@ describe('the record carries test counts, not a count of files', () => {
 });
 
 describe('a branch with no diff at all', () => {
-  test('is not-provable, by its own path rather than by resemblance', () => {
+  test('is not-provable, by its own path rather than by resemblance', async () => {
     const { dir } = repo({});
     try {
-      const r = redFirst({ repo: dir, base: 'main', tests: CMD });
+      const r = await redFirst({ repo: dir, base: 'main', tests: CMD });
       assert.strictEqual(r.outcome, 'not-provable');
       assert.match(r.reason, /nothing changed/i);
     } finally {
@@ -513,7 +515,7 @@ describe('a branch with no diff at all', () => {
 });
 
 describe('the test command does not inherit this runner is own context', () => {
-  test('NODE_TEST_CONTEXT is stripped, because it makes a nested runner exit 0', () => {
+  test('NODE_TEST_CONTEXT is stripped, because it makes a nested runner exit 0', async () => {
     // Found while writing the counts test. `node --test` that inherits
     // NODE_TEST_CONTEXT reports failures and still exits 0, so a suite that
     // should have gone red comes back green. For a tool whose only job is
@@ -531,7 +533,7 @@ describe('the test command does not inherit this runner is own context', () => {
     try {
       const cmd = `${JSON.stringify(process.execPath)} -e `
         + JSON.stringify(`require('fs').writeFileSync(${JSON.stringify(probe)}, String(process.env.NODE_TEST_CONTEXT))`);
-      redFirst({ repo: dir, base: 'main', tests: cmd });
+      await redFirst({ repo: dir, base: 'main', tests: cmd });
       assert.strictEqual(fs.readFileSync(probe, 'utf8'), 'undefined',
         'the child must not see the parent test runner is context');
     } finally {
@@ -542,7 +544,7 @@ describe('the test command does not inherit this runner is own context', () => {
 });
 
 describe('classifying a path as a test, by segment rather than by substring', () => {
-  test('a source directory whose name ends in "test" is not a test directory', () => {
+  test('a source directory whose name ends in "test" is not a test directory', async () => {
     // `'src/latest/module.js'.includes('test/')` is true, because "latest/"
     // ends in "test/". So do contest/, attest/, protest/, fastest/. A source
     // file misclassified this way is never reverted, so the check runs against
@@ -555,7 +557,7 @@ describe('classifying a path as a test, by segment rather than by substring', ()
         + "module.exports = () => { assert.strictEqual(require('../src/latest/module.js').b(), 2); };\n",
     });
     try {
-      const r = redFirst({ repo: dir, base: 'main', tests: CMD });
+      const r = await redFirst({ repo: dir, base: 'main', tests: CMD });
       assert.deepStrictEqual(r.source, ['src/latest/module.js'],
         'a path containing "test/" inside a longer segment is source');
       assert.deepStrictEqual(r.tests, ['test/check.js']);
@@ -565,7 +567,7 @@ describe('classifying a path as a test, by segment rather than by substring', ()
     }
   });
 
-  test('a real test directory and a suffixed filename are still tests', () => {
+  test('a real test directory and a suffixed filename are still tests', async () => {
     const { dir } = repo({
       source: 'module.exports.a = () => 1;\nmodule.exports.c = () => 3;\n',
       added: {
@@ -576,7 +578,7 @@ describe('classifying a path as a test, by segment rather than by substring', ()
         + "module.exports = () => { assert.strictEqual(require('../lib.js').c(), 3); };\n",
     });
     try {
-      const r = redFirst({ repo: dir, base: 'main', tests: CMD });
+      const r = await redFirst({ repo: dir, base: 'main', tests: CMD });
       assert.deepStrictEqual(r.source, ['lib.js']);
       assert.deepStrictEqual(r.tests.slice().sort(),
         ['spec/other.js', 'src/thing.test.js', 'test/check.js']);
@@ -638,7 +640,7 @@ describe('the command itself, not only the function inside it', () => {
 });
 
 describe('the record contract is the gate is, not this file is', () => {
-  test('recordOutcome reads a record the real gate wrote', () => {
+  test('recordOutcome reads a record the real gate wrote', async () => {
     // The point of this test is the coupling, not the assertion. It imports
     // scripts/precommit-gate.js, so a renamed field or a different
     // tree-computation on that side fails here rather than failing silently in
@@ -658,7 +660,7 @@ describe('the record contract is the gate is, not this file is', () => {
         execFileSync('git', ['write-tree'], { cwd: dir, encoding: 'utf8' }).trim(),
         'the gate identifies a tree by git write-tree, which is what recordOutcome assumes');
 
-      const outcome = redFirst({ repo: dir, base: 'main', tests: CMD });
+      const outcome = await redFirst({ repo: dir, base: 'main', tests: CMD });
       assert.strictEqual(recordOutcome(dir, outcome), true,
         'a record written by the real gate is accepted');
     } finally {
@@ -668,7 +670,7 @@ describe('the record contract is the gate is, not this file is', () => {
 });
 
 describe('a renamed source file', () => {
-  test('is restored to its old path, not deleted, so a false proven is impossible', () => {
+  test('is restored to its old path, not deleted, so a false proven is impossible', async () => {
     // git diff reports a rename as one new path when rename detection is on.
     // restoreTo then asks whether that path exists at the base, finds it does
     // not, and DELETES it. The reverted run fails with a module-not-found for
@@ -692,13 +694,130 @@ describe('a renamed source file', () => {
       // Rename detection on, which is what a developer's config may well do.
       git('config', 'diff.renames', 'true');
 
-      const r = redFirst({ repo: dir, base: 'main', tests: CMD });
+      const r = await redFirst({ repo: dir, base: 'main', tests: CMD });
       assert.deepStrictEqual(r.source.slice().sort(), ['new-name.js', 'old-name.js'],
         'both sides of the rename are treated as source');
       assert.strictEqual(
         execFileSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).trim(), '',
         'and the tree comes back clean',
       );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('AC-4 with an uncooperative child, which is where the claim was false', () => {
+  test('a test command that traps SIGINT does not hold the tree hostage', async () => {
+    // The case an independent reviewer named, twice, before it was fixed.
+    // spawnSync blocks the event loop for the whole life of the child, so the
+    // SIGINT handler could not run until the child chose to exit. A command
+    // that traps or ignores the signal therefore left the source reverted for
+    // as long as it kept running, while AC-4 claims restoration happens
+    // whatever happens. Documenting that gap did not discharge the criterion,
+    // and the reviewer was right to refuse it.
+    const { dir } = repo({
+      added: { 'lib2.js': 'module.exports.b = () => 2;\n' },
+      testFile: "const assert = require('assert');\nmodule.exports = () => { assert.ok(true); };\n",
+    });
+    const marker = path.join(os.tmpdir(), `red-first-trap-${process.pid}.txt`);
+    // Behaves like a real suite on the first run: the source is present, so it
+    // passes at once. On the REVERTED run the source is gone, and this is where
+    // it turns uncooperative: it ignores SIGINT and SIGTERM and keeps running.
+    // Written this way because the command is the same on both runs, and a
+    // child that hangs on the first one never reaches the revert step at all.
+    const trapping = `${JSON.stringify(process.execPath)} -e `
+      + JSON.stringify(
+        "if (require('fs').existsSync('lib2.js')) process.exit(0);"
+        + "process.on('SIGINT', () => {}); process.on('SIGTERM', () => {});"
+        + `require('fs').writeFileSync(${JSON.stringify(marker)}, String(process.pid));`
+        + 'setTimeout(() => process.exit(1), 30000);');
+
+    try {
+      await new Promise((resolve, reject) => {
+        const kid = spawn(process.execPath,
+          [path.join(__dirname, '..', '..', 'scripts', 'red-first.js'),
+            '--repo', dir, '--base', 'main', '--tests', trapping],
+          { stdio: ['ignore', 'pipe', 'pipe'] });
+
+        let out = '';
+        let signalled = false;
+        const deadline = setTimeout(() => {
+          kid.kill('SIGKILL');
+          reject(new Error('red-first did not exit after the interrupt; the '
+            + 'trapping child held it, which is the defect this covers'));
+        }, 20000);
+
+        kid.stdout.on('data', (b) => {
+          out += b.toString();
+          if (!signalled && out.includes('restoring the source')) {
+            signalled = true;
+            setTimeout(() => kid.kill('SIGINT'), 300);
+          }
+        });
+        kid.on('error', reject);
+        kid.on('exit', () => {
+          clearTimeout(deadline);
+          try {
+            assert.strictEqual(signalled, true, 'the run reached the revert step');
+            assert.strictEqual(fs.existsSync(marker), true,
+              'the trapping child really did start and ignore the signal');
+
+            // The assertion that discriminates the kill. Restoring the tree
+            // while a child that ignores signals keeps running only holds until
+            // that child writes again, so AC-4 needs the child ended, not
+            // merely outlived. Checked by pid liveness rather than by ps, which
+            // the local sandbox blocks.
+            const kidPid = Number(fs.readFileSync(marker, 'utf8'));
+            const alive = () => { try { process.kill(kidPid, 0); return true; } catch (e) { return false; } };
+            const deadline2 = Date.now() + 3000;
+            while (alive() && Date.now() < deadline2) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+            assert.strictEqual(alive(), false,
+              `the trapping child (pid ${kidPid}) must be ended, not left running`);
+            assert.strictEqual(fs.existsSync(path.join(dir, 'lib2.js')), true,
+              'the source is back despite the child refusing to die');
+            assert.strictEqual(
+              execFileSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).trim(),
+              '', 'and the tree is clean');
+            resolve();
+          } catch (e) {
+            reject(e);
+          }
+        });
+      });
+    } finally {
+      fs.rmSync(marker, { force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('a tree that does not come back clean', () => {
+  test('overrides an otherwise proven outcome with refused', async () => {
+    // The post-restore check gates whether the central claim can be trusted at
+    // all, and nothing exercised it: the only "refused" test was the
+    // dirty-before-start case, which returns long before this branch. Here the
+    // reverted run writes to a tracked file that is neither source nor test, so
+    // restoreTo puts back what it knows about and the tree is still dirty.
+    const { dir } = repo({
+      added: { 'lib2.js': 'module.exports.b = () => 2;\n' },
+      testFile: "const assert = require('assert');\nmodule.exports = () => { assert.ok(true); };\n",
+    });
+    try {
+      let call = 0;
+      const runner = () => {
+        call += 1;
+        if (call === 2) {
+          // A side effect on a tracked file outside sourceFiles, which is
+          // exactly what a real test suite doing something careless would do.
+          fs.writeFileSync(path.join(dir, 'run.js'), '// scribbled on by the suite\n');
+          return false;
+        }
+        return true;
+      };
+      const r = await redFirst({ repo: dir, base: 'main', tests: CMD, runner });
+      assert.strictEqual(r.outcome, 'refused', r.reason);
+      assert.match(r.reason, /did not come back clean/);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
