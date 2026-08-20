@@ -10,15 +10,27 @@
 // The defect only appears once the pane has more content than it can show, so
 // these tests use a long note. A short one lays out correctly either way and
 // would pass against the broken stylesheet.
+const fs = require('node:fs');
+const path = require('node:path');
 const { test, expect } = require('@playwright/test');
+const { unreviewedSections, sectionedBodyLines } = require('./fixture.js');
 
 const UNREVIEWED = 'unreviewed-sections.md';
 
-async function openNote(page, name) {
+// Selects by path, not by text. `hasText` is a SUBSTRING match, and these two
+// fixtures are named such that one contains the other: a search for
+// "reviewed-sections" also matches "unreviewed-sections.md". That resolved
+// correctly only because the tree sorts alphabetically and "r" precedes "u",
+// which is not a property any test should rest on.
+//
+// The row carries its own path as a data attribute and owns the click handler,
+// so addressing it that way is exact by construction and does not depend on
+// how the name happens to be rendered.
+async function openNote(page, file) {
   await page.goto('/');
   await expect(page.locator('.convo-item').first()).toBeVisible();
   await page.locator('.nav-item[data-nav="files"]').click();
-  await page.locator('.file-item', { hasText: name }).first().click();
+  await page.locator(`#file-tree .file-item[data-path="${file}"]`).click();
   await expect(page.locator('#tiptap-properties.visible')).toBeVisible();
   await expect(page.locator('.ProseMirror h1')).toBeVisible();
 }
@@ -78,7 +90,7 @@ function expectVisuallyOrdered(blocks) {
 }
 
 test('the body starts below the properties panel while review mode is on', async ({ page }) => {
-  await openNote(page, 'reviewed-sections');
+  await openNote(page, 'reviewed-sections.md');
   const l = await layout(page);
 
   expect(l.reviewActive).toBe(true);
@@ -90,9 +102,14 @@ test('the body starts below the properties panel while review mode is on', async
 });
 
 test('the body stays in document order below the panel', async ({ page }) => {
-  await openNote(page, 'reviewed-sections');
+  await openNote(page, 'reviewed-sections.md');
   const l = await layout(page);
 
+  // Without this the test passes against the broken stylesheet: blocks stay
+  // ordered relative to one another even while the panel paints across them,
+  // so ordering alone never saw the defect. The overlap test is what catches
+  // it, and this assertion is what stops this test claiming credit for that.
+  expect(l.reviewActive).toBe(true);
   expectDefectConditions(l);
   expectVisuallyOrdered(l.blocks);
   expect(l.blocks[0].text).toContain('Reviewed Sections');
@@ -103,7 +120,7 @@ test('the body stays in document order below the panel', async ({ page }) => {
 // which would also drop the corner clipping the panel was given on purpose.
 // This pins both halves: still clipping, still not a scroll container.
 test('the panel still clips to its rounded corners, without scrolling', async ({ page }) => {
-  await openNote(page, 'reviewed-sections');
+  await openNote(page, 'reviewed-sections.md');
   const { panelClip } = await layout(page);
 
   expect(panelClip.radius).toBeGreaterThan(0);
@@ -115,10 +132,23 @@ test('the panel still clips to its rounded corners, without scrolling', async ({
 });
 
 test('adding the first comment does not change the rendered order', async ({ page }) => {
+  // This test WRITES to its fixture, so it has to start from a known state
+  // rather than from whatever a previous run left behind. Restoring it here
+  // makes the test idempotent: run it twice against one server and the second
+  // run judges the fixture, not the first run's comment.
+  //
+  // The content comes from the fixture module rather than a copy pasted into
+  // this file, so there is one definition and nothing to drift.
+  await page.goto('/');
+  const workspace = await page.evaluate(() => currentWorkspacePath);
+  expect(workspace).toBeTruthy();
+  fs.writeFileSync(path.join(workspace, UNREVIEWED),
+    unreviewedSections(sectionedBodyLines()));
+
   // The bytes as authored, before the interface touches the file.
   const onDiskBefore = await (await page.request.get(`/api/file?path=${UNREVIEWED}`)).text();
 
-  await openNote(page, 'unreviewed-sections');
+  await openNote(page, 'unreviewed-sections.md');
   const before = await layout(page);
   expect(before.reviewActive).toBe(false);
   expect(before.overlapping).toEqual([]);
