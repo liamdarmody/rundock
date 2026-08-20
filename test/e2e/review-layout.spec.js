@@ -211,26 +211,25 @@ test('adding the first comment does not change the rendered order', async ({ pag
 // A reply carrying a long URL overflowed the side of its card.
 //
 // Root comment bodies wrap (`.review-card-body`, overflow-wrap: anywhere).
-// Reply bodies were a classless <span> in a flex row, so nothing reached them:
-// with the flex default `min-width: auto` the item could not shrink below the
-// longest unbreakable run, and the whole box grew wider than the card.
+// Reply bodies were a classless <span> in a flex row, so nothing reached
+// them: with the flex default `min-width: auto` the item could not shrink
+// below the longest unbreakable run, and the box grew wider than the card.
 //
 // These tests measure PAINTED TEXT, not the element box, and the distinction
-// is the whole point. A rule that only lets the box shrink (`min-width: 0`
-// with no wrapping change) leaves the box inside the card while the text
-// keeps painting straight out through the card wall. A test that asked the
-// box whether it fit would have passed against that non-fix.
+// is the point. A change that only lets the box shrink leaves the box inside
+// the card while the glyphs keep painting through the card wall, so a test
+// that asked the box whether it fit would pass against a fix that fixes
+// nothing.
 //
-// RECORDED OBSERVATION, made in a browser BEFORE the fix was written
-// (2026-08-20), because the last defect of this shape here was a layout fault
-// wearing a parser's clothes and the written diagnosis cost a session:
-// at the narrowest panel width, 220px, in both themes, the reply text painted
-// 624px outside the card across 2 lines; afterwards 1px inside it across 9.
-// The written diagnosis held. The parse was never involved.
-//
-// The last test below is what keeps that from being a story: it measures the
-// pre-fix declarations and the break-word near-miss on the live page, so the
-// claim that this rule is the thing that works is re-proved on every run.
+// The last test is the one that keeps the diagnosis honest. This defect sits
+// in an area where a layout fault once wore a parser's clothes and the
+// written diagnosis cost a session, so the cause is not asserted in prose
+// anywhere: it is re-measured on every run. The unfixed element is driven
+// through the declarations it used to carry and its width is compared
+// against its own min-content width. If the real cause were something other
+// than the min-content contribution pinning a flex item open, that
+// comparison would not hold, and it would fail as a mismatch rather than as
+// a passing boolean.
 // ---------------------------------------------------------------------------
 
 // Mirrors SIDEBAR_MIN in public/editor/panels/review.js. The narrowest the
@@ -315,6 +314,9 @@ async function replyLayout(page, unbreakableRun) {
 
 // The fixture still reproduces the defect. Asserted wherever a layout is
 // judged, so a shortened URL fails loudly instead of passing vacuously.
+// The reply body text is asserted in full, which also proves the endmatter
+// `re:` entry actually rendered as a reply rather than being dropped: no
+// reply, no element, and every assertion below fails at the selector.
 function expectReplyDefectConditions(l) {
   expect(l.appliedWidth).toBe(SIDEBAR_MIN);
   expect(l.bodyText).toBe(LONG_REPLY_URL);
@@ -353,11 +355,10 @@ test('the reply fix leaves the root body and the author label alone', async ({ p
   expect(l.byClipped).toBe(false);
 });
 
-// The near-miss test. AC-3 asks that the regression fail without the fix, and
-// a comment claiming it would is not evidence. This drives the reply body
-// through the declarations a plausible wrong fix would leave behind and
-// measures each one, so "anywhere is the part that matters" is an assertion
-// rather than a belief.
+// A regression test must fail against the unfixed stylesheet, not merely
+// claim that it would. This drives the reply body through the declarations a
+// plausible wrong fix would leave behind and measures each one, so "anywhere
+// is the part that matters" is an assertion rather than a belief.
 //
 // `break-word` is the dangerous one: it reads as a synonym, passes review by
 // eye, and leaves the defect exactly where it was, because it does not reduce
@@ -380,6 +381,7 @@ test('only the shipped declaration wraps the reply; the near-misses do not', asy
       const rects = [...range.getClientRects()];
       return {
         lines: rects.length,
+        bodyWidth: Math.round(body.getBoundingClientRect().width),
         // Both edges, because they can disagree, and the disagreement is the
         // reason this suite measures glyphs rather than boxes.
         boxOverflowPx: Math.round(body.getBoundingClientRect().right - cardContentRight),
@@ -387,7 +389,26 @@ test('only the shipped declaration wraps the reply; the near-misses do not', asy
       };
     };
     const under = (css) => { body.style.cssText = css; return measure(); };
+
+    // The element's own min-content width, measured under the wrapping rules
+    // it had BEFORE the fix. This is the number the diagnosis is about: a
+    // flex item's automatic minimum size is its min-content contribution, and
+    // `overflow-wrap: anywhere` works by lowering it. Measured on a detached
+    // probe so the live element is never left in a half-styled state.
+    const probe = document.createElement('span');
+    probe.textContent = body.textContent;
+    probe.style.cssText = 'position:absolute;visibility:hidden;left:-9999px;'
+      + 'width:min-content;overflow-wrap:normal';
+    probe.style.font = getComputedStyle(body).font;
+    document.body.appendChild(probe);
+    const minContentPx = Math.round(probe.getBoundingClientRect().width);
+    probe.remove();
     const out = {
+      minContentPx,
+      cardContentWidth: Math.round(
+        card.getBoundingClientRect().width
+        - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+        - parseFloat(cs.borderLeftWidth) - parseFloat(cs.borderRightWidth)),
       shipped: under(''),
       // What the element had before this change: no rule reached it at all.
       preFix: under('overflow-wrap: normal'),
@@ -420,4 +441,19 @@ test('only the shipped declaration wraps the reply; the near-misses do not', asy
   expect(variants.shrinkOnly.boxOverflowPx).toBeLessThanOrEqual(0);
   expect(variants.shrinkOnly.textOverflowPx)
     .toBeGreaterThan(variants.shrinkOnly.boxOverflowPx);
+
+  // The diagnosis itself, as a measurement that can come out false.
+  //
+  // "A flex item pinned open by its own min-content contribution" is a claim
+  // with a number attached: unfixed, the item's width should BE its
+  // min-content width, and that width should exceed the space it has. Both
+  // are compared against quantities measured on this page rather than against
+  // constants copied from one machine, so the check is meaningful on any
+  // renderer. A cause that was not the min-content contribution would show up
+  // here as a mismatch rather than as a quietly passing boolean.
+  expect(Math.abs(variants.preFix.bodyWidth - variants.minContentPx))
+    .toBeLessThanOrEqual(2);
+  expect(variants.preFix.bodyWidth).toBeGreaterThan(variants.cardContentWidth);
+  // And the fix works by lowering exactly that: the item now fits the card.
+  expect(variants.shipped.bodyWidth).toBeLessThanOrEqual(variants.cardContentWidth + 1);
 });

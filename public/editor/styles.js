@@ -330,21 +330,14 @@ const CSS = `
 }
 .review-reply .review-by { margin-left: 0; flex-shrink: 0; }
 .review-reply .review-by::after { content: ':'; }
-/* The reply body wraps the way .review-card-body above does, with the same
-   'anywhere'. The reply body is a flex item, so its automatic minimum size
-   is its min-content width: without this it could not shrink below the
-   longest unbreakable run, and a URL pushed the whole card open.
+/* The reply body is a flex item, so its automatic minimum size is its
+   min-content width: without this it cannot shrink below the longest
+   unbreakable run, and a long URL pushes the whole card open.
    'anywhere' rather than 'break-word' is the load-bearing part, and the two
    look identical in a diff. Only 'anywhere' reduces the min-content
-   contribution that sets the automatic minimum size; 'break-word' leaves it
-   at the full run width, so the card still opens. The E2E suite proves this
-   by measuring the break-word substitute rather than trusting this comment.
-   Confirmed in a browser before the fix (2026-08-20), at the narrowest panel
-   width of 220px in both themes: the reply text painted 624px outside the
-   card, and 1px inside it afterwards, across nine wrapped lines. The written
-   diagnosis held; this was a layout fault and the parse was never involved.
-   No backticks in this file: the stylesheet is a JS template literal, and a
-   backtick in a comment ends the string. */
+   contribution that sets that automatic minimum; 'break-word' leaves it at
+   the full run width. The E2E suite measures the break-word substitute, so
+   this is checked rather than asserted here. */
 .review-reply-body { overflow-wrap: anywhere; }
 /* Review text entry: the conversations-input grammar at card scale: a
    growing textarea with an embedded circular send button that activates
