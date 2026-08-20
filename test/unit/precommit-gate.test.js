@@ -18,7 +18,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const {
   refusal, buildRecord, writeRecord, readRecord, currentTree, defaultBranch,
-  isReleaseCommit, RELEASE_FOOTPRINT,
+  isReleaseCommit, RELEASE_FOOTPRINT, stagedPaths,
 } = require('../../scripts/precommit-gate.js');
 
 const TREE = 'a'.repeat(40);
@@ -408,5 +408,76 @@ describe('the release commit is the one thing allowed on the default branch', ()
 
   test('the footprint is exactly the two files release.js touches', () => {
     assert.deepStrictEqual([...RELEASE_FOOTPRINT].sort(), ['CHANGELOG.md', 'package.json']);
+  });
+});
+
+describe('the release commit, through the real entry point on real git', () => {
+  // Everything above hands refusal() a staged array built by hand, which is a
+  // double for what stagedPaths() returns. That proves the decision and not the
+  // wiring, and the wiring is the whole card: if stagedPaths() had wrong flags
+  // or mishandled a path, every test above would stay green while npm run
+  // release failed exactly as it did the night this was written.
+  const PASSING = {
+    test: 'node -e "0"', typecheck: 'node -e "0"',
+    'lint:styles': 'node -e "0"', 'check:refs': 'node -e "0"',
+  };
+
+  function repoOnDefaultBranch() {
+    const { dir, run } = repoWithScripts(PASSING);
+    run('commit', '-q', '-m', 'initial');
+    run('checkout', '-q', '-B', 'main');
+    fs.writeFileSync(path.join(dir, 'CHANGELOG.md'), '# Changelog\n\n## Unreleased\n');
+    fs.writeFileSync(path.join(dir, 'server.js'), '// source\n');
+    run('add', '-A');
+    run('commit', '-q', '-m', 'add changelog and a source file');
+    return { dir, run };
+  }
+
+  test('the real hook admits a release-shaped commit on the default branch', () => {
+    const { dir, run } = repoOnDefaultBranch();
+    try {
+      // What release.js does: bump the version, promote the changelog, stage
+      // exactly those two, commit on main.
+      const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+      pkg.version = '1.0.1';
+      fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg, null, 2));
+      fs.writeFileSync(path.join(dir, 'CHANGELOG.md'), '# Changelog\n\n## 1.0.1 (today)\n');
+      run('add', 'package.json', 'CHANGELOG.md');
+
+      const { code, out } = spawnGate(['--verify'], dir);
+      assert.strictEqual(code, 0, `the release commit must be admitted, got: ${out}`);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('the real hook refuses a source file riding along with it', () => {
+    const { dir, run } = repoOnDefaultBranch();
+    try {
+      fs.writeFileSync(path.join(dir, 'CHANGELOG.md'), '# Changelog\n\n## 1.0.1 (today)\n');
+      fs.writeFileSync(path.join(dir, 'server.js'), '// snuck in\n');
+      run('add', 'CHANGELOG.md', 'server.js');
+
+      const { code, out } = spawnGate(['--verify'], dir);
+      assert.notStrictEqual(code, 0, 'a source file on the default branch is refused');
+      assert.match(out, /refusing to commit directly to main/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('stagedPaths reads the index, and reads it the way refusal expects', () => {
+    // Named separately because a path normalisation bug here would be
+    // invisible above: refusal() compares against bare names, so anything
+    // returning a prefixed or quoted path would silently stop matching.
+    const { dir, run } = repoOnDefaultBranch();
+    try {
+      fs.writeFileSync(path.join(dir, 'CHANGELOG.md'), '# changed\n');
+      run('add', 'CHANGELOG.md');
+      assert.deepStrictEqual(stagedPaths(dir), ['CHANGELOG.md']);
+      assert.strictEqual(isReleaseCommit(stagedPaths(dir)), true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
