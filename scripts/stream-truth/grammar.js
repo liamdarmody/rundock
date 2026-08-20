@@ -160,6 +160,28 @@ function normalize(tokens) {
 // The contract the interception engine rests on, checked directly against
 // reality. If a runtime update breaks one of these, the harness fails before
 // any code change hides behind the stub.
+// The grammar as STORED for invariant checking.
+//
+// The captured section that invariants read cannot be the normalised grammar:
+// normalisation drops consolidated `assistant[...]` envelopes via the
+// stub-omits-per-block-assistant-envelopes gap, and the invariant that no such
+// envelope appears after the final message_stop is exactly the guard for the
+// 0.11.6 interception regression. Normalise it and the guard reads nothing.
+//
+// It also cannot be the unreduced grammar, because two of its tokens are
+// non-deterministic and neither is read by any invariant: the number of
+// thinking deltas varies per run, and transport noise (rate_limit_event and
+// friends) arrives in a different position each time. Storing those made every
+// re-capture produce a diff whether or not anything real had moved, which
+// trains a reader to skim the one artifact whose whole purpose is to be read.
+//
+// So: drop precisely the two noise sources, keep everything an invariant
+// reads. Idempotent by construction, since both steps are filters.
+function stableGrammar(tokens) {
+  const transportNoise = KNOWN_GAPS.find(g => g.name === 'transport-noise');
+  return dropThinkingSpans(tokens).filter(t => !transportNoise.drop(t));
+}
+
 function checkStreamInvariants(rawTokens) {
   // The documented tool_result float applies here too: a result envelope
   // drifting inside the final message close is position noise, not a
@@ -211,4 +233,4 @@ function diffGrammars(expected, actual, { expectedLabel = 'captured (real CLI)',
   return equal ? null : lines.join('\n');
 }
 
-module.exports = { tokenize, reduceToGrammar, normalize, dropThinkingSpans, floatUserEnvelopes, checkStreamInvariants, diffGrammars, KNOWN_GAPS };
+module.exports = { tokenize, reduceToGrammar, normalize, dropThinkingSpans, floatUserEnvelopes, stableGrammar, checkStreamInvariants, diffGrammars, KNOWN_GAPS };

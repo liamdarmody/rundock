@@ -27,7 +27,7 @@ const { spawn } = require('node:child_process');
 
 const fx = require('../fixtures/stream-json.js');
 const {
-  reduceToGrammar, normalize, checkStreamInvariants, diffGrammars, KNOWN_GAPS,
+  reduceToGrammar, normalize, stableGrammar, checkStreamInvariants, diffGrammars, KNOWN_GAPS,
 } = require('../../scripts/stream-truth/grammar.js');
 const { SCENARIOS } = require('../../scripts/stream-truth/scenarios.js');
 
@@ -170,9 +170,107 @@ describe('the committed capture', () => {
 
   test('the capture itself satisfies the stream invariants', () => {
     const captured = JSON.parse(fs.readFileSync(CAPTURE_FILE, 'utf8'));
-    for (const [name, { raw }] of Object.entries(captured.scenarios)) {
-      assert.deepStrictEqual(checkStreamInvariants(raw), [], `invariants hold for "${name}"`);
+    for (const [name, { invariants }] of Object.entries(captured.scenarios)) {
+      assert.deepStrictEqual(checkStreamInvariants(invariants), [], `invariants hold for "${name}"`);
     }
+  });
+
+  test('keeps what the invariants read, and drops what they do not', () => {
+    const captured = JSON.parse(fs.readFileSync(CAPTURE_FILE, 'utf8'));
+    for (const [name, { invariants }] of Object.entries(captured.scenarios)) {
+      // The tokens every invariant is written against.
+      assert.ok(invariants.includes('stream_event:message_stop'), `${name} keeps message_stop`);
+      assert.ok(invariants.includes('stream_event:message_delta'), `${name} keeps message_delta`);
+      assert.ok(invariants.some(t => t.startsWith('result:')), `${name} keeps the result envelope`);
+      // The two non-deterministic sources, which no invariant reads.
+      assert.ok(!invariants.includes('rate_limit_event'), `${name} drops transport noise`);
+      assert.ok(!invariants.some(t => t.includes('thinking')), `${name} drops thinking spans`);
+    }
+    // The consolidated assistant envelope is the 0.11.6 shape and the reason
+    // this section cannot simply be the normalised grammar, which drops it.
+    const tool = captured.scenarios['tool-turn'];
+    assert.ok(tool.invariants.some(t => t.startsWith('assistant[')),
+      'the tool turn keeps consolidated assistant envelopes');
+  });
+
+  test('records the runtime version and capture time, which is what makes the version check fire', () => {
+    const captured = JSON.parse(fs.readFileSync(CAPTURE_FILE, 'utf8'));
+    assert.match(captured.runtimeVersion, /^\d+\.\d+\.\d+$/);
+    assert.match(captured.capturedAt, /^\d{4}-\d{2}-\d{2}T/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The churn this section exists to stop
+// ---------------------------------------------------------------------------
+
+describe('the stored grammar does not churn on a re-capture', () => {
+  // Two runs of the same turn, differing ONLY in the ways a non-deterministic
+  // model differs from itself: a different number of thinking deltas, and
+  // transport noise arriving somewhere else. Nothing the server reads has
+  // moved, so the stored grammar must not move either. Before this, every
+  // re-capture produced a diff and the reader learned to skim it.
+  // Token shapes are taken from the committed capture, not invented. The
+  // reduction keys on the exact strings the reducer emits, so a fixture in a
+  // made-up shape would exercise nothing and pass for the wrong reason.
+  const runA = [
+    'system:init',
+    'stream_event:message_start',
+    'system:status',
+    'stream_event:content_block_start(thinking)',
+    'stream_event:content_block_delta(thinking_delta)',
+    'stream_event:content_block_delta(thinking_delta)',
+    'stream_event:content_block_stop',
+    'stream_event:content_block_start(text)',
+    'stream_event:content_block_delta(text_delta)',
+    'assistant[text]',
+    'rate_limit_event',
+    'stream_event:content_block_stop',
+    'stream_event:message_delta',
+    'stream_event:message_stop',
+    'result:success',
+  ];
+  const runB = [
+    'system:init',
+    'stream_event:message_start',
+    'stream_event:content_block_start(thinking)',
+    'stream_event:content_block_delta(thinking_delta)',
+    'stream_event:content_block_delta(thinking_delta)',
+    'stream_event:content_block_delta(thinking_delta)',
+    'stream_event:content_block_delta(thinking_delta)',
+    'stream_event:content_block_stop',
+    'rate_limit_event',
+    'stream_event:content_block_start(text)',
+    'stream_event:content_block_delta(text_delta)',
+    'assistant[text]',
+    'system:thinking_tokens',
+    'stream_event:content_block_stop',
+    'stream_event:message_delta',
+    'stream_event:message_stop',
+    'result:success',
+  ];
+
+  test('two runs differing only in noise reduce to the same grammar', () => {
+    assert.deepStrictEqual(stableGrammar(runA), stableGrammar(runB));
+  });
+
+  test('and that grammar still satisfies the invariants', () => {
+    assert.deepStrictEqual(checkStreamInvariants(stableGrammar(runA)), []);
+  });
+
+  test('the reduction is idempotent, so re-applying it changes nothing', () => {
+    const once = stableGrammar(runA);
+    assert.deepStrictEqual(stableGrammar(once), once);
+  });
+
+  test('the guard survives the reduction: a stray assistant envelope after message_stop still fails', () => {
+    // The 0.11.6 shape. If reducing the stored grammar had removed the
+    // consolidated envelopes, this violation would vanish and the section
+    // would be decorative.
+    const broken = [...runA, 'assistant[text]'];
+    const errors = checkStreamInvariants(stableGrammar(broken));
+    assert.ok(errors.some(e => e.includes('AFTER the final message_stop')),
+      `expected a stray-envelope violation, got ${JSON.stringify(errors)}`);
   });
 });
 
