@@ -27,7 +27,7 @@ const { redFirst, recordOutcome } = require('../../scripts/red-first.js');
 
 // A throwaway repository with a base commit, then a branch carrying whatever
 // source and test content the case needs.
-function repo({ source, testFile, baseSource = 'module.exports.a = () => 1;\n', baseTest = 'module.exports = () => {};\n' }) {
+function repo({ source, testFile, added = {}, baseSource = 'module.exports.a = () => 1;\n', baseTest = 'module.exports = () => {};\n' }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'red-first-'));
   const git = (...args) => execFileSync('git', args, { cwd: dir, stdio: 'ignore' });
   git('init', '-q');
@@ -47,6 +47,12 @@ function repo({ source, testFile, baseSource = 'module.exports.a = () => 1;\n', 
   git('checkout', '-q', '-b', 'change');
   if (source !== undefined) fs.writeFileSync(path.join(dir, 'lib.js'), source);
   if (testFile !== undefined) fs.writeFileSync(path.join(dir, 'test', 'check.js'), testFile);
+  // Files that exist only on the branch. There is no base version to check
+  // out, which is the case every other fixture here happens to avoid.
+  for (const [rel, content] of Object.entries(added)) {
+    fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+    fs.writeFileSync(path.join(dir, rel), content);
+  }
   git('add', '-A');
   git('commit', '-q', '-m', 'the change');
   return { dir, git };
@@ -276,6 +282,74 @@ describe('the record file must not dirty the tree it describes', () => {
       const r = redFirst({ repo: dir, base: 'main', tests: CMD });
       assert.strictEqual(r.outcome, 'refused');
       assert.match(r.reason, /uncommitted/i);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('source added by the change, with no version at the base', () => {
+  // Found by running this tool on its own branch, which adds two files and
+  // modifies none. `git checkout <base> -- <path>` fails outright on a path
+  // that does not exist at the base, so the run died on a pathspec error
+  // instead of reporting an outcome. Every fixture above modifies a file that
+  // already existed, so none of them could reach it: the same shape of gap
+  // this tool exists to catch, in the tool itself.
+
+  test('an added file is taken away by deleting it, and the tests go red', () => {
+    const { dir } = repo({
+      added: {
+        'lib2.js': 'module.exports.b = () => 2;\n',
+      },
+      testFile: "const assert = require('assert');\n"
+        + "module.exports = () => { assert.strictEqual(require('../lib2.js').b(), 2); };\n",
+    });
+    try {
+      const r = redFirst({ repo: dir, base: 'main', tests: CMD });
+      assert.strictEqual(r.outcome, 'proven', r.reason);
+      assert.deepStrictEqual(r.source, ['lib2.js']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('the added file comes back, so the branch is not left short a file', () => {
+    // The restore path is the one that matters most here: a deleted file that
+    // is not put back turns a diagnostic run into data loss on the branch.
+    const { dir } = repo({
+      added: { 'lib2.js': 'module.exports.b = () => 2;\n' },
+      testFile: "const assert = require('assert');\n"
+        + "module.exports = () => { assert.strictEqual(require('../lib2.js').b(), 2); };\n",
+    });
+    try {
+      redFirst({ repo: dir, base: 'main', tests: CMD });
+      assert.strictEqual(fs.existsSync(path.join(dir, 'lib2.js')), true, 'the added file is restored');
+      assert.strictEqual(
+        execFileSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).trim(), '',
+        'and the tree comes back clean',
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a mix of added and modified source is handled in one run', () => {
+    const { dir } = repo({
+      source: 'module.exports.a = () => 1;\nmodule.exports.c = () => 3;\n',
+      added: { 'lib2.js': 'module.exports.b = () => 2;\n' },
+      testFile: "const assert = require('assert');\n"
+        + "module.exports = () => {\n"
+        + "  assert.strictEqual(require('../lib2.js').b(), 2);\n"
+        + "  assert.strictEqual(require('../lib.js').c(), 3);\n"
+        + "};\n",
+    });
+    try {
+      const r = redFirst({ repo: dir, base: 'main', tests: CMD });
+      assert.strictEqual(r.outcome, 'proven', r.reason);
+      assert.deepStrictEqual(r.source.slice().sort(), ['lib.js', 'lib2.js']);
+      assert.strictEqual(
+        execFileSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).trim(), '',
+      );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

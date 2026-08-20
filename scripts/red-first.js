@@ -58,6 +58,42 @@ function isTest(file) {
   return TEST_MARKERS.some(m => file.includes(m));
 }
 
+function existsAt(repo, ref, file) {
+  try {
+    execFileSync('git', ['cat-file', '-e', `${ref}:${file}`], { cwd: repo, stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Make `files` look exactly as they do in `ref`, in both the index and the
+ * working tree.
+ *
+ * Checking a path out is only half of it. A file the change ADDED has no
+ * version at the base, and `git checkout <base> -- <path>` fails outright on a
+ * pathspec it cannot resolve, which is how the first run of this tool against
+ * its own branch died: the branch adds two files and modifies none. Taking an
+ * added file away means deleting it. Taking a deleted file away means putting
+ * it back. Asking the target tree what it holds covers both, and renames, and
+ * needs no status letters to be parsed correctly.
+ *
+ * The same function serves the restore, pointed at HEAD, so the way back
+ * cannot drift from the way out.
+ */
+function restoreTo(repo, ref, files) {
+  const present = files.filter(f => existsAt(repo, ref, f));
+  const absent = files.filter(f => !existsAt(repo, ref, f));
+  if (present.length) git(repo, ['checkout', ref, '--', ...present]);
+  for (const f of absent) {
+    // --ignore-unmatch so a second pass over an already-removed path is a
+    // no-op rather than an error, which matters because the restore runs in a
+    // finally block that must not throw over the top of a real failure.
+    git(repo, ['rm', '--quiet', '-f', '--ignore-unmatch', '--', f]);
+  }
+}
+
 /**
  * @returns {{outcome: 'proven'|'not-discriminating'|'inconclusive'|'not-provable'|'refused',
  *            reason: string, passedWithChange: boolean|null,
@@ -110,13 +146,13 @@ function redFirst({ repo, base = 'main', tests, log = () => {} }) {
   log('restoring the source, keeping the tests');
   let failedWithoutChange = null;
   try {
-    git(repo, ['checkout', mergeBase, '--', ...sourceFiles]);
+    restoreTo(repo, mergeBase, sourceFiles);
     failedWithoutChange = !run();
   } finally {
     // Unconditional. A tool that can leave a repository half-reverted is worse
     // than no tool, because the next person debugs a tree nobody put there on
     // purpose.
-    git(repo, ['checkout', 'HEAD', '--', ...sourceFiles]);
+    restoreTo(repo, 'HEAD', sourceFiles);
   }
 
   if (git(repo, ['status', '--porcelain'])) {
@@ -190,4 +226,4 @@ function main() {
 
 if (require.main === module) process.exit(main());
 
-module.exports = { redFirst, recordOutcome, isTest, TEST_MARKERS, LIMITATION };
+module.exports = { redFirst, recordOutcome, restoreTo, isTest, TEST_MARKERS, LIMITATION };
