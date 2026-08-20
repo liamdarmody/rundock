@@ -17,6 +17,7 @@
     "test:e2e": "playwright test",
     "check:refs": "node scripts/check-internal-refs.js",
     "precommit": "node scripts/precommit-gate.js",
+    "red-first": "node scripts/red-first.js",
     "lint:styles": "node test/tools/style-drift.js",
     "typecheck": "tsc -p tsconfig.server.json && tsc -p tsconfig.client.json",
     "screenshots": "node scripts/screenshots/run.mjs",
