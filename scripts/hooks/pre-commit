@@ -6,3 +6,9 @@ node scripts/check-internal-refs.js || {
   echo "commit blocked: reword the internal references above, then commit again." >&2
   exit 1
 }
+
+# The four steps that three errors in 0.11.7 died at, and a fourth after them:
+# verify the branch, run the checks, read the result, commit. Doing them by
+# habit worked until the work stopped being easy. CI still runs the same checks
+# on every pull request and remains the line that actually holds.
+node scripts/precommit-gate.js --verify || exit 1
