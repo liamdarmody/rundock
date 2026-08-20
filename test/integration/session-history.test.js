@@ -34,6 +34,10 @@ function assistantLine(text, timestamp) {
   return { message: { role: 'assistant', content: [{ type: 'text', text }] }, timestamp: timestamp || null };
 }
 
+function toolLine(name, timestamp) {
+  return { message: { role: 'assistant', content: [{ type: 'tool_use', name, input: {} }] }, timestamp: timestamp || null };
+}
+
 function writeTranscript(convoId, entries) {
   const dir = path.join(h.workspaceDir, '.rundock', 'transcripts');
   fs.mkdirSync(dir, { recursive: true });
@@ -201,6 +205,79 @@ describe('get_session_history: multi-session merge', () => {
       'Recovered from the transcript alone',
     ]);
   });
+
+  test('every text block of a multi-block turn survives a relaunch', async () => {
+    // The shape from the field report: text, tool, text, tool, text. It renders
+    // in full while live and, before this was fixed, collapsed to its opening
+    // line on reload. The session file kept every block; the rebuild claimed
+    // one of them per turn and silently dropped the rest, so the final summary,
+    // usually the most valuable part of a long turn, vanished from view.
+    const convoId = 'sh-multiblock-1';
+    const first = 'Let me gather the actual clutter before prescribing anything.';
+    const second = 'Now checking what the settings file already carries.';
+    const third = "I've done everything that was safe to do without your input. "
+      + 'Here is the summary and what I recommend next, which is the part worth keeping.';
+
+    writeSession('sess-multi-1', [
+      userLine('Please tidy this workspace', '2026-08-13T09:00:00Z'),
+      assistantLine(first, '2026-08-13T09:00:10Z'),
+      toolLine('Read', '2026-08-13T09:00:11Z'),
+      assistantLine(second, '2026-08-13T09:00:20Z'),
+      toolLine('Edit', '2026-08-13T09:00:21Z'),
+      assistantLine(third, '2026-08-13T09:00:30Z'),
+    ]);
+    // One transcript entry per TURN, holding the turn's whole text, which is
+    // what the accumulator in the delegation engine produces.
+    writeTranscript(convoId, [
+      { role: 'user', text: 'Please tidy this workspace', timestamp: '2026-08-13T09:00:00Z' },
+      { role: 'agent', agent: 'dev', text: first + second + third, timestamp: '2026-08-13T09:00:30Z' },
+    ]);
+
+    const res = await getHistory({
+      conversationId: convoId,
+      sessionIds: [{ sessionId: 'sess-multi-1' }],
+    });
+
+    assert.strictEqual(res.messages.length, 2, 'one user turn and one agent turn');
+    const agentMsg = res.messages[1];
+    assert.strictEqual(agentMsg.role, 'assistant');
+    for (const [label, block] of [['first', first], ['second', second], ['final', third]]) {
+      assert.ok(agentMsg.content.includes(block), `the ${label} block is shown`);
+    }
+    // Order matters as much as presence: a summary shown before the work that
+    // produced it would read as nonsense.
+    assert.ok(agentMsg.content.indexOf(first) < agentMsg.content.indexOf(second));
+    assert.ok(agentMsg.content.indexOf(second) < agentMsg.content.indexOf(third));
+  });
+
+  test('a following agent turn is not swallowed into the one before it', async () => {
+    // The guard on the change above. Two agents replying in sequence with no
+    // user message between them is ordinary, and absorbing every assistant
+    // entry up to the next user message would merge them into one bubble and
+    // misattribute the second agent's words to the first.
+    const convoId = 'sh-multiblock-2';
+    writeSession('sess-two-agents', [
+      userLine('Who can help', '2026-08-13T10:00:00Z'),
+      assistantLine('Routing you to the specialist now', '2026-08-13T10:00:05Z'),
+      assistantLine('Specialist here, this is my own separate answer', '2026-08-13T10:00:10Z'),
+    ]);
+    writeTranscript(convoId, [
+      { role: 'user', text: 'Who can help', timestamp: '2026-08-13T10:00:00Z' },
+      { role: 'agent', agent: 'cos', text: 'Routing you to the specialist now', timestamp: '2026-08-13T10:00:05Z' },
+      { role: 'agent', agent: 'penn', text: 'Specialist here, this is my own separate answer', timestamp: '2026-08-13T10:00:10Z' },
+    ]);
+
+    const res = await getHistory({
+      conversationId: convoId,
+      sessionIds: [{ sessionId: 'sess-two-agents' }],
+    });
+
+    assert.strictEqual(res.messages.length, 3, 'the two agent turns stay separate');
+    assert.deepStrictEqual(res.messages.map(m => m.agentId), [null, 'cos', 'penn']);
+    assert.ok(!res.messages[1].content.includes('Specialist here'),
+      "the first agent's bubble did not absorb the second agent's reply");
+  });
+
 });
 
 describe('get_session_history: single-session fallback', () => {
