@@ -32,3 +32,6 @@ scripts/screenshots/.banned-tokens.json
 # the form a reader can actually use: the pull request states the verdict, the
 # models and what was judged, in prose.
 .independent-review/
+
+# Local pre-commit gate record: names the tree the checks passed on.
+.precommit-gate.json
