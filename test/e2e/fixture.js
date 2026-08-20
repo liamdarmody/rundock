@@ -43,6 +43,48 @@ function buildPng() {
   ]);
 }
 
+// The unreviewed sectioned note, as a function rather than a literal, because
+// the browser test that adds a comment MUTATES this file on disk. Run twice
+// against one server it would otherwise read back its own leftovers, so the
+// spec rewrites the file from this definition before it runs. Exported so the
+// spec never carries a second copy of the content to drift against.
+function unreviewedSections(sectionedBody) {
+  return [
+    '---',
+    'title: Unreviewed Sections',
+    'date: 2026-08-18',
+    'status: FROZEN. Amendments only, with named reasons.',
+    'related:',
+    '  - "[[Roadmap-2026]]"',
+    '  - "[[Missing Note]]"',
+    'tags:',
+    '  - product',
+    '  - ux',
+    '---',
+    '',
+    '# Unreviewed Sections',
+    '',
+    'The first paragraph, which sits above the first thematic break.',
+    '',
+    'The second paragraph, still above the first thematic break.',
+    '',
+    ...sectionedBody,
+  ].join('\n');
+}
+
+// The body shared by both sectioned fixtures: four sections, each long enough
+// that the pane must scroll, which is the condition the defect needs.
+function sectionedBodyLines() {
+  const lines = [];
+  for (let s = 1; s <= 4; s += 1) {
+    lines.push('---', '', `## Section ${s}`, '');
+    for (let i = 1; i <= 6; i += 1) {
+      lines.push(`Paragraph ${i} of section ${s}, carrying enough text to give the pane real height to scroll through.`, '');
+    }
+  }
+  return lines;
+}
+
 function buildFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rundock-e2e-'));
   const workspace = path.join(root, 'workspace');
@@ -93,13 +135,7 @@ function buildFixture() {
   // several thematic breaks, and a review endmatter block. It is deliberately
   // long: the properties panel only loses its place once the editor pane has
   // more content than it can show at once, so a short note passes either way.
-  const sectionedBody = [];
-  for (let s = 1; s <= 4; s += 1) {
-    sectionedBody.push('---', '', `## Section ${s}`, '');
-    for (let i = 1; i <= 6; i += 1) {
-      sectionedBody.push(`Paragraph ${i} of section ${s}, carrying enough text to give the pane real height to scroll through.`, '');
-    }
-  }
+  const sectionedBody = sectionedBodyLines();
   fs.writeFileSync(path.join(workspace, 'reviewed-sections.md'), [
     '---',
     'title: Reviewed Sections',
@@ -133,28 +169,13 @@ function buildFixture() {
 
   // The same shape with no review data yet, so a test can add the first
   // comment and watch what that does to the rendered order.
-  fs.writeFileSync(path.join(workspace, 'unreviewed-sections.md'), [
-    '---',
-    'title: Unreviewed Sections',
-    'date: 2026-08-18',
-    'status: FROZEN. Amendments only, with named reasons.',
-    'related:',
-    '  - "[[Roadmap-2026]]"',
-    '  - "[[Missing Note]]"',
-    'tags:',
-    '  - product',
-    '  - ux',
-    '---',
-    '',
-    '# Unreviewed Sections',
-    '',
-    'The first paragraph, which sits above the first thematic break.',
-    '',
-    'The second paragraph, still above the first thematic break.',
-    '',
-    ...sectionedBody,
-  ].join('\n'));
-
+  //
+  // Exported rather than written inline, because the test that adds a comment
+  // MUTATES this file. Run twice against one server it would otherwise find
+  // its own leftovers and judge them, so the spec rewrites it from this same
+  // definition before each run. One definition, two readers: duplicating the
+  // content into the spec would create a second source that drifts.
+  fs.writeFileSync(path.join(workspace, 'unreviewed-sections.md'), unreviewedSections(sectionedBody));
   // A briefing-style note: foldable + nested callouts and frontmatter
   // wikilinks.
   fs.writeFileSync(path.join(workspace, 'briefing.md'), [
@@ -295,4 +316,4 @@ function buildFixture() {
   return { root, workspace, home };
 }
 
-module.exports = { buildFixture };
+module.exports = { buildFixture, unreviewedSections, sectionedBodyLines };
