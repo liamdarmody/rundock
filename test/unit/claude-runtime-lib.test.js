@@ -175,6 +175,45 @@ test('pruning clears stale scratch and leaves recent scratch alone', () => {
   });
 });
 
+test('a stale-looking folder holding recent work is not deleted', () => {
+  // The case the age bound exists for, and the one it originally got wrong.
+  // A directory's own timestamp moves when its immediate children change and
+  // not when something deeper does, so a project folder untouched at its top
+  // level for weeks can still hold a file written minutes ago. Judging the
+  // folder by its own timestamp deleted exactly the work in progress the
+  // bound was meant to protect.
+  const rt = freshClaudeRuntime();
+  rt.wireClaudeRuntimeDeps({ getActualPort: () => 4444 });
+  withTwoWorkspaces((config, wsA) => {
+    config.setWorkspace(wsA);
+    const dir = rt.getSpawnEnv(null).TMPDIR;
+
+    const busy = path.join(dir, 'busy-project');
+    fs.mkdirSync(busy, { recursive: true });
+    const inUse = path.join(busy, 'render.html');
+    fs.writeFileSync(inUse, 'work in progress');
+
+    const abandoned = path.join(dir, 'abandoned-project');
+    fs.mkdirSync(abandoned, { recursive: true });
+    const old = path.join(abandoned, 'render.html');
+    fs.writeFileSync(old, 'finished long ago');
+
+    // Both FOLDERS look ancient. They differ only in what is inside them.
+    const longAgo = (Date.now() - (30 * 24 * 60 * 60 * 1000)) / 1000;
+    fs.utimesSync(old, longAgo, longAgo);
+    fs.utimesSync(abandoned, longAgo, longAgo);
+    fs.utimesSync(busy, longAgo, longAgo);
+
+    rt.pruneScratch();
+
+    assert.strictEqual(fs.existsSync(inUse), true,
+      'a folder holding recent work survives, however old the folder looks');
+    assert.strictEqual(fs.readFileSync(inUse, 'utf-8'), 'work in progress');
+    assert.strictEqual(fs.existsSync(abandoned), false,
+      'a folder whose contents are all stale is still cleared');
+  });
+});
+
 test('pruning a workspace that has no scratch directory is a quiet no-op', () => {
   const rt = freshClaudeRuntime();
   rt.wireClaudeRuntimeDeps({ getActualPort: () => 4444 });
