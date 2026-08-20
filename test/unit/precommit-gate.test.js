@@ -18,6 +18,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const {
   refusal, buildRecord, writeRecord, readRecord, currentTree, defaultBranch,
+  isReleaseCommit, RELEASE_FOOTPRINT, stagedPaths,
 } = require('../../scripts/precommit-gate.js');
 
 const TREE = 'a'.repeat(40);
@@ -357,6 +358,124 @@ describe('the default branch is read from the remote, not assumed', () => {
     const { dir } = tempRepo();
     try {
       assert.strictEqual(defaultBranch(dir), 'main');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the release commit is the one thing allowed on the default branch', () => {
+  // scripts/release.js bumps the version, promotes the changelog and commits
+  // straight to main. That is by design, and on the day this guard merged it
+  // stopped `npm run release` dead: the version was bumped, the changelog
+  // promoted, and the commit refused. A gate that blocks the release tool
+  // shipping beside it is not protecting anything.
+  const onMain = (staged) => refusal({
+    record: null, tree: TREE, branch: MAIN, mainBranch: MAIN, staged,
+  });
+
+  test('the release footprint is admitted', () => {
+    assert.strictEqual(onMain(['package.json', 'CHANGELOG.md']), null);
+    // Either alone is still the release commit's shape.
+    assert.strictEqual(onMain(['package.json']), null);
+    assert.strictEqual(onMain(['CHANGELOG.md']), null);
+  });
+
+  test('anything else alongside it is still refused', () => {
+    // The exception is the footprint, not the presence of a version bump. A
+    // source file riding along is exactly what this guard exists to stop.
+    assert.strictEqual(onMain(['package.json', 'server.js']).code, 'on-default-branch');
+    assert.strictEqual(onMain(['CHANGELOG.md', 'lib/agents/prompt.js']).code, 'on-default-branch');
+    assert.strictEqual(onMain(['server.js']).code, 'on-default-branch');
+  });
+
+  test('an empty staging area is not a release commit', () => {
+    // Nothing staged means nothing to vouch for, and admitting it would let
+    // an empty or amend-shaped commit through on the default branch.
+    assert.strictEqual(onMain([]).code, 'on-default-branch');
+    assert.strictEqual(isReleaseCommit([]), false);
+  });
+
+  test('on a feature branch the footprint still faces the normal checks', () => {
+    // The exception is about the DEFAULT branch. Elsewhere a changelog edit is
+    // an ordinary commit and needs a record like any other.
+    const why = refusal({
+      record: null, tree: TREE, branch: BRANCH, mainBranch: MAIN,
+      staged: ['CHANGELOG.md'],
+    });
+    assert.strictEqual(why.code, 'no-record');
+  });
+
+  test('the footprint is exactly the two files release.js touches', () => {
+    assert.deepStrictEqual([...RELEASE_FOOTPRINT].sort(), ['CHANGELOG.md', 'package.json']);
+  });
+});
+
+describe('the release commit, through the real entry point on real git', () => {
+  // Everything above hands refusal() a staged array built by hand, which is a
+  // double for what stagedPaths() returns. That proves the decision and not the
+  // wiring, and the wiring is the whole card: if stagedPaths() had wrong flags
+  // or mishandled a path, every test above would stay green while npm run
+  // release failed exactly as it did the night this was written.
+  const PASSING = {
+    test: 'node -e "0"', typecheck: 'node -e "0"',
+    'lint:styles': 'node -e "0"', 'check:refs': 'node -e "0"',
+  };
+
+  function repoOnDefaultBranch() {
+    const { dir, run } = repoWithScripts(PASSING);
+    run('commit', '-q', '-m', 'initial');
+    run('checkout', '-q', '-B', 'main');
+    fs.writeFileSync(path.join(dir, 'CHANGELOG.md'), '# Changelog\n\n## Unreleased\n');
+    fs.writeFileSync(path.join(dir, 'server.js'), '// source\n');
+    run('add', '-A');
+    run('commit', '-q', '-m', 'add changelog and a source file');
+    return { dir, run };
+  }
+
+  test('the real hook admits a release-shaped commit on the default branch', () => {
+    const { dir, run } = repoOnDefaultBranch();
+    try {
+      // What release.js does: bump the version, promote the changelog, stage
+      // exactly those two, commit on main.
+      const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+      pkg.version = '1.0.1';
+      fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg, null, 2));
+      fs.writeFileSync(path.join(dir, 'CHANGELOG.md'), '# Changelog\n\n## 1.0.1 (today)\n');
+      run('add', 'package.json', 'CHANGELOG.md');
+
+      const { code, out } = spawnGate(['--verify'], dir);
+      assert.strictEqual(code, 0, `the release commit must be admitted, got: ${out}`);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('the real hook refuses a source file riding along with it', () => {
+    const { dir, run } = repoOnDefaultBranch();
+    try {
+      fs.writeFileSync(path.join(dir, 'CHANGELOG.md'), '# Changelog\n\n## 1.0.1 (today)\n');
+      fs.writeFileSync(path.join(dir, 'server.js'), '// snuck in\n');
+      run('add', 'CHANGELOG.md', 'server.js');
+
+      const { code, out } = spawnGate(['--verify'], dir);
+      assert.notStrictEqual(code, 0, 'a source file on the default branch is refused');
+      assert.match(out, /refusing to commit directly to main/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('stagedPaths reads the index, and reads it the way refusal expects', () => {
+    // Named separately because a path normalisation bug here would be
+    // invisible above: refusal() compares against bare names, so anything
+    // returning a prefixed or quoted path would silently stop matching.
+    const { dir, run } = repoOnDefaultBranch();
+    try {
+      fs.writeFileSync(path.join(dir, 'CHANGELOG.md'), '# changed\n');
+      run('add', 'CHANGELOG.md');
+      assert.deepStrictEqual(stagedPaths(dir), ['CHANGELOG.md']);
+      assert.strictEqual(isReleaseCommit(stagedPaths(dir)), true);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -132,6 +132,34 @@ function buildRecord({ tree, branch, at }) {
   return { tree, branch, at, steps: STEPS.map(s => s.name) };
 }
 
+// The release commit's footprint.
+//
+// scripts/release.js bumps the version, promotes the changelog, and commits
+// directly to main. That is by design and the card plan states the constraint:
+// it is the only thing allowed on top of a gated SHA, release.js checks the
+// gate BEFORE creating it, and it touches these two files and nothing else.
+//
+// The exception is defined by WHAT IS STAGED rather than by an environment
+// variable or the name of the calling process, because a guard any caller can
+// announce its way past is not a guard.
+//
+// RESIDUAL RISK, stated rather than left implicit: this also lets a
+// hand-edited changelog or a hand-edited version reach the default branch
+// without a branch. That is judged acceptable, because neither is code, both
+// are visible in the one place people read before a release, and the
+// alternative is a gate that blocks the release tool it ships beside.
+const RELEASE_FOOTPRINT = ['package.json', 'CHANGELOG.md'];
+
+/** Paths staged for the next commit. */
+function stagedPaths(root = ROOT) {
+  const out = git(['diff', '--cached', '--name-only'], root);
+  return out ? out.split('\n').filter(Boolean) : [];
+}
+
+function isReleaseCommit(staged) {
+  return staged.length > 0 && staged.every(p => RELEASE_FOOTPRINT.includes(p));
+}
+
 /**
  * Why a commit may not proceed, or null when it may.
  *
@@ -139,9 +167,11 @@ function buildRecord({ tree, branch, at }) {
  * on: a guard that refuses for the wrong reason is a guard that will refuse
  * for no reason later, and "it failed" is not enough to tell those apart.
  */
-function refusal({ record, tree, branch, mainBranch }) {
+function refusal({ record, tree, branch, mainBranch, staged = [] }) {
   const rerun = 'Run `npm run precommit`, then commit again.';
   if (branch === mainBranch) {
+    // The one commit that belongs here. Everything else branches first.
+    if (isReleaseCommit(staged)) return null;
     return { code: 'on-default-branch', message: `refusing to commit directly to ${mainBranch}. Branch first.` };
   }
   if (!record) {
@@ -205,7 +235,10 @@ function run() {
 
 function verify() {
   const branch = git(['branch', '--show-current']);
-  const why = refusal({ record: readRecord(), tree: currentTree(), branch, mainBranch: defaultBranch() });
+  const why = refusal({
+    record: readRecord(), tree: currentTree(), branch,
+    mainBranch: defaultBranch(), staged: stagedPaths(),
+  });
   if (why) {
     console.error(`[precommit] commit blocked: ${why.message}`);
     process.exit(1);
@@ -217,4 +250,4 @@ if (require.main === module) {
   else run();
 }
 
-module.exports = { refusal, buildRecord, writeRecord, readRecord, currentTree, defaultBranch, workingTreeDrift, RECORD, STEPS };
+module.exports = { refusal, buildRecord, writeRecord, readRecord, currentTree, defaultBranch, workingTreeDrift, stagedPaths, isReleaseCommit, RELEASE_FOOTPRINT, RECORD, STEPS };
