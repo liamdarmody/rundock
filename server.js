@@ -450,6 +450,7 @@ function discoverWorkspaces() {
 const schedulerLib = require('./lib/scheduler.js');
 const {
   routineState, loadRoutineState, saveRoutineState, recordRoutineRun,
+  routineSlots, loadRoutineSlots, saveRoutineSlots,
   startScheduler, stopScheduler, getNextRun, executeRoutine,
 } = schedulerLib;
 // Hand lib/agents its root-owned dependencies (see the module headers).
@@ -3057,6 +3058,7 @@ module.exports._internal = {
   // scheduler
   getNextRun, executeRoutine, routineState, startScheduler, stopScheduler,
   loadRoutineState, saveRoutineState, recordRoutineRun,
+  routineSlots, loadRoutineSlots, saveRoutineSlots,
   // agent + skill discovery / parsing
   discoverAgents, invalidateAgentCache, discoverSkills, parseSkillFile,
   parseAgentFrontmatter, extractFrontmatterText, parseCapabilities,

@@ -791,3 +791,555 @@ test('stopping a scheduler that was never started is safe and does nothing', (t)
     }
   });
 });
+
+// ===== SLOTS THAT PASSED UNSERVED =====
+// The scheduled instant used to be a local value, recomputed every tick and
+// thrown away, so nothing anywhere knew when a routine had been DUE. These
+// pin the persistence of that instant and of the time the scheduler last
+// observed, and the side of the workspace-switch line the pair sits on.
+
+function writeRoutineAgent(ws, routines) {
+  const dir = path.join(ws, '.claude', 'agents');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'nightly.md'), agentFile({
+    name: 'nightly', type: 'specialist', order: 1, routines,
+  }));
+  invalidateAgentCache();
+}
+
+// One tick at a fixed instant, with the routine's time still ahead of it so
+// the tick observes without spawning anything.
+function observeOnce(t, sched, when) {
+  sched.wireSchedulerDeps({ now: () => when });
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  try {
+    sched.startScheduler();
+    t.mock.timers.tick(60_000);
+  } finally {
+    sched.stopScheduler();
+    t.mock.timers.reset();
+  }
+}
+
+const LATE_ROUTINE = [{ name: 'late', schedule: 'every day at 23:00', prompt: 'p' }];
+const LATE_KEY = 'nightly:late';
+
+test('the due instant and the last observed time are persisted, and survive a restart', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, LATE_ROUTINE);
+    const observed = new Date(2026, 7, 15, 8, 0, 0);
+    const due = new Date(2026, 7, 15, 23, 0, 0);
+    observeOnce(t, sched, observed);
+
+    assert.strictEqual(sched.routineSlots.routines[LATE_KEY].due, due.toISOString(),
+      'the instant the routine is next due is held rather than recomputed and dropped');
+    assert.strictEqual(sched.routineSlots.observedAt, observed.toISOString(),
+      'and so is the time the scheduler last observed');
+
+    const onDisk = JSON.parse(fs.readFileSync(path.join(ws, '.rundock', 'routine-slots.json'), 'utf-8'));
+    assert.strictEqual(onDisk.routines[LATE_KEY].due, due.toISOString(), 'both reached the workspace file');
+    assert.strictEqual(onDisk.observedAt, observed.toISOString());
+
+    // The restart. Losing the in-memory copy is what a new process starts
+    // from, so clobbering it is the only honest way to show the values below
+    // were read back rather than never lost.
+    sched.routineSlots.observedAt = null;
+    delete sched.routineSlots.routines[LATE_KEY];
+    sched.loadRoutineSlots();
+    assert.strictEqual(sched.routineSlots.routines[LATE_KEY].due, due.toISOString(),
+      'a restarted process knows when the routine was due');
+    assert.strictEqual(sched.routineSlots.observedAt, observed.toISOString(),
+      'and when it was last watching, which is what tells it what it missed');
+  });
+});
+
+// WHICH SIDE OF THE WORKSPACE-SWITCH LINE. loadRoutineState drops the run
+// state and the announcements because those describe the workspace being
+// left, while the in-flight set survives because it describes child processes
+// that are still running. Slot records describe a workspace: the keys are
+// workspace-local and collide freely, so carrying A's gaps into B would file
+// them under B's routines. The last observed time is workspace-scoped for the
+// same reason and for a second one: while B was open, nobody was watching A,
+// which is precisely the condition the record exists to describe.
+//
+// Driven through the real switch handler rather than through loadRoutineState,
+// for the reason the in-flight test above gives: a reset added to
+// openWorkspace beside the two that belong there would leave this green.
+test('a workspace switch replaces the slot records the way it replaces the run state', (t) => {
+  const sched = freshScheduler();
+  const config = require('../../lib/config.js');
+  const original = config.getWorkspace();
+  const slotsRef = sched.routineSlots; // held BEFORE any call: identity must survive
+  const wsA = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-slots-a-'));
+  const wsB = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-slots-b-'));
+  const noop = () => {};
+  const switchTo = (dir) => {
+    const ctx = {
+      signals: { phaseTimer: () => ({ mark: noop, summary: () => '' }), reportStartup: noop },
+      runtime: { killAllChildren: noop, cleanOrphanedProcesses: noop },
+      workspace: {
+        setWorkspaceRoot: (d) => config.setWorkspace(d),
+        armAgentsDirWatcher: noop, armFileTreeWatcher: noop, healWorkspaceIfMoved: noop,
+        saveRecentWorkspace: noop, fileTreeForSend: () => [],
+      },
+      agents: { armAgentsDirWatcher: noop, invalidateAgentCache: noop },
+      store: { clearSearchFailure: noop, ensureSearchEngine: noop },
+    };
+    const sent = [];
+    freshWorkspaceHandlers(sched).handleSetWorkspace(ctx, { send: (raw) => sent.push(JSON.parse(raw)) },
+      { type: 'set_workspace', path: dir });
+    assert.ok(sent.some(m => m.type === 'workspace_set'),
+      'the switch ran its open path to the end rather than into the rollback');
+    invalidateAgentCache();
+  };
+  try {
+    config.setWorkspace(wsA);
+    writeRoutineAgent(wsA, LATE_ROUTINE);
+    observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
+    assert.ok(slotsRef.routines[LATE_KEY], "workspace A's slot state was recorded");
+
+    switchTo(wsB);
+    assert.strictEqual(sched.routineSlots, slotsRef, 'routineSlots is never reassigned');
+    assert.deepStrictEqual(Object.keys(slotsRef.routines), [],
+      "workspace A's records did not follow the switch into B");
+    assert.strictEqual(slotsRef.observedAt, null,
+      'and neither did the time A was last observed: B has its own, or none');
+
+    switchTo(wsA);
+    assert.ok(slotsRef.routines[LATE_KEY], "and A's own records came back when A did");
+    assert.strictEqual(slotsRef.observedAt, new Date(2026, 7, 15, 8, 0, 0).toISOString());
+  } finally {
+    config.setWorkspace(original);
+    invalidateAgentCache();
+    fs.rmSync(wsA, { recursive: true, force: true });
+    fs.rmSync(wsB, { recursive: true, force: true });
+  }
+});
+
+// The sibling of the recordRoutineRun case in the characterization suite, at
+// the one call site that runs sixty times an hour rather than once a run.
+test('a tick survives an unwritable .rundock, and says so once rather than once a minute', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, LATE_ROUTINE);
+    fs.writeFileSync(path.join(ws, '.rundock'), 'a file, not a directory'); // mkdir will fail
+    const errors = [];
+    t.mock.method(console, 'error', (...args) => errors.push(args.join(' ')));
+
+    sched.wireSchedulerDeps({ now: () => new Date(2026, 7, 15, 8, 0, 0) });
+    t.mock.timers.enable({ apis: ['setInterval'] });
+    try {
+      assert.doesNotThrow(() => {
+        sched.startScheduler();
+        t.mock.timers.tick(180_000);
+      }, 'three ticks against an unwritable workspace, none of them fatal');
+    } finally {
+      sched.stopScheduler();
+      t.mock.timers.reset();
+    }
+
+    assert.strictEqual(sched.routineSlots.routines[LATE_KEY].due, new Date(2026, 7, 15, 23, 0, 0).toISOString(),
+      'this process still knows when the routine is due: the file is protection for the NEXT one');
+    assert.strictEqual(errors.filter(e => e.includes('Failed to persist routine slots')).length, 1,
+      'the outage was announced once, not once per tick');
+  });
+});
+
+// A due instant absurdly far behind: a workspace restored from an old backup,
+// or a clock that was years wrong. Walking a slot at a time from there would
+// enumerate a record for every day since, which is neither quick nor useful,
+// and would do it again on every tick if the walk left `due` where it found it.
+test('a due instant years behind is bounded rather than enumerated, and resyncs', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, LATE_ROUTINE);
+    const warnings = [];
+    t.mock.method(console, 'warn', (...args) => warnings.push(args.join(' ')));
+
+    // The stale file is written by the scheduler itself, three years ago.
+    observeOnce(t, sched, new Date(2023, 7, 15, 8, 0, 0));
+    assert.strictEqual(sched.routineSlots.routines[LATE_KEY].due, new Date(2023, 7, 15, 23, 0, 0).toISOString());
+
+    const daysSince = 1096; // 2023-08-15 to 2026-08-15, two leap-free years and one leap
+    observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
+    const missed = sched.routineSlots.routines[LATE_KEY].missed;
+    assert.ok(missed.length > 0, 'the slots it did walk were recorded');
+    assert.ok(missed.length < daysSince, `the walk stopped short of every day since (${missed.length})`);
+    assert.ok(warnings.some(w => w.includes(LATE_KEY)), 'and said which routine it gave up on');
+    // WHICH END IT KEPT. Walking forward from the ancient anchor and stopping
+    // at a cap keeps the oldest slots and drops the recent ones, which is the
+    // wrong half: nobody opening a laptop wants 2023 and nothing about last
+    // week. The bound is applied to where the walk STARTS.
+    assert.strictEqual(missed[missed.length - 1].slot, new Date(2026, 7, 14, 23, 0, 0).toISOString(),
+      'the last record is last night, the slot immediately before today');
+    assert.ok(new Date(missed[0].slot) > new Date(2024, 0, 1),
+      `the walk did not spend its budget on 2023 (first record ${missed[0].slot})`);
+    assert.strictEqual(sched.routineSlots.routines[LATE_KEY].due, new Date(2026, 7, 15, 23, 0, 0).toISOString(),
+      'the due instant resynced to today');
+
+    const bounded = missed.length;
+    observeOnce(t, sched, new Date(2026, 7, 15, 9, 0, 0));
+    assert.strictEqual(sched.routineSlots.routines[LATE_KEY].missed.length, bounded,
+      'so the next tick walks nothing: giving up once is giving up');
+  });
+});
+
+// A routine RENAMED while the machine slept, which is the case that makes
+// both halves of this necessary. The new name is a key the scheduler has
+// never seen, so it has no history and must not be handed one: a rename would
+// otherwise report the whole sleep as gaps the moment the machine woke. And
+// the old name keeps what it earned, because a gap record is history and a
+// rename is not a reason to lose it. The announcement map answers the same
+// question the other way, on purpose: a silence outliving what it described
+// is handed to whatever is written under the name next.
+test('a routine renamed while the machine slept wakes with no history, and the old name keeps its own', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, LATE_ROUTINE);
+    observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
+    assert.ok(sched.routineSlots.routines[LATE_KEY], 'the original name was being watched');
+
+    writeRoutineAgent(ws, [{ name: 'renamed', schedule: 'every day at 23:00', prompt: 'p' }]);
+    observeOnce(t, sched, new Date(2026, 7, 21, 8, 0, 0));
+
+    assert.deepStrictEqual(sched.routineSlots.routines['nightly:renamed'].missed, [],
+      'six days of sleep were not billed to a name the scheduler had never seen');
+    assert.strictEqual(sched.routineSlots.routines['nightly:renamed'].due, new Date(2026, 7, 21, 23, 0, 0).toISOString(),
+      'it starts from the slot it is next due, which is what the next wake compares against');
+    assert.ok(sched.routineSlots.routines[LATE_KEY],
+      'and the old name was not swept off with the roster, unlike its announcement');
+  });
+});
+
+// WRITER AND READER, MADE TO AGREE. The record's shape is stated twice in
+// production: once where a slot is pushed, once where the load path names the
+// fields it will keep. Nothing but a round trip makes those two agree, and the
+// failure is silent in the worst possible way: the filter is per record, so a
+// renamed field leaves the file parsing cleanly and coming back empty, with no
+// error and no log line.
+//
+// It also lands exactly where the feature is for. These records are written
+// just before a process dies and are only ever of use once it restarts, so
+// every in-memory assertion in this diff could stay green while a laptop
+// closed for five days reopened showing nothing.
+test('a missed record survives the file it is written to, with its content intact', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, LATE_ROUTINE);
+    observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
+    observeOnce(t, sched, new Date(2026, 7, 17, 8, 0, 0));
+
+    const nights = [
+      { slot: new Date(2026, 7, 15, 23, 0, 0).toISOString() },
+      { slot: new Date(2026, 7, 16, 23, 0, 0).toISOString() },
+    ];
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, nights,
+      'two unwatched nights went by and both were recorded');
+
+    const file = path.join(ws, '.rundock', 'routine-slots.json');
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).routines[LATE_KEY].missed, nights,
+      'and reached the file in the shape they were written in');
+
+    // What a restart starts from: nothing in memory, everything on disk.
+    delete sched.routineSlots.routines[LATE_KEY];
+    sched.loadRoutineSlots();
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, nights,
+      'and came back off it, which is the only moment they are ever read');
+  });
+});
+
+test('a slot entry with no due instant is dropped on load, without taking the file with it', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, LATE_ROUTINE);
+    observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
+    observeOnce(t, sched, new Date(2026, 7, 17, 8, 0, 0));
+
+    // Production's own file with one field taken back out: a hand edit, a
+    // truncated write, an older shape. An entry with no due instant has
+    // nothing to walk from, so keeping it would walk from an invalid date.
+    const file = path.join(ws, '.rundock', 'routine-slots.json');
+    const saved = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    assert.strictEqual(saved.routines[LATE_KEY].missed.length, 2, 'the entry about to be damaged had real history');
+    delete saved.routines[LATE_KEY].due;
+    fs.writeFileSync(file, JSON.stringify(saved, null, 2));
+
+    sched.loadRoutineSlots();
+    assert.strictEqual(sched.routineSlots.routines[LATE_KEY], undefined,
+      'the entry was dropped whole rather than loaded with nothing to anchor it');
+    assert.strictEqual(sched.routineSlots.observedAt, saved.observedAt,
+      'and the rest of the file still loaded: one bad entry is not a lost workspace');
+  });
+});
+
+// Weekly is half the grammar, and the walk steps by a different amount for it.
+test('a weekly routine walks a week at a time, so a fortnight closed leaves two records', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, [{ name: 'weekly', schedule: 'every friday at 23:00', prompt: 'p' }]);
+    const key = 'nightly:weekly';
+
+    observeOnce(t, sched, new Date(2026, 7, 21, 8, 0, 0)); // Friday 21 August 2026
+    assert.strictEqual(sched.routineSlots.routines[key].due, new Date(2026, 7, 21, 23, 0, 0).toISOString(),
+      'on its own weekday the slot is today, still ahead at 08:00');
+
+    observeOnce(t, sched, new Date(2026, 8, 4, 8, 0, 0)); // two Fridays later
+    assert.deepStrictEqual(sched.routineSlots.routines[key].missed, [
+      { slot: new Date(2026, 7, 21, 23, 0, 0).toISOString() },
+      { slot: new Date(2026, 7, 28, 23, 0, 0).toISOString() },
+    ], 'two Fridays passed unwatched, and the thirteen days between them are not slots');
+    assert.strictEqual(sched.routineSlots.routines[key].due, new Date(2026, 8, 4, 23, 0, 0).toISOString(),
+      "and today's Friday is still to come rather than already gone");
+  });
+});
+
+// The complaint is throttled per outage, so the flag that throttles it has to
+// end with the workspace it described. Otherwise the first unwritable
+// workspace silences every one that follows it, for the life of the process.
+test('a second unwritable workspace is announced too, rather than silenced by the first', (t) => {
+  const sched = freshScheduler();
+  const config = require('../../lib/config.js');
+  const original = config.getWorkspace();
+  const wsA = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-unwritable-a-'));
+  const wsB = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-unwritable-b-'));
+  const errors = [];
+  t.mock.method(console, 'error', (...args) => errors.push(args.join(' ')));
+  const complaints = () => errors.filter(e => e.includes('Failed to persist routine slots')).length;
+  try {
+    for (const ws of [wsA, wsB]) {
+      writeRoutineAgent(ws, LATE_ROUTINE);
+      fs.writeFileSync(path.join(ws, '.rundock'), 'a file, not a directory');
+    }
+    config.setWorkspace(wsA);
+    observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
+    assert.strictEqual(complaints(), 1, "workspace A's outage was announced");
+
+    config.setWorkspace(wsB);
+    sched.loadRoutineState();
+    observeOnce(t, sched, new Date(2026, 7, 15, 9, 0, 0));
+    assert.strictEqual(complaints(), 2, "and so was workspace B's, which is a different workspace failing");
+  } finally {
+    config.setWorkspace(original);
+    invalidateAgentCache();
+    fs.rmSync(wsA, { recursive: true, force: true });
+    fs.rmSync(wsB, { recursive: true, force: true });
+  }
+});
+
+// THE CLOSED LAPTOP, END TO END, through the boot path rather than around it.
+//
+// Every other test here walks from state the same scheduler instance put in
+// memory a moment earlier, so the load path is exercised and the walk is
+// exercised and nothing joins them. That is the double sweep's finding one
+// level up: the record survives the file, and nothing proved the walk can
+// start from what the loader admitted. A second scheduler module IS the
+// second process: its own empty state, filled only by loadRoutineState.
+test('a second process loads the file and walks from what it read, which is the closed laptop', (t) => {
+  withTempWorkspace((ws) => {
+    const before = freshScheduler();
+    writeRoutineAgent(ws, LATE_ROUTINE);
+    observeOnce(t, before, new Date(2026, 7, 15, 8, 0, 0));
+    assert.deepStrictEqual(before.routineSlots.routines[LATE_KEY].missed, [], 'nothing was owed when the lid closed');
+
+    const after = freshScheduler();
+    assert.strictEqual(after.routineSlots.observedAt, null,
+      'the new process starts knowing nothing, which is what makes the rest of this mean something');
+
+    after.loadRoutineState(); // the boot path, and the workspace-switch path
+    assert.strictEqual(after.routineSlots.observedAt, new Date(2026, 7, 15, 8, 0, 0).toISOString(),
+      'and takes its last observation off disk');
+
+    observeOnce(t, after, new Date(2026, 7, 17, 8, 0, 0));
+    assert.deepStrictEqual(after.routineSlots.routines[LATE_KEY].missed, [
+      { slot: new Date(2026, 7, 15, 23, 0, 0).toISOString() },
+      { slot: new Date(2026, 7, 16, 23, 0, 0).toISOString() },
+    ], 'the walk started from the loaded instants and named exactly the nights between them and the tick');
+    assert.strictEqual(after.routineSlots.routines[LATE_KEY].due, new Date(2026, 7, 17, 23, 0, 0).toISOString(),
+      'and resynced to tonight');
+  });
+});
+
+// A routine edited while the machine was closed. The walk starts from an
+// instant computed under the OLD schedule and would step using the NEW one,
+// so every record it wrote would name an hour, or a weekday, that was never
+// scheduled. Reachable by editing a routine and closing the lid.
+test('a schedule edited while the machine was closed resyncs instead of recording the old hour', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, LATE_ROUTINE); // 23:00
+    observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
+
+    writeRoutineAgent(ws, [{ name: 'late', schedule: 'every day at 22:00', prompt: 'p' }]);
+    observeOnce(t, sched, new Date(2026, 7, 17, 8, 0, 0));
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, [],
+      'two nights passed, and neither is recorded at an hour the routine was never due at');
+    assert.strictEqual(sched.routineSlots.routines[LATE_KEY].due, new Date(2026, 7, 17, 22, 0, 0).toISOString(),
+      'the anchor moved to the schedule actually in force');
+
+    // And the resync is a pause, not an off switch: under the new schedule the
+    // walk works again, at the new hour.
+    observeOnce(t, sched, new Date(2026, 7, 19, 8, 0, 0));
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, [
+      { slot: new Date(2026, 7, 17, 22, 0, 0).toISOString() },
+      { slot: new Date(2026, 7, 18, 22, 0, 0).toISOString() },
+    ], 'every recorded slot names 22:00, which is when the routine was actually due');
+  });
+});
+
+// Being paused does not exempt a routine from records for periods that passed
+// entirely unobserved, which is pinned rather than endorsed: see the block
+// comment in lib/scheduler.js, and the boundary test below for the other side
+// of the line. Whether a paused routine should SHOW gaps is the routines
+// view's ruling, and this is what makes changing it deliberate.
+test('a paused routine accrues records for the days nobody was watching at all', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, [{ name: 'late', schedule: 'every day at 23:00', prompt: 'p', paused: true }]);
+    observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
+    observeOnce(t, sched, new Date(2026, 7, 17, 8, 0, 0));
+
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, [
+      { slot: new Date(2026, 7, 15, 23, 0, 0).toISOString() },
+      { slot: new Date(2026, 7, 16, 23, 0, 0).toISOString() },
+    ], 'being paused did not stop the slots being recorded');
+  });
+});
+
+// The other half of the resync, which the resync test cannot show because it
+// has no history yet when the edit lands. Slots recorded before an edit passed
+// under the schedule that was in force when they did. Editing the routine
+// afterwards is not a reason to lose them, and dropping them would be the
+// quiet way to make an edit erase a week of gaps.
+test('a schedule edit resyncs the anchor without discarding the history already recorded', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, LATE_ROUTINE); // 23:00
+    observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
+    observeOnce(t, sched, new Date(2026, 7, 17, 8, 0, 0));
+    const earned = [
+      { slot: new Date(2026, 7, 15, 23, 0, 0).toISOString() },
+      { slot: new Date(2026, 7, 16, 23, 0, 0).toISOString() },
+    ];
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, earned, 'two nights were already recorded');
+
+    writeRoutineAgent(ws, [{ name: 'late', schedule: 'every day at 22:00', prompt: 'p' }]);
+    observeOnce(t, sched, new Date(2026, 7, 19, 8, 0, 0));
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, earned,
+      'the edit added nothing and took nothing away');
+    assert.strictEqual(sched.routineSlots.routines[LATE_KEY].due, new Date(2026, 7, 19, 22, 0, 0).toISOString(),
+      'only the anchor moved');
+  });
+});
+
+// A file written before the anchor carried its schedule, which every workspace
+// already running this scheduler has. There is nothing to compare, so the walk
+// cannot vouch for what the anchor was computed under, and treating an absent
+// shape as a match would walk the old file under whatever schedule is current.
+test('an anchor stored without its schedule resyncs on the first wake rather than being trusted', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, LATE_ROUTINE);
+    observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
+
+    const file = path.join(ws, '.rundock', 'routine-slots.json');
+    const saved = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    assert.ok(saved.routines[LATE_KEY].schedule, 'the anchor normally carries its schedule');
+    delete saved.routines[LATE_KEY].schedule; // the older shape
+    fs.writeFileSync(file, JSON.stringify(saved, null, 2));
+    sched.loadRoutineSlots();
+
+    observeOnce(t, sched, new Date(2026, 7, 17, 8, 0, 0));
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, [],
+      'the first wake on an older file records nothing rather than guessing');
+
+    // One wake of silence, not a permanent one.
+    observeOnce(t, sched, new Date(2026, 7, 19, 8, 0, 0));
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, [
+      { slot: new Date(2026, 7, 17, 23, 0, 0).toISOString() },
+      { slot: new Date(2026, 7, 18, 23, 0, 0).toISOString() },
+    ], 'and the wake after it walks normally, from an anchor it can vouch for');
+  });
+});
+
+// THE BOUNDARY OF WHAT A RECORD IS, at the exact edge, in one test.
+//
+// A record is a slot whose whole period went by with the scheduler not
+// watching. A slot that passed while the scheduler was AWAKE and was not
+// served leaves nothing, even once its period closes: the machine was on and
+// said so at the time, in the refusal log and in the routine's own state. The
+// gap this card exists to close is the one with no trace at all.
+//
+// Both halves are one test on purpose. Either alone is satisfied by a walk
+// that records everything or nothing.
+test('a slot the scheduler was awake for leaves no record; a day it was closed for leaves one', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, [{ name: 'late', schedule: 'every day at 05:00', prompt: 'p', paused: true }]);
+
+    observeOnce(t, sched, new Date(2026, 7, 15, 4, 0, 0));  // awake before the slot
+    observeOnce(t, sched, new Date(2026, 7, 15, 9, 0, 0));  // reopened after it, paused, nothing served it
+    observeOnce(t, sched, new Date(2026, 7, 15, 23, 0, 0)); // still awake as its day closes
+    observeOnce(t, sched, new Date(2026, 7, 16, 9, 0, 0));  // and into the next
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, [],
+      'the 05:00 slot passed unserved while the scheduler watched it happen, so it is not a gap');
+
+    observeOnce(t, sched, new Date(2026, 7, 18, 9, 0, 0));  // closed for all of the 17th
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, [
+      { slot: new Date(2026, 7, 17, 5, 0, 0).toISOString() },
+    ], 'a day nobody was watching at all leaves exactly one, and being paused did not exempt it');
+  });
+});
+
+// A routine deleted and re-added under the same name. The days in between are
+// days on which no slot existed to pass, so walking from the old anchor would
+// record gaps for a routine that did not exist. Same answer as a changed
+// schedule, deliberately in the same shape: history stays, anchor unknown, the
+// first tick after it returns resyncs without walking.
+test('a routine removed and re-added later wakes with no records for the days it did not exist', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, LATE_ROUTINE);
+    observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
+    observeOnce(t, sched, new Date(2026, 7, 17, 8, 0, 0));
+    const earned = [
+      { slot: new Date(2026, 7, 15, 23, 0, 0).toISOString() },
+      { slot: new Date(2026, 7, 16, 23, 0, 0).toISOString() },
+    ];
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, earned, 'two real nights were recorded');
+
+    writeRoutineAgent(ws, undefined); // the routine is deleted from the agent
+    observeOnce(t, sched, new Date(2026, 7, 19, 8, 0, 0));
+
+    writeRoutineAgent(ws, LATE_ROUTINE); // and written back, days later
+    observeOnce(t, sched, new Date(2026, 7, 21, 8, 0, 0));
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, earned,
+      'nothing was recorded for the days the routine did not exist, and nothing it had earned was lost');
+    assert.strictEqual(sched.routineSlots.routines[LATE_KEY].due, new Date(2026, 7, 21, 23, 0, 0).toISOString(),
+      'the anchor resynced to the schedule that is back in force');
+  });
+});
+
+// The narrower half of the same rule: a routine can be declared, and refusable,
+// and still have no anchor anyone can vouch for, because its schedule stopped
+// parsing. An unparseable schedule never fires, so the days it spans are days
+// on which nothing was due, exactly like the days after a deletion.
+test('a schedule that stopped parsing loses its anchor too, not just a routine that vanished', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, LATE_ROUTINE);
+    observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
+
+    // A documented pitfall: the hour must be zero-padded, so this parses as a
+    // routine and never matches as a schedule.
+    writeRoutineAgent(ws, [{ name: 'late', schedule: 'every day at 9:00', prompt: 'p' }]);
+    observeOnce(t, sched, new Date(2026, 7, 17, 8, 0, 0));
+
+    writeRoutineAgent(ws, LATE_ROUTINE);
+    observeOnce(t, sched, new Date(2026, 7, 19, 8, 0, 0));
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, [],
+      'no slot passed on the days the schedule named no time at all');
+    assert.strictEqual(sched.routineSlots.routines[LATE_KEY].due, new Date(2026, 7, 19, 23, 0, 0).toISOString(),
+      'and the anchor resynced once the schedule parsed again');
+  });
+});
