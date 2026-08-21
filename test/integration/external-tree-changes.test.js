@@ -21,7 +21,9 @@
 // freshness. The remaining
 // tests are guard criteria of the form "and it must not also do X" (the two
 // quiet cases, the in-app create, the in-app save, and the post-switch save),
-// so with no poller at all they pass vacuously. They
+// so with no poller at all they pass vacuously. One more covers a second
+// connected client, which the rest of the file cannot see because it drives
+// only one. They
 // earn their place once the poller is in, where they are the only thing
 // standing between a working push and one that fights the reconcile diff or
 // duplicates work Rundock did itself.
@@ -185,6 +187,52 @@ describe('a change made outside Rundock reaches the file tree', () => {
       treePaths(msg.tree).includes('written-then-searched.md'),
       'a search must not be able to absorb an external change on the tree\'s behalf'
     );
+  });
+
+  test('a second client is not starved by the first client asking', async () => {
+    // The record that suppresses the poll is process-global. The dangerous
+    // ordering is the external write landing FIRST: the other client's own
+    // get_files then absorbs the change into that global record, and a poll
+    // keyed on it stays quiet about a change this client never received.
+    //
+    // Note the ordering. With the request first, the write still moves the
+    // signature afterwards and the poll broadcasts anyway, so a test written
+    // that way passes whether or not the send reaches everybody.
+    const second = await h.connect();
+    await h.delay(POLL_MS * 2);
+
+    const watching = second.messages.length;
+    fs.writeFileSync(path.join(h.workspaceDir, 'seen-by-both.md'), '# External\n');
+    client.send({ type: 'get_files' });
+
+    const { msg } = await second.waitFor(m => m.type === 'file_tree', {
+      since: watching,
+      timeout: PUSH_WINDOW_MS + 2000,
+      label: 'file_tree reaching the client that never asked for one',
+    });
+    assert.ok(
+      treePaths(msg.tree).includes('seen-by-both.md'),
+      'a client that made no request must still be told about an external change'
+    );
+    // Same starvation, other send site: a file created by one client exists
+    // for every client. Without a broadcast the creator's own reply records
+    // the tree as delivered, the poll finds nothing new to say, and the other
+    // client never learns the file exists.
+    const created = second.messages.length;
+    client.send({ type: 'create_path', path: 'made-for-both.md', kind: 'note', content: '# Shared\n' });
+
+    const { msg: afterCreate } = await second.waitFor(m => m.type === 'file_tree', {
+      since: created,
+      timeout: PUSH_WINDOW_MS + 2000,
+      label: 'file_tree reaching the other client after an in-app create',
+    });
+    assert.ok(
+      treePaths(afterCreate.tree).includes('made-for-both.md'),
+      'a file created by one client must reach the others'
+    );
+
+    second.close();
+    await h.delay(POLL_MS);
   });
 
   test('an untouched workspace produces no pushes at all', async () => {

@@ -1159,7 +1159,7 @@ const wsHandlerContext = {
     setWorkspaceRoot, healWorkspaceIfMoved, saveRecentWorkspace, loadRecentWorkspaces,
     discoverWorkspaces, isInsideWorkspace, isSafeCreatePath, getFileTreeCached,
     invalidateFileListCache, invalidateFileTreeCache, watchOpenFile,
-    fileTreeForSend, armFileTreeWatcher,
+    fileTreeForSend, broadcastFileTree, armFileTreeWatcher,
   },
   runtime: { getRuntimeStatus, killAllChildren, cleanOrphanedProcesses },
   signals: { reportStartup, phaseTimer },         // startup telemetry (recordEvent is lib-owned)
@@ -1934,13 +1934,35 @@ let _lastSentTreeSig = null;
 let _lastSeenTree = null;
 
 // The tree, plus a record that this is what clients have now been told. Every
-// site that sends a file_tree must go through here, or the poll will send it
-// again.
+// site that sends a file_tree must go through here or through
+// broadcastFileTree, or the poll will send it again.
+//
+// Use this one only where the send genuinely concerns the requester alone.
+// The record it writes is process-global, so a send that reaches ONE client
+// while claiming the tree is delivered starves every other client of the
+// poll's broadcast: see broadcastFileTree.
 function fileTreeForSend() {
   const tree = getFileTreeCached();
   _lastSeenTree = tree;
   _lastSentTreeSig = JSON.stringify(tree);
   return tree;
+}
+
+// The tree, delivered to EVERY connected client, and recorded as delivered.
+//
+// The record that suppresses the poll is process-global, but a reply on one
+// socket is not. So a per-connection reply that recorded the tree as sent
+// would tell the poll to stay quiet about a change the other clients never
+// received, and they would sit stale until some later change happened to
+// occur. They made no request of their own, which is exactly the case the
+// poll exists to serve.
+//
+// The file tree is shared state: one server, one workspace, one tree. Every
+// client wants the same answer, so the send that records it as answered has
+// to be the send that reaches all of them. A client that did not ask
+// reconciles the push to zero operations and nothing moves on its screen.
+function broadcastFileTree() {
+  safeSend(JSON.stringify({ type: 'file_tree', tree: fileTreeForSend() }));
 }
 
 function armFileTreeWatcher() {
@@ -3030,7 +3052,7 @@ module.exports._internal = {
   setWorkspace(dir) { setWorkspaceRoot(dir); invalidateAgentCache(); armAgentsDirWatcher(); armFileTreeWatcher(); },
   getWorkspace() { return WORKSPACE; },
   // file tree external-change poll
-  armFileTreeWatcher, fileTreeForSend,
+  armFileTreeWatcher, fileTreeForSend, broadcastFileTree,
   flatFileListCached, invalidateFileListCache,
   // scheduler
   getNextRun, executeRoutine, routineState, startScheduler,
