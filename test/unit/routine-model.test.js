@@ -11,6 +11,8 @@
 // the parts nobody thought to preserve.
 const { test, describe, after } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const { parseRoutines, extractFrontmatterText } = require('../../lib/agents/discovery.js');
 const { _internal: srv } = require('../../server.js');
@@ -258,5 +260,110 @@ describe('plan hash', () => {
     // back off disk lands on the same hash.
     assert.strictEqual(readBack.planHash, before);
     assert.strictEqual(computePlanHash(readBack), before);
+  });
+});
+
+describe('migration of existing routines', () => {
+  after(cleanup);
+
+  const AGENT = 'content-lead';
+  function legacyWorkspace() {
+    const dir = makeWorkspace({
+      agents: {
+        [AGENT]: agentFile({
+          name: AGENT, displayName: 'Penn', role: 'Content Lead',
+          type: 'specialist', order: 2,
+          routines: [{ name: 'morning-digest', schedule: 'every day at 08:00', prompt: 'Run the digest' }],
+          body: 'You are Penn.\n\nA body the migration is not allowed to touch.',
+        }),
+      },
+    });
+    srv.setWorkspace(dir);
+    return { dir, file: path.join(dir, '.claude', 'agents', `${AGENT}.md`) };
+  }
+
+  function reread() {
+    srv.invalidateAgentCache();
+    return srv.discoverAgents();
+  }
+
+  test('an existing routine gains the new representation, detected without a version marker', () => {
+    const { file } = legacyWorkspace();
+    const original = fs.readFileSync(file, 'utf-8');
+    const agents = reread();
+
+    const written = fs.readFileSync(file, 'utf-8');
+    assert.ok(written.includes('    runOn: local'), 'runOn not written');
+    assert.ok(written.includes('    enabled: true'), 'enabled not written');
+    assert.ok(written.includes('    paused: false'), 'paused not written');
+
+    const routine = agents.find(a => a.id === AGENT).routines[0];
+    assert.ok(written.includes(`    planHash: ${routine.planHash}`), 'planHash not written');
+    assert.strictEqual(routine.planHash, computePlanHash(routine));
+
+    // Nothing stamps a schema version anywhere: the data says whether it has
+    // been migrated, the same way the conversation store decides.
+    assert.ok(!/version/i.test(written), 'a version marker was written');
+
+    // Ownership stays positional unless it was declared, so a file that never
+    // named an owner still means what it meant.
+    assert.ok(!written.includes('owner:'), 'an owner was written into a file that declared none');
+
+    // And the parts the migration was never told about survive.
+    assert.strictEqual(splitFile(written).body, splitFile(original).body);
+    assert.strictEqual(
+      splitFile(written).frontmatter.split('\n').slice(0, 5).join('\n'),
+      splitFile(original).frontmatter.split('\n').slice(0, 5).join('\n'));
+  });
+
+  test('running the migration twice changes nothing on the second run', () => {
+    const { file } = legacyWorkspace();
+    reread();
+    const afterFirst = fs.readFileSync(file, 'utf-8');
+    reread();
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), afterFirst);
+  });
+
+  test('the pre-migration backup is written once and never overwritten', () => {
+    const { file } = legacyWorkspace();
+    const original = fs.readFileSync(file, 'utf-8');
+    reread();
+
+    const backup = `${file}.pre-routine-model-backup`;
+    assert.ok(fs.existsSync(backup), 'no backup was written');
+    assert.strictEqual(fs.readFileSync(backup, 'utf-8'), original);
+
+    // A second routine, declared later and un-migrated, forces another
+    // migrating write. The backup must still hold the ORIGINAL file.
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf-8').replace(
+      '    prompt: Run the digest\n',
+      '    prompt: Run the digest\n  - name: handover\n    schedule: every friday at 16:00\n    prompt: Hand over\n'));
+    reread();
+    assert.ok(fs.readFileSync(file, 'utf-8').includes('  - name: handover'), 'the second routine was lost');
+    assert.strictEqual(fs.readFileSync(backup, 'utf-8'), original, 'the backup was overwritten');
+  });
+
+  test('a failed migrating write is logged and leaves the read usable', () => {
+    const { file } = legacyWorkspace();
+    const before = fs.readFileSync(file, 'utf-8');
+    fs.chmodSync(file, 0o444);
+    const errors = [];
+    const realError = console.error;
+    console.error = (...args) => errors.push(args.join(' '));
+    try {
+      const agents = reread();
+      const routine = agents.find(a => a.id === AGENT).routines[0];
+      // The read still returns the new representation: it is built in memory
+      // and the write is only how it is remembered for next time.
+      assert.strictEqual(routine.runOn, 'local');
+      assert.strictEqual(routine.enabled, true);
+      assert.strictEqual(routine.paused, false);
+      assert.strictEqual(typeof routine.planHash, 'string');
+    } finally {
+      console.error = realError;
+      fs.chmodSync(file, 0o644);
+    }
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), before, 'the unwritable file changed');
+    assert.ok(errors.some(e => /routine/i.test(e)), `nothing was logged, saw: ${JSON.stringify(errors)}`);
   });
 });
