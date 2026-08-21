@@ -37,6 +37,11 @@ test('the scheduler tick discovers a due routine and executes it end to end', as
     lastRun: new Date().toISOString(), status: 'completed', duration: 1,
   };
 
+  // The server arms the tick at boot, and a second start is now a no-op
+  // rather than a second interval, so the boot tick has to go before this
+  // test can arm the mocked one it drives. Stopped before the mock timers
+  // are installed so the handle being cleared is the real one it came from.
+  h.internal.stopScheduler();
   t.mock.timers.enable({ apis: ['setInterval'] });
   h.internal.startScheduler();
   t.mock.timers.tick(60_000);
