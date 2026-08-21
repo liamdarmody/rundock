@@ -40,6 +40,8 @@ const LATE = new Date(2026, 6, 1, 23, 30, 0);
 // before it starts, and it needs two separate due windows.
 const THURSDAY = new Date(2026, 6, 2, 6, 30, 0);
 const NEXT_THURSDAY = new Date(2026, 6, 9, 6, 30, 0);
+const FRIDAY = new Date(2026, 6, 3, 6, 30, 0);
+const SATURDAY = new Date(2026, 6, 4, 6, 30, 0);
 // Yesterday, so it cannot suppress today's run: the refused routines have to
 // be genuinely due, or they prove nothing.
 const YESTERDAY = { lastRun: new Date(2026, 5, 30, 9, 5, 0).toISOString(), status: 'completed', duration: 7 };
@@ -51,6 +53,19 @@ const ORDINARY = 'worker:ordinary-check';
 const QUIET = 'mute:quiet-check';
 
 const FLIP = 'flipper:flip-check';
+const VANISH = 'vanisher:vanish-check';
+const SWITCH = 'switcher:switch-check';
+
+// The routine can be taken out of the file entirely, which is what a rename or
+// a deletion looks like to the tick: a key that was on the roster and is not.
+function vanisherFile(withRoutine) {
+  return agentFile({
+    name: 'vanisher', type: 'specialist', order: 7,
+    routines: withRoutine
+      ? [{ name: 'vanish-check', schedule: 'every friday at 06:00', prompt: 'vanish body', paused: true }]
+      : undefined,
+  });
+}
 
 function flipperFile(paused) {
   return agentFile({
@@ -89,6 +104,11 @@ before(async () => {
       // Weekly, on a day no other test in this file visits, so its
       // announcements are all its own.
       flipper: flipperFile(true),
+      vanisher: vanisherFile(true),
+      switcher: agentFile({
+        name: 'switcher', type: 'specialist', order: 8,
+        routines: [{ name: 'switch-check', schedule: 'every saturday at 06:00', prompt: 'switch body', paused: true }],
+      }),
       mute: agentFile({
         name: 'mute', type: 'specialist', order: 5,
         routines: [{ name: 'quiet-check', schedule: 'every day at 23:00', prompt: 'quiet body', paused: true }],
@@ -281,4 +301,54 @@ test('a routine refused, released and refused again says so both times', async (
   const announced = (logs) => logs.filter(l => l.includes('Not running routine') && l.includes('flip-check'));
   assert.strictEqual(announced(first).length, 1, 'the first refusal was announced');
   assert.strictEqual(announced(third).length, 1, 'and so was the refusal a week later, after the release in between');
+});
+
+// The once-only announcement has to be scoped to the life of the routine, not
+// to the life of the process. Both tests below are the other half of that
+// decision: without them, a key announced once is silent forever, and a
+// refusal that says nothing on its first tick is indistinguishable from a
+// routine that is simply not due, which is the distinction the announcement
+// exists to draw.
+test('a routine that leaves the roster loses its announcement', (t) => {
+  const file = path.join(h.workspaceDir, '.claude', 'agents', 'vanisher.md');
+  clock.at = FRIDAY;
+
+  const first = driveTick(t);
+  assert.strictEqual(h.internal.routineState[VANISH], undefined, 'refused, so nothing ran');
+
+  // Gone from the file: a rename or a deletion looks exactly like this.
+  fs.writeFileSync(file, vanisherFile(false));
+  invalidateAgentCache();
+  driveTick(t);
+
+  // Back again, which is a routine of that name being written afresh. It has
+  // never been announced in its own lifetime and has to say why it will not
+  // run, exactly as it did the first time.
+  fs.writeFileSync(file, vanisherFile(true));
+  invalidateAgentCache();
+  const third = driveTick(t);
+
+  const announced = (logs) => logs.filter(l => l.includes('Not running routine') && l.includes('vanish-check'));
+  assert.strictEqual(announced(first).length, 1, 'the first refusal was announced');
+  assert.strictEqual(announced(third).length, 1, 'and so was the refusal after the routine left the roster and came back');
+});
+
+// loadRoutineState is what a workspace switch calls, and it empties the run
+// state because the runs belong to the workspace being left. The announcements
+// belong to it just as much: agent ids and routine names are workspace-local
+// and collide freely between one workspace and the next, so a routine in the
+// new workspace can inherit the silence earned by a different routine in the
+// old one.
+test('resetting the routine state resets what has been announced with it', (t) => {
+  clock.at = SATURDAY;
+
+  const first = driveTick(t);
+  assert.strictEqual(h.internal.routineState[SWITCH], undefined, 'refused, so nothing ran');
+
+  scheduler.loadRoutineState();
+  const second = driveTick(t);
+
+  const announced = (logs) => logs.filter(l => l.includes('Not running routine') && l.includes('switch-check'));
+  assert.strictEqual(announced(first).length, 1, 'the first refusal was announced');
+  assert.strictEqual(announced(second).length, 1, 'and the reset put the refusal back on speaking terms');
 });
