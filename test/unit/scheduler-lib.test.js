@@ -20,6 +20,7 @@ const CODEX_GLUE_KEY = require.resolve('../../lib/runtime/codex-glue.js');
 const { createCodexAppServer } = require('../../codex-appserver.js');
 const asfx = require('../fixtures/codex-appserver-protocol.js');
 const PROMPT_KEY = require.resolve('../../lib/agents/prompt.js');
+const STUB_CODEX = path.join(__dirname, '..', 'helpers', 'stub-codex', 'codex');
 
 const AGENT = { id: 'runner', name: 'Runner' };
 const ROUTINE = { name: 'r', prompt: 'p' };
@@ -197,6 +198,42 @@ async function realTurnEvents() {
   return { error, retryable, done: seen.find(e => e.type === 'done') };
 }
 
+// The thread a run is filed under, TAKEN FROM THE CLIENT for the same reason
+// the events above are.
+//
+// executeRoutine destructures what startThread resolves and hands the id it
+// finds to startTurn. Every codex test below stood a two-method literal in for
+// the client, with a key this file chose, so nothing tied that key to the
+// producer. Rename it there and the turn is filed under `undefined` while the
+// notifications carry the real id, turn/completed finds no state and bails, no
+// `done` ever reaches the promise the routine is released by, and the routine
+// is held for the life of the process: the one failure the comment on that
+// promise says the design refuses to rest on.
+//
+// A real thread takes a real request round-trip, so this drives the repo's
+// stub app-server, binPath injected, the way codex-appserver's own tests drive
+// it. Nothing here can reach an installed codex. Started once for the file and
+// shut down before the answer is returned, because the answer is a frozen
+// object rather than a live client.
+let codexRun = null;
+function realCodexRun() {
+  if (!codexRun) codexRun = startRealCodexRun();
+  return codexRun;
+}
+
+async function startRealCodexRun() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduler-lib-codex-'));
+  const server = createCodexAppServer({ binPath: STUB_CODEX, cwd: dir, requestTimeoutMs: 15000 });
+  try {
+    await server.start();
+    const thread = await server.startThread({ cwd: dir });
+    return { thread };
+  } finally {
+    await server.shutdown();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 const CODEX_AGENT = { id: 'runner', name: 'Runner', runtime: 'codex' };
 
 test('unwired root deps throw the named wiring error at first use', () => {
@@ -304,6 +341,12 @@ test('the codex fields the scheduler reads are the ones the client emits', async
   assert.strictEqual(done.type, 'done', 'a turn ending is typed done');
   assert.ok(Object.hasOwn(done, 'status'),
     'and the scheduler decides success by reading status on it');
+
+  // The thread the run is filed under, from the same client. The scheduler
+  // destructures this key and hands what it finds to startTurn.
+  const { thread } = await realCodexRun();
+  assert.ok(Object.hasOwn(thread, 'threadId'),
+    'startThread resolves the key the scheduler destructures: renamed, the turn is filed under undefined, turn/completed finds no state, no done arrives, and the routine is held for the life of the process');
 });
 
 // The codex half of AC-7, and the half this card's own change made worse. The
@@ -321,10 +364,16 @@ test('a codex turn that ends without a done event does not hold the routine', as
   await withTempWorkspaceAsync(async () => {
     const real = await realTurnEvents();
     const sub = new EventEmitter();
-    const server = { startThread: async () => ({ threadId: 't1' }), startTurn: () => sub };
+    // The client's own thread result, so the scheduler destructures the real
+    // key, and what it hands on is recorded rather than ignored.
+    const { thread } = await realCodexRun();
+    let filedUnder;
+    const server = { startThread: async () => thread, startTurn: (threadId) => { filedUnder = threadId; return sub; } };
     await withFakeCodex(server, async (sched) => {
       assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true, 'the run started');
       assert.ok(await until(() => sub.listenerCount('event') > 0), 'the run reached the turn subscription');
+      assert.ok(Object.values(thread).includes(filedUnder),
+        'and filed it under the id the client gave it, rather than under undefined');
 
       // The client's own non-retryable error, verbatim.
       sub.emit('event', real.error);
@@ -350,10 +399,16 @@ test('a codex error that will be retried is not an ending', async () => {
   await withTempWorkspaceAsync(async () => {
     const real = await realTurnEvents();
     const sub = new EventEmitter();
-    const server = { startThread: async () => ({ threadId: 't1' }), startTurn: () => sub };
+    // The client's own thread result, so the scheduler destructures the real
+    // key, and what it hands on is recorded rather than ignored.
+    const { thread } = await realCodexRun();
+    let filedUnder;
+    const server = { startThread: async () => thread, startTurn: (threadId) => { filedUnder = threadId; return sub; } };
     await withFakeCodex(server, async (sched) => {
       assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true, 'the run started');
       assert.ok(await until(() => sub.listenerCount('event') > 0), 'the run reached the turn subscription');
+      assert.ok(Object.values(thread).includes(filedUnder),
+        'and filed it under the id the client gave it, rather than under undefined');
 
       // The client's own retryable error, verbatim: no field of it is named
       // here, so a rename in the client arrives intact rather than being
