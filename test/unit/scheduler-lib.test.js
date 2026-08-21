@@ -52,6 +52,34 @@ test('unwired root deps throw the named wiring error at first use', () => {
   });
 });
 
+// A run is held from the moment it is started until it records an outcome, so
+// a start that throws before there is anything to record would hold its
+// routine for the life of the process: no spawn, no child, no close event,
+// and therefore nothing that will ever release it. That is the one way the
+// guard can turn from a protection into a routine that never runs again, and
+// it needs no bug in the guard itself to happen.
+//
+// The test asserts the SECOND attempt gets as far as the first did. That is
+// the assertion that can fail: a routine still held would be turned away by
+// the guard and would return quietly, throwing nothing.
+//
+// The spawn itself is the other half, and it is not a throw. Node reports a
+// child that never launched asynchronously, as an 'error' event followed by a
+// 'close' with a negative code, so a routine whose runtime is missing entirely
+// releases through the ordinary outcome path rather than through this one. The
+// killed-child test in the integration suite pins that path.
+test('a start that throws before the spawn does not hold the routine', () => {
+  withTempWorkspace(() => {
+    const sched = freshScheduler();
+    // The broadcast is the first wired-dep touch, and it happens before any
+    // child exists. An unwired dep at boot is exactly this shape.
+    const start = () => sched.executeRoutine({ id: 'runner', name: 'Runner' }, { name: 'r', prompt: 'p' }, 'runner:r');
+    assert.throws(start, /getWssClients not wired/);
+    assert.throws(start, /getWssClients not wired/,
+      'the second start reached the same throw, so the first one released the routine on its way out');
+  });
+});
+
 test('wireSchedulerDeps returns the previous set, restorable by identity', () => {
   withTempWorkspace(() => {
     const sched = freshScheduler();
