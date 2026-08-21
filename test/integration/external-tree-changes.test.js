@@ -159,6 +159,34 @@ describe('a change made outside Rundock reaches the file tree', () => {
     );
   });
 
+  test('a search rebuilding the shared cache does not swallow the change', async () => {
+    // _treeCache is shared by every caller of getFileTreeCached, not only by
+    // the poll and the handlers. The search file list rebuilds it on its own
+    // expiry, which marks it fresh against already-changed disk WITHOUT
+    // recording anything as sent. A poll guarded on freshness returns before
+    // it compares signatures, and the change is never pushed: the sidebar
+    // stays stale until some unrelated change happens to occur.
+    //
+    // Reproduced here by driving the search path between the write and the
+    // tick. h.internal reaches the same function the search handlers use.
+    const since = client.messages.length;
+    fs.writeFileSync(path.join(h.workspaceDir, 'written-then-searched.md'), '# External\n');
+
+    // Rebuild the shared cache the way a search would, before the poll looks.
+    h.internal.invalidateFileListCache();
+    h.internal.flatFileListCached();
+
+    const { msg } = await client.waitFor(m => m.type === 'file_tree', {
+      since,
+      timeout: PUSH_WINDOW_MS + 2000,
+      label: 'unrequested push after a search rebuilt the cache first',
+    });
+    assert.ok(
+      treePaths(msg.tree).includes('written-then-searched.md'),
+      'a search must not be able to absorb an external change on the tree\'s behalf'
+    );
+  });
+
   test('an untouched workspace produces no pushes at all', async () => {
     // Not "a push that reconciles to zero operations": nothing on the wire.
     const since = client.messages.length;

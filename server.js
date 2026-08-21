@@ -1893,22 +1893,24 @@ function getFileTreeCached() {
 // TWO GUARDS, because a push that fights the reconcile diff would undo the
 // no-flicker work that card bought.
 //
-// The first is freshness: an unchanged workspace returns before anything is
-// built or sent, so nothing reaches the wire at all. Not a push that
-// reconciles to zero operations, which would still cost a serialisation on
-// every tick, forever, on the thread driving the window.
+// The first is identity, and it must NOT be a freshness check. _treeCache is
+// shared by every caller of getFileTreeCached, not only by the poll and the
+// handlers: the search file list and the grep file list both rebuild it on
+// their own expiry. So a search running between an external write and the
+// next tick rebuilds the cache to match the already-changed disk and marks it
+// fresh, without touching _lastSentTreeSig. A tick guarded on freshness then
+// returns before it ever compares signatures, and that external change is
+// never pushed at all: the sidebar stays stale until some unrelated change
+// happens to occur. An earlier revision of this poll had exactly that bug,
+// defended with a cost argument that assumed the poll and the handlers were
+// the only writers of the cache. They are not.
 //
-// That check is deliberately REDUNDANT with the one inside getFileTreeCached,
-// and the redundancy is the point rather than an oversight. Without it a
-// quiet tick still returns the cached tree correctly, but only after
-// serialising the whole thing to compare it, which on a large vault is
-// hundreds of kilobytes every two seconds for no result. The price is one
-// extra directory-stat pass on ticks that DO find a change, which is
-// negligible beside the walk those ticks are about to do anyway. No test
-// discriminates this line: deleting it leaves every assertion green, because
-// what it saves is serialisation rather than directory reads. It is kept on
-// the cost argument alone, which is stated here so the next reader does not
-// have to rediscover it before deleting it.
+// Comparing the tree OBJECT instead is both correct and cheap. A fresh cache
+// hands back the same array every time, so an idle tick matches on identity
+// and returns without serialising anything. A cache rebuilt by anyone at all
+// hands back a new array, which fails identity and falls through to the
+// signature comparison, where a genuine change is caught and a rebuild that
+// changed nothing costs one serialisation and is dropped.
 //
 // The second is the signature, and it is the one that is easy to get wrong.
 // Cache invalidation is NOT evidence of an external change: every in-app save
@@ -1928,12 +1930,15 @@ function getFileTreeCached() {
 const TREE_WATCH_POLL_MS = parseInt(process.env.RUNDOCK_TREE_POLL_MS || '', 10) || 2000;
 let _treeWatchTimer = null;
 let _lastSentTreeSig = null;
+// The exact array last compared. Identity only: never read for its contents.
+let _lastSeenTree = null;
 
 // The tree, plus a record that this is what clients have now been told. Every
 // site that sends a file_tree must go through here, or the poll will send it
 // again.
 function fileTreeForSend() {
   const tree = getFileTreeCached();
+  _lastSeenTree = tree;
   _lastSentTreeSig = JSON.stringify(tree);
   return tree;
 }
@@ -1954,11 +1959,13 @@ function armFileTreeWatcher() {
   invalidateFileTreeCache();
   // Baseline against what is on disk right now, so entering a workspace is
   // never itself reported as an external change.
-  _lastSentTreeSig = JSON.stringify(getFileTreeCached());
+  _lastSeenTree = getFileTreeCached();
+  _lastSentTreeSig = JSON.stringify(_lastSeenTree);
   _treeWatchTimer = setInterval(() => {
     if (!WORKSPACE) return;
-    if (treeCacheIsFresh()) return;
     const tree = getFileTreeCached();
+    if (tree === _lastSeenTree) return;
+    _lastSeenTree = tree;
     const sig = JSON.stringify(tree);
     if (sig === _lastSentTreeSig) return;
     _lastSentTreeSig = sig;
@@ -3024,6 +3031,7 @@ module.exports._internal = {
   getWorkspace() { return WORKSPACE; },
   // file tree external-change poll
   armFileTreeWatcher, fileTreeForSend,
+  flatFileListCached, invalidateFileListCache,
   // scheduler
   getNextRun, executeRoutine, routineState, startScheduler,
   loadRoutineState, saveRoutineState, recordRoutineRun,
