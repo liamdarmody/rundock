@@ -132,22 +132,41 @@ function armControl() {
   delete h.internal.routineState[ORDINARY];
 }
 
-// Stamped with the wired clock, so this says the control fired on the tick
-// just driven. A bare truthiness check on its state would also be satisfied
-// by the run it did in the previous test, which would make every refusal
-// test's proof-of-life assertion pass without the tick doing anything at all.
-function assertControlFiredOnThisTick() {
+// The proof that the tick just driven was live. It leads with the line that
+// tick wrote, because that line is the one thing here no earlier test can
+// produce: the console is captured only for the duration of one drive, and
+// only the tick writes it, synchronously, while the drive is in progress.
+//
+// The state check is second and no longer stands alone. A run stamped with
+// this test's clock instant looks like proof, and is not: a control spawned by
+// an EARLIER test records its outcome whenever the child happens to exit, and
+// it reads the clock at that moment, so a late arrival stamps whatever instant
+// this test has since wired. That is the same fault as asserting a default,
+// wearing a timestamp.
+function assertControlFiredOnThisTick(logs) {
+  assert.ok(logs.some(l => l.includes('Running routine') && l.includes('ordinary-check')),
+    'the tick just driven announced the control as running, so that tick was live');
   const state = h.internal.routineState[ORDINARY];
   assert.ok(state, 'the ordinary routine ran');
   assert.strictEqual(state.lastRun, clock.at.toISOString(),
-    'the ordinary routine fired on the tick just driven, so that tick was live');
+    'and its run belongs to this drive rather than to an earlier one');
+}
+
+// Waited for at the end of every refusal test, so no control run is still in
+// flight when the next test wires a new instant. This closes the bleed at
+// source rather than only asserting around it.
+function settleControl() {
+  return h.waitUntil(() => {
+    const s = h.internal.routineState[ORDINARY];
+    return s && s.status !== 'running';
+  });
 }
 
 function seed(key) {
   h.internal.routineState[key] = { ...YESTERDAY };
 }
 
-test('a paused routine does not fire', (t) => {
+test('a paused routine does not fire', async (t) => {
   clock.at = PAST_NINE;
   armControl();
   seed(PAUSED);
@@ -156,12 +175,14 @@ test('a paused routine does not fire', (t) => {
 
   assert.deepStrictEqual(h.internal.routineState[PAUSED], YESTERDAY,
     'the refused routine kept yesterday\'s run: refusing is not recorded as a run');
-  assertControlFiredOnThisTick();
+  assertControlFiredOnThisTick(logs);
   assert.ok(logs.some(l => l.includes('paused-check') && l.includes('paused is true')),
     'the refusal is announced and names the field that caused it');
+
+  await settleControl();
 });
 
-test('a disabled routine does not fire', (t) => {
+test('a disabled routine does not fire', async (t) => {
   clock.at = PAST_TEN;
   armControl();
   seed(DISABLED);
@@ -170,12 +191,14 @@ test('a disabled routine does not fire', (t) => {
 
   assert.deepStrictEqual(h.internal.routineState[DISABLED], YESTERDAY,
     'the refused routine kept yesterday\'s run: refusing is not recorded as a run');
-  assertControlFiredOnThisTick();
+  assertControlFiredOnThisTick(logs);
   assert.ok(logs.some(l => l.includes('disabled-check') && l.includes('enabled is false')),
     'the refusal is announced and names the field that caused it');
+
+  await settleControl();
 });
 
-test('a routine whose runOn is not supported does not fire', (t) => {
+test('a routine whose runOn is not supported does not fire', async (t) => {
   clock.at = PAST_ELEVEN;
   armControl();
   seed(ELSEWHERE);
@@ -184,9 +207,11 @@ test('a routine whose runOn is not supported does not fire', (t) => {
 
   assert.deepStrictEqual(h.internal.routineState[ELSEWHERE], YESTERDAY,
     'the refused routine kept yesterday\'s run: refusing is not recorded as a run');
-  assertControlFiredOnThisTick();
+  assertControlFiredOnThisTick(logs);
   assert.ok(logs.some(l => l.includes('elsewhere-check') && l.includes('runOn is agent-computer')),
     'the refusal is announced and names the field that caused it');
+
+  await settleControl();
 });
 
 test('a routine declaring none of the three fields still fires, and runs through', async (t) => {
