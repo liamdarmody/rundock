@@ -5,12 +5,11 @@
 // none of them, so a paused routine fired, a disabled routine fired, and a
 // routine reserved for hardware that does not exist yet ran locally.
 //
-// Every test here drives the SAME tick through the same fixture at the same
-// instant, and every refusal test asserts the ordinary routine fired on that
-// very tick. "It did not fire" is the absence of something, and absence is
-// satisfied by a scheduler that was never going to run anything; the control
-// firing beside it is what makes the absence mean the gate rather than the
-// path being broken.
+// Every test here drives the real tick, and every refusal test asserts the
+// ordinary routine fired on that very tick. "It did not fire" is the absence
+// of something, and absence is satisfied by a scheduler that was never going
+// to run anything; the control firing beside it is what makes the absence
+// mean the gate rather than the path being broken.
 //
 // The refused routines are seeded with a run from the PREVIOUS day, so the
 // assertion is that their stored state is untouched rather than merely
@@ -18,11 +17,10 @@
 // spawned, and would still be a routine that never fires again.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
-const h = require('../helpers/harness.js');
-const { agentFile } = require('../helpers/workspace.js');
-
 const fs = require('node:fs');
 const path = require('node:path');
+const h = require('../helpers/harness.js');
+const { agentFile } = require('../helpers/workspace.js');
 
 const scheduler = require('../../lib/scheduler.js');
 const { invalidateAgentCache } = require('../../lib/agents/discovery.js');
