@@ -137,3 +137,95 @@ test('the tick reads the current time through the wired clock seam', (t) => {
     }
   });
 });
+
+// ===== LIFECYCLE =====
+// startScheduler used to throw its interval handle away, so the tick could
+// not be stopped and a second call quietly added a second one. The clock
+// seam above is what makes these countable: a bare workspace discovers one
+// agent with no routines, so a tick is exactly one clock read and nothing
+// else, and the count is the number of ticks that ran.
+
+function countingClock(sched, at = new Date(2026, 6, 1, 8, 0, 0)) {
+  const clock = { reads: 0, at };
+  sched.wireSchedulerDeps({ now: () => { clock.reads += 1; return clock.at; } });
+  return clock;
+}
+
+test('a stopped scheduler fires nothing', (t) => {
+  withTempWorkspace(() => {
+    const sched = freshScheduler();
+    const clock = countingClock(sched);
+    t.mock.timers.enable({ apis: ['setInterval'] });
+    try {
+      sched.startScheduler();
+      t.mock.timers.tick(60_000);
+      // Proves the tick was LIVE before the stop. Without it, "no ticks after
+      // the stop" is satisfied by a scheduler that was never running.
+      assert.strictEqual(clock.reads, 1, 'the tick was running before the stop');
+
+      clock.reads = 0;
+      sched.stopScheduler();
+      t.mock.timers.tick(180_000);
+      assert.strictEqual(clock.reads, 0, 'three minutes passed and no tick ran');
+    } finally {
+      t.mock.timers.reset();
+    }
+  });
+});
+
+test('starting the scheduler twice leaves exactly one tick running', (t) => {
+  withTempWorkspace(() => {
+    const sched = freshScheduler();
+    const clock = countingClock(sched);
+    t.mock.timers.enable({ apis: ['setInterval'] });
+    try {
+      sched.startScheduler();
+      sched.startScheduler();
+      t.mock.timers.tick(60_000);
+      assert.strictEqual(clock.reads, 1, 'one minute produced one tick, not two');
+    } finally {
+      sched.stopScheduler();
+      t.mock.timers.reset();
+    }
+  });
+});
+
+test('a scheduler stopped and started again ticks normally', (t) => {
+  withTempWorkspace(() => {
+    const sched = freshScheduler();
+    const clock = countingClock(sched);
+    t.mock.timers.enable({ apis: ['setInterval'] });
+    try {
+      sched.startScheduler();
+      sched.stopScheduler();
+      clock.reads = 0;
+      sched.startScheduler();
+      t.mock.timers.tick(60_000);
+      assert.strictEqual(clock.reads, 1, 'stopping is not a one-way door');
+    } finally {
+      sched.stopScheduler();
+      t.mock.timers.reset();
+    }
+  });
+});
+
+test('stopping a scheduler that was never started is safe and does nothing', (t) => {
+  withTempWorkspace(() => {
+    const sched = freshScheduler();
+    const clock = countingClock(sched);
+    t.mock.timers.enable({ apis: ['setInterval'] });
+    try {
+      sched.stopScheduler();
+      t.mock.timers.tick(60_000);
+      assert.strictEqual(clock.reads, 0, 'nothing was armed, so nothing ticked');
+      // And the no-op stop left the scheduler startable, which is the part
+      // that would break if stopping recorded anything about having run.
+      sched.startScheduler();
+      t.mock.timers.tick(60_000);
+      assert.strictEqual(clock.reads, 1, 'a start after a no-op stop still arms the tick');
+    } finally {
+      sched.stopScheduler();
+      t.mock.timers.reset();
+    }
+  });
+});
