@@ -16,6 +16,8 @@ const { EventEmitter } = require('node:events');
 
 const SCHEDULER_KEY = require.resolve('../../lib/scheduler.js');
 const CLAUDE_KEY = require.resolve('../../lib/runtime/claude.js');
+const CODEX_GLUE_KEY = require.resolve('../../lib/runtime/codex-glue.js');
+const PROMPT_KEY = require.resolve('../../lib/agents/prompt.js');
 
 const AGENT = { id: 'runner', name: 'Runner' };
 const ROUTINE = { name: 'r', prompt: 'p' };
@@ -32,20 +34,62 @@ function freshScheduler() {
   return mod;
 }
 
-function withTempWorkspace(fn) {
+function enterTempWorkspace() {
   const config = require('../../lib/config.js');
   const original = config.getWorkspace();
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduler-lib-'));
+  config.setWorkspace(ws);
+  return {
+    ws,
+    config,
+    leave() {
+      config.setWorkspace(original);
+      fs.rmSync(ws, { recursive: true, force: true });
+    },
+  };
+}
+
+function withTempWorkspace(fn) {
+  const t = enterTempWorkspace();
   try {
-    config.setWorkspace(ws);
-    return fn(ws, config);
+    return fn(t.ws, t.config);
   } finally {
-    config.setWorkspace(original);
-    fs.rmSync(ws, { recursive: true, force: true });
+    t.leave();
   }
 }
 
+// The same workspace, held for a lifetime that outlives a synchronous return.
+// The codex path is asynchronous, so a sync finally would tear the workspace
+// down while the run under test was still going. One mechanism, two lifetimes,
+// rather than two mechanisms.
+async function withTempWorkspaceAsync(fn) {
+  const t = enterTempWorkspace();
+  try {
+    return await fn(t.ws, t.config);
+  } finally {
+    t.leave();
+  }
+}
+
+// Poll until a predicate holds. The codex path settles over several
+// microtasks and then over whatever the fake does, so a fixed flush would be
+// a guess at how many.
+async function until(predicate, tries = 200) {
+  for (let i = 0; i < tries; i++) {
+    if (predicate()) return true;
+    await new Promise(r => setTimeout(r, 5));
+  }
+  return false;
+}
+
 // A scheduler whose child processes are the test's to drive.
+//
+// WHY NOT THE SEAM THAT EXISTS. wireSchedulerDeps is the file's own injection
+// point and it reaches exactly two things, the WebSocket clients and the
+// clock. Neither is a child process. A test that has to decide how a child
+// ends, or make the spawn itself fail, needs the module the scheduler imports
+// rather than a dep it is handed, and adding a spawn dep to the wiring surface
+// would put a seam in production code that only tests would ever use.
 //
 // lib/scheduler.js destructures spawnClaude at load, so a copy required after
 // the export is swapped closes over the fake, and the swap is undone before
@@ -71,6 +115,37 @@ function withFakeSpawn(fakeSpawn, fn) {
     claude.wireClaudeRuntimeDeps(prevClaudeDeps);
   }
 }
+
+// A scheduler whose codex app-server is the test's to drive.
+//
+// Same reason as withFakeSpawn, and the same answer to "why not the seam that
+// exists": wireSchedulerDeps reaches the WebSocket clients and the clock, and
+// nothing else. A test that has to hold a turn subscription and decide how the
+// turn ends needs the module the scheduler imports, not a dep it is handed.
+// The system prompt builder is stood in for as well, because it has wiring of
+// its own that has nothing to do with what is under test here.
+async function withFakeCodex(server, fn) {
+  const glue = require(CODEX_GLUE_KEY);
+  const prompt = require(PROMPT_KEY);
+  const real = {
+    getCodexAppServer: glue.getCodexAppServer,
+    waitForCodexReady: glue.waitForCodexReady,
+    buildSystemPrompt: prompt.buildSystemPrompt,
+  };
+  glue.getCodexAppServer = async () => server;
+  glue.waitForCodexReady = async () => {};
+  prompt.buildSystemPrompt = () => 'system prompt';
+  try {
+    const sched = freshScheduler();
+    sched.wireSchedulerDeps({ getWssClients: () => [] });
+    return await fn(sched);
+  } finally {
+    Object.assign(glue, { getCodexAppServer: real.getCodexAppServer, waitForCodexReady: real.waitForCodexReady });
+    prompt.buildSystemPrompt = real.buildSystemPrompt;
+  }
+}
+
+const CODEX_AGENT = { id: 'runner', name: 'Runner', runtime: 'codex' };
 
 test('unwired root deps throw the named wiring error at first use', () => {
   withTempWorkspace(() => {
@@ -101,6 +176,14 @@ test('unwired root deps throw the named wiring error at first use', () => {
 // 'close' with a negative code, so a routine whose runtime is missing entirely
 // releases through the ordinary outcome path rather than through this one. The
 // killed-child test in the integration suite pins that path.
+//
+// WHY BOTH THIS AND THE SPAWN TEST BELOW, since one guard catches both. They
+// throw from different statements, and only one of them needs a stand-in for a
+// module: this one is reachable through the file's own wiring, so it is the
+// cheaper test and it is kept for that. The one below throws from the spawn,
+// which is what AC-6 is about, and reading it against a criterion that names
+// the spawn should not require believing that a throw from the line above
+// behaves the same way.
 test('a start that throws before the spawn does not hold the routine', () => {
   withTempWorkspace(() => {
     const sched = freshScheduler();
@@ -149,6 +232,82 @@ test('a failure reported as both an error and a close records one outcome', () =
       child.emit('close', -2);
       assert.strictEqual(broadcasts, 2,
         'the start and one outcome, not the start and the same outcome twice');
+    });
+  });
+});
+
+// The codex half of AC-7, and the half this card's own change made worse. The
+// outcome promise resolved only on a `done` event. Before single-flight, a
+// turn that never reached one left stale running state and the next window
+// fired anyway; afterwards it holds the routine for the life of the process.
+// A self-healing failure turned into a permanent one, on a path the card never
+// mentioned.
+//
+// The reasoning that fixed the claude path applies unchanged: do not try to
+// establish that every turn ends with `done`. The client documents it as
+// terminal and exactly once and every path in it reaches one today, and a
+// routine held on that staying true is held forever when it stops being true.
+test('a codex turn that ends without a done event does not hold the routine', async () => {
+  await withTempWorkspaceAsync(async () => {
+    const sub = new EventEmitter();
+    const server = { startThread: async () => ({ threadId: 't1' }), startTurn: () => sub };
+    await withFakeCodex(server, async (sched) => {
+      assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true, 'the run started');
+      assert.ok(await until(() => sub.listenerCount('event') > 0), 'the run reached the turn subscription');
+
+      sub.emit('event', { type: 'error', message: 'app-server went away', kind: 'unknown', willRetry: false });
+
+      assert.ok(await until(() => sched.routineState[KEY] && sched.routineState[KEY].status !== 'running'),
+        'the turn ending without a done event still recorded an outcome');
+      assert.strictEqual(sched.routineState[KEY].status, 'failed', 'and recorded it as a failure');
+      assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true,
+        'and released the routine, so the next start was allowed');
+    });
+  });
+});
+
+// The other side of that, and the reason the fix reads willRetry rather than
+// treating every error as an ending. A retryable error is not an ending: the
+// turn is still going, and releasing there would let a second run start
+// alongside the first, which is the fault this whole change exists to stop.
+test('a codex error that will be retried is not an ending', async () => {
+  await withTempWorkspaceAsync(async () => {
+    const sub = new EventEmitter();
+    const server = { startThread: async () => ({ threadId: 't1' }), startTurn: () => sub };
+    await withFakeCodex(server, async (sched) => {
+      assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true, 'the run started');
+      assert.ok(await until(() => sub.listenerCount('event') > 0), 'the run reached the turn subscription');
+
+      sub.emit('event', { type: 'error', message: 'rate limited', kind: 'quota', willRetry: true });
+      await until(() => false, 4); // give a wrong release time to happen
+
+      assert.strictEqual(sched.routineState[KEY].status, 'running', 'the turn is still going');
+      assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), false,
+        'so the routine is still held');
+
+      sub.emit('event', { type: 'done', status: 'completed', usage: null, error: null });
+      assert.ok(await until(() => sched.routineState[KEY].status !== 'running'), 'the turn then ended');
+      assert.strictEqual(sched.routineState[KEY].status, 'completed', 'as a success, because the retry worked');
+      assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true, 'and released the routine');
+    });
+  });
+});
+
+// AC-5 on the codex path. The rejection handler was implemented and only ever
+// exercised for the outcome it records, never for the release it also owes.
+test('a codex run that cannot start its thread releases the routine', async () => {
+  await withTempWorkspaceAsync(async () => {
+    const server = {
+      startThread: async () => { throw new Error('thread/start refused'); },
+      startTurn: () => { throw new Error('never reached'); },
+    };
+    await withFakeCodex(server, async (sched) => {
+      assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true, 'the run started');
+      assert.ok(await until(() => sched.routineState[KEY] && sched.routineState[KEY].status !== 'running'),
+        'the rejected start recorded an outcome');
+      assert.strictEqual(sched.routineState[KEY].status, 'failed', 'as a failure');
+      assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true,
+        'and released the routine, which the outcome test alone never checked');
     });
   });
 });
