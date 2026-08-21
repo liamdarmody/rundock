@@ -967,6 +967,14 @@ test('a due instant years behind is bounded rather than enumerated, and resyncs'
     assert.ok(missed.length > 0, 'the slots it did walk were recorded');
     assert.ok(missed.length < daysSince, `the walk stopped short of every day since (${missed.length})`);
     assert.ok(warnings.some(w => w.includes(LATE_KEY)), 'and said which routine it gave up on');
+    // WHICH END IT KEPT. Walking forward from the ancient anchor and stopping
+    // at a cap keeps the oldest slots and drops the recent ones, which is the
+    // wrong half: nobody opening a laptop wants 2023 and nothing about last
+    // week. The bound is applied to where the walk STARTS.
+    assert.strictEqual(missed[missed.length - 1].slot, new Date(2026, 7, 14, 23, 0, 0).toISOString(),
+      'the last record is last night, the slot immediately before today');
+    assert.ok(new Date(missed[0].slot) > new Date(2024, 0, 1),
+      `the walk did not spend its budget on 2023 (first record ${missed[0].slot})`);
     assert.strictEqual(sched.routineSlots.routines[LATE_KEY].due, new Date(2026, 7, 15, 23, 0, 0).toISOString(),
       'the due instant resynced to today');
 
@@ -1117,4 +1125,138 @@ test('a second unwritable workspace is announced too, rather than silenced by th
     fs.rmSync(wsA, { recursive: true, force: true });
     fs.rmSync(wsB, { recursive: true, force: true });
   }
+});
+
+// THE CLOSED LAPTOP, END TO END, through the boot path rather than around it.
+//
+// Every other test here walks from state the same scheduler instance put in
+// memory a moment earlier, so the load path is exercised and the walk is
+// exercised and nothing joins them. That is the double sweep's finding one
+// level up: the record survives the file, and nothing proved the walk can
+// start from what the loader admitted. A second scheduler module IS the
+// second process: its own empty state, filled only by loadRoutineState.
+test('a second process loads the file and walks from what it read, which is the closed laptop', (t) => {
+  withTempWorkspace((ws) => {
+    const before = freshScheduler();
+    writeRoutineAgent(ws, LATE_ROUTINE);
+    observeOnce(t, before, new Date(2026, 7, 15, 8, 0, 0));
+    assert.deepStrictEqual(before.routineSlots.routines[LATE_KEY].missed, [], 'nothing was owed when the lid closed');
+
+    const after = freshScheduler();
+    assert.strictEqual(after.routineSlots.observedAt, null,
+      'the new process starts knowing nothing, which is what makes the rest of this mean something');
+
+    after.loadRoutineState(); // the boot path, and the workspace-switch path
+    assert.strictEqual(after.routineSlots.observedAt, new Date(2026, 7, 15, 8, 0, 0).toISOString(),
+      'and takes its last observation off disk');
+
+    observeOnce(t, after, new Date(2026, 7, 17, 8, 0, 0));
+    assert.deepStrictEqual(after.routineSlots.routines[LATE_KEY].missed, [
+      { slot: new Date(2026, 7, 15, 23, 0, 0).toISOString() },
+      { slot: new Date(2026, 7, 16, 23, 0, 0).toISOString() },
+    ], 'the walk started from the loaded instants and named exactly the nights between them and the tick');
+    assert.strictEqual(after.routineSlots.routines[LATE_KEY].due, new Date(2026, 7, 17, 23, 0, 0).toISOString(),
+      'and resynced to tonight');
+  });
+});
+
+// A routine edited while the machine was closed. The walk starts from an
+// instant computed under the OLD schedule and would step using the NEW one,
+// so every record it wrote would name an hour, or a weekday, that was never
+// scheduled. Reachable by editing a routine and closing the lid.
+test('a schedule edited while the machine was closed resyncs instead of recording the old hour', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, LATE_ROUTINE); // 23:00
+    observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
+
+    writeRoutineAgent(ws, [{ name: 'late', schedule: 'every day at 22:00', prompt: 'p' }]);
+    observeOnce(t, sched, new Date(2026, 7, 17, 8, 0, 0));
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, [],
+      'two nights passed, and neither is recorded at an hour the routine was never due at');
+    assert.strictEqual(sched.routineSlots.routines[LATE_KEY].due, new Date(2026, 7, 17, 22, 0, 0).toISOString(),
+      'the anchor moved to the schedule actually in force');
+
+    // And the resync is a pause, not an off switch: under the new schedule the
+    // walk works again, at the new hour.
+    observeOnce(t, sched, new Date(2026, 7, 19, 8, 0, 0));
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, [
+      { slot: new Date(2026, 7, 17, 22, 0, 0).toISOString() },
+      { slot: new Date(2026, 7, 18, 22, 0, 0).toISOString() },
+    ], 'every recorded slot names 22:00, which is when the routine was actually due');
+  });
+});
+
+// A paused routine still accrues records, and that is pinned rather than
+// endorsed: see the block comment in lib/scheduler.js. Whether a paused
+// routine should show gaps is the routines view's ruling to make, and this
+// test is what makes that change deliberate instead of accidental.
+test('a paused routine accrues records too, which is today behaviour and the view card owns it', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, [{ name: 'late', schedule: 'every day at 23:00', prompt: 'p', paused: true }]);
+    observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
+    observeOnce(t, sched, new Date(2026, 7, 17, 8, 0, 0));
+
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, [
+      { slot: new Date(2026, 7, 15, 23, 0, 0).toISOString() },
+      { slot: new Date(2026, 7, 16, 23, 0, 0).toISOString() },
+    ], 'being paused did not stop the slots being recorded');
+  });
+});
+
+// The other half of the resync, which the resync test cannot show because it
+// has no history yet when the edit lands. Slots recorded before an edit passed
+// under the schedule that was in force when they did. Editing the routine
+// afterwards is not a reason to lose them, and dropping them would be the
+// quiet way to make an edit erase a week of gaps.
+test('a schedule edit resyncs the anchor without discarding the history already recorded', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, LATE_ROUTINE); // 23:00
+    observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
+    observeOnce(t, sched, new Date(2026, 7, 17, 8, 0, 0));
+    const earned = [
+      { slot: new Date(2026, 7, 15, 23, 0, 0).toISOString() },
+      { slot: new Date(2026, 7, 16, 23, 0, 0).toISOString() },
+    ];
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, earned, 'two nights were already recorded');
+
+    writeRoutineAgent(ws, [{ name: 'late', schedule: 'every day at 22:00', prompt: 'p' }]);
+    observeOnce(t, sched, new Date(2026, 7, 19, 8, 0, 0));
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, earned,
+      'the edit added nothing and took nothing away');
+    assert.strictEqual(sched.routineSlots.routines[LATE_KEY].due, new Date(2026, 7, 19, 22, 0, 0).toISOString(),
+      'only the anchor moved');
+  });
+});
+
+// A file written before the anchor carried its schedule, which every workspace
+// already running this scheduler has. There is nothing to compare, so the walk
+// cannot vouch for what the anchor was computed under, and treating an absent
+// shape as a match would walk the old file under whatever schedule is current.
+test('an anchor stored without its schedule resyncs on the first wake rather than being trusted', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, LATE_ROUTINE);
+    observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
+
+    const file = path.join(ws, '.rundock', 'routine-slots.json');
+    const saved = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    assert.ok(saved.routines[LATE_KEY].schedule, 'the anchor normally carries its schedule');
+    delete saved.routines[LATE_KEY].schedule; // the older shape
+    fs.writeFileSync(file, JSON.stringify(saved, null, 2));
+    sched.loadRoutineSlots();
+
+    observeOnce(t, sched, new Date(2026, 7, 17, 8, 0, 0));
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, [],
+      'the first wake on an older file records nothing rather than guessing');
+
+    // One wake of silence, not a permanent one.
+    observeOnce(t, sched, new Date(2026, 7, 19, 8, 0, 0));
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, [
+      { slot: new Date(2026, 7, 17, 23, 0, 0).toISOString() },
+      { slot: new Date(2026, 7, 18, 23, 0, 0).toISOString() },
+    ], 'and the wake after it walks normally, from an anchor it can vouch for');
+  });
 });
