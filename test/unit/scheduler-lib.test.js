@@ -12,8 +12,14 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { EventEmitter } = require('node:events');
 
 const SCHEDULER_KEY = require.resolve('../../lib/scheduler.js');
+const CLAUDE_KEY = require.resolve('../../lib/runtime/claude.js');
+
+const AGENT = { id: 'runner', name: 'Runner' };
+const ROUTINE = { name: 'r', prompt: 'p' };
+const KEY = 'runner:r';
 
 // A private copy per test: wiring one test's fakes must never leak into
 // another test (or into the shared instance other requires would see).
@@ -36,6 +42,33 @@ function withTempWorkspace(fn) {
   } finally {
     config.setWorkspace(original);
     fs.rmSync(ws, { recursive: true, force: true });
+  }
+}
+
+// A scheduler whose child processes are the test's to drive.
+//
+// lib/scheduler.js destructures spawnClaude at load, so a copy required after
+// the export is swapped closes over the fake, and the swap is undone before
+// the shared instance the rest of the suite runs against can see it. The port
+// dep is wired because the real getSpawnEnv still runs on the way to the fake.
+//
+// Nothing here reaches a real binary, which matters more than usual next to
+// this code: resolveClaudeBin memoises whatever `which claude` finds, and the
+// unit suite has no equivalent of the integration harness's refusal to run
+// against it, so a unit test that reaches the real spawn runs whatever happens
+// to be installed on the machine.
+function withFakeSpawn(fakeSpawn, fn) {
+  const claude = require(CLAUDE_KEY);
+  const realSpawn = claude.spawnClaude;
+  const prevClaudeDeps = claude.wireClaudeRuntimeDeps({ getActualPort: () => 0 });
+  claude.spawnClaude = fakeSpawn;
+  try {
+    const sched = freshScheduler();
+    sched.wireSchedulerDeps({ getWssClients: () => [] });
+    return fn(sched);
+  } finally {
+    claude.spawnClaude = realSpawn;
+    claude.wireClaudeRuntimeDeps(prevClaudeDeps);
   }
 }
 
@@ -77,6 +110,58 @@ test('a start that throws before the spawn does not hold the routine', () => {
     assert.throws(start, /getWssClients not wired/);
     assert.throws(start, /getWssClients not wired/,
       'the second start reached the same throw, so the first one released the routine on its way out');
+  });
+});
+
+// AC-7 in its sharpest form. The claude path used to release only from the
+// child's close event, on the strength of close following error. That holds
+// for a binary that is not there, which is the case easy to reach and easy to
+// test. It is not established for the failures a tick is most likely to meet,
+// which are the file-descriptor exhaustion ones: a process under that pressure
+// is exactly when a spawn fails, and whether the handle still closes after the
+// error is a question about a Node version rather than about this file. So the
+// error routes to the same outcome and the question stops mattering.
+test('a child that reports an error and never closes does not hold the routine', () => {
+  withTempWorkspace(() => {
+    const child = new EventEmitter();
+    withFakeSpawn(() => child, (sched) => {
+      assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true, 'the first run started');
+      child.emit('error', Object.assign(new Error('too many open files'), { code: 'EMFILE' }));
+      assert.strictEqual(sched.routineState[KEY].status, 'failed',
+        'the error was recorded as an outcome rather than waiting for a close that may never come');
+      assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true,
+        'and it released the routine, so the next start was allowed');
+    });
+  });
+});
+
+// The cost of listening to both: a failure that reports twice must not be
+// recorded twice. Counted through the broadcast, which happens once when a run
+// starts and once per outcome, so a second outcome is a third broadcast.
+test('a failure reported as both an error and a close records one outcome', () => {
+  withTempWorkspace(() => {
+    const child = new EventEmitter();
+    let broadcasts = 0;
+    withFakeSpawn(() => child, (sched) => {
+      sched.wireSchedulerDeps({ getWssClients: () => { broadcasts += 1; return []; } });
+      sched.executeRoutine(AGENT, ROUTINE, KEY);
+      child.emit('error', Object.assign(new Error('no such file'), { code: 'ENOENT' }));
+      child.emit('close', -2);
+      assert.strictEqual(broadcasts, 2,
+        'the start and one outcome, not the start and the same outcome twice');
+    });
+  });
+});
+
+// AC-6, at the call site it is about rather than at one that stands in for it.
+test('a start whose spawn throws does not hold the routine', () => {
+  withTempWorkspace(() => {
+    withFakeSpawn(() => { throw new Error('spawn refused'); }, (sched) => {
+      const start = () => sched.executeRoutine(AGENT, ROUTINE, KEY);
+      assert.throws(start, /spawn refused/);
+      assert.throws(start, /spawn refused/,
+        'the second start reached the same throw, so the first one released the routine on its way out');
+    });
   });
 });
 
