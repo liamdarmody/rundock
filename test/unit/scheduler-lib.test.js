@@ -101,7 +101,7 @@ async function until(predicate, tries = 200) {
 // unit suite has no equivalent of the integration harness's refusal to run
 // against it, so a unit test that reaches the real spawn runs whatever happens
 // to be installed on the machine.
-function withFakeSpawn(fakeSpawn, fn) {
+async function withFakeSpawn(fakeSpawn, fn) {
   const claude = require(CLAUDE_KEY);
   const realSpawn = claude.spawnClaude;
   const prevClaudeDeps = claude.wireClaudeRuntimeDeps({ getActualPort: () => 0 });
@@ -109,7 +109,7 @@ function withFakeSpawn(fakeSpawn, fn) {
   try {
     const sched = freshScheduler();
     sched.wireSchedulerDeps({ getWssClients: () => [] });
-    return fn(sched);
+    return await fn(sched);
   } finally {
     claude.spawnClaude = realSpawn;
     claude.wireClaudeRuntimeDeps(prevClaudeDeps);
@@ -143,6 +143,20 @@ async function withFakeCodex(server, fn) {
     Object.assign(glue, { getCodexAppServer: real.getCodexAppServer, waitForCodexReady: real.waitForCodexReady });
     prompt.buildSystemPrompt = real.buildSystemPrompt;
   }
+}
+
+// Starting a run is the only way to observe that a routine was released, so
+// every release test below starts one. A run left going outlives its test: it
+// records its outcome later, into whatever workspace the next test has set,
+// which is where the stray "failed to persist routine state" lines in this
+// file's output came from. So every started run is driven to an end before its
+// test returns. A start always writes 'running' first, so leaving that state
+// is the signal the run has ended, whatever it ended as.
+async function endedAfter(sched, start) {
+  assert.strictEqual(sched.routineState[KEY].status, 'running', 'the start under test is a real run');
+  await start();
+  assert.ok(await until(() => sched.routineState[KEY].status !== 'running'),
+    'and it was ended rather than left going');
 }
 
 const CODEX_AGENT = { id: 'runner', name: 'Runner', runtime: 'codex' };
@@ -204,16 +218,17 @@ test('a start that throws before the spawn does not hold the routine', () => {
 // is exactly when a spawn fails, and whether the handle still closes after the
 // error is a question about a Node version rather than about this file. So the
 // error routes to the same outcome and the question stops mattering.
-test('a child that reports an error and never closes does not hold the routine', () => {
-  withTempWorkspace(() => {
+test('a child that reports an error and never closes does not hold the routine', async () => {
+  await withTempWorkspaceAsync(async () => {
     const child = new EventEmitter();
-    withFakeSpawn(() => child, (sched) => {
+    await withFakeSpawn(() => child, async (sched) => {
       assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true, 'the first run started');
       child.emit('error', Object.assign(new Error('too many open files'), { code: 'EMFILE' }));
       assert.strictEqual(sched.routineState[KEY].status, 'failed',
         'the error was recorded as an outcome rather than waiting for a close that may never come');
       assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true,
         'and it released the routine, so the next start was allowed');
+      await endedAfter(sched, async () => { child.emit('close', 0); });
     });
   });
 });
@@ -221,11 +236,11 @@ test('a child that reports an error and never closes does not hold the routine',
 // The cost of listening to both: a failure that reports twice must not be
 // recorded twice. Counted through the broadcast, which happens once when a run
 // starts and once per outcome, so a second outcome is a third broadcast.
-test('a failure reported as both an error and a close records one outcome', () => {
-  withTempWorkspace(() => {
+test('a failure reported as both an error and a close records one outcome', async () => {
+  await withTempWorkspaceAsync(async () => {
     const child = new EventEmitter();
     let broadcasts = 0;
-    withFakeSpawn(() => child, (sched) => {
+    await withFakeSpawn(() => child, async (sched) => {
       sched.wireSchedulerDeps({ getWssClients: () => { broadcasts += 1; return []; } });
       sched.executeRoutine(AGENT, ROUTINE, KEY);
       child.emit('error', Object.assign(new Error('no such file'), { code: 'ENOENT' }));
@@ -262,6 +277,10 @@ test('a codex turn that ends without a done event does not hold the routine', as
       assert.strictEqual(sched.routineState[KEY].status, 'failed', 'and recorded it as a failure');
       assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true,
         'and released the routine, so the next start was allowed');
+      await endedAfter(sched, async () => {
+        await until(() => sub.listenerCount('event') > 1);
+        sub.emit('event', { type: 'done', status: 'completed', usage: null, error: null });
+      });
     });
   });
 });
@@ -289,6 +308,10 @@ test('a codex error that will be retried is not an ending', async () => {
       assert.ok(await until(() => sched.routineState[KEY].status !== 'running'), 'the turn then ended');
       assert.strictEqual(sched.routineState[KEY].status, 'completed', 'as a success, because the retry worked');
       assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true, 'and released the routine');
+      await endedAfter(sched, async () => {
+        await until(() => sub.listenerCount('event') > 1);
+        sub.emit('event', { type: 'done', status: 'completed', usage: null, error: null });
+      });
     });
   });
 });
@@ -308,6 +331,9 @@ test('a codex run that cannot start its thread releases the routine', async () =
       assert.strictEqual(sched.routineState[KEY].status, 'failed', 'as a failure');
       assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true,
         'and released the routine, which the outcome test alone never checked');
+      // The second start rejects on its own, so ending it is only a matter of
+      // waiting for it rather than driving it.
+      await endedAfter(sched, async () => {});
     });
   });
 });
@@ -318,10 +344,10 @@ test('a codex run that cannot start its thread releases the routine', async () =
 // A run in flight is a child process that is still running, and clearing its
 // key would free the routine to start again while the first run was still
 // going, with the eventual release then having nothing to release.
-test('switching workspace does not release a run that is still going', () => {
-  withTempWorkspace(() => {
+test('switching workspace does not release a run that is still going', async () => {
+  await withTempWorkspaceAsync(async () => {
     const child = new EventEmitter();
-    withFakeSpawn(() => child, (sched) => {
+    await withFakeSpawn(() => child, async (sched) => {
       assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true, 'the run started');
       sched.loadRoutineState(); // what a workspace switch calls
       // Only loadRoutineState writes this value, so it is the proof the reset
@@ -333,14 +359,15 @@ test('switching workspace does not release a run that is still going', () => {
       child.emit('close', 0);
       assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true,
         'the run ending is the only thing that releases it, switch or no switch');
+      await endedAfter(sched, async () => { child.emit('close', 0); });
     });
   });
 });
 
 // AC-6, at the call site it is about rather than at one that stands in for it.
-test('a start whose spawn throws does not hold the routine', () => {
-  withTempWorkspace(() => {
-    withFakeSpawn(() => { throw new Error('spawn refused'); }, (sched) => {
+test('a start whose spawn throws does not hold the routine', async () => {
+  await withTempWorkspaceAsync(async () => {
+    await withFakeSpawn(() => { throw new Error('spawn refused'); }, async (sched) => {
       const start = () => sched.executeRoutine(AGENT, ROUTINE, KEY);
       assert.throws(start, /spawn refused/);
       assert.throws(start, /spawn refused/,
