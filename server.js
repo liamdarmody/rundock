@@ -1159,6 +1159,7 @@ const wsHandlerContext = {
     setWorkspaceRoot, healWorkspaceIfMoved, saveRecentWorkspace, loadRecentWorkspaces,
     discoverWorkspaces, isInsideWorkspace, isSafeCreatePath, getFileTreeCached,
     invalidateFileListCache, invalidateFileTreeCache, watchOpenFile,
+    fileTreeForSend, armFileTreeWatcher,
   },
   runtime: { getRuntimeStatus, killAllChildren, cleanOrphanedProcesses },
   signals: { reportStartup, phaseTimer },         // startup telemetry (recordEvent is lib-owned)
@@ -1872,6 +1873,89 @@ function getFileTreeCached() {
   try { dirs.set(WORKSPACE, fs.statSync(WORKSPACE).mtimeMs); } catch (e) {}
   _treeCache = { tree, dirs };
   return tree;
+}
+
+// ── External-change poll ───────────────────────────────────────────────────
+// Nothing else watches the filesystem on the tree's behalf. The client asks
+// for the tree in exactly three places and all three mean "Rundock did
+// something": workspace open, after a file-writing tool call, and after an
+// agent turn. So a file written by anything else (a CLI agent session, an
+// editor, git, a sync client) never reached the sidebar until a restart,
+// while search saw it within seconds through its own TTL-gated reconcile.
+//
+// A self-owned POLLER, not fs.watch, for the reasons already written up at
+// the agents-directory watcher: event-based watching is where the 0.11.5
+// live-refresh data-loss bug lived, and fs.watch delivery differs across
+// platforms and Node versions. Detection is the tree cache's own freshness
+// pass, which is a directory-only stat walk, so a quiet workspace costs one
+// stat per directory and reads none of them.
+//
+// TWO GUARDS, because a push that fights the reconcile diff would undo the
+// no-flicker work that card bought.
+//
+// The first is freshness: an unchanged workspace returns before anything is
+// built or sent, so nothing reaches the wire at all. Not a push that
+// reconciles to zero operations, which would still cost a serialisation on
+// every tick, forever, on the thread driving the window.
+//
+// That check is deliberately REDUNDANT with the one inside getFileTreeCached,
+// and the redundancy is the point rather than an oversight. Without it a
+// quiet tick still returns the cached tree correctly, but only after
+// serialising the whole thing to compare it, which on a large vault is
+// hundreds of kilobytes every two seconds for no result. The price is one
+// extra directory-stat pass on ticks that DO find a change, which is
+// negligible beside the walk those ticks are about to do anyway. No test
+// discriminates this line: deleting it leaves every assertion green, because
+// what it saves is serialisation rather than directory reads. It is kept on
+// the cost argument alone, which is stated here so the next reader does not
+// have to rediscover it before deleting it.
+//
+// The second is the signature, and it is the one that is easy to get wrong.
+// Cache invalidation is NOT evidence of an external change: every in-app save
+// and create calls invalidateFileTreeCache(), which makes treeCacheIsFresh()
+// false on the very next tick. Keying the push off freshness alone therefore
+// duplicates every tree the handlers already sent, and re-walks after every
+// content save. Comparing against the last tree actually SENT distinguishes
+// the two: the handlers record theirs through fileTreeForSend, so work that
+// went out through a handler is already accounted for by the time the poll
+// looks. Tree nodes carry only type, name, path and kind, never mtime or
+// size, so a content edit cannot move the signature on its own.
+//
+// One consequence worth naming: changing a note's frontmatter to a board DOES
+// move the signature, so the poll happens to close the fileKind gap recorded
+// against the cache above. That is a side effect of comparing trees rather
+// than an intended feature, and nothing should depend on it.
+const TREE_WATCH_POLL_MS = parseInt(process.env.RUNDOCK_TREE_POLL_MS || '', 10) || 2000;
+let _treeWatchTimer = null;
+let _lastSentTreeSig = null;
+
+// The tree, plus a record that this is what clients have now been told. Every
+// site that sends a file_tree must go through here, or the poll will send it
+// again.
+function fileTreeForSend() {
+  const tree = getFileTreeCached();
+  _lastSentTreeSig = JSON.stringify(tree);
+  return tree;
+}
+
+function armFileTreeWatcher() {
+  if (_treeWatchTimer) { clearInterval(_treeWatchTimer); _treeWatchTimer = null; }
+  if (!WORKSPACE) return;
+  // Baseline against what is on disk right now, so entering a workspace is
+  // never itself reported as an external change.
+  _lastSentTreeSig = JSON.stringify(getFileTreeCached());
+  _treeWatchTimer = setInterval(() => {
+    if (!WORKSPACE) return;
+    if (treeCacheIsFresh()) return;
+    const tree = getFileTreeCached();
+    const sig = JSON.stringify(tree);
+    if (sig === _lastSentTreeSig) return;
+    _lastSentTreeSig = sig;
+    safeSend(JSON.stringify({ type: 'file_tree', tree }));
+    console.log('[FileTree] workspace changed on disk; pushed a refreshed tree');
+  }, TREE_WATCH_POLL_MS);
+  // Never hold shutdown open for a sidebar refresh.
+  if (_treeWatchTimer.unref) _treeWatchTimer.unref();
 }
 
 // ===== PROCESS CLEANUP (S4) =====
@@ -2860,6 +2944,7 @@ async function runUniversalSearch(msg) {
 
 function startServer(options = {}) {
   armAgentsDirWatcher();
+  armFileTreeWatcher();
   const port = options.port != null ? options.port : PORT;
   return new Promise((resolve) => {
     server.listen(port, () => {
@@ -2924,8 +3009,10 @@ module.exports = { startServer };
 // tests can point the module-level WORKSPACE at a temp fixture directory.
 module.exports._internal = {
   // workspace pointer (test fixture wiring only)
-  setWorkspace(dir) { setWorkspaceRoot(dir); invalidateAgentCache(); armAgentsDirWatcher(); },
+  setWorkspace(dir) { setWorkspaceRoot(dir); invalidateAgentCache(); armAgentsDirWatcher(); armFileTreeWatcher(); },
   getWorkspace() { return WORKSPACE; },
+  // file tree external-change poll
+  armFileTreeWatcher, fileTreeForSend,
   // scheduler
   getNextRun, executeRoutine, routineState, startScheduler,
   loadRoutineState, saveRoutineState, recordRoutineRun,
