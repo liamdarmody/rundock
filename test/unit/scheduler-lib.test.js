@@ -17,6 +17,8 @@ const { EventEmitter } = require('node:events');
 const SCHEDULER_KEY = require.resolve('../../lib/scheduler.js');
 const CLAUDE_KEY = require.resolve('../../lib/runtime/claude.js');
 const CODEX_GLUE_KEY = require.resolve('../../lib/runtime/codex-glue.js');
+const { createCodexAppServer } = require('../../codex-appserver.js');
+const asfx = require('../fixtures/codex-appserver-protocol.js');
 const PROMPT_KEY = require.resolve('../../lib/agents/prompt.js');
 
 const AGENT = { id: 'runner', name: 'Runner' };
@@ -159,6 +161,42 @@ async function endedAfter(sched, start) {
     'and it was ended rather than left going');
 }
 
+// The codex turn events, TAKEN FROM THE CLIENT rather than written here.
+//
+// The scheduler decides whether a turn has ended by reading ev.type,
+// ev.willRetry and ev.status. A test that hand-builds those events asserts a
+// contract its own author invented: rename willRetry in the client and every
+// error becomes terminal, a routine is released mid-turn, a second run starts
+// alongside the first, and every test in this file stays green while saying
+// the opposite. Verified by doing it.
+//
+// A client that was never started refuses its first request, and that refusal
+// runs the same event construction the live paths run: one error event and one
+// terminal event, built by the client, with no process spawned and nothing
+// left running.
+async function realTurnEvents() {
+  const server = createCodexAppServer({ binPath: '/nonexistent', cwd: os.tmpdir(), requestTimeoutMs: 200 });
+  const seen = [];
+  const sub = server.startTurn('thread-contract', 'contract probe');
+  sub.on('event', (ev) => seen.push(ev));
+
+  // The retryable error comes from the streaming path, which is the only one
+  // that ever sets the flag true and is a different construction site from the
+  // two below. Fed as a wire notification built by the fixture the stub and
+  // the client's own tests share, so the shape is not this file's either. The
+  // turn state exists from the synchronous startTurn above until the refusal
+  // below is handled, so this ordering is microtask-deterministic.
+  const wire = asfx.errorNotification('thread-contract', 'turn-contract', { message: 'rate limited', willRetry: true });
+  server._onNotification(wire.method, wire.params);
+  const retryable = seen.find(e => e.type === 'error');
+  assert.ok(retryable && retryable.willRetry === true, 'the client built a retryable error');
+
+  assert.ok(await until(() => seen.some(e => e.type === 'done')), 'the client reached a terminal event');
+  const error = seen.filter(e => e.type === 'error').find(e => e !== retryable);
+  assert.ok(error, 'and emitted a non-retryable error alongside it');
+  return { error, retryable, done: seen.find(e => e.type === 'done') };
+}
+
 const CODEX_AGENT = { id: 'runner', name: 'Runner', runtime: 'codex' };
 
 test('unwired root deps throw the named wiring error at first use', () => {
@@ -251,6 +289,23 @@ test('a failure reported as both an error and a close records one outcome', asyn
   });
 });
 
+// The contract the two tests below rest on, asserted against the client that
+// owns it. Without this they rest on nothing: the fields are read by the
+// scheduler and supplied by the tests, so the tests agree with themselves.
+test('the codex fields the scheduler reads are the ones the client emits', async () => {
+  const { error, retryable, done } = await realTurnEvents();
+  // Both construction sites, because renaming either one alone would leave the
+  // other still answering and this test still green.
+  for (const [what, ev] of [['a failed start', error], ['a streamed turn error', retryable]]) {
+    assert.strictEqual(ev.type, 'error', `${what} is typed error`);
+    assert.ok(Object.hasOwn(ev, 'willRetry'),
+      `${what} carries willRetry, which is how the scheduler decides an error ended the turn: renamed, every error ends it and a routine is released mid-run`);
+  }
+  assert.strictEqual(done.type, 'done', 'a turn ending is typed done');
+  assert.ok(Object.hasOwn(done, 'status'),
+    'and the scheduler decides success by reading status on it');
+});
+
 // The codex half of AC-7, and the half this card's own change made worse. The
 // outcome promise resolved only on a `done` event. Before single-flight, a
 // turn that never reached one left stale running state and the next window
@@ -264,13 +319,15 @@ test('a failure reported as both an error and a close records one outcome', asyn
 // routine held on that staying true is held forever when it stops being true.
 test('a codex turn that ends without a done event does not hold the routine', async () => {
   await withTempWorkspaceAsync(async () => {
+    const real = await realTurnEvents();
     const sub = new EventEmitter();
     const server = { startThread: async () => ({ threadId: 't1' }), startTurn: () => sub };
     await withFakeCodex(server, async (sched) => {
       assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true, 'the run started');
       assert.ok(await until(() => sub.listenerCount('event') > 0), 'the run reached the turn subscription');
 
-      sub.emit('event', { type: 'error', message: 'app-server went away', kind: 'unknown', willRetry: false });
+      // The client's own non-retryable error, verbatim.
+      sub.emit('event', real.error);
 
       assert.ok(await until(() => sched.routineState[KEY] && sched.routineState[KEY].status !== 'running'),
         'the turn ending without a done event still recorded an outcome');
@@ -279,7 +336,7 @@ test('a codex turn that ends without a done event does not hold the routine', as
         'and released the routine, so the next start was allowed');
       await endedAfter(sched, async () => {
         await until(() => sub.listenerCount('event') > 1);
-        sub.emit('event', { type: 'done', status: 'completed', usage: null, error: null });
+        sub.emit('event', { ...real.done, status: 'completed' });
       });
     });
   });
@@ -291,26 +348,30 @@ test('a codex turn that ends without a done event does not hold the routine', as
 // alongside the first, which is the fault this whole change exists to stop.
 test('a codex error that will be retried is not an ending', async () => {
   await withTempWorkspaceAsync(async () => {
+    const real = await realTurnEvents();
     const sub = new EventEmitter();
     const server = { startThread: async () => ({ threadId: 't1' }), startTurn: () => sub };
     await withFakeCodex(server, async (sched) => {
       assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true, 'the run started');
       assert.ok(await until(() => sub.listenerCount('event') > 0), 'the run reached the turn subscription');
 
-      sub.emit('event', { type: 'error', message: 'rate limited', kind: 'quota', willRetry: true });
+      // The client's own retryable error, verbatim: no field of it is named
+      // here, so a rename in the client arrives intact rather than being
+      // papered over by a literal this file wrote.
+      sub.emit('event', real.retryable);
       await until(() => false, 4); // give a wrong release time to happen
 
       assert.strictEqual(sched.routineState[KEY].status, 'running', 'the turn is still going');
       assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), false,
         'so the routine is still held');
 
-      sub.emit('event', { type: 'done', status: 'completed', usage: null, error: null });
+      sub.emit('event', { ...real.done, status: 'completed' });
       assert.ok(await until(() => sched.routineState[KEY].status !== 'running'), 'the turn then ended');
       assert.strictEqual(sched.routineState[KEY].status, 'completed', 'as a success, because the retry worked');
       assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true, 'and released the routine');
       await endedAfter(sched, async () => {
         await until(() => sub.listenerCount('event') > 1);
-        sub.emit('event', { type: 'done', status: 'completed', usage: null, error: null });
+        sub.emit('event', { ...real.done, status: 'completed' });
       });
     });
   });
