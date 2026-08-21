@@ -1003,3 +1003,118 @@ test('a routine renamed while the machine slept wakes with no history, and the o
       'and the old name was not swept off with the roster, unlike its announcement');
   });
 });
+
+// WRITER AND READER, MADE TO AGREE. The record's shape is stated twice in
+// production: once where a slot is pushed, once where the load path names the
+// fields it will keep. Nothing but a round trip makes those two agree, and the
+// failure is silent in the worst possible way: the filter is per record, so a
+// renamed field leaves the file parsing cleanly and coming back empty, with no
+// error and no log line.
+//
+// It also lands exactly where the feature is for. These records are written
+// just before a process dies and are only ever of use once it restarts, so
+// every in-memory assertion in this diff could stay green while a laptop
+// closed for five days reopened showing nothing.
+test('a missed record survives the file it is written to, with its content intact', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, LATE_ROUTINE);
+    observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
+    observeOnce(t, sched, new Date(2026, 7, 17, 8, 0, 0));
+
+    const nights = [
+      { slot: new Date(2026, 7, 15, 23, 0, 0).toISOString() },
+      { slot: new Date(2026, 7, 16, 23, 0, 0).toISOString() },
+    ];
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, nights,
+      'two unwatched nights went by and both were recorded');
+
+    const file = path.join(ws, '.rundock', 'routine-slots.json');
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).routines[LATE_KEY].missed, nights,
+      'and reached the file in the shape they were written in');
+
+    // What a restart starts from: nothing in memory, everything on disk.
+    delete sched.routineSlots.routines[LATE_KEY];
+    sched.loadRoutineSlots();
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, nights,
+      'and came back off it, which is the only moment they are ever read');
+  });
+});
+
+test('a slot entry with no due instant is dropped on load, without taking the file with it', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, LATE_ROUTINE);
+    observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
+    observeOnce(t, sched, new Date(2026, 7, 17, 8, 0, 0));
+
+    // Production's own file with one field taken back out: a hand edit, a
+    // truncated write, an older shape. An entry with no due instant has
+    // nothing to walk from, so keeping it would walk from an invalid date.
+    const file = path.join(ws, '.rundock', 'routine-slots.json');
+    const saved = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    assert.strictEqual(saved.routines[LATE_KEY].missed.length, 2, 'the entry about to be damaged had real history');
+    delete saved.routines[LATE_KEY].due;
+    fs.writeFileSync(file, JSON.stringify(saved, null, 2));
+
+    sched.loadRoutineSlots();
+    assert.strictEqual(sched.routineSlots.routines[LATE_KEY], undefined,
+      'the entry was dropped whole rather than loaded with nothing to anchor it');
+    assert.strictEqual(sched.routineSlots.observedAt, saved.observedAt,
+      'and the rest of the file still loaded: one bad entry is not a lost workspace');
+  });
+});
+
+// Weekly is half the grammar, and the walk steps by a different amount for it.
+test('a weekly routine walks a week at a time, so a fortnight closed leaves two records', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, [{ name: 'weekly', schedule: 'every friday at 23:00', prompt: 'p' }]);
+    const key = 'nightly:weekly';
+
+    observeOnce(t, sched, new Date(2026, 7, 21, 8, 0, 0)); // Friday 21 August 2026
+    assert.strictEqual(sched.routineSlots.routines[key].due, new Date(2026, 7, 21, 23, 0, 0).toISOString(),
+      'on its own weekday the slot is today, still ahead at 08:00');
+
+    observeOnce(t, sched, new Date(2026, 8, 4, 8, 0, 0)); // two Fridays later
+    assert.deepStrictEqual(sched.routineSlots.routines[key].missed, [
+      { slot: new Date(2026, 7, 21, 23, 0, 0).toISOString() },
+      { slot: new Date(2026, 7, 28, 23, 0, 0).toISOString() },
+    ], 'two Fridays passed unwatched, and the thirteen days between them are not slots');
+    assert.strictEqual(sched.routineSlots.routines[key].due, new Date(2026, 8, 4, 23, 0, 0).toISOString(),
+      "and today's Friday is still to come rather than already gone");
+  });
+});
+
+// The complaint is throttled per outage, so the flag that throttles it has to
+// end with the workspace it described. Otherwise the first unwritable
+// workspace silences every one that follows it, for the life of the process.
+test('a second unwritable workspace is announced too, rather than silenced by the first', (t) => {
+  const sched = freshScheduler();
+  const config = require('../../lib/config.js');
+  const original = config.getWorkspace();
+  const wsA = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-unwritable-a-'));
+  const wsB = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-unwritable-b-'));
+  const errors = [];
+  t.mock.method(console, 'error', (...args) => errors.push(args.join(' ')));
+  const complaints = () => errors.filter(e => e.includes('Failed to persist routine slots')).length;
+  try {
+    for (const ws of [wsA, wsB]) {
+      writeRoutineAgent(ws, LATE_ROUTINE);
+      fs.writeFileSync(path.join(ws, '.rundock'), 'a file, not a directory');
+    }
+    config.setWorkspace(wsA);
+    observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
+    assert.strictEqual(complaints(), 1, "workspace A's outage was announced");
+
+    config.setWorkspace(wsB);
+    sched.loadRoutineState();
+    observeOnce(t, sched, new Date(2026, 7, 15, 9, 0, 0));
+    assert.strictEqual(complaints(), 2, "and so was workspace B's, which is a different workspace failing");
+  } finally {
+    config.setWorkspace(original);
+    invalidateAgentCache();
+    fs.rmSync(wsA, { recursive: true, force: true });
+    fs.rmSync(wsB, { recursive: true, force: true });
+  }
+});
