@@ -195,6 +195,68 @@ describe('handler seams (stub ctx, capture ws)', () => {
     }
   });
 
+  // The error path in handleCreatePath: the catch that answers create_error
+  // when the create itself throws, as opposed to the two guard branches above
+  // it that refuse a path before touching the disk.
+  //
+  // WHY THIS TEST EXISTS AT ALL. Those two lines were already counted as
+  // covered, but by accident: whichever test happened to make a create throw
+  // picked them up, and when a run interleaved so that none did, the file
+  // measured 95.3% against a 97.5% floor and the floors job went red on
+  // changes that touched neither file. A floor held up by incidental coverage
+  // protects nothing and reports a number that is not about the tests.
+  //
+  // The throw is real, not injected: `notes` is created as a FILE, so the
+  // handler's own `fs.mkdirSync(path.dirname(full), { recursive: true })`
+  // fails EEXIST on it. The path clears both guards on their own terms, so
+  // the message reaches the try for the same reason a real one would.
+  // Asserting the
+  // errno reason rather than merely "a create_error was sent" is what
+  // separates this from the branch above: the guards answer with the fixed
+  // strings 'invalid path' and 'already exists', so an EEXIST reason can only
+  // have come from the catch.
+  test('create_path answers create_error carrying the failure reason when the create itself throws', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-handlers-'));
+    try {
+      config.setWorkspace(dir);
+      // The obstruction: a regular file where the handler must make a folder.
+      fs.writeFileSync(path.join(dir, 'notes'), 'not a directory', 'utf-8');
+      let broadcasts = 0;
+      const ctx = {
+        workspace: {
+          // Real containment against this workspace rather than `() => true`:
+          // server.js's own isInsideWorkspace reads a module-local WORKSPACE
+          // that config.setWorkspace does not touch, so it cannot be borrowed
+          // here, but the rule it applies can be. isSafeCreatePath is pure and
+          // is used as it ships.
+          isInsideWorkspace: (p) => path.resolve(p).startsWith(path.resolve(dir) + path.sep),
+          isSafeCreatePath: srv.isSafeCreatePath,
+          invalidateFileListCache: () => {},
+          invalidateFileTreeCache: () => {},
+          broadcastFileTree: () => { broadcasts++; },
+        },
+        store: { ensureSearchEngine: () => null },
+      };
+      const ws = captureWs();
+      table.create_path(ctx, ws, { type: 'create_path', path: 'notes/x.md', kind: 'file', content: 'hi' });
+
+      assert.strictEqual(ws.sent.length, 1, 'exactly one answer');
+      const [answer] = ws.sent;
+      assert.strictEqual(answer.type, 'create_error');
+      assert.strictEqual(answer.path, 'notes/x.md');
+      // The errno text, which no guard branch can produce.
+      assert.match(answer.reason, /^EEXIST:/, `the catch reported the real failure, got ${answer.reason}`);
+      assert.strictEqual(broadcasts, 0, 'a failed create broadcasts no tree');
+      assert.ok(!fs.existsSync(path.join(dir, 'notes', 'x.md')), 'nothing was created');
+      assert.ok(fs.statSync(path.join(dir, 'notes')).isFile(), 'the obstruction is untouched');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('get_skills answers from ctx.agents.discoverSkills', () => {
     const table = buildDispatch();
     const ctx = { agents: { discoverSkills: () => [{ id: 'linting', name: 'Linting' }] } };
