@@ -976,3 +976,30 @@ test('a due instant years behind is bounded rather than enumerated, and resyncs'
       'so the next tick walks nothing: giving up once is giving up');
   });
 });
+
+// A routine RENAMED while the machine slept, which is the case that makes
+// both halves of this necessary. The new name is a key the scheduler has
+// never seen, so it has no history and must not be handed one: a rename would
+// otherwise report the whole sleep as gaps the moment the machine woke. And
+// the old name keeps what it earned, because a gap record is history and a
+// rename is not a reason to lose it. The announcement map answers the same
+// question the other way, on purpose: a silence outliving what it described
+// is handed to whatever is written under the name next.
+test('a routine renamed while the machine slept wakes with no history, and the old name keeps its own', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, LATE_ROUTINE);
+    observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
+    assert.ok(sched.routineSlots.routines[LATE_KEY], 'the original name was being watched');
+
+    writeRoutineAgent(ws, [{ name: 'renamed', schedule: 'every day at 23:00', prompt: 'p' }]);
+    observeOnce(t, sched, new Date(2026, 7, 21, 8, 0, 0));
+
+    assert.deepStrictEqual(sched.routineSlots.routines['nightly:renamed'].missed, [],
+      'six days of sleep were not billed to a name the scheduler had never seen');
+    assert.strictEqual(sched.routineSlots.routines['nightly:renamed'].due, new Date(2026, 7, 21, 23, 0, 0).toISOString(),
+      'it starts from the slot it is next due, which is what the next wake compares against');
+    assert.ok(sched.routineSlots.routines[LATE_KEY],
+      'and the old name was not swept off with the roster, unlike its announcement');
+  });
+});
