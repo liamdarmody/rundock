@@ -16,7 +16,7 @@ const { parseRoutines, extractFrontmatterText } = require('../../lib/agents/disc
 const { _internal: srv } = require('../../server.js');
 const { makeWorkspace, agentFile, cleanup } = require('../helpers/workspace.js');
 const {
-  updateRoutineBlock, normalizeRoutine, isRunOnSupported,
+  updateRoutineBlock, normalizeRoutine, isRunOnSupported, computePlanHash,
 } = require('../../lib/agents/routines.js');
 
 const FIXTURE = [
@@ -193,5 +193,70 @@ describe('ownership', () => {
     const penn = srv.discoverAgents().find(a => a.id === 'content-lead');
     assert.strictEqual(penn.routines[0].owner, 'content-lead');
     assert.strictEqual(penn.routines[1].owner, 'executive-assistant');
+  });
+});
+
+describe('plan hash', () => {
+  const plan = (fields) => computePlanHash(normalizeRoutine({
+    name: 'morning-digest', prompt: 'Run the digest', skill: 'content-linter', ...fields,
+  }, { owner: 'penn' }));
+
+  // The unchanged cases are the ones that matter. A hash that moved when the
+  // schedule moved would invalidate an approval every time someone shifted a
+  // routine by ten minutes, which makes approval worthless.
+  test('changing only the schedule leaves the hash unchanged', () => {
+    assert.strictEqual(
+      plan({ schedule: 'every day at 08:00' }),
+      plan({ schedule: 'every friday at 16:00' }));
+  });
+
+  test('changing enabled or paused leaves the hash unchanged', () => {
+    const base = plan({});
+    assert.strictEqual(plan({ enabled: 'false' }), base);
+    assert.strictEqual(plan({ paused: 'true' }), base);
+  });
+
+  test('changing what the routine does changes the hash', () => {
+    const base = plan({});
+    assert.notStrictEqual(plan({ prompt: 'Run something else' }), base);
+    assert.notStrictEqual(plan({ skill: 'voice-editor' }), base);
+    assert.notStrictEqual(plan({ runOn: 'agent-computer' }), base);
+    assert.notStrictEqual(plan({ owner: 'executive-assistant' }), base);
+  });
+
+  test('the hash does not depend on the order the fields appear in the file', () => {
+    const ordered = [
+      'routines:',
+      '  - name: morning-digest',
+      '    schedule: every day at 08:00',
+      '    prompt: Run the digest',
+      '    skill: content-linter',
+      '    runOn: local',
+    ].join('\n');
+    const shuffled = [
+      'routines:',
+      '  - name: morning-digest',
+      '    runOn: local',
+      '    skill: content-linter',
+      '    prompt: Run the digest',
+      '    schedule: every day at 08:00',
+    ].join('\n');
+    const hashOf = (fm) => computePlanHash(parseRoutines(fm, { owner: 'penn' })[0]);
+    assert.strictEqual(hashOf(shuffled), hashOf(ordered));
+  });
+
+  test('the hash is stable across a write-then-read cycle', () => {
+    const source = parseRoutines(extractFrontmatterText(FIXTURE), { owner: 'penn' })
+      .find(r => r.name === 'morning-digest');
+    const before = computePlanHash(source);
+    const updated = updateRoutineBlock(FIXTURE, 'morning-digest', {
+      planHash: before, planApprovedAt: '2026-08-21T09:00:00.000Z',
+    });
+    const readBack = parseRoutines(extractFrontmatterText(updated), { owner: 'penn' })
+      .find(r => r.name === 'morning-digest');
+    // Both halves: the stored value survives, and recomputing from what came
+    // back off disk lands on the same hash.
+    assert.strictEqual(readBack.planHash, before);
+    assert.strictEqual(computePlanHash(readBack), before);
   });
 });
