@@ -18,6 +18,8 @@ const SCHEDULER_KEY = require.resolve('../../lib/scheduler.js');
 const CLAUDE_KEY = require.resolve('../../lib/runtime/claude.js');
 const CODEX_GLUE_KEY = require.resolve('../../lib/runtime/codex-glue.js');
 const { createCodexAppServer } = require('../../codex-appserver.js');
+const { discoverAgents, invalidateAgentCache } = require('../../lib/agents/discovery.js');
+const { agentFile } = require('../helpers/workspace.js');
 const asfx = require('../fixtures/codex-appserver-protocol.js');
 const PROMPT_KEY = require.resolve('../../lib/agents/prompt.js');
 const STUB_CODEX = path.join(__dirname, '..', 'helpers', 'stub-codex', 'codex');
@@ -299,7 +301,25 @@ function defaultedDone() {
   return done;
 }
 
-const CODEX_AGENT = { id: 'runner', name: 'Runner', runtime: 'codex' };
+// The agent that sends a routine down the codex branch, DISCOVERED rather
+// than declared. All four codex tests take that branch because of the runtime
+// field, and discovery is what really decides it: the field is case-folded,
+// anything unrecognised falls back to claude, and an orchestrator is forced to
+// claude whatever its file says. A literal here asserts none of that, and the
+// tests would keep taking the branch after discovery stopped putting anything
+// on it.
+function realCodexAgent(dir) {
+  const agentsDir = path.join(dir, '.claude', 'agents');
+  fs.mkdirSync(agentsDir, { recursive: true });
+  fs.writeFileSync(path.join(agentsDir, 'runner.md'),
+    agentFile({ name: 'Runner', type: 'specialist', order: 1, runtime: 'codex', body: 'runner instructions' }));
+  invalidateAgentCache();
+  const agent = discoverAgents().find(a => a.id === 'runner');
+  assert.ok(agent, 'the roster carries the agent this test wrote');
+  assert.strictEqual(agent.runtime, 'codex',
+    'and discovery put it on the codex runtime, which is what sends its routines down the branch under test');
+  return agent;
+}
 
 test('unwired root deps throw the named wiring error at first use', () => {
   withTempWorkspace(() => {
@@ -433,7 +453,8 @@ test('the codex fields the scheduler reads are the ones the client emits', async
 // terminal and exactly once and every path in it reaches one today, and a
 // routine held on that staying true is held forever when it stops being true.
 test('a codex turn that ends without a done event does not hold the routine', async () => {
-  await withTempWorkspaceAsync(async () => {
+  await withTempWorkspaceAsync(async (dir) => {
+    const CODEX_AGENT = realCodexAgent(dir);
     const real = await realTurnEvents();
     const sub = new EventEmitter();
     // The client's own thread result, so the scheduler destructures the real
@@ -469,7 +490,8 @@ test('a codex turn that ends without a done event does not hold the routine', as
 // turn is still going, and releasing there would let a second run start
 // alongside the first, which is the fault this whole change exists to stop.
 test('a codex error that will be retried is not an ending', async () => {
-  await withTempWorkspaceAsync(async () => {
+  await withTempWorkspaceAsync(async (dir) => {
+    const CODEX_AGENT = realCodexAgent(dir);
     const real = await realTurnEvents();
     const sub = new EventEmitter();
     // The client's own thread result, so the scheduler destructures the real
@@ -509,7 +531,8 @@ test('a codex error that will be retried is not an ending', async () => {
 // AC-5 on the codex path. The rejection handler was implemented and only ever
 // exercised for the outcome it records, never for the release it also owes.
 test('a codex run that cannot start its thread releases the routine', async () => {
-  await withTempWorkspaceAsync(async () => {
+  await withTempWorkspaceAsync(async (dir) => {
+    const CODEX_AGENT = realCodexAgent(dir);
     const server = {
       startThread: async () => { throw new Error('thread/start refused'); },
       startTurn: () => { throw new Error('never reached'); },
