@@ -81,6 +81,12 @@ function agentFile({ name, displayName, role, type, order, reportsTo, model, run
       lines.push(`  - name: ${r.name}`);
       if (r.schedule) lines.push(`    schedule: ${r.schedule}`);
       if (r.prompt) lines.push(`    prompt: ${r.prompt}`);
+      // Any other key an author might write, so a fixture can declare the
+      // routine fields this helper predates without knowing about each one.
+      for (const [k, v] of Object.entries(r)) {
+        if (k === 'name' || k === 'schedule' || k === 'prompt') continue;
+        lines.push(`    ${k}: ${v}`);
+      }
     }
   }
   lines.push('---', '');
