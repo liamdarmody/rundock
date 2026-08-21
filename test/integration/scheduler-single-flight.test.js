@@ -86,8 +86,14 @@ before(async () => {
   prevDeps = scheduler.wireSchedulerDeps({ now: () => clock.at });
 });
 
+// The two prompts whose scenario rules hang. Every other run in this file
+// exits in milliseconds, and signalling a pid that exited long ago is how a
+// recycled pid gets signalled instead. Each of these is killed by the test
+// that started it; this is the net under a test that failed before it could.
+const HANGING = ['slow body', 'first twin body'];
+
 after(async () => {
-  for (const inv of h.readInvocations()) killPid(inv.pid);
+  for (const prompt of HANGING) for (const inv of spawns(prompt)) killPid(inv.pid);
   if (prevDeps) scheduler.wireSchedulerDeps(prevDeps);
   await h.shutdown();
 });
