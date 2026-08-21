@@ -114,3 +114,26 @@ test('a run left "running" by a dead server loads back as "interrupted", still s
     assert.strictEqual(sched.routineState['bad:entry'], undefined, 'entries without a lastRun string are dropped');
   });
 });
+
+// ===== THE CLOCK SEAM =====
+// The tick used to call the clock directly, so the only way to reach a
+// scheduled instant was to wait for it. These pin the seam itself: the tick
+// reads the wired clock, and it reads it once per tick, which is what makes
+// the tick countable in the lifecycle tests below.
+
+test('the tick reads the current time through the wired clock seam', (t) => {
+  withTempWorkspace(() => {
+    const sched = freshScheduler();
+    let reads = 0;
+    const fixed = new Date(2026, 6, 1, 8, 0, 0);
+    sched.wireSchedulerDeps({ now: () => { reads += 1; return fixed; } });
+    t.mock.timers.enable({ apis: ['setInterval'] });
+    try {
+      sched.startScheduler();
+      t.mock.timers.tick(60_000);
+      assert.strictEqual(reads, 1, 'the tick took its instant from the wired clock, once');
+    } finally {
+      t.mock.timers.reset();
+    }
+  });
+});
