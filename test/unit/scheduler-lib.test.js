@@ -153,6 +153,31 @@ test('a failure reported as both an error and a close records one outcome', () =
   });
 });
 
+// The decision that the in-flight set is NOT reset by a workspace switch,
+// pinned so it cannot be quietly corrected into consistency with the two
+// states beside it that ARE reset. Those describe the workspace being left.
+// A run in flight is a child process that is still running, and clearing its
+// key would free the routine to start again while the first run was still
+// going, with the eventual release then having nothing to release.
+test('switching workspace does not release a run that is still going', () => {
+  withTempWorkspace(() => {
+    const child = new EventEmitter();
+    withFakeSpawn(() => child, (sched) => {
+      assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true, 'the run started');
+      sched.loadRoutineState(); // what a workspace switch calls
+      // Only loadRoutineState writes this value, so it is the proof the reset
+      // really ran rather than being skipped over.
+      assert.strictEqual(sched.routineState[KEY].status, 'interrupted',
+        'the switch rebuilt the run state from the workspace file');
+      assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), false,
+        'and the hold survived it, because the child it describes is still running');
+      child.emit('close', 0);
+      assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true,
+        'the run ending is the only thing that releases it, switch or no switch');
+    });
+  });
+});
+
 // AC-6, at the call site it is about rather than at one that stands in for it.
 test('a start whose spawn throws does not hold the routine', () => {
   withTempWorkspace(() => {
