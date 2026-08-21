@@ -29,7 +29,8 @@ const SLOW = 'slow:slow-check';
 const OTHER = 'other:other-check';
 const TWIN = 'twin:twin-check';
 const BRISK = 'brisk:brisk-check';
-const ALL = [SLOW, OTHER, TWIN, BRISK];
+const FALL = 'faller:fall-check';
+const ALL = [SLOW, OTHER, TWIN, BRISK, FALL];
 
 // July 2026, local time, so the fixture is timezone-independent. Each test
 // owns its own days: the run under test has to survive from one day to the
@@ -74,6 +75,12 @@ before(async () => {
         name: 'brisk', type: 'specialist', order: 4,
         routines: [{ name: 'brisk-check', schedule: 'every day at 06:00', prompt: 'brisk body' }],
       }),
+      // Hangs like the slow routine, and belongs to the failure test alone, so
+      // that test starts the run it later kills rather than inheriting one.
+      faller: agentFile({
+        name: 'faller', type: 'specialist', order: 5,
+        routines: [{ name: 'fall-check', schedule: 'every day at 09:00', prompt: 'fall body' }],
+      }),
     },
   });
   h.writeScenario([
@@ -82,6 +89,7 @@ before(async () => {
     { match: { agent: 'twin', promptIncludes: 'first twin body' }, delayMs: 600000, turn: [{ text: 'never arrives' }] },
     { match: { agent: 'twin', promptIncludes: 'second twin body' }, turn: [{ text: 'the twin should never run' }] },
     { match: { agent: 'brisk', promptIncludes: 'brisk body' }, turn: [{ text: 'brisk ran' }] },
+    { match: { agent: 'faller', promptIncludes: 'fall body' }, delayMs: 600000, turn: [{ text: 'never arrives' }] },
   ]);
   prevDeps = scheduler.wireSchedulerDeps({ now: () => clock.at });
 });
@@ -90,7 +98,7 @@ before(async () => {
 // exits in milliseconds, and signalling a pid that exited long ago is how a
 // recycled pid gets signalled instead. Each of these is killed by the test
 // that started it; this is the net under a test that failed before it could.
-const HANGING = ['slow body', 'first twin body'];
+const HANGING = ['slow body', 'fall body', 'first twin body'];
 
 after(async () => {
   for (const prompt of HANGING) for (const inv of spawns(prompt)) killPid(inv.pid);
@@ -197,27 +205,41 @@ test('a routine whose run outlives its window is not started a second time', asy
   await settled(OTHER);
   assert.strictEqual(spawns('slow body').length, 1,
     'the routine still in flight was not started a second time');
+
+  // Ended here rather than left for the next test. A run this file starts is
+  // this test's to finish, or the next test is reading state it did not make.
+  killPid(spawns('slow body')[0].pid);
+  assert.ok(await settled(SLOW), 'the run this test started has finished');
 });
 
 test('a run that fails releases the routine, and the next window starts a new one', async (t) => {
-  const [running] = spawns('slow body');
+  clock.at = dayAt(8, 9, 30);
+  delete h.internal.routineState[FALL];
+  quieten(8, [FALL]);
+
+  driveTick(t);
+  const [running] = await waitForSpawns('fall body', 1);
+  assert.strictEqual(h.internal.routineState[FALL].status, 'running',
+    'this test started its own run rather than inheriting one');
+
   killPid(running.pid);
-  assert.ok(await settled(SLOW), 'the killed run reached an outcome');
-  assert.strictEqual(h.internal.routineState[SLOW].status, 'failed',
+  assert.ok(await settled(FALL), 'the killed run reached an outcome');
+  assert.strictEqual(h.internal.routineState[FALL].status, 'failed',
     'a run whose child dies is recorded as failed');
 
-  clock.at = dayAt(3, 9, 30);
-  quieten(3, [SLOW]);
+  clock.at = dayAt(9, 9, 30);
+  quieten(9, [FALL]);
   const logs = driveTick(t);
 
-  assert.ok(logs.some(l => l.includes('Running routine') && l.includes('slow-check')),
+  assert.ok(logs.some(l => l.includes('Running routine') && l.includes('fall-check')),
     'the failed run released the routine, so the next window started a new one');
-  const started = await waitForSpawns('slow body', 2);
+  const started = await waitForSpawns('fall body', 2);
   assert.strictEqual(started.length, 2, 'exactly one further run, not two');
-  assert.strictEqual(h.internal.routineState[SLOW].lastRun, dayAt(3, 9, 30).toISOString(),
+  assert.strictEqual(h.internal.routineState[FALL].lastRun, dayAt(9, 9, 30).toISOString(),
     'and the new run is stamped with this tick');
+
   killPid(started[1].pid);
-  await settled(SLOW);
+  assert.ok(await settled(FALL), 'the run this test started has finished');
 });
 
 test('a run that completes releases the routine', async (t) => {
@@ -265,6 +287,8 @@ test('two routines sharing a name under one agent are held together', async (t) 
   await waitForSpawns('first twin body', 1);
   const held = { ...h.internal.routineState[TWIN] };
   assert.strictEqual(held.status, 'running', 'the first namesake started');
+  assert.strictEqual(held.lastRun, dayAt(6, 9, 30).toISOString(),
+    'and its run belongs to this drive, so the comparison below is against a run this test made');
 
   // 08:30 the next day: the first namesake (09:00) is not due, the second
   // (07:00) is, and it has never run. Anything it does now is its own.
@@ -280,6 +304,8 @@ test('two routines sharing a name under one agent are held together', async (t) 
 
   assert.ok(logs.some(l => l.includes('Running routine') && l.includes('brisk-check')),
     'a routine of another name started on the same tick, so that tick was live');
+  assert.strictEqual(h.internal.routineState[BRISK].lastRun, dayAt(7, 8, 30).toISOString(),
+    'and the control run belongs to this tick rather than to an earlier test');
 
   // Read after the control's run has been and gone, for the same reason as
   // above: the invocation log lags the tick by a whole child process.
