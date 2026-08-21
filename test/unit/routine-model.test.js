@@ -91,6 +91,32 @@ describe('routine write path', () => {
     assert.strictEqual(typeof r.planApprovedAt, 'string');
   });
 
+  // The test above writes the values normalizeRoutine invents when a key is
+  // absent or unreadable, so for runOn, enabled, paused and owner it cannot
+  // tell "survived the cycle" from "was defaulted": a writer that dropped
+  // those keys entirely would still pass it. These are the same fields with
+  // values nothing defaults to.
+  test('non-default values survive the cycle, so a dropped key cannot pass as a default', () => {
+    const updated = updateRoutineBlock(FIXTURE, 'morning-digest', {
+      runOn: 'agent-computer',
+      enabled: false,
+      paused: true,
+      owner: 'executive-assistant',
+    });
+    const r = parseRoutines(extractFrontmatterText(updated), { owner: 'penn' })
+      .find(x => x.name === 'morning-digest');
+
+    assert.strictEqual(r.runOn, 'agent-computer');
+    assert.strictEqual(r.enabled, false);
+    assert.strictEqual(r.paused, true);
+    assert.strictEqual(r.owner, 'executive-assistant');
+
+    assert.strictEqual(typeof r.runOn, 'string');
+    assert.strictEqual(typeof r.enabled, 'boolean');
+    assert.strictEqual(typeof r.paused, 'boolean');
+    assert.strictEqual(typeof r.owner, 'string');
+  });
+
   test('writing a routine leaves every other frontmatter key byte for byte', () => {
     const updated = updateRoutineBlock(FIXTURE, 'morning-digest', written);
     const before = splitFile(FIXTURE).frontmatter.split('\n');
@@ -244,6 +270,9 @@ describe('plan hash', () => {
       '    schedule: every day at 08:00',
     ].join('\n');
     const hashOf = (fm) => computePlanHash(parseRoutines(fm, { owner: 'penn' })[0]);
+    // Two hashes of nothing are also equal, so prove both files parsed first.
+    assert.strictEqual(parseRoutines(shuffled, { owner: 'penn' })[0].skill, 'content-linter');
+    assert.strictEqual(parseRoutines(ordered, { owner: 'penn' })[0].skill, 'content-linter');
     assert.strictEqual(hashOf(shuffled), hashOf(ordered));
   });
 
@@ -339,9 +368,13 @@ describe('migration of existing routines', () => {
     fs.writeFileSync(file, crlf);
 
     const routine = reread().find(a => a.id === AGENT).routines[0];
+    // runOn and enabled here equal what the reader invents for an absent key,
+    // so they cannot tell a migrated read from an unmigrated one. The plan
+    // hash can: nothing defaults it, and a routine the migration never saw
+    // comes back with it null.
+    assert.strictEqual(routine.planHash, computePlanHash(routine));
     assert.strictEqual(routine.runOn, 'local');
     assert.strictEqual(routine.enabled, true);
-    assert.strictEqual(typeof routine.planHash, 'string');
     // Rewriting every line in the file to record four keys is not a trade a
     // migration gets to make, so the file keeps its line endings and waits.
     assert.strictEqual(fs.readFileSync(file, 'utf-8'), crlf);
@@ -378,10 +411,12 @@ describe('migration of existing routines', () => {
       const routine = agents.find(a => a.id === AGENT).routines[0];
       // The read still returns the new representation: it is built in memory
       // and the write is only how it is remembered for next time.
+      // Again the plan hash is the assertion that discriminates: the other
+      // three are what the reader would invent even if migration did nothing.
+      assert.strictEqual(routine.planHash, computePlanHash(routine));
       assert.strictEqual(routine.runOn, 'local');
       assert.strictEqual(routine.enabled, true);
       assert.strictEqual(routine.paused, false);
-      assert.strictEqual(typeof routine.planHash, 'string');
     } finally {
       console.error = realError;
       fs.chmodSync(file, 0o644);
