@@ -183,6 +183,7 @@ test('a routine whose run outlives its window is not started a second time', asy
   // exactly the case the schedule rule cannot see.
   clock.at = dayAt(2, 9, 30);
   quieten(2, [SLOW, OTHER]);
+  const controlSpawns = spawns('other body').length;
   const logs = driveTick(t);
 
   // The stored state and the log line first: both are written synchronously by
@@ -200,11 +201,16 @@ test('a routine whose run outlives its window is not started a second time', asy
   assert.strictEqual(h.internal.routineState[OTHER].lastRun, dayAt(2, 9, 30).toISOString(),
     'and its run belongs to this tick rather than to the day before');
 
-  // Only now, with the control's whole spawn and exit elapsed, is the absence
-  // of a second slow spawn worth reading.
-  await settled(OTHER);
+  // The absence is read against a record this tick produced, not against time
+  // having passed. The control's spawn from THIS tick appearing in the
+  // invocation log is what makes the log current for this tick, so a second
+  // slow spawn would be in it if there were one. Waiting for the control to
+  // finish would only prove that some time elapsed, which is a reading rather
+  // than a record.
+  await waitForSpawns('other body', controlSpawns + 1);
   assert.strictEqual(spawns('slow body').length, 1,
     'the routine still in flight was not started a second time');
+  assert.ok(await settled(OTHER), 'the control run from this tick has finished');
 
   // Ended here rather than left for the next test. A run this file starts is
   // this test's to finish, or the next test is reading state it did not make.
@@ -294,6 +300,7 @@ test('two routines sharing a name under one agent are held together', async (t) 
   // (07:00) is, and it has never run. Anything it does now is its own.
   clock.at = dayAt(7, 8, 30);
   quieten(7, [TWIN, BRISK]);
+  const controlSpawns = spawns('brisk body').length;
   const logs = driveTick(t);
 
   assert.deepStrictEqual(h.internal.routineState[TWIN], held,
@@ -307,11 +314,13 @@ test('two routines sharing a name under one agent are held together', async (t) 
   assert.strictEqual(h.internal.routineState[BRISK].lastRun, dayAt(7, 8, 30).toISOString(),
     'and the control run belongs to this tick rather than to an earlier test');
 
-  // Read after the control's run has been and gone, for the same reason as
-  // above: the invocation log lags the tick by a whole child process.
-  await settled(BRISK);
+  // Read against this tick's own record, as above: the control's spawn landing
+  // in the log is what makes the log current for the tick that held the
+  // namesake.
+  await waitForSpawns('brisk body', controlSpawns + 1);
   assert.strictEqual(spawns('second twin body').length, 0,
     'the namesake did not start: the two share one identity, so one run holds both');
+  assert.ok(await settled(BRISK), 'the control run from this tick has finished');
 
   killPid(spawns('first twin body')[0].pid);
   await settled(TWIN);
