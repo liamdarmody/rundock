@@ -12,16 +12,20 @@
 // with plain fs writes into the workspace directory, because a write made
 // through a handler is exactly the case that already worked.
 //
-// HONESTY NOTE ON WHAT EACH TEST PROVES. Only the first test goes red when
-// the poll is removed; it is the one that proves the mechanism exists. The
-// other two are guard criteria of the form "and it must not also do X", so
-// with no poller at all they pass vacuously. They earn their place once the
-// poller is in, where they are the only thing standing between a working
-// push and one that fights the reconcile diff or duplicates in-app work.
+// HONESTY NOTE ON WHAT EACH TEST PROVES, measured by reverting rather than
+// assumed. THREE tests go red when the poll is removed, and they are the ones
+// that prove the mechanism exists: external create, external mkdir, external
+// delete. The remaining tests are guard criteria of the form "and it must not
+// also do X" (the two quiet cases, the in-app create, the in-app save, and
+// the workspace switch), so with no poller at all they pass vacuously. They
+// earn their place once the poller is in, where they are the only thing
+// standing between a working push and one that fights the reconcile diff or
+// duplicates work Rundock did itself.
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 
 const h = require('../helpers/harness.js');
 
@@ -68,6 +72,15 @@ function treePaths(nodes, out = []) {
   for (const n of nodes || []) {
     out.push(n.path);
     if (n.children) treePaths(n.children, out);
+  }
+  return out;
+}
+
+/** Only the file nodes in a tree payload, never the folders. */
+function treeFiles(nodes, out = []) {
+  for (const n of nodes || []) {
+    if (n.type === 'folder') treeFiles(n.children, out);
+    else out.push(n.path);
   }
   return out;
 }
@@ -227,6 +240,54 @@ describe('a change made outside Rundock reaches the file tree', () => {
     assert.strictEqual(
       dirReads, 0,
       `an idle poll must read no directories, saw ${dirReads} read(s)`
+    );
+  });
+
+  // LAST ON PURPOSE: this repoints the server at another directory, so any
+  // test after it would be measuring a workspace it did not set up.
+  test('opening a workspace does not leave the poll believing it missed a change', async () => {
+    // Opening a workspace scaffolds into it, which changes the tree AFTER the
+    // watcher has taken its baseline. If the tree that open sends is not
+    // recorded as sent, the baseline still describes the pre-scaffold
+    // directory, and the next cache invalidation that changes nothing
+    // structural (a content save) makes the poll compare against it and
+    // announce Rundock's own scaffolding as an external change.
+    const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'rundock-open-'));
+    const since = client.messages.length;
+    client.send({ type: 'set_workspace', path: fresh });
+
+    await client.waitFor(m => m.type === 'workspace_set', {
+      since,
+      timeout: 15000,
+      label: 'workspace_set for the freshly opened workspace',
+    });
+    const opened = await client.waitFor(m => m.type === 'file_tree', {
+      since,
+      timeout: 15000,
+      label: 'file_tree for the freshly opened workspace',
+    });
+
+    // Let the scaffold settle, then invalidate WITHOUT sending a tree. It has
+    // to be a content save: create_path rebuilds and records on its way out,
+    // which repairs a stale baseline and hides exactly the defect under test.
+    await h.delay(POLL_MS * 4);
+
+    const scaffolded = treeFiles(opened.msg.tree);
+    assert.ok(scaffolded.length > 0, 'opening a workspace must scaffold at least one visible file to save');
+
+    const quiet = client.messages.length;
+    client.send({ type: 'save_file', path: scaffolded[0], content: '# Edited after open\n' });
+    await client.waitFor(m => m.type === 'file_saved', {
+      since: quiet,
+      timeout: 8000,
+      label: 'file_saved in the freshly opened workspace',
+    });
+    await h.delay(POLL_MS * 6);
+
+    const pushes = pushesSince(quiet);
+    assert.strictEqual(
+      pushes.length, 0,
+      `a content save after a workspace open must produce zero file_tree pushes, saw ${pushes.length}`
     );
   });
 });
