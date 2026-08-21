@@ -423,3 +423,27 @@ describe('the writer at its edges', () => {
       /cannot contain a line break/);
   });
 });
+
+describe('writing a whole routine back', () => {
+  // The writer's contract invites a caller to hand it a routine and let it
+  // work out what to change, which means it is handed the nulls the reader
+  // produces for every field a file does not declare. Writing those through
+  // as text puts the four letters n-u-l-l in the file, and the next read hands
+  // back a string that is not null, is truthy, and hashes differently.
+  test('a routine with no skill round-trips unchanged, nulls and all', () => {
+    const parsed = parseRoutines(extractFrontmatterText(FIXTURE), { owner: 'penn' })
+      .find(r => r.name === 'morning-digest');
+    assert.strictEqual(parsed.skill, null, 'the fixture routine is supposed to declare no skill');
+    const before = computePlanHash(parsed);
+
+    const updated = updateRoutineBlock(FIXTURE, 'morning-digest', parsed);
+    const readBack = parseRoutines(extractFrontmatterText(updated), { owner: 'penn' })
+      .find(r => r.name === 'morning-digest');
+
+    assert.strictEqual(readBack.skill, null);
+    assert.strictEqual(readBack.planHash, null);
+    assert.strictEqual(readBack.planApprovedAt, null);
+    assert.ok(!updated.includes('null'), 'the text "null" reached the file');
+    assert.strictEqual(computePlanHash(readBack), before, 'the plan hash moved across a round trip');
+  });
+});
