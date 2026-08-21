@@ -120,7 +120,14 @@ describe('handler seams (stub ctx, capture ws)', () => {
     const ctx = {
       signals: { phaseTimer: () => { throw new Error('prepare exploded'); } },
       runtime: { killAllChildren: () => {} },
-      workspace: { setWorkspaceRoot: (d) => { rolledBack.push(d); config.setWorkspace(d); } },
+      workspace: {
+        setWorkspaceRoot: (d) => { rolledBack.push(d); config.setWorkspace(d); },
+        // The open path baselines the file-tree poller against the new
+        // directory before anything that can throw, so the rollback has to
+        // put the poller back or the failed workspace's tree is served as if
+        // it were this one. Arming clears the tree cache as part of arming.
+        armFileTreeWatcher: () => invalidated.push('tree-watch'),
+      },
       agents: { invalidateAgentCache: () => invalidated.push('agents') },
       store: { clearSearchFailure: () => invalidated.push('search') },
     };
@@ -131,7 +138,10 @@ describe('handler seams (stub ctx, capture ws)', () => {
       assert.strictEqual(ws.sent[0].type, 'workspace_error');
       assert.match(ws.sent[0].message, /^Could not open workspace: prepare exploded$/);
       assert.deepStrictEqual(rolledBack, [original], 'the previous root was restored');
-      assert.deepStrictEqual(invalidated, ['agents', 'search'], 'caches cleared after rollback');
+      // Order matters: the established steps must complete before the newer
+      // tree-poller rollback, because one catch covers the whole block.
+      assert.deepStrictEqual(invalidated, ['agents', 'search', 'tree-watch'],
+        'caches cleared and the tree poller re-armed after rollback');
       assert.strictEqual(config.getWorkspace(), original, 'no half-switch persists');
     } finally {
       config.setWorkspace(original);

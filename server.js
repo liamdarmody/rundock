@@ -1159,6 +1159,7 @@ const wsHandlerContext = {
     setWorkspaceRoot, healWorkspaceIfMoved, saveRecentWorkspace, loadRecentWorkspaces,
     discoverWorkspaces, isInsideWorkspace, isSafeCreatePath, getFileTreeCached,
     invalidateFileListCache, invalidateFileTreeCache, watchOpenFile,
+    fileTreeForSend, broadcastFileTree, armFileTreeWatcher,
   },
   runtime: { getRuntimeStatus, killAllChildren, cleanOrphanedProcesses },
   signals: { reportStartup, phaseTimer },         // startup telemetry (recordEvent is lib-owned)
@@ -1872,6 +1873,129 @@ function getFileTreeCached() {
   try { dirs.set(WORKSPACE, fs.statSync(WORKSPACE).mtimeMs); } catch (e) {}
   _treeCache = { tree, dirs };
   return tree;
+}
+
+// ── External-change poll ───────────────────────────────────────────────────
+// Nothing else watches the filesystem on the tree's behalf. The client asks
+// for the tree in exactly three places and all three mean "Rundock did
+// something": workspace open, after a file-writing tool call, and after an
+// agent turn. So a file written by anything else (a CLI agent session, an
+// editor, git, a sync client) never reached the sidebar until a restart,
+// while search saw it within seconds through its own TTL-gated reconcile.
+//
+// A self-owned POLLER, not fs.watch, for the reasons already written up at
+// the agents-directory watcher: event-based watching is where the 0.11.5
+// live-refresh data-loss bug lived, and fs.watch delivery differs across
+// platforms and Node versions. Detection is the tree cache's own freshness
+// pass, which is a directory-only stat walk, so a quiet workspace costs one
+// stat per directory and reads none of them.
+//
+// TWO GUARDS, because a push that fights the reconcile diff would undo the
+// no-flicker work that card bought.
+//
+// The first is identity, and it must NOT be a freshness check. _treeCache is
+// shared by every caller of getFileTreeCached, not only by the poll and the
+// handlers: the search file list and the grep file list both rebuild it on
+// their own expiry. So a search running between an external write and the
+// next tick rebuilds the cache to match the already-changed disk and marks it
+// fresh, without touching _lastSentTreeSig. A tick guarded on freshness then
+// returns before it ever compares signatures, and that external change is
+// never pushed at all: the sidebar stays stale until some unrelated change
+// happens to occur. An earlier revision of this poll had exactly that bug,
+// defended with a cost argument that assumed the poll and the handlers were
+// the only writers of the cache. They are not.
+//
+// Comparing the tree OBJECT instead is both correct and cheap. A fresh cache
+// hands back the same array every time, so an idle tick matches on identity
+// and returns without serialising anything. A cache rebuilt by anyone at all
+// hands back a new array, which fails identity and falls through to the
+// signature comparison, where a genuine change is caught and a rebuild that
+// changed nothing costs one serialisation and is dropped.
+//
+// The second is the signature, and it is the one that is easy to get wrong.
+// Cache invalidation is NOT evidence of an external change: every in-app save
+// and create calls invalidateFileTreeCache(), which makes treeCacheIsFresh()
+// false on the very next tick. Keying the push off freshness alone therefore
+// duplicates every tree the handlers already sent, and re-walks after every
+// content save. Comparing against the last tree actually SENT distinguishes
+// the two: the handlers record theirs through fileTreeForSend, so work that
+// went out through a handler is already accounted for by the time the poll
+// looks. Tree nodes carry only type, name, path and kind, never mtime or
+// size, so a content edit cannot move the signature on its own.
+//
+// One consequence worth naming: changing a note's frontmatter to a board DOES
+// move the signature, so the poll happens to close the fileKind gap recorded
+// against the cache above. That is a side effect of comparing trees rather
+// than an intended feature, and nothing should depend on it.
+const TREE_WATCH_POLL_MS = parseInt(process.env.RUNDOCK_TREE_POLL_MS || '', 10) || 2000;
+let _treeWatchTimer = null;
+let _lastSentTreeSig = null;
+// The exact array last compared. Identity only: never read for its contents.
+let _lastSeenTree = null;
+
+// The tree, plus a record that this is what clients have now been told. Every
+// site that sends a file_tree must go through here or through
+// broadcastFileTree, or the poll will send it again.
+//
+// Use this one only where the send genuinely concerns the requester alone.
+// The record it writes is process-global, so a send that reaches ONE client
+// while claiming the tree is delivered starves every other client of the
+// poll's broadcast: see broadcastFileTree.
+function fileTreeForSend() {
+  const tree = getFileTreeCached();
+  _lastSeenTree = tree;
+  _lastSentTreeSig = JSON.stringify(tree);
+  return tree;
+}
+
+// The tree, delivered to EVERY connected client, and recorded as delivered.
+//
+// The record that suppresses the poll is process-global, but a reply on one
+// socket is not. So a per-connection reply that recorded the tree as sent
+// would tell the poll to stay quiet about a change the other clients never
+// received, and they would sit stale until some later change happened to
+// occur. They made no request of their own, which is exactly the case the
+// poll exists to serve.
+//
+// The file tree is shared state: one server, one workspace, one tree. Every
+// client wants the same answer, so the send that records it as answered has
+// to be the send that reaches all of them. A client that did not ask
+// reconciles the push to zero operations and nothing moves on its screen.
+function broadcastFileTree() {
+  safeSend(JSON.stringify({ type: 'file_tree', tree: fileTreeForSend() }));
+}
+
+function armFileTreeWatcher() {
+  if (_treeWatchTimer) { clearInterval(_treeWatchTimer); _treeWatchTimer = null; }
+  if (!WORKSPACE) return;
+  // Drop the cache before baselining, because every caller has just pointed
+  // the server at a workspace and the cache still describes the previous one.
+  // Freshness re-stats the ABSOLUTE directory paths it recorded and never
+  // checks which workspace they belong to, so a previous workspace still
+  // sitting untouched on disk reads as fresh: the baseline would be taken
+  // from the wrong tree and the interval would go on stat-checking the wrong
+  // directories, unable to see any change in the workspace it is supposed to
+  // be watching. Arming is always a workspace boundary, so this is always the
+  // right thing to do here, and it belongs here rather than at each call site
+  // where the next one added would forget it.
+  invalidateFileTreeCache();
+  // Baseline against what is on disk right now, so entering a workspace is
+  // never itself reported as an external change.
+  _lastSeenTree = getFileTreeCached();
+  _lastSentTreeSig = JSON.stringify(_lastSeenTree);
+  _treeWatchTimer = setInterval(() => {
+    if (!WORKSPACE) return;
+    const tree = getFileTreeCached();
+    if (tree === _lastSeenTree) return;
+    _lastSeenTree = tree;
+    const sig = JSON.stringify(tree);
+    if (sig === _lastSentTreeSig) return;
+    _lastSentTreeSig = sig;
+    safeSend(JSON.stringify({ type: 'file_tree', tree }));
+    console.log('[FileTree] workspace changed on disk; pushed a refreshed tree');
+  }, TREE_WATCH_POLL_MS);
+  // Never hold shutdown open for a sidebar refresh.
+  if (_treeWatchTimer.unref) _treeWatchTimer.unref();
 }
 
 // ===== PROCESS CLEANUP (S4) =====
@@ -2860,6 +2984,7 @@ async function runUniversalSearch(msg) {
 
 function startServer(options = {}) {
   armAgentsDirWatcher();
+  armFileTreeWatcher();
   const port = options.port != null ? options.port : PORT;
   return new Promise((resolve) => {
     server.listen(port, () => {
@@ -2924,8 +3049,11 @@ module.exports = { startServer };
 // tests can point the module-level WORKSPACE at a temp fixture directory.
 module.exports._internal = {
   // workspace pointer (test fixture wiring only)
-  setWorkspace(dir) { setWorkspaceRoot(dir); invalidateAgentCache(); armAgentsDirWatcher(); },
+  setWorkspace(dir) { setWorkspaceRoot(dir); invalidateAgentCache(); armAgentsDirWatcher(); armFileTreeWatcher(); },
   getWorkspace() { return WORKSPACE; },
+  // file tree external-change poll
+  armFileTreeWatcher, fileTreeForSend, broadcastFileTree,
+  flatFileListCached, invalidateFileListCache,
   // scheduler
   getNextRun, executeRoutine, routineState, startScheduler,
   loadRoutineState, saveRoutineState, recordRoutineRun,
