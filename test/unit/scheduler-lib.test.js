@@ -210,6 +210,19 @@ async function realTurnEvents() {
 // is held for the life of the process: the one failure the comment on that
 // promise says the design refuses to rest on.
 //
+// The success token comes back with it, and for the same reason. The
+// scheduler branches on the status of the terminal event, and every test
+// below overwrote that one field with a token of its own, so the contract
+// test could only pin that a `done` HAS a status and never what a successful
+// one says. Rename the token and every successful codex routine records as
+// failed, in the routine state and in the signal, and the interface shows a
+// permanently failing routine while the tests stay green.
+//
+// Two tokens are read, because the client owns the value on one path and
+// passes it through on the other: a turn the stub really completes, and a
+// turn/completed carrying no status at all, where the client's own default is
+// the only thing that can name it.
+//
 // A real thread takes a real request round-trip, so this drives the repo's
 // stub app-server, binPath injected, the way codex-appserver's own tests drive
 // it. Nothing here can reach an installed codex. Started once for the file and
@@ -227,11 +240,35 @@ async function startRealCodexRun() {
   try {
     await server.start();
     const thread = await server.startThread({ cwd: dir });
-    return { thread };
+    // The id read as the value the client returned rather than by a name this
+    // file chose, so a rename has to reach the SCHEDULER's destructure, which
+    // is what the tests are about, rather than stopping here in the helper.
+    const [threadId] = Object.values(thread);
+    const seen = [];
+    server.startTurn(threadId, 'contract probe').on('event', (ev) => seen.push(ev));
+    assert.ok(await until(() => seen.some(e => e.type === 'done'), 3000),
+      'the probe turn reached its terminal event');
+    return { thread, done: seen.find(e => e.type === 'done'), defaulted: defaultedDone() };
   } finally {
     await server.shutdown();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+// The terminal event for a turn that completes without saying how, which is
+// the one success token the client owns rather than relays. Same never-started
+// client as realTurnEvents, and the same fixture, with the status removed from
+// the wire so the client has to supply it.
+function defaultedDone() {
+  const server = createCodexAppServer({ binPath: '/nonexistent', cwd: os.tmpdir(), requestTimeoutMs: 200 });
+  const seen = [];
+  server.startTurn('thread-default', 'default probe').on('event', (ev) => seen.push(ev));
+  const wire = asfx.turnCompleted('thread-default', 'turn-default');
+  delete wire.params.turn.status;
+  server._onNotification(wire.method, wire.params);
+  const done = seen.find(e => e.type === 'done');
+  assert.ok(done, 'the client ended the turn on a completion carrying no status');
+  return done;
 }
 
 const CODEX_AGENT = { id: 'runner', name: 'Runner', runtime: 'codex' };
@@ -344,9 +381,16 @@ test('the codex fields the scheduler reads are the ones the client emits', async
 
   // The thread the run is filed under, from the same client. The scheduler
   // destructures this key and hands what it finds to startTurn.
-  const { thread } = await realCodexRun();
+  const { thread, done: completed, defaulted } = await realCodexRun();
   assert.ok(Object.hasOwn(thread, 'threadId'),
     'startThread resolves the key the scheduler destructures: renamed, the turn is filed under undefined, turn/completed finds no state, no done arrives, and the routine is held for the life of the process');
+
+  // What a successful one SAYS, which is the half the assertion above cannot
+  // reach: the scheduler reads this exact token as success.
+  assert.strictEqual(completed.status, 'completed',
+    'a turn that ran to the end says completed, and the scheduler records success on that token alone: rename it and every successful routine records as failed');
+  assert.strictEqual(defaulted.status, completed.status,
+    'and a completion that carries no status gets the same token from the client, so the default cannot drift away from the value it stands in for');
 });
 
 // The codex half of AC-7, and the half this card's own change made worse. The
@@ -366,7 +410,8 @@ test('a codex turn that ends without a done event does not hold the routine', as
     const sub = new EventEmitter();
     // The client's own thread result, so the scheduler destructures the real
     // key, and what it hands on is recorded rather than ignored.
-    const { thread } = await realCodexRun();
+    const run = await realCodexRun();
+    const { thread } = run;
     let filedUnder;
     const server = { startThread: async () => thread, startTurn: (threadId) => { filedUnder = threadId; return sub; } };
     await withFakeCodex(server, async (sched) => {
@@ -385,7 +430,7 @@ test('a codex turn that ends without a done event does not hold the routine', as
         'and released the routine, so the next start was allowed');
       await endedAfter(sched, async () => {
         await until(() => sub.listenerCount('event') > 1);
-        sub.emit('event', { ...real.done, status: 'completed' });
+        sub.emit('event', run.done);
       });
     });
   });
@@ -401,7 +446,8 @@ test('a codex error that will be retried is not an ending', async () => {
     const sub = new EventEmitter();
     // The client's own thread result, so the scheduler destructures the real
     // key, and what it hands on is recorded rather than ignored.
-    const { thread } = await realCodexRun();
+    const run = await realCodexRun();
+    const { thread } = run;
     let filedUnder;
     const server = { startThread: async () => thread, startTurn: (threadId) => { filedUnder = threadId; return sub; } };
     await withFakeCodex(server, async (sched) => {
@@ -420,13 +466,13 @@ test('a codex error that will be retried is not an ending', async () => {
       assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), false,
         'so the routine is still held');
 
-      sub.emit('event', { ...real.done, status: 'completed' });
+      sub.emit('event', run.done);
       assert.ok(await until(() => sched.routineState[KEY].status !== 'running'), 'the turn then ended');
       assert.strictEqual(sched.routineState[KEY].status, 'completed', 'as a success, because the retry worked');
       assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true, 'and released the routine');
       await endedAfter(sched, async () => {
         await until(() => sub.listenerCount('event') > 1);
-        sub.emit('event', { ...real.done, status: 'completed' });
+        sub.emit('event', run.done);
       });
     });
   });
