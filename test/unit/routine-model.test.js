@@ -367,3 +367,36 @@ describe('migration of existing routines', () => {
     assert.ok(errors.some(e => /routine/i.test(e)), `nothing was logged, saw: ${JSON.stringify(errors)}`);
   });
 });
+
+describe('the writer at its edges', () => {
+  test('a key already present is replaced in place, not duplicated', () => {
+    const once = updateRoutineBlock(FIXTURE, 'morning-digest', { enabled: false, prompt: 'Run it differently' });
+    const twice = updateRoutineBlock(once, 'morning-digest', { enabled: true });
+    const lines = splitFile(twice).frontmatter.split('\n');
+    const block = lines
+      .slice(lines.indexOf('  - name: morning-digest'), lines.indexOf('  - name: weekly-review'))
+      .filter(l => /^\s+(enabled|prompt):/.test(l));
+    assert.deepStrictEqual(block, ['    prompt: Run it differently', '    enabled: true']);
+  });
+
+  test('a block with nothing but a name gets its keys at the indent the marker implies', () => {
+    const bare = ['---', 'name: penn', 'routines:', '  - name: solo', '---', '', 'body', ''].join('\n');
+    const written = updateRoutineBlock(bare, 'solo', { runOn: 'local' });
+    assert.ok(written.includes('  - name: solo\n    runOn: local\n'), written);
+  });
+
+  test('a routine named in no block leaves the file alone', () => {
+    assert.strictEqual(updateRoutineBlock(FIXTURE, 'not-a-routine', { runOn: 'local' }), FIXTURE);
+    assert.strictEqual(updateRoutineBlock('no frontmatter here', 'solo', { runOn: 'local' }), 'no frontmatter here');
+    assert.strictEqual(updateRoutineBlock('---\nname: penn\n---\nbody', 'solo', { runOn: 'local' }),
+      '---\nname: penn\n---\nbody');
+  });
+
+  test('a value carrying a line break is refused rather than written', () => {
+    // One key would silently become two and every routine below it would move
+    // into the wrong block, so this fails where it can still be seen.
+    assert.throws(
+      () => updateRoutineBlock(FIXTURE, 'morning-digest', { prompt: 'line one\nline two' }),
+      /cannot contain a line break/);
+  });
+});
