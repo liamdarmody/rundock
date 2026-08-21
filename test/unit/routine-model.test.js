@@ -249,7 +249,27 @@ describe('plan hash', () => {
     assert.notStrictEqual(plan({ prompt: 'Run something else' }), base);
     assert.notStrictEqual(plan({ skill: 'voice-editor' }), base);
     assert.notStrictEqual(plan({ runOn: 'agent-computer' }), base);
-    assert.notStrictEqual(plan({ owner: 'executive-assistant' }), base);
+  });
+
+  // Ownership is settled by the caller for almost every routine there is,
+  // because files declare it only rarely and it otherwise resolves from the
+  // agent file's name and its position on the roster. Hashing it would mean a
+  // rename, or an agent gaining or losing order zero, silently invalidating an
+  // approval while every byte of the routine stayed where it was. That is the
+  // same failure excluding the schedule exists to prevent, arriving by a
+  // different road, so the hash reads only what the routine itself declares.
+  test('who owns a routine does not reach the hash, declared or resolved', () => {
+    const raw = { name: 'morning-digest', prompt: 'Run the digest', skill: 'content-linter' };
+    // Resolved: the same bytes read from two different agent files.
+    assert.strictEqual(
+      computePlanHash(normalizeRoutine(raw, { owner: 'content-lead' })),
+      computePlanHash(normalizeRoutine(raw, { owner: 'default' })));
+    // Declared: the cost of the choice, pinned so it cannot drift back by
+    // accident. Owner is a field in its own right, so an approval flow can
+    // compare it directly rather than through the hash.
+    assert.strictEqual(
+      computePlanHash(normalizeRoutine({ ...raw, owner: 'executive-assistant' }, { owner: 'penn' })),
+      computePlanHash(normalizeRoutine(raw, { owner: 'penn' })));
   });
 
   test('the hash does not depend on the order the fields appear in the file', () => {
