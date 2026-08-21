@@ -21,6 +21,7 @@ const { createCodexAppServer } = require('../../codex-appserver.js');
 const asfx = require('../fixtures/codex-appserver-protocol.js');
 const PROMPT_KEY = require.resolve('../../lib/agents/prompt.js');
 const STUB_CODEX = path.join(__dirname, '..', 'helpers', 'stub-codex', 'codex');
+const WORKSPACE_HANDLERS_KEY = require.resolve('../../lib/protocol/handlers/workspace.js');
 
 const AGENT = { id: 'runner', name: 'Runner' };
 const ROUTINE = { name: 'r', prompt: 'p' };
@@ -35,6 +36,33 @@ function freshScheduler() {
   delete require.cache[SCHEDULER_KEY];
   if (cached) require.cache[SCHEDULER_KEY] = cached;
   return mod;
+}
+
+// The real workspace switch, closed over the scheduler under test.
+//
+// handleSetWorkspace IS the switch; loadRoutineState is one of the eleven
+// things its open path calls. A test that drives the call instead of the
+// switch leaves the invariant open to the one change that would break it: a
+// reset added to openWorkspace, beside the two resets that belong there, with
+// every scheduler test still green.
+//
+// The handler destructures loadRoutineState at load, so a copy required while
+// the test's own scheduler sits in the cache closes over that one rather than
+// the shared instance the rest of the suite runs against. Same technique as
+// freshScheduler, one module further out, and undone the same way.
+function freshWorkspaceHandlers(sched) {
+  const cachedSched = require.cache[SCHEDULER_KEY];
+  const cachedHandlers = require.cache[WORKSPACE_HANDLERS_KEY];
+  require.cache[SCHEDULER_KEY] = { id: SCHEDULER_KEY, filename: SCHEDULER_KEY, loaded: true, exports: sched };
+  delete require.cache[WORKSPACE_HANDLERS_KEY];
+  try {
+    return require(WORKSPACE_HANDLERS_KEY);
+  } finally {
+    delete require.cache[WORKSPACE_HANDLERS_KEY];
+    if (cachedHandlers) require.cache[WORKSPACE_HANDLERS_KEY] = cachedHandlers;
+    if (cachedSched) require.cache[SCHEDULER_KEY] = cachedSched;
+    else delete require.cache[SCHEDULER_KEY];
+  }
 }
 
 function enterTempWorkspace() {
@@ -506,14 +534,39 @@ test('a codex run that cannot start its thread releases the routine', async () =
 // A run in flight is a child process that is still running, and clearing its
 // key would free the routine to start again while the first run was still
 // going, with the eventual release then having nothing to release.
-test('switching workspace does not release a run that is still going', async () => {
-  await withTempWorkspaceAsync(async () => {
+//
+// Driven through the real switch handler, re-selecting the same workspace
+// (which the open path treats as a switch, and which keeps the state file the
+// test wrote). Killing the children is ctx's, injected, and stubbed here: the
+// child in this test is the test's to end, and what is pinned is that the
+// SWITCH does not let go of a routine whose run is still going.
+test('the workspace switch does not release a run that is still going', async () => {
+  await withTempWorkspaceAsync(async (dir, config) => {
     const child = new EventEmitter();
     await withFakeSpawn(() => child, async (sched) => {
       assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true, 'the run started');
-      sched.loadRoutineState(); // what a workspace switch calls
-      // Only loadRoutineState writes this value, so it is the proof the reset
-      // really ran rather than being skipped over.
+
+      const sent = [];
+      const ws = { send: (raw) => sent.push(JSON.parse(raw)) };
+      const noop = () => {};
+      const ctx = {
+        signals: { phaseTimer: () => ({ mark: noop, summary: () => '' }), reportStartup: noop },
+        runtime: { killAllChildren: noop, cleanOrphanedProcesses: noop },
+        workspace: {
+          setWorkspaceRoot: (d) => config.setWorkspace(d),
+          armAgentsDirWatcher: noop, armFileTreeWatcher: noop, healWorkspaceIfMoved: noop,
+          saveRecentWorkspace: noop, fileTreeForSend: () => [],
+        },
+        agents: { armAgentsDirWatcher: noop, invalidateAgentCache: noop },
+        store: { clearSearchFailure: noop, ensureSearchEngine: noop },
+      };
+      const handlers = freshWorkspaceHandlers(sched);
+      handlers.handleSetWorkspace(ctx, ws, { type: 'set_workspace', path: dir });
+      assert.ok(sent.some(m => m.type === 'workspace_set'),
+        'the switch ran its open path to the end rather than into the rollback');
+
+      // Only loadRoutineState writes this value, so it is the proof the
+      // switch's resets really ran rather than being skipped over.
       assert.strictEqual(sched.routineState[KEY].status, 'interrupted',
         'the switch rebuilt the run state from the workspace file');
       assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), false,
