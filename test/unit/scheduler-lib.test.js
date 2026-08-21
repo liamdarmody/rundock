@@ -1187,11 +1187,12 @@ test('a schedule edited while the machine was closed resyncs instead of recordin
   });
 });
 
-// A paused routine still accrues records, and that is pinned rather than
-// endorsed: see the block comment in lib/scheduler.js. Whether a paused
-// routine should show gaps is the routines view's ruling to make, and this
-// test is what makes that change deliberate instead of accidental.
-test('a paused routine accrues records too, which is today behaviour and the view card owns it', (t) => {
+// Being paused does not exempt a routine from records for periods that passed
+// entirely unobserved, which is pinned rather than endorsed: see the block
+// comment in lib/scheduler.js, and the boundary test below for the other side
+// of the line. Whether a paused routine should SHOW gaps is the routines
+// view's ruling, and this is what makes changing it deliberate.
+test('a paused routine accrues records for the days nobody was watching at all', (t) => {
   withTempWorkspace((ws) => {
     const sched = freshScheduler();
     writeRoutineAgent(ws, [{ name: 'late', schedule: 'every day at 23:00', prompt: 'p', paused: true }]);
@@ -1258,5 +1259,87 @@ test('an anchor stored without its schedule resyncs on the first wake rather tha
       { slot: new Date(2026, 7, 17, 23, 0, 0).toISOString() },
       { slot: new Date(2026, 7, 18, 23, 0, 0).toISOString() },
     ], 'and the wake after it walks normally, from an anchor it can vouch for');
+  });
+});
+
+// THE BOUNDARY OF WHAT A RECORD IS, at the exact edge, in one test.
+//
+// A record is a slot whose whole period went by with the scheduler not
+// watching. A slot that passed while the scheduler was AWAKE and was not
+// served leaves nothing, even once its period closes: the machine was on and
+// said so at the time, in the refusal log and in the routine's own state. The
+// gap this card exists to close is the one with no trace at all.
+//
+// Both halves are one test on purpose. Either alone is satisfied by a walk
+// that records everything or nothing.
+test('a slot the scheduler was awake for leaves no record; a day it was closed for leaves one', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, [{ name: 'late', schedule: 'every day at 05:00', prompt: 'p', paused: true }]);
+
+    observeOnce(t, sched, new Date(2026, 7, 15, 4, 0, 0));  // awake before the slot
+    observeOnce(t, sched, new Date(2026, 7, 15, 9, 0, 0));  // reopened after it, paused, nothing served it
+    observeOnce(t, sched, new Date(2026, 7, 15, 23, 0, 0)); // still awake as its day closes
+    observeOnce(t, sched, new Date(2026, 7, 16, 9, 0, 0));  // and into the next
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, [],
+      'the 05:00 slot passed unserved while the scheduler watched it happen, so it is not a gap');
+
+    observeOnce(t, sched, new Date(2026, 7, 18, 9, 0, 0));  // closed for all of the 17th
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, [
+      { slot: new Date(2026, 7, 17, 5, 0, 0).toISOString() },
+    ], 'a day nobody was watching at all leaves exactly one, and being paused did not exempt it');
+  });
+});
+
+// A routine deleted and re-added under the same name. The days in between are
+// days on which no slot existed to pass, so walking from the old anchor would
+// record gaps for a routine that did not exist. Same answer as a changed
+// schedule, deliberately in the same shape: history stays, anchor unknown, the
+// first tick after it returns resyncs without walking.
+test('a routine removed and re-added later wakes with no records for the days it did not exist', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, LATE_ROUTINE);
+    observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
+    observeOnce(t, sched, new Date(2026, 7, 17, 8, 0, 0));
+    const earned = [
+      { slot: new Date(2026, 7, 15, 23, 0, 0).toISOString() },
+      { slot: new Date(2026, 7, 16, 23, 0, 0).toISOString() },
+    ];
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, earned, 'two real nights were recorded');
+
+    writeRoutineAgent(ws, undefined); // the routine is deleted from the agent
+    observeOnce(t, sched, new Date(2026, 7, 19, 8, 0, 0));
+
+    writeRoutineAgent(ws, LATE_ROUTINE); // and written back, days later
+    observeOnce(t, sched, new Date(2026, 7, 21, 8, 0, 0));
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, earned,
+      'nothing was recorded for the days the routine did not exist, and nothing it had earned was lost');
+    assert.strictEqual(sched.routineSlots.routines[LATE_KEY].due, new Date(2026, 7, 21, 23, 0, 0).toISOString(),
+      'the anchor resynced to the schedule that is back in force');
+  });
+});
+
+// The narrower half of the same rule: a routine can be declared, and refusable,
+// and still have no anchor anyone can vouch for, because its schedule stopped
+// parsing. An unparseable schedule never fires, so the days it spans are days
+// on which nothing was due, exactly like the days after a deletion.
+test('a schedule that stopped parsing loses its anchor too, not just a routine that vanished', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, LATE_ROUTINE);
+    observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
+
+    // A documented pitfall: the hour must be zero-padded, so this parses as a
+    // routine and never matches as a schedule.
+    writeRoutineAgent(ws, [{ name: 'late', schedule: 'every day at 9:00', prompt: 'p' }]);
+    observeOnce(t, sched, new Date(2026, 7, 17, 8, 0, 0));
+
+    writeRoutineAgent(ws, LATE_ROUTINE);
+    observeOnce(t, sched, new Date(2026, 7, 19, 8, 0, 0));
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, [],
+      'no slot passed on the days the schedule named no time at all');
+    assert.strictEqual(sched.routineSlots.routines[LATE_KEY].due, new Date(2026, 7, 19, 23, 0, 0).toISOString(),
+      'and the anchor resynced once the schedule parsed again');
   });
 });
