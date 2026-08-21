@@ -241,6 +241,16 @@ test('a run that completes releases the routine', async (t) => {
 // protects would let one namesake run while the other's hold was still
 // standing, and both would write the same slot.
 test('two routines sharing a name under one agent are held together', async (t) => {
+  // The whole test is vacuous if the roster carries one routine where the
+  // fixture wrote two: there would be no namesake to hold, and every assertion
+  // below would pass by describing a routine that does not exist. Asserted
+  // rather than assumed, because the thing being pinned is precisely that the
+  // data model still allows this.
+  const twins = h.internal.discoverAgents()
+    .find(a => a.id === 'twin').routines.filter(r => r.name === 'twin-check');
+  assert.strictEqual(twins.length, 2, 'the fixture declares two routines of one name and the roster carries both');
+  assert.notStrictEqual(twins[0].prompt, twins[1].prompt, 'and they are two different routines, not one read twice');
+
   clock.at = dayAt(6, 9, 30);
   delete h.internal.routineState[TWIN];
   quieten(6, [TWIN]);
