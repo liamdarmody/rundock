@@ -86,10 +86,25 @@ describe('nested frontmatter block parsers', () => {
     assert.strictEqual(srv.parseCapabilities('name: x'), null);
   });
 
-  test('parseRoutines extracts each routine with fields', () => {
+  // The shape gained typed fields with the routine data model. A file that
+  // declares none of them still means what it always meant: it runs locally,
+  // it is enabled, it is not paused, and its owner is settled by the caller
+  // that knows which agent file this frontmatter came from.
+  test('parseRoutines extracts each routine with fields, typed', () => {
     const routines = srv.parseRoutines(fm);
     assert.strictEqual(routines.length, 2);
-    assert.deepStrictEqual(routines[0], { name: 'morning-digest', schedule: 'every day at 08:00', prompt: 'Run the digest' });
+    assert.deepStrictEqual(routines[0], {
+      name: 'morning-digest',
+      schedule: 'every day at 08:00',
+      prompt: 'Run the digest',
+      skill: null,
+      runOn: 'local',
+      owner: null,
+      enabled: true,
+      paused: false,
+      planHash: null,
+      planApprovedAt: null,
+    });
     assert.strictEqual(routines[1].name, 'weekly-review');
     assert.deepStrictEqual(srv.parseRoutines('name: x'), []);
   });
