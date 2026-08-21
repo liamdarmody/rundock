@@ -582,3 +582,64 @@ describe('writing a whole routine back', () => {
     assert.strictEqual(computePlanHash(readBack), before, 'the plan hash moved across a round trip');
   });
 });
+
+describe('caller-supplied text is data, not pattern', () => {
+  // A prompt is free text a person wrote, and a dollar sign is ordinary in
+  // one. Splicing it in through a replacement template hands it to the regex
+  // engine: $1 becomes the captured prefix, $& the whole match, $` and $' the
+  // text around it, and $$ collapses to one dollar. Only the replace-in-place
+  // branch was exposed, which is why migration, which only ever appends,
+  // never touched it.
+  test('a value full of dollar sequences replaces an existing key byte for byte', () => {
+    const value = "Budget is $1 per run, $& of $$100, $` and $' too";
+    const updated = updateRoutineBlock(FIXTURE, 'morning-digest', { prompt: value });
+    const r = parseRoutines(extractFrontmatterText(updated), { owner: 'penn' })
+      .find(x => x.name === 'morning-digest');
+    assert.strictEqual(r.prompt, value);
+    assert.ok(updated.includes(`    prompt: ${value}`), 'the line was rewritten as something else');
+  });
+
+  test('the same sequences survive on a key that has to be appended', () => {
+    const value = '$1$&$$';
+    const updated = updateRoutineBlock(FIXTURE, 'morning-digest', { skill: value });
+    const r = parseRoutines(extractFrontmatterText(updated), { owner: 'penn' })
+      .find(x => x.name === 'morning-digest');
+    assert.strictEqual(r.skill, value);
+  });
+
+  // The routine name reaches the block locator, which is the other place a
+  // caller-supplied string could become a pattern. It does not: the locator
+  // matches every item line with one fixed regex and compares the captured
+  // name with ===. This pins that, because a name is exactly the kind of
+  // string that would grow a regex under a later refactor.
+  const NAMES = [
+    '---',
+    'name: penn',
+    'routines:',
+    '  - name: axb',
+    '    prompt: the wrong one',
+    '  - name: a.b',
+    '    prompt: the right one',
+    '---',
+    '',
+    'body',
+    '',
+  ].join('\n');
+
+  test('a routine name carrying regex metacharacters matches only itself', () => {
+    const updated = updateRoutineBlock(NAMES, 'a.b', { skill: 'content-linter' });
+    const routines = parseRoutines(extractFrontmatterText(updated), { owner: 'penn' });
+    assert.strictEqual(routines.find(r => r.name === 'a.b').skill, 'content-linter');
+    assert.strictEqual(routines.find(r => r.name === 'axb').skill, null,
+      'a dot in the name matched a different routine');
+  });
+
+  // The key is interpolated into a RegExp to find its line. The parser only
+  // ever reads back keys made of word characters, so a key it could not read
+  // is refused at the boundary rather than compiled into a pattern.
+  test('a key the parser could never read back is refused', () => {
+    assert.throws(
+      () => updateRoutineBlock(FIXTURE, 'morning-digest', { 'pro.*mpt': 'x' }),
+      /not a routine field name/);
+  });
+});
