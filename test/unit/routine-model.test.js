@@ -419,6 +419,86 @@ describe('migration of existing routines', () => {
     assert.strictEqual(fs.readFileSync(backup, 'utf-8'), original, 'the backup was overwritten');
   });
 
+  // A copy-pasted routine block is an ordinary thing to find in a hand-edited
+  // file, and nothing makes a name unique. Addressing a block by its name
+  // sent both sets of updates into the first block: the second never got its
+  // own hash, still needed migrating on every read, and so rewrote and
+  // announced the file on every cache miss, which is the opposite of what
+  // running twice is supposed to do.
+  test('two routines sharing a name are each migrated in their own block', () => {
+    const dir = makeWorkspace({
+      agents: {
+        [AGENT]: agentFile({
+          name: AGENT, displayName: 'Penn', role: 'Content Lead',
+          type: 'specialist', order: 2,
+          routines: [
+            { name: 'morning-digest', schedule: 'every day at 08:00', prompt: 'Run the digest' },
+            { name: 'morning-digest', schedule: 'every day at 09:00', prompt: 'Run it again' },
+          ],
+        }),
+      },
+    });
+    srv.setWorkspace(dir);
+    const file = path.join(dir, '.claude', 'agents', `${AGENT}.md`);
+
+    const routines = reread().find(a => a.id === AGENT).routines;
+    assert.strictEqual(routines.length, 2);
+    assert.strictEqual(routines[0].planHash, computePlanHash(routines[0]));
+    assert.strictEqual(routines[1].planHash, computePlanHash(routines[1]));
+    assert.notStrictEqual(routines[0].planHash, routines[1].planHash,
+      'the two blocks do different things and must not share a hash');
+
+    const afterFirst = fs.readFileSync(file, 'utf-8');
+    const logs = [];
+    const realLog = console.log;
+    console.log = (...args) => logs.push(args.join(' '));
+    try { reread(); } finally { console.log = realLog; }
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), afterFirst);
+    assert.deepStrictEqual(logs.filter(l => l.includes('[migrate]')), []);
+  });
+
+  // The case above cannot see whether the block index counts every namesake
+  // or only the ones being migrated, because in it every block needs
+  // migrating and the two counts agree. Here the first block is already done,
+  // so a counter that skipped it would send the second block's updates into
+  // the first, overwrite a hash that was already correct, and leave the
+  // second block unmigrated for the next read to find again.
+  test('an already-migrated namesake still holds its place in the count', () => {
+    const settled = computePlanHash(normalizeRoutine(
+      { name: 'morning-digest', prompt: 'Run the digest' }, { owner: AGENT }));
+    const dir = makeWorkspace({
+      agents: {
+        [AGENT]: agentFile({
+          name: AGENT, displayName: 'Penn', role: 'Content Lead',
+          type: 'specialist', order: 2,
+          routines: [
+            {
+              name: 'morning-digest', schedule: 'every day at 08:00', prompt: 'Run the digest',
+              runOn: 'local', enabled: true, paused: false, planHash: settled,
+            },
+            { name: 'morning-digest', schedule: 'every day at 09:00', prompt: 'Run it again' },
+          ],
+        }),
+      },
+    });
+    srv.setWorkspace(dir);
+    const file = path.join(dir, '.claude', 'agents', `${AGENT}.md`);
+
+    const routines = reread().find(a => a.id === AGENT).routines;
+    assert.strictEqual(routines[0].prompt, 'Run the digest');
+    assert.strictEqual(routines[1].prompt, 'Run it again');
+    assert.strictEqual(routines[0].planHash, settled, 'the settled block was written over');
+    assert.strictEqual(routines[1].planHash, computePlanHash(routines[1]));
+
+    const afterFirst = fs.readFileSync(file, 'utf-8');
+    const logs = [];
+    const realLog = console.log;
+    console.log = (...args) => logs.push(args.join(' '));
+    try { reread(); } finally { console.log = realLog; }
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), afterFirst);
+    assert.deepStrictEqual(logs.filter(l => l.includes('[migrate]')), []);
+  });
+
   test('a failed migrating write is logged and leaves the read usable', () => {
     const { file } = legacyWorkspace();
     const before = fs.readFileSync(file, 'utf-8');
