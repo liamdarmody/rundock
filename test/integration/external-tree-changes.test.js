@@ -14,10 +14,14 @@
 //
 // HONESTY NOTE ON WHAT EACH TEST PROVES, measured by reverting rather than
 // assumed. THREE tests go red when the poll is removed, and they are the ones
-// that prove the mechanism exists: external create, external mkdir, external
-// delete. The remaining tests are guard criteria of the form "and it must not
-// also do X" (the two quiet cases, the in-app create, the in-app save, and
-// the workspace switch), so with no poller at all they pass vacuously. They
+// that prove the mechanism exists at boot: external create, external mkdir,
+// external delete. Three more cover the workspace boundary: that the open and
+// create paths arm a poll when none is running, which is what a fresh install
+// is, and that creating a workspace does not inherit the previous one's
+// freshness. The remaining
+// tests are guard criteria of the form "and it must not also do X" (the two
+// quiet cases, the in-app create, the in-app save, and the post-switch save),
+// so with no poller at all they pass vacuously. They
 // earn their place once the poller is in, where they are the only thing
 // standing between a working push and one that fights the reconcile diff or
 // duplicates work Rundock did itself.
@@ -243,51 +247,143 @@ describe('a change made outside Rundock reaches the file tree', () => {
     );
   });
 
-  // LAST ON PURPOSE: this repoints the server at another directory, so any
-  // test after it would be measuring a workspace it did not set up.
-  test('opening a workspace does not leave the poll believing it missed a change', async () => {
-    // Opening a workspace scaffolds into it, which changes the tree AFTER the
-    // watcher has taken its baseline. If the tree that open sends is not
-    // recorded as sent, the baseline still describes the pre-scaffold
-    // directory, and the next cache invalidation that changes nothing
-    // structural (a content save) makes the poll compare against it and
-    // announce Rundock's own scaffolding as an external change.
+  // LAST ON PURPOSE: these repoint the server at another directory and clear
+  // the workspace to construct their starting state, so any test after them
+  // would be measuring a workspace it did not set up.
+
+  test('opening a workspace arms the poll when nothing had armed it', async () => {
+    // The case the arming call in the open path exists for, and the only one
+    // that can prove it: the server running with NO workspace, which is what
+    // a fresh install is, and what a recent workspace that has gone away
+    // leaves behind. Nothing has started a poll, so detection for the rest of
+    // the session depends entirely on the open path arming one.
+    //
+    // Without this setup the test cannot discriminate, and that was checked
+    // rather than assumed: the interval reads the workspace at TICK time, so
+    // the one armed at boot keeps working across a switch and deleting the
+    // open path's arming call leaves every other assertion in this file
+    // green.
+    h.internal.setWorkspace(null);
+    await h.delay(POLL_MS * 2);
+
     const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'rundock-open-'));
     const since = client.messages.length;
     client.send({ type: 'set_workspace', path: fresh });
 
     await client.waitFor(m => m.type === 'workspace_set', {
-      since,
-      timeout: 15000,
-      label: 'workspace_set for the freshly opened workspace',
+      since, timeout: 15000, label: 'workspace_set for the switched-to workspace',
     });
     const opened = await client.waitFor(m => m.type === 'file_tree', {
-      since,
-      timeout: 15000,
-      label: 'file_tree for the freshly opened workspace',
+      since, timeout: 15000, label: 'file_tree for the switched-to workspace',
     });
-
-    // Let the scaffold settle, then invalidate WITHOUT sending a tree. It has
-    // to be a content save: create_path rebuilds and records on its way out,
-    // which repairs a stale baseline and hides exactly the defect under test.
     await h.delay(POLL_MS * 4);
 
+    const external = client.messages.length;
+    fs.writeFileSync(path.join(fresh, 'after-the-switch.md'), '# External\n');
+    const { msg } = await client.waitFor(m => m.type === 'file_tree', {
+      since: external,
+      timeout: PUSH_WINDOW_MS + 2000,
+      label: 'unrequested push after an external write to the switched-to workspace',
+    });
+    assert.ok(
+      treePaths(msg.tree).includes('after-the-switch.md'),
+      'the push must describe the workspace switched to, not the one booted'
+    );
+
+    // And the switch must not have left the poll believing it missed the
+    // scaffold. It has to be a content save: create_path rebuilds and records
+    // on its way out, which repairs a stale baseline and hides the defect.
     const scaffolded = treeFiles(opened.msg.tree);
-    assert.ok(scaffolded.length > 0, 'opening a workspace must scaffold at least one visible file to save');
+    assert.ok(scaffolded.length > 0, 'opening a workspace must scaffold at least one visible file');
 
     const quiet = client.messages.length;
     client.send({ type: 'save_file', path: scaffolded[0], content: '# Edited after open\n' });
     await client.waitFor(m => m.type === 'file_saved', {
-      since: quiet,
-      timeout: 8000,
-      label: 'file_saved in the freshly opened workspace',
+      since: quiet, timeout: 8000, label: 'file_saved in the switched-to workspace',
     });
     await h.delay(POLL_MS * 6);
 
     const pushes = pushesSince(quiet);
     assert.strictEqual(
       pushes.length, 0,
-      `a content save after a workspace open must produce zero file_tree pushes, saw ${pushes.length}`
+      `a content save after a workspace switch must produce zero pushes, saw ${pushes.length}`
+    );
+  });
+
+  test('creating a workspace arms the poll when nothing had armed it', async () => {
+    // Same construction as the test above, and for the same reason: with a
+    // poll already running from an earlier workspace this cannot fail.
+    //
+    // The create path also never cleared the tree cache of its own accord.
+    // Freshness re-stats absolute directory paths without checking which
+    // workspace they belong to, so with an earlier workspace still on disk
+    // the cache reads as fresh and the poll goes on watching it, and an
+    // external write to the NEW workspace is never seen. Arming clears the
+    // cache, which is why that now holds for every entry point rather than
+    // for the ones somebody remembered.
+    h.internal.setWorkspace(null);
+    await h.delay(POLL_MS * 2);
+
+    const name = 'poll-armed-on-create';
+    const created = path.join(process.env.HOME, 'Documents', 'Rundock', name);
+    const since = client.messages.length;
+    client.send({ type: 'create_workspace', name });
+
+    await client.waitFor(m => m.type === 'workspace_set' && m.path === created, {
+      since, timeout: 15000, label: 'workspace_set for the created workspace',
+    });
+    await h.delay(POLL_MS * 4);
+
+    const external = client.messages.length;
+    fs.writeFileSync(path.join(created, 'after-the-create.md'), '# External\n');
+    const { msg } = await client.waitFor(m => m.type === 'file_tree', {
+      since: external,
+      timeout: PUSH_WINDOW_MS + 2000,
+      label: 'unrequested push after an external write to the created workspace',
+    });
+    assert.ok(
+      treePaths(msg.tree).includes('after-the-create.md'),
+      'the push must describe the created workspace, not a previous one'
+    );
+  });
+
+  test('creating a workspace does not inherit the previous workspace\'s freshness', async () => {
+    // The blocking case, and it needs a populated cache to exist at all: the
+    // test above cannot show it, because clearing the workspace cascades
+    // through invalidateAgentCache and empties the cache on the way.
+    //
+    // So warm the cache against the CURRENT workspace first, then create a
+    // new one. Freshness re-stats the absolute directory paths it recorded
+    // and never checks which workspace they belong to, so with the previous
+    // workspace still sitting untouched on disk the cache reads as fresh, the
+    // baseline is taken from the wrong tree, and the poll goes on stat-
+    // checking directories in a workspace the server has left. An external
+    // write to the new workspace is then never seen at all.
+    const warm = client.messages.length;
+    client.send({ type: 'get_files' });
+    await client.waitFor(m => m.type === 'file_tree', {
+      since: warm, timeout: 8000, label: 'file_tree warming the cache for the current workspace',
+    });
+
+    const name = 'poll-not-inheriting-freshness';
+    const created = path.join(process.env.HOME, 'Documents', 'Rundock', name);
+    const since = client.messages.length;
+    client.send({ type: 'create_workspace', name });
+    await client.waitFor(m => m.type === 'workspace_set' && m.path === created, {
+      since, timeout: 15000, label: 'workspace_set for the second created workspace',
+    });
+    await h.delay(POLL_MS * 4);
+
+    const external = client.messages.length;
+    fs.writeFileSync(path.join(created, 'not-inherited.md'), '# External\n');
+    const { msg } = await client.waitFor(m => m.type === 'file_tree', {
+      since: external,
+      timeout: PUSH_WINDOW_MS + 2000,
+      label: 'unrequested push after an external write to the second created workspace',
+    });
+    assert.ok(
+      treePaths(msg.tree).includes('not-inherited.md'),
+      'the poll must be watching the created workspace, not the one it was warmed against'
     );
   });
 });

@@ -124,9 +124,8 @@ describe('handler seams (stub ctx, capture ws)', () => {
         setWorkspaceRoot: (d) => { rolledBack.push(d); config.setWorkspace(d); },
         // The open path baselines the file-tree poller against the new
         // directory before anything that can throw, so the rollback has to
-        // put both the cache and the poller back or the failed workspace's
-        // tree is served as if it were this one.
-        invalidateFileTreeCache: () => invalidated.push('tree-cache'),
+        // put the poller back or the failed workspace's tree is served as if
+        // it were this one. Arming clears the tree cache as part of arming.
         armFileTreeWatcher: () => invalidated.push('tree-watch'),
       },
       agents: { invalidateAgentCache: () => invalidated.push('agents') },
@@ -141,7 +140,7 @@ describe('handler seams (stub ctx, capture ws)', () => {
       assert.deepStrictEqual(rolledBack, [original], 'the previous root was restored');
       // Order matters: the established steps must complete before the newer
       // tree-poller rollback, because one catch covers the whole block.
-      assert.deepStrictEqual(invalidated, ['agents', 'search', 'tree-cache', 'tree-watch'],
+      assert.deepStrictEqual(invalidated, ['agents', 'search', 'tree-watch'],
         'caches cleared and the tree poller re-armed after rollback');
       assert.strictEqual(config.getWorkspace(), original, 'no half-switch persists');
     } finally {

@@ -1941,6 +1941,17 @@ function fileTreeForSend() {
 function armFileTreeWatcher() {
   if (_treeWatchTimer) { clearInterval(_treeWatchTimer); _treeWatchTimer = null; }
   if (!WORKSPACE) return;
+  // Drop the cache before baselining, because every caller has just pointed
+  // the server at a workspace and the cache still describes the previous one.
+  // Freshness re-stats the ABSOLUTE directory paths it recorded and never
+  // checks which workspace they belong to, so a previous workspace still
+  // sitting untouched on disk reads as fresh: the baseline would be taken
+  // from the wrong tree and the interval would go on stat-checking the wrong
+  // directories, unable to see any change in the workspace it is supposed to
+  // be watching. Arming is always a workspace boundary, so this is always the
+  // right thing to do here, and it belongs here rather than at each call site
+  // where the next one added would forget it.
+  invalidateFileTreeCache();
   // Baseline against what is on disk right now, so entering a workspace is
   // never itself reported as an external change.
   _lastSentTreeSig = JSON.stringify(getFileTreeCached());
