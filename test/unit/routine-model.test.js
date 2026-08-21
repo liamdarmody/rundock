@@ -320,8 +320,31 @@ describe('migration of existing routines', () => {
     const { file } = legacyWorkspace();
     reread();
     const afterFirst = fs.readFileSync(file, 'utf-8');
-    reread();
+
+    const logs = [];
+    const realLog = console.log;
+    console.log = (...args) => logs.push(args.join(' '));
+    try { reread(); } finally { console.log = realLog; }
+
     assert.strictEqual(fs.readFileSync(file, 'utf-8'), afterFirst);
+    // Identical bytes are not enough on their own: a second pass that rewrites
+    // the same content and announces it has still done something. Nothing at
+    // all should happen.
+    assert.deepStrictEqual(logs.filter(l => l.includes('[migrate]')), []);
+  });
+
+  test('a file with Windows line endings is read migrated and left alone on disk', () => {
+    const { file } = legacyWorkspace();
+    const crlf = fs.readFileSync(file, 'utf-8').replace(/\n/g, '\r\n');
+    fs.writeFileSync(file, crlf);
+
+    const routine = reread().find(a => a.id === AGENT).routines[0];
+    assert.strictEqual(routine.runOn, 'local');
+    assert.strictEqual(routine.enabled, true);
+    assert.strictEqual(typeof routine.planHash, 'string');
+    // Rewriting every line in the file to record four keys is not a trade a
+    // migration gets to make, so the file keeps its line endings and waits.
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), crlf);
   });
 
   test('the pre-migration backup is written once and never overwritten', () => {
