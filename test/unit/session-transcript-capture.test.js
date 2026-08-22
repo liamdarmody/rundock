@@ -25,8 +25,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-const { readSessionTranscript } = require('../../lib/runtime/session-transcript.js');
-const { checkTranscriptInvariants, EXPECTED_EXTRACTION, EXPECTED_ABSENT } = require('../../scripts/transcript-truth/truth.js');
+const { readSessionTranscript, FILE_TOOLS, KNOWN_BLOCK_TYPES } = require('../../lib/runtime/session-transcript.js');
+const { checkTranscriptInvariants, checkDeclarationsAgree, EXPECTED_EXTRACTION, EXPECTED_ABSENT, WITNESSED_TOOLS, UNWITNESSED_TOOLS } = require('../../scripts/transcript-truth/truth.js');
 
 const captured = JSON.parse(fs.readFileSync(
   path.join(__dirname, '..', '..', 'scripts', 'transcript-truth', 'captured-transcript.json'), 'utf-8'));
@@ -115,5 +115,94 @@ describe('the reader over the capture', () => {
     const parallel = result.files.filter(f => path.basename(f.path).startsWith('par-'));
     assert.strictEqual(parallel.length, 2, 'two parallel writes, two entries');
     assert.strictEqual(new Set(parallel.map(f => f.path)).size, 2, 'and two different files, not one file twice');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// One rule, one place
+// ---------------------------------------------------------------------------
+
+describe('the declarations the reader owns', () => {
+  // The reader's account of the format used to be restated by the truth
+  // harness and again by the fixtures. Three copies pass happily while
+  // covering different things, and the way that shows up is silence: add a
+  // tool and the capture, the invariant check and the fixtures all stop
+  // covering it without a word.
+  test('every tool the reader handles is either witnessed by the capture or recorded as unwitnessed', () => {
+    assert.deepStrictEqual(checkDeclarationsAgree(), [], 'the reader and the capture harness agree today');
+    for (const tool of WITNESSED_TOOLS) assert.ok(FILE_TOOLS[tool], `${tool} is claimed as witnessed and is a tool the reader handles`);
+    for (const [tool, reason] of Object.entries(UNWITNESSED_TOOLS)) {
+      assert.ok(FILE_TOOLS[tool], `${tool} is recorded as unwitnessed and is still a tool the reader handles`);
+      assert.ok(reason.length > 40, `${tool} carries a reason somebody can weigh, not a label`);
+    }
+  });
+
+  // The enforcement itself, driven rather than assumed: a tool added to the
+  // reader and to nothing else must fail, or the agreement above is a
+  // coincidence that holds only while nobody adds anything.
+  test('a tool added to the reader alone fails the agreement', () => {
+    FILE_TOOLS.PatchFile = { input: 'file_path', result: 'filePath' };
+    try {
+      const failures = checkDeclarationsAgree();
+      assert.strictEqual(failures.length, 1, 'the new tool is complained about, exactly once');
+      assert.match(failures[0], /PatchFile/, 'and it is named');
+      assert.match(failures[0], /witness/i, 'with what has to happen about it');
+    } finally {
+      delete FILE_TOOLS.PatchFile;
+    }
+    assert.deepStrictEqual(checkDeclarationsAgree(), [], 'and the complaint goes away when the tool does');
+  });
+
+  // A fourth copy, which the reader's own comment appeals to. types.d.ts
+  // declares the content-block union the reader claims to be following, and a
+  // reader that quietly knew a different set would make that comment a
+  // decoration.
+  test('the block types the reader knows are the union the type model declares', () => {
+    const types = fs.readFileSync(path.join(__dirname, '..', '..', 'types.d.ts'), 'utf-8');
+    // The union runs to the blank line after it. Split on the semicolon
+    // instead and the first member's own field separator ends the search
+    // after one block type, which reads as a type model that declares only
+    // text: a parse that fails quietly is worse here than no check at all.
+    const union = (types.split('type ContentBlock =')[1] || '').split('\n\n')[0];
+    assert.ok(union, 'types.d.ts declares a ContentBlock union to compare against');
+    const declared = new Set([...union.matchAll(/type: '([a-z_]+)'/g)].map(m => m[1]));
+    assert.ok(declared.size > 1, 'and the union parsed as more than a single member, so this is reading the whole of it');
+    assert.ok(declared.size > 0, 'and the union names its block types');
+    assert.deepStrictEqual([...declared].sort(), [...KNOWN_BLOCK_TYPES].sort(),
+      'the reader knows exactly the blocks the repository says exist');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The question this capture answers on the way past
+// ---------------------------------------------------------------------------
+
+describe('the permission hook under skipped permissions', () => {
+  // AC-18 and AC-19. Routines spawn with permissions skipped, and whether a
+  // PreToolUse hook fires under that flag decides whether write-time capture
+  // is available at all to the work that needs it (bytes can only be saved
+  // before a write by something that runs before the write). It was an open
+  // question nobody had run.
+  //
+  // The answer lives in the capture rather than in prose because a capture
+  // can be re-run: npm run transcript:truth -- --capture.
+  test('fires, and the capture says so with what it was asked', () => {
+    const hook = captured.permissionHook;
+    assert.ok(hook, 'the capture carries the experiment');
+    assert.strictEqual(hook.fired, true,
+      'the pre-tool hook DOES fire when a routine spawns with permissions skipped');
+    assert.ok(hook.calls > 1, `it was consulted ${hook.calls} times, so this is not one lucky call`);
+    assert.ok(hook.tools.includes('Write'), 'including about the writes the run made');
+    assert.ok(hook.matchers.length > 0, 'and the capture records the matchers it was configured with');
+    assert.match(hook.spawn, /dangerously-skip-permissions/, 'and the spawn shape it was asked under');
+  });
+
+  test('is consulted before the tool runs, which is what write-time capture needs', () => {
+    // The payload the hook receives names the tool it is being asked about,
+    // which is only meaningful before the tool has run.
+    assert.ok(captured.permissionHook.payloadKeys.includes('tool_name'),
+      'the hook is told which tool is about to run');
+    assert.ok(captured.permissionHook.payloadKeys.includes('transcript_path'),
+      'and where the run is writing its transcript, which anything reading it later would otherwise have to find');
   });
 });

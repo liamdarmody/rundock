@@ -23,6 +23,12 @@
 // an outcome pass its tests, which is the defect these fixtures exist to make
 // impossible.
 
+// The input field each file tool names its file in, taken from the reader
+// rather than restated here. A fixture with its own copy would keep building
+// the shape the reader used to expect, so a tool whose input field moved
+// would go on passing here while failing in production.
+const { FILE_TOOLS } = require('../../lib/runtime/session-transcript.js');
+
 // Line ids are per-file and only have to be unique within one transcript.
 let seq = 0;
 function toolId() { return `toolu_fixture_${++seq}`; }
@@ -54,7 +60,8 @@ function say(sessionId, text, at = '2026-08-22T19:15:05.000Z') {
  */
 function fileTool(sessionId, { tool = 'Write', file, outcome = 'create', at = '2026-08-22T19:15:10.000Z', resultPath } = {}) {
   const id = toolId();
-  const inputKey = tool === 'NotebookEdit' ? 'notebook_path' : 'file_path';
+  const inputKey = FILE_TOOLS[tool].input;
+  const resultKey = FILE_TOOLS[tool].result;
   const ask = line({
     type: 'assistant', sessionId, timestamp: at,
     message: { role: 'assistant', content: [{ type: 'tool_use', id, name: tool, input: { [inputKey]: file, content: 'body' } }] },
@@ -73,8 +80,8 @@ function fileTool(sessionId, { tool = 'Write', file, outcome = 'create', at = '2
       // path and the strings it swapped, with no type at all, because an
       // edit can only ever be an edit.
       toolUseResult: tool === 'Write'
-        ? { type: outcome, filePath: resultPath || file, content: 'body', structuredPatch: [] }
-        : { filePath: resultPath || file, oldString: 'before', newString: 'after', originalFile: 'before', structuredPatch: [], userModified: false },
+        ? { type: outcome, [resultKey]: resultPath || file, content: 'body', structuredPatch: [] }
+        : { [resultKey]: resultPath || file, oldString: 'before', newString: 'after', originalFile: 'before', structuredPatch: [], userModified: false },
       message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `File ${outcome === 'create' ? 'created' : 'updated'} successfully at: ${resultPath || file}` }] },
     });
   return { ask, answered, id };

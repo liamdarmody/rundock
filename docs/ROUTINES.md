@@ -158,6 +158,20 @@ Two limits, stated rather than implied. A file written through a shell command i
 
 The second limit covers more than a missing file. The transcript format belongs to Claude Code, so Rundock pins it to a transcript captured from a real run (`scripts/transcript-truth`, re-captured with `npm run transcript:truth -- --capture`). If a run's transcript arrives in a shape that capture has not shown, the run reports that it does not know rather than reporting a shorter list. A quietly incomplete list would be worse than no list, because the record is what a later revert would act on.
 
+### Do the permission hooks run for a routine?
+
+**Yes.** A routine spawns with `--dangerously-skip-permissions`, and it is reasonable to assume that means Claude Code's `PreToolUse` hooks are skipped too. They are not: the hooks still run, and they still run *before* the tool does.
+
+This was established by running it rather than by reading, and it is re-run every time the transcript capture is taken, so the answer carries a runtime version instead of a date. The capture harness configures a `PreToolUse` hook in the shape Rundock scaffolds (matchers `Bash` and `Read|Write|Edit|MultiEdit|NotebookEdit|Glob|Grep`, a fail-open script that records what it was asked about and exits 0), spawns a real run in the routine's own shape (`--print --output-format stream-json --verbose --dangerously-skip-permissions --session-id <uuid>`, output discarded), and records what the hook saw:
+
+```
+npm run transcript:truth -- --capture
+```
+
+On Claude Code 2.1.240 the hook was consulted ten times, about `Read`, `Write`, `Edit` and `NotebookEdit`, including the write that then failed. Each payload named the tool about to run and the path of the run's own transcript. The recorded answer, the matchers, the spawn shape and the tools it was consulted about all live in `scripts/transcript-truth/captured-transcript.json` under `permissionHook`, and `test/unit/session-transcript-capture.test.js` asserts them.
+
+Why it matters beyond the curiosity: a hook is the only thing that runs *before* a write, so it is the only place that can copy a file's bytes before they are overwritten. Reading a transcript afterwards can say what changed but never what it used to be. Any future feature that needs to undo a routine's work depends on the answer above being yes.
+
 The practical implication: any routine that needs to leave a trace should write that trace itself, through the agent's tools. A morning briefing that creates a file in the daily note, a research digest that writes a markdown report to a folder, an end-of-day sync that updates Todoist via MCP: all of these work because the agent's system prompt instructs the agent to write its output to a known location. A routine that simply asks the model to think out loud will produce output that nobody ever reads.
 
 There is no built-in notification when a routine completes. The user notices a routine ran by either seeing the timestamp update in the Routines panel, or seeing the file the agent wrote, or seeing the Todoist tasks the agent created.

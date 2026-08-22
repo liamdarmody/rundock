@@ -54,19 +54,75 @@ function cliVersion(bin) {
 }
 
 // One run that exercises every shape the reader depends on: a file created, a
-// file edited, a file overwritten, a write that is refused, and two writes
-// issued in parallel from one message.
+// file edited, a file overwritten, a notebook cell edited, a write that is
+// refused, and two writes issued in parallel from one message.
+//
+// Every tool the reader claims and this capture is meant to witness has a
+// step here. scripts/transcript-truth/truth.js fails if a witnessed tool is
+// missing from the capture, so a tool added to the reader cannot narrow what
+// this prompt covers without saying so.
 const PROMPT = `Do exactly these steps in this order, using no Bash at all.
 1. Use the Write tool to create new.md containing the word one.
 2. Use the Edit tool on existing.md to change the word alpha to gamma.
 3. Use the Write tool to overwrite overwrite.md with the word two.
-4. Use the Write tool once on the absolute path /System/capture-blocked.txt with the word three. This will fail; do not retry it and do not work around it.
-5. In a SINGLE message, issue two parallel Write tool calls at the same time: par-a.md containing four, and par-b.md containing five.
+4. Use the NotebookEdit tool on book.ipynb to replace the source of cell 0 with print('two').
+5. Use the Write tool once on the absolute path /System/capture-blocked.txt with the word three. This will fail; do not retry it and do not work around it.
+6. In a SINGLE message, issue two parallel Write tool calls at the same time: par-a.md containing four, and par-b.md containing five.
 Then stop and say done.`;
+
+const NOTEBOOK = {
+  cells: [{ cell_type: 'code', source: ["print('one')\n"], metadata: {}, outputs: [], execution_count: null }],
+  metadata: {}, nbformat: 4, nbformat_minor: 5,
+};
+
+// THE PERMISSION HOOK, CONFIGURED AS THE PRODUCT CONFIGURES IT, so this run
+// answers a second question at the same time: does a PreToolUse hook fire at
+// all when a routine spawns with permissions skipped?
+//
+// It is not a question about this reader. It is the question the revert work
+// depends on, because bytes can only be saved before a write by something
+// that runs before the write, and nothing else does. It rides along here
+// because the run this harness makes is already the exact spawn shape that
+// question is about, and because an answer nobody can re-run is an answer
+// people end up arguing about.
+//
+// The hook is fail-open, matching the product's posture for an in-workspace
+// write: it records what it was asked about and exits 0.
+const HOOK_MATCHERS = ['Bash', 'Read|Write|Edit|MultiEdit|NotebookEdit|Glob|Grep'];
+const HOOK_LOG = 'hook-fired.jsonl';
 
 function seedWorkspace(dir) {
   fs.writeFileSync(path.join(dir, 'existing.md'), 'alpha\nbeta\n');
   fs.writeFileSync(path.join(dir, 'overwrite.md'), 'old\n');
+  fs.writeFileSync(path.join(dir, 'book.ipynb'), JSON.stringify(NOTEBOOK, null, 1));
+
+  const hook = path.join(dir, 'hook.sh');
+  fs.writeFileSync(hook, `#!/bin/sh\ncat >> "${path.join(dir, HOOK_LOG)}"\nprintf '\\n' >> "${path.join(dir, HOOK_LOG)}"\nexit 0\n`);
+  fs.chmodSync(hook, 0o755);
+  fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.claude', 'settings.local.json'), JSON.stringify({
+    hooks: {
+      PreToolUse: HOOK_MATCHERS.map(matcher => ({
+        matcher, hooks: [{ type: 'command', command: `sh "${hook}"`, timeout: 300 }],
+      })),
+    },
+  }, null, 2));
+}
+
+// What the hook recorded, reduced to the answer and enough of the evidence to
+// argue with: which tools it was consulted about, and one payload's keys.
+function readHookEvidence(dir) {
+  const file = path.join(dir, HOOK_LOG);
+  if (!fs.existsSync(file)) return { fired: false, calls: 0, tools: [], payloadKeys: [] };
+  const payloads = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(l => {
+    try { return JSON.parse(l); } catch { return null; }
+  }).filter(Boolean);
+  return {
+    fired: payloads.length > 0,
+    calls: payloads.length,
+    tools: [...new Set(payloads.map(p => p.tool_name).filter(Boolean))].sort(),
+    payloadKeys: payloads.length ? Object.keys(payloads[0]).sort() : [],
+  };
 }
 
 // The routine spawn's own shape: print mode, stream-json, verbose, permissions
@@ -77,6 +133,7 @@ function runRoutineShaped(dir, sessionId) {
   return new Promise((resolve, reject) => {
     const proc = spawn('claude', [
       '--add-dir', dir,
+      '--settings', path.join(dir, '.claude', 'settings.local.json'),
       '--model', 'sonnet',
       '--print', '--output-format', 'stream-json', '--verbose',
       '--dangerously-skip-permissions',
@@ -112,6 +169,7 @@ async function capture() {
   if (!file) fail(`no transcript named for session ${sessionId}: the runtime no longer names it for the session it was given, which is the assumption the whole reader rests on`);
 
   const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+  const hook = readHookEvidence(dir);
   const problems = checkTranscriptInvariants(lines);
   if (problems.length) {
     fail(`real CLI ${version} no longer matches what the reader assumes:\n  - ${problems.join('\n  - ')}\n` +
@@ -123,9 +181,21 @@ async function capture() {
     sessionId,
     workspace: dir,
     prompt: PROMPT,
+    // The second question this run answers, recorded with what it was asked
+    // and what came back. Whether the pre-tool hook fires when permissions
+    // are skipped is a fact about the product, established by running the
+    // product, and it decides whether write-time capture is available to the
+    // work that needs it.
+    permissionHook: {
+      question: 'does a PreToolUse hook fire when a routine spawns with --dangerously-skip-permissions?',
+      matchers: HOOK_MATCHERS,
+      spawn: 'the routine shape: --print --output-format stream-json --verbose --dangerously-skip-permissions --session-id <uuid>, output discarded',
+      ...hook,
+    },
     lines,
   }, null, 2) + '\n');
   fs.rmSync(dir, { recursive: true, force: true });
+  console.log(`[transcript-truth] permission hook under skipped permissions: ${hook.fired ? `FIRED (${hook.calls} calls, tools: ${hook.tools.join(', ')})` : 'DID NOT FIRE'}`);
   console.log(`[transcript-truth] capture written: ${path.relative(ROOT, CAPTURE_FILE)} (${lines.length} lines; commit it)`);
 }
 
@@ -143,6 +213,10 @@ function check() {
 
   const problems = checkTranscriptInvariants(captured.lines);
   if (problems.length) fail(`the committed capture does not satisfy what the reader assumes:\n  - ${problems.join('\n  - ')}`);
+  if (!captured.permissionHook || typeof captured.permissionHook.fired !== 'boolean') {
+    fail('the capture carries no answer on whether the permission hook fires with permissions skipped; re-capture');
+  }
+  console.log(`[transcript-truth] recorded answer: the permission hook ${captured.permissionHook.fired ? 'FIRES' : 'DOES NOT FIRE'} when permissions are skipped (${captured.runtimeVersion})`);
 
   // The reader, over the captured artefact, through its real lookup: the
   // capture is laid down where a transcript lives and asked for by session id.

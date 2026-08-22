@@ -192,6 +192,22 @@ describe('the files a run changed', () => {
       'only the write that reported back is a write that happened');
   });
 
+  // An outcome that reports its own failure in a field of its own, which is
+  // what a notebook edit carries (empty in the capture, where it worked). A
+  // file whose write says something went wrong is not a file this reader may
+  // list as changed.
+  test('an outcome that reports an error of its own is not a file changed', () => {
+    const sid = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab';
+    writeTranscript(sid, [
+      fx.prompt(sid, 'go'),
+      fx.completed(sid, { tool: 'NotebookEdit', file: '/w/book.ipynb', outcome: 'update' })
+        .split('"oldString"').join('"error":"cell not found","oldString"'),
+    ]);
+    const result = readSessionTranscript(sid);
+    assert.strictEqual(result.status, 'unknown', 'an outcome carrying an error is not an outcome to list');
+    assert.strictEqual(result.files, null);
+  });
+
   // The gap the review found in the existing tool matcher: the permission
   // hook's own list includes these two and the chat-side matcher does not.
   test('multi-edit and notebook writes count, because they change files too', () => {
