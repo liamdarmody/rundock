@@ -53,6 +53,23 @@ const signals = require('./lib/signals.js');
 const { recordEvent, bumpSkillUsage, normalizeDocsGapTopic } = signals;
 
 const PORT = process.env.PORT || 3000;
+// The address the server answers on, used at the listen() call below.
+//
+// Loopback is a DECISION about the default, not a statement about capability.
+// Everything behind this socket is the product itself: it spawns agent
+// subprocesses, reads and writes the workspace the user chose, carries the
+// permission bridge, and holds the WebSocket that drives the interface. None
+// of it sits behind authentication, because until now nothing but this machine
+// could reach it. Passing a port with no host binds every interface, which put
+// all of that in front of anyone on the same wifi.
+//
+// TO WHOEVER IMPLEMENTS REMOTE ACCESS, which the roadmap wants: this is the
+// line you change, and changing it is not the feature. Widening the bind on
+// its own publishes an unauthenticated agent runner to the network, so
+// authentication and transport security belong in the same change as the
+// wider address. There is deliberately no environment override: an override is
+// that same widening with nobody having decided it.
+const HOST = '127.0.0.1';
 let ACTUAL_PORT = PORT; // Updated after server.listen() with the real listening port
 // WORKSPACE mirrors lib/config's workspace root during the decomposition:
 // this file's remaining read sites use the local variable, while extracted
@@ -2988,7 +3005,7 @@ function startServer(options = {}) {
   armFileTreeWatcher();
   const port = options.port != null ? options.port : PORT;
   return new Promise((resolve) => {
-    server.listen(port, () => {
+    server.listen(port, HOST, () => {
       const actualPort = server.address().port;
       ACTUAL_PORT = actualPort;
       if (WORKSPACE) {
