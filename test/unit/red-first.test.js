@@ -23,7 +23,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawn, spawnSync } = require('node:child_process');
 
-const { redFirst, recordOutcome, namesFrom } = require('../../scripts/red-first.js');
+const { redFirst, recordOutcome, namesFrom, NAME_LIMIT } = require('../../scripts/red-first.js');
 // The REAL record writer, not a local idea of one. scripts/precommit-gate.js
 // says why in its own docstring: "a test that hand-builds the JSON proves the
 // reader can read the test's idea of a record". These tests hand-built it
@@ -485,6 +485,8 @@ describe('the record carries test counts, not a count of files', () => {
       assert.deepStrictEqual(rec.redFirst.namesFailedWithoutChange.sort(), ['b is a function', 'b is two'],
         'the record names which tests failed when the source was taken away');
       assert.strictEqual(rec.redFirst.namesTruncated, false, 'and says whether the list is the whole of it');
+      assert.ok(rec.redFirst.namesFailedWithoutChange.length <= NAME_LIMIT,
+        'the list is capped, and the cap is the thing namesTruncated reports on');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

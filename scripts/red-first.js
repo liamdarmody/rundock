@@ -73,10 +73,18 @@ function countFrom(text, kind) {
   return null;
 }
 
-// How many named tests the record carries. A record is read by a person, and a
-// list of several hundred names is a list nobody reads; the count beside it is
-// the complete quantity, so nothing is hidden by the cap.
-const NAME_LIMIT = 40;
+// How many named tests the record carries.
+//
+// SET HIGH ON PURPOSE. The first version capped at forty, and reverting a
+// module that the test fixtures import fails a hundred and twenty tests in run
+// order, so the forty recorded were forty unrelated integration tests and the
+// proofs a reviewer came to check were the ones cut off. A capped list is a
+// partial list offered with the shape of a complete one, which is the exact
+// failure this branch exists to stop shipping.
+//
+// A cap still exists, because a record nobody can read is its own kind of
+// useless, and `namesTruncated` says plainly when one has been applied.
+const NAME_LIMIT = 200;
 
 // The NAMES of the tests that failed, in the two shapes this project and its
 // neighbours emit: the spec reporter's cross and TAP's `not ok`.
