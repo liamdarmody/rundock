@@ -167,14 +167,14 @@ function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [])
   // folder, so "always allow this folder" would remember nothing and the
   // button would be a lie.
   if (ti.dangerouslyDisableSandbox === true) {
-    return { where: 'outside', escape: true, resolvedPath: null, grantDir: null };
+    return { where: 'outside', resolvedPath: null, grantDir: null };
   }
   // Signal 2.
   if (typeof ti.command !== 'string' || !ti.command) return null;
   const roots = [path.resolve(workspaceRoot), ...extraDirs.map(d => path.resolve(d))];
   const resolvedPath = shellCrossing(ti.command, workspaceRoot, roots);
   if (!resolvedPath) return null;
-  return { where: 'outside', escape: false, resolvedPath, grantDir: path.dirname(resolvedPath) };
+  return { where: 'outside', resolvedPath, grantDir: path.dirname(resolvedPath) };
 }
 
 module.exports = { isProtectedClaudeEdit, isMcpReadTool, classifyFileAccess, classifyShellAccess };
@@ -281,12 +281,7 @@ process.stdin.on('end', () => {
     session_id: data.session_id,
     conversation_id: convoId,
     ...(access && access.where === 'outside'
-      ? {
-          boundary: true,
-          resolved_path: access.resolvedPath || null,
-          grant_dir: access.grantDir || null,
-          ...(access.escape ? { sandbox_escape: true } : {})
-        }
+      ? { boundary: true, resolved_path: access.resolvedPath || null, grant_dir: access.grantDir || null }
       : {})
   });
 

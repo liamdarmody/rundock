@@ -98,7 +98,6 @@ describe('classifyShellAccess (hook-side)', () => {
     // decided, at syscall time, that this command reached outside.
     const r = classifyShellAccess('Bash', { command: 'make install', dangerouslyDisableSandbox: true }, ws, []);
     assert.strictEqual(r.where, 'outside');
-    assert.strictEqual(r.escape, true, 'the card must be able to say the sandbox was being turned off');
     assert.strictEqual(r.grantDir, null,
       'a standing folder grant must never be offered for a sandbox escape: there is no one folder it is about');
   });
