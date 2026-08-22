@@ -1,0 +1,242 @@
+# Evidence: agent output cannot become script
+
+Recorded here because a reviewer sees the change and nothing else. Every
+measurement below is reproducible from a clone with the command shown next to
+it; nothing here asks you to take a number on trust.
+
+The acceptance criteria this was judged against live outside this repository,
+so each one is quoted in full rather than cited by number. A reader with only
+this checkout can still follow what was asked and check whether it was done.
+
+## The hole
+
+> **AC-1:** Script cannot execute from markdown that reaches the renderer,
+> through any of the four points named.
+
+`test/unit/markdown-render.test.js`, the group
+`renderMarkdown: markdown cannot carry HTML into the page`, plus the
+per-point groups below. Eleven payloads covering raw HTML at block and inline
+level, inside a callout body, inside a table cell, inside a list item and
+inside a wikilink label; each asserts the element was not created and no
+handler attribute exists.
+
+> **AC-2:** Event-handler attributes in agent output do not survive into the
+> DOM.
+
+Asserted in four places rather than one, because the renderer had four ways to
+write an attribute: `no wikilink render carries an event-handler attribute`,
+`no callout render carries an event-handler attribute`,
+`a rendered code block carries no event-handler attribute`, and the sweep
+inside `a tag written in the document becomes text, not an element`. Each
+collects every attribute name in the rendered DOM and fails on any beginning
+`on`.
+
+> **AC-3:** A callout title containing markup renders as text.
+
+`a callout title containing a tag renders as text` and
+`a callout title cannot close the box it is written into`. Point 2's payload,
+`> [!note] <img src=x onerror=alert(1)>`, is recorded in the group's header
+comment with the output it produced before the change.
+
+> **AC-4:** Wikilink target text cannot terminate the attribute or the call it
+> is written into.
+
+`a quote in a wikilink target cannot open a second attribute` and
+`a wikilink target that closes the call cannot append an expression`. Both
+payloads are recorded in the group's header comment with the attribute they
+produced before the change. The single-quote payload is the one that broke the
+old inline handler; the double-quote payload is the one that breaks the data
+attribute that replaced it, and it was added after mutation showed the first
+was not enough (see below).
+
+> **AC-5:** A relative link whose filename contains a quote or a backslash
+> cannot alter the handler it is rewritten into.
+
+`character references in a filename cannot become code`,
+`a quote or a backslash in a filename cannot alter the handler`, and
+`a character reference in a filename stays those characters`.
+
+Worth reading the group's header comment: a backslash cannot in fact do it,
+because marked percent-encodes a backslash in an href. What does it is a
+character reference, `[a](<&#39;&#41;;alert&#40;1&#41;;//.md>)`, which the
+browser decodes before any of the attribute is JavaScript. The criterion names
+the right defect and the wrong mechanism, and the change closes the defect.
+
+## The decision
+
+> **AC-6:** Whether HTML is permitted in agent markdown is recorded in the code
+> with its reason, not only in a commit message.
+>
+> **AC-8:** A policy is present, or its absence is a stated decision naming what
+> carries the risk instead.
+
+`public/markdown-render.js`, the header block titled `THE DECISION`, at the top
+of the file a reader opens to change it. It records the answer (agent markdown
+may not contain HTML), what escaping costs, what a sanitiser costs, why
+comments are dropped rather than escaped, and why there is no
+Content-Security-Policy yet along with what carries the risk in its place.
+
+> **AC-7:** If a sanitiser is added, it is available offline on the same terms
+> as the other vendored dependencies.
+
+Does not arise: no sanitiser was added and no dependency changed.
+`git diff main -- package.json` is one line, adding the new module to the
+coverage include list; `dependencies`, `devDependencies` and
+`public/vendor/package.json` are untouched.
+
+## Not breaking what works
+
+> **AC-9:** Code blocks, tables, task lists, callouts and wikilinks still render
+> as they did.
+>
+> **AC-11:** Highlighting still applies to fenced code.
+
+Two existing browser tests pass unmodified and are the strongest evidence here,
+because they drive the real client:
+
+- `test/e2e/viewers.spec.js`, `a wikilink to an image or PDF in a conversation
+  opens the real viewer`. This clicks a wikilink produced by this renderer, in
+  Chromium, and is the end-to-end proof that the delegated listener replaced the
+  inline handler without breaking navigation.
+- `test/e2e/chat-table-scroll.spec.js`, which renders a wide markdown table in
+  a chat message through this renderer and checks it wraps and scrolls inside
+  the bubble.
+- `test/e2e/chat-number-only-reply.spec.js`, which pins this renderer's
+  empty-ordered-list handling in real layout.
+
+`npx playwright test`: 162 passed.
+
+In the unit suite, `code blocks, tables, task lists and callouts still render`
+and `highlighting still applies to fenced code`.
+
+> **AC-15:** A test asserts the rendered output for a benign document is
+> unchanged, so the fix is shown not to have rewritten ordinary markdown.
+
+`test/fixtures/markdown-benign-before.html` is this renderer's output as it
+stood on main, generated by running `test/fixtures/markdown-benign.md` through
+the code in `public/app.js` before any of this. It is frozen: no commit on this
+branch regenerates it.
+
+Two comparisons against it:
+
+- `the benign document keeps the structure and text it had before this change`
+  compares every element, its class and its own text. It does not move at all.
+- `the benign document renders to the recorded bytes` compares against
+  `markdown-benign.html`, the current output. That file moved exactly twice,
+  both declared in the commit that moved it: two inline handlers became
+  listeners, and the callout box stopped leaving a blank line behind it.
+
+Three behaviour changes beyond ordinary rendering, each with its own test and
+its reason in the source:
+
+| What changed | Test |
+|---|---|
+| A wikilink in a callout title renders as text, not a link | reason in the callout tokenizer's comment |
+| A tag or highlight inside fenced code is left alone | `a fenced block containing #tag or ==text== keeps its own text` |
+| A tag at the start of a line keeps its line break | `a tag at the start of a line no longer swallows the line break` |
+
+## Proof
+
+> **AC-12:** A hostile payload is driven through `renderMarkdown` itself, not
+> through a unit of the parser.
+
+Every test calls `renderMarkdown`. `test/helpers/markdown-harness.js` builds it
+from `public/markdown-render.js` wired to the same marked build the browser
+gets: `lib/http-router.js` serves `node_modules/marked/lib/marked.umd.js` at
+`/marked.min.js`, and the harness loads that exact file the way a script tag
+does, because requiring it as CommonJS returns an empty object and would have
+tested a different build.
+
+> **AC-13:** Each of the four injection points has its own payload and its own
+> assertion.
+
+Four groups in the test file, each opening with a header comment naming its
+point, the code that was wrong, and the output its payload produced before the
+change. A fifth group covers a fifth point found while closing the fourth: no
+scheme filter on a link or image destination, so `[click](javascript:alert(1))`
+produced an anchor that ran on click.
+
+> **AC-14:** Each proof fails when its own guard is removed.
+
+`node test/tools/mutate-render-guards.js --markdown`, committed so the run can
+be repeated. It removes one guard, runs the suite, and names the tests that
+turn red. It exits non-zero if any mutation turns nothing red, so it is a check
+and not a report. Run on the tree this file is committed with:
+
+| Guard removed | Tests red | Which |
+|---|---|---|
+| wikilink target escaped into its attribute | 2 | `a quote in a wikilink target cannot open a second attribute`<br>`a click still reaches the opener with the same target value` |
+| callout title escaped | 3 | `a callout title containing a tag renders as text`<br>`a callout title cannot close the box it is written into`<br>`no callout render carries an event-handler attribute` |
+| raw HTML escaped | 2 | `a tag written in the document becomes text, not an element`<br>`the escaped tag is still legible to the reader` |
+| HTML comments dropped rather than escaped | 1 | `an HTML comment stays invisible instead of becoming visible text` |
+| link destination checked before it is written | 1 | `a script scheme cannot reach an href or a src` |
+| image destination checked before it is written | 1 | `a script scheme cannot reach an href or a src` |
+| href written as an attribute value, not left to the parser | 1 | `a script scheme cannot reach an href or a src` |
+| workspace-file href escaped into its attribute | 1 | `a character reference in a filename stays those characters` |
+| tag offered only where a hash follows whitespace | 1 | `the ordinary forms render exactly as they did` |
+| copy button carries no inline handler | 2 | `the benign document renders to the recorded bytes`<br>`a rendered code block carries no event-handler attribute` |
+| wikilink anchor carries no inline handler | 4 | `a quote in a wikilink target cannot open a second attribute`<br>`a wikilink target that closes the call cannot append an expression`<br>`no wikilink render carries an event-handler attribute`<br>`a tag written in the document becomes text, not an element` |
+
+Two of these turned nothing red on the first run, and the tests were
+strengthened rather than the result written up as a pass. Both are recorded in
+the commit `Make two escaping guards testable by mutating them`:
+
+- Removing the escaping from a wikilink target changed nothing any test could
+  see, because every payload on record used a single quote, which is harmless
+  inside the double-quoted attribute the target now travels in.
+- Removing the escaping from a rewritten relative href changed nothing at all.
+  The parser percent-encodes quotes, angle brackets and backslashes in a
+  destination, so the only character that reaches the attribute able to change
+  its meaning is the ampersand of a character reference, and no test used one.
+
+## Red-first and the gate
+
+`node scripts/red-first.js --base main --tests "npm test"` reports `proven`:
+1964 tests passing with the change, 2 failing without it.
+
+Read that with its limit. Reverting deletes `public/markdown-render.js`, which
+is a new file, so the suite fails at module load rather than assertion by
+assertion, and the two names it reports are a whole file and a manifest test.
+Red-first shows the tests notice the change; it is the mutation table above
+that shows each individual guard is noticed, which is why that instrument
+exists.
+
+`npm run precommit` passes all four steps: `test:coverage`, `typecheck`,
+`lint:styles`, `check:refs`.
+
+The record itself, `.precommit-gate.json`, is not tracked: it names the tree
+hash the checks passed on and is per-machine, and `.gitignore` says so. It is
+also not quotable here without contradicting itself, since writing its contents
+into a tracked file changes the tree it names. Both commands above are the
+reproduction, and both were run on the tree this file is committed with.
+
+## Coverage, measured inside the gate
+
+`npm run test:coverage`:
+
+```
+markdown-render.js      |  99.82 |    81.11 |   96.88 | 73
+all files               |  98.49 |    87.11 |   95.85 |
+```
+
+Line 73 is the browser half of the UMD wrapper, which cannot execute under
+node. It is the only uncovered line in the file. Branch coverage at 81% is the
+honest number and lower than the line figure: the uncovered branches are
+absent-dependency fallbacks and option defaults, not guards. Every guard in the
+mutation table is covered, which is a stronger statement about this file than
+its branch percentage is.
+
+`node test/tools/coverage-areas.js coverage.lcov`: all 50 floors hold.
+
+## Raised rather than absorbed
+
+- The other 86 `innerHTML` assignments across `public/`, 99 counting the
+  editor's own. This renderer's guarantee covers only what is rendered through
+  it. Count with:
+  `grep -rn "innerHTML\s*=" public/ --include="*.js" | grep -v markdown-render | wc -l`
+- The 75 inline handlers elsewhere in the client, 28 in `index.html` and 47
+  written by other scripts. They are what makes a Content-Security-Policy
+  impossible today; the two this renderer wrote are gone.
+- `test/unit/codex-appserver.test.js` has a 200ms wall-clock failsafe that loses
+  under a doubled suite load. It passes in isolation and failed one red-first
+  run before passing the next. Not touched here.
