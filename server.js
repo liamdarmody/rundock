@@ -3028,6 +3028,10 @@ function startServer(options = {}) {
       // whole session.
       startIdleReaper();
       console.log(`\n  Rundock running at http://localhost:${actualPort}`);
+      // Say who can reach it, not only where it is. Someone who used to open
+      // Rundock from another device now meets a bare connection refusal, and
+      // this is the only line they read.
+      console.log('  Reachable from this machine only: Rundock listens on loopback by default.');
       if (WORKSPACE && !fs.existsSync(WORKSPACE)) {
         console.log(`  Workspace no longer exists: ${WORKSPACE}`);
         setWorkspaceRoot(null);
