@@ -4,6 +4,16 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** Render Hardening
+
+### Fixed
+
+- **Text an agent brings back can no longer run code in the app:** anything an agent wrote into a conversation or a note was turned into the page as it was written, so a document could carry an instruction to the app rather than words to read. That mattered because most of what an agent produces is not the agent's own writing: it is a file from the workspace, a page it fetched, or an agent or skill file installed from somewhere else, and routines make agents produce it on a schedule with nobody watching. Five ways in were found and closed, four of them needing no interaction from you at all. Markup written into a document now shows as the characters it was written with, a callout heading reads as a label rather than as instructions, a note reference and a link to a file in your workspace carry their target as data instead of as code, and a link that names a destination the app will not follow now shows its text without becoming clickable. Nothing about ordinary markdown changed: code blocks, tables, task lists, callouts, note references and syntax highlighting all render exactly as before, which the suite checks against a recorded copy of the previous output.
+- **A tag or a highlight written inside a code block stays inside it:** a `#tag` or `==highlight==` typed into fenced code was turned into page markup and rendered as visible angle brackets in the middle of your code, and enough of them that the block was sometimes labelled as the wrong language. Both are left alone inside code now.
+- **A tag at the start of a line no longer joins it to the line above:** writing a tag as the first thing on a new line quietly swallowed the line break, running the two lines together.
+
 ## 0.11.8: Editor Hardening (2026-08-20)
 
 ### Fixed
