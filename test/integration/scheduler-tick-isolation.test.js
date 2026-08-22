@@ -321,6 +321,11 @@ test('a failed start survives the restart it will be read after', async (t) => {
   assert.strictEqual(saved[FAULTY].status, 'failed', 'the failure reached the file');
   assert.match(saved[FAULTY].error, /null byte/i, 'with its reason, which is the part only this path writes');
 
+  // This reload also clears the slot records, and four tests follow it. They
+  // are safe for a reason worth stating rather than leaving to be rediscovered:
+  // each drives its own tick, which re-stamps the observation before anything
+  // reads it. The safety is in what those tests do, not in where this one sits,
+  // so moving either does not break the other.
   h.internal.loadRoutineState();
   const restored = h.internal.routineState[FAULTY];
   assert.strictEqual(restored.status, 'failed', 'and the read back agrees with the write');
@@ -424,6 +429,73 @@ test('a start that throws away from the spawn is isolated too', async (t) => {
 // way to the record, so an inherited stamp is strictly later than the tick's
 // instant and a restamped one is exactly equal to it. That is the whole
 // distinction, asserted without counting reads.
+test('a failed start is held for THIS period even when it inherits an older stamp', async (t) => {
+  // The case the fallback does not cover. beginRun stamps a running record as
+  // its first act, so ordinarily the failure path inherits a stamp from this
+  // period. If beginRun throws BEFORE that write, what it inherits is whatever
+  // the last run left, which can be days old, and a stale stamp does not
+  // suppress: the routine reads as due again on the very next tick and retries
+  // every sixty seconds, which is the outcome the once-per-period decision and
+  // the documentation both rule out.
+  //
+  // Substituting only when the stamp is ABSENT does not reach this. The stamp
+  // is present; it is just from the wrong period. Hence a floor rather than a
+  // fallback.
+  begin(13, [FAULTY]);
+  h.internal.routineState[FAULTY] = {
+    lastRun: dayAt(12, 9, 5).toISOString(), status: 'completed', duration: 1,
+  };
+
+  const base = dayAt(13, 9, 30);
+  // A single-shot throw on the start's OWN first reading of the clock, so the
+  // start dies ahead of its own stamp while the tick's earlier reading still
+  // reaches the failure path.
+  //
+  // It selects on the call site rather than on a count. Counting was tried and
+  // was wrong twice: the tick reads once, then once per routine to ask whether
+  // each is due, and that total moves whenever the fixture or the iteration
+  // order changes. A test whose setup has to be re-derived every time the
+  // fixture grows is a test that will one day be quietly aimed at the wrong
+  // reading and still pass.
+  //
+  // Single-shot on purpose: throwing on every later reading would kill the
+  // due-check of the routine after this one, which nothing here catches, and
+  // the pass would die for a reason unrelated to what this test is about.
+  let thrown = false;
+  const prev = scheduler.wireSchedulerDeps({
+    now: () => {
+      if (!thrown && new Error().stack.includes('beginRun')) {
+        thrown = true;
+        throw new Error('clock unavailable');
+      }
+      return base;
+    },
+  });
+  let errors;
+  try {
+    ({ errors } = driveTicks(t, 3));
+  } finally {
+    scheduler.wireSchedulerDeps(prev);
+  }
+
+  // Proves the setup did what it claims BEFORE anything is concluded from it.
+  // Without this the test passes for the ordinary reason: this routine's spawn
+  // throws anyway, after the start has written its own stamp, so the record is
+  // already of this period and the floor is never exercised.
+  assert.ok(thrown, 'the clock threw inside the start, so the record it inherited is the stale one');
+  assert.strictEqual(h.internal.routineState[FAULTY].status, 'failed',
+    'the pass met a start that threw before it could stamp');
+
+  // The retry is what the stale stamp causes, so the retry is what to count.
+  // Asserting the FINAL stamp would prove nothing: a later pass writes one of
+  // this period on its way through, so the record looks correct afterwards
+  // whether or not the first failure was ever held. The damage is the extra
+  // attempt, and it is only visible while it is happening.
+  const announced = errors.filter(e => e.includes('faulty-check') && e.includes('failed to start'));
+  assert.strictEqual(announced.length, 1,
+    'three passes, one attempt: a stamp from an earlier period did not let it retry every tick');
+});
+
 test('a failed start keeps the stamp its own start wrote', async (t) => {
   begin(12, [FAULTY]);
 
