@@ -22,8 +22,8 @@ const { spawn } = require('node:child_process');
 const srv = require('../../server.js');
 
 /** Spawn a long-lived child and wait until it genuinely exists. */
-async function liveChild() {
-  const kid = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1e9)'], { stdio: 'ignore' });
+async function liveChild(pad = '') {
+  const kid = spawn(process.execPath, ['-e', `setInterval(() => {}, 1e9) //${pad}`], { stdio: 'ignore' });
   await new Promise((resolve, reject) => {
     kid.once('spawn', resolve);
     kid.once('error', reject);
@@ -80,6 +80,26 @@ describe('child pid records', () => {
         `the value must be the command line, not a thread or executable name. got ${JSON.stringify(viaProc)}`);
       assert.strictEqual(processCommand(kid.pid), viaProc,
         'processCommand must return the non-spawning value where one is available');
+    } finally {
+      try { kid.kill('SIGKILL'); } catch (e) {}
+    }
+  });
+
+  // The same measurement at a length that matters. `ps` is documented in places
+  // as fitting its output to the terminal width, which would make the two
+  // sources disagree for a LONG command line while agreeing for a short one:
+  // the guard would then look correct in every test and fail on the real thing,
+  // because a spawn here carries an agent's whole system prompt in argv.
+  // Measured rather than reasoned about, at a length well past any terminal.
+  test('the two sources still agree for a command line far longer than any terminal', { skip: noComparison }, async (t) => {
+    const kid = await liveChild('A'.repeat(16384));
+    try {
+      const viaProc = readProcCmdline(kid.pid);
+      const viaPs = psCommand(kid.pid);
+      t.diagnostic(`/proc/<pid>/cmdline  -> ${String(viaProc).length} chars, ends ${JSON.stringify(String(viaProc).slice(-8))}`);
+      t.diagnostic(`ps -p <pid> -o args= -> ${String(viaPs).length} chars, ends ${JSON.stringify(String(viaPs).slice(-8))}`);
+      assert.ok(String(viaPs).length > 16384, `ps truncated a long command line to ${String(viaPs).length} chars`);
+      assert.strictEqual(viaProc, viaPs, 'neither source may truncate where the other does not');
     } finally {
       try { kid.kill('SIGKILL'); } catch (e) {}
     }
