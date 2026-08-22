@@ -40,12 +40,17 @@ const NUL = String.fromCharCode(0);
 const KEEPER = 'keeper:briefing';
 const TWINS = 'twins:check';
 const FAULTY = 'faulty:faulty-check';
+const CRASHER = 'crasher:crash-check';
+const CODEX = 'codex-keeper:codex-check';
+const MISMATCH = 'mismatched:whoami';
 const RENAMED = 'keeper:briefing-renamed';
-const ALL = [KEEPER, TWINS, FAULTY, RENAMED];
+const ALL = [KEEPER, TWINS, FAULTY, CRASHER, CODEX, MISMATCH, RENAMED];
 
 const KEEPER_BODY = 'keeper routine body';
 const TWIN_EARLY = 'twin early body';
 const TWIN_LATE = 'twin late body';
+const CRASH_BODY = 'crasher routine body';
+const MISMATCH_BODY = 'mismatched routine body';
 
 // September 2026, local components, so the fixture is timezone-independent.
 function dayAt(day, hour, minute) { return new Date(2026, 8, day, hour, minute, 0); }
@@ -81,6 +86,31 @@ before(async () => {
         name: 'faulty', type: 'specialist', order: 3,
         routines: [{ name: 'faulty-check', schedule: 'every day at 05:00', prompt: `bad${NUL}body` }],
       }),
+      // A run whose CHILD fails, which is the only way a routine fails in the
+      // field: the CLI crashing, running out of memory, an expired login, the
+      // process killed at quit. Every one of those arrives as a non-zero close
+      // code on a child that really started, which is a different path from the
+      // start that never reached one.
+      crasher: agentFile({
+        name: 'crasher', type: 'specialist', order: 4,
+        routines: [{ name: 'crash-check', schedule: 'every day at 05:00', prompt: CRASH_BODY }],
+      }),
+      // The second runtime. Routines on it reach the same outcome closure by a
+      // completely different route, so a record written on the claude path says
+      // nothing about this one.
+      'codex-keeper': agentFile({
+        name: 'codex-keeper', type: 'specialist', order: 5, runtime: 'codex',
+        routines: [{ name: 'codex-check', schedule: 'every day at 05:00', prompt: 'codex routine body' }],
+      }),
+      // THE ONLY AGENT IN THIS FILE WHOSE ID AND NAME DIFFER, and it exists for
+      // exactly that. The id comes from the filename and the name from the
+      // frontmatter, and every other fixture here sets them to the same string,
+      // so a record carrying either one would look identical. A hand-written or
+      // marketplace agent normally has them apart.
+      mismatched: agentFile({
+        name: 'Mismatched Display Name', type: 'specialist', order: 6,
+        routines: [{ name: 'whoami', schedule: 'every day at 05:00', prompt: MISMATCH_BODY }],
+      }),
     },
   });
   keeperAgentFile = path.join(h.workspaceDir, '.claude', 'agents', 'keeper.md');
@@ -90,7 +120,15 @@ before(async () => {
     // the record while it is still open.
     { match: { agent: 'keeper' }, delayMs: 200, turn: [{ text: 'keeper ran' }] },
     { match: { agent: 'twins' }, turn: [{ text: 'twin ran' }] },
+    // Exits non-zero WITHOUT a result envelope: an abnormal mid-run death, not
+    // a routine that reported a failure. The delay holds it open past the
+    // synchronous tick, the same as the keeper rule above.
+    { match: { agent: 'crasher' }, delayMs: 200, crash: 1 },
+    { match: { agent: 'mismatched' }, turn: [{ text: 'mismatched ran' }] },
   ]);
+  // No rules: the codex stub answers an unmatched prompt with an ordinary turn
+  // that completes, which is the successful path on that runtime.
+  h.writeCodexScenario([]);
   prevDeps = scheduler.wireSchedulerDeps({ now: () => clock.at });
 });
 
@@ -168,11 +206,11 @@ function driveTicks(t, count = 1) {
   return { logs, errors };
 }
 
-function settled(key) {
+function settled(key, opts) {
   return h.waitUntil(() => {
     const s = h.internal.routineState[key];
     return s && s.status !== 'running';
-  });
+  }, opts);
 }
 
 // ---------------------------------------------------------------------------
@@ -200,6 +238,23 @@ test('a run leaves one record, open while it runs and closed when it ends', asyn
   assert.strictEqual(open[0].status, 'running', 'and it says the run is running');
   assert.strictEqual(open[0].endedAt, null, 'with no ending yet');
   assert.strictEqual(open[0].durationMs, null, 'and no duration yet');
+
+  // THE OPEN RECORD IS ASSERTED IN FULL, not just for the two fields that
+  // differ from a closed one. An open record is not a transient: it is what a
+  // sleeping machine, a quit, or a killed process leaves behind, because the
+  // closing write only ever runs from a live handler. So the run that never
+  // finished is exactly the run a history most needs to show, and one carrying
+  // an id and a start time and nothing else is dropped by any reader that
+  // filters by agent. Asserting only the closed record hides this completely,
+  // because the closing write rewrites the whole file from the handle and
+  // repairs any omission before anything looks.
+  assert.deepStrictEqual(Object.keys(open[0]).sort(),
+    ['agent', 'durationMs', 'endedAt', 'error', 'id', 'routine', 'startedAt', 'status'],
+    'an open record carries every field a closed one does');
+  assert.strictEqual(open[0].agent, 'keeper', 'including the agent it belongs to');
+  assert.strictEqual(open[0].routine, 'briefing', 'and the routine it belongs to');
+  assert.strictEqual(open[0].startedAt, dayAt(1, 5, 30).toISOString(), 'and when it started');
+  assert.strictEqual(open[0].error, null, 'and nothing has gone wrong yet');
 
   // Five minutes of the run's life, chosen rather than waited for.
   clock.at = dayAt(1, 5, 35);
@@ -251,6 +306,101 @@ test('a start that throws closes its record as failed, with the reason it gave',
   // vocabulary. Neither was renamed to match the other.
   assert.strictEqual(h.internal.routineState[FAULTY].status, 'failed',
     'and the routine state recorded the same failure, unchanged by this card');
+});
+
+// AC-4, AC-6 and AC-14 on the path that actually produces failures. Every
+// other failed record in this file comes from a start that threw before there
+// was a child, which is the rare case and is documented as the rare case. What
+// happens in the field is a child that started and died: the CLI crashing,
+// running out of memory, a login that expired overnight, the process killed
+// when the app quit. All of them arrive as a non-zero close code, and this
+// store exists to answer how often a routine has failed, so a history that
+// called them all successes would answer it wrongly and confidently.
+//
+// The routine state records a failure here too, so without this test the two
+// stores would disagree with only one of them tested.
+test('a run whose child dies is recorded as failed, and gives no reason it does not have', async (t) => {
+  begin(15, [CRASHER]);
+
+  driveTicks(t);
+  clock.at = dayAt(15, 5, 32);
+  assert.ok(await settled(CRASHER), 'the run reached an outcome');
+
+  const recs = records();
+  assert.strictEqual(recs.length, 1, 'the run left one record');
+  const rec = recs[0];
+  assert.strictEqual(rec.status, 'failed', 'a child that exited non-zero is a failed run, not a succeeded one');
+  assert.strictEqual(rec.agent, 'crasher', 'naming the agent');
+  assert.strictEqual(rec.routine, 'crash-check', 'and the routine');
+  assert.strictEqual(rec.startedAt, dayAt(15, 5, 30).toISOString(), 'started when the tick started it');
+  assert.strictEqual(rec.endedAt, dayAt(15, 5, 32).toISOString(), 'and ended when its child did');
+  assert.strictEqual(rec.durationMs, 2 * 60 * 1000, 'so it has a real duration, which a start that never ran does not');
+  // NOT an omission. The child said nothing a record could carry: an exit code
+  // is not a message, and reading what a routine wrote on its way out is
+  // explicitly another card. A reason invented here would be this file's guess
+  // rather than the failure's own words.
+  assert.strictEqual(rec.error, null,
+    'and no reason, because a non-zero exit gives none and the output is not read');
+
+  assert.strictEqual(h.internal.routineState[CRASHER].status, 'failed',
+    'the routine state agrees, in its own vocabulary');
+});
+
+// The second runtime. A routine on a codex agent reaches the same outcome
+// closure by a completely different route: an app-server thread, a turn, and a
+// promise, with no child process and no close event anywhere in it. A record
+// written on the claude path proves nothing about this one, and until this test
+// no codex agent existed in this file at all.
+test('a routine on the codex runtime leaves a record too', async (t) => {
+  begin(16, [CODEX]);
+
+  driveTicks(t);
+  // The codex path is asynchronous through a real app-server handshake, so it
+  // gets room the claude path does not need.
+  assert.ok(await settled(CODEX, { timeout: 20000 }), 'the codex run reached an outcome');
+
+  // The branch is asserted, not assumed. Discovery is what decides a routine
+  // takes the codex path, and a fixture whose runtime field stopped being
+  // honoured would run this through the claude stub and produce an identical
+  // record, leaving the test green and the path uncovered.
+  assert.ok(h.codexTurnPrompts().some(prompt => prompt.includes('codex routine body')),
+    'the routine really went through the codex app-server rather than a spawned child');
+
+  const recs = records();
+  assert.strictEqual(recs.length, 1, 'the codex run left one record');
+  assert.strictEqual(recs[0].agent, 'codex-keeper', 'naming the agent whose runtime it ran on');
+  assert.strictEqual(recs[0].routine, 'codex-check', 'and the routine');
+  assert.strictEqual(recs[0].status, 'succeeded', 'in the same vocabulary the other runtime uses');
+  assert.strictEqual(recs[0].startedAt, dayAt(16, 5, 30).toISOString(), 'and the instant the tick started it');
+  assert.ok(recs[0].endedAt, 'and it was closed rather than left open');
+});
+
+// AC-7, pinned to the id rather than to a coincidence. Everything else keys on
+// the agent id: the routine key the scheduler builds, the run state, the
+// single-flight hold, and the signals event written beside this record. A
+// record carrying the display name could not be joined back to any of them.
+//
+// The consequence is deferred, because nothing reads these records yet, and
+// that is what makes it worth pinning now: the wrong string would be written to
+// users' disks permanently and could not be re-derived afterwards.
+test('the record names the agent by the id everything else keys on, not its display name', async (t) => {
+  const agent = h.internal.discoverAgents().find(a => a.id === 'mismatched');
+  // The fixture defends itself. Every other agent in this file has an id equal
+  // to its name, so if this one ever collapsed to the same shape the assertion
+  // below would pass while proving nothing.
+  assert.ok(agent, 'the agent is on the roster');
+  assert.strictEqual(agent.name, 'Mismatched Display Name', 'whose frontmatter name is not its id');
+  assert.notStrictEqual(agent.name, agent.id, 'so the two really do diverge here');
+
+  begin(17, [MISMATCH]);
+  driveTicks(t);
+  assert.ok(await settled(MISMATCH), 'the run finished');
+
+  const [rec] = records();
+  assert.strictEqual(rec.agent, 'mismatched', 'the record carries the id');
+  assert.notStrictEqual(rec.agent, agent.name, 'and not the name a person reads on screen');
+  assert.ok(h.internal.routineState[`${rec.agent}:${rec.routine}`],
+    'so the record joins back to the run state, which is the point of carrying it');
 });
 
 // ---------------------------------------------------------------------------
@@ -407,13 +557,24 @@ test('nothing a record writes reaches the value double-fire suppression reads', 
   begin(9, [KEEPER]);
 
   driveTicks(t);
+  // TWO CHOSEN INSTANTS, and the whole criterion rests on them. Frozen, the
+  // instant the run started and the instant it ended are the same string, so a
+  // record field fed into the suppression stamp would be indistinguishable from
+  // the stamp the run wrote itself, and this test would defend its criterion
+  // nowhere while appearing to defend it here.
+  clock.at = dayAt(9, 5, 45);
   assert.ok(await settled(KEEPER), 'the run finished');
+  const [rec] = records();
   assert.strictEqual(records().length, 1, 'a record really was written on this pass');
 
   assert.deepStrictEqual(Object.keys(h.internal.routineState[KEEPER]).sort(), ['duration', 'lastRun', 'status'],
     'the routine state kept its shape: no run id, no record fields, nothing new');
-  assert.strictEqual(h.internal.routineState[KEEPER].lastRun, dayAt(9, 5, 30).toISOString(),
-    'and its stamp is the one the run wrote, not one a record moved');
+  assert.strictEqual(h.internal.routineState[KEEPER].lastRun, dayAt(9, 5, 45).toISOString(),
+    'and its stamp is the one the RUN wrote when it ended');
+  assert.strictEqual(rec.startedAt, dayAt(9, 5, 30).toISOString(),
+    'while the record carries a different instant entirely');
+  assert.notStrictEqual(h.internal.routineState[KEEPER].lastRun, rec.startedAt,
+    'so a record field reaching the suppression stamp would move it, visibly');
   assert.deepStrictEqual(Object.keys(h.internal.routineSlots.routines[KEEPER]).sort(), ['due', 'missed', 'schedule'],
     'and the slot store kept its shape too');
 
