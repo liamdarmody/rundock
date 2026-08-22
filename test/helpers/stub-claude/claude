@@ -89,8 +89,38 @@ try {
 // The server SIGKILLs stubs mid-stream by design (interception, auto-return).
 // Never crash on a broken pipe.
 process.stdout.on('error', () => {});
+// Counted where the bytes are handed over, so a test that cares how much a run
+// emitted reads a measurement instead of trusting the size of the fixture it
+// wrote. Only what write() accepted is counted: a stub killed mid-write did
+// not emit that chunk.
+let WROTE = 0;
 function writeOut(s) {
-  try { process.stdout.write(s); } catch (e) { /* killed mid-write */ }
+  try { process.stdout.write(s); WROTE += Buffer.byteLength(s); } catch (e) { /* killed mid-write */ }
+}
+
+// A --print run ends when its output has actually left the process, not when
+// the last write() call returns.
+//
+// process.exit() throws away whatever process.stdout still has queued, and on
+// a pipe that is everything the kernel buffer would not take: 500 KB written
+// and exited on the spot closes in 32 ms with most of it discarded. No real
+// CLI can do that. A real write does not come back until a reader has taken
+// the bytes, so a parent that reads neither pipe blocks its child forever.
+// A stub that exits anyway cannot reproduce the commonest way a subprocess
+// hangs, which is why the routine deadlock was invisible to every test here.
+//
+// The output log is written from the same callback, so the byte count belongs
+// to output that really left rather than to output that was merely queued.
+const OUTPUT_LOG = path.join(process.cwd(), 'stub-output.jsonl');
+function exitWhenWritten(code) {
+  process.stdout.write('', () => {
+    try {
+      fs.appendFileSync(OUTPUT_LOG, JSON.stringify({
+        agent: AGENT, pid: process.pid, stdoutBytes: WROTE, ts: Date.now(),
+      }) + '\n');
+    } catch (e) { /* logging is best-effort */ }
+    process.exit(code);
+  });
 }
 
 const SESSION_ID = RESUME || `stub-${AGENT || 'default'}-${process.pid}`;
@@ -163,7 +193,7 @@ function emitTurn(rule) {
   } else {
     for (const e of events) writeOut(JSON.stringify(e) + '\n');
   }
-  if (PRINT) process.exit(0);
+  if (PRINT) exitWhenWritten(0);
 }
 
 // Model an MCP server. The real `claude` spawns these as its OWN children over

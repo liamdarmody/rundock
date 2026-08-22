@@ -100,6 +100,18 @@ function readGrandchildren() {
   return fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
 }
 
+// One line per --print run that finished writing, carrying how many bytes of
+// stdout really left the child. A test about output volume asserts on this
+// rather than on the size of the fixture it wrote: a child that queued 200 KB
+// and got 2 KB out is the case worth telling apart, and it is invisible from
+// the scenario file. A run still blocked on a full pipe has written no line
+// here at all, which is the same absence read a different way.
+function readStubOutputs() {
+  const file = path.join(workspaceDir, 'stub-output.jsonl');
+  if (!fs.existsSync(file)) return [];
+  return fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+}
+
 // ── Prompt log (Claude stub) ──────────────────────────────────────────────
 // Direct assertion surface for what the server actually sent an agent. Use
 // this instead of encoding the expectation in a scenario rule's promptIncludes
@@ -292,7 +304,7 @@ function freshConvoId(prefix = 'it') {
 module.exports = {
   boot, shutdown, connect, writeScenario, writeCodexScenario, codexTurnPrompts,
   readInvocations, clearInvocations,
-  readGrandchildren, pidAlive, waitForPidExit,
+  readGrandchildren, readStubOutputs, pidAlive, waitForPidExit,
   readPrompts, promptsFor, unmatchedPrompts, assertAllPromptsMatched, clearPrompts,
   delay, waitUntil, freshConvoId, reapConvo,
   get internal() { return internal; },

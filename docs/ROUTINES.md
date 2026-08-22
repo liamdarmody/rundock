@@ -135,7 +135,9 @@ If neither applies, schedule routines for whenever you tend to be at the machine
 
 ## Where routine output goes
 
-When a routine fires, the spawned Claude Code subprocess produces output on stdout (stream-json) and stderr. **Rundock does not capture or surface this output.** The pipes are open but unread. The model's response, any tool calls it made, any files it produced via Write or Bash: none of these flow back into a Rundock conversation or notification.
+When a routine fires, the spawned Claude Code subprocess produces output on stdout (stream-json) and stderr. **Rundock discards both.** The child's stdout and stderr are attached to the null device, so a routine can print as much as it likes and every write completes. The model's response, any tool calls it made, any files it produced via Write or Bash: none of these flow back into a Rundock conversation or notification.
+
+This page used to say the pipes were open but unread, and described that as a deliberate choice. It was a hang. Nothing was reading them, and an unread pipe fills: past roughly 128 KB of output the subprocess blocked on its next write and never exited, so the run never recorded an outcome, the routine stayed marked as in flight, and it did not run again until Rundock was restarted. Verbose stream output passes that in the opening list of available tools alone. Discarding the output removes the hazard; whether Rundock should read it instead is an open question, and this page will say so if that changes.
 
 What Rundock does record:
 
@@ -270,7 +272,7 @@ A few specific things that go wrong silently.
 
 **Rundock is closed for a whole day when the schedule comes due.** The scheduler is in-process, so a routine can only fire while Rundock is running. If Rundock is shut at 05:00 but opened later the same day, the morning briefing fires when you open it: that is the catch-up window described above. What is lost is a day Rundock is never opened at all, because the window is the calendar day and it does not carry over. Routines are best suited to cadences you keep Rundock running through; for one that must never miss a slot, schedule it when Rundock is reliably open.
 
-**Routines that need their output read.** Rundock does not capture the routine's stdout. If the agent does not write its output somewhere durable through tools (file system, Todoist, Notion, etc), the run produces nothing the user can find later. Always design routines so the agent writes a trace.
+**Routines that need their output read.** Rundock discards the routine's stdout. If the agent does not write its output somewhere durable through tools (file system, Todoist, Notion, etc), the run produces nothing the user can find later. Always design routines so the agent writes a trace.
 
 **Two routines on the same agent fire in the same minute.** Both routines spawn Claude Code subprocesses concurrently. They do not share context, conversation history, or file locks. Stagger the schedules unless the routines are genuinely independent and idempotent.
 
