@@ -360,6 +360,27 @@ describe('a run that handed work to a subagent', () => {
     assert.strictEqual(result.files, null);
   });
 
+  // A subagent transcript that will not open. The reason to look at it is to
+  // find out whether anything was changed out of sight, and a file that cannot
+  // be read has not answered that, so it counts as one that did.
+  test('a subagent transcript that cannot be read counts as one that changed something', () => {
+    const sid = 'd1000000-0000-4000-8000-000000000005';
+    writeTranscript(sid, [fx.prompt(sid, 'go'), fx.completed(sid, { file: '/w/parent.md' })]);
+    const file = writeSidechain(sid, [fx.sidechainSay(sid, 'nothing to see')]);
+    // Proved harmless first, so the assertion below is about the permission
+    // change and not about a sidechain that was never read.
+    assert.strictEqual(readSessionTranscript(sid).status, 'known', 'readable, and it changed nothing');
+    fs.chmodSync(file, 0o000);
+    try {
+      const result = readSessionTranscript(sid);
+      assert.strictEqual(result.status, 'unknown', 'a subagent record nobody can open is not a subagent that did nothing');
+      assert.strictEqual(result.reason, 'delegated');
+      assert.strictEqual(result.files, null);
+    } finally {
+      fs.chmodSync(file, 0o600);
+    }
+  });
+
   // A run that delegated nothing must be unaffected, or the guard above is a
   // rule that fires on the ordinary case.
   test('a run that delegated nothing still reports its own files', () => {
@@ -422,6 +443,61 @@ describe('a transcript that cannot be used', () => {
     } finally {
       fs.chmodSync(file, 0o600);
     }
+  });
+
+  // THE THREE ABSENCES THAT LOOK ALIKE TO A LINE COUNTER. Each of these sits
+  // in a one-line try/catch or ternary, so the file measures as fully covered
+  // whether or not any of them has ever been reached: a floor set on lines
+  // says nothing about them. Driven here so the claim is discharged on its
+  // merits rather than on the instrument.
+  test('a process with no home at all cannot find a transcript, and says so', () => {
+    const home_ = process.env.HOME;
+    const profile = process.env.USERPROFILE;
+    try {
+      delete process.env.HOME;
+      delete process.env.USERPROFILE;
+      const result = readSessionTranscript('a0000000-0000-4000-8000-00000000home');
+      assert.strictEqual(result.status, 'unknown', 'no home is no answer, never an empty list');
+      assert.strictEqual(result.reason, 'no-transcript');
+      assert.strictEqual(result.files, null);
+    } finally {
+      process.env.HOME = home_;
+      if (profile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = profile;
+    }
+  });
+
+  test('a home with no transcript directory at all is unknown, not empty', () => {
+    const home_ = process.env.HOME;
+    const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'rundock-nohome-'));
+    try {
+      process.env.HOME = fresh;
+      const result = readSessionTranscript('a0000000-0000-4000-8000-00000000nodi');
+      assert.strictEqual(result.status, 'unknown', 'a machine that has never run the agent tool has no answer to give');
+      assert.strictEqual(result.reason, 'no-transcript');
+      assert.strictEqual(result.files, null);
+    } finally {
+      process.env.HOME = home_;
+      fs.rmSync(fresh, { recursive: true, force: true });
+    }
+  });
+
+  // Something in a content array that is not a block at all. Passed over
+  // rather than refused: an entry that is not an object cannot be a renamed
+  // block type, so there is nothing here that could hide a write.
+  test('a content entry that is not an object is passed over, and the rest is still read', () => {
+    const sid = 'a0000000-0000-4000-8000-000000000003';
+    writeTranscript(sid, [
+      fx.prompt(sid, 'go'),
+      JSON.stringify({
+        type: 'assistant', sessionId: sid, timestamp: '2026-08-22T19:15:06.000Z',
+        message: { role: 'assistant', content: [null, 'a bare string', { type: 'text', text: 'still here' }] },
+      }) + '\n',
+      fx.completed(sid, { file: '/w/after.md' }),
+    ]);
+
+    const result = readSessionTranscript(sid);
+    assert.strictEqual(result.status, 'known');
+    assert.deepStrictEqual(paths(result), ['/w/after.md'], 'the write after the odd entry is still accounted for');
   });
 
   // A format this reader does not know. Valid JSON lines, none of them a
