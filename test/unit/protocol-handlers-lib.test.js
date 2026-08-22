@@ -195,6 +195,103 @@ describe('handler seams (stub ctx, capture ws)', () => {
     }
   });
 
+  // The error path in handleCreatePath: the catch that answers create_error
+  // when the create itself throws, as opposed to the two guard branches above
+  // it that refuse a path before touching the disk.
+  //
+  // WHY THIS TEST EXISTS AT ALL. Those two lines were already counted as
+  // covered, but by accident: whichever test happened to make a create throw
+  // picked them up, and when a run interleaved so that none did, the file
+  // measured 95.3% against a 97.5% floor and the floors job went red on
+  // changes that touched neither file. A floor held up by incidental coverage
+  // protects nothing and reports a number that is not about the tests.
+  //
+  // The throw is real, not injected: `notes` is created as a FILE, so the
+  // handler's own `fs.mkdirSync(path.dirname(full), { recursive: true })`
+  // fails EEXIST on it. The path clears both guards on their own terms, so
+  // the message reaches the try for the same reason a real one would.
+  // Asserting the errno reason rather than merely "a create_error was sent"
+  // is what separates this from the branch above: the guards answer with the
+  // fixed strings 'invalid path' and 'already exists', so an EEXIST reason
+  // can only have come from the catch.
+  //
+  // THE MEASUREMENT, since the claim is that the file now clears its floor
+  // whatever else ran, and a claim like that is worth only the runs behind
+  // it. SIX full coverage runs were made: one before this test and FIVE
+  // after. Every figure below is `npm run test:coverage` against a floor of
+  // 97.5%.
+  //
+  //   before, 1 run:  97.6%  (83/85), uncovered 81-82
+  //   after,  run 1:  97.6%  (83/85), uncovered 81-82
+  //   after,  run 2:  97.6%  (83/85), uncovered 81-82
+  //   after,  run 3:  97.6%  (83/85), uncovered 81-82
+  //   after,  run 4:  97.6%  (83/85), uncovered 81-82
+  //   after,  run 5:  97.6%  (83/85), uncovered 81-82
+  //
+  // All five met the floor and none measured below it. The spread is zero,
+  // which is the property being claimed: same figure, same two uncovered
+  // lines, every run. Those two are handleRevealInFinder's macOS-only spawn,
+  // which nothing covers on purpose either and which is carded separately.
+  //
+  // The interleaving that was failing measured 81/85 = 95.3%, with lines
+  // 71-72 AND 81-82 of lib/protocol/handlers/files.js uncovered: the catch
+  // and the reveal spawn missing together.
+  // It cannot recur, because 71-72 no longer depends on another test
+  // happening to make a create throw. The lcov confirms the mechanism rather
+  // than just the total: line 71 was hit in all five runs, with the count
+  // varying between 1 and 3, so the incidental hits still arrive, on top of
+  // one that is now guaranteed. The worst case is therefore 83/85.
+  //
+  // DISCRIMINATION was proved by hand, and had to be. `npm run red-first`
+  // returns NOT-PROVABLE for a change that is only a test, correctly: it
+  // works by reverting the source, and there is no source here to take away.
+  // So the mutation is the only evidence, and it is this one: delete the
+  // `ws.send` inside that catch, leaving the catch itself in place, and
+  // the suite reports 14 pass, 1 fail with this test the single failure.
+  // Nothing else in the suite notices the send is gone, which is the whole
+  // reason the floor was measuring luck.
+  test('create_path answers create_error carrying the failure reason when the create itself throws', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-handlers-'));
+    try {
+      config.setWorkspace(dir);
+      // The obstruction: a regular file where the handler must make a folder.
+      fs.writeFileSync(path.join(dir, 'notes'), 'not a directory', 'utf-8');
+      let broadcasts = 0;
+      const ctx = {
+        workspace: {
+          // Real containment against this workspace rather than `() => true`:
+          // server.js's own isInsideWorkspace reads a module-local WORKSPACE
+          // that config.setWorkspace does not touch, so it cannot be borrowed
+          // here, but the rule it applies can be. isSafeCreatePath is pure and
+          // is used as it ships.
+          isInsideWorkspace: (p) => path.resolve(p).startsWith(path.resolve(dir) + path.sep),
+          isSafeCreatePath: srv.isSafeCreatePath,
+          invalidateFileListCache: () => {},
+          invalidateFileTreeCache: () => {},
+          broadcastFileTree: () => { broadcasts++; },
+        },
+        store: { ensureSearchEngine: () => null },
+      };
+      const ws = captureWs();
+      table.create_path(ctx, ws, { type: 'create_path', path: 'notes/x.md', kind: 'file', content: 'hi' });
+
+      assert.strictEqual(ws.sent.length, 1, 'exactly one answer');
+      const [answer] = ws.sent;
+      assert.strictEqual(answer.type, 'create_error');
+      assert.strictEqual(answer.path, 'notes/x.md');
+      // The errno text, which no guard branch can produce.
+      assert.match(answer.reason, /^EEXIST:/, `the catch reported the real failure, got ${answer.reason}`);
+      assert.strictEqual(broadcasts, 0, 'a failed create broadcasts no tree');
+      assert.ok(!fs.existsSync(path.join(dir, 'notes', 'x.md')), 'nothing was created');
+      assert.ok(fs.statSync(path.join(dir, 'notes')).isFile(), 'the obstruction is untouched');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('get_skills answers from ctx.agents.discoverSkills', () => {
     const table = buildDispatch();
     const ctx = { agents: { discoverSkills: () => [{ id: 'linting', name: 'Linting' }] } };
