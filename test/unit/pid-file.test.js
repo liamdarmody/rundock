@@ -14,16 +14,36 @@ const { spawn } = require('node:child_process');
 
 const srv = require('../../server.js');
 
-/** Spawn a long-lived child and wait until it genuinely exists. */
+const { pidRecordAlive, processCommand } = srv._internal;
+
+/**
+ * Spawn a long-lived child and wait until it genuinely exists.
+ *
+ * The 'spawn' event is not enough. It fires when the fork has happened, and on
+ * macOS `ps -p <pid> -o args=` reports an EMPTY command line between the fork
+ * and the exec: measured here, 30 spawns out of 30 read empty at that moment.
+ * commandsMatch treats an empty command as unknown and answers true, so a test
+ * that asks whether a MISMATCHED record is refused gets true and fails, on a
+ * race that has nothing to do with what it is testing. Whether the race is lost
+ * depends on how much work happens between the spawn and the lookup, which is
+ * why the suite could pass for a long time and then fail on an unrelated commit
+ * that changed nothing but its own timing.
+ *
+ * So wait for what the assertion actually depends on: a command line the
+ * platform can read back.
+ */
 async function liveChild() {
   const kid = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1e9)'], { stdio: 'ignore' });
   await new Promise((resolve, reject) => {
     kid.once('spawn', resolve);
     kid.once('error', reject);
   });
+  const deadline = Date.now() + 5000;
+  while (!processCommand(kid.pid) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
   return kid;
 }
-const { pidRecordAlive, processCommand } = srv._internal;
 
 describe('child pid records', () => {
   test('a live process spawned as the recorded command is recognised', async () => {
