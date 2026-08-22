@@ -140,10 +140,11 @@ When a routine fires, the spawned Claude Code subprocess produces output on stdo
 What Rundock does record:
 
 - The routine's `lastRun` timestamp.
-- The routine's `status` (`running`, `completed`, `failed`, or `interrupted`). The first three follow the subprocess exit code; `interrupted` is written on startup when a run was still marked `running` when the process died, so a routine killed mid-run is distinguishable from one that failed.
+- The routine's `status` (`running`, `completed`, `failed`, or `interrupted`). `completed` and `failed` normally follow the subprocess exit code; `interrupted` is written on startup when a run was still marked `running` when the process died, so a routine killed mid-run is distinguishable from one that failed.
 - The routine's `duration` in seconds.
+- An `error` string, written only when a start never produced a subprocess at all. A routine whose spawn throws is recorded as `failed` with the reason the failure gave, and with a `duration` of zero, because nothing ran. Its `lastRun` is the instant the start was attempted, so the ordinary guard holds it for the rest of its period rather than retrying it every 60 seconds; the next period attempts it again. One routine failing this way does not stop any other routine on the same tick.
 
-These three fields update in the Routines panel and on the agent profile in real time over the WebSocket.
+These fields update in the Routines panel and on the agent profile in real time over the WebSocket, except after a failed start, which the next update carries.
 
 The practical implication: any routine that needs to leave a trace should write that trace itself, through the agent's tools. A morning briefing that creates a file in the daily note, a research digest that writes a markdown report to a folder, an end-of-day sync that updates Todoist via MCP: all of these work because the agent's system prompt instructs the agent to write its output to a known location. A routine that simply asks the model to think out loud will produce output that nobody ever reads.
 
