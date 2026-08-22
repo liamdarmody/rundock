@@ -30,6 +30,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const h = require('../helpers/harness.js');
 const { agentFile, makeWorkspace } = require('../helpers/workspace.js');
+const { calledFrom } = require('../helpers/stack.js');
 
 const scheduler = require('../../lib/scheduler.js');
 
@@ -475,6 +476,63 @@ test('two runs of one routine leave two records, one for each', async (t) => {
     'and both belong to the one routine that ran twice');
 });
 
+// AC-2, on the question of WHICH instant a start is. The tick reads the clock
+// once and judges every routine against that one reading. A record that read
+// the clock again would describe the same start at a different moment, and the
+// run's own elapsed time would be measured from a third. Under a frozen clock
+// all of them are the same string and nothing can tell them apart.
+//
+// THE CLOCK HERE JUMPS ONCE, on its second reading, and then holds. That is
+// what makes every reading nameable without counting any: the tick's is the
+// only one before the jump, and everything the run does afterwards sees one
+// other value. Counting readings was tried on this project twice and was wrong
+// both times, because the total moves whenever a fixture grows.
+//
+// Five minutes, so the jump stays inside the routine's own day and the pass
+// still judges it due.
+test('a run is timed from the one instant the tick judged it due', async (t) => {
+  begin(19, [KEEPER]);
+  const base = dayAt(19, 5, 30);
+  const JUMP = 5 * 60 * 1000;
+  let reads = 0;
+  const prev = scheduler.wireSchedulerDeps({
+    now: () => new Date(base.getTime() + (reads++ === 0 ? 0 : JUMP)),
+  });
+  try {
+    driveTicks(t);
+    assert.ok(await settled(KEEPER), 'the run finished');
+  } finally {
+    scheduler.wireSchedulerDeps(prev);
+  }
+
+  // Proves the clock did what the test claims before anything is concluded
+  // from it. A fake that never moved would make every assertion below pass
+  // against code that reads the clock as often as it likes.
+  assert.ok(reads > 1, 'the clock was read more than once, so its readings really do differ');
+
+  const [rec] = records();
+  assert.strictEqual(rec.startedAt, base.toISOString(),
+    "the record's start is the tick's own reading, not a later one taken on the way to it");
+  assert.strictEqual(rec.endedAt, new Date(base.getTime() + JUMP).toISOString(),
+    'and its ending is a reading from after the jump, so the two are not the same value by accident');
+  assert.strictEqual(rec.durationMs, JUMP, 'so the record spans the whole run');
+
+  // The run's own elapsed time is measured from the same instant. Read from a
+  // later reading it would be zero, because every reading after the first is
+  // the same one.
+  assert.strictEqual(h.internal.routineState[KEEPER].duration, JUMP / 1000,
+    'and the routine state measured the run from that instant too, not from a reading of its own');
+
+  // THE ONE READING DELIBERATELY LEFT ALONE, said here as well as at the code.
+  // The routine state's stamp is the sole input to double-fire suppression and
+  // is written by beginRun from its own reading. It stays there because moving
+  // the suppression's input is a behaviour change this card has no business
+  // making, and because an existing test drives a throw at exactly that read to
+  // prove the failed-start floor.
+  assert.strictEqual(h.internal.routineState[KEEPER].lastRun, new Date(base.getTime() + JUMP).toISOString(),
+    'while the suppression stamp keeps its own later reading, which is deliberate');
+});
+
 // ---------------------------------------------------------------------------
 // Identity
 // ---------------------------------------------------------------------------
@@ -566,15 +624,18 @@ test('records use the frozen vocabulary and the routine state keeps its own', as
   const statuses = records().map(r => r.status).sort();
   assert.deepStrictEqual(statuses, ['failed', 'succeeded'],
     'a pass with one success and one failure wrote exactly those two words');
-  for (const status of records().map(r => r.status)) {
-    assert.ok(['running', 'succeeded', 'failed'].includes(status), `"${status}" is outside the record vocabulary`);
-  }
-  // Not producible yet, and so never written: routines start the moment they
-  // are found due, and the child handle is never kept, so nothing can reach a
-  // run to cancel it.
-  const written = new Set(records().map(r => r.status));
-  assert.ok(!written.has('queued'), 'nothing queues a run, so no record claims it');
-  assert.ok(!written.has('cancelled'), 'nothing can cancel a run, so no record claims it');
+
+  // AC-15, that no record carries a state the product cannot produce, is NOT
+  // asserted here, and saying so is more honest than the assertion that used to
+  // be. `queued` and `cancelled` cannot be driven: nothing queues a run, since
+  // a routine starts the moment it is found due, and the child handle is never
+  // kept, so nothing can reach a run to cancel it. An assertion that an
+  // unreachable value is absent is an assertion that cannot fail, and this file
+  // has already removed one promise nothing could hold. The criterion is a
+  // property of the writer, which states its three statuses as literals and is
+  // read in the diff. The set assertion above is what catches a fourth word
+  // arriving, because it names the whole set rather than forbidding two members
+  // of it.
 
   assert.strictEqual(h.internal.routineState[KEEPER].status, 'completed',
     'the routine state still says completed, which is the token on every user disk and was not renamed');
@@ -669,8 +730,13 @@ test('a workspace that cannot be written to does not stop the run or the pass', 
 // making anything else pretend. Single-shot, and selected on the call site
 // rather than on a count of readings: the tick reads once and then once per
 // routine to ask whether each is due, and that total moves whenever the fixture
-// grows. beginRun is excluded because its readings are deeper in the same stack
-// and are a different case, already pinned elsewhere.
+// grows. beginRun is excluded because a throw from inside it happens AFTER the
+// record has been opened, which is a different case with a test of its own.
+//
+// The selection matches FRAMES, not substrings. `beginRun` is a prefix of
+// `beginRunRecord`, so a substring exclusion would stop this fake firing the
+// moment the clock reading moved inside the record opener, which is an ordinary
+// refactor that leaves the case under test exactly as it is.
 //
 // What is asserted is that the SECOND start gets going. A routine still held
 // would be turned away by the single-flight guard and would return false
@@ -688,8 +754,7 @@ test('a start that fails before its record is opened does not hold the routine',
   let thrown = false;
   const prev = scheduler.wireSchedulerDeps({
     now: () => {
-      const stack = new Error().stack;
-      if (!thrown && stack.includes('executeRoutine') && !stack.includes('beginRun')) {
+      if (!thrown && calledFrom('executeRoutine') && !calledFrom('beginRun')) {
         thrown = true;
         throw new Error('clock unavailable');
       }

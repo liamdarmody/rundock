@@ -77,7 +77,23 @@ function enterTempWorkspace() {
     config,
     leave() {
       config.setWorkspace(original);
-      fs.rmSync(ws, { recursive: true, force: true });
+      // TOLERANT ON PURPOSE, and the reason is a property of the scheduler
+      // rather than a flake. A run in flight writes its record to the
+      // directory it STARTED in, deliberately, so that a workspace switch
+      // cannot orphan a record from its own beginning. A test that leaves a
+      // run going therefore has a writer that can recreate this directory in
+      // between the walk and the unlink, and the removal fails with ENOTEMPTY.
+      //
+      // Retried, then left to the operating system. A stray temp directory
+      // costs nothing, while a throw here reports as a failure of whichever
+      // test happened to run last, which is the least informative place a
+      // failure can appear.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          fs.rmSync(ws, { recursive: true, force: true });
+          return;
+        } catch (e) { /* a late record recreated it; try again */ }
+      }
     },
   };
 }
