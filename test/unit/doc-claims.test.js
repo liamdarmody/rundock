@@ -83,6 +83,90 @@ describe('SKILLS.md: only slugs are injected into the prompt', () => {
 });
 
 // ---------------------------------------------------------------------------
+// docs/ROUTINES.md: where a routine's output goes
+// ---------------------------------------------------------------------------
+
+describe('ROUTINES.md: the child\'s output is discarded', () => {
+  // The claim: "The child's stdout and stderr are attached to the null device,
+  // so a routine can print as much as it likes and every write completes."
+  //
+  // This one is load-bearing in a way the others are not: it is the claim that
+  // says the hazard cannot happen. The page previously stated the opposite,
+  // that the pipes were open but unread and that this was a deliberate choice,
+  // and that sentence was true for as long as it took a routine to print
+  // 160 KB, after which the routine hung and never ran again. Put 'pipe' back
+  // in either slot and this sentence is false with nothing noticing: the
+  // integration test would catch the hang, and nothing at all would catch the
+  // prose drifting from the spawn.
+  //
+  // So both halves are read here. The configuration is taken from what the
+  // scheduler REALLY passes to the spawn, by standing in for the spawn and
+  // catching it, rather than from the shape of the source: a source-shape pin
+  // can only say the words are still there, which is the half that was never
+  // in doubt.
+  const CLAUDE_KEY = require.resolve('../../lib/runtime/claude.js');
+  const SCHEDULER_KEY = require.resolve('../../lib/scheduler.js');
+
+  // The stdio the scheduler asks for when it starts a routine.
+  //
+  // lib/scheduler.js destructures spawnClaude at load, so a copy required
+  // after the export is swapped closes over the stand-in, and the swap is
+  // undone before the shared instance the rest of the suite runs against can
+  // see it. Same technique as test/unit/scheduler-lib.test.js, and the same
+  // reason: a spawn dep on the wiring surface would be a seam in production
+  // code that only tests would ever use.
+  function stdioTheSpawnAsksFor() {
+    const claude = require(CLAUDE_KEY);
+    const realSpawn = claude.spawnClaude;
+    const prevClaudeDeps = claude.wireClaudeRuntimeDeps({ getActualPort: () => 0 });
+    const cached = require.cache[SCHEDULER_KEY];
+    let seen = null;
+    claude.spawnClaude = (args, options) => {
+      seen = options;
+      // A child that reports nothing and is never driven. The run is left
+      // held, which is why the workspace below is this test's own.
+      return new (require('node:events').EventEmitter)();
+    };
+    try {
+      delete require.cache[SCHEDULER_KEY];
+      const sched = require(SCHEDULER_KEY);
+      delete require.cache[SCHEDULER_KEY];
+      sched.wireSchedulerDeps({ getWssClients: () => [] });
+      useWorkspace({ agents: standardTeam() });
+      sched.executeRoutine({ id: 'runner', name: 'Runner' }, { name: 'r', prompt: 'p' }, 'runner:r');
+    } finally {
+      claude.spawnClaude = realSpawn;
+      claude.wireClaudeRuntimeDeps(prevClaudeDeps);
+      if (cached) require.cache[SCHEDULER_KEY] = cached;
+    }
+    assert.ok(seen, 'the scheduler reached the spawn, so there is a configuration to read');
+    return seen.stdio;
+  }
+
+  test('the spawn asks for no output pipes at all, which is what the page promises', () => {
+    const stdio = stdioTheSpawnAsksFor();
+    assert.deepStrictEqual(stdio, ['ignore', 'ignore', 'ignore'],
+      'stdin, stdout and stderr are all discarded: an unread pipe in ANY slot hangs the child');
+
+    // The page's half of the same claim. Read as the sentence a user meets,
+    // not as a keyword, because "discarded" appears elsewhere on the page.
+    assert.match(routinesDoc, /stdout and stderr are attached to the null device/,
+      'ROUTINES.md must state what the spawn does, and it is this sentence that says it');
+    assert.match(routinesDoc, /\*\*Rundock discards both\.\*\*/,
+      'and say it in the paragraph a reader looking for routine output would land on');
+  });
+
+  test('the doc says it is pinned, and names this file', () => {
+    // Named beside the claim itself rather than only once in the file, so an
+    // editor rewriting this paragraph is told where its behaviour is asserted.
+    const paragraph = routinesDoc.split('\n').find(l => l.includes('Rundock discards both'));
+    assert.ok(paragraph, 'the claim is in the page');
+    assert.match(paragraph, /doc-claims\.test\.js/,
+      'the paragraph making the claim must name the test that pins it, so the next editor moves both');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // docs/ROUTINES.md: the catch-up window
 // ---------------------------------------------------------------------------
 

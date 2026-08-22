@@ -25,7 +25,8 @@
 //                  "crash": 1,   // exit with this code WITHOUT emitting a result
 //                                // envelope: simulates an abnormal mid-turn death
 //                                // (CLI crash / OOM / auth expiry). No `turn` runs.
-//                  "stderr": "...",     // written to stderr before a crash exit
+//                  "stderr": "...",     // written to stderr: before a crash exit,
+//                                       // or alongside an ordinary turn
 //                  "crashTail": "...",  // final stdout fragment, no newline,
 //                                       // left in the server's line buffer
 //                  "turn": [ { "text": "..." },
@@ -89,8 +90,56 @@ try {
 // The server SIGKILLs stubs mid-stream by design (interception, auto-return).
 // Never crash on a broken pipe.
 process.stdout.on('error', () => {});
+process.stderr.on('error', () => {});
+// Counted where the bytes are handed over, so a test that cares how much a run
+// emitted reads a measurement instead of trusting the size of the fixture it
+// wrote. Only what write() accepted is counted: a stub killed mid-write did
+// not emit that chunk. Both descriptors are counted, because both can be piped
+// and an unread pipe hangs a child whichever one it is.
+let WROTE = 0;
+let WROTE_ERR = 0;
 function writeOut(s) {
-  try { process.stdout.write(s); } catch (e) { /* killed mid-write */ }
+  try { process.stdout.write(s); WROTE += Buffer.byteLength(s); } catch (e) { /* killed mid-write */ }
+}
+function writeErr(s) {
+  try { process.stderr.write(s); WROTE_ERR += Buffer.byteLength(s); } catch (e) { /* killed mid-write */ }
+}
+
+// A --print run ends when its output has actually left the process, not when
+// the last write() call returns, and that is true of BOTH descriptors.
+//
+// process.exit() throws away whatever the output streams still have queued,
+// and on a pipe that is everything the kernel buffer would not take: 500 KB
+// written and exited on the spot closes in 32 ms with most of it discarded.
+// A stub that exits that way cannot reproduce the commonest way a subprocess
+// hangs, which is why the routine deadlock was invisible to every test here.
+//
+// AN ASSUMPTION, AND IT SHOULD BE READ AS ONE. Nothing in this repository
+// establishes what the real `claude` binary does with output it has queued
+// when it finishes: whether it waits for the reader or exits regardless. This
+// stub models the one that waits, because that is the conservative choice for
+// a hazard test (a stub that exits regardless cannot show a hang that a real
+// waiting binary would suffer), and because a process whose output survives is
+// what every user of a CLI expects. The original hang was measured
+// synthetically, on a throwaway parent and child; there is no field report of
+// it anywhere in this repository. Both halves of that are worth knowing.
+//
+// The output log is written from the same callback, so the byte counts belong
+// to output that really left rather than to output that was merely queued.
+const OUTPUT_LOG = path.join(process.cwd(), 'stub-output.jsonl');
+function exitWhenWritten(code) {
+  let pending = 2;
+  const done = () => {
+    if (--pending > 0) return;
+    try {
+      fs.appendFileSync(OUTPUT_LOG, JSON.stringify({
+        agent: AGENT, pid: process.pid, stdoutBytes: WROTE, stderrBytes: WROTE_ERR, ts: Date.now(),
+      }) + '\n');
+    } catch (e) { /* logging is best-effort */ }
+    process.exit(code);
+  };
+  process.stdout.write('', done);
+  process.stderr.write('', done);
 }
 
 const SESSION_ID = RESUME || `stub-${AGENT || 'default'}-${process.pid}`;
@@ -156,6 +205,11 @@ function buildEnvelopes(rule) {
 
 function emitTurn(rule) {
   const events = buildEnvelopes(rule);
+  // A run that ends normally can still have written to stderr: warnings,
+  // progress, deprecation notices. Modelled because stderr is a pipe like any
+  // other and fills like any other, and a scenario that can only reach it by
+  // crashing cannot exercise that at all.
+  if (rule.stderr) writeErr(String(rule.stderr));
   if (rule.singleChunk) {
     // One write -> one 'data' chunk on the server side (small payloads do not
     // get split by the pipe). Used to pin per-chunk guard behavior.
@@ -163,7 +217,7 @@ function emitTurn(rule) {
   } else {
     for (const e of events) writeOut(JSON.stringify(e) + '\n');
   }
-  if (PRINT) process.exit(0);
+  if (PRINT) exitWhenWritten(0);
 }
 
 // Model an MCP server. The real `claude` spawns these as its OWN children over
@@ -219,9 +273,13 @@ function handleUserMessage(content) {
     // when the process dies.
     const code = typeof rule.crash === 'number' ? rule.crash : 1;
     const die = () => {
-      if (rule.stderr) process.stderr.write(String(rule.stderr));
-      if (rule.crashTail) process.stdout.write(String(rule.crashTail));
-      process.exit(code);
+      if (rule.stderr) writeErr(String(rule.stderr));
+      if (rule.crashTail) writeOut(String(rule.crashTail));
+      // Through the same flushing exit as a normal turn. This was the last
+      // bare exit in the file, and it was the only path that wrote to stderr
+      // at all, so a full stderr pipe could not be reproduced whatever a test
+      // asserted. A crash is still a crash: no result envelope, non-zero code.
+      exitWhenWritten(code);
     };
     if (rule.delayMs) setTimeout(die, rule.delayMs);
     else die();

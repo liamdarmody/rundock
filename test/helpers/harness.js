@@ -85,6 +85,11 @@ function readInvocations() {
 function clearInvocations() {
   try { fs.unlinkSync(path.join(workspaceDir, 'stub-invocations.jsonl')); } catch (e) {}
   try { fs.unlinkSync(path.join(workspaceDir, 'stub-grandchildren.jsonl')); } catch (e) {}
+  // The per-run output log has the same lifetime as the invocation log it sits
+  // beside: both are written by children, one line per run. Nothing reads it
+  // across a clear today, and that is exactly when a stale line is cheapest to
+  // leave and most expensive to find.
+  try { fs.unlinkSync(path.join(workspaceDir, 'stub-output.jsonl')); } catch (e) {}
   // Prompt log is per-message test state with the same lifetime, so clear it
   // alongside. Kept in a separate file because readInvocations() has exact
   // count and index assertions across the suite.
@@ -96,6 +101,21 @@ function clearInvocations() {
 // handle on, and which survive a single-pid kill of their parent.
 function readGrandchildren() {
   const file = path.join(workspaceDir, 'stub-grandchildren.jsonl');
+  if (!fs.existsSync(file)) return [];
+  return fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+}
+
+// One line per --print run that finished writing: which agent, its pid, and
+// how many bytes really left it on stdout and on stderr.
+//
+// The counts are of output the child got OUT, not output it handed to a
+// stream, because the line is written once both descriptors have flushed. So
+// the absence of a line is a fact too: a run still blocked on a full pipe, or
+// one killed before it drained, has written nothing here. Whatever a test
+// wants to know about what a run emitted, this is where the child says it,
+// rather than the test inferring it from the size of the fixture it wrote.
+function readStubOutputs() {
+  const file = path.join(workspaceDir, 'stub-output.jsonl');
   if (!fs.existsSync(file)) return [];
   return fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
 }
@@ -292,7 +312,7 @@ function freshConvoId(prefix = 'it') {
 module.exports = {
   boot, shutdown, connect, writeScenario, writeCodexScenario, codexTurnPrompts,
   readInvocations, clearInvocations,
-  readGrandchildren, pidAlive, waitForPidExit,
+  readGrandchildren, readStubOutputs, pidAlive, waitForPidExit,
   readPrompts, promptsFor, unmatchedPrompts, assertAllPromptsMatched, clearPrompts,
   delay, waitUntil, freshConvoId, reapConvo,
   get internal() { return internal; },
