@@ -237,6 +237,11 @@ its branch percentage is.
 - The 75 inline handlers elsewhere in the client, 28 in `index.html` and 47
   written by other scripts. They are what makes a Content-Security-Policy
   impossible today; the two this renderer wrote are gone.
+- The streaming call site in `public/views/chat.js` renders raw response text
+  without stripping Rundock's markers, which the settled paths do strip. The
+  consequence is a one-frame flicker of `<!-- RUNDOCK:COMP` while a marker is
+  still arriving. Recorded in the renderer's header comment with what it
+  replaced, which was the rest of the message vanishing for that frame.
 - `test/unit/codex-appserver.test.js` has a 200ms wall-clock failsafe that loses
   under a doubled suite load. It passes in isolation and failed one red-first
   run before passing the next. Not touched here.

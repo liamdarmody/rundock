@@ -53,8 +53,17 @@
 // response text, which carries Rundock's own <!-- RUNDOCK:... --> markers.
 // Those are invisible today because the parser passed them through; escaping
 // them would have printed the app's internal protocol into the conversation.
-// Dropping leaves every comment exactly as visible as it was, which is not at
-// all.
+// Dropping leaves every completed comment exactly as visible as it was, which
+// is not at all.
+//
+// One transient consequence, on the streaming path only. A comment still
+// arriving, `<!-- RUNDOCK:COMP`, has no closing marker yet, so the parser reads
+// it as text and it shows for the frame before the rest lands. It used to show
+// as nothing, because an unterminated comment assigned to innerHTML swallows
+// everything after it, which also meant the rest of the message disappeared for
+// that frame. A flicker of marker text is the better of the two, and the real
+// fix is for the streaming call site to strip markers as the settled paths
+// already do.
 //
 // NO CONTENT-SECURITY-POLICY, and what carries the risk instead. A CSP worth
 // having forbids inline handlers, and the app has 28 of them in index.html and
