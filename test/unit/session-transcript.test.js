@@ -22,6 +22,7 @@ const os = require('node:os');
 
 const fx = require('../fixtures/session-transcript.js');
 const { readSessionTranscript } = require('../../lib/runtime/session-transcript.js');
+const { checkTranscriptInvariants } = require('../../scripts/transcript-truth/truth.js');
 
 let home = null;
 let realHome = null;
@@ -51,6 +52,47 @@ function writeTranscript(sessionId, lines, projectDir = '-w-one') {
 }
 
 const paths = (result) => (result.files || []).map(f => f.path);
+
+// ---------------------------------------------------------------------------
+// The double, held to the same facts as the real thing
+// ---------------------------------------------------------------------------
+
+// AC-22. The fixture builder is a hand-written model of a transcript, and it
+// is what this whole file and the stub binary produce. The reader is checked
+// against a real capture elsewhere, but nothing held the FIXTURE to the same
+// facts, so it could drift from the real shape while every fixture-driven test
+// here stayed green: the reader would simply tolerate both, and the day the
+// two disagreed would be the day the product met a real transcript.
+//
+// So the fixture is run through the same invariant checker the capture is
+// held to. One check is excluded and only one: the parallel batch, which the
+// fixture does not model, because it emits one tool call per message where a
+// real batch shares a message id across two. That exclusion is named rather
+// than filtered by shape, so a second failure cannot hide behind it.
+describe('the fixture builder', () => {
+  const PARALLEL_CHECK = 'no parallel tool batch in this capture';
+
+  test('satisfies every assumption the reader makes about a real transcript', () => {
+    const sid = 'f0000000-0000-4000-8000-000000000001';
+    const lines = [
+      fx.prompt(sid, 'go'),
+      fx.say(sid, 'starting'),
+      fx.completed(sid, { file: '/w/new.md', outcome: 'create' }),
+      fx.completed(sid, { file: '/w/overwritten.md', outcome: 'update' }),
+      fx.completed(sid, { tool: 'Edit', file: '/w/edited.md', outcome: 'update' }),
+      fx.completed(sid, { tool: 'NotebookEdit', file: '/w/book.ipynb', outcome: 'update' }),
+      fx.completed(sid, { file: '/System/refused.md', outcome: 'error' }),
+      fx.unanswered(sid, { file: '/w/in-flight.md' }),
+    ].join('').split('\n').filter(Boolean);
+
+    const failures = checkTranscriptInvariants(lines);
+    const excluded = failures.filter(f => f.includes(PARALLEL_CHECK));
+    assert.strictEqual(excluded.length, 1,
+      'the one exclusion is real: the fixture genuinely does not model a parallel batch, so this check must be failing');
+    assert.deepStrictEqual(failures.filter(f => !f.includes(PARALLEL_CHECK)), [],
+      'and everything else the capture is held to, the fixture is held to as well');
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Identification
@@ -394,7 +436,7 @@ describe('a transcript that cannot be used', () => {
 
     const result = readSessionTranscript(sid);
     assert.strictEqual(result.status, 'unknown');
-    assert.strictEqual(result.reason, 'unrecognized', 'a shape nobody here understands is named as such');
+    assert.strictEqual(result.reason, 'unrecognised', 'a shape nobody here understands is named as such');
     assert.strictEqual(result.files, null);
   });
 
@@ -448,21 +490,21 @@ describe('a format that has moved', () => {
   test('a renamed block type is drift, not a run that changed nothing', () => {
     const result = drifted('b0000000-0000-4000-8000-000000000001', renameJson('tool_use', 'toolCall'));
     assert.strictEqual(result.status, 'unknown');
-    assert.strictEqual(result.reason, 'unrecognized');
+    assert.strictEqual(result.reason, 'unrecognised');
     assert.strictEqual(result.files, null, 'no list, rather than an empty one');
   });
 
   test('a renamed input field is drift', () => {
     const result = drifted('b0000000-0000-4000-8000-000000000002', renameJson('file_path', 'path'));
     assert.strictEqual(result.status, 'unknown');
-    assert.strictEqual(result.reason, 'unrecognized');
+    assert.strictEqual(result.reason, 'unrecognised');
     assert.strictEqual(result.files, null);
   });
 
   test('an outcome payload in a shape this reader has not been shown is drift', () => {
     const result = drifted('b0000000-0000-4000-8000-000000000003', renameJson('filePath', 'file'));
     assert.strictEqual(result.status, 'unknown');
-    assert.strictEqual(result.reason, 'unrecognized');
+    assert.strictEqual(result.reason, 'unrecognised');
     assert.strictEqual(result.files, null);
   });
 
@@ -523,7 +565,7 @@ describe('a format that has moved', () => {
     ]);
     const result = readSessionTranscript(sid);
     assert.strictEqual(result.status, 'unknown', 'a marker in a shape this reader cannot judge is not judged');
-    assert.strictEqual(result.reason, 'unrecognized');
+    assert.strictEqual(result.reason, 'unrecognised');
     assert.strictEqual(result.files, null);
   });
 

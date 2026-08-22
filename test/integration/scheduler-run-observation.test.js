@@ -221,10 +221,19 @@ test('a finished run lists the files it changed, and not the one it could not', 
   assert.ok(byPath.get(created).at, 'and when');
 });
 
-// AC-1 and AC-2, at the level where the identification actually happens. Two
-// runs on the SAME tick, each writing a different file, and the second one
-// finishes last so "the most recent transcript" would answer both records
-// with the second run's file.
+// AC-1, at the level where the identification actually happens: two runs on
+// the SAME tick, each writing a different file, each record carrying the
+// session its own child was told to be.
+//
+// WHAT THIS TEST DOES NOT PROVE, said here because the comment used to claim
+// it did. Nothing orders the two stub exits, and the stub writes a run's final
+// transcript immediately before the child exits, so at the moment a run's
+// record is closed that run's own transcript is the most recently written one
+// whatever the other run is doing. A reader that reached for the newest
+// transcript would pass this test on most runs. AC-2's deterministic proof is
+// the unit test 'the run asked about is answered even when a newer run has
+// happened since', which forces the wanted transcript to be the OLDEST file on
+// disk with utimes and then asks for it by name.
 test('two runs on one pass each report their own files', async (t) => {
   begin(2, [WRITER, OTHER]);
 
@@ -243,8 +252,9 @@ test('two runs on one pass each report their own files', async (t) => {
     'while still reporting what it changed itself');
 
   // The identification, read from the spawn the run really made: the session
-  // the child was told to be is the run's own id, which is what names the
-  // transcript. Nothing here depends on when anything happened.
+  // the child was told to be is the one its record names, and that is what
+  // names the transcript. This is the evidence this test actually carries, and
+  // it depends on nothing about when either run happened.
   const spawns = h.readInvocations().filter(i => Array.isArray(i.argv) && i.argv.includes('--session-id'));
   const sessions = new Map(spawns.map(i => [i.argv[i.argv.indexOf('--session-id') + 1], i.argv[i.argv.indexOf('--agent') + 1]]));
   assert.strictEqual(sessions.get(writer.sessionId), 'writer',

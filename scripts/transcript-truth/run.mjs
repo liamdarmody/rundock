@@ -44,6 +44,13 @@ const { checkTranscriptInvariants, checkCaptureAnswers, withoutDelegation, EXPEC
 // which is a rule stated twice and true only while both copies are edited
 // together: a change to the search would leave the harness pinning a file the
 // product never reads.
+//
+// AND THERE IS NO THIRD COPY, which was worth checking because the product
+// does locate transcripts elsewhere. lib/store/transcripts.js is a different
+// artefact entirely: it reads a conversation's own transcript out of the
+// workspace's .rundock/transcripts directory, keyed by conversation id, and it
+// never goes near the agent tool's session files. So the search rule for a
+// session transcript is stated once, in the reader, and used here.
 const { readSessionTranscript, findTranscript, sidechainTranscripts } =
   require(path.join(ROOT, 'lib', 'runtime', 'session-transcript.js'));
 

@@ -46,10 +46,6 @@ function parseLines(lines) {
 }
 
 /**
- * Everything the reader assumes, checked. Returns a list of failures; empty
- * means reality still matches what the reader was built against.
- */
-/**
  * The reader's declarations against this file's account of them. Separate
  * from the transcript checks below because it needs no transcript: it is a
  * check that the two documents agree, and it fails when a tool is added to
@@ -71,6 +67,10 @@ function checkDeclarationsAgree() {
   return failures;
 }
 
+/**
+ * Everything the reader assumes, checked. Returns a list of failures; empty
+ * means reality still matches what the reader was built against.
+ */
 function checkTranscriptInvariants(lines) {
   const failures = [...checkDeclarationsAgree()];
   let entries;

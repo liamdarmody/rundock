@@ -352,11 +352,9 @@ function handleUserMessage(content) {
   if (rule.spawnChild) spawnGrandchild();
   // Written before the turn is emitted, and before any delay, so a run held
   // open by a delayed rule has a transcript to be read WHILE it is still
-  // going, which is what progress is read from. A crash still leaves one
-  // too: a run that died halfway leaves the transcript it had got to.
-  // The transcript as it stands at the start of the run: the tools asked for
-  // and no outcomes yet. A crash leaves it exactly here, which is what a run
-  // that died halfway really leaves behind.
+  // going, which is what progress is read from. It holds the tools asked for
+  // and no outcomes yet, which is exactly what a run that died halfway leaves
+  // behind.
   if (FIXED_SESSION) beginTranscript(rule, content);
   if (rule.crash != null) {
     // Abnormal death: exit without emitting a result envelope, so the
