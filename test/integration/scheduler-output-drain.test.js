@@ -2,9 +2,12 @@
 // A routine that says a lot still finishes.
 //
 // The routine spawn used to ask for both output pipes and attach a reader to
-// neither. Node's stdio streams start paused, so the kernel buffer filled and
-// the child blocked on its next write. Measured on a throwaway parent and
-// child: 128 KB of output completes in 26 ms, 160 KB never closes at all.
+// neither. Node's stdio streams start paused, so nothing drained the pipe and
+// the kernel buffer filled. A Node child does not block there: its writes are
+// asynchronous, so they return, the bytes queue in its memory, and the pending
+// writes never complete, so the child never exits. Measured on a throwaway
+// parent and child: 128 KB of output completes in 26 ms, 160 KB never closes
+// at all, on either descriptor.
 //
 // A child that never ends never closes, and every mechanism downstream of the
 // close event is correct on its own: no close means no outcome recorded, no
@@ -41,16 +44,35 @@ const ALL = [LOUD, QUIET];
 const LOUD_BODY = 'loud body';
 const QUIET_BODY = 'quiet body';
 
-// The payload the loud routine's child prints. Every envelope the stub emits
-// carries it (two text deltas, the consolidated assistant message, the result),
-// so what reaches stdout is several times this, and the assertions below read
-// the real figure rather than this one.
+// What the loud routine's child prints, on each descriptor.
+//
+// STDERR IS NOT DECORATION HERE. An unread stderr pipe hangs a child exactly
+// as an unread stdout pipe does, and stderr is the likelier reintroduction:
+// the outcome handler observes that a non-zero exit says nothing about why,
+// and capturing stderr to answer that is a one-word edit at the spawn. A test
+// that drove stdout alone would stay green through it, which was measured
+// rather than supposed.
+//
+// Every envelope the stub emits carries the stdout payload (two text deltas,
+// the consolidated assistant message, the result), so what reaches stdout is
+// several times this. The assertions below read the real figures.
 const PAYLOAD = 'v'.repeat(200 * 1024);
+const ERR_PAYLOAD = 'e'.repeat(300 * 1024);
 
-// The two measurements the hazard was characterised by, kept as named
-// constants because every assertion about volume is really about them.
-const COMPLETED = 128 * 1024; // completed in 26 ms
-const HUNG = 160 * 1024;      // never closed
+// The two volumes the hazard was characterised by, when the pipes were open
+// and unread: 128 KB of output finished in 26 ms, 160 KB never finished at
+// all.
+//
+// WHAT THESE CAN AND CANNOT MEAN HERE. Under the fix the child's output goes
+// to the null device, so nothing in this file observes a buffer filling: what
+// is asserted below is volume EMITTED, and these two numbers are the reason
+// that figure is worth asserting rather than a capacity being measured. They
+// are the thresholds a piped run was measured against, kept so that a run
+// which emits far more than the larger one is known to be a run the hazard
+// would have caught. Both margins here are several times the observed
+// capacity.
+const FINISHED_WHEN_PIPED = 128 * 1024;
+const HUNG_WHEN_PIPED = 160 * 1024;
 
 // October 2026, local components, so the fixture is timezone-independent.
 function dayAt(day, hour, minute) { return new Date(2026, 9, day, hour, minute, 0); }
@@ -78,8 +100,8 @@ before(async () => {
     },
   });
   h.writeScenario([
-    { match: { agent: 'loud', promptIncludes: LOUD_BODY }, turn: [{ text: PAYLOAD }] },
-    { match: { agent: 'quiet', promptIncludes: QUIET_BODY }, turn: [{ text: 'brief' }] },
+    { match: { agent: 'loud', promptIncludes: LOUD_BODY }, turn: [{ text: PAYLOAD }], stderr: ERR_PAYLOAD },
+    { match: { agent: 'quiet', promptIncludes: QUIET_BODY }, turn: [{ text: 'brief' }], stderr: 'brief warning' },
   ]);
   prevDeps = scheduler.wireSchedulerDeps({ now: () => clock.at });
 });
@@ -172,22 +194,28 @@ test('a routine whose output floods the pipe completes, records its outcome, and
   assert.ok(await settled(QUIET), 'and so did the control beside it');
 
   // THE SETUP, ASSERTED BEFORE ANYTHING IS CONCLUDED FROM IT. A run that
-  // completed having printed 2 KB says nothing about a pipe buffer, and it is
+  // completed having printed 2 KB says nothing about the hazard, and it is
   // what this test would silently become if the scenario stopped matching or
-  // the payload stopped arriving.
+  // the payload stopped arriving. Both descriptors, because the fix is about
+  // both and only one of them is on the obvious path back.
   const loudOut = outputsFor('loud');
   assert.strictEqual(loudOut.length, 1, 'the loud child finished writing exactly once');
-  assert.ok(loudOut[0].stdoutBytes > HUNG,
-    `the child really emitted more than the ${HUNG} bytes measured never to close, `
-    + `it emitted ${loudOut[0].stdoutBytes}`);
+  assert.ok(loudOut[0].stdoutBytes > HUNG_WHEN_PIPED,
+    `the child emitted ${loudOut[0].stdoutBytes} bytes on stdout, which is past the `
+    + `${HUNG_WHEN_PIPED} that never closed while the pipes were open and unread`);
+  assert.ok(loudOut[0].stderrBytes > HUNG_WHEN_PIPED,
+    `and ${loudOut[0].stderrBytes} bytes on stderr, past the same figure: an unread `
+    + 'stderr pipe hangs a child exactly as an unread stdout pipe does');
 
-  // And the figure follows the run rather than being a constant: the control
-  // printed a few hundred bytes through the identical path.
+  // And the figures follow the run rather than being constants: the control
+  // printed a few hundred bytes on each descriptor through the identical path.
   const quietOut = outputsFor('quiet');
   assert.strictEqual(quietOut.length, 1, 'the control child finished writing once too');
-  assert.ok(quietOut[0].stdoutBytes < COMPLETED,
-    `the control stayed under the ${COMPLETED} bytes that always completed, `
-    + `at ${quietOut[0].stdoutBytes}, so the count above is this run's own`);
+  assert.ok(quietOut[0].stdoutBytes < FINISHED_WHEN_PIPED,
+    `the control emitted ${quietOut[0].stdoutBytes} bytes on stdout, under the `
+    + `${FINISHED_WHEN_PIPED} that finished even while piped, so the counts above are this run's own`);
+  assert.ok(quietOut[0].stderrBytes < FINISHED_WHEN_PIPED,
+    `and ${quietOut[0].stderrBytes} on stderr, for the same reason`);
 
   // AC-1 and AC-2: it finished, and the outcome reached both stores in their
   // own vocabularies.
