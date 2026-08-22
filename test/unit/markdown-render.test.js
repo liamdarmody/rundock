@@ -63,14 +63,12 @@ function outline(html) {
 }
 
 describe('renderMarkdown: ordinary markdown is untouched by this change', () => {
-  test('the frozen before fixture really is the old renderer\'s output', () => {
-    // Provenance, not decoration. Every claim that ordinary rendering did not
-    // change is taken against that file, so if it were simply a hand-written
-    // stand-in the comparison would prove nothing. The tool reproduces it from
-    // the pre-change public/app.js read out of git history.
-    const { oldRenderer } = require('../tools/regenerate-benign-before.js');
-    assert.strictEqual(oldRenderer('1441068').formatMdFull(BENIGN_MD), BENIGN_BEFORE);
-  });
+  // The fixture's PROVENANCE is checked by `npm run check:fixture`, not from
+  // here. It reproduces the file from the pre-change public/app.js read out of
+  // git history, and this suite must not depend on git history: CI checks out
+  // at depth 1, so the base commit does not exist in the clone and the check
+  // could only ever fail there or be skipped into meaninglessness. It runs in
+  // the pre-commit gate and in the CI job that checks out full history.
 
   test('the benign document renders to the recorded bytes', () => {
     assert.strictEqual(render(BENIGN_MD), BENIGN_HTML);

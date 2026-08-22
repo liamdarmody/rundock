@@ -21,6 +21,12 @@
 // the original code unmodified. `esc` is supplied as the same three-character
 // escape the DOM round-trip it used produces.
 //
+// WHERE IT RUNS. The pre-commit gate and the CI job that checks out full
+// history, and NOT the unit suite. CI checks out at depth 1 by default, so the
+// base commit is absent from the clone and a test calling this could only fail
+// there or be skipped into meaninglessness. It was in the suite for one push,
+// which is how that was found.
+//
 // The base revision is the commit this work branched from. Pass another as
 // --base <rev> if the fixture ever needs regenerating against a different one.
 
@@ -34,7 +40,16 @@ const SOURCE = path.join(ROOT, 'test', 'fixtures', 'markdown-benign.md');
 const DEFAULT_BASE = '1441068';
 
 function oldRenderer(base) {
-  const app = execFileSync('git', ['-C', ROOT, 'show', `${base}:public/app.js`], { encoding: 'utf8' });
+  let app;
+  try {
+    app = execFileSync('git', ['-C', ROOT, 'show', `${base}:public/app.js`],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch (e) {
+    throw new Error(
+      `cannot read public/app.js at ${base}. This needs the repository's history, `
+      + 'and a shallow clone does not have it: a depth-1 checkout contains only the '
+      + 'tip commit. Fetch full history (actions/checkout with fetch-depth: 0) and run again.');
+  }
   const lines = app.split('\n');
   const start = lines.findIndex((l) => l.includes('===== 12. MARKDOWN RENDERING'));
   const end = lines.findIndex((l) => l.includes('===== 13. SKILLS'));
@@ -88,5 +103,14 @@ function main(argv) {
   return 1;
 }
 
-if (require.main === module) process.exit(main(process.argv.slice(2)));
+if (require.main === module) {
+  try {
+    process.exit(main(process.argv.slice(2)));
+  } catch (e) {
+    // The one expected failure is a shallow clone, and a stack trace buries the
+    // one sentence that says so.
+    console.error(e.message);
+    process.exit(1);
+  }
+}
 module.exports = { oldRenderer };

@@ -73,6 +73,10 @@ const STEPS = [
   // red when the check was first written, which no other step in this list
   // would ever have reported.
   { name: 'mutate:guards', args: ['run', 'mutate:guards'] },
+  // Reproduces the frozen "before" fixture from the pre-change renderer read
+  // out of git history. Needs history, so it lives here and in CI rather than
+  // in the unit suite, which runs against a depth-1 checkout.
+  { name: 'check:fixture', args: ['run', 'check:fixture'] },
 ];
 
 function git(args, root = ROOT) {
