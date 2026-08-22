@@ -18,7 +18,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const {
   refusal, buildRecord, writeRecord, readRecord, currentTree, defaultBranch,
-  isReleaseCommit, RELEASE_FOOTPRINT, stagedPaths,
+  isReleaseCommit, RELEASE_FOOTPRINT, stagedPaths, STEPS,
 } = require('../../scripts/precommit-gate.js');
 
 const TREE = 'a'.repeat(40);
@@ -170,6 +170,19 @@ function spawnGate(args, root) {
   return { code: res.status, out: `${res.stdout || ''}${res.stderr || ''}` };
 }
 
+// A package.json whose scripts are exactly the steps the gate will run,
+// DERIVED FROM STEPS rather than listed here. Listed, the fixture drifts the
+// day a step is added or renamed: every test below would fail with a missing
+// npm script and say nothing about the guard they exist to check, which is
+// what happened when coverage joined the gate.
+function allStepsPass() {
+  return Object.fromEntries(STEPS.map(step => [step.name, 'node -e "0"']));
+}
+
+function oneStepFails(name = STEPS[0].name) {
+  return { ...allStepsPass(), [name]: 'node -e "process.exit(1)"' };
+}
+
 function repoWithScripts(scripts) {
   const { dir, run } = tempRepo();
   run('checkout', '-q', '-b', 'fix/card');
@@ -184,10 +197,7 @@ describe('the entry points, against a throwaway repository', () => {
     // The branch that matters most: a check failed, so nothing may vouch for
     // this tree. If the loop stopped short-circuiting, the record would be
     // written anyway and the guard would wave through an unverified commit.
-    const { dir } = repoWithScripts({
-      test: 'node -e "process.exit(1)"',
-      typecheck: 'node -e "0"', 'lint:styles': 'node -e "0"', 'check:refs': 'node -e "0"',
-    });
+    const { dir } = repoWithScripts(oneStepFails());
     try {
       const { code } = spawnGate([], dir);
       assert.notStrictEqual(code, 0, 'a failing check fails the gate');
@@ -199,10 +209,7 @@ describe('the entry points, against a throwaway repository', () => {
   });
 
   test('all steps passing writes a record for this tree and branch', () => {
-    const { dir } = repoWithScripts({
-      test: 'node -e "0"', typecheck: 'node -e "0"',
-      'lint:styles': 'node -e "0"', 'check:refs': 'node -e "0"',
-    });
+    const { dir } = repoWithScripts(allStepsPass());
     try {
       const { code } = spawnGate([], dir);
       assert.strictEqual(code, 0);
@@ -216,10 +223,7 @@ describe('the entry points, against a throwaway repository', () => {
   });
 
   test('--verify admits a commit when the record matches', () => {
-    const { dir } = repoWithScripts({
-      test: 'node -e "0"', typecheck: 'node -e "0"',
-      'lint:styles': 'node -e "0"', 'check:refs': 'node -e "0"',
-    });
+    const { dir } = repoWithScripts(allStepsPass());
     try {
       assert.strictEqual(spawnGate([], dir).code, 0, 'gate passes first');
       assert.strictEqual(spawnGate(['--verify'], dir).code, 0, 'and the commit is admitted');
@@ -229,10 +233,7 @@ describe('the entry points, against a throwaway repository', () => {
   });
 
   test('--verify refuses, and says why, when the tree moved after the checks', () => {
-    const { dir, run } = repoWithScripts({
-      test: 'node -e "0"', typecheck: 'node -e "0"',
-      'lint:styles': 'node -e "0"', 'check:refs': 'node -e "0"',
-    });
+    const { dir, run } = repoWithScripts(allStepsPass());
     try {
       assert.strictEqual(spawnGate([], dir).code, 0);
       fs.writeFileSync(path.join(dir, 'a.txt'), 'changed after the checks\n');
@@ -247,7 +248,7 @@ describe('the entry points, against a throwaway repository', () => {
   });
 
   test('--verify refuses when the checks have never been run', () => {
-    const { dir } = repoWithScripts({ test: 'node -e "0"' });
+    const { dir } = repoWithScripts(allStepsPass());
     try {
       const { code, out } = spawnGate(['--verify'], dir);
       assert.notStrictEqual(code, 0);
@@ -259,11 +260,32 @@ describe('the entry points, against a throwaway repository', () => {
   });
 });
 
+describe('what the gate checks', () => {
+  // The floors in test/tools/coverage-floors.json are enforced by a step the
+  // gate runs, so a floor is a measurement of the tree the record names rather
+  // than a number quoted beside it from a run nobody can identify. A floor set
+  // above what is measured is a claim, and it fails on the next run; the point
+  // of running it here is that the next run is this one.
+  //
+  // Read through package.json rather than by matching a step's NAME, because
+  // the name is the part that can be renamed while the gate quietly stops
+  // measuring anything.
+  test('coverage floors are enforced by one of the steps', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8'));
+    const enforcing = STEPS.filter(step => (pkg.scripts[step.name] || '').includes('coverage-areas.js'));
+    assert.strictEqual(enforcing.length, 1,
+      'exactly one gate step runs the coverage floor enforcer: none means the floors are unmeasured, two means the suite runs twice');
+  });
+
+  test('every step is a script this package really has', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8'));
+    for (const step of STEPS) {
+      assert.ok(pkg.scripts[step.name], `${step.name} is a step the gate runs and must be a script that exists`);
+    }
+  });
+});
+
 describe('the tree that was checked is the tree that gets recorded', () => {
-  const PASSING = {
-    test: 'node -e "0"', typecheck: 'node -e "0"',
-    'lint:styles': 'node -e "0"', 'check:refs': 'node -e "0"',
-  };
 
   test('an unstaged edit is refused, because the checks would read a different tree', () => {
     // The gap this closes: STEPS run against the working directory while the
@@ -271,7 +293,7 @@ describe('the tree that was checked is the tree that gets recorded', () => {
     // checks validate content the record does not name. Committing then puts
     // the older staged version in, and verify() admits it because the index
     // never moved: a tree certified without ever being checked.
-    const { dir } = repoWithScripts(PASSING);
+    const { dir } = repoWithScripts(allStepsPass());
     try {
       fs.writeFileSync(path.join(dir, 'a.txt'), 'edited after staging\n');
       const { code, out } = spawnGate([], dir);
@@ -285,7 +307,7 @@ describe('the tree that was checked is the tree that gets recorded', () => {
   });
 
   test('an untracked file is refused too: the checks would read it, the record would not name it', () => {
-    const { dir } = repoWithScripts(PASSING);
+    const { dir } = repoWithScripts(allStepsPass());
     try {
       fs.writeFileSync(path.join(dir, 'new-test.js'), '// never staged\n');
       const { code, out } = spawnGate([], dir);
@@ -299,7 +321,7 @@ describe('the tree that was checked is the tree that gets recorded', () => {
   test('the real entry point refuses to run on the default branch', () => {
     // run() carries its own branch check, separate from refusal()'s. Covering
     // only the shared decision left this copy untested.
-    const { dir, run } = repoWithScripts(PASSING);
+    const { dir, run } = repoWithScripts(allStepsPass());
     try {
       run('commit', '-q', '-m', 'initial');
       run('checkout', '-q', '-B', 'main');
@@ -314,7 +336,7 @@ describe('the tree that was checked is the tree that gets recorded', () => {
   test('a record written on one branch is refused after switching to another', () => {
     // The wrong-branch case, end to end rather than hand-built: a real record,
     // a real checkout, and the refusal the fixture only assumed.
-    const { dir, run } = repoWithScripts(PASSING);
+    const { dir, run } = repoWithScripts(allStepsPass());
     try {
       assert.strictEqual(spawnGate([], dir).code, 0, 'record written on fix/card');
       run('commit', '-q', '-m', 'initial');
@@ -417,13 +439,9 @@ describe('the release commit, through the real entry point on real git', () => {
   // wiring, and the wiring is the whole card: if stagedPaths() had wrong flags
   // or mishandled a path, every test above would stay green while npm run
   // release failed exactly as it did the night this was written.
-  const PASSING = {
-    test: 'node -e "0"', typecheck: 'node -e "0"',
-    'lint:styles': 'node -e "0"', 'check:refs': 'node -e "0"',
-  };
 
   function repoOnDefaultBranch() {
-    const { dir, run } = repoWithScripts(PASSING);
+    const { dir, run } = repoWithScripts(allStepsPass());
     run('commit', '-q', '-m', 'initial');
     run('checkout', '-q', '-B', 'main');
     fs.writeFileSync(path.join(dir, 'CHANGELOG.md'), '# Changelog\n\n## Unreleased\n');
