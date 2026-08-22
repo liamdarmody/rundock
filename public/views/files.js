@@ -5,7 +5,7 @@
 // every function on the root object, because classic-script function
 // declarations were window properties and the callers rely on that: the
 // static inline handlers (setEditorMode, editorGoBack, openCreateMenu), the
-// generated onclick wikilinks emitted by renderMarkdown (openWikilink), the
+// delegated wikilink listener registered in app.js (openWikilink), the
 // WS dispatch (renderFileTree, loadFileContent, handleExternalFileChange,
 // highlightFileInSidebar), routing (destroyTiptapEditorIfActive,
 // updateEditorBackButton), the workspace picker (closeOpenFile), the init

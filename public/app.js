@@ -1409,6 +1409,12 @@ const findState = {
 
 initFindBar();
 
+// Rendered wikilinks used to carry their own onclick. One delegated listener
+// replaces every one of them, so the target is never written into the page as
+// code. Registered once, here, because the markup it serves is rewritten with
+// innerHTML on every streaming frame in chat and on every file preview.
+RundockMarkdown.attachWikilinkHandler(document, (target) => openWikilink(target));
+
 // ===== 18. UNIVERSAL SEARCH PALETTE (Cmd+K / Ctrl+K) =====
 // The palette itself moved to views/palette.js. What stays here, and why:
 //   paletteOpen           the find bar's Escape handler defers to it, and the

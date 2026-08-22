@@ -16,7 +16,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { JSDOM } = require('jsdom');
-const { makeRenderer } = require('../helpers/markdown-harness.js');
+const { makeRenderer, attachWikilinkHandler } = require('../helpers/markdown-harness.js');
 
 const FIXTURES = path.join(__dirname, '..', 'fixtures');
 const BENIGN_MD = fs.readFileSync(path.join(FIXTURES, 'markdown-benign.md'), 'utf8');
@@ -73,5 +73,77 @@ describe('renderMarkdown: ordinary markdown is untouched by this card', () => {
     const js = doc.querySelector('.code-block-wrapper');
     assert.strictEqual(js.querySelector('.code-lang').textContent, 'JavaScript');
     assert.ok(js.querySelector('code.hljs .hljs-keyword'), 'hljs token spans are present');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Injection point 3: wikilink source rewriting.
+//
+// Before this card, renderMarkdown replaced [[target|label]] in the SOURCE with
+//   <a class="wikilink" onclick="openWikilink('$1')">$2</a>
+// and took both captures verbatim. `$1` lands inside a single-quoted JavaScript
+// string inside a double-quoted HTML attribute, so a quote in the target ends
+// the string and everything after it is code the page runs on click; a quote
+// plus a space opens a NEW attribute, and onmouseover does not even need the
+// click. Recorded payloads, run against the pre-card renderer:
+//   [[note' onmouseover='alert(1)]]
+//     -> onclick="openWikilink('note' onmouseover='alert(1)')"
+//   [[a') + alert(1) + ('b]]
+//     -> onclick="openWikilink('a') + alert(1) + ('b')"
+// ---------------------------------------------------------------------------
+describe('renderMarkdown: wikilink targets cannot reach the handler as code', () => {
+  const attrs = (html) => {
+    const doc = new JSDOM(`<div id="root">${html}</div>`).window.document;
+    return Array.from(doc.querySelectorAll('*')).flatMap((el) => Array.from(el.attributes).map((a) => a.name));
+  };
+
+  test('AC-4: a quote in the target cannot open a second attribute', () => {
+    const html = render("[[note' onmouseover='alert(1)]]");
+    assert.ok(!attrs(html).some((name) => name.startsWith('on')), `handler attribute survived: ${html}`);
+  });
+
+  test('AC-4: a target that closes the call cannot append an expression', () => {
+    const html = render("[[a') + alert(1) + ('b]]");
+    assert.ok(!/alert\(1\)/.test(html.replace(/&#\d+;/g, '')) || !attrs(html).some((n) => n.startsWith('on')),
+      `payload reached an executable position: ${html}`);
+    assert.ok(!attrs(html).some((name) => name.startsWith('on')), `handler attribute survived: ${html}`);
+  });
+
+  test('AC-2: no wikilink render carries an event-handler attribute', () => {
+    for (const src of ['[[Plain]]', '[[Target|Label]]', "[[a'b]]", '[[a"b]]', '[[a\\b]]']) {
+      assert.ok(!attrs(render(src)).some((name) => name.startsWith('on')), `handler attribute in: ${src}`);
+    }
+  });
+
+  test('AC-10: a click still reaches openWikilink with the same target value', () => {
+    // The target values the old onclick would have passed, for targets that did
+    // not break it. The listener must deliver these characters unchanged.
+    const targets = ['Plain note', 'folder/Note', "Bobby's note", 'a"b', 'a\\b', "note' onmouseover='alert(1)"];
+    for (const target of targets) {
+      const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost/' });
+      const doc = dom.window.document;
+      doc.getElementById('root').innerHTML = render(`[[${target}]]`);
+      const seen = [];
+      attachWikilinkHandler(doc, (value) => seen.push(value));
+      const anchor = doc.querySelector('a.wikilink');
+      assert.ok(anchor, `no anchor for target: ${target}`);
+      anchor.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+      assert.deepStrictEqual(seen, [target]);
+    }
+  });
+
+  test('AC-10: the visible label is still the alias, or the target when there is none', () => {
+    const doc = (html) => new JSDOM(`<div id="root">${html}</div>`).window.document;
+    assert.strictEqual(doc(render('[[Target|Label]]')).querySelector('a.wikilink').textContent, 'Label');
+    assert.strictEqual(doc(render('[[Target]]')).querySelector('a.wikilink').textContent, 'Target');
+    assert.ok(doc(render('[[Target|**bold**]]')).querySelector('a.wikilink strong'), 'alias is still parsed as markdown');
+  });
+
+  test('a wikilink inside code is left alone, which the source rewrite could not do', () => {
+    // Recorded change of behaviour, not a regression. The old pass ran a
+    // regex over the whole source, so `[[a]]` inside a code span became the
+    // literal text of an anchor tag. A tokenizer never enters a code span.
+    const html = render('`[[a]]`');
+    assert.ok(/<code>\[\[a\]\]<\/code>/.test(html), html);
   });
 });

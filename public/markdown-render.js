@@ -30,6 +30,27 @@
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
+  // Escape for HTML ATTRIBUTE position. Both quote characters are included, so
+  // the value cannot end the attribute whichever delimiter is used, and `<`
+  // and `>` are included so a value cannot start a tag if the surrounding
+  // markup is ever restructured.
+  //
+  // This is the ONLY escaping applied to a value that ends up in an attribute.
+  // The renderer used to write attacker text into an inline handler and escape
+  // it with a JavaScript rule (backslashes before quotes), which is the wrong
+  // language for the position: the browser finishes parsing the attribute, and
+  // decodes its character references, before any of it is JavaScript. Values
+  // now go into data-* attributes read back through the DOM, so there is no
+  // JavaScript position left to escape for.
+  function escapeAttr(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
   const HLJS_AUTODETECT_MAX = 20000; // skip highlightAuto on very large blocks (perf)
 
   const COPY_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
@@ -62,7 +83,43 @@
     // Originating contributions: copy button (#6/#7) and syntax highlighting
     // (#10/#11) by @dougseven; isolated and hardened here (escaped language
     // label, clipboard fallback, auto-detect size cap).
+    // Obsidian wikilinks, as a tokenizer rather than a source rewrite.
+    //
+    // They used to be a regex over the raw source that spliced an <a> tag with
+    // an inline onclick into the markdown, taking the target and the label
+    // verbatim. That put attacker text inside a JavaScript string inside an
+    // HTML attribute, two nested parsers deep, where a single quote is enough
+    // to leave both. A tokenizer has no such position: the target reaches the
+    // page only as an escaped attribute value, and the label only as tokens
+    // marked itself renders.
+    //
+    // The two patterns and their order are the originals, so which text
+    // becomes the target and which the label is unchanged, including the
+    // ragged cases ([[a|b|c]] takes `a` and `b|c`; [[a|]] takes `a|` as both).
     instance.use({
+      extensions: [{
+        name: 'wikilink',
+        level: 'inline',
+        start(src) { return src.indexOf('[['); },
+        tokenizer(src) {
+          const aliased = /^\[\[([^\]|]+)\|([^\]]+)\]\]/.exec(src);
+          const plain = aliased ? null : /^\[\[([^\]]+)\]\]/.exec(src);
+          const match = aliased || plain;
+          if (!match) return undefined;
+          const target = match[1];
+          const label = aliased ? match[2] : match[1];
+          return {
+            type: 'wikilink',
+            raw: match[0],
+            target,
+            tokens: this.lexer.inlineTokens(label),
+          };
+        },
+        renderer(token) {
+          return `<a class="wikilink" data-wikilink="${escapeAttr(token.target)}">`
+            + `${this.parser.parseInline(token.tokens)}</a>`;
+        },
+      }],
       renderer: {
         code({ text, lang }) {
           let highlighted = '';
@@ -115,9 +172,8 @@
       // Obsidian comments: %%text%% - hide completely
       src = src.replace(/%%[\s\S]*?%%/g, '');
 
-      // Wikilinks: [[file|display]] and [[file]]
-      src = src.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '<a class="wikilink" onclick="openWikilink(\'$1\')">$2</a>');
-      src = src.replace(/\[\[([^\]]+)\]\]/g, '<a class="wikilink" onclick="openWikilink(\'$1\')">$1</a>');
+      // Wikilinks are a marked extension now, not a source rewrite. See the
+      // tokenizer above.
 
       // Highlights: ==text==
       src = src.replace(/==(.*?)==/g, '<mark>$1</mark>');
@@ -191,5 +247,40 @@
     return { renderMarkdown };
   }
 
-  return { createMarkdownRenderer, escapeHtml, COPY_ICON, CHECK_ICON, HLJS_AUTODETECT_MAX };
+  /**
+   * Route clicks on rendered wikilinks to the app's opener.
+   *
+   * The anchors used to carry `onclick="openWikilink('...')"`, which meant the
+   * target was written into the page as source code and re-parsed by the
+   * browser as JavaScript. One delegated listener replaces every one of them:
+   * the target travels as data, is read back as data, and is never parsed as
+   * anything.
+   *
+   * Delegated rather than bound per anchor because the markup is written with
+   * innerHTML on every streaming frame, so per-element binding would have to
+   * re-run after each one and would leak listeners for the elements it
+   * replaced.
+   *
+   * @param {Document} doc
+   * @param {(target: string) => void} onWikilink
+   */
+  function attachWikilinkHandler(doc, onWikilink) {
+    doc.addEventListener('click', (event) => {
+      const target = event.target;
+      const anchor = target && target.closest ? target.closest('a.wikilink[data-wikilink]') : null;
+      if (!anchor) return;
+      event.preventDefault();
+      onWikilink(anchor.getAttribute('data-wikilink'));
+    });
+  }
+
+  return {
+    createMarkdownRenderer,
+    attachWikilinkHandler,
+    escapeHtml,
+    escapeAttr,
+    COPY_ICON,
+    CHECK_ICON,
+    HLJS_AUTODETECT_MAX,
+  };
 }));
