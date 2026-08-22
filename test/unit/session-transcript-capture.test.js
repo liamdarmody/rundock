@@ -12,7 +12,11 @@
 // and was taken from a run driven the way the scheduler drives one: print
 // mode, permissions skipped, output discarded, session named by the caller.
 // It contains a file created, a file edited, a file overwritten, a write that
-// was refused, and two writes issued in parallel from a single message.
+// was refused, two writes issued in parallel from a single message, a web
+// search, and work delegated to a subagent. The last two are there because
+// they were open questions the packet could not answer either way, and the
+// only thing that settles a question about somebody else's format is an
+// artefact from their software.
 //
 // This half runs in continuous integration, which has no runtime to spend.
 // The half that checks the capture is still CURRENT (the installed CLI's
@@ -26,13 +30,24 @@ const path = require('node:path');
 const os = require('node:os');
 
 const { readSessionTranscript, FILE_TOOLS, KNOWN_BLOCK_TYPES } = require('../../lib/runtime/session-transcript.js');
-const { checkTranscriptInvariants, checkDeclarationsAgree, EXPECTED_EXTRACTION, EXPECTED_ABSENT, WITNESSED_TOOLS, UNWITNESSED_TOOLS } = require('../../scripts/transcript-truth/truth.js');
+const { checkTranscriptInvariants, checkDeclarationsAgree, checkCaptureAnswers, withoutDelegation, EXPECTED_EXTRACTION, EXPECTED_ABSENT, EXPECTED_DELEGATED, WITNESSED_TOOLS, UNWITNESSED_TOOLS } = require('../../scripts/transcript-truth/truth.js');
 
 const captured = JSON.parse(fs.readFileSync(
   path.join(__dirname, '..', '..', 'scripts', 'transcript-truth', 'captured-transcript.json'), 'utf-8'));
 
 let home = null;
 let realHome = null;
+
+// TWO READINGS OF ONE ARTEFACT, laid down as two sessions, because one capture
+// cannot witness both halves at once: the delegation in it is precisely what
+// stops the reader publishing a list.
+//
+// The captured session id carries the run WHOLE, subagent transcript included,
+// and must report that it cannot say. A second id carries the same lines with
+// the delegation removed, which is what a run that delegated nothing leaves,
+// and its file list must come out exactly. Neither invents a shape: both are
+// lines a real run wrote.
+const NO_DELEGATION_SESSION = 'e0000000-0000-4000-8000-00000000cafe';
 
 before(() => {
   realHome = process.env.HOME;
@@ -42,6 +57,14 @@ before(() => {
   const dir = path.join(home, '.claude', 'projects', 'captured-run');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, `${captured.sessionId}.jsonl`), captured.lines.join('\n') + '\n');
+  // And its subagent's transcript where the runtime really files one: under a
+  // directory named for the session, beside the session's own file.
+  const sidechains = path.join(dir, captured.sessionId, 'subagents');
+  fs.mkdirSync(sidechains, { recursive: true });
+  for (const sub of captured.subagents || []) {
+    fs.writeFileSync(path.join(sidechains, sub.name), sub.lines.join('\n') + '\n');
+  }
+  fs.writeFileSync(path.join(dir, `${NO_DELEGATION_SESSION}.jsonl`), withoutDelegation(captured.lines).join('\n') + '\n');
   process.env.HOME = home;
 });
 
@@ -63,6 +86,8 @@ describe('the committed capture', () => {
   test('still contains every shape the reader depends on', () => {
     assert.deepStrictEqual(checkTranscriptInvariants(captured.lines), [],
       'the capture satisfies each assumption the reader makes about the format');
+    assert.deepStrictEqual(checkCaptureAnswers(captured), [],
+      'and still holds the web search and the delegation the two open questions were settled by');
   });
 
   test('really does contain the write that was refused', () => {
@@ -78,20 +103,20 @@ describe('the committed capture', () => {
 
 describe('the reader over the capture', () => {
   test('extracts exactly the files that run changed, and what happened to each', () => {
-    const result = readSessionTranscript(captured.sessionId);
+    const result = readSessionTranscript(NO_DELEGATION_SESSION);
     assert.strictEqual(result.status, 'known', 'the real transcript is one this reader understands');
     assert.deepStrictEqual(result.files.map(f => [path.basename(f.path), f.change]), EXPECTED_EXTRACTION,
       'a creation, an edit, an overwrite and both halves of a parallel batch, each named for what it was');
   });
 
   test('does not list the write the run attempted and did not make', () => {
-    const result = readSessionTranscript(captured.sessionId);
+    const result = readSessionTranscript(NO_DELEGATION_SESSION);
     assert.ok(!result.files.some(f => f.path.includes(EXPECTED_ABSENT)),
       'the refused write is in the transcript and is not in the list');
   });
 
   test('reports the paths the run itself named', () => {
-    const result = readSessionTranscript(captured.sessionId);
+    const result = readSessionTranscript(NO_DELEGATION_SESSION);
     // Taken from the capture's own asks rather than written here, because the
     // run happened in a temporary directory belonging to the machine that
     // captured it.
@@ -111,10 +136,148 @@ describe('the reader over the capture', () => {
   });
 
   test('both halves of a parallel batch are listed once each, against their own paths', () => {
-    const result = readSessionTranscript(captured.sessionId);
+    const result = readSessionTranscript(NO_DELEGATION_SESSION);
     const parallel = result.files.filter(f => path.basename(f.path).startsWith('par-'));
     assert.strictEqual(parallel.length, 2, 'two parallel writes, two entries');
     assert.strictEqual(new Set(parallel.map(f => f.path)).size, 2, 'and two different files, not one file twice');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The two questions this capture was extended to settle
+// ---------------------------------------------------------------------------
+
+describe('a run that used a web tool', () => {
+  // THE QUESTION: a research routine is this project's documented leading
+  // example, and every one of them searches the web. If a web tool produced
+  // content blocks this reader does not know, every such run would report
+  // unknown and AC-4 would fail for the commonest real routine.
+  //
+  // THE ANSWER, from a run rather than from reasoning: it does not. On this
+  // runtime a web search is an ordinary tool_use like any other, and the block
+  // types in a transcript containing one are the four the reader already
+  // knows. The concern was reasonable and it is unfounded, and the capture is
+  // what stops it having to be re-argued.
+  test('produces no content block the reader does not know', () => {
+    const uses = captured.lines.flatMap(l => {
+      const content = (JSON.parse(l).message || {}).content;
+      return Array.isArray(content) ? content : [];
+    });
+    assert.ok(uses.some(b => b && b.type === 'tool_use' && b.name === 'WebSearch'),
+      'the run really did use a web tool, so the absence below is a measurement');
+    const types = new Set(uses.filter(b => b && typeof b === 'object').map(b => b.type));
+    assert.deepStrictEqual([...types].sort().filter(t => !KNOWN_BLOCK_TYPES.has(t)), [],
+      'and every block type it produced is one the reader knows');
+  });
+});
+
+describe('a run that delegated to a subagent', () => {
+  // THE QUESTION: whether a delegated subagent's writes land in the session's
+  // own transcript. THE ANSWER: they do not. The subagent gets a transcript of
+  // its own, filed under a directory named for the session, and its outcome
+  // entries carry no payload at all: the path and whether the file was created
+  // survive only as an English sentence.
+  test('leaves its work in a transcript of its own, which the session\'s never mentions', () => {
+    assert.ok((captured.subagents || []).length > 0, 'the capture holds the subagent\'s own transcript');
+    const wrote = (captured.subagents || []).flatMap(sub => sub.lines).some(l => {
+      const content = (JSON.parse(l).message || {}).content;
+      return Array.isArray(content) && content.some(b => b && b.type === 'tool_use'
+        && FILE_TOOLS[b.name] && String(b.input[FILE_TOOLS[b.name].input]).endsWith(EXPECTED_DELEGATED));
+    });
+    assert.ok(wrote, `the subagent really asked to write ${EXPECTED_DELEGATED}`);
+    assert.deepStrictEqual(checkCaptureAnswers(captured), [],
+      'and the session\'s own transcript holds no file tool naming it');
+  });
+
+  // What the reader does about it, over the real artefact. A list holding only
+  // the parent's writes would be a confident list missing a file the run
+  // really changed, which is the failure this whole reader exists to prevent.
+  test('reports that it cannot say what the run changed', () => {
+    const result = readSessionTranscript(captured.sessionId);
+    assert.strictEqual(result.status, 'unknown', 'the parent\'s writes are not the whole of what this run changed');
+    assert.strictEqual(result.reason, 'delegated', 'and it names where the rest of the answer went');
+    assert.strictEqual(result.files, null, 'with no list at all');
+    assert.ok(result.activity, 'while what the run was last seen doing survives');
+  });
+});
+
+// The enforcement, driven rather than assumed. checkCaptureAnswers is what
+// stops a future re-capture quietly dropping the web search or the delegation
+// and leaving both questions answered by a capture that no longer exercises
+// them. Satisfied by today's artefact, it asserts nothing about itself: a
+// requirement that has never been seen to fail is a requirement nobody has
+// tested. So each one is driven by taking the real capture and removing the
+// thing it demands.
+describe('a capture that stopped exercising what it settles', () => {
+  const withoutWebSearch = () => captured.lines.filter(line => {
+    const content = (JSON.parse(line).message || {}).content;
+    if (!Array.isArray(content)) return true;
+    return !content.some(b => b && b.type === 'tool_use' && b.name === 'WebSearch');
+  });
+
+  test('a capture with no web search is complained about', () => {
+    const lines = withoutWebSearch();
+    assert.ok(lines.length < captured.lines.length, 'the capture really did contain the search that was removed');
+    const failures = checkCaptureAnswers({ ...captured, lines });
+    assert.ok(failures.some(f => /WebSearch/.test(f)), 'the missing search is named');
+    assert.ok(failures.some(f => /unwitnessed/.test(f)),
+      'and the complaint says what the loss costs: the block-type check stops proving anything about web tools');
+  });
+
+  test('a capture with no subagent transcript is complained about', () => {
+    const failures = checkCaptureAnswers({ ...captured, subagents: [] });
+    // The two absences are different problems and are told apart, so the
+    // complaint sends the reader to the right place: no transcript at all
+    // means the delegation left nothing behind, while a transcript that never
+    // asked to write means the run did not do what the prompt asked.
+    assert.ok(failures.some(f => /carries no subagent transcript/.test(f)),
+      'a delegation with no transcript beside it leaves the reason for the reader\'s refusal unwitnessed');
+    assert.ok(failures.some(f => new RegExp(`no subagent transcript asks to write ${EXPECTED_DELEGATED}`).test(f)),
+      'and the file the subagent was asked to write is named, so the fix is obvious');
+  });
+
+  // THE TWO FACTS THE READER'S REFUSAL RESTS ON, each driven by taking the
+  // real capture and making the fact false. Without these, the reader would go
+  // on refusing to list a delegated run on grounds that had quietly stopped
+  // holding, which is the same class of error as a list that is quietly wrong.
+  test('a delegated write the parent can see for itself is complained about', () => {
+    const parentWrote = JSON.stringify({
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_parent', name: 'Write', input: { file_path: `/w/${EXPECTED_DELEGATED}` } }] },
+    });
+    const failures = checkCaptureAnswers({ ...captured, lines: [...captured.lines, parentWrote] });
+    assert.ok(failures.some(f => /not invisible from the parent/.test(f)),
+      'a subagent whose writes show up in the session\'s own transcript would leave nothing to refuse');
+  });
+
+  test('a subagent outcome that grew a payload is complained about', () => {
+    const subagents = (captured.subagents || []).map(sub => ({
+      ...sub,
+      lines: sub.lines.map(line => {
+        const entry = JSON.parse(line);
+        const content = (entry.message || {}).content;
+        if (!Array.isArray(content) || !content.some(b => b && b.type === 'tool_result')) return line;
+        // The payload a session's own transcript carries, put on a subagent's
+        // outcome: if that ever became true, the delegated write would be
+        // readable and the reader should stop refusing to list it.
+        return JSON.stringify({ ...entry, toolUseResult: { type: 'create', filePath: `/w/${EXPECTED_DELEGATED}` } });
+      }),
+    }));
+    const failures = checkCaptureAnswers({ ...captured, subagents });
+    assert.ok(failures.some(f => /now carries a payload/.test(f)),
+      'the ground for refusing a delegated run has moved and the capture says so');
+  });
+
+  test('a capture that no longer delegates at all is complained about', () => {
+    const lines = withoutDelegation(captured.lines);
+    assert.ok(lines.length < captured.lines.length, 'the capture really did contain the delegation that was removed');
+    const failures = checkCaptureAnswers({ ...captured, lines });
+    assert.ok(failures.some(f => /no delegation in the capture/.test(f)),
+      'a capture that stopped delegating settles nothing about where a subagent\'s work is recorded');
+  });
+
+  test('and says nothing about the capture that does exercise both', () => {
+    assert.deepStrictEqual(checkCaptureAnswers(captured), []);
   });
 });
 

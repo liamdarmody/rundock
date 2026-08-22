@@ -167,6 +167,45 @@ describe('ROUTINES.md: the child\'s output is discarded', () => {
 });
 
 // ---------------------------------------------------------------------------
+// docs/ROUTINES.md: what the permission-hook experiment found
+// ---------------------------------------------------------------------------
+
+describe('ROUTINES.md: the hook experiment reports the capture\'s own numbers', () => {
+  // The claim names a runtime version, a call count and a list of tools. Those
+  // are facts about an artefact in this repository, and they were copied into
+  // the prose by hand: a re-capture moves the JSON and leaves the sentence
+  // saying what used to be true, which is the quiet rot this file exists to
+  // stop. The sentence beside it about the output being discarded is pinned to
+  // the spawn; this one was pinned to nothing.
+  //
+  // So the sentence is COMPOSED here from the capture and asserted whole,
+  // rather than matched loosely. A looser check would pass while the numbers
+  // drifted, which is the failure being prevented.
+  const captured = JSON.parse(fs.readFileSync(
+    path.join(ROOT, 'scripts', 'transcript-truth', 'captured-transcript.json'), 'utf-8'));
+
+  test('the version, the call count and the tools are the ones the capture recorded', () => {
+    const hook = captured.permissionHook;
+    assert.ok(hook && Array.isArray(hook.tools) && hook.tools.length > 1 && hook.calls > 1,
+      'the capture carries the experiment, so there is something to pin the prose to');
+    const tools = hook.tools.map(t => `\`${t}\``);
+    const list = `${tools.slice(0, -1).join(', ')} and ${tools[tools.length - 1]}`;
+    const sentence = `On Claude Code ${captured.runtimeVersion} the hook was consulted ${hook.calls} times, `
+      + `about ${list}, including the write that then failed.`;
+    assert.ok(routinesDoc.includes(sentence),
+      `ROUTINES.md must state the capture's own numbers. Expected the sentence:\n  ${sentence}`);
+  });
+
+  test('the delegation limit is stated, because a delegating run reports no list at all', () => {
+    // A user reading this page to find out what a run changed would otherwise
+    // meet an empty answer with no explanation. The reason code is named so
+    // the page and the record use the same word.
+    assert.match(routinesDoc, /reports `delegated`/,
+      'ROUTINES.md must name the reason a delegating run reports, so the page and the run record agree');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // docs/ROUTINES.md: the catch-up window
 // ---------------------------------------------------------------------------
 

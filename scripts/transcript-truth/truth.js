@@ -24,7 +24,7 @@
 // never exercised. The partition below closes it. Every tool the reader names
 // must be either witnessed by the capture, and checked against it, or listed
 // as unwitnessed with the reason, and a tool that is neither fails this file.
-const { FILE_TOOLS, KNOWN_BLOCK_TYPES } = require('../../lib/runtime/session-transcript.js');
+const { FILE_TOOLS, KNOWN_BLOCK_TYPES, DELEGATION_TOOLS } = require('../../lib/runtime/session-transcript.js');
 
 // Tools the committed capture really contains, each checked below against the
 // shapes it produced. Adding a tool to the reader means adding it here and
@@ -156,6 +156,111 @@ function checkTranscriptInvariants(lines) {
   return failures;
 }
 
+// The file the delegated subagent writes. It is the whole of the delegation
+// evidence: present in the subagent's transcript, absent from the session's.
+const EXPECTED_DELEGATED = 'sub.md';
+
+function blocksOf(entry) {
+  const content = entry && entry.message ? entry.message.content : null;
+  return Array.isArray(content) ? content.filter(b => b && typeof b === 'object') : [];
+}
+
+/**
+ * The capture's lines with the delegation taken out: the parent's Agent ask
+ * and the answer it got.
+ *
+ * WHY A READING NEEDS THIS. One capture cannot witness both halves at once,
+ * because the delegation is precisely what stops the reader publishing a list.
+ * Removing it gives the artefact a run that did not delegate, which is what
+ * the file-list extraction has to be checked against, while the untouched
+ * lines give the run that did. Both readings are of the same real transcript;
+ * neither invents a shape.
+ */
+function withoutDelegation(lines) {
+  const ids = new Set();
+  const entries = parseLines(lines);
+  const keep = [];
+  for (let i = 0; i < entries.length; i++) {
+    const blocks = blocksOf(entries[i]);
+    const asks = blocks.filter(b => b.type === 'tool_use' && DELEGATION_TOOLS.has(b.name));
+    if (asks.length) { for (const a of asks) ids.add(a.id); continue; }
+    if (blocks.some(b => b.type === 'tool_result' && ids.has(b.tool_use_id))) continue;
+    keep.push(lines[i]);
+  }
+  return keep;
+}
+
+/**
+ * The two questions this capture rides along to answer, checked against what
+ * it actually holds rather than against what anybody expected.
+ *
+ * A web tool, because a run that used one might produce content blocks the
+ * reader does not know, which would turn every research routine into an
+ * unknown. A delegation, because a subagent's writes might be recorded
+ * somewhere the reader never looks, which would leave them missing from a list
+ * reported as complete.
+ */
+function checkCaptureAnswers(captured) {
+  const failures = [];
+  const say = (ok, msg) => { if (!ok) failures.push(msg); };
+  let entries;
+  try { entries = parseLines(captured.lines); } catch (e) { return [e.message]; }
+  const uses = entries.flatMap(e => blocksOf(e).filter(b => b.type === 'tool_use'));
+
+  say(uses.some(b => b.name === 'WebSearch'),
+    'no WebSearch call in the capture: whether a web tool produces block types the reader does not know is unwitnessed, and the block-type check above proves nothing about it');
+  say(uses.some(b => DELEGATION_TOOLS.has(b.name)),
+    `no delegation in the capture: nothing witnesses where a subagent's work is recorded (expected a tool_use named one of ${[...DELEGATION_TOOLS].join(', ')})`);
+
+  const subagents = Array.isArray(captured.subagents) ? captured.subagents : [];
+  say(subagents.length > 0, 'the capture carries no subagent transcript, so the delegation it made left no evidence to check');
+
+  // ABSENT AS A FILE THE PARENT TOUCHED, which is not the same as absent from
+  // the text. The delegation's own instruction names the file, so a search of
+  // the raw lines finds it in the ask that asked somebody else to write it.
+  // What has to be true is that no file tool in the SESSION's transcript, and
+  // no outcome in it, ever names the file: that is what makes the delegated
+  // write invisible to a reader of this transcript, and the reader's refusal
+  // to list a delegated run rests on it.
+  const namesDelegated = (value) => typeof value === 'string' && value.endsWith(EXPECTED_DELEGATED);
+  const parentTouched = entries.some(entry => {
+    const outcome = entry.toolUseResult;
+    if (outcome && typeof outcome === 'object'
+      && Object.values(FILE_TOOLS).some(f => namesDelegated(outcome[f.result]))) return true;
+    return blocksOf(entry).some(b => b.type === 'tool_use' && FILE_TOOLS[b.name]
+      && b.input && namesDelegated(b.input[FILE_TOOLS[b.name].input]));
+  });
+  say(!parentTouched,
+    `the session's own transcript holds a file tool naming ${EXPECTED_DELEGATED}: the delegated write is not invisible from the parent after all, and the reader's refusal to list a delegated run rests on it being so`);
+
+  let sawDelegatedWrite = false;
+  let sawOutcomeWithoutPayload = false;
+  for (const sub of subagents) {
+    let subEntries;
+    try { subEntries = parseLines(sub.lines); } catch (e) { failures.push(`${sub.name}: ${e.message}`); continue; }
+    const ids = new Set();
+    for (const entry of subEntries) {
+      for (const block of blocksOf(entry)) {
+        say(KNOWN_BLOCK_TYPES.has(block.type), `content block type "${block.type}" in ${sub.name} is one the reader does not know`);
+        const field = block.type === 'tool_use' && FILE_TOOLS[block.name] ? FILE_TOOLS[block.name].input : null;
+        if (field && block.input && String(block.input[field] || '').endsWith(EXPECTED_DELEGATED)) {
+          sawDelegatedWrite = true;
+          ids.add(block.id);
+        }
+        // The fact the reader's refusal rests on: the subagent's outcome
+        // carries no payload at all, so the path it wrote and whether the file
+        // was created or overwritten survive only as an English sentence.
+        if (block.type === 'tool_result' && ids.has(block.tool_use_id) && entry.toolUseResult === undefined) {
+          sawOutcomeWithoutPayload = true;
+        }
+      }
+    }
+  }
+  say(sawDelegatedWrite, `no subagent transcript asks to write ${EXPECTED_DELEGATED}: the delegation did not do what the capture prompt asked, so nothing here is evidence`);
+  say(sawOutcomeWithoutPayload, `the delegated write's outcome now carries a payload: a subagent's changes may be readable after all, and the reader refuses to list them on the grounds that they are not`);
+  return failures;
+}
+
 /**
  * What the reader must extract from the committed capture, by file name and
  * what happened to it. Names rather than absolute paths, because the capture
@@ -174,4 +279,7 @@ const EXPECTED_EXTRACTION = [
 // The write the run attempted and did not make. Never a file it changed.
 const EXPECTED_ABSENT = 'capture-blocked.txt';
 
-module.exports = { checkTranscriptInvariants, checkDeclarationsAgree, EXPECTED_EXTRACTION, EXPECTED_ABSENT, WITNESSED_TOOLS, UNWITNESSED_TOOLS };
+module.exports = {
+  checkTranscriptInvariants, checkDeclarationsAgree, checkCaptureAnswers, withoutDelegation,
+  EXPECTED_EXTRACTION, EXPECTED_ABSENT, EXPECTED_DELEGATED, WITNESSED_TOOLS, UNWITNESSED_TOOLS,
+};

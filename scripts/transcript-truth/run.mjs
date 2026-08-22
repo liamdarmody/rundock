@@ -38,8 +38,14 @@ import { randomUUID } from 'node:crypto';
 const require = createRequire(import.meta.url);
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
-const { checkTranscriptInvariants, EXPECTED_EXTRACTION, EXPECTED_ABSENT } = require('./truth.js');
-const { readSessionTranscript } = require(path.join(ROOT, 'lib', 'runtime', 'session-transcript.js'));
+const { checkTranscriptInvariants, checkCaptureAnswers, withoutDelegation, EXPECTED_EXTRACTION, EXPECTED_ABSENT } = require('./truth.js');
+// THE READER'S OWN LOOKUP, not a copy of it. This harness used to scan for the
+// session id itself, with a comment saying it was doing what the reader does,
+// which is a rule stated twice and true only while both copies are edited
+// together: a change to the search would leave the harness pinning a file the
+// product never reads.
+const { readSessionTranscript, findTranscript, sidechainTranscripts } =
+  require(path.join(ROOT, 'lib', 'runtime', 'session-transcript.js'));
 
 const CAPTURE_FILE = path.join(HERE, 'captured-transcript.json');
 const CAPTURE = process.argv.includes('--capture');
@@ -61,6 +67,21 @@ function cliVersion(bin) {
 // step here. scripts/transcript-truth/truth.js fails if a witnessed tool is
 // missing from the capture, so a tool added to the reader cannot narrow what
 // this prompt covers without saying so.
+//
+// THE LAST TWO STEPS SETTLE QUESTIONS RATHER THAN WITNESSING A TOOL, and both
+// were raised as things the packet could not answer either way.
+//
+// The web search asks whether a run that uses a web tool produces content
+// blocks the reader does not know, which would turn every research routine
+// into an unknown. It does not: on this runtime the search is an ordinary
+// tool_use like any other, and the block-type check below runs over these
+// lines, so the answer is pinned rather than remembered.
+//
+// The delegation asks where a subagent's work is recorded. It is recorded in a
+// transcript of the subagent's OWN, and that transcript answers a write with an
+// English sentence instead of the outcome object the session's transcript
+// carries. That is why the reader refuses to list a delegated run's files, and
+// this capture is the evidence for it.
 const PROMPT = `Do exactly these steps in this order, using no Bash at all.
 1. Use the Write tool to create new.md containing the word one.
 2. Use the Edit tool on existing.md to change the word alpha to gamma.
@@ -68,7 +89,14 @@ const PROMPT = `Do exactly these steps in this order, using no Bash at all.
 4. Use the NotebookEdit tool on book.ipynb to replace the source of cell 0 with print('two').
 5. Use the Write tool once on the absolute path /System/capture-blocked.txt with the word three. This will fail; do not retry it and do not work around it.
 6. In a SINGLE message, issue two parallel Write tool calls at the same time: par-a.md containing four, and par-b.md containing five.
+7. Use the WebSearch tool exactly once to search the web for: Node.js long term support release schedule. One sentence about what you found is enough.
+8. Use the Agent tool exactly once, with subagent_type general-purpose, to delegate this exact instruction to a subagent: "Use the Write tool to create sub.md in the current working directory containing the word six, then stop."
 Then stop and say done.`;
+
+// The file the DELEGATED subagent writes, which the parent's transcript never
+// mentions. Named here because two checks turn on it: it must be absent from
+// the session's own transcript, and present in the subagent's.
+const DELEGATED_FILE = 'sub.md';
 
 const NOTEBOOK = {
   cells: [{ cell_type: 'code', source: ["print('one')\n"], metadata: {}, outputs: [], execution_count: null }],
@@ -145,18 +173,6 @@ function runRoutineShaped(dir, sessionId) {
   });
 }
 
-// Found by scanning for the session id, which is what the reader does and for
-// the same reason: the directory name is derived from the working directory by
-// a rule this project does not own.
-function findTranscript(sessionId) {
-  const root = path.join(os.homedir(), '.claude', 'projects');
-  for (const dir of fs.readdirSync(root)) {
-    const candidate = path.join(root, dir, `${sessionId}.jsonl`);
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  return null;
-}
-
 async function capture() {
   const version = cliVersion('claude');
   const sessionId = randomUUID();
@@ -169,11 +185,23 @@ async function capture() {
   if (!file) fail(`no transcript named for session ${sessionId}: the runtime no longer names it for the session it was given, which is the assumption the whole reader rests on`);
 
   const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+  // The transcripts the delegated subagent left, read through the reader's own
+  // discovery so the harness cannot pin a file the product would not find.
+  const subagents = sidechainTranscripts(file, sessionId).map(f => ({
+    name: path.basename(f),
+    lines: fs.readFileSync(f, 'utf8').split('\n').filter(Boolean),
+  }));
   const hook = readHookEvidence(dir);
-  const problems = checkTranscriptInvariants(lines);
+  const problems = [...checkTranscriptInvariants(lines), ...checkCaptureAnswers({ lines, subagents })];
   if (problems.length) {
+    // The run happened and cost what it cost, so the artefact is kept where
+    // somebody can look at it rather than thrown away with the process. It is
+    // written outside the repository on purpose: a capture that failed its own
+    // checks is evidence to read, never a capture to commit.
+    const rejected = path.join(os.tmpdir(), `transcript-truth-rejected-${sessionId}.json`);
+    fs.writeFileSync(rejected, JSON.stringify({ runtimeVersion: version, sessionId, prompt: PROMPT, problems, lines, subagents }, null, 2) + '\n');
     fail(`real CLI ${version} no longer matches what the reader assumes:\n  - ${problems.join('\n  - ')}\n` +
-      'The transcript format has CHANGED. Fix the reader before committing this capture.');
+      `The transcript format has CHANGED. Fix the reader before committing this capture.\nThe run that failed is at ${rejected}`);
   }
   fs.writeFileSync(CAPTURE_FILE, JSON.stringify({
     runtimeVersion: version,
@@ -193,9 +221,13 @@ async function capture() {
       ...hook,
     },
     lines,
+    // The subagent's own transcript, kept beside the session's because the
+    // whole point is that they are different files with different shapes.
+    subagents,
   }, null, 2) + '\n');
   fs.rmSync(dir, { recursive: true, force: true });
   console.log(`[transcript-truth] permission hook under skipped permissions: ${hook.fired ? `FIRED (${hook.calls} calls, tools: ${hook.tools.join(', ')})` : 'DID NOT FIRE'}`);
+  console.log(`[transcript-truth] delegation: ${subagents.length} subagent transcript(s), filed under the session's own directory`);
   console.log(`[transcript-truth] capture written: ${path.relative(ROOT, CAPTURE_FILE)} (${lines.length} lines; commit it)`);
 }
 
@@ -211,7 +243,7 @@ function check() {
   }
   if (!installed) console.log(`[transcript-truth] no real CLI here; checking the reader against the capture from ${captured.runtimeVersion}`);
 
-  const problems = checkTranscriptInvariants(captured.lines);
+  const problems = [...checkTranscriptInvariants(captured.lines), ...checkCaptureAnswers(captured)];
   if (problems.length) fail(`the committed capture does not satisfy what the reader assumes:\n  - ${problems.join('\n  - ')}`);
   if (!captured.permissionHook || typeof captured.permissionHook.fired !== 'boolean') {
     fail('the capture carries no answer on whether the permission hook fires with permissions skipped; re-capture');
@@ -220,24 +252,42 @@ function check() {
 
   // The reader, over the captured artefact, through its real lookup: the
   // capture is laid down where a transcript lives and asked for by session id.
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'transcript-truth-home-'));
-  const realHome = process.env.HOME;
-  try {
-    const dir = path.join(home, '.claude', 'projects', 'captured');
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, `${captured.sessionId}.jsonl`), captured.lines.join('\n') + '\n');
-    process.env.HOME = home;
-    const result = readSessionTranscript(captured.sessionId);
-    if (result.status !== 'known') fail(`the reader could not read the captured transcript: ${result.reason}`);
-    const got = result.files.map(f => [path.basename(f.path), f.change]);
-    const want = EXPECTED_EXTRACTION;
-    if (JSON.stringify(got) !== JSON.stringify(want)) {
-      fail(`the reader extracts ${JSON.stringify(got)} from the capture, expected ${JSON.stringify(want)}`);
+  //
+  // TWO READINGS OF ONE ARTEFACT, because one capture cannot witness both
+  // halves at once: the delegation is precisely what stops the reader
+  // publishing a list. Laid down without it, the capture is a run that did not
+  // delegate and its file list must come out exactly; laid down whole, with the
+  // subagent's transcript where the runtime files it, the same run must report
+  // that it cannot say. Both are readings of a real transcript.
+  const readAs = (lines, subagents) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'transcript-truth-home-'));
+    const realHome = process.env.HOME;
+    try {
+      const dir = path.join(home, '.claude', 'projects', 'captured');
+      fs.mkdirSync(path.join(dir, captured.sessionId, 'subagents'), { recursive: true });
+      fs.writeFileSync(path.join(dir, `${captured.sessionId}.jsonl`), lines.join('\n') + '\n');
+      for (const sub of subagents) {
+        fs.writeFileSync(path.join(dir, captured.sessionId, 'subagents', sub.name), sub.lines.join('\n') + '\n');
+      }
+      process.env.HOME = home;
+      return readSessionTranscript(captured.sessionId);
+    } finally {
+      process.env.HOME = realHome;
+      fs.rmSync(home, { recursive: true, force: true });
     }
-    if (got.some(([name]) => name === EXPECTED_ABSENT)) fail(`${EXPECTED_ABSENT} was attempted and refused; it must never be listed as changed`);
-  } finally {
-    process.env.HOME = realHome;
-    fs.rmSync(home, { recursive: true, force: true });
+  };
+
+  const plain = readAs(withoutDelegation(captured.lines), []);
+  if (plain.status !== 'known') fail(`the reader could not read the captured transcript: ${plain.reason}`);
+  const got = plain.files.map(f => [path.basename(f.path), f.change]);
+  if (JSON.stringify(got) !== JSON.stringify(EXPECTED_EXTRACTION)) {
+    fail(`the reader extracts ${JSON.stringify(got)} from the capture, expected ${JSON.stringify(EXPECTED_EXTRACTION)}`);
+  }
+  if (got.some(([name]) => name === EXPECTED_ABSENT)) fail(`${EXPECTED_ABSENT} was attempted and refused; it must never be listed as changed`);
+
+  const delegated = readAs(captured.lines, captured.subagents || []);
+  if (delegated.status !== 'unknown' || delegated.reason !== 'delegated') {
+    fail(`the run that delegated reports ${delegated.status}/${delegated.reason}: a subagent's writes are recorded where this reader cannot read their outcome, so the only honest answer is that the list is not known`);
   }
   console.log(`[transcript-truth] PASS: the reader matches the ${captured.runtimeVersion} capture`);
 }
