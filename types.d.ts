@@ -117,7 +117,13 @@ type StreamEvent =
 type ContentBlock =
   | { type: 'text'; text: string }
   | { type: 'tool_use'; id: string; name: string; input?: Record<string, unknown> }
-  | { type: 'tool_result'; tool_use_id: string; content: unknown }
+  // `is_error` marks a tool call that failed. Declared because
+  // lib/runtime/session-transcript.js decides on it: it is the only thing
+  // separating a write that happened from one that was refused, and a list of
+  // attempted writes is not a list of files changed. Witnessed by the
+  // committed transcript capture (scripts/transcript-truth), not by a fixture
+  // this repository wrote.
+  | { type: 'tool_result'; tool_use_id: string; content: unknown; is_error?: boolean }
   | { type: 'thinking' };
 
 // ---------------------------------------------------------------------------

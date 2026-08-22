@@ -73,6 +73,51 @@ function countFrom(text, kind) {
   return null;
 }
 
+// How many named tests the record carries.
+//
+// SET HIGH ON PURPOSE. The first version capped at forty, and reverting a
+// module that the test fixtures import fails a hundred and twenty tests in run
+// order, so the forty recorded were forty unrelated integration tests and the
+// proofs a reviewer came to check were the ones cut off. A capped list is a
+// partial list offered with the shape of a complete one, which is the exact
+// failure this branch exists to stop shipping.
+//
+// A cap still exists, because a record nobody can read is its own kind of
+// useless, and `namesTruncated` says plainly when one has been applied.
+const NAME_LIMIT = 200;
+
+// The NAMES of the tests that failed, in the two shapes this project and its
+// neighbours emit: the spec reporter's cross and TAP's `not ok`.
+//
+// WHY NAMES AND NOT ONLY A COUNT. A count says the suite noticed something. It
+// cannot say the proofs a criterion names are among what it noticed, so a
+// change whose real guards are untested still records a healthy number as long
+// as anything at all went red. The names are what let a reader check the claim
+// against the criteria rather than take it.
+//
+// Best effort by nature, like the counts: an unrecognised reporter yields an
+// empty list, which is recorded as empty. Names invented from output nobody
+// could read would be worse than none, because the record is the thing a
+// reviewer is asked to trust.
+const NAME_PATTERNS = [
+  /^\s*\u2716\s+(.+?)\s+\(\d+(?:\.\d+)?ms\)\s*$/gm,
+  /^not ok \d+ - (.+?)\s*$/gm,
+];
+
+function namesFrom(text) {
+  const names = new Set();
+  for (const re of NAME_PATTERNS) {
+    for (const m of text.matchAll(re)) {
+      // The spec reporter's summary heading ("failing tests:") carries no
+      // duration, so the pattern above never reaches it and nothing here has
+      // to exclude it by name.
+      const name = m[1].trim();
+      if (name) names.add(name);
+    }
+  }
+  return [...names];
+}
+
 function git(repo, args) {
   return execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
 }
@@ -123,13 +168,14 @@ function restoreTo(repo, ref, files) {
 /**
  * @returns {{outcome: 'proven'|'not-discriminating'|'inconclusive'|'not-provable'|'refused',
  *            reason: string, passedWithChange: boolean|null,
- *            failedWithoutChange: boolean|null, source: string[], tests: string[],
- *            limitation: string}}
+ *            failedWithoutChange: boolean|null, testsPassedWithChange: number|null,
+ *            testsFailedWithoutChange: number|null, namesFailedWithoutChange: string[],
+ *            source: string[], tests: string[], limitation: string}}
  */
 async function redFirst({ repo, base = 'main', tests, log = () => {}, runner = null }) {
   const result = (outcome, reason, extra = {}) => ({
     outcome, reason, passedWithChange: null, failedWithoutChange: null,
-    testsPassedWithChange: null, testsFailedWithoutChange: null,
+    testsPassedWithChange: null, testsFailedWithoutChange: null, namesFailedWithoutChange: [],
     source: [], tests: [], limitation: LIMITATION, ...extra,
   });
 
@@ -193,7 +239,7 @@ async function redFirst({ repo, base = 'main', tests, log = () => {}, runner = n
     kid.on('error', (e) => { child = null; reject(e); });
     kid.on('close', (code) => {
       child = null;
-      resolve({ ok: code === 0, pass: countFrom(text, 'pass'), fail: countFrom(text, 'fail') });
+      resolve({ ok: code === 0, pass: countFrom(text, 'pass'), fail: countFrom(text, 'fail'), names: namesFrom(text) });
     });
   });
 
@@ -203,7 +249,7 @@ async function redFirst({ repo, base = 'main', tests, log = () => {}, runner = n
   // command that always failed, so it never got past the first run and would
   // have passed with the restore deleted.
   const run = runner
-    ? async () => ({ ok: !!(await runner()), pass: null, fail: null })
+    ? async () => ({ ok: !!(await runner()), pass: null, fail: null, names: [] })
     : spawnRun;
 
   /** End the child and everything it started. Best effort by necessity. */
@@ -228,7 +274,7 @@ async function redFirst({ repo, base = 'main', tests, log = () => {}, runner = n
 
   log('restoring the source, keeping the tests');
   let failedWithoutChange = null;
-  let withoutChange = { ok: null, pass: null, fail: null };
+  let withoutChange = { ok: null, pass: null, fail: null, names: [] };
 
   // try/finally does not survive a signal: Node's default handling terminates
   // without unwinding, which would abandon the tree mid-revert. Registering a
@@ -266,6 +312,7 @@ async function redFirst({ repo, base = 'main', tests, log = () => {}, runner = n
   const counts = {
     testsPassedWithChange: withChange.pass,
     testsFailedWithoutChange: withoutChange.fail,
+    namesFailedWithoutChange: withoutChange.names || [],
   };
 
   if (git(repo, ['status', '--porcelain'])) {
@@ -309,6 +356,9 @@ function recordOutcome(repo, outcome) {
     // check exists to catch, committed inside the check itself.
     testsPassedWithChange: outcome.testsPassedWithChange,
     testsFailedWithoutChange: outcome.testsFailedWithoutChange,
+    // The names, capped, with the count above carrying the whole quantity.
+    namesFailedWithoutChange: (outcome.namesFailedWithoutChange || []).slice(0, NAME_LIMIT),
+    namesTruncated: (outcome.namesFailedWithoutChange || []).length > NAME_LIMIT,
     sourceFiles: outcome.source.length,
     testFiles: outcome.tests.length,
     limitation: outcome.limitation,
@@ -349,4 +399,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { redFirst, recordOutcome, restoreTo, isTest, TEST_DIRS, TEST_FILENAME_MARKERS, LIMITATION };
+module.exports = { redFirst, recordOutcome, restoreTo, isTest, namesFrom, TEST_DIRS, TEST_FILENAME_MARKERS, NAME_LIMIT, LIMITATION };

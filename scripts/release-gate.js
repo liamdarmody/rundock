@@ -98,6 +98,7 @@ function buildSteps(live) {
     // stream capture, or the stub has drifted from it: no candidate gets
     // validated against a stale model of the stream.
     { name: 'stream truth', cmd: ['npm', ['run', 'stream:truth']] },
+    { name: 'transcript truth', cmd: ['npm', ['run', 'transcript:truth']] },
     { name: 'typecheck', cmd: ['npm', ['run', 'typecheck']] },
     { name: 'suite+coverage', cmd: ['npm', ['run', 'test:coverage']] },
     { name: 'e2e', cmd: ['npm', ['run', 'test:e2e']] },
