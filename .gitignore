@@ -35,3 +35,12 @@ scripts/screenshots/.banned-tokens.json
 
 # Local pre-commit gate record: names the tree the checks passed on.
 .precommit-gate.json
+
+# Per-workspace scratch and local state Rundock writes into a workspace it has
+# opened. A checkout is itself a plausible workspace, so this directory appears
+# here during ordinary use and during development, and nothing in it belongs to
+# the project. Added after finding that contributor instructions said to put
+# scratch files here while `git add -A` would have committed them: the guidance
+# and the mechanism disagreed, and only the habit of deleting kept the two from
+# meeting.
+.rundock/
