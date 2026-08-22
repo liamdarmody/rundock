@@ -112,8 +112,14 @@ describe('renderMarkdown: wikilink targets cannot reach the handler as code', ()
   };
 
   test('AC-4: a quote in the target cannot open a second attribute', () => {
-    const html = render("[[note' onmouseover='alert(1)]]");
-    assert.ok(!attrs(html).some((name) => name.startsWith('on')), `handler attribute survived: ${html}`);
+    // Both quote characters, because the target now travels in a double-quoted
+    // attribute and only the double quote can end that one. The single-quote
+    // payload is the one the old inline handler fell to and is kept as the
+    // record of it.
+    for (const src of ["[[note' onmouseover='alert(1)]]", '[[note" onmouseover="alert(1)]]']) {
+      const html = render(src);
+      assert.ok(!attrs(html).some((name) => name.startsWith('on')), `handler attribute survived: ${html}`);
+    }
   });
 
   test('AC-4: a target that closes the call cannot append an expression', () => {
@@ -257,6 +263,23 @@ describe('renderMarkdown: a relative link cannot rewrite its own handler', () =>
       const anchor = doc.querySelector('a.wikilink');
       assert.ok(anchor, `no wikilink anchor for: ${src}`);
       anchor.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+      assert.deepStrictEqual(seen, [expected], src);
+    }
+  });
+
+  test('AC-5: a character reference in a filename stays those characters', () => {
+    // The guard against the payload above, seen from the benign side. A
+    // destination is written into the attribute escaped as an attribute value,
+    // so what the browser decodes back is what the document said, not one
+    // decoding further on. Without that, `&#39;` would arrive as a quote, which
+    // is exactly how the old rewrite was broken.
+    for (const [src, expected] of [['[x](<&#39;.md>)', '&#39;.md'], ['[x](<a&amp;b.md>)', 'a&amp;b.md']]) {
+      const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost/' });
+      const doc = dom.window.document;
+      doc.getElementById('root').innerHTML = render(src);
+      const seen = [];
+      attachWikilinkHandler(doc, (value) => seen.push(value));
+      doc.querySelector('a.wikilink').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
       assert.deepStrictEqual(seen, [expected], src);
     }
   });
