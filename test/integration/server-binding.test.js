@@ -32,6 +32,65 @@
 // environment, so an environment that cannot carry the experiment is reported
 // as a failure naming what could not be established. A red suite on a laptop
 // with the wifi off is the intended cost.
+// EVERYTHING THAT REACHES THIS SERVER FROM OUTSIDE THE APPLICATION, and what
+// each one needed. Established BEFORE the binding changed, and written down
+// here including the entries that were examined and dismissed, because a
+// reader cannot otherwise tell "looked at and does not apply" from "not looked
+// at". Anyone widening or narrowing the bind should start from this list.
+//
+// 1. THE PERMISSION HOOK, scripts/permission-hook.js. A separate process, one
+//    per agent tool call, and the only thing in the tree that reaches this
+//    server from outside it. It reads RUNDOCK_PORT from its environment and
+//    dials the literal 127.0.0.1, never a hostname, so no name resolution can
+//    send it to an address the server is not on.
+//    VERIFIED, not assumed, and not by this file:
+//    test/integration/boundary-permissions.test.js spawns the real hook script
+//    with the environment the runtime gives it, and asserts the server received
+//    the request, by waiting for the permission card the server emits over the
+//    WebSocket and reading the decision the hook prints back. If the hook could
+//    not reach the server, that card never arrives and those tests fail. Green
+//    on this branch. The other half of the chain, that the runtime actually
+//    hands the hook the port the server is listening on, is pinned separately
+//    by test/integration/spawn-argv-freeze.test.js and
+//    test/unit/claude-runtime-lib.test.js.
+//
+// 2. THE CODEX RUNTIME'S SPAWN ENVIRONMENT, lib/runtime/codex-glue.js, which
+//    is handed the real port exactly as lib/runtime/claude.js is. DISMISSED as
+//    a second dialer: it passes RUNDOCK_PORT to the same hook, and RUNDOCK_PORT
+//    has exactly one consumer in the tree, entry 1. Codex itself speaks to
+//    Rundock over stdio JSON-RPC (codex-appserver.js), not over this socket.
+//
+// 3. THE ELECTRON SHELL, electron/main.js. It starts the server inside its own
+//    process with port 0 and loads http://localhost:<port> into the renderer: a
+//    hostname, not a literal, so Chromium may try ::1 first and fall back to
+//    127.0.0.1. Unaffected, and covered: the browser suite runs 162 specs
+//    against this bind through that same hostname. Deliberately NOT switched to
+//    the literal: renderer storage is keyed by origin, so moving the shell from
+//    localhost to 127.0.0.1 would orphan the stored state of every existing
+//    install.
+//
+// 4. THE BROWSER CLIENT, public/app.js, which opens its WebSocket at
+//    location.host. Same-origin by construction: it follows whatever the page
+//    was loaded from and can never dial something the page could not.
+//
+// 5. THE WEBSOCKET ORIGIN ALLOWLIST, the verifyClient check in server.js.
+//    EXAMINED and unaffected: it filters browser origins on a connection that
+//    has already been established, so it was never a reachability control and
+//    does not widen one. Worth knowing before moving the bind: it lists
+//    http://localhost and http://127.0.0.1 only, so binding the IPv6 loopback
+//    would leave a browser arriving as http://[::1] refused at this check
+//    rather than at the socket.
+//
+// 6. THE DEVELOPMENT HARNESSES under scripts/. The update harness already binds
+//    127.0.0.1 itself; the smoke and screenshot runners drive a server on this
+//    machine over localhost. None of them wanted the wide bind and none of them
+//    ship in the packaged app.
+//
+// 7. NOTHING ELSE. There is one http.createServer in the product tree and the
+//    WebSocket server attaches to it, so it is the only socket the application
+//    listens on. No document in the repository offers reaching Rundock from
+//    another device. Nothing was found that relied on the old binding, and
+//    nothing is named broken.
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 const net = require('node:net');
@@ -150,7 +209,10 @@ describe('server binding', () => {
   test('this machine still reaches the server over loopback, on HTTP and on the WebSocket', async () => {
     const res = await fetch(`http://127.0.0.1:${booted.port}/`);
     assert.strictEqual(res.status, 200,
-      'loopback HTTP is the address the permission hook dials, and it is a separate process from this one');
+      'a request to the loopback literal must still be answered. This is that claim and no more: the request '
+      + 'comes from the process hosting the server, so it says nothing about whether the permission hook reaches '
+      + 'it. That is entry 1 of the enumeration above, established by boundary-permissions.test.js driving the '
+      + 'real hook script, and it is the evidence for the hook rather than this line.');
     const client = await h.connect();
     assert.strictEqual(client.ws.readyState, 1,
       'the WebSocket drives the whole interface and connects over loopback');

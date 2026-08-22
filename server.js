@@ -69,6 +69,9 @@ const PORT = process.env.PORT || 3000;
 // authentication and transport security belong in the same change as the
 // wider address. There is deliberately no environment override: an override is
 // that same widening with nobody having decided it.
+// What already reaches this socket from outside the application, including
+// what was examined and dismissed, is enumerated at the top of
+// test/integration/server-binding.test.js. Start there before moving this.
 const HOST = '127.0.0.1';
 let ACTUAL_PORT = PORT; // Updated after server.listen() with the real listening port
 // WORKSPACE mirrors lib/config's workspace root during the decomposition:
