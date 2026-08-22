@@ -14,7 +14,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-const { classifyFileAccess } = require('../../scripts/permission-hook.js');
+const { classifyFileAccess, classifyShellAccess } = require('../../scripts/permission-hook.js');
 const { _internal: srv } = require('../../server.js');
 const { makeWorkspace, cleanup } = require('../helpers/workspace.js');
 const claudeRuntime = require('../../lib/runtime/claude.js');
@@ -60,6 +60,86 @@ describe('classifyFileAccess (hook-side)', () => {
     const extra = '/tmp/boundary-extra';
     const r = classifyFileAccess('Write', { file_path: path.join(extra, 'f.md') }, ws, [extra]);
     assert.strictEqual(r.where, 'inside');
+  });
+});
+
+describe('classifyShellAccess (hook-side)', () => {
+  // The seam this closes: a shell command is not a file tool, so
+  // classifyFileAccess never looks at it, and in Code mode the hook
+  // auto-approves everything the classifier returns null for. A write
+  // outside the workspace therefore happened with no boundary card at all.
+  //
+  // The seam is SHELL COMMANDS, not Bash: on Windows the same commands run
+  // through the PowerShell tool, which the scaffold registers as its own
+  // matcher and which was equally unclassified.
+  const ws = '/tmp/boundary-ws';
+  const home = os.homedir();
+
+  test('non-shell tools are not classified here', () => {
+    assert.strictEqual(classifyShellAccess('Write', { file_path: '/etc/hosts' }, ws, []), null);
+    assert.strictEqual(classifyShellAccess('WebFetch', { url: 'https://x' }, ws, []), null);
+  });
+
+  test('an ordinary command is NOT reported inside, so its own card survives', () => {
+    // The load-bearing non-regression. Reporting 'inside' would make the hook
+    // allow it instantly with no server round-trip, which would DELETE the
+    // Bash card that knowledge mode shows today. Only a crossing is reported;
+    // everything else stays null and keeps whatever card it already had.
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'npm test' }, ws, []), null);
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'git commit -m "x"' }, ws, []), null);
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'rm -rf node_modules' }, ws, []), null);
+  });
+
+  test('the sandbox escape hatch is a crossing, whatever the command says', () => {
+    // Measured against the CLI on 2026-08-22: a command the sandbox denies is
+    // retried with dangerouslyDisableSandbox true, and that retry reaches this
+    // hook with the flag in tool_input. It is the one signal that does not
+    // depend on reading the command text: the operating system already
+    // decided, at syscall time, that this command reached outside.
+    const r = classifyShellAccess('Bash', { command: 'make install', dangerouslyDisableSandbox: true }, ws, []);
+    assert.strictEqual(r.where, 'outside');
+    assert.strictEqual(r.escape, true, 'the card must be able to say the sandbox was being turned off');
+    assert.strictEqual(r.grantDir, null,
+      'a standing folder grant must never be offered for a sandbox escape: there is no one folder it is about');
+  });
+
+  test('a path outside the workspace in the command text is a crossing', () => {
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'touch /etc/hosts' }, ws, []).where, 'outside');
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'cp a.txt ' + path.join(home, 'notes.md') }, ws, []).where, 'outside');
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'cd /tmp && touch x' }, ws, []).where, 'outside');
+  });
+
+  test('the forms that resolve outside WITHOUT containing an absolute path', () => {
+    // Named because the first analysis of this seam offered `cd /tmp` as the
+    // example that beats a literal-path scan. It does not: /tmp is a literal
+    // absolute path. These three are the ones that actually get past it.
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'touch ~/probe.txt' }, ws, []).where, 'outside');
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'touch "$HOME/probe.txt"' }, ws, []).where, 'outside');
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'cp report.md ../../elsewhere/' }, ws, []).where, 'outside');
+  });
+
+  test('in-workspace paths and allowed extra roots are not crossings', () => {
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'touch ' + path.join(ws, 'notes.md') }, ws, []), null);
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'cat ./src/app.js' }, ws, []), null);
+    const extra = '/tmp/boundary-extra';
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'ls ' + extra + '/x' }, ws, [extra]), null);
+  });
+
+  // NO TEST HERE FOR "a URL is not a path", DELIBERATELY, and this note is the
+  // record so it is not added back as an oversight. One was written, passed,
+  // and was deleted when mutation showed nothing could make it fail: the
+  // explicit URL guard it credited was already unreachable, and so is the
+  // path-shape filter that replaced the credit. A relative token resolves
+  // against the workspace root, so it lands inside whatever it looks like.
+  // The property is real; no mutation of this module can violate it, so a
+  // test asserting it is decoration that reports green forever.
+
+  test('PowerShell is classified exactly as Bash is', () => {
+    // On Windows the shell tool is PowerShell, and the scaffold registers it
+    // as its own hook matcher. A boundary that only knew about Bash would be
+    // absent on one of the two platforms this product ships.
+    assert.strictEqual(classifyShellAccess('PowerShell', { command: 'ni /etc/probe.txt' }, ws, []).where, 'outside');
+    assert.strictEqual(classifyShellAccess('PowerShell', { command: 'ls .' }, ws, []), null);
   });
 });
 

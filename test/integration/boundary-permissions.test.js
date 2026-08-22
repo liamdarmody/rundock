@@ -29,7 +29,7 @@ before(async () => {
 after(async () => h.shutdown());
 
 // Run the real hook binary with a tool request; resolves with its decision.
-function runHook(toolName, toolInput) {
+function runHook(toolName, toolInput, extraEnv = {}) {
   return new Promise((resolve, reject) => {
     const proc = spawn(process.execPath, [HOOK], {
       cwd: h.workspaceDir,
@@ -39,6 +39,7 @@ function runHook(toolName, toolInput) {
         RUNDOCK_PORT: String(h.port),
         RUNDOCK_WORKSPACE: h.workspaceDir,
         RUNDOCK_CONVO_ID: 'boundary-test',
+        ...extraEnv,
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -115,6 +116,55 @@ describe('workspace file-access boundary', () => {
     const pending = runHook('Read', { file_path: path.join(os.homedir(), 'somefile.txt') });
     const { msg } = await client.waitFor(m => m.type === 'control_request'
       && m.request && m.request.boundary === true, { since, label: 'read boundary card' });
+    client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: 'boundary-test', allow: false });
+    assert.strictEqual(decisionOf(await pending), 'deny');
+  });
+
+  test('CODE MODE: a shell command reaching outside cards, while one staying inside does not', async () => {
+    // The seam, replayed through the real hook process. Code mode auto-
+    // approves everything the classifier returns null for, and a shell
+    // command was never classified, so a write outside the workspace happened
+    // with no card at all while an Edit of the same file raised one.
+    //
+    // Both halves are asserted together on purpose. A test that only proved
+    // the card appears would still pass if the change carded EVERY command in
+    // code mode, which would make code mode unusable and is the obvious way
+    // to overshoot this fix.
+    const CODE = { RUNDOCK_CODE_MODE: '1' };
+
+    let since = client.messages.length;
+    const inside = await runHook('Bash', { command: 'npm test' }, CODE);
+    assert.strictEqual(decisionOf(inside), 'allow', 'code mode still runs ordinary commands without asking');
+    await h.delay(300);
+    assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0,
+      'an ordinary command raises no card in code mode');
+
+    since = client.messages.length;
+    const target = path.join(os.homedir(), 'stray-from-a-command.txt');
+    const pending = runHook('Bash', { command: `touch ${target}` }, CODE);
+    const { msg } = await client.waitFor(m => m.type === 'control_request'
+      && m.request && m.request.boundary === true, { since, label: 'shell boundary card' });
+    assert.strictEqual(msg.request.tool_name, 'Bash');
+    assert.strictEqual(msg.request.resolved_path, target, 'the card names where the command reaches');
+    client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: 'boundary-test', allow: false });
+    assert.strictEqual(decisionOf(await pending), 'deny', 'the command never runs');
+  });
+
+  test('CODE MODE: turning the sandbox off is itself the boundary question', async () => {
+    // The escape hatch, which is the only signal here that does not depend on
+    // reading command text. When the spawned runtime's sandbox denies a
+    // command it is retried with dangerouslyDisableSandbox, and the retry
+    // arrives at this hook carrying the flag. The command text is deliberately
+    // one that would NOT card on its own, so the flag alone is what is being
+    // proven.
+    const since = client.messages.length;
+    const pending = runHook('Bash',
+      { command: 'make install', dangerouslyDisableSandbox: true },
+      { RUNDOCK_CODE_MODE: '1' });
+    const { msg } = await client.waitFor(m => m.type === 'control_request'
+      && m.request && m.request.boundary === true, { since, label: 'sandbox escape card' });
+    assert.strictEqual(msg.request.grant_dir, null,
+      'no standing folder grant is offered: a sandbox escape is not about one folder');
     client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: 'boundary-test', allow: false });
     assert.strictEqual(decisionOf(await pending), 'deny');
   });

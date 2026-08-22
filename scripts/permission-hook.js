@@ -89,7 +89,95 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = []) 
   return { where: inside ? 'inside' : 'outside', resolvedPath, grantDir };
 }
 
-module.exports = { isProtectedClaudeEdit, isMcpReadTool, classifyFileAccess };
+// The shell-command half of the same boundary.
+//
+// classifyFileAccess above covers the seven FILE tools. A shell command is
+// none of them, so it returned null, and at the code-mode branch in main()
+// null means auto-approve. The result was that in the mode where coding
+// agents run, a command writing to the home directory raised NO card, while
+// an Edit of the same file did. The comment that used to sit above
+// FILE_TOOL_PATH_FIELD said Bash "is already carded on every call": true in
+// knowledge mode, false in code mode, and it is code mode where this matters.
+//
+// The seam is SHELL COMMANDS, not Bash. On Windows the same commands run
+// through the PowerShell tool (registered as its own matcher by
+// lib/workspace/scaffold.js), and it was equally unclassified.
+const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
+
+// TWO SIGNALS, AND THEY ARE NOT EQUALLY GOOD. Only the first is a guarantee.
+//
+// 1. dangerouslyDisableSandbox. When the spawned runtime's command sandbox is
+//    on, a command it denies is retried with this flag, and the retry arrives
+//    here. The operating system already decided, at syscall time, that the
+//    command reached outside; no text was read to establish it. Measured
+//    against the CLI on 2026-08-22 rather than assumed.
+//
+// 2. A path in the command text that resolves outside. Deciding what a shell
+//    command writes by reading it is undecidable, so this is an ESCALATION
+//    HEURISTIC and never a containment guarantee. It exists because the
+//    sandbox does not cover every platform this product ships on, and a
+//    partial answer beats silence there. What actually holds the line is
+//    signal 1, and where signal 1 is unavailable the seam is stated in the
+//    product copy instead of papered over here.
+//
+// WHY THIS NEVER RETURNS 'inside'. main() allows an 'inside' classification
+// instantly with no server round-trip. Returning 'inside' for an ordinary
+// command would therefore delete the Bash card knowledge mode shows today.
+// A crossing is reported; everything else returns null and keeps whatever
+// card it already had.
+function shellPathTokens(command) {
+  const out = [];
+  const rest = String(command)
+    // Quoted segments are single tokens: a path with a space in it is one
+    // path, and splitting it on whitespace would resolve two wrong ones.
+    .replace(/'([^']*)'|"([^"]*)"/g, (m, a, b) => { out.push(a !== undefined ? a : b); return ' '; });
+  for (const t of rest.split(/[\s;|&<>()`]+/)) if (t) out.push(t);
+  return out;
+}
+
+function shellCrossing(command, workspaceRoot, roots) {
+  for (const raw of shellPathTokens(command)) {
+    let t = raw;
+    if (t === '~' || t.startsWith('~/')) t = os.homedir() + t.slice(1);
+    else if (t === '$HOME' || t.startsWith('$HOME/')) t = os.homedir() + t.slice(5);
+    else if (t === '${HOME}' || t.startsWith('${HOME}/')) t = os.homedir() + t.slice(7);
+    // Skip tokens that could not cross anyway: anything without a leading
+    // slash and without a `..` segment.
+    //
+    // THIS IS A FILTER, NOT A GUARD, and the difference is recorded because
+    // both lines that used to sit here read like guards. An explicit
+    // `includes('://')` URL test was deleted when mutating it turned no test
+    // red, and mutating THIS line turns none red either. Neither can: a
+    // relative token resolves against the workspace root, so it lands inside
+    // whatever it looks like, URL or Windows path or compiler flag. What
+    // decides a crossing is the resolve base below and nothing here. Left in
+    // for cost and legibility, labelled so it is never credited with safety.
+    else if (!t.startsWith('/') && !/(^|\/)\.\.(\/|$)/.test(t)) continue;
+    const resolved = path.resolve(workspaceRoot, t);
+    const under = (root) => resolved === root || resolved.startsWith(root + path.sep);
+    if (!roots.some(under)) return resolved;
+  }
+  return null;
+}
+
+function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = []) {
+  if (!SHELL_TOOLS.has(toolName)) return null;
+  const ti = toolInput || {};
+  // Signal 1. No grant folder is offered: a sandbox escape is not about one
+  // folder, so "always allow this folder" would remember nothing and the
+  // button would be a lie.
+  if (ti.dangerouslyDisableSandbox === true) {
+    return { where: 'outside', escape: true, resolvedPath: null, grantDir: null };
+  }
+  // Signal 2.
+  if (typeof ti.command !== 'string' || !ti.command) return null;
+  const roots = [path.resolve(workspaceRoot), ...extraDirs.map(d => path.resolve(d))];
+  const resolvedPath = shellCrossing(ti.command, workspaceRoot, roots);
+  if (!resolvedPath) return null;
+  return { where: 'outside', escape: false, resolvedPath, grantDir: path.dirname(resolvedPath) };
+}
+
+module.exports = { isProtectedClaudeEdit, isMcpReadTool, classifyFileAccess, classifyShellAccess };
 
 if (require.main === module) main();
 function main() {
@@ -116,9 +204,15 @@ process.stdin.on('end', () => {
   // workspace, it does not extend the workspace to the whole machine.
   const wsRoot = process.env.RUNDOCK_WORKSPACE || process.cwd();
   const extraDirs = (process.env.RUNDOCK_EXTRA_DIRS || '').split(path.delimiter).filter(Boolean);
-  const access = (typeof data.tool_name === 'string' && !isProtectedClaudeEdit(data.tool_name, data.tool_input))
+  // File tools and shell commands are classified by the same boundary and
+  // reach the same card. classifyShellAccess only ever answers 'outside' or
+  // null, so an ordinary command keeps whatever card it already had: the
+  // instant-allow branch below stays reachable only by file tools.
+  const classified = (typeof data.tool_name === 'string' && !isProtectedClaudeEdit(data.tool_name, data.tool_input))
     ? classifyFileAccess(data.tool_name, data.tool_input, wsRoot, extraDirs)
+      || classifyShellAccess(data.tool_name, data.tool_input, wsRoot, extraDirs)
     : null;
+  const access = classified;
   if (access && access.where === 'inside') {
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: {
@@ -187,7 +281,12 @@ process.stdin.on('end', () => {
     session_id: data.session_id,
     conversation_id: convoId,
     ...(access && access.where === 'outside'
-      ? { boundary: true, resolved_path: access.resolvedPath, grant_dir: access.grantDir }
+      ? {
+          boundary: true,
+          resolved_path: access.resolvedPath || null,
+          grant_dir: access.grantDir || null,
+          ...(access.escape ? { sandbox_escape: true } : {})
+        }
       : {})
   });
 
