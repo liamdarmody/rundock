@@ -100,12 +100,15 @@ function readGrandchildren() {
   return fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
 }
 
-// One line per --print run that finished writing, carrying how many bytes of
-// stdout really left the child. A test about output volume asserts on this
-// rather than on the size of the fixture it wrote: a child that queued 200 KB
-// and got 2 KB out is the case worth telling apart, and it is invisible from
-// the scenario file. A run still blocked on a full pipe has written no line
-// here at all, which is the same absence read a different way.
+// One line per --print run that finished writing: which agent, its pid, and
+// how many bytes really left it on stdout and on stderr.
+//
+// The counts are of output the child got OUT, not output it handed to a
+// stream, because the line is written once both descriptors have flushed. So
+// the absence of a line is a fact too: a run still blocked on a full pipe, or
+// one killed before it drained, has written nothing here. Whatever a test
+// wants to know about what a run emitted, this is where the child says it,
+// rather than the test inferring it from the size of the fixture it wrote.
 function readStubOutputs() {
   const file = path.join(workspaceDir, 'stub-output.jsonl');
   if (!fs.existsSync(file)) return [];
