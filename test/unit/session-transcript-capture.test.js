@@ -153,6 +153,36 @@ describe('the declarations the reader owns', () => {
     assert.deepStrictEqual(checkDeclarationsAgree(), [], 'and the complaint goes away when the tool does');
   });
 
+  // The other half of the enforcement, and the half that decides whether the
+  // partition means anything: a tool CLAIMED as witnessed and missing from
+  // the capture. Without this the harness is satisfied by naming a tool and
+  // never exercising it, which is the silent narrowing the whole arrangement
+  // exists to prevent. Driven by taking the real capture and removing one
+  // witnessed tool from it.
+  test('a witnessed tool missing from the capture is complained about by name', () => {
+    const notebookIds = new Set();
+    const stripped = captured.lines.filter(line => {
+      const entry = JSON.parse(line);
+      const content = entry.message && entry.message.content;
+      if (!Array.isArray(content)) return true;
+      if (content.some(b => b.type === 'tool_use' && b.name === 'NotebookEdit' && notebookIds.add(b.id))) return false;
+      return !content.some(b => b.type === 'tool_result' && notebookIds.has(b.tool_use_id));
+    });
+    assert.ok(stripped.length < captured.lines.length, 'the capture really did contain the tool that was removed');
+
+    const failures = checkTranscriptInvariants(stripped);
+    const named = failures.filter(f => f.includes('NotebookEdit'));
+    assert.ok(named.length > 0, 'the harness names the witnessed tool the capture no longer exercises');
+    // The SENTENCE, not just the name. A tool with no call at all and a tool
+    // whose outcome shape has moved are different problems with different
+    // fixes, and told the wrong one somebody goes looking for a broken result
+    // shape that does not exist.
+    assert.ok(named.some(f => /contains no NotebookEdit call/.test(f)),
+      'and says the capture no longer contains the call, rather than blaming its outcome');
+    assert.deepStrictEqual(checkTranscriptInvariants(captured.lines), [],
+      'and says nothing about the capture that does exercise it');
+  });
+
   // A fourth copy, which the reader's own comment appeals to. types.d.ts
   // declares the content-block union the reader claims to be following, and a
   // reader that quietly knew a different set would make that comment a

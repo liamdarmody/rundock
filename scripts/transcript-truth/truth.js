@@ -133,7 +133,16 @@ function checkTranscriptInvariants(lines) {
   // silent narrowing it exists to prevent.
   for (const tool of WITNESSED_TOOLS) {
     const used = uses.filter(u => u.block.name === tool).map(u => u.block.id);
-    say(used.length > 0, `${tool} is claimed as witnessed and the capture contains no ${tool} call`);
+    // THE TWO ABSENCES ARE DIFFERENT PROBLEMS AND GET DIFFERENT SENTENCES, so
+    // the complaint sends the reader to the right place. A tool with no call
+    // at all means the capture prompt no longer exercises it; a tool called
+    // and never answered means its result shape has moved. Told the second
+    // when the first is true, somebody goes looking for a broken outcome and
+    // finds nothing, because there was no call to answer.
+    if (used.length === 0) {
+      failures.push(`${tool} is claimed as witnessed and the capture contains no ${tool} call: extend the capture prompt or stop claiming it`);
+      continue;
+    }
     const answered = results.filter(r => used.includes(r.block.tool_use_id) && r.entry.toolUseResult);
     say(answered.length > 0, `${tool} appears in the capture with no outcome, so its result shape is unwitnessed`);
     // The field the OUTCOME names the file in, per tool, because they differ:
