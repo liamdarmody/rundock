@@ -16,7 +16,8 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { JSDOM } = require('jsdom');
-const { makeRenderer, attachWikilinkHandler, attachCodeCopyHandler } = require('../helpers/markdown-harness.js');
+const { makeRenderer, loadBrowserMarked, attachWikilinkHandler, attachCodeCopyHandler } = require('../helpers/markdown-harness.js');
+const { createMarkdownRenderer } = require('../../public/markdown-render.js');
 
 const FIXTURES = path.join(__dirname, '..', 'fixtures');
 const BENIGN_MD = fs.readFileSync(path.join(FIXTURES, 'markdown-benign.md'), 'utf8');
@@ -284,6 +285,15 @@ describe('renderMarkdown: a relative link cannot rewrite its own handler', () =>
     }
   });
 
+  test('a link or image title still reaches the attribute, escaped', () => {
+    // This renderer writes these attributes itself now, so the title it used to
+    // get from the parser for free is its own responsibility.
+    const d = new JSDOM(`<div id="root">${render('[x](https://example.com "a \\"quoted\\" title")\n\n![y](https://example.com/i.png "t")')}</div>`).window.document;
+    assert.strictEqual(d.querySelector('a').getAttribute('title'), 'a "quoted" title');
+    assert.strictEqual(d.querySelector('img').getAttribute('title'), 't');
+    assert.strictEqual(d.querySelector('img').getAttribute('alt'), 'y');
+  });
+
   test('links the rewrite never claimed are still ordinary links', () => {
     for (const [src, href] of [['[a](https://example.com/x.md)', 'https://example.com/x.md'],
       ['[a](mailto:x@example.com)', 'mailto:x@example.com'], ['[a](page.html)', 'page.html']]) {
@@ -444,5 +454,33 @@ describe('renderMarkdown: the copy button is a listener, not an attribute', () =
     assert.ok(button, 'the button is rendered');
     button.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
     assert.deepStrictEqual(copied, ['const x = 1;\nconsole.log(x);']);
+  });
+});
+
+describe('renderMarkdown: the fallbacks still behave', () => {
+  test('a code block renders escaped text when language resolution throws', () => {
+    // The catch around resolveCodeLanguage. Highlighting is a nicety and the
+    // block still has to render, with its content escaped rather than raw.
+    const { renderMarkdown: renderWithBrokenHighlighter } = createMarkdownRenderer({
+      marked: loadBrowserMarked(),
+      resolveCodeLanguage: () => { throw new Error('highlighter unavailable'); },
+    });
+    const html = renderWithBrokenHighlighter('```js\n<img src=x onerror=alert(1)>\n```\n', {});
+    const root = new JSDOM(`<div id="root">${html}</div>`).window.document.getElementById('root');
+    assert.strictEqual(root.querySelectorAll('img').length, 0, 'the fallback escapes too');
+    assert.strictEqual(root.querySelector('pre code').textContent, '<img src=x onerror=alert(1)>');
+    assert.strictEqual(root.querySelector('.code-lang').textContent, 'js');
+  });
+
+  test('copying without a clipboard api does not throw', () => {
+    // Rundock served over plain http from a VPS has no navigator.clipboard, and
+    // the textarea fallback needs execCommand, which not every context has
+    // either. Failing to copy is acceptable; throwing into the click handler is
+    // not.
+    const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost/' });
+    dom.window.document.getElementById('root').innerHTML = render('```\nplain\n```\n');
+    attachCodeCopyHandler(dom.window.document);
+    const button = dom.window.document.querySelector('.copy-code-btn');
+    assert.doesNotThrow(() => button.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })));
   });
 });
