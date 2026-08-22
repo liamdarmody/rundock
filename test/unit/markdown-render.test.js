@@ -207,3 +207,67 @@ describe('renderMarkdown: a callout title is text, not markup', () => {
     assert.ok(d.querySelector('.callout.callout-warning'), 'type is lowercased into the class');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Injection point 4: relative-link rewriting.
+//
+// A link whose href ended in .md/.yaml/.yml/.json/.txt was rewritten, AFTER
+// marked had produced HTML, into an inline handler:
+//   `onclick="openWikilink('${href.replace(/'/g, "\\'")}')"`
+// The escaping is a JavaScript rule applied to a value going into an HTML
+// attribute, and an HTML attribute is not a JavaScript string until the browser
+// has finished parsing it: character references are decoded FIRST, and the
+// replace never sees them. Recorded payload, run against the pre-card renderer:
+//   [a](<&#39;&#41;;alert&#40;1&#41;;//.md>)
+//     -> onclick="openWikilink('&#39;&#41;;alert&#40;1&#41;;//.md')"
+// which the parser decodes to
+//        openWikilink('');alert(1);//.md')
+// and the page runs alert(1) on click. Backslashes cannot do it, because marked
+// percent-encodes them in an href; character references walk straight past.
+// ---------------------------------------------------------------------------
+describe('renderMarkdown: a relative link cannot rewrite its own handler', () => {
+  const handlerAttrs = (html) => {
+    const d = new JSDOM(`<div id="root">${html}</div>`).window.document;
+    return Array.from(d.querySelectorAll('*')).flatMap((el) => Array.from(el.attributes))
+      .filter((a) => a.name.startsWith('on'));
+  };
+
+  test('AC-5: character references in a filename cannot become code', () => {
+    const html = render('[a](<&#39;&#41;;alert&#40;1&#41;;//.md>)');
+    assert.deepStrictEqual(handlerAttrs(html).map((a) => a.name), [], html);
+  });
+
+  test('AC-5: a quote or a backslash in a filename cannot alter the handler', () => {
+    for (const src of ["[a](<x'.md>)", '[a](<x\\\\.md>)', '[a](<x\\\\\');alert(1);//.md>)']) {
+      assert.deepStrictEqual(handlerAttrs(render(src)).map((a) => a.name), [], src);
+    }
+  });
+
+  test('AC-10: a relative link still opens the same target', () => {
+    // The values the old rewrite passed to openWikilink, for the hrefs it
+    // handled. Left column is the markdown; right is what must still arrive.
+    const cases = [['[a](notes/Plan.md)', 'notes/Plan.md'], ['[a](config.yaml)', 'config.yaml'],
+      ['[a](data.json)', 'data.json'], ['[a](log.txt)', 'log.txt'], ['[a](a%20b.md)', 'a%20b.md']];
+    for (const [src, expected] of cases) {
+      const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost/' });
+      const doc = dom.window.document;
+      doc.getElementById('root').innerHTML = render(src);
+      const seen = [];
+      attachWikilinkHandler(doc, (value) => seen.push(value));
+      const anchor = doc.querySelector('a.wikilink');
+      assert.ok(anchor, `no wikilink anchor for: ${src}`);
+      anchor.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+      assert.deepStrictEqual(seen, [expected], src);
+    }
+  });
+
+  test('links the rewrite never claimed are still ordinary links', () => {
+    for (const [src, href] of [['[a](https://example.com/x.md)', 'https://example.com/x.md'],
+      ['[a](mailto:x@example.com)', 'mailto:x@example.com'], ['[a](page.html)', 'page.html']]) {
+      const d = new JSDOM(`<div id="root">${render(src)}</div>`).window.document;
+      const anchor = d.querySelector('a');
+      assert.strictEqual(anchor.getAttribute('href'), href, src);
+      assert.strictEqual(anchor.getAttribute('class'), null, src);
+    }
+  });
+});

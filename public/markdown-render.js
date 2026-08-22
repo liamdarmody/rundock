@@ -78,6 +78,10 @@
 
     const instance = new markedNs.Marked({ gfm: true, breaks: true });
 
+    // Hrefs that name a file in the workspace rather than a place on the web.
+    // Same extensions and same exclusions the post-processing regex used.
+    const WORKSPACE_FILE_HREF = /^(?!https?:\/\/|mailto:|obsidian:\/\/).*\.(?:md|yaml|yml|json|txt)$/;
+
     // Whether the callout tokenizer is live for the current render. The option
     // is per-call and an extension is per-instance, so the flag bridges them.
     // Safe because rendering is synchronous: nothing can interleave between
@@ -181,6 +185,31 @@
         },
       }],
       renderer: {
+        // Relative links to workspace files open in the app instead of
+        // navigating, so they are rewritten into wikilinks.
+        //
+        // This used to be a regex over the FINISHED HTML that pulled the href
+        // back out of the attribute marked had just written and pasted it into
+        // an inline handler, escaping it with `href.replace(/'/g, "\\'")`.
+        // That is a JavaScript rule applied to a value going into an HTML
+        // attribute, and the two languages are not layered the way the escape
+        // assumes: the browser decodes character references in the attribute
+        // BEFORE any of it is JavaScript, so `&#39;` arrives as a quote the
+        // replace never saw. `[a](<&#39;&#41;;alert&#40;1&#41;;//.md>)` was
+        // enough to run arbitrary code on click. Backslashes were not, because
+        // marked percent-encodes those in an href.
+        //
+        // Deciding at the link token removes both halves of the problem: there
+        // is no HTML to re-parse, and the href goes into a data attribute
+        // rather than a handler, so no JavaScript position exists to escape
+        // for. Which hrefs are claimed is unchanged, and so is the value
+        // handed to the opener.
+        link(token) {
+          const href = token.href;
+          if (!WORKSPACE_FILE_HREF.test(href)) return false; // marked's own renderer
+          return `<a class="wikilink" data-wikilink="${escapeAttr(href)}">`
+            + `${this.parser.parseInline(token.tokens)}</a>`;
+        },
         // Syntax-highlight fenced code blocks (highlight.js, vendored locally)
         // and wrap them with a header bar showing the language label and a copy
         // button. Originating contributions: copy button (#6/#7) and syntax
@@ -262,10 +291,8 @@
       // safe.
       html = html.replace(/<table>([\s\S]*?)<\/table>/g, '<div class="md-table-wrap"><table>$1</table></div>');
 
-      // Convert relative file links to in-app wikilinks
-      // Matches href values that end in .md, .yaml, .yml, .json, .txt and don't start with http/mailto/obsidian
-      html = html.replace(/<a href="(?!https?:\/\/|mailto:|obsidian:\/\/)([^"]*\.(?:md|yaml|yml|json|txt))"([^>]*)>(.*?)<\/a>/g,
-        (match, href, attrs, text) => `<a class="wikilink" onclick="openWikilink('${href.replace(/'/g, "\\'")}')">${text}</a>`);
+      // Relative file links become wikilinks in the link renderer now, not by
+      // rewriting the finished HTML. See WORKSPACE_FILE_HREF above.
 
       // Checkboxes: add accent colour
       html = html.replace(/<input.*?checked.*?disabled.*?>/g, '<input type="checkbox" checked disabled style="margin-right:8px;accent-color:var(--accent)">');
