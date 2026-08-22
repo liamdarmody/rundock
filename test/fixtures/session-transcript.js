@@ -87,6 +87,56 @@ function fileTool(sessionId, { tool = 'Write', file, outcome = 'create', at = '2
   return { ask, answered, id };
 }
 
+/**
+ * A run handing work to a subagent, as the PARENT's transcript records it.
+ *
+ * The parent holds the ask and the summary that came back and nothing else:
+ * the subagent's own tool calls live in a separate file. Captured from a real
+ * delegation (2.1.240), where the parent's outcome for an Agent call is a
+ * plain string rather than the object a file tool returns.
+ */
+function delegate(sessionId, { at = '2026-08-22T19:15:20.000Z', prompt: task = 'write the file', type = 'general-purpose' } = {}) {
+  const id = toolId();
+  return line({
+    type: 'assistant', sessionId, timestamp: at,
+    message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Agent', input: { description: 'delegated step', prompt: task, subagent_type: type, run_in_background: false } }] },
+  }) + line({
+    type: 'user', sessionId, timestamp: at,
+    toolUseResult: 'the subagent reported back',
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'the subagent reported back' }] },
+  });
+}
+
+/**
+ * A line from a SUBAGENT's own transcript, which is a different file.
+ *
+ * WHAT MAKES IT DIFFERENT, and it is the whole reason a delegated run cannot
+ * report a list: the outcome entry carries NO `toolUseResult` at all. Where
+ * the session's own transcript answers a write with an object naming the path
+ * and whether the file was created or overwritten, a subagent's answers with
+ * an English sentence inside the result block and nothing else. Captured from
+ * a real delegation on 2.1.240, not modelled from the parent's shape.
+ */
+function sidechainWrite(sessionId, { file, tool = 'Write', at = '2026-08-22T19:15:21.000Z' } = {}) {
+  const id = toolId();
+  const inputKey = FILE_TOOLS[tool].input;
+  return line({
+    type: 'assistant', sessionId, timestamp: at, isSidechain: true, agentId: 'agent_fixture',
+    message: { role: 'assistant', content: [{ type: 'tool_use', id, name: tool, input: { [inputKey]: file, content: 'body' } }] },
+  }) + line({
+    type: 'user', sessionId, timestamp: at, isSidechain: true, agentId: 'agent_fixture',
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `File created successfully at: ${file}` }] },
+  });
+}
+
+/** A subagent that only ever talked, which changes nothing anywhere. */
+function sidechainSay(sessionId, text, at = '2026-08-22T19:15:22.000Z') {
+  return line({
+    type: 'assistant', sessionId, timestamp: at, isSidechain: true, agentId: 'agent_fixture',
+    message: { role: 'assistant', content: [{ type: 'text', text }] },
+  });
+}
+
 /** An ask with no answer yet: the shape a transcript has WHILE a tool runs. */
 function unanswered(sessionId, opts) {
   return fileTool(sessionId, opts).ask;
@@ -98,4 +148,4 @@ function completed(sessionId, opts) {
   return ask + answered;
 }
 
-module.exports = { prompt, say, fileTool, unanswered, completed };
+module.exports = { prompt, say, fileTool, unanswered, completed, delegate, sidechainWrite, sidechainSay };

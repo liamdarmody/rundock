@@ -256,6 +256,78 @@ describe('the files a run changed', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Work the run handed to somebody else
+// ---------------------------------------------------------------------------
+
+/**
+ * A subagent's transcript, where the runtime really files one: under a
+ * directory named for the session, beside the session's own transcript.
+ */
+function writeSidechain(sessionId, lines, projectDir = '-w-one', name = 'agent-fixture.jsonl') {
+  const dir = path.join(home, '.claude', 'projects', projectDir, sessionId, 'subagents');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, name);
+  fs.writeFileSync(file, lines.join(''));
+  return file;
+}
+
+describe('a run that handed work to a subagent', () => {
+  // AC-4 and AC-7, settled by capture rather than by argument. A delegated
+  // subagent gets a transcript of its OWN, and its outcome entries carry no
+  // toolUseResult: the path and whether the file was created or overwritten
+  // are only in an English sentence. So the reader can see THAT a subagent
+  // asked to write and cannot say what came of it, which is not a list it may
+  // publish beside the parent's as though it were complete.
+  test('a subagent that asked to change a file makes the run\'s list unknown', () => {
+    const sid = 'd1000000-0000-4000-8000-000000000001';
+    writeTranscript(sid, [fx.prompt(sid, 'go'), fx.completed(sid, { file: '/w/parent.md' }), fx.delegate(sid)]);
+    writeSidechain(sid, [fx.sidechainWrite(sid, { file: '/w/by-the-subagent.md' })]);
+
+    const result = readSessionTranscript(sid);
+    assert.strictEqual(result.status, 'unknown', 'the parent\'s own writes are not the whole of what the run changed');
+    assert.strictEqual(result.reason, 'delegated', 'and it names where the rest of the answer went');
+    assert.strictEqual(result.files, null,
+      'no list: the parent\'s file alone would read as everything the run touched');
+    assert.ok(result.activity, 'and the run can still say what it was last seen doing');
+  });
+
+  // The other half, so 'delegated' is a finding rather than a blanket refusal
+  // to answer whenever an Agent appears. A subagent that changed nothing
+  // leaves the parent's list complete, and a complete list is the answer.
+  test('a subagent that changed nothing leaves the parent\'s list intact', () => {
+    const sid = 'd1000000-0000-4000-8000-000000000002';
+    writeTranscript(sid, [fx.prompt(sid, 'go'), fx.completed(sid, { file: '/w/parent.md' }), fx.delegate(sid)]);
+    writeSidechain(sid, [fx.sidechainSay(sid, 'I read three files and reported back.')]);
+
+    const result = readSessionTranscript(sid);
+    assert.strictEqual(result.status, 'known', 'nothing was changed anywhere this reader cannot see');
+    assert.deepStrictEqual(paths(result), ['/w/parent.md']);
+  });
+
+  // The delegation whose transcript is not where this reader looks. Reached by
+  // a runtime that files it elsewhere, and by a subagent still running. Either
+  // way the parent asked somebody else to do work and this reader has not seen
+  // what came of it, so the list is not one it can vouch for.
+  test('a delegation with no subagent transcript to be found is unknown too', () => {
+    const sid = 'd1000000-0000-4000-8000-000000000003';
+    writeTranscript(sid, [fx.prompt(sid, 'go'), fx.completed(sid, { file: '/w/parent.md' }), fx.delegate(sid)]);
+
+    const result = readSessionTranscript(sid);
+    assert.strictEqual(result.status, 'unknown', 'an unanswered delegation is not a run that only did what the parent did');
+    assert.strictEqual(result.reason, 'delegated');
+    assert.strictEqual(result.files, null);
+  });
+
+  // A run that delegated nothing must be unaffected, or the guard above is a
+  // rule that fires on the ordinary case.
+  test('a run that delegated nothing still reports its own files', () => {
+    const sid = 'd1000000-0000-4000-8000-000000000004';
+    writeTranscript(sid, [fx.prompt(sid, 'go'), fx.completed(sid, { file: '/w/alone.md' })]);
+    assert.deepStrictEqual(paths(readSessionTranscript(sid)), ['/w/alone.md']);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Progress while it runs
 // ---------------------------------------------------------------------------
 
