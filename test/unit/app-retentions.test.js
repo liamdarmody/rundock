@@ -22,7 +22,6 @@ const path = require('node:path');
 // it. Adding an entry here is amending the spec's retention list, so it should
 // be as deliberate as that: a named reason, written down at the time.
 const ALLOWED = {
-  copyCode: 'retention 1: markdown rendering',
   showWorkspacePicker: 'retention 2: workspace picker',
   renderUpdateStrip: 'retention 3: update strip',
   EFFECT_EXECUTORS: 'retention 4: effect executors',

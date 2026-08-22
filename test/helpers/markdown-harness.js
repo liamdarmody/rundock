@@ -38,6 +38,6 @@ function makeRenderer() {
   });
 }
 
-const { attachWikilinkHandler } = require(path.join(ROOT, 'public', 'markdown-render.js'));
+const { attachWikilinkHandler, attachCodeCopyHandler } = require(path.join(ROOT, 'public', 'markdown-render.js'));
 
-module.exports = { makeRenderer, loadBrowserMarked, attachWikilinkHandler };
+module.exports = { makeRenderer, loadBrowserMarked, attachWikilinkHandler, attachCodeCopyHandler };

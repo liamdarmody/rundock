@@ -14,7 +14,8 @@
  * 9. CHAT & MESSAGING ............... moved to views/chat.js (agent tick, permission stores stay)
  * 10. VIEWS & NAVIGATION ............ switchNav, showView, goHome, toggleTheme
  * 11. FILE TREE & EDITOR ............ moved to views/files.js (tree cache, icon tables, menu listeners stay)
- * 12. MARKDOWN RENDERING ............ renderMarkdown, processCalloutsSrc
+ * 12. MARKDOWN RENDERING ............ moved to markdown-render.js (the wiring,
+ *                                     the theme swap and the aliases stay)
  * 13. SKILLS ........................ moved to views/skills.js
  * 14. SETTINGS ...................... moved to views/settings.js
  * 15. WORKSPACE PICKER .............. handleWorkspaces, showWorkspacePicker
@@ -1095,32 +1096,6 @@ const RundockRenderer = RundockMarkdown.createMarkdownRenderer({
   emptyOrderedListText: window.emptyOrderedListText,
 });
 
-const COPY_ICON = RundockMarkdown.COPY_ICON;
-const CHECK_ICON = RundockMarkdown.CHECK_ICON;
-
-
-function copyCode(btn) {
-  const codeEl = btn.closest('.code-block-wrapper')?.querySelector('code');
-  if (!codeEl) return;
-  const text = codeEl.textContent;
-  const done = () => {
-    btn.innerHTML = CHECK_ICON;
-    btn.classList.add('copied');
-    setTimeout(() => { btn.innerHTML = COPY_ICON; btn.classList.remove('copied'); }, 2000);
-  };
-  // navigator.clipboard is unavailable in non-secure contexts (e.g. VPS over http).
-  if (navigator.clipboard?.writeText) {
-    navigator.clipboard.writeText(text).then(done).catch(() => {});
-  } else {
-    try {
-      const ta = document.createElement('textarea');
-      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-      document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
-      done();
-    } catch (e) { /* copy unavailable: no-op */ }
-  }
-}
-
 // Swap the highlight.js theme stylesheet to match the app theme.
 function applyHljsTheme(isLight) {
   const dark = document.getElementById('hljs-dark');
@@ -1414,6 +1389,10 @@ initFindBar();
 // code. Registered once, here, because the markup it serves is rewritten with
 // innerHTML on every streaming frame in chat and on every file preview.
 RundockMarkdown.attachWikilinkHandler(document, (target) => openWikilink(target));
+
+// Same move for the copy button on a rendered code block: the renderer wrote
+// an onclick, and now one listener serves every block it will ever render.
+RundockMarkdown.attachCodeCopyHandler(document);
 
 // ===== 18. UNIVERSAL SEARCH PALETTE (Cmd+K / Ctrl+K) =====
 // The palette itself moved to views/palette.js. What stays here, and why:

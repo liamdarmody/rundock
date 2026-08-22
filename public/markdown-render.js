@@ -391,7 +391,7 @@
           return (
             `<div class="code-block-wrapper">` +
             `<div class="code-block-header">${langLabel}` +
-            `<button class="copy-code-btn" onclick="copyCode(this)" title="Copy code">${COPY_ICON}</button>` +
+            `<button class="copy-code-btn" title="Copy code">${COPY_ICON}</button>` +
             `</div><pre><code class="hljs">${highlighted}</code></pre></div>`
           );
         },
@@ -456,6 +456,58 @@
   }
 
   /**
+   * Copy a code block's text, from its button.
+   *
+   * Moved here with the markup it belongs to, and reached by delegation rather
+   * than by the `onclick="copyCode(this)"` the renderer used to write. The
+   * attribute was never an injection point, since nothing from the document
+   * reached it, but a Content-Security-Policy worth having forbids inline
+   * handlers and every surviving one is a reason it cannot be turned on.
+   *
+   * Everything is taken from the button's own document, so the same code works
+   * in the app and under a test DOM.
+   *
+   * @param {Element} button
+   */
+  function copyCode(button) {
+    const doc = button.ownerDocument;
+    const view = doc.defaultView;
+    const codeEl = button.closest('.code-block-wrapper')
+      && button.closest('.code-block-wrapper').querySelector('code');
+    if (!codeEl) return;
+    const text = codeEl.textContent;
+    const done = () => {
+      button.innerHTML = CHECK_ICON;
+      button.classList.add('copied');
+      view.setTimeout(() => { button.innerHTML = COPY_ICON; button.classList.remove('copied'); }, 2000);
+    };
+    // navigator.clipboard is unavailable in non-secure contexts (e.g. VPS over http).
+    if (view.navigator.clipboard && view.navigator.clipboard.writeText) {
+      view.navigator.clipboard.writeText(text).then(done).catch(() => {});
+    } else {
+      try {
+        const ta = doc.createElement('textarea');
+        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        doc.body.appendChild(ta); ta.select(); doc.execCommand('copy'); ta.remove();
+        done();
+      } catch (e) { /* copy unavailable: no-op */ }
+    }
+  }
+
+  /**
+   * Route clicks on a rendered code block's copy button to copyCode.
+   *
+   * @param {Document} doc
+   */
+  function attachCodeCopyHandler(doc) {
+    doc.addEventListener('click', (event) => {
+      const target = event.target;
+      const button = target && target.closest ? target.closest('.copy-code-btn') : null;
+      if (button) copyCode(button);
+    });
+  }
+
+  /**
    * Route clicks on rendered wikilinks to the app's opener.
    *
    * The anchors used to carry `onclick="openWikilink('...')"`, which meant the
@@ -485,6 +537,7 @@
   return {
     createMarkdownRenderer,
     attachWikilinkHandler,
+    attachCodeCopyHandler,
     escapeHtml,
     escapeAttr,
     COPY_ICON,

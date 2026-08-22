@@ -16,7 +16,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { JSDOM } = require('jsdom');
-const { makeRenderer, attachWikilinkHandler } = require('../helpers/markdown-harness.js');
+const { makeRenderer, attachWikilinkHandler, attachCodeCopyHandler } = require('../helpers/markdown-harness.js');
 
 const FIXTURES = path.join(__dirname, '..', 'fixtures');
 const BENIGN_MD = fs.readFileSync(path.join(FIXTURES, 'markdown-benign.md'), 'utf8');
@@ -386,5 +386,40 @@ describe('renderMarkdown: markdown cannot carry HTML into the page', () => {
     // would have printed those markers into the conversation.
     assert.strictEqual(render('<!-- RUNDOCK:COMPLETE -->'), '');
     assert.strictEqual(doc(render('a <!-- x --> b')).textContent.trim(), 'a  b');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The other inline handler this renderer wrote. Not an injection point: the
+// attribute is a constant and nothing from the document reaches it. It is here
+// because a Content-Security-Policy worth having forbids inline handlers, and
+// every one that survives is one more reason a policy cannot be turned on.
+// ---------------------------------------------------------------------------
+describe('renderMarkdown: the copy button is a listener, not an attribute', () => {
+  const mount = (html) => {
+    const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost/' });
+    dom.window.document.getElementById('root').innerHTML = html;
+    return dom;
+  };
+
+  test('AC-2: a rendered code block carries no event-handler attribute', () => {
+    const dom = mount(render('```js\nconst x = 1;\n```\n'));
+    const names = Array.from(dom.window.document.querySelectorAll('*'))
+      .flatMap((el) => Array.from(el.attributes).map((a) => a.name));
+    assert.ok(!names.some((n) => n.startsWith('on')), render('```js\nconst x = 1;\n```\n'));
+  });
+
+  test('clicking the button still copies the code block text', () => {
+    const dom = mount(render('```js\nconst x = 1;\nconsole.log(x);\n```\n'));
+    const copied = [];
+    Object.defineProperty(dom.window.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: (text) => { copied.push(text); return Promise.resolve(); } },
+    });
+    attachCodeCopyHandler(dom.window.document);
+    const button = dom.window.document.querySelector('.copy-code-btn');
+    assert.ok(button, 'the button is rendered');
+    button.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    assert.deepStrictEqual(copied, ['const x = 1;\nconsole.log(x);']);
   });
 });
