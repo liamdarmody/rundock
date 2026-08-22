@@ -78,26 +78,86 @@
 
     const instance = new markedNs.Marked({ gfm: true, breaks: true });
 
-    // Syntax-highlight fenced code blocks (highlight.js, vendored locally) and
-    // wrap them with a header bar showing the language label and a copy button.
-    // Originating contributions: copy button (#6/#7) and syntax highlighting
-    // (#10/#11) by @dougseven; isolated and hardened here (escaped language
-    // label, clipboard fallback, auto-detect size cap).
-    // Obsidian wikilinks, as a tokenizer rather than a source rewrite.
-    //
-    // They used to be a regex over the raw source that spliced an <a> tag with
-    // an inline onclick into the markdown, taking the target and the label
-    // verbatim. That put attacker text inside a JavaScript string inside an
-    // HTML attribute, two nested parsers deep, where a single quote is enough
-    // to leave both. A tokenizer has no such position: the target reaches the
-    // page only as an escaped attribute value, and the label only as tokens
-    // marked itself renders.
-    //
-    // The two patterns and their order are the originals, so which text
-    // becomes the target and which the label is unchanged, including the
-    // ragged cases ([[a|b|c]] takes `a` and `b|c`; [[a|]] takes `a|` as both).
+    // Whether the callout tokenizer is live for the current render. The option
+    // is per-call and an extension is per-instance, so the flag bridges them.
+    // Safe because rendering is synchronous: nothing can interleave between
+    // the assignment below and the parse it belongs to, and the only re-entry
+    // is a callout's own body, which renders with callouts on either way.
+    let calloutsEnabled = true;
+
     instance.use({
       extensions: [{
+        // Obsidian callouts, as a block tokenizer rather than a source rewrite.
+        //
+        // The box used to be built by string concatenation before any parser
+        // ran, with the title interpolated raw:
+        //   `<div class="callout-title">${title}</div>`
+        // The title is the rest of the `> [!type]` line, straight from the
+        // document, so `> [!note] <img src=x onerror=alert(1)>` put an image
+        // element with a handler into the page with marked not involved at any
+        // point. As a tokenizer, the title is a value the renderer escapes.
+        //
+        // The title is TEXT, deliberately, which is also what it was: the box
+        // was block-level HTML, so marked never parsed markdown inside it and
+        // `**bold**` in a title has always rendered literally. One thing that
+        // did work no longer does: a wikilink in a title was rewritten by the
+        // old source pass before the callout pass saw it, and a tokenizer has
+        // no such ordering. Titles are a label, and a label that renders
+        // exactly the characters written in it is the behaviour to want here.
+        name: 'callout',
+        level: 'block',
+        start(src) {
+          const m = /^>\s*\[!\w+\]/m.exec(src);
+          return m ? m.index : undefined;
+        },
+        tokenizer(src) {
+          if (!calloutsEnabled) return undefined;
+          const lines = src.split('\n');
+          const head = /^>\s*\[!(\w+)\]([+-])?\s*(.*)/.exec(lines[0]);
+          if (!head) return undefined;
+          const calloutType = head[1].toLowerCase();
+          const title = head[3] || calloutType.charAt(0).toUpperCase() + calloutType.slice(1);
+
+          // Content collection, unchanged from the original loop: quoted lines
+          // belong to the box, a blank line belongs to it only when the box
+          // continues after it, and a blank line before anything unquoted ends
+          // it.
+          const contentLines = [];
+          let i = 1;
+          while (i < lines.length && (lines[i].startsWith('>') || lines[i].trim() === '')) {
+            if (lines[i].trim() === '' && i + 1 < lines.length && !lines[i + 1].startsWith('>')) break;
+            contentLines.push(lines[i].replace(/^>\s?/, ''));
+            i++;
+          }
+
+          return {
+            type: 'callout',
+            raw: lines.slice(0, i).join('\n') + (i < lines.length ? '\n' : ''),
+            calloutType,
+            title,
+            tokens: this.lexer.blockTokens(contentLines.join('\n'), []),
+          };
+        },
+        renderer(token) {
+          return `<div class="callout callout-${token.calloutType}">`
+            + `<div class="callout-title">${escapeHtml(token.title)}</div>`
+            + `<div class="callout-content">${this.parser.parse(token.tokens)}</div></div>`;
+        },
+      }, {
+        // Obsidian wikilinks, as a tokenizer rather than a source rewrite.
+        //
+        // They used to be a regex over the raw source that spliced an <a> tag
+        // with an inline onclick into the markdown, taking the target and the
+        // label verbatim. That put attacker text inside a JavaScript string
+        // inside an HTML attribute, two nested parsers deep, where a single
+        // quote is enough to leave both. A tokenizer has no such position: the
+        // target reaches the page only as an escaped attribute value, and the
+        // label only as tokens marked itself renders.
+        //
+        // The two patterns and their order are the originals, so which text
+        // becomes the target and which the label is unchanged, including the
+        // ragged cases ([[a|b|c]] takes `a` and `b|c`; [[a|]] takes `a|` as
+        // both).
         name: 'wikilink',
         level: 'inline',
         start(src) { return src.indexOf('[['); },
@@ -121,6 +181,11 @@
         },
       }],
       renderer: {
+        // Syntax-highlight fenced code blocks (highlight.js, vendored locally)
+        // and wrap them with a header bar showing the language label and a copy
+        // button. Originating contributions: copy button (#6/#7) and syntax
+        // highlighting (#10/#11) by @dougseven; isolated and hardened here
+        // (escaped language label, clipboard fallback, auto-detect size cap).
         code({ text, lang }) {
           let highlighted = '';
           let displayLang = '';
@@ -181,10 +246,9 @@
       // Tags: #tag (but not inside code blocks or headings)
       src = src.replace(/(?:^|\s)#([a-zA-Z][a-zA-Z0-9_/-]*)/g, ' <span class="md-tag">#$1</span>');
 
-      // Callouts: process before marked
-      if (options.callouts !== false) {
-        src = processCalloutsSrc(src);
-      }
+      // Callouts are a marked extension now, not a source rewrite. The flag
+      // it reads is set here so the per-call option still means what it did.
+      calloutsEnabled = options.callouts !== false;
 
       // Render with marked
       let html = instance.parse(src);
@@ -208,40 +272,6 @@
       html = html.replace(/<input.*?disabled.*?type="checkbox".*?>/g, '<input type="checkbox" disabled style="margin-right:8px">');
 
       return html;
-    }
-
-    function processCalloutsSrc(src) {
-      // Process Obsidian callouts in raw source before marked
-      // Callout: > [!type] title followed by > content
-      const lines = src.split('\n');
-      const result = [];
-      let i = 0;
-
-      while (i < lines.length) {
-        const calloutMatch = lines[i].match(/^>\s*\[!(\w+)\]([+-])?\s*(.*)/);
-        if (calloutMatch) {
-          const type = calloutMatch[1].toLowerCase();
-          const title = calloutMatch[3] || type.charAt(0).toUpperCase() + type.slice(1);
-          const contentLines = [];
-          i++;
-
-          // Collect callout content (lines starting with >)
-          while (i < lines.length && (lines[i].startsWith('>') || lines[i].trim() === '')) {
-            if (lines[i].trim() === '' && i + 1 < lines.length && !lines[i + 1].startsWith('>')) break;
-            let line = lines[i].replace(/^>\s?/, '');
-            contentLines.push(line);
-            i++;
-          }
-
-          const content = renderMarkdown(contentLines.join('\n'), { callouts: true });
-          result.push(`<div class="callout callout-${type}"><div class="callout-title">${title}</div><div class="callout-content">${content}</div></div>`);
-        } else {
-          result.push(lines[i]);
-          i++;
-        }
-      }
-
-      return result.join('\n');
     }
 
     return { renderMarkdown };

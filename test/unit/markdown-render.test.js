@@ -20,40 +20,54 @@ const { makeRenderer, attachWikilinkHandler } = require('../helpers/markdown-har
 
 const FIXTURES = path.join(__dirname, '..', 'fixtures');
 const BENIGN_MD = fs.readFileSync(path.join(FIXTURES, 'markdown-benign.md'), 'utf8');
+// What this renderer produces now. Regenerated only by a commit that means to
+// change rendering, and never without the invariant below still holding.
 const BENIGN_HTML = fs.readFileSync(path.join(FIXTURES, 'markdown-benign.html'), 'utf8');
+// What the renderer produced on main BEFORE this card, generated from the code
+// in public/app.js as it stood. Frozen: nothing on this branch may regenerate
+// it, because it is the only record of what "unchanged" means.
+const BENIGN_BEFORE = fs.readFileSync(path.join(FIXTURES, 'markdown-benign-before.html'), 'utf8');
 
 const { renderMarkdown } = makeRenderer();
 const render = (src) => renderMarkdown(src, { callouts: true });
 
-// The shape of a rendered document, ignoring attributes.
+// The shape of a rendered document: every element, its class, and its own
+// text, exactly.
 //
 // This is the invariant that must hold across every commit on this card. The
-// byte fixture below it is stricter and legitimately moves when a handler
-// attribute becomes a listener; this does not move at all. If the escaping
-// work ever swallows an element, changes a class, or alters a single visible
-// character, this fails and the fixture update cannot hide it.
+// byte fixture is stricter and legitimately moves, because this card turns two
+// inline handlers into listeners and drops the blank line the old callout box
+// left behind it. This does not move. If the escaping work ever swallows an
+// element, changes a class, or alters a single character INSIDE one, it fails,
+// and regenerating the byte fixture cannot hide it.
+//
+// Text is compared per element rather than as one string for the whole
+// document, so whitespace BETWEEN block elements is out of scope while
+// whitespace inside them, which is the whole content of a <pre>, is compared
+// exactly. The container's own text nodes are the only thing skipped, and at
+// the top level of marked's output those are the inter-block newlines.
 function outline(html) {
   const dom = new JSDOM(`<div id="root">${html}</div>`);
-  const root = dom.window.document.getElementById('root');
+  const ownText = (el) => Array.from(el.childNodes)
+    .filter((node) => node.nodeType === 3)
+    .map((node) => node.data)
+    .join('');
   const walk = (el) => Array.from(el.children).map((child) => ({
     tag: child.tagName.toLowerCase(),
     cls: child.getAttribute('class') || '',
+    text: ownText(child),
     children: walk(child),
   }));
-  return { tree: walk(root), text: root.textContent };
+  return walk(dom.window.document.getElementById('root'));
 }
 
 describe('renderMarkdown: ordinary markdown is untouched by this card', () => {
-  test('AC-15: the benign document renders to the recorded pre-change bytes', () => {
-    // markdown-benign.html was produced by the renderer as it stood on main
-    // before this card, by running the same fixture through the code in
-    // public/app.js. Equality here is the claim that nothing about ordinary
-    // rendering changed.
+  test('AC-15: the benign document renders to the recorded bytes', () => {
     assert.strictEqual(render(BENIGN_MD), BENIGN_HTML);
   });
 
-  test('AC-15: the benign document keeps its structure and its every visible character', () => {
-    assert.deepStrictEqual(outline(render(BENIGN_MD)), outline(BENIGN_HTML));
+  test('AC-15: the benign document keeps the structure and text it had before this card', () => {
+    assert.deepStrictEqual(outline(render(BENIGN_MD)), outline(BENIGN_BEFORE));
   });
 
   test('AC-9: code blocks, tables, task lists and callouts still render', () => {
@@ -145,5 +159,51 @@ describe('renderMarkdown: wikilink targets cannot reach the handler as code', ()
     // literal text of an anchor tag. A tokenizer never enters a code span.
     const html = render('`[[a]]`');
     assert.ok(/<code>\[\[a\]\]<\/code>/.test(html), html);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Injection point 2: callout titles.
+//
+// processCalloutsSrc built its box by string concatenation BEFORE any parser
+// ran: `<div class="callout-title">${title}</div>`, where title is the raw
+// remainder of the `> [!type]` line. marked was never involved, so nothing
+// about the parser's own escaping applied. Recorded payload, run against the
+// pre-card renderer:
+//   > [!note] <img src=x onerror=alert(1)>
+//     -> <div class="callout-title"><img src=x onerror=alert(1)></div>
+// which is an image element in the DOM with an onerror handler, and needs no
+// interaction at all: a broken src fires it on render.
+// ---------------------------------------------------------------------------
+describe('renderMarkdown: a callout title is text, not markup', () => {
+  const doc = (html) => new JSDOM(`<div id="root">${html}</div>`).window.document;
+
+  test('AC-3: a title containing a tag renders as text', () => {
+    const d = doc(render('> [!note] <img src=x onerror=alert(1)>\n> body\n'));
+    assert.strictEqual(d.querySelectorAll('img').length, 0, 'no element was created from the title');
+    assert.strictEqual(d.querySelector('.callout-title').textContent, '<img src=x onerror=alert(1)>');
+  });
+
+  test('AC-3: a title cannot close the box it is written into', () => {
+    const d = doc(render('> [!note] </div><a href="#" onclick="alert(1)">x</a><div>\n> body\n'));
+    assert.strictEqual(d.querySelectorAll('a').length, 0);
+    assert.strictEqual(d.querySelectorAll('.callout-title').length, 1);
+    assert.ok(d.querySelector('.callout-content'), 'the box still has its content div');
+  });
+
+  test('AC-2: no callout render carries an event-handler attribute', () => {
+    for (const src of [
+      '> [!note] <img src=x onerror=alert(1)>\n> body\n',
+      '> [!tip] " onmouseover="alert(1)\n> body\n',
+    ]) {
+      const d = doc(render(src));
+      const names = Array.from(d.querySelectorAll('*')).flatMap((el) => Array.from(el.attributes).map((a) => a.name));
+      assert.ok(!names.some((n) => n.startsWith('on')), `handler attribute in: ${src}`);
+    }
+  });
+
+  test('the callout type still becomes the modifier class', () => {
+    const d = doc(render('> [!Warning] Careful\n> body\n'));
+    assert.ok(d.querySelector('.callout.callout-warning'), 'type is lowercased into the class');
   });
 });
