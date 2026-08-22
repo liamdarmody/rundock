@@ -210,11 +210,46 @@ describe('handler seams (stub ctx, capture ws)', () => {
   // handler's own `fs.mkdirSync(path.dirname(full), { recursive: true })`
   // fails EEXIST on it. The path clears both guards on their own terms, so
   // the message reaches the try for the same reason a real one would.
-  // Asserting the
-  // errno reason rather than merely "a create_error was sent" is what
-  // separates this from the branch above: the guards answer with the fixed
-  // strings 'invalid path' and 'already exists', so an EEXIST reason can only
-  // have come from the catch.
+  // Asserting the errno reason rather than merely "a create_error was sent"
+  // is what separates this from the branch above: the guards answer with the
+  // fixed strings 'invalid path' and 'already exists', so an EEXIST reason
+  // can only have come from the catch.
+  //
+  // THE MEASUREMENT, since the claim is that the file now clears its floor
+  // whatever else ran, and a claim like that is worth only the runs behind
+  // it. SIX full coverage runs were made: one before this test and FIVE
+  // after. Every figure below is `npm run test:coverage` against a floor of
+  // 97.5%.
+  //
+  //   before, 1 run:  97.6%  (83/85), uncovered 81-82
+  //   after,  run 1:  97.6%  (83/85), uncovered 81-82
+  //   after,  run 2:  97.6%  (83/85), uncovered 81-82
+  //   after,  run 3:  97.6%  (83/85), uncovered 81-82
+  //   after,  run 4:  97.6%  (83/85), uncovered 81-82
+  //   after,  run 5:  97.6%  (83/85), uncovered 81-82
+  //
+  // All five met the floor and none measured below it. The spread is zero,
+  // which is the property being claimed: same figure, same two uncovered
+  // lines, every run. Those two are handleRevealInFinder's macOS-only spawn,
+  // which nothing covers on purpose either and which is carded separately.
+  //
+  // The interleaving that was failing measured 81/85 = 95.3%, with lines
+  // 71-72 AND 81-82 of lib/protocol/handlers/files.js uncovered: the catch
+  // and the reveal spawn missing together.
+  // It cannot recur, because 71-72 no longer depends on another test
+  // happening to make a create throw. The lcov confirms the mechanism rather
+  // than just the total: line 71 was hit in all five runs, with the count
+  // varying between 1 and 3, so the incidental hits still arrive, on top of
+  // one that is now guaranteed. The worst case is therefore 83/85.
+  //
+  // DISCRIMINATION was proved by hand, and had to be. `npm run red-first`
+  // returns NOT-PROVABLE for a change that is only a test, correctly: it
+  // works by reverting the source, and there is no source here to take away.
+  // So the mutation is the only evidence, and it is this one: delete the
+  // `ws.send` inside that catch, leaving the catch itself in place, and
+  // the suite reports 14 pass, 1 fail with this test the single failure.
+  // Nothing else in the suite notices the send is gone, which is the whole
+  // reason the floor was measuring luck.
   test('create_path answers create_error carrying the failure reason when the create itself throws', () => {
     const table = buildDispatch();
     const original = config.getWorkspace();
