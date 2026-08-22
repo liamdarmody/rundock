@@ -7,10 +7,10 @@
 // wrapped around marked, so a test that called marked directly would exercise
 // none of them.
 //
-// AC-9, AC-11 and AC-15 are the half that matters most day to day: the likeliest
-// way to fail this card is to break ordinary markdown while closing the hole.
-// formatMd has nine call sites across chat and message handling, so a
-// regression here is visible in every conversation in the app.
+// The first group matters most day to day: the likeliest way to fail at this is
+// to break ordinary markdown while closing the hole. formatMd has nine call
+// sites across chat and message handling, so a regression there is visible in
+// every conversation in the app.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -24,7 +24,7 @@ const BENIGN_MD = fs.readFileSync(path.join(FIXTURES, 'markdown-benign.md'), 'ut
 // What this renderer produces now. Regenerated only by a commit that means to
 // change rendering, and never without the invariant below still holding.
 const BENIGN_HTML = fs.readFileSync(path.join(FIXTURES, 'markdown-benign.html'), 'utf8');
-// What the renderer produced on main BEFORE this card, generated from the code
+// What the renderer produced on main BEFORE this change, generated from the code
 // in public/app.js as it stood. Frozen: nothing on this branch may regenerate
 // it, because it is the only record of what "unchanged" means.
 const BENIGN_BEFORE = fs.readFileSync(path.join(FIXTURES, 'markdown-benign-before.html'), 'utf8');
@@ -35,8 +35,8 @@ const render = (src) => renderMarkdown(src, { callouts: true });
 // The shape of a rendered document: every element, its class, and its own
 // text, exactly.
 //
-// This is the invariant that must hold across every commit on this card. The
-// byte fixture is stricter and legitimately moves, because this card turns two
+// This is the invariant that must hold across every commit here. The byte
+// fixture is stricter and legitimately moves, because this work turns two
 // inline handlers into listeners and drops the blank line the old callout box
 // left behind it. This does not move. If the escaping work ever swallows an
 // element, changes a class, or alters a single character INSIDE one, it fails,
@@ -62,16 +62,16 @@ function outline(html) {
   return walk(dom.window.document.getElementById('root'));
 }
 
-describe('renderMarkdown: ordinary markdown is untouched by this card', () => {
-  test('AC-15: the benign document renders to the recorded bytes', () => {
+describe('renderMarkdown: ordinary markdown is untouched by this change', () => {
+  test('the benign document renders to the recorded bytes', () => {
     assert.strictEqual(render(BENIGN_MD), BENIGN_HTML);
   });
 
-  test('AC-15: the benign document keeps the structure and text it had before this card', () => {
+  test('the benign document keeps the structure and text it had before this change', () => {
     assert.deepStrictEqual(outline(render(BENIGN_MD)), outline(BENIGN_BEFORE));
   });
 
-  test('AC-9: code blocks, tables, task lists and callouts still render', () => {
+  test('code blocks, tables, task lists and callouts still render', () => {
     const doc = new JSDOM(`<div id="root">${render(BENIGN_MD)}</div>`).window.document;
     assert.strictEqual(doc.querySelectorAll('.code-block-wrapper pre code.hljs').length, 2, 'both fenced blocks');
     assert.ok(doc.querySelector('.md-table-wrap > table > thead'), 'table wrapped and intact');
@@ -83,7 +83,7 @@ describe('renderMarkdown: ordinary markdown is untouched by this card', () => {
     assert.ok(callout.querySelector('.callout-content strong'), 'callout body is still parsed as markdown');
   });
 
-  test('AC-11: highlighting still applies to fenced code', () => {
+  test('highlighting still applies to fenced code', () => {
     const doc = new JSDOM(`<div id="root">${render(BENIGN_MD)}</div>`).window.document;
     const js = doc.querySelector('.code-block-wrapper');
     assert.strictEqual(js.querySelector('.code-lang').textContent, 'JavaScript');
@@ -94,13 +94,13 @@ describe('renderMarkdown: ordinary markdown is untouched by this card', () => {
 // ---------------------------------------------------------------------------
 // Injection point 3: wikilink source rewriting.
 //
-// Before this card, renderMarkdown replaced [[target|label]] in the SOURCE with
+// Before this change, renderMarkdown replaced [[target|label]] in the SOURCE with
 //   <a class="wikilink" onclick="openWikilink('$1')">$2</a>
 // and took both captures verbatim. `$1` lands inside a single-quoted JavaScript
 // string inside a double-quoted HTML attribute, so a quote in the target ends
 // the string and everything after it is code the page runs on click; a quote
 // plus a space opens a NEW attribute, and onmouseover does not even need the
-// click. Recorded payloads, run against the pre-card renderer:
+// click. Recorded payloads, run against the previous renderer:
 //   [[note' onmouseover='alert(1)]]
 //     -> onclick="openWikilink('note' onmouseover='alert(1)')"
 //   [[a') + alert(1) + ('b]]
@@ -112,7 +112,7 @@ describe('renderMarkdown: wikilink targets cannot reach the handler as code', ()
     return Array.from(doc.querySelectorAll('*')).flatMap((el) => Array.from(el.attributes).map((a) => a.name));
   };
 
-  test('AC-4: a quote in the target cannot open a second attribute', () => {
+  test('a quote in a wikilink target cannot open a second attribute', () => {
     // Both quote characters, because the target now travels in a double-quoted
     // attribute and only the double quote can end that one. The single-quote
     // payload is the one the old inline handler fell to and is kept as the
@@ -123,20 +123,20 @@ describe('renderMarkdown: wikilink targets cannot reach the handler as code', ()
     }
   });
 
-  test('AC-4: a target that closes the call cannot append an expression', () => {
+  test('a wikilink target that closes the call cannot append an expression', () => {
     const html = render("[[a') + alert(1) + ('b]]");
     assert.ok(!/alert\(1\)/.test(html.replace(/&#\d+;/g, '')) || !attrs(html).some((n) => n.startsWith('on')),
       `payload reached an executable position: ${html}`);
     assert.ok(!attrs(html).some((name) => name.startsWith('on')), `handler attribute survived: ${html}`);
   });
 
-  test('AC-2: no wikilink render carries an event-handler attribute', () => {
+  test('no wikilink render carries an event-handler attribute', () => {
     for (const src of ['[[Plain]]', '[[Target|Label]]', "[[a'b]]", '[[a"b]]', '[[a\\b]]']) {
       assert.ok(!attrs(render(src)).some((name) => name.startsWith('on')), `handler attribute in: ${src}`);
     }
   });
 
-  test('AC-10: a click still reaches openWikilink with the same target value', () => {
+  test('a click still reaches the opener with the same target value', () => {
     // The target values the old onclick would have passed, for targets that did
     // not break it. The listener must deliver these characters unchanged.
     const targets = ['Plain note', 'folder/Note', "Bobby's note", 'a"b', 'a\\b', "note' onmouseover='alert(1)"];
@@ -153,7 +153,7 @@ describe('renderMarkdown: wikilink targets cannot reach the handler as code', ()
     }
   });
 
-  test('AC-10: the visible label is still the alias, or the target when there is none', () => {
+  test('the visible label is still the alias, or the target when there is none', () => {
     const doc = (html) => new JSDOM(`<div id="root">${html}</div>`).window.document;
     assert.strictEqual(doc(render('[[Target|Label]]')).querySelector('a.wikilink').textContent, 'Label');
     assert.strictEqual(doc(render('[[Target]]')).querySelector('a.wikilink').textContent, 'Target');
@@ -176,7 +176,7 @@ describe('renderMarkdown: wikilink targets cannot reach the handler as code', ()
 // ran: `<div class="callout-title">${title}</div>`, where title is the raw
 // remainder of the `> [!type]` line. marked was never involved, so nothing
 // about the parser's own escaping applied. Recorded payload, run against the
-// pre-card renderer:
+// previous renderer:
 //   > [!note] <img src=x onerror=alert(1)>
 //     -> <div class="callout-title"><img src=x onerror=alert(1)></div>
 // which is an image element in the DOM with an onerror handler, and needs no
@@ -185,20 +185,20 @@ describe('renderMarkdown: wikilink targets cannot reach the handler as code', ()
 describe('renderMarkdown: a callout title is text, not markup', () => {
   const doc = (html) => new JSDOM(`<div id="root">${html}</div>`).window.document;
 
-  test('AC-3: a title containing a tag renders as text', () => {
+  test('a callout title containing a tag renders as text', () => {
     const d = doc(render('> [!note] <img src=x onerror=alert(1)>\n> body\n'));
     assert.strictEqual(d.querySelectorAll('img').length, 0, 'no element was created from the title');
     assert.strictEqual(d.querySelector('.callout-title').textContent, '<img src=x onerror=alert(1)>');
   });
 
-  test('AC-3: a title cannot close the box it is written into', () => {
+  test('a callout title cannot close the box it is written into', () => {
     const d = doc(render('> [!note] </div><a href="#" onclick="alert(1)">x</a><div>\n> body\n'));
     assert.strictEqual(d.querySelectorAll('a').length, 0);
     assert.strictEqual(d.querySelectorAll('.callout-title').length, 1);
     assert.ok(d.querySelector('.callout-content'), 'the box still has its content div');
   });
 
-  test('AC-2: no callout render carries an event-handler attribute', () => {
+  test('no callout render carries an event-handler attribute', () => {
     for (const src of [
       '> [!note] <img src=x onerror=alert(1)>\n> body\n',
       '> [!tip] " onmouseover="alert(1)\n> body\n',
@@ -224,7 +224,7 @@ describe('renderMarkdown: a callout title is text, not markup', () => {
 // The escaping is a JavaScript rule applied to a value going into an HTML
 // attribute, and an HTML attribute is not a JavaScript string until the browser
 // has finished parsing it: character references are decoded FIRST, and the
-// replace never sees them. Recorded payload, run against the pre-card renderer:
+// replace never sees them. Recorded payload, run against the previous renderer:
 //   [a](<&#39;&#41;;alert&#40;1&#41;;//.md>)
 //     -> onclick="openWikilink('&#39;&#41;;alert&#40;1&#41;;//.md')"
 // which the parser decodes to
@@ -239,18 +239,18 @@ describe('renderMarkdown: a relative link cannot rewrite its own handler', () =>
       .filter((a) => a.name.startsWith('on'));
   };
 
-  test('AC-5: character references in a filename cannot become code', () => {
+  test('character references in a filename cannot become code', () => {
     const html = render('[a](<&#39;&#41;;alert&#40;1&#41;;//.md>)');
     assert.deepStrictEqual(handlerAttrs(html).map((a) => a.name), [], html);
   });
 
-  test('AC-5: a quote or a backslash in a filename cannot alter the handler', () => {
+  test('a quote or a backslash in a filename cannot alter the handler', () => {
     for (const src of ["[a](<x'.md>)", '[a](<x\\\\.md>)', '[a](<x\\\\\');alert(1);//.md>)']) {
       assert.deepStrictEqual(handlerAttrs(render(src)).map((a) => a.name), [], src);
     }
   });
 
-  test('AC-10: a relative link still opens the same target', () => {
+  test('a relative link still opens the same target', () => {
     // The values the old rewrite passed to openWikilink, for the hrefs it
     // handled. Left column is the markdown; right is what must still arrive.
     const cases = [['[a](notes/Plan.md)', 'notes/Plan.md'], ['[a](config.yaml)', 'config.yaml'],
@@ -268,7 +268,7 @@ describe('renderMarkdown: a relative link cannot rewrite its own handler', () =>
     }
   });
 
-  test('AC-5: a character reference in a filename stays those characters', () => {
+  test('a character reference in a filename stays those characters', () => {
     // The guard against the payload above, seen from the benign side. A
     // destination is written into the attribute escaped as an attribute value,
     // so what the browser decodes back is what the document said, not one
@@ -349,7 +349,7 @@ describe('renderMarkdown: highlights and tags stay out of code', () => {
 //
 // marked passes HTML through by design in its current major, and this renderer
 // assigns the result to innerHTML with nothing in between. Recorded payloads,
-// run against the pre-card renderer:
+// run against the previous renderer:
 //   <img src=x onerror=alert(1)>   -> the same bytes, verbatim, into the DOM
 //   Text <script>alert(1)</script> -> the same bytes, verbatim, into the DOM
 // The script element is inert when set through innerHTML, which is a property
@@ -369,7 +369,7 @@ describe('renderMarkdown: markdown cannot carry HTML into the page', () => {
   const handlerNames = (root) => Array.from(root.querySelectorAll('*'))
     .flatMap((el) => Array.from(el.attributes).map((a) => a.name)).filter((n) => n.startsWith('on'));
 
-  test('AC-1, AC-2: a tag written in the document becomes text, not an element', () => {
+  test('a tag written in the document becomes text, not an element', () => {
     const payloads = [
       ['<img src=x onerror=alert(1)>', 'img'],
       ['Text <script>alert(1)</script> more', 'script'],
@@ -390,11 +390,11 @@ describe('renderMarkdown: markdown cannot carry HTML into the page', () => {
     }
   });
 
-  test('AC-1: the escaped tag is still legible to the reader', () => {
+  test('the escaped tag is still legible to the reader', () => {
     assert.match(doc(render('<img src=x onerror=alert(1)>')).textContent, /<img src=x onerror=alert\(1\)>/);
   });
 
-  test('AC-1: a script scheme cannot reach an href or a src', () => {
+  test('a script scheme cannot reach an href or a src', () => {
     for (const src of ['[click](javascript:alert(1))', '[click](JaVaScRiPt:alert(1))',
       '[x](vbscript:msgbox)', '[x](data:text/html;base64,PHN2Zz4=)',
       '![x](javascript:alert(1))', '[x](java&Tab;script:alert(1))', '[x](&#106;avascript:alert(1))']) {
@@ -435,7 +435,7 @@ describe('renderMarkdown: the copy button is a listener, not an attribute', () =
     return dom;
   };
 
-  test('AC-2: a rendered code block carries no event-handler attribute', () => {
+  test('a rendered code block carries no event-handler attribute', () => {
     const dom = mount(render('```js\nconst x = 1;\n```\n'));
     const names = Array.from(dom.window.document.querySelectorAll('*'))
       .flatMap((el) => Array.from(el.attributes).map((a) => a.name));

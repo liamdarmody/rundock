@@ -46,7 +46,7 @@
 //   capability nothing is asking for. Escaping answers the question once and
 //   the question stays answered.
 //
-// So: no sanitiser, no new dependency, and AC-7 does not arise.
+// So: no sanitiser, and no new dependency to vendor, licence and keep current.
 //
 // COMMENTS ARE DROPPED, NOT ESCAPED. The one exception, and it is behaviour
 // preservation rather than leniency. The streaming path renders the raw
@@ -61,13 +61,13 @@
 // 47 more written by client scripts outside this file. A policy with
 // 'unsafe-inline' is not a policy, and one without it breaks the app, so the
 // honest state is: not yet, and the prerequisite is removing those handlers.
-// This card removed the two that this renderer emitted, which is the part of
-// the surface it owns. Until a policy exists, what stands between agent output
-// and the page is this file: no path through it produces markup the document
-// controls, which is a stronger claim than a policy makes and a narrower one,
-// because it holds only for what is rendered HERE. The seventeen other
-// innerHTML assignments in the client are not covered by it and want their own
-// card.
+// The two this renderer emitted are gone, which is the part of the surface it
+// owns. Until a policy exists, what stands between agent output and the page is
+// this file: no path through it produces markup the document controls, which is
+// a stronger claim than a policy makes and a narrower one, because it holds
+// only for what is rendered HERE. The other 86 innerHTML assignments across
+// public/ (99 counting the editor's own) are not covered by it and want a
+// change of their own.
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.RundockMarkdown = factory();
@@ -137,12 +137,12 @@
 
     // Destinations a link or an image may point at.
     //
-    // A FIFTH injection point, named by neither the card nor the frozen
-    // criteria and found while closing the fourth: marked applies no scheme
-    // filter to a link destination, so `[click](javascript:alert(1))` produced
-    // an anchor that ran the expression on click, and an image src did the same
-    // without one. Same class as the other four, same renderer, so it is closed
-    // here rather than left for a card of its own.
+    // A FIFTH way in, found while closing the fourth and named in none of the
+    // reports that started this work: marked applies no scheme filter to a link
+    // destination, so `[click](javascript:alert(1))` produced an anchor that ran
+    // the expression on click, and an image source did the same without one.
+    // Same class as the other four and the same renderer, so it is closed here
+    // rather than left open under a separate heading.
     //
     // Stated as a shape rather than a list of bad schemes, because a blocklist
     // has to be right about character references and this does not have to know
