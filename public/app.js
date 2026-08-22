@@ -14,7 +14,8 @@
  * 9. CHAT & MESSAGING ............... moved to views/chat.js (agent tick, permission stores stay)
  * 10. VIEWS & NAVIGATION ............ switchNav, showView, goHome, toggleTheme
  * 11. FILE TREE & EDITOR ............ moved to views/files.js (tree cache, icon tables, menu listeners stay)
- * 12. MARKDOWN RENDERING ............ renderMarkdown, processCalloutsSrc
+ * 12. MARKDOWN RENDERING ............ moved to markdown-render.js (the wiring,
+ *                                     the theme swap and the aliases stay)
  * 13. SKILLS ........................ moved to views/skills.js
  * 14. SETTINGS ...................... moved to views/settings.js
  * 15. WORKSPACE PICKER .............. handleWorkspaces, showWorkspacePicker
@@ -1085,85 +1086,15 @@ let fileHistory = [];
 
 // ===== 12. MARKDOWN RENDERING =====
 
-// Configure marked
-marked.setOptions({ gfm: true, breaks: true });
-
-// Syntax-highlight fenced code blocks (highlight.js, vendored locally) and wrap
-// them with a header bar showing the language label and a copy button.
-// Originating contributions: copy button (#6/#7) and syntax highlighting (#10/#11)
-// by @dougseven; isolated and hardened here (escaped language label, clipboard
-// fallback, auto-detect size cap).
-const HLJS_AUTODETECT_MAX = 20000; // skip highlightAuto on very large blocks (perf)
-marked.use({
-  renderer: {
-    code({ text, lang }) {
-      let highlighted = '';
-      let displayLang = '';
-      const escapeHtml = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      try {
-        // Decision logic lives in code-language.js (pure, unit-tested):
-        // explicit hints win, plaintext hints are first-class, unlabelled
-        // blocks auto-detect over a curated subset with a relevance gate so
-        // prose is never mislabelled as code (the VB.NET bug).
-        const resolved = window.resolveCodeLanguage
-          ? resolveCodeLanguage(lang, text, window.hljs, HLJS_AUTODETECT_MAX)
-          : { html: escapeHtml(text), label: lang || '' };
-        highlighted = resolved.html;
-        displayLang = resolved.label;
-      } catch (e) {
-        highlighted = escapeHtml(text);
-        displayLang = lang || '';
-      }
-      const langLabel = displayLang ? `<span class="code-lang">${esc(displayLang)}</span>` : '<span></span>';
-      return (
-        `<div class="code-block-wrapper">` +
-        `<div class="code-block-header">${langLabel}` +
-        `<button class="copy-code-btn" onclick="copyCode(this)" title="Copy code">${COPY_ICON}</button>` +
-        `</div><pre><code class="hljs">${highlighted}</code></pre></div>`
-      );
-    },
-    list(token) {
-      // A reply that is only a number (`4471.`) is valid ordered-list syntax,
-      // so it parses to a list whose single item is empty. The reply then
-      // exists solely as the marker, which the bubble's fixed list padding
-      // cannot contain, and it renders outside the bubble. The intent was
-      // never a list, so emit the original text instead.
-      //
-      // Decision logic lives in empty-list.js (pure, unit-tested). It returns
-      // null for anything it does not recognise, and `false` here hands the
-      // token back to marked's own renderer untouched, so every genuine list
-      // is completely unaffected.
-      const text = emptyOrderedListText(token);
-      if (text !== null) return `<p>${esc(text)}</p>\n`;
-      return false;
-    }
-  }
+// The renderer itself lives in markdown-render.js so it can be driven directly
+// under node --test; this file only wires it to the browser's globals and owns
+// the DOM-side behaviour of the markup it emits.
+const RundockRenderer = RundockMarkdown.createMarkdownRenderer({
+  marked,
+  hljs: window.hljs,
+  resolveCodeLanguage: window.resolveCodeLanguage,
+  emptyOrderedListText: window.emptyOrderedListText,
 });
-
-const COPY_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
-const CHECK_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
-
-function copyCode(btn) {
-  const codeEl = btn.closest('.code-block-wrapper')?.querySelector('code');
-  if (!codeEl) return;
-  const text = codeEl.textContent;
-  const done = () => {
-    btn.innerHTML = CHECK_ICON;
-    btn.classList.add('copied');
-    setTimeout(() => { btn.innerHTML = COPY_ICON; btn.classList.remove('copied'); }, 2000);
-  };
-  // navigator.clipboard is unavailable in non-secure contexts (e.g. VPS over http).
-  if (navigator.clipboard?.writeText) {
-    navigator.clipboard.writeText(text).then(done).catch(() => {});
-  } else {
-    try {
-      const ta = document.createElement('textarea');
-      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-      document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
-      done();
-    } catch (e) { /* copy unavailable: no-op */ }
-  }
-}
 
 // Swap the highlight.js theme stylesheet to match the app theme.
 function applyHljsTheme(isLight) {
@@ -1174,86 +1105,7 @@ function applyHljsTheme(isLight) {
 }
 applyHljsTheme(document.body.classList.contains('light'));
 
-function renderMarkdown(text, options = {}) {
-  let src = text;
-
-
-  // Pre-processing: Obsidian-specific syntax (before marked processes it)
-
-  // Obsidian comments: %%text%% - hide completely
-  src = src.replace(/%%[\s\S]*?%%/g, '');
-
-  // Wikilinks: [[file|display]] and [[file]]
-  src = src.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '<a class="wikilink" onclick="openWikilink(\'$1\')">$2</a>');
-  src = src.replace(/\[\[([^\]]+)\]\]/g, '<a class="wikilink" onclick="openWikilink(\'$1\')">$1</a>');
-
-  // Highlights: ==text==
-  src = src.replace(/==(.*?)==/g, '<mark>$1</mark>');
-
-  // Tags: #tag (but not inside code blocks or headings)
-  src = src.replace(/(?:^|\s)#([a-zA-Z][a-zA-Z0-9_/-]*)/g, ' <span class="md-tag">#$1</span>');
-
-  // Callouts: process before marked
-  if (options.callouts !== false) {
-    src = processCalloutsSrc(src);
-  }
-
-  // Render with marked
-  let html = marked.parse(src);
-
-  // Post-processing: clean up marked output for our styling
-
-  // Wrap tables in a horizontal-scroll container so a wide table stays within
-  // the message bubble and scrolls inside it, rather than pushing the bubble
-  // wide and forcing the whole conversation to scroll sideways. marked emits a
-  // bare, non-nested <table>, so this non-greedy wrap is safe.
-  html = html.replace(/<table>([\s\S]*?)<\/table>/g, '<div class="md-table-wrap"><table>$1</table></div>');
-
-  // Convert relative file links to in-app wikilinks
-  // Matches href values that end in .md, .yaml, .yml, .json, .txt and don't start with http/mailto/obsidian
-  html = html.replace(/<a href="(?!https?:\/\/|mailto:|obsidian:\/\/)([^"]*\.(?:md|yaml|yml|json|txt))"([^>]*)>(.*?)<\/a>/g,
-    (match, href, attrs, text) => `<a class="wikilink" onclick="openWikilink('${href.replace(/'/g, "\\'")}')">${text}</a>`);
-
-  // Checkboxes: add accent colour
-  html = html.replace(/<input.*?checked.*?disabled.*?>/g, '<input type="checkbox" checked disabled style="margin-right:8px;accent-color:var(--accent)">');
-  html = html.replace(/<input.*?disabled.*?type="checkbox".*?>/g, '<input type="checkbox" disabled style="margin-right:8px">');
-
-  return html;
-}
-
-function processCalloutsSrc(src) {
-  // Process Obsidian callouts in raw source before marked
-  // Callout: > [!type] title followed by > content
-  const lines = src.split('\n');
-  const result = [];
-  let i = 0;
-
-  while (i < lines.length) {
-    const calloutMatch = lines[i].match(/^>\s*\[!(\w+)\]([+-])?\s*(.*)/);
-    if (calloutMatch) {
-      const type = calloutMatch[1].toLowerCase();
-      const title = calloutMatch[3] || type.charAt(0).toUpperCase() + type.slice(1);
-      const contentLines = [];
-      i++;
-
-      // Collect callout content (lines starting with >)
-      while (i < lines.length && (lines[i].startsWith('>') || lines[i].trim() === '')) {
-        if (lines[i].trim() === '' && i + 1 < lines.length && !lines[i + 1].startsWith('>')) break;
-        let line = lines[i].replace(/^>\s?/, '');
-        contentLines.push(line);
-        i++;
-      }
-
-      const content = renderMarkdown(contentLines.join('\n'), { callouts: true });
-      result.push(`<div class="callout callout-${type}"><div class="callout-title">${title}</div><div class="callout-content">${content}</div></div>`);
-    } else {
-      result.push(lines[i]);
-      i++;
-    }
-  }
-
-  return result.join('\n');
-}
+function renderMarkdown(text, options = {}) { return RundockRenderer.renderMarkdown(text, options); }
 
 // Alias for backward compatibility
 function formatMd(text) { return renderMarkdown(text); }
@@ -1531,6 +1383,16 @@ const findState = {
 };
 
 initFindBar();
+
+// Rendered wikilinks used to carry their own onclick. One delegated listener
+// replaces every one of them, so the target is never written into the page as
+// code. Registered once, here, because the markup it serves is rewritten with
+// innerHTML on every streaming frame in chat and on every file preview.
+RundockMarkdown.attachWikilinkHandler(document, (target) => openWikilink(target));
+
+// Same move for the copy button on a rendered code block: the renderer wrote
+// an onclick, and now one listener serves every block it will ever render.
+RundockMarkdown.attachCodeCopyHandler(document);
 
 // ===== 18. UNIVERSAL SEARCH PALETTE (Cmd+K / Ctrl+K) =====
 // The palette itself moved to views/palette.js. What stays here, and why:

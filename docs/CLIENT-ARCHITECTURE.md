@@ -105,13 +105,12 @@ deliberate edit to that manifest.
 
 ## What stays in `app.js`, and why
 
-`app.js` is 1,745 lines, down from 5,647. It owns boot, the WebSocket client,
-routing, and shared-state wiring. It also keeps five things that render, each a
+`app.js` is 1,601 lines, down from 5,647. It owns boot, the WebSocket client,
+routing, and shared-state wiring. It also keeps four things that render, each a
 recorded decision rather than leftover mess:
 
 | What | Why it stays |
 |---|---|
-| Markdown rendering | Shared infrastructure with nine chat call sites against one files call site, and its top-level `marked` configuration cannot live in a side-effect-free factory |
 | Workspace picker | Delegated document listeners plus `onWorkspaceReady` lifecycle wiring |
 | Update strip | A top-level `window.electronAPI.onUpdate` registration |
 | `EFFECT_EXECUTORS` | The effect half of the reducer in `conversation-state.js`, cross-view by construction: the same object renders chat bubbles, repaints the sidebar, clears agent status dots, moves unread badges and persists conversations |
@@ -209,3 +208,4 @@ vacuously the day someone renames it.
 | What a module may and may not export | `test/unit/client-namespace.test.js` |
 | What `app.js` may still render | `test/unit/app-retentions.test.js` |
 | Chat thread markup | `public/chat-markup.js`, which is the only file allowed to write it |
+| Markdown rendering, and what a document may put in the page | `public/markdown-render.js`, whose header carries the decision |
