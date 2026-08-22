@@ -310,3 +310,81 @@ describe('renderMarkdown: highlights and tags stay out of code', () => {
     assert.strictEqual(render('x `#tag` y'), '<p>x <code>#tag</code> y</p>\n');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Injection point 1: raw HTML reaching innerHTML.
+//
+// marked passes HTML through by design in its current major, and this renderer
+// assigns the result to innerHTML with nothing in between. Recorded payloads,
+// run against the pre-card renderer:
+//   <img src=x onerror=alert(1)>   -> the same bytes, verbatim, into the DOM
+//   Text <script>alert(1)</script> -> the same bytes, verbatim, into the DOM
+// The script element is inert when set through innerHTML, which is a property
+// of that one tag and not a defence; the image handler fires on render, with no
+// interaction at all.
+//
+// And a FIFTH point, named by neither the card nor the criteria, found while
+// closing this one: marked applies no scheme filter to a link destination.
+//   [click](javascript:alert(1)) -> <a href="javascript:alert(1)">click</a>
+// which runs on click. Same class, same renderer, same release.
+// ---------------------------------------------------------------------------
+describe('renderMarkdown: markdown cannot carry HTML into the page', () => {
+  // Query from #root, never from the document: the wrapper is a div, and
+  // counting it would report every payload as having produced one.
+  const doc = (html) => new JSDOM(`<div id="root">${html}</div>`, { url: 'http://localhost/' })
+    .window.document.getElementById('root');
+  const handlerNames = (root) => Array.from(root.querySelectorAll('*'))
+    .flatMap((el) => Array.from(el.attributes).map((a) => a.name)).filter((n) => n.startsWith('on'));
+
+  test('AC-1, AC-2: a tag written in the document becomes text, not an element', () => {
+    const payloads = [
+      ['<img src=x onerror=alert(1)>', 'img'],
+      ['Text <script>alert(1)</script> more', 'script'],
+      ['<div onmouseover="alert(1)">hover</div>', 'div'],
+      ['<svg onload="alert(1)"></svg>', 'svg'],
+      ['<iframe src="javascript:alert(1)"></iframe>', 'iframe'],
+      ['<a href="javascript:alert(1)">x</a>', 'a'],
+      ['<style>*{x:y}</style>', 'style'],
+      ['> [!note] fine\n> <img src=x onerror=alert(1)>\n', 'img'],
+      ['| a |\n| --- |\n| <img src=x onerror=alert(1)> |\n', 'img'],
+      ['- <img src=x onerror=alert(1)>\n', 'img'],
+      ['[[Note|<img src=x onerror=alert(1)>]]', 'img'],
+    ];
+    for (const [src, tag] of payloads) {
+      const d = doc(render(src));
+      assert.strictEqual(d.querySelectorAll(tag).length, 0, `${tag} element created by: ${src}`);
+      assert.deepStrictEqual(handlerNames(d), [], `handler attribute created by: ${src}`);
+    }
+  });
+
+  test('AC-1: the escaped tag is still legible to the reader', () => {
+    assert.match(doc(render('<img src=x onerror=alert(1)>')).textContent, /<img src=x onerror=alert\(1\)>/);
+  });
+
+  test('AC-1: a script scheme cannot reach an href or a src', () => {
+    for (const src of ['[click](javascript:alert(1))', '[click](JaVaScRiPt:alert(1))',
+      '[x](vbscript:msgbox)', '[x](data:text/html;base64,PHN2Zz4=)',
+      '![x](javascript:alert(1))', '[x](java&Tab;script:alert(1))', '[x](&#106;avascript:alert(1))']) {
+      // The RESOLVED url, which is what the browser would act on: a relative
+      // href against the page's origin comes back as http:, and only a
+      // destination that really carries a scheme keeps one of its own.
+      for (const el of doc(render(src)).querySelectorAll('a[href], img[src]')) {
+        const resolved = new URL(el.href || el.src, 'http://localhost/');
+        assert.ok(['http:', 'https:', 'mailto:'].includes(resolved.protocol),
+          `${resolved.protocol} survived in ${el.outerHTML} from: ${src}`);
+      }
+    }
+  });
+
+  test('the link text of a blocked destination is still shown', () => {
+    assert.match(doc(render('[click me](javascript:alert(1))')).textContent, /click me/);
+  });
+
+  test('an HTML comment stays invisible instead of becoming visible text', () => {
+    // Not decoration: the streaming path renders the raw response text, which
+    // carries Rundock's own <!-- RUNDOCK:... --> markers. Escaping a comment
+    // would have printed those markers into the conversation.
+    assert.strictEqual(render('<!-- RUNDOCK:COMPLETE -->'), '');
+    assert.strictEqual(doc(render('a <!-- x --> b')).textContent.trim(), 'a  b');
+  });
+});

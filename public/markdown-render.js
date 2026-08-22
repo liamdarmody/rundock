@@ -15,6 +15,59 @@
 // hand it the same marked build the browser gets (lib/http-router.js serves
 // node_modules/marked/lib/marked.umd.js at /marked.min.js) and get the same
 // bytes back.
+//
+// ===========================================================================
+// THE DECISION: agent markdown may NOT contain HTML.
+// ===========================================================================
+//
+// This renderer's input is agent output, and agent output is not the user. It
+// carries text the user never wrote: a file in the workspace, a page an agent
+// fetched, a skill or agent file installed from a marketplace. Routines make
+// agents produce it on a timer, unattended, with nobody reading it as it
+// arrives. So the question is not whether the author is trusted. It is what a
+// document is allowed to do to the page it lands on, and the answer here is:
+// carry text and the constructs this renderer knows how to build, nothing else.
+//
+// A tag written in a document therefore renders as the characters of that tag.
+// The alternative was a sanitiser, and it was weighed rather than dismissed:
+//
+//   What escaping costs. An agent that writes <details> or <kbd> gets the text
+//   of it. That is a visible failure the reader can see and report, not a
+//   silent one, and if a construct ever earns its place the answer is a
+//   tokenizer for it on the same terms as callouts and wikilinks, which is how
+//   every construct this renderer supports already works. Nothing in the app
+//   needs HTML in a document today: raw HTML was never a feature here, it was
+//   the parser's default left unguarded.
+//
+//   What a sanitiser costs. A vendored bundle, its licence record, and a
+//   version to keep chasing, in an app that has no build step and must work
+//   offline. More to the point, it is an answer that has to be re-given: an
+//   allowlist to maintain, and a mutation-XSS literature to track, for a
+//   capability nothing is asking for. Escaping answers the question once and
+//   the question stays answered.
+//
+// So: no sanitiser, no new dependency, and AC-7 does not arise.
+//
+// COMMENTS ARE DROPPED, NOT ESCAPED. The one exception, and it is behaviour
+// preservation rather than leniency. The streaming path renders the raw
+// response text, which carries Rundock's own <!-- RUNDOCK:... --> markers.
+// Those are invisible today because the parser passed them through; escaping
+// them would have printed the app's internal protocol into the conversation.
+// Dropping leaves every comment exactly as visible as it was, which is not at
+// all.
+//
+// NO CONTENT-SECURITY-POLICY, and what carries the risk instead. A CSP worth
+// having forbids inline handlers, and the app has 28 of them in index.html and
+// 47 more written by client scripts outside this file. A policy with
+// 'unsafe-inline' is not a policy, and one without it breaks the app, so the
+// honest state is: not yet, and the prerequisite is removing those handlers.
+// This card removed the two that this renderer emitted, which is the part of
+// the surface it owns. Until a policy exists, what stands between agent output
+// and the page is this file: no path through it produces markup the document
+// controls, which is a stronger claim than a policy makes and a narrower one,
+// because it holds only for what is rendered HERE. The seventeen other
+// innerHTML assignments in the client are not covered by it and want their own
+// card.
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.RundockMarkdown = factory();
@@ -81,6 +134,29 @@
     // Hrefs that name a file in the workspace rather than a place on the web.
     // Same extensions and same exclusions the post-processing regex used.
     const WORKSPACE_FILE_HREF = /^(?!https?:\/\/|mailto:|obsidian:\/\/).*\.(?:md|yaml|yml|json|txt)$/;
+
+    // Destinations a link or an image may point at.
+    //
+    // A FIFTH injection point, named by neither the card nor the frozen
+    // criteria and found while closing the fourth: marked applies no scheme
+    // filter to a link destination, so `[click](javascript:alert(1))` produced
+    // an anchor that ran the expression on click, and an image src did the same
+    // without one. Same class as the other four, same renderer, so it is closed
+    // here rather than left for a card of its own.
+    //
+    // Stated as a shape rather than a list of bad schemes, because a blocklist
+    // has to be right about character references and this does not have to know
+    // about them at all. A destination is allowed when it either begins with a
+    // scheme that is spelled out here, or has no colon before the first path,
+    // query or fragment character, which is what makes it relative. So
+    // `java&Tab;script:alert(1)` is refused for having a colon where a relative
+    // path cannot have one, without anyone having to decode it first.
+    const ALLOWED_SCHEME = /^(?:https?:\/\/|mailto:|obsidian:\/\/)/i;
+    const RELATIVE_HREF = /^[^:/?#]*(?:[/?#]|$)/;
+    function isNavigableHref(href) {
+      const value = String(href == null ? '' : href);
+      return ALLOWED_SCHEME.test(value) || RELATIVE_HREF.test(value);
+    }
 
     // Whether the callout tokenizer is live for the current render. The option
     // is per-call and an extension is per-instance, so the flag bridges them.
@@ -237,6 +313,13 @@
         },
       }],
       renderer: {
+        // Raw HTML in the document. See THE DECISION at the top of this file:
+        // it renders as its own characters, so nothing the document says can
+        // become an element or an attribute. Comments are dropped instead of
+        // escaped, for the reason recorded there.
+        html(token) {
+          return escapeHtml(token.text.replace(/<!--[\s\S]*?-->/g, ''));
+        },
         // Relative links to workspace files open in the app instead of
         // navigating, so they are rewritten into wikilinks.
         //
@@ -256,11 +339,31 @@
         // rather than a handler, so no JavaScript position exists to escape
         // for. Which hrefs are claimed is unchanged, and so is the value
         // handed to the opener.
+        // Every link is written here, not only the rewritten ones. marked's own
+        // link renderer escapes an href in a mode that deliberately leaves
+        // existing character references intact, which is correct for a URL and
+        // wrong for this: `[x](&#106;avascript:alert(1))` reaches the attribute
+        // with the reference unchanged, and the browser decodes it to
+        // `javascript:` before deciding what the URL means. Writing the
+        // attribute here, escaped as an attribute value, means the bytes
+        // checked below are the bytes the browser reads.
         link(token) {
           const href = token.href;
-          if (!WORKSPACE_FILE_HREF.test(href)) return false; // marked's own renderer
-          return `<a class="wikilink" data-wikilink="${escapeAttr(href)}">`
-            + `${this.parser.parseInline(token.tokens)}</a>`;
+          const text = this.parser.parseInline(token.tokens);
+          if (!isNavigableHref(href)) return text;
+          if (WORKSPACE_FILE_HREF.test(href)) {
+            return `<a class="wikilink" data-wikilink="${escapeAttr(href)}">${text}</a>`;
+          }
+          const title = token.title ? ` title="${escapeAttr(token.title)}"` : '';
+          return `<a href="${escapeAttr(href)}"${title}>${text}</a>`;
+        },
+        // An image destination is a URL the page fetches, so it is the same
+        // question as a link destination and gets the same answer.
+        image(token) {
+          const alt = escapeAttr(token.text || '');
+          if (!isNavigableHref(token.href)) return escapeHtml(token.text || '');
+          const title = token.title ? ` title="${escapeAttr(token.title)}"` : '';
+          return `<img src="${escapeAttr(token.href)}" alt="${alt}"${title}>`;
         },
         // Syntax-highlight fenced code blocks (highlight.js, vendored locally)
         // and wrap them with a header bar showing the language label and a copy
