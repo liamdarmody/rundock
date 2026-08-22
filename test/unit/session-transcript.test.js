@@ -178,9 +178,14 @@ describe('the files a run changed', () => {
       'a list of attempted writes is not a list of files changed');
   });
 
-  // A tool still running when the transcript was read has asked and not been
-  // answered, which is the same absence of evidence as a refusal.
-  test('a write with no outcome yet is not counted as one that happened', () => {
+  // AC-7, and the case a partial list gets wrong. One write reported back and
+  // one never did, which after the run has ended means the run was cut off
+  // between the tool writing the file and the runtime recording the outcome.
+  // The open write may well be on disk. A list holding only the resolved one
+  // is quietly incomplete, and quietly incomplete is the failure this reader
+  // exists to prevent: the honest answer is that the list cannot be vouched
+  // for, whatever else in the same transcript could be.
+  test('a write with no outcome yet makes the whole list unknown, not a shorter list', () => {
     const sid = '99999999-9999-4999-8999-999999999999';
     writeTranscript(sid, [
       fx.prompt(sid, 'go'),
@@ -188,8 +193,13 @@ describe('the files a run changed', () => {
       fx.unanswered(sid, { file: '/w/in-flight.md' }),
     ]);
 
-    assert.deepStrictEqual(paths(readSessionTranscript(sid)), ['/w/done.md'],
-      'only the write that reported back is a write that happened');
+    const result = readSessionTranscript(sid);
+    assert.strictEqual(result.status, 'unknown', 'one open ask is enough, however many closed');
+    assert.strictEqual(result.reason, 'unresolved', 'and it names which absence this is');
+    assert.strictEqual(result.files, null,
+      'no list at all: a list of the writes that did report back reads as the whole of what the run changed');
+    assert.deepStrictEqual(result.activity, { kind: 'tool', tool: 'Write', path: '/w/in-flight.md', at: '2026-08-22T19:15:10.000Z' },
+      'while what the run was last seen doing survives, which is what progress is read from');
   });
 
   // An outcome that reports its own failure in a field of its own, which is
