@@ -40,6 +40,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const h = require('../helpers/harness.js');
 const { agentFile } = require('../helpers/workspace.js');
+const { calledFrom } = require('../helpers/stack.js');
 
 const scheduler = require('../../lib/scheduler.js');
 
@@ -451,6 +452,13 @@ test('a failed start is held for THIS period even when it inherits an older stam
   // start dies ahead of its own stamp while the tick's earlier reading still
   // reaches the failure path.
   //
+  // It matches a FRAME rather than a substring of the stack, and that is not
+  // cosmetic. `beginRun` is a prefix of `beginRunRecord`, which arrived with
+  // the run-records change; a substring test would have selected whichever of
+  // the two appeared first and said nothing about it. When this was written no
+  // such pair existed, which is exactly why the guard belongs here rather than
+  // in the memory of whoever adds the next function.
+  //
   // It selects on the call site rather than on a count. Counting was tried and
   // was wrong twice: the tick reads once, then once per routine to ask whether
   // each is due, and that total moves whenever the fixture or the iteration
@@ -464,7 +472,7 @@ test('a failed start is held for THIS period even when it inherits an older stam
   let thrown = false;
   const prev = scheduler.wireSchedulerDeps({
     now: () => {
-      if (!thrown && new Error().stack.includes('beginRun')) {
+      if (!thrown && calledFrom('beginRun')) {
         thrown = true;
         throw new Error('clock unavailable');
       }
