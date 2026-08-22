@@ -271,3 +271,42 @@ describe('renderMarkdown: a relative link cannot rewrite its own handler', () =>
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Highlights and tags: the last two source rewrites.
+//
+// `==text==` and `#tag` were regexes over the whole document that spliced
+// <mark> and <span class="md-tag"> into the markdown. They are not an injection
+// point on their own, but they are why the raw-HTML decision could not be made:
+// once agent HTML stops being trusted, HTML the renderer wrote into the source
+// is indistinguishable from HTML the document's author wrote there. Both are
+// tokenizers now, which also fixes what a whole-document regex could never get
+// right.
+// ---------------------------------------------------------------------------
+describe('renderMarkdown: highlights and tags stay out of code', () => {
+  const doc = (html) => new JSDOM(`<div id="root">${html}</div>`).window.document;
+
+  test('a fenced block containing #tag or ==text== keeps its own text', () => {
+    // Before: the regexes ran inside the fence, so the block rendered visible
+    // span and mark tags, and highlight.js then detected the block as HTML.
+    const code = doc(render('```\nlet a = 1; // #todo and ==x==\n```\n')).querySelector('pre code');
+    assert.strictEqual(code.textContent, 'let a = 1; // #todo and ==x==');
+    assert.strictEqual(code.querySelectorAll('.md-tag, mark').length, 0);
+  });
+
+  test('a tag at the start of a line no longer swallows the line break', () => {
+    // Before: the pattern consumed the preceding whitespace, newline included,
+    // and put a single space back, so the two lines ran together.
+    const d = doc(render('line one\n#tag next\n'));
+    assert.ok(d.querySelector('br'), 'the line break survives');
+    assert.strictEqual(d.querySelector('.md-tag').textContent, '#tag');
+  });
+
+  test('the ordinary forms render exactly as they did', () => {
+    assert.strictEqual(render('a #tag b'), '<p>a <span class="md-tag">#tag</span> b</p>\n');
+    assert.strictEqual(render('a ==hi== b'), '<p>a <mark>hi</mark> b</p>\n');
+    assert.strictEqual(render('a==b==c'), '<p>a<mark>b</mark>c</p>\n');
+    assert.strictEqual(render('C#programming is fine'), '<p>C#programming is fine</p>\n');
+    assert.strictEqual(render('x `#tag` y'), '<p>x <code>#tag</code> y</p>\n');
+  });
+});

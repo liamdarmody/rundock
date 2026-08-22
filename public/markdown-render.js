@@ -148,6 +148,58 @@
             + `<div class="callout-content">${this.parser.parse(token.tokens)}</div></div>`;
         },
       }, {
+        // Obsidian highlights: ==text==.
+        //
+        // Was a whole-document regex that spliced <mark> into the source, so
+        // it fired inside fenced code too and the block rendered visible mark
+        // tags. The pattern is the original, non-greedy and single-line.
+        name: 'highlight',
+        level: 'inline',
+        start(src) {
+          const i = src.indexOf('==');
+          return i === -1 ? undefined : i;
+        },
+        tokenizer(src) {
+          const match = /^==(.*?)==/.exec(src);
+          if (!match) return undefined;
+          return { type: 'highlight', raw: match[0], tokens: this.lexer.inlineTokens(match[1]) };
+        },
+        renderer(token) {
+          return `<mark>${this.parser.parseInline(token.tokens)}</mark>`;
+        },
+      }, {
+        // Obsidian tags: #tag.
+        //
+        // Was a whole-document regex that fired inside fenced code, and that
+        // consumed the whitespace before the tag and put a single space back,
+        // so a tag at the start of a line silently joined it to the line above.
+        //
+        // The boundary is the delicate part, and it is `start` that holds it.
+        // marked calls `start` with the source MINUS its first character, to
+        // work out where to cut the current text run short, so a `#` at index 0
+        // of what it passes is by definition preceded by the character that was
+        // sliced off, and is mid-word. Accepting it is what made `C#sharp`
+        // render `#sharp` as a tag. Only a `#` that follows whitespace is
+        // offered, which is the condition the old pattern expressed by
+        // consuming that whitespace.
+        //
+        // A tag that opens the source needs no offer: the tokenizer is called
+        // at that position before any text is consumed.
+        name: 'tag',
+        level: 'inline',
+        start(src) {
+          const match = /\s#[a-zA-Z]/.exec(src);
+          return match ? match.index + 1 : undefined;
+        },
+        tokenizer(src) {
+          const match = /^#([a-zA-Z][a-zA-Z0-9_/-]*)/.exec(src);
+          if (!match) return undefined;
+          return { type: 'tag', raw: match[0], name: match[1] };
+        },
+        renderer(token) {
+          return `<span class="md-tag">#${escapeHtml(token.name)}</span>`;
+        },
+      }, {
         // Obsidian wikilinks, as a tokenizer rather than a source rewrite.
         //
         // They used to be a regex over the raw source that spliced an <a> tag
@@ -269,11 +321,7 @@
       // Wikilinks are a marked extension now, not a source rewrite. See the
       // tokenizer above.
 
-      // Highlights: ==text==
-      src = src.replace(/==(.*?)==/g, '<mark>$1</mark>');
-
-      // Tags: #tag (but not inside code blocks or headings)
-      src = src.replace(/(?:^|\s)#([a-zA-Z][a-zA-Z0-9_/-]*)/g, ' <span class="md-tag">#$1</span>');
+      // Highlights and tags are marked extensions now, not source rewrites.
 
       // Callouts are a marked extension now, not a source rewrite. The flag
       // it reads is set here so the per-call option still means what it did.
