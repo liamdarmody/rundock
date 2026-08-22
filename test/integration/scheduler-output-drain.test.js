@@ -3,11 +3,14 @@
 //
 // The routine spawn used to ask for both output pipes and attach a reader to
 // neither. Node's stdio streams start paused, so nothing drained the pipe and
-// the kernel buffer filled. A Node child does not block there: its writes are
-// asynchronous, so they return, the bytes queue in its memory, and the pending
-// writes never complete, so the child never exits. Measured on a throwaway
-// parent and child: 128 KB of output completes in 26 ms, 160 KB never closes
-// at all, on either descriptor.
+// the kernel buffer filled. From there the child cannot get its bytes out: a
+// blocking descriptor stops inside the write call, an asynchronous one returns
+// and queues the bytes in the child's own memory, and either way the writes
+// never complete and the child never exits. Which of those you get is a
+// platform question rather than a general truth about Node, and the spawn
+// comment carries the looked-up answer. Measured here, on macOS, on a
+// throwaway parent and child: 128 KB of output completes in 26 ms, 160 KB
+// never closes at all, on either descriptor.
 //
 // A child that never ends never closes, and every mechanism downstream of the
 // close event is correct on its own: no close means no outcome recorded, no

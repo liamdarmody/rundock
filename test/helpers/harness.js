@@ -85,6 +85,11 @@ function readInvocations() {
 function clearInvocations() {
   try { fs.unlinkSync(path.join(workspaceDir, 'stub-invocations.jsonl')); } catch (e) {}
   try { fs.unlinkSync(path.join(workspaceDir, 'stub-grandchildren.jsonl')); } catch (e) {}
+  // The per-run output log has the same lifetime as the invocation log it sits
+  // beside: both are written by children, one line per run. Nothing reads it
+  // across a clear today, and that is exactly when a stale line is cheapest to
+  // leave and most expensive to find.
+  try { fs.unlinkSync(path.join(workspaceDir, 'stub-output.jsonl')); } catch (e) {}
   // Prompt log is per-message test state with the same lifetime, so clear it
   // alongside. Kept in a separate file because readInvocations() has exact
   // count and index assertions across the suite.
