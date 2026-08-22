@@ -72,23 +72,27 @@ before(async () => {
   h.writeScenario([
     {
       match: { agent: 'writer' },
+      // The stub decides create against update from the disk, as the real
+      // tool does, so which of the two `kept-by-writer.md` gets is settled by
+      // the test seeding it beforehand rather than by this scenario claiming
+      // it.
       writes: [
-        { file: 'made-by-writer.md', outcome: 'create' },
-        { file: 'kept-by-writer.md', outcome: 'update' },
+        { file: 'made-by-writer.md' },
+        { file: 'kept-by-writer.md' },
         { file: 'refused-for-writer.md', outcome: 'error' },
       ],
       turn: [{ text: 'writer done' }],
     },
     {
       match: { agent: 'other' },
-      writes: [{ file: 'made-by-other.md', outcome: 'create' }],
+      writes: [{ file: 'made-by-other.md' }],
       turn: [{ text: 'other done' }],
     },
     // Runs, writes a file, and leaves no transcript behind.
     {
       match: { agent: 'silent' },
       skipTranscript: true,
-      writes: [{ file: 'made-by-silent.md', outcome: 'create' }],
+      writes: [{ file: 'made-by-silent.md' }],
       turn: [{ text: 'silent done' }],
     },
     // Held open past the synchronous tick, so its transcript can be read
@@ -96,7 +100,7 @@ before(async () => {
     {
       match: { agent: 'slow' },
       delayMs: 400,
-      writes: [{ file: 'made-by-slow.md', outcome: 'create' }],
+      writes: [{ file: 'made-by-slow.md' }],
       turn: [{ text: 'slow done' }],
     },
   ]);
@@ -175,15 +179,27 @@ const listed = (record) => (record.files || []).map(f => f.path);
 test('a finished run lists the files it changed, and not the one it could not', async (t) => {
   begin(1, [WRITER]);
 
+  // THE WORKSPACE BEFORE THE RUN, stated rather than assumed, because it is
+  // what decides which of created and edited is the true answer. One file is
+  // seeded and one is not, so the run's two successful writes are genuinely
+  // an overwrite and a creation, and asserting the pair the other way round
+  // would fail.
+  const created = inWorkspace('made-by-writer.md');
+  const updated = inWorkspace('kept-by-writer.md');
+  const refused = inWorkspace('refused-for-writer.md');
+  fs.rmSync(created, { force: true });
+  fs.rmSync(refused, { force: true });
+  fs.writeFileSync(updated, 'here before the run\n');
+  assert.ok(!fs.existsSync(created), 'the file the run will create is not there yet');
+  assert.ok(fs.existsSync(refused) === false, 'and neither is the one it will fail to write');
+
   driveTicks(t);
   clock.at = dayAt(1, 5, 32);
   assert.ok(await settled(WRITER), 'the run finished');
 
-  const created = inWorkspace('made-by-writer.md');
-  const updated = inWorkspace('kept-by-writer.md');
-  const refused = inWorkspace('refused-for-writer.md');
   assert.ok(fs.existsSync(created), 'the run really created a file');
-  assert.ok(fs.existsSync(updated), 'and really wrote over another');
+  assert.notStrictEqual(fs.readFileSync(updated, 'utf-8'), 'here before the run\n',
+    'and really wrote over the one that was already there');
   assert.ok(!fs.existsSync(refused), 'and really failed to write the third');
 
   const [record] = recordsFor('writer');
@@ -196,8 +212,10 @@ test('a finished run lists the files it changed, and not the one it could not', 
     'a write it attempted and did not make is not a file it changed');
 
   const byPath = new Map(record.files.map(f => [f.path, f]));
-  assert.strictEqual(byPath.get(created).change, 'created', 'a file that was not there is a creation');
-  assert.strictEqual(byPath.get(updated).change, 'edited', 'a file that was is an edit');
+  assert.strictEqual(byPath.get(created).change, 'created',
+    'the file that was not there before the run is reported as a creation');
+  assert.strictEqual(byPath.get(updated).change, 'edited',
+    'and the file that was there before it is reported as an edit');
   assert.strictEqual(byPath.get(created).source, 'transcript', 'and each entry says where it was learned');
   assert.strictEqual(byPath.get(created).tool, 'Write', 'and which tool did it');
   assert.ok(byPath.get(created).at, 'and when');
@@ -284,6 +302,8 @@ test('a running routine can be asked what it is doing', async (t) => {
   driveTicks(t);
   const [open] = recordsFor('slow');
   assert.strictEqual(open.status, 'running', 'the run is still going');
+  assert.ok(!fs.existsSync(inWorkspace('made-by-slow.md')),
+    'and its write has not landed yet, so its transcript holds an ask and no outcome');
   assert.strictEqual(open.filesStatus, 'unknown', 'so what it changed is not settled yet');
   assert.strictEqual(open.filesReason, 'running', 'and the reason is that it has not finished');
 

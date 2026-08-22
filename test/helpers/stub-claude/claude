@@ -269,13 +269,20 @@ function finishTranscript(rule, prompt) {
   const lines = [tfx.prompt(FIXED_SESSION, String(prompt))];
   for (const w of rule.writes || []) {
     const file = path.resolve(process.cwd(), w.file);
-    if (w.outcome !== 'error') {
+    // WHETHER THIS WAS A CREATION OR AN OVERWRITE IS DECIDED BY THE DISK, not
+    // by the scenario, exactly as the real tool decides it. A scenario that
+    // could declare "update" for a file that was not there would let a test
+    // assert an edit against a run that created something, which is the field
+    // the whole created-versus-edited distinction lives in.
+    let outcome = w.outcome === 'error' ? 'error' : null;
+    if (outcome !== 'error') {
       try {
+        outcome = fs.existsSync(file) ? 'update' : 'create';
         fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, `${w.outcome || 'create'}:${w.file}\n`);
+        fs.writeFileSync(file, `${outcome}:${w.file}\n`);
       } catch (e) { /* the transcript still records what was attempted */ }
     }
-    lines.push(tfx.completed(FIXED_SESSION, { tool: w.tool || 'Write', file, outcome: w.outcome || 'create', at: w.at }));
+    lines.push(tfx.completed(FIXED_SESSION, { tool: w.tool || 'Write', file, outcome, at: w.at }));
   }
   for (const block of rule.turn || []) if (block.text != null) lines.push(tfx.say(FIXED_SESSION, block.text));
   putTranscript(rule, lines);

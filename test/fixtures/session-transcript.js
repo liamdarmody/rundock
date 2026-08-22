@@ -67,7 +67,14 @@ function fileTool(sessionId, { tool = 'Write', file, outcome = 'create', at = '2
     })
     : line({
       type: 'user', sessionId, timestamp: at,
-      toolUseResult: { type: outcome, filePath: resultPath || file, content: 'body', structuredPatch: [] },
+      // The two success payloads are DIFFERENT SHAPES in reality, and the
+      // committed capture holds both. A write reports what it did to the
+      // file, `create` or `update`, beside the path. An edit reports the
+      // path and the strings it swapped, with no type at all, because an
+      // edit can only ever be an edit.
+      toolUseResult: tool === 'Write'
+        ? { type: outcome, filePath: resultPath || file, content: 'body', structuredPatch: [] }
+        : { filePath: resultPath || file, oldString: 'before', newString: 'after', originalFile: 'before', structuredPatch: [], userModified: false },
       message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `File ${outcome === 'create' ? 'created' : 'updated'} successfully at: ${resultPath || file}` }] },
     });
   return { ask, answered, id };

@@ -34,6 +34,13 @@ const SKIP = [
   /^dist\//,
   /\.min\.(js|css)$/,
   /^scripts\/check-internal-refs\.js$/,
+  // Captured artefacts: transcripts and streams recorded verbatim from the
+  // real runtime, kept byte for byte so a format change is visible as a diff.
+  // The prose inside them is the runtime's, not ours, and rewording it to
+  // satisfy a house style rule would destroy the only thing the capture is
+  // for. Skipped rather than marked line by line, because the file is one
+  // long machine-written line per message.
+  /^scripts\/[a-z-]+\/captured-[a-z-]+\.json$/,
 ];
 
 // Each rule: a label and a regex that identifies an internal reference. Keep

@@ -315,3 +315,159 @@ describe('a transcript that cannot be used', () => {
       'the lines that parse are still read');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Drift in a format nobody here owns
+// ---------------------------------------------------------------------------
+
+describe('a format that has moved', () => {
+  // THE FAILURE THESE EXIST FOR. The transcript belongs to the agent tool. If
+  // it changes shape, the danger is not an error: it is a reader that carries
+  // on and reports, with total confidence, that a run which rewrote the
+  // workspace changed nothing. Each mutation below is a plausible drift, and
+  // each must make the reader say it does not know.
+  //
+  // Every one starts from the SAME lines that are proved to work two
+  // assertions in, so a mutation that fails to apply cannot pass as a drift
+  // that was caught.
+  const drifted = (sid, mutate) => {
+    const lines = [
+      fx.prompt(sid, 'go'),
+      fx.completed(sid, { file: '/w/one.md', outcome: 'create' }),
+    ];
+    const before = readSessionTranscript(writeAt(sid, lines));
+    assert.strictEqual(before.status, 'known', 'the unmutated lines read cleanly');
+    assert.deepStrictEqual(before.files.map(f => f.path), ['/w/one.md'], 'and yield the file');
+    writeTranscript(sid, lines.map(mutate));
+    return readSessionTranscript(sid);
+  };
+  // Helper that writes and returns the id, so the pre-check above reads the
+  // same transcript the mutation will replace.
+  function writeAt(sid, lines) { writeTranscript(sid, lines); return sid; }
+
+  const renameJson = (from, to) => (line) => line.split(`"${from}"`).join(`"${to}"`);
+
+  test('a renamed block type is drift, not a run that changed nothing', () => {
+    const result = drifted('b0000000-0000-4000-8000-000000000001', renameJson('tool_use', 'toolCall'));
+    assert.strictEqual(result.status, 'unknown');
+    assert.strictEqual(result.reason, 'unrecognized');
+    assert.strictEqual(result.files, null, 'no list, rather than an empty one');
+  });
+
+  test('a renamed input field is drift', () => {
+    const result = drifted('b0000000-0000-4000-8000-000000000002', renameJson('file_path', 'path'));
+    assert.strictEqual(result.status, 'unknown');
+    assert.strictEqual(result.reason, 'unrecognized');
+    assert.strictEqual(result.files, null);
+  });
+
+  test('an outcome payload in a shape this reader has not been shown is drift', () => {
+    const result = drifted('b0000000-0000-4000-8000-000000000003', renameJson('filePath', 'file'));
+    assert.strictEqual(result.status, 'unknown');
+    assert.strictEqual(result.reason, 'unrecognized');
+    assert.strictEqual(result.files, null);
+  });
+
+  // The error marker moving is the worst of them: it turns a refused write
+  // into a file the run reports having changed, which inverts the one claim
+  // this whole reader exists to make.
+  test('an error marker that has moved does not turn a refused write into a change', () => {
+    const sid = 'b0000000-0000-4000-8000-000000000004';
+    writeTranscript(sid, [
+      fx.prompt(sid, 'go'),
+      fx.completed(sid, { file: '/w/refused.md', outcome: 'error' }).split('"is_error":true').join('"error":true'),
+    ]);
+    const result = readSessionTranscript(sid);
+    assert.strictEqual(result.status, 'unknown', 'a refusal it cannot recognise is not a change it may report');
+    assert.strictEqual(result.files, null);
+  });
+
+  // A Write reports what it did to the file, always. One that arrives with
+  // the payload an EDIT carries, or with an outcome word this reader has
+  // never been shown, is a shape that has moved: it names a real path, so the
+  // temptation is to list it and call it changed, and the honest answer is
+  // that nobody can say whether it created or replaced anything.
+  test('a write whose outcome no longer says what it did is drift', () => {
+    const sid = 'b0000000-0000-4000-8000-000000000006';
+    writeTranscript(sid, [
+      fx.prompt(sid, 'go'),
+      fx.completed(sid, { file: '/w/one.md', outcome: 'create' }).split('"type":"create",').join(''),
+    ]);
+    const result = readSessionTranscript(sid);
+    assert.strictEqual(result.status, 'unknown', 'a write with no outcome word is not a write this reader can classify');
+    assert.strictEqual(result.files, null);
+
+    const other = 'b0000000-0000-4000-8000-000000000007';
+    writeTranscript(other, [
+      fx.prompt(other, 'go'),
+      fx.completed(other, { file: '/w/one.md', outcome: 'create' }).split('"type":"create"').join('"type":"replaced"'),
+    ]);
+    const renamed = readSessionTranscript(other);
+    assert.strictEqual(renamed.status, 'unknown', 'and neither is one whose outcome word has been renamed');
+    assert.strictEqual(renamed.files, null);
+  });
+
+  // A whole run of writes with nothing ever coming back. Reachable two ways
+  // and both matter: a run cut off mid-write, and a runtime that stopped
+  // writing outcomes at all.
+  test('writes that never came back are unresolved rather than nothing', () => {
+    const sid = 'b0000000-0000-4000-8000-000000000005';
+    writeTranscript(sid, [fx.prompt(sid, 'go'), fx.unanswered(sid, { file: '/w/pending.md' })]);
+    const result = readSessionTranscript(sid);
+    assert.strictEqual(result.status, 'unknown');
+    assert.strictEqual(result.reason, 'unresolved');
+    assert.strictEqual(result.files, null);
+    assert.ok(result.activity, 'and the run can still say what it is doing, which is how progress works');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Two outcomes in one entry
+// ---------------------------------------------------------------------------
+
+// NOT the shape the installed runtime writes, and the committed capture
+// proves it: a parallel batch of writes arrives as ONE api message and the
+// transcript splits it, one line per block. These pin what happens if that
+// ever stops being true, because the outcome payload sits on the entry while
+// the ask sits on the block, and reading the entry's payload for two blocks
+// reports one file twice and loses the other.
+describe('an entry carrying more than one outcome', () => {
+  function twoResults(sid, { payloads, ids }) {
+    const asks = ids.map((id, i) => JSON.stringify({
+      type: 'assistant', sessionId: sid, timestamp: '2026-08-22T19:15:10.000Z',
+      message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Write', input: { file_path: `/w/p${i}.md`, content: 'x' } }] },
+    }) + '\n').join('');
+    const answer = JSON.stringify({
+      type: 'user', sessionId: sid, timestamp: '2026-08-22T19:15:11.000Z',
+      toolUseResult: payloads,
+      message: { role: 'user', content: ids.map(id => ({ type: 'tool_result', tool_use_id: id, content: 'ok' })) },
+    }) + '\n';
+    writeTranscript(sid, [fx.prompt(sid, 'go'), asks, answer]);
+  }
+
+  test('outcomes are matched to their own writes by the path each names', () => {
+    const sid = 'c0000000-0000-4000-8000-000000000001';
+    twoResults(sid, {
+      ids: ['toolu_a', 'toolu_b'],
+      payloads: [
+        { type: 'create', filePath: '/w/p0.md' },
+        { type: 'update', filePath: '/w/p1.md' },
+      ],
+    });
+    const result = readSessionTranscript(sid);
+    assert.strictEqual(result.status, 'known');
+    assert.deepStrictEqual(result.files.map(f => [f.path, f.change]), [['/w/p0.md', 'created'], ['/w/p1.md', 'edited']],
+      'each write gets its own outcome, rather than one file twice and the other lost');
+  });
+
+  test('outcomes that cannot be matched are not guessed at', () => {
+    const sid = 'c0000000-0000-4000-8000-000000000002';
+    twoResults(sid, {
+      ids: ['toolu_c', 'toolu_d'],
+      payloads: { type: 'create', filePath: '/w/p0.md' }, // one payload, two results
+    });
+    const result = readSessionTranscript(sid);
+    assert.strictEqual(result.status, 'unknown', 'an outcome that cannot be attributed is not an outcome');
+    assert.strictEqual(result.files, null, 'and never a file listed twice');
+  });
+});
