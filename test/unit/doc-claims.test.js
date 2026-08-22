@@ -34,11 +34,51 @@ function useWorkspace(opts) {
 }
 
 const routinesDoc = fs.readFileSync(path.join(ROOT, 'docs', 'ROUTINES.md'), 'utf-8');
+const changelog = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf-8');
+const architecture = fs.readFileSync(path.join(ROOT, 'ARCHITECTURE.md'), 'utf-8');
 const skillsDoc = fs.readFileSync(path.join(ROOT, 'docs', 'SKILLS.md'), 'utf-8');
 
 // ---------------------------------------------------------------------------
 // docs/SKILLS.md: what actually reaches the model
 // ---------------------------------------------------------------------------
+
+describe('the workspace boundary says what it enforces, per platform', () => {
+  // The claim, in the release notes and in the audit section: the operating
+  // system enforces the folder boundary on macOS, and on Windows the boundary
+  // is the approval card alone.
+  //
+  // Pinned because this is the claim whose falsity would mislead most. A user
+  // reading it decides how much to trust the product with their machine, and
+  // the honest half is the Windows half. If the sandbox were ever quietly
+  // written on a platform that has none, or quietly dropped on the one that
+  // has it, the sentence would keep reading correctly while meaning something
+  // else. Behavioural, not a source-shape grep: the words being there was
+  // never the half in doubt.
+  const { sandboxSettings } = require('../../lib/workspace/scaffold.js');
+  const HOME = '/Users/someone';
+
+  test('both documents state the macOS-only limit, in those words', () => {
+    assert.match(changelog, /macOS only/i, 'the release notes say so where a user reads them');
+    assert.match(architecture, /macOS only/i, 'and the audit section says so too');
+  });
+
+  test('and the code does exactly that: configured on macOS, absent on Windows', () => {
+    assert.ok(sandboxSettings('/ws', 'darwin', HOME), 'macOS gets the sandbox the docs promise');
+    assert.strictEqual(sandboxSettings('/ws', 'win32', HOME), null,
+      'Windows gets none, which is what the docs say rather than something they hide');
+  });
+
+  test('the audit section names the file a reader would have to open', () => {
+    // The section exists to be followed. A claim pointing at a name that has
+    // moved is worse than no pointer, because it costs the reader the search
+    // before they find out.
+    const named = architecture.match(/`(lib\/workspace\/scaffold\.js)`/);
+    assert.ok(named, 'the claim names a file');
+    assert.ok(fs.existsSync(path.join(ROOT, named[1])), `${named[1]} exists`);
+    assert.match(fs.readFileSync(path.join(ROOT, named[1]), 'utf-8'), /function sandboxSettings/,
+      'and it holds the function the claim credits');
+  });
+});
 
 describe('SKILLS.md: only slugs are injected into the prompt', () => {
   // The claim: "Rundock injects a bare list of slugs into the agent's prompt

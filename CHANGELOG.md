@@ -4,6 +4,13 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+### Changed
+
+- **A command that reaches outside your workspace now asks you, and says that is what it is asking:** a shell command could write to your home directory, or anywhere else on the machine, with no approval card at all in a Code-mode workspace, while an ordinary file edit to the very same place asked first. The two cards ask different questions. Approving a command you cannot fully read is not the same as agreeing to let an agent out of your folder, and only the second is what Rundock promises. Any command whose target lands outside the workspace now raises the boundary card, naming where it reaches; commands that stay inside are unaffected and still run without interruption. This covers commands on Windows too, where they run through a different tool that was equally exempt.
+- **On macOS the operating system now enforces the folder boundary, not just the question:** the runtime Rundock starts is given a list of the folders a command may write to, so a write anywhere else fails at the operating system level rather than depending on anything reading the command first. Your workspace and the package cache are writable, the rest of the machine is not, and network access is unchanged. If an agent needs to step outside, it asks, and that request is the boundary card rather than a command card. **This part is macOS only.** Windows has no equivalent, and there the boundary rests on the approval card alone: a command crafted to hide its target from the card can still get past it, and Rundock would rather say so than imply a guarantee it does not have on that platform. The same is true of anything the list does not cover, such as a language's package cache other than npm's: it will ask rather than fail silently.
+
 ## 0.11.8: Editor Hardening (2026-08-20)
 
 ### Fixed
