@@ -1033,8 +1033,8 @@ function syncTitleBarOverlay(isLight) {
 
 // ===== 11. FILE TREE & EDITOR =====
 // View functions live in views/files.js (RundockFilesView, republished on
-// window for the inline handlers, the generated onclick wikilinks, and the
-// cross-section callers). What stays below is shared state and top-level
+// window for the inline handlers, the delegated wikilink listener registered
+// at the foot of this file, and the cross-section callers). What stays below is shared state and top-level
 // wiring: the WS dispatch writes the tree cache, switchNav and the palette
 // write editorReturnView/fileHistory, the find bar and the init listeners
 // read editorMode and the editor surfaces' state. TREE_ICONS and

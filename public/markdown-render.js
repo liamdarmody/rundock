@@ -72,11 +72,19 @@
 // honest state is: not yet, and the prerequisite is removing those handlers.
 // The two this renderer emitted are gone, which is the part of the surface it
 // owns. Until a policy exists, what stands between agent output and the page is
-// this file: no path through it produces markup the document controls, which is
-// a stronger claim than a policy makes and a narrower one, because it holds
-// only for what is rendered HERE. The other 86 innerHTML assignments across
-// public/ (99 counting the editor's own) are not covered by it and want a
-// change of their own.
+// this file, and the claim it makes is narrower than a policy's and stronger
+// where it holds: no path through THIS renderer produces markup the document
+// controls. The other 86 innerHTML assignments across public/ (99 counting the
+// editor's own) are not covered by it and want a change of their own.
+//
+// That claim needs two overrides, not one, and it was false with only the
+// first. Escaping the html token covers the markup marked's tag regex
+// recognises. A shape the browser accepts and that regex rejects never becomes
+// an html token: inside a raw block it arrives as text flagged as
+// already-escaped, and the default text renderer emits it verbatim. Both
+// renderers below carry the detail. Anything added here that writes to the page
+// has to answer the same question: which token types can carry document text,
+// and is every one of them covered.
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.RundockMarkdown = factory();
@@ -96,6 +104,12 @@
   // the value cannot end the attribute whichever delimiter is used, and `<`
   // and `>` are included so a value cannot start a tag if the surrounding
   // markup is ever restructured.
+  //
+  // Character for character the same rule as escAttr in app.js, and a
+  // deliberate copy rather than a shared one: this module has to stay
+  // requireable in node without app.js, which cannot be loaded outside a
+  // browser. The two are expected to stay in step; if one gains a character the
+  // other should gain it too.
   //
   // This is the ONLY escaping applied to a value that ends up in an attribute.
   // The renderer used to write attacker text into an inline handler and escape
@@ -322,6 +336,36 @@
         },
       }],
       renderer: {
+        // Text, and the second door into the page.
+        //
+        // Escaping the `html` token above closes only the markup marked's own
+        // tag regex recognises. That tokenizer also keeps state: an opening
+        // <pre>, <code>, <kbd> or <script> sets `lexer.state.inRawBlock`, and
+        // every text token made while it is set carries `escaped: true`, which
+        // tells the default text renderer to emit the characters verbatim until
+        // the close tag. A tag shape the browser accepts but the regex rejects
+        // therefore never becomes an html token at all: it arrives as text and
+        // goes to innerHTML raw, with the wrapper around it escaped and the
+        // payload inside it not.
+        //
+        //   x <code><img/src=x onerror=alert(1)></code>
+        //
+        // The slash before the attribute name is what the regex rejects and the
+        // browser does not mind, and the result is a live element with a
+        // handler that fires on render.
+        //
+        // Ordinary text is handed BACK to marked rather than escaped here, and
+        // that is the point of the shape below. marked stores the raw capture
+        // in the token and escapes at render time, using a rule that leaves a
+        // character reference already written in the prose alone, so `a &amp; b`
+        // stays one ampersand. Re-escaping it here would double-encode every
+        // entity in every message. The only branch this file takes over is the
+        // one marked would emit verbatim.
+        text(token) {
+          if ('tokens' in token && token.tokens) return false; // marked parses the children
+          if (!token.escaped) return false;                    // marked escapes it, correctly
+          return escapeAttr(token.text);
+        },
         // Raw HTML in the document. See THE DECISION at the top of this file:
         // it renders as its own characters, so nothing the document says can
         // become an element or an attribute. Comments are dropped instead of
@@ -346,8 +390,18 @@
         // Deciding at the link token removes both halves of the problem: there
         // is no HTML to re-parse, and the href goes into a data attribute
         // rather than a handler, so no JavaScript position exists to escape
-        // for. Which hrefs are claimed is unchanged, and so is the value
-        // handed to the opener.
+        // for. Which hrefs are claimed is unchanged.
+        //
+        // The value handed to the opener is NOT unchanged, and the difference
+        // is a fix rather than a side effect. The old path took the href back
+        // out of finished HTML, where marked's default renderer had already
+        // URI-encoded it, so `[a](<notes/My Plan.md>)` reached openWikilink as
+        // `notes/My%20Plan.md` and `[a](<ré.md>)` as `r%C3%A9.md`. openWikilink
+        // does no decoding: it matches the value against the file tree and
+        // sends it as a path, so an encoded name matched nothing and the link
+        // opened nothing. The token carries the destination as written, which
+        // is what the file is called and what a [[wikilink]] to the same file
+        // has always delivered.
         // Every link is written here, not only the rewritten ones. marked's own
         // link renderer escapes an href in a mode that deliberately leaves
         // existing character references intact, which is correct for a URL and
@@ -543,14 +597,8 @@
     });
   }
 
-  return {
-    createMarkdownRenderer,
-    attachWikilinkHandler,
-    attachCodeCopyHandler,
-    escapeHtml,
-    escapeAttr,
-    COPY_ICON,
-    CHECK_ICON,
-    HLJS_AUTODETECT_MAX,
-  };
+  // Only what has a caller. The client's namespace test treats a module's
+  // public surface as a deliberate manifest, and an export nobody reads is a
+  // wider surface for nothing.
+  return { createMarkdownRenderer, attachWikilinkHandler, attachCodeCopyHandler };
 }));

@@ -26,7 +26,7 @@ function loadBrowserMarked() {
 const hljs = require(path.join(ROOT, 'public', 'vendor', 'highlight', 'highlight.min.js'));
 const resolveCodeLanguage = require(path.join(ROOT, 'public', 'code-language.js'));
 const emptyOrderedListText = require(path.join(ROOT, 'public', 'empty-list.js'));
-const { createMarkdownRenderer } = require(path.join(ROOT, 'public', 'markdown-render.js'));
+const { createMarkdownRenderer, attachWikilinkHandler, attachCodeCopyHandler } = require(path.join(ROOT, 'public', 'markdown-render.js'));
 
 /** Build a renderer with the browser's dependency set. */
 function makeRenderer() {
@@ -37,7 +37,5 @@ function makeRenderer() {
     emptyOrderedListText,
   });
 }
-
-const { attachWikilinkHandler, attachCodeCopyHandler } = require(path.join(ROOT, 'public', 'markdown-render.js'));
 
 module.exports = { makeRenderer, loadBrowserMarked, attachWikilinkHandler, attachCodeCopyHandler };

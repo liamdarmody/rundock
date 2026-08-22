@@ -63,6 +63,15 @@ function outline(html) {
 }
 
 describe('renderMarkdown: ordinary markdown is untouched by this change', () => {
+  test('the frozen before fixture really is the old renderer\'s output', () => {
+    // Provenance, not decoration. Every claim that ordinary rendering did not
+    // change is taken against that file, so if it were simply a hand-written
+    // stand-in the comparison would prove nothing. The tool reproduces it from
+    // the pre-change public/app.js read out of git history.
+    const { oldRenderer } = require('../tools/regenerate-benign-before.js');
+    assert.strictEqual(oldRenderer('1441068').formatMdFull(BENIGN_MD), BENIGN_BEFORE);
+  });
+
   test('the benign document renders to the recorded bytes', () => {
     assert.strictEqual(render(BENIGN_MD), BENIGN_HTML);
   });
@@ -253,8 +262,14 @@ describe('renderMarkdown: a relative link cannot rewrite its own handler', () =>
   test('a relative link still opens the same target', () => {
     // The values the old rewrite passed to openWikilink, for the hrefs it
     // handled. Left column is the markdown; right is what must still arrive.
+    // The last two are a deliberate CHANGE, not a preservation, and are here so
+    // it is pinned rather than incidental. The old path read the href back out
+    // of finished HTML, where marked had URI-encoded it, and delivered
+    // `notes/My%20Plan.md` and `r%C3%A9.md`. openWikilink does no decoding, so
+    // those matched no file. The destination as written is what opens.
     const cases = [['[a](notes/Plan.md)', 'notes/Plan.md'], ['[a](config.yaml)', 'config.yaml'],
-      ['[a](data.json)', 'data.json'], ['[a](log.txt)', 'log.txt'], ['[a](a%20b.md)', 'a%20b.md']];
+      ['[a](data.json)', 'data.json'], ['[a](log.txt)', 'log.txt'], ['[a](a%20b.md)', 'a%20b.md'],
+      ['[a](<notes/My Plan.md>)', 'notes/My Plan.md'], ['[a](<ré.md>)', 'ré.md']];
     for (const [src, expected] of cases) {
       const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost/' });
       const doc = dom.window.document;
@@ -292,6 +307,27 @@ describe('renderMarkdown: a relative link cannot rewrite its own handler', () =>
     assert.strictEqual(d.querySelector('a').getAttribute('title'), 'a "quoted" title');
     assert.strictEqual(d.querySelector('img').getAttribute('title'), 't');
     assert.strictEqual(d.querySelector('img').getAttribute('alt'), 'y');
+  });
+
+  test('an ordinary link keeps its destination exactly as the document wrote it', () => {
+    // The same guard as the payload above, on a destination nobody would call
+    // hostile, so what the escape does is visible without having to work out
+    // how a payload is classified first.
+    //
+    // marked's own link renderer escapes an href in a mode that leaves an
+    // existing character reference intact, which is correct for a URL and wrong
+    // once the reference is the attack. Writing the attribute here means the
+    // browser decodes back to the characters the document actually wrote:
+    // `&amp;` stays `&amp;` rather than becoming a bare ampersand.
+    for (const [src, expected] of [
+      ['[a](https://example.com/?a=1&amp;b=2)', 'https://example.com/?a=1&amp;b=2'],
+      ['[a](<https://example.com/?q=&quot;x>)', 'https://example.com/?q=&quot;x'],
+    ]) {
+      const d = new JSDOM(`<div id="root">${render(src)}</div>`).window.document;
+      const anchor = d.querySelector('a');
+      assert.ok(anchor, `no anchor for: ${src}`);
+      assert.strictEqual(anchor.getAttribute('href'), expected, src);
+    }
   });
 
   test('links the rewrite never claimed are still ordinary links', () => {
@@ -413,6 +449,35 @@ describe('renderMarkdown: markdown cannot carry HTML into the page', () => {
     assert.match(doc(render('[click me](javascript:alert(1))')).textContent, /click me/);
   });
 
+  test('a hostile image alt or title cannot become an attribute', () => {
+    // The image renderer writes src, alt and title itself, so each is a value
+    // this file escapes rather than one the parser escapes for it.
+    for (const src of [
+      '![a" onerror="alert(1)](https://example.com/i.png)',
+      '![ok](https://example.com/i.png "t" onload="alert(1)")',
+      '![ok](https://example.com/i.png \'a" onerror="alert(1)\')',
+    ]) {
+      const d = doc(render(src));
+      assert.deepStrictEqual(handlerNames(d), [], `handler attribute from: ${src}`);
+      const img = d.querySelector('img');
+      if (img) {
+        // The alt legitimately CONTAINS the characters `onerror=`: that is the
+        // point. What must not exist is an attribute of that name, which the
+        // sweep above covers, and the destination must be untouched by it.
+        assert.strictEqual(img.getAttribute('src'), 'https://example.com/i.png', src);
+        const names = Array.from(img.attributes).map((a) => a.name).sort();
+        assert.ok(names.every((n) => ['src', 'alt', 'title'].includes(n)),
+          `unexpected attribute ${names.join(',')} from: ${src}`);
+      }
+    }
+  });
+
+  test('an image alt and title round-trip the characters the document wrote', () => {
+    const img = doc(render('![a "quoted" b](https://example.com/i.png "t \'x\' u")')).querySelector('img');
+    assert.strictEqual(img.getAttribute('alt'), 'a "quoted" b');
+    assert.strictEqual(img.getAttribute('title'), "t 'x' u");
+  });
+
   test('an HTML comment stays invisible instead of becoming visible text', () => {
     // Not decoration: the streaming path renders the raw response text, which
     // carries Rundock's own <!-- RUNDOCK:... --> markers. Escaping a comment
@@ -472,6 +537,35 @@ describe('renderMarkdown: the fallbacks still behave', () => {
     assert.strictEqual(root.querySelector('.code-lang').textContent, 'js');
   });
 
+  test('an unterminated comment leaves the text before it intact', () => {
+    // The header records what a marker still arriving looks like: it shows as
+    // text for a frame instead of swallowing the rest of the message, which is
+    // what an unterminated comment assigned to innerHTML used to do. Both
+    // halves of that claim are asserted here so neither can regress quietly.
+    const root = new JSDOM(`<div id="root">${render('Done. <!-- RUNDOCK:COMP')}</div>`)
+      .window.document.getElementById('root');
+    assert.match(root.textContent, /Done\./, 'the text before the opener survives');
+    assert.match(root.textContent, /<!-- RUNDOCK:COMP/, 'the partial marker reads as characters');
+    assert.strictEqual(root.querySelectorAll('img, svg, iframe, script').length, 0);
+    assert.deepStrictEqual(Array.from(root.querySelectorAll('*'))
+      .flatMap((el) => Array.from(el.attributes).map((a) => a.name)).filter((n) => n.startsWith('on')), []);
+  });
+
+  test('the callouts option still turns callouts off, and the next render back on', () => {
+    // The one stateful mechanism the extension rewrite introduced: the per-call
+    // option is bridged to a per-instance tokenizer by a flag. A flag that
+    // failed to reset would leak one render's option into the next.
+    const src = '> [!note] Title\n> Body.\n';
+    const off = new JSDOM(`<div id="root">${renderMarkdown(src, { callouts: false })}</div>`)
+      .window.document.getElementById('root');
+    assert.strictEqual(off.querySelectorAll('.callout').length, 0, 'callouts off');
+    assert.match(off.textContent, /Body\./, 'the content is still rendered, as a quote');
+
+    const on = new JSDOM(`<div id="root">${renderMarkdown(src)}</div>`)
+      .window.document.getElementById('root');
+    assert.strictEqual(on.querySelectorAll('.callout').length, 1, 'the flag reset for the next render');
+  });
+
   test('copying without a clipboard api does not throw', () => {
     // Rundock served over plain http from a VPS has no navigator.clipboard, and
     // the textarea fallback needs execCommand, which not every context has
@@ -482,5 +576,70 @@ describe('renderMarkdown: the fallbacks still behave', () => {
     attachCodeCopyHandler(dom.window.document);
     const button = dom.window.document.querySelector('.copy-code-btn');
     assert.doesNotThrow(() => button.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Injection point 1, second door: marked's raw-block text.
+//
+// Escaping the `html` token closes only the markup marked's own tag regex
+// recognises. Its inline tag tokenizer also keeps state: seeing an opening
+// <pre>, <code>, <kbd> or <script> sets `lexer.state.inRawBlock`, and every
+// text token created while that is set carries `escaped: true`, which tells the
+// default text renderer to emit the characters verbatim until the close tag.
+//
+// So a tag shape the browser accepts but that regex rejects never becomes an
+// html token at all. It falls through as text, and the flag hands it to
+// innerHTML raw. The wrapper is escaped and the payload inside it is not:
+//
+//   x <code><img/src=x onerror=alert(1)></code>
+//     -> <p>x &lt;code&gt;<img/src=x onerror=alert(1)>&lt;/code&gt;</p>
+//
+// which is a live image element with a handler that fires on render. The `/`
+// before the attribute name is what the regex rejects and the browser does not
+// mind. Every raw-block opener works, and <svg/onload=...> works the same way.
+describe('renderMarkdown: a raw block is not a way out of escaping', () => {
+  const root = (html) => {
+    const doc = new JSDOM('<div id="root"></div>', { url: 'http://localhost/' }).window.document;
+    doc.getElementById('root').innerHTML = html;
+    return doc.getElementById('root');
+  };
+  const handlerNames = (el) => Array.from(el.querySelectorAll('*'))
+    .flatMap((node) => Array.from(node.attributes).map((a) => a.name)).filter((n) => n.startsWith('on'));
+
+  test('a tag marked rejects and the browser accepts cannot survive a raw block', () => {
+    const payloads = [
+      'x <code><img/src=x onerror=alert(1)></code>',
+      'x <kbd><img/src=x onerror=alert(1)></kbd>',
+      'x <pre><img/src=x onerror=alert(1)></pre>',
+      'x <script><img/src=x onerror=alert(1)></script>',
+      'x <code><img src="x" onerror="alert(1)"\'></code>',
+      'x <code><svg/onload=alert(1)></code>',
+      // The reviewed payload. This one makes an element but no handler: the
+      // second slash folds the handler into the src value, so the browser reads
+      // one attribute. It is still markup the document controls, so it is held
+      // to the same assertion as the rest.
+      'x <code><img/src=x/onerror=alert(1)></code>',
+    ];
+    for (const src of payloads) {
+      const el = root(render(src));
+      assert.deepStrictEqual(handlerNames(el), [], `handler attribute survived: ${src}`);
+      assert.strictEqual(el.querySelectorAll('img, svg, iframe, script, style').length, 0,
+        `element created from document text by: ${src}`);
+    }
+  });
+
+  test('the escaped payload is legible as characters', () => {
+    const text = root(render('x <code><img/src=x onerror=alert(1)></code>')).textContent;
+    assert.match(text, /<img\/src=x onerror=alert\(1\)>/);
+    assert.match(text, /<code>/, 'the wrapper reads as text too');
+  });
+
+  test('a raw block does not change how ordinary text around it is escaped', () => {
+    // The fix must not double-escape: marked holds the raw capture in the token
+    // and escapes at render, so an entity already written in the prose has to
+    // survive as the one character it names.
+    assert.strictEqual(render('a &amp; b'), '<p>a &amp; b</p>\n');
+    assert.strictEqual(render('5 &lt; 6 and "quoted"'), '<p>5 &lt; 6 and &quot;quoted&quot;</p>\n');
   });
 });
