@@ -165,6 +165,65 @@ describe('scaffoldWorkspace', () => {
     assert.ok(fs.readFileSync(launcher, 'utf-8').includes('permission-hook.js'));
   });
 
+  test('the runtime sandbox is written into the settings the runtime is given', () => {
+    // The wiring, not the decision function. Without this the block could be
+    // computed perfectly and never reach the file the runtime is started
+    // with (lib/runtime/claude.js passes --settings at this exact path), and
+    // every test of the decision would still be green.
+    const dir = useWorkspace({ claudeMd: '# x' });
+    srv.scaffoldWorkspace(dir);
+    const settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf-8'));
+    if (process.platform === 'darwin') {
+      assert.ok(settings.sandbox, 'the sandbox block is present');
+      assert.strictEqual(settings.sandbox.enabled, true);
+      assert.ok(settings.sandbox.filesystem.allowWrite.includes(dir),
+        'the workspace it was scaffolded for is the writable root, not some other one');
+    } else {
+      assert.strictEqual(settings.sandbox, undefined,
+        'no sandbox block on a platform with no sandbox');
+    }
+  });
+
+  test('an existing workspace gains the sandbox on the next open, with its hooks already current', () => {
+    // The upgrade path, and the only case where the sandbox alone decides
+    // whether the file is written at all. Every workspace that exists today
+    // has current hooks and no sandbox block, so if adding one does not by
+    // itself mark the settings dirty, nothing changes for anybody who is
+    // already using this product. Found by mutation: removing that term
+    // turned no test red, because a FRESH scaffold writes the file for the
+    // hooks regardless and hid the case that matters.
+    const dir = useWorkspace({ claudeMd: '# x' });
+    srv.scaffoldWorkspace(dir);
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    delete settings.sandbox;
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+
+    srv.scaffoldWorkspace(dir);
+
+    const after = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    if (process.platform === 'darwin') {
+      assert.ok(after.sandbox && after.sandbox.enabled === true,
+        'the sandbox arrives even though the hooks needed no change');
+    } else {
+      assert.strictEqual(after.sandbox, undefined);
+    }
+  });
+
+  test('a sandbox block already in the file is left exactly as the user wrote it', () => {
+    // Whoever edited it knows something this scaffold does not: which extra
+    // roots their work needs. Overwriting on every workspace open would undo
+    // that silently, on a file they were invited to edit.
+    const dir = useWorkspace({ claudeMd: '# x' });
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    const mine = { enabled: true, filesystem: { allowWrite: ['/somewhere/of/my/own'] } };
+    fs.writeFileSync(settingsPath, JSON.stringify({ sandbox: mine }));
+    srv.scaffoldWorkspace(dir);
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    assert.deepStrictEqual(settings.sandbox, mine, 'untouched');
+  });
+
   test('idempotent: second run makes no changes and adds no duplicate hook entries', () => {
     const dir = useWorkspace({ claudeMd: '# x' });
     srv.scaffoldWorkspace(dir);
