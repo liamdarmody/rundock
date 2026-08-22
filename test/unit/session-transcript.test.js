@@ -407,6 +407,28 @@ describe('a format that has moved', () => {
     assert.strictEqual(renamed.files, null);
   });
 
+  // The marker that decides whether a write counts as a change, arriving as
+  // something other than a boolean. Read for truthiness, the string "false"
+  // is a refusal and the write vanishes from the list; read strictly, it is
+  // not a refusal and the write is listed as though nothing had been said.
+  // Both are answers this reader has no right to give.
+  test('an error marker that is no longer a boolean is drift', () => {
+    const sid = 'b0000000-0000-4000-8000-000000000008';
+    // A write that otherwise reads as a SUCCESS, so the marker is the only
+    // thing in question. Put on a refusal instead, the payload beside it is
+    // an error string this reader cannot read either, and the marker would
+    // never decide anything.
+    writeTranscript(sid, [
+      fx.prompt(sid, 'go'),
+      fx.completed(sid, { file: '/w/one.md', outcome: 'create' })
+        .split('"type":"tool_result"').join('"type":"tool_result","is_error":"false"'),
+    ]);
+    const result = readSessionTranscript(sid);
+    assert.strictEqual(result.status, 'unknown', 'a marker in a shape this reader cannot judge is not judged');
+    assert.strictEqual(result.reason, 'unrecognized');
+    assert.strictEqual(result.files, null);
+  });
+
   // A whole run of writes with nothing ever coming back. Reachable two ways
   // and both matter: a run cut off mid-write, and a runtime that stopped
   // writing outcomes at all.
