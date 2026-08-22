@@ -489,7 +489,7 @@ const {
   resolveClaudeBin, killProcessTree, spawnClaude,
   registerChildPid, unregisterChildPid, pruneScratch,
   loadPidFile, savePidFile, pidOf, pidRecordAlive,
-  processCommand, readProcCmdline, psCommand, commandLineCapability,
+  processCommand, readProcCmdline, parseProcCmdline, psCommand, commandLineCapability,
 } = claudeRuntime;
 claudeRuntime.wireClaudeRuntimeDeps({ getActualPort: () => ACTUAL_PORT });
 const codexGlue = require('./lib/runtime/codex-glue.js');
@@ -3113,7 +3113,7 @@ module.exports._internal = {
   getBareArgs, getSpawnEnv, getDisallowedTools, getPermissionMode,
   getAllowedToolsInteractive, getAllowedToolsLegacy, modelArgs,
   killAllChildren, cleanOrphanedProcesses, loadPidFile, savePidFile, pidRecordAlive,
-  processCommand, readProcCmdline, psCommand, commandLineCapability,
+  processCommand, readProcCmdline, parseProcCmdline, psCommand, commandLineCapability,
   // live state maps
   chatProcesses, convoTranscripts, pendingPermissionRequests,
   agentAutoResumeCount, disconnectBuffer, connectedClients,

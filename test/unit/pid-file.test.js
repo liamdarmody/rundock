@@ -30,7 +30,7 @@ async function liveChild() {
   });
   return kid;
 }
-const { pidRecordAlive, processCommand, readProcCmdline, psCommand, commandLineCapability } = srv._internal;
+const { pidRecordAlive, processCommand, readProcCmdline, parseProcCmdline, psCommand, commandLineCapability } = srv._internal;
 
 // Decided once, at load, so a skip can name what is missing rather than
 // reporting an environment as a defect.
@@ -137,6 +137,46 @@ describe('child pid records', () => {
     const spawned = commandLineCapability(() => null, () => '/x/node -e code');
     assert.deepStrictEqual(spawned, { ok: true, source: 'ps -p <pid> -o args=', missing: null },
       'the spawning source remains for platforms with no other');
+  });
+
+  // The separator question, covered on every machine including the ones with no
+  // procfs to read. What /proc hands over is argv with a NUL after every
+  // argument INCLUDING the last; what the guard needs is the same string `ps -o
+  // args=` prints. Getting this wrong yields a command line that matches
+  // nothing, which looks like every record being foreign.
+  test('argv separated by NULs becomes the space-joined command line', () => {
+    assert.strictEqual(parseProcCmdline('/usr/bin/node\0-e\0setInterval(() => {}, 1e9)\0'),
+      '/usr/bin/node -e setInterval(() => {}, 1e9)', 'NULs become single spaces and the trailing one goes');
+    assert.strictEqual(parseProcCmdline('/usr/bin/node\0'), '/usr/bin/node', 'a one-argument command line survives');
+    assert.strictEqual(parseProcCmdline('/usr/bin/node\0-e\0x'), '/usr/bin/node -e x', 'a missing trailing NUL is not a missing argument');
+    assert.strictEqual(parseProcCmdline(''), null, 'an empty cmdline is no answer, not an empty command line');
+    assert.strictEqual(parseProcCmdline('\0\0'), null, 'nor is one that is all separator');
+  });
+
+  // AC of the whole card: where the command line can be read without spawning,
+  // it IS read that way. Unobservable in the value, because both sources return
+  // the identical string wherever both work: a mutant that asks ps first passed
+  // the entire suite on Linux. What distinguishes them is the spawn, so that is
+  // what this observes.
+  test('nothing is spawned when the command line can be read without it', () => {
+    let spawns = 0;
+    const value = processCommand(process.pid, () => '/x/node -e code', () => { spawns++; return '/x/node -e code'; });
+    assert.strictEqual(value, '/x/node -e code');
+    assert.strictEqual(spawns, 0, 'the spawning source must not be reached when the free one answered');
+
+    let fallbacks = 0;
+    const viaPs = processCommand(process.pid, () => null, () => { fallbacks++; return '/x/node -e code'; });
+    assert.strictEqual(viaPs, '/x/node -e code', 'and it must still be reached when the free one cannot answer');
+    assert.strictEqual(fallbacks, 1);
+  });
+
+  // Neither reader may invent an answer for a process that is not there. A '' or
+  // a stray value here would match every record through the deliberately loose
+  // comparison, which is the exact failure the guard exists to prevent.
+  test('a pid that does not exist yields no command line from either source', () => {
+    assert.strictEqual(readProcCmdline(2147480000), null, 'the non-spawning source must say nothing');
+    assert.strictEqual(psCommand(2147480000), null, 'the spawning source must say nothing');
+    assert.strictEqual(processCommand(2147480000), null, 'and so must the reader that picks between them');
   });
 
   test('a dead pid is not alive', () => {
