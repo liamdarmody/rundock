@@ -21,6 +21,7 @@
     "OVERALL lib/workspace/scaffold.js": 96.9,
     "OVERALL lib/signals.js": 100,
     "OVERALL lib/runtime/codex-glue.js": 96.3,
+    "OVERALL lib/runtime/session-transcript.js": 100.0,
     "Delegation / orchestration engine": 96,
     "- wireProcessHandlers (stream-json + interception)": 100,
     "- handleScopeReturn": 95.3,

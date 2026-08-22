@@ -142,7 +142,11 @@ function exitWhenWritten(code) {
   process.stderr.write('', done);
 }
 
-const SESSION_ID = RESUME || `stub-${AGENT || 'default'}-${process.pid}`;
+// A run that was told which session to be is that session, exactly as the
+// real binary is: --session-id fixes the id, and the transcript below is
+// named for it. Only the routine spawn passes it today.
+const FIXED_SESSION = argValue('--session-id');
+const SESSION_ID = FIXED_SESSION || RESUME || `stub-${AGENT || 'default'}-${process.pid}`;
 let initSent = false;
 
 function loadRules() {
@@ -203,7 +207,89 @@ function buildEnvelopes(rule) {
   return events;
 }
 
-function emitTurn(rule) {
+// THE TRANSCRIPT, which is the half of a run this stub used not to leave
+// behind at all. The real binary appends every message and every tool result
+// to ~/.claude/projects/<cwd encoded>/<session id>.jsonl as it goes, and that
+// file is the only place a run's tool OUTCOMES are recorded. A stub that
+// spoke the stream and left no transcript could not reproduce the defect the
+// reader exists to prevent: a write that was refused looking exactly like one
+// that happened.
+//
+// The directory rule is the one observed from a real run (every character
+// that is not a letter or a digit becomes a dash), written out here rather
+// than shared with the reader, which deliberately makes no assumption about
+// it and searches by session id instead. If the rule is ever wrong, the
+// reader still finds this file and only the stub is wrong, which is the right
+// way round.
+//
+// A rule's `writes` entries REALLY WRITE their files, except the ones whose
+// outcome is 'error'. That is what lets a test compare the list a run reports
+// against what is actually on disk, instead of against the fixture it asked
+// for.
+const tfx = require(path.join(__dirname, '..', '..', 'fixtures', 'session-transcript.js'));
+
+function transcriptFile() {
+  if (!FIXED_SESSION) return null;
+  const dir = path.join(process.env.HOME || '', '.claude', 'projects', process.cwd().replace(/[^a-zA-Z0-9]/g, '-'));
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    return path.join(dir, `${FIXED_SESSION}.jsonl`);
+  } catch (e) { return null; }
+}
+
+function putTranscript(rule, lines) {
+  if (rule.skipTranscript) return;
+  const file = transcriptFile();
+  if (!file) return;
+  try { fs.writeFileSync(file, lines.join('')); } catch (e) { /* best effort, like every log here */ }
+}
+
+// WHAT THE RUN HAS GOT TO, written when it gets there. A real run appends its
+// transcript as it goes, so a run still in flight has asked for its tool and
+// has no outcome for it yet. Modelled in two steps for exactly that reason: a
+// stub that only wrote the finished transcript could not show a run being
+// asked what it is doing, and a reader that counted asks as changes would
+// pass against it.
+function beginTranscript(rule, prompt) {
+  putTranscript(rule, [
+    tfx.prompt(FIXED_SESSION, String(prompt)),
+    ...(rule.writes || []).map(w => tfx.unanswered(FIXED_SESSION, {
+      tool: w.tool || 'Write', file: path.resolve(process.cwd(), w.file), outcome: w.outcome || 'create', at: w.at,
+    })),
+  ]);
+}
+
+// The end of the run: the writes REALLY HAPPEN here, except the ones whose
+// outcome is 'error', which is what lets a test compare the list a run reports
+// against what is actually on disk rather than against the fixture it asked
+// for. The file writes are not conditional on a transcript being kept: a run
+// whose transcript goes missing still changed the workspace, which is the case
+// that separates "changed nothing" from "nobody can say".
+function finishTranscript(rule, prompt) {
+  const lines = [tfx.prompt(FIXED_SESSION, String(prompt))];
+  for (const w of rule.writes || []) {
+    const file = path.resolve(process.cwd(), w.file);
+    // WHETHER THIS WAS A CREATION OR AN OVERWRITE IS DECIDED BY THE DISK, not
+    // by the scenario, exactly as the real tool decides it. A scenario that
+    // could declare "update" for a file that was not there would let a test
+    // assert an edit against a run that created something, which is the field
+    // the whole created-versus-edited distinction lives in.
+    let outcome = w.outcome === 'error' ? 'error' : null;
+    if (outcome !== 'error') {
+      try {
+        outcome = fs.existsSync(file) ? 'update' : 'create';
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, `${outcome}:${w.file}\n`);
+      } catch (e) { /* the transcript still records what was attempted */ }
+    }
+    lines.push(tfx.completed(FIXED_SESSION, { tool: w.tool || 'Write', file, outcome, at: w.at }));
+  }
+  for (const block of rule.turn || []) if (block.text != null) lines.push(tfx.say(FIXED_SESSION, block.text));
+  putTranscript(rule, lines);
+}
+
+function emitTurn(rule, prompt) {
+  if (FIXED_SESSION) finishTranscript(rule, prompt);
   const events = buildEnvelopes(rule);
   // A run that ends normally can still have written to stderr: warnings,
   // progress, deprecation notices. Modelled because stderr is a pipe like any
@@ -264,6 +350,12 @@ function handleUserMessage(content) {
     turn: [{ text: `STUB-NO-RULE agent=${AGENT} prompt=${String(content).slice(0, 120)}` }],
   };
   if (rule.spawnChild) spawnGrandchild();
+  // Written before the turn is emitted, and before any delay, so a run held
+  // open by a delayed rule has a transcript to be read WHILE it is still
+  // going, which is what progress is read from. It holds the tools asked for
+  // and no outcomes yet, which is exactly what a run that died halfway leaves
+  // behind.
+  if (FIXED_SESSION) beginTranscript(rule, content);
   if (rule.crash != null) {
     // Abnormal death: exit without emitting a result envelope, so the
     // server's close handler runs with no result for this turn.
@@ -286,8 +378,8 @@ function handleUserMessage(content) {
     return;
   }
   const delay = rule.delayMs || 0;
-  if (delay > 0) setTimeout(() => emitTurn(rule), delay);
-  else emitTurn(rule);
+  if (delay > 0) setTimeout(() => emitTurn(rule, content), delay);
+  else emitTurn(rule, content);
 }
 
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -313,7 +405,8 @@ if (PRINT) {
       // flags with values (skip the value); boolean flags have no value
       if (['--model', '--agent', '--resume', '--output-format', '--input-format',
         '--permission-mode', '--allowed-tools', '--disallowed-tools',
-        '--append-system-prompt', '--settings', '--mcp-config', '--add-dir'].includes(a)) i++;
+        '--append-system-prompt', '--settings', '--mcp-config', '--add-dir',
+        '--session-id'].includes(a)) i++;
     } else {
       positional.push(a);
     }

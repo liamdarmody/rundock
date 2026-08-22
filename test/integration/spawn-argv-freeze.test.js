@@ -46,7 +46,7 @@ after(async () => h.shutdown());
 // Flags whose values are dynamic by design. The flag's presence and position
 // stay frozen; only the value is masked.
 const DYNAMIC_VALUE_FLAGS = new Set([
-  '--add-dir', '--settings', '--mcp-config', '--append-system-prompt', '--resume',
+  '--add-dir', '--settings', '--mcp-config', '--append-system-prompt', '--resume', '--session-id',
 ]);
 
 function maskArgv(argv) {
@@ -167,6 +167,11 @@ describe('spawn argv freeze', () => {
       '--output-format', 'stream-json',
       '--verbose',
       '--dangerously-skip-permissions',
+      // The run names the session it will run under, which is the only way
+      // anything can find the transcript it leaves afterwards: the run's own
+      // output is discarded at the spawn and never read. An identity on the
+      // invocation, not a change to what the child says or where it says it.
+      '--session-id', '<session-id>',
       '--agent', 'content-lead',
       'freeze routine path',
     ]);
