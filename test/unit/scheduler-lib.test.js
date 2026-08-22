@@ -393,6 +393,49 @@ test('a child that reports an error and never closes does not hold the routine',
   });
 });
 
+// The run record's AC-6, on the path that only a fake spawn can reach.
+//
+// A child that never launched reports an Error with a message: the binary is
+// missing, the descriptors are exhausted, the executable is not executable.
+// That reason is the whole of what a maintainer has to go on, because no child
+// existed to write anything. The outcome handler used to close the record with
+// no reason at all on every path, so this failure and a routine that ran and
+// exited non-zero were indistinguishable in the history, and only one of them
+// genuinely has nothing to say.
+//
+// This test lives here rather than beside the rest of the run-record suite
+// because the event cannot be produced against a real spawn: the integration
+// harness resolves a stub that does launch. The fake spawn is the only place
+// this path exists.
+test('a child that never launched puts the reason it gave in the run record', async () => {
+  await withTempWorkspaceAsync(async () => {
+    const child = new EventEmitter();
+    await withFakeSpawn(() => child, async (sched) => {
+      assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true, 'the run started');
+
+      // Opened before anything went wrong, so the assertion below is about the
+      // ending rather than about whether a record exists at all.
+      const [opened] = sched.readRunRecords();
+      assert.strictEqual(opened.status, 'running', 'the run opened a record');
+
+      child.emit('error', Object.assign(new Error('spawn claude ENOENT'), { code: 'ENOENT' }));
+
+      const [rec] = sched.readRunRecords();
+      assert.strictEqual(rec.id, opened.id, 'the same record was closed rather than a second one written');
+      assert.strictEqual(rec.status, 'failed', 'a child that never launched is a failed run');
+      assert.strictEqual(rec.error, 'spawn claude ENOENT',
+        'carrying the reason the failure gave, which is all anyone has when there was no child');
+      assert.strictEqual(sched.routineState[KEY].status, 'failed',
+        'and the routine state agrees, in its own vocabulary');
+
+      // No close is driven afterwards. The run already reached an outcome, so
+      // the routine is released and a close would be swallowed by the
+      // record-once guard; the test beside this one is what covers that.
+      child.emit('close', 0);
+    });
+  });
+});
+
 // The cost of listening to both: a failure that reports twice must not be
 // recorded twice. Counted through the broadcast, which happens once when a run
 // starts and once per outcome, so a second outcome is a third broadcast.

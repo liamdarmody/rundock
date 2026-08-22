@@ -276,10 +276,11 @@ test('a run leaves one record, open while it runs and closed when it ends', asyn
   assert.strictEqual(rec.error, null, 'a run that succeeded gave no reason, so none is recorded');
 });
 
-// AC-6 and AC-22. The only failure that hands this file a reason today is a
-// start that threw: a child's exit code carries no message, and reading what
-// the child said is explicitly another card. So this is the test that a reason
-// reaches the record at all.
+// AC-6 and AC-22, on the first of the three failures that hand over a reason.
+// The other two are a child that never launched and a codex turn that could not
+// start, each covered by its own test. The failure with no reason to give is a
+// child that ran and exited non-zero: an exit code is not a message, and
+// reading what the child said is explicitly another card.
 //
 // It is also where a record could most easily be abandoned. The start throws
 // out of executeRoutine, so nothing on the ordinary outcome path runs, and a
@@ -401,6 +402,45 @@ test('the record names the agent by the id everything else keys on, not its disp
   assert.notStrictEqual(rec.agent, agent.name, 'and not the name a person reads on screen');
   assert.ok(h.internal.routineState[`${rec.agent}:${rec.routine}`],
     'so the record joins back to the run state, which is the point of carrying it');
+});
+
+// AC-6 on the OTHER kind of failure, and the distinction is the whole point.
+// A child that exits non-zero says nothing a record could carry, so `error` is
+// null there and that is honest. A codex turn that cannot start its thread is
+// handed an object with a message, and the scheduler already prints that
+// message to the console one line before the outcome is recorded. A record
+// saying `failed` with no reason, beside a log line saying exactly why, is a
+// reason discarded rather than a reason absent.
+//
+// The console line is what the assertion is anchored to, rather than a literal
+// string of the client's. What must hold is that the record carries the same
+// reason the failure gave, not that the reason reads any particular way.
+test('a codex run that cannot start its thread records the reason it was given', async (t) => {
+  begin(18, [CODEX]);
+  // Exhaust the client's retries so thread/start ultimately rejects. This is
+  // the rejection path, not a turn that ran and failed.
+  h.writeCodexScenario([], { overload: { method: 'thread/start', times: 10 } });
+
+  const errors = [];
+  const realError = console.error;
+  console.error = (...args) => errors.push(args.join(' '));
+  try {
+    driveTicks(t);
+    assert.ok(await settled(CODEX, { timeout: 25000 }), 'the codex run reached an outcome');
+  } finally {
+    console.error = realError;
+    h.writeCodexScenario([]);
+  }
+
+  const [rec] = records();
+  assert.strictEqual(rec.status, 'failed', 'a thread that never started is a failed run');
+  assert.ok(typeof rec.error === 'string' && rec.error.length > 0,
+    'and the record carries a reason rather than nothing');
+
+  const logged = errors.find(e => e.includes('codex-check') && e.includes('failed to run'));
+  assert.ok(logged, 'the scheduler printed why, which is what proves a reason existed to be kept');
+  assert.ok(logged.includes(rec.error),
+    'and the record carries that same reason, rather than dropping it one line after it was printed');
 });
 
 // ---------------------------------------------------------------------------
