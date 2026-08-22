@@ -776,6 +776,69 @@ test('a start that fails before its record is opened does not hold the routine',
   assert.ok(await settled(KEEPER), 'the run that did start finished');
 });
 
+// AC-22 IN THE COMBINATION IT NAMES, which nothing above exercises. The test
+// beside this one forces the write to fail against a routine whose start
+// SUCCEEDS, and the throwing routine is only ever driven against a writable
+// store. The criterion is about neither on its own: it is about a record write
+// failing on the path that runs INSIDE the catch that keeps the whole pass
+// alive.
+//
+// That is the worst place for a swallowed failure to stop being swallowed. A
+// throw raised there escapes exactly as the original one did, one routine ends
+// the pass for every agent in the workspace, and it happens again sixty seconds
+// later with nothing recorded and nothing shown. The write helper wraps both of
+// its filesystem calls, so this holds by construction today; a criterion whose
+// named combination is left to construction is the kind of claim this project
+// has had wrong four times, every one a comment asserting what the code did not
+// do.
+//
+// The routine that follows the thrower is the isolation half, and the empty
+// store is what proves the write really was failing rather than the setup
+// quietly not taking.
+test('a start that throws while the record store is unwritable still fails safely', async (t) => {
+  begin(20, [FAULTY, MISMATCH]);
+  fs.mkdirSync(path.dirname(runsDir()), { recursive: true });
+  fs.writeFileSync(runsDir(), 'not a directory');
+  h.clearPrompts();
+
+  try {
+    const { errors } = driveTicks(t);
+
+    // The store really could not be written, on this pass, for these runs.
+    // Without this the whole test is satisfied by a writable store.
+    assert.deepStrictEqual(records(), [], 'no record could be written at all');
+    assert.ok(errors.some(e => e.includes('run record')),
+      'and the write failure was reported rather than passing silently');
+
+    // THE REASON IS THE START'S OWN. A throw escaping the record write would
+    // replace it, and the routine state would explain a filesystem problem to
+    // someone whose routine is malformed.
+    const failed = h.internal.routineState[FAULTY];
+    assert.strictEqual(failed.status, 'failed', 'the throwing start was recorded as a failed run');
+    assert.match(failed.error, /null byte/i, 'carrying the reason its own start gave');
+    assert.doesNotMatch(failed.error, /EEXIST|ENOTDIR|not a directory/i,
+      'and not the reason the record store gave, which is a different problem entirely');
+    assert.ok(errors.some(e => e.includes('faulty-check') && e.includes('failed to start')),
+      'and the log names the routine that failed to start, beside the write failure');
+
+    // The isolation half: a routine declared after the thrower, on the same
+    // pass, with the write still failing under both of them.
+    const after = h.internal.routineState[MISMATCH];
+    assert.ok(after, 'the routine declared after the thrower was reached');
+    assert.strictEqual(after.lastRun, dayAt(20, 5, 30).toISOString(), 'and started on that same pass');
+
+    // And everything below the routine loop, which the original escape skipped.
+    assert.strictEqual(h.internal.routineSlots.observedAt, dayAt(20, 5, 30).toISOString(),
+      'the end-of-tick bookkeeping still ran, so the pass did not end at the thrower');
+
+    assert.ok(await settled(MISMATCH), 'the run that did start finished');
+    assert.ok(h.promptsFor('mismatched').includes(MISMATCH_BODY),
+      'and it really did the work, rather than only being recorded as having started');
+  } finally {
+    fs.rmSync(runsDir(), { force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // The reader
 // ---------------------------------------------------------------------------
