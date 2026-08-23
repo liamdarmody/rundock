@@ -488,7 +488,9 @@ const {
   modelArgs, getBareArgs, getSpawnEnv,
   resolveClaudeBin, killProcessTree, spawnClaude,
   registerChildPid, unregisterChildPid, pruneScratch,
-  loadPidFile, savePidFile, pidOf, pidRecordAlive, processCommand,
+  loadPidFile, savePidFile, pidOf, pidRecordAlive,
+  processCommand, readProcCmdline, parseProcCmdline, psCommand,
+  commandLineCapability, COMMAND_LINE_SOURCES,
 } = claudeRuntime;
 claudeRuntime.wireClaudeRuntimeDeps({ getActualPort: () => ACTUAL_PORT });
 const codexGlue = require('./lib/runtime/codex-glue.js');
@@ -3111,7 +3113,9 @@ module.exports._internal = {
   handleChatSpawnError, resolveClaudeBin, spawnClaude, killProcessTree,
   getBareArgs, getSpawnEnv, getDisallowedTools, getPermissionMode,
   getAllowedToolsInteractive, getAllowedToolsLegacy, modelArgs,
-  killAllChildren, cleanOrphanedProcesses, loadPidFile, savePidFile, pidRecordAlive, processCommand,
+  killAllChildren, cleanOrphanedProcesses, loadPidFile, savePidFile, pidRecordAlive,
+  processCommand, readProcCmdline, parseProcCmdline, psCommand,
+  commandLineCapability, COMMAND_LINE_SOURCES,
   // live state maps
   chatProcesses, convoTranscripts, pendingPermissionRequests,
   agentAutoResumeCount, disconnectBuffer, connectedClients,
