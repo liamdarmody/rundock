@@ -229,9 +229,18 @@ tested a different build.
 
 Four groups in the test file, each opening with a header comment naming its
 point, the code that was wrong, and the output its payload produced before the
-change. A fifth group covers a fifth point found while closing the fourth: no
-scheme filter on a link or image destination, so `[click](javascript:alert(1))`
-produced an anchor that ran on click.
+change. Two more groups cover two more ways in, neither of them named when the
+criteria were written and both found while closing the four:
+
+- No scheme filter on a link or image destination, so
+  `[click](javascript:alert(1))` produced an anchor that ran on click and an
+  image source did the same with no click at all.
+- Marked's raw-block text path, which reaches innerHTML unescaped and is the
+  second door into point 1 rather than a point of its own. Escaping the `html`
+  token covers only the markup marked's tag regex recognises; a shape the
+  browser accepts and that regex rejects arrives as text flagged
+  already-escaped. `x <code><img/src=x onerror=alert(1)></code>` was a live
+  image with a handler that fires on render.
 
 > **AC-14:** Each proof fails when its own guard is removed.
 
