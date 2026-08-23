@@ -13,7 +13,8 @@ diff or a local test run there would otherwise see a skip and no measurement
 anywhere.
 
 Linux figures below: run `32630589200`, commit `337e95d`, jobs `Test (Node 22)`
-and `Test (Node 24)`, both green. Reproduce on any Linux host with:
+and `Test (Node 24)`, both green. The default-binding rows in the last table were
+measured on runs `32630171282`, `32630173480` and `32631467930`. Reproduce on any Linux host with:
 
     node --test test/unit/pid-file.test.js
 
@@ -128,6 +129,16 @@ observed:
   reached. This is the one that covers the shipped wiring; the first covers a
   model of it, and stays green if the defaults are swapped.
 
+The capability report has the same shape and needed the same treatment. Its two
+sources are named POSITIONALLY, so swapping its defaults makes it report the
+free source while probing the spawning one, and every skip reason and diagnostic
+in the suite would then name the wrong thing. Asserting the reported name does
+not catch that, because a swap leaves the name where it was. `the DEFAULT
+capability report names the source that actually answered` injects nothing and
+makes the spawning primitive fail underneath, so on a machine where the free
+source works the two become distinguishable by what they answered rather than by
+where they sit.
+
 ## What happens where no source answers
 
 The record is assumed to be ours rather than discarded. A recycled pid can be
@@ -163,6 +174,7 @@ run `node --test test/unit/pid-file.test.js`, and revert.
 | `processCommand` asks the spawning source first, via injected readers | `nothing is spawned when the command line can be read without it` |
 | `processCommand`'s DEFAULT readers swapped, nothing injected | `the DEFAULT reader is the non-spawning one, with nothing injected` (Linux, both Node lines) |
 | `processCommand`'s first default bound to the spawning source | same test (Linux, both Node lines) |
+| The capability report's DEFAULT readers swapped, nothing injected | `the DEFAULT capability report names the source that actually answered` (Linux, both Node lines) |
 | argv joined with nothing instead of a space | `argv separated by NULs becomes the space-joined command line` |
 | The executable name returned instead of the command line | same test |
 | An empty cmdline returned as an empty command line | same test |
@@ -170,10 +182,11 @@ run `node --test test/unit/pid-file.test.js`, and revert.
 The last two rows were also run on Linux against an earlier shape of this
 change, where each turned the printable-argv comparison red on Node 22 and 24.
 
-The two default-binding rows are the ones worth keeping in mind: each turned
-exactly ONE test red, the last one in the list above, while the whole rest of
-the suite stayed green. That is why a test that injects readers is not enough on
-its own.
+The three default-binding rows are the ones worth keeping in mind. Each turned
+exactly ONE test red while the whole rest of the suite stayed green, including,
+in every case, the test that injects readers to cover the same property. That is
+why injecting readers is not enough on its own: it supplies the very positions
+the defect is in.
 
 **One change that turned nothing red is recorded because it is a result.** An
 empty-output guard on the spawning path (`out || null`) survived every test on
