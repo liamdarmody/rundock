@@ -90,6 +90,10 @@ describe('nested frontmatter block parsers', () => {
   // declares none of them still means what it always meant: it runs locally,
   // it is enabled, it is not paused, and its owner is settled by the caller
   // that knows which agent file this frontmatter came from.
+  //
+  // `timezone` is null here rather than the machine's zone, and this is the
+  // whole-shape assertion that would notice a default arriving from anywhere:
+  // a routine that never recorded a zone still has not recorded one.
   test('parseRoutines extracts each routine with fields, typed', () => {
     const routines = srv.parseRoutines(fm);
     assert.strictEqual(routines.length, 2);
@@ -99,6 +103,7 @@ describe('nested frontmatter block parsers', () => {
       prompt: 'Run the digest',
       skill: null,
       runOn: 'local',
+      timezone: null,
       owner: null,
       enabled: true,
       paused: false,
