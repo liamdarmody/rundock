@@ -46,6 +46,14 @@ const ROOT = path.join(__dirname, '..', '..');
 // noticed as well.
 const MODEL = { src: path.join(ROOT, 'public', 'routine-editor-model.js'), suite: 'test/unit/routine-editor-model.test.js' };
 const VIEW = { src: path.join(ROOT, 'public', 'views', 'routine-editor.js'), suite: 'test/unit/routine-editor-view.test.js' };
+// The client's message dispatch. It is not a module the suite can load, so its
+// case bodies are cut out and run; mutating it here is what proves those tests
+// are watching the dispatch rather than the stubs they run it against. Wiring
+// reachable only by loading the whole shell is exactly the wiring that gets
+// deleted by accident.
+const APP = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routine-editor-view.test.js' };
+// The handler that writes the routine.
+const HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/unit/routine-write.test.js' };
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -169,6 +177,41 @@ const MUTATIONS = [
   [VIEW, 'the skill list fills in when it arrives',
     '    state.skills = list || [];\n    state.loading = false;',
     '    state.skills = list || [];'],
+  [VIEW, 'the breadcrumb returns to the agent it names',
+    "    if (agentId && typeof showProfile === 'function') { showProfile(agentId); return; }\n",
+    ''],
+  [VIEW, 'the breadcrumb names an agent only when there is one to return to',
+    '    if (state.agentId && state.agentName) {',
+    '    if (state.agentName || true) {'],
+
+  // The dispatch. Each of these deletes one call the client makes into the
+  // editor, which is the accident these tests exist to catch.
+  [APP, 'the client tells the editor its skill list arrived',
+    'routineEditorSkillsArrived(d.skills); ',
+    ''],
+  [APP, 'the client releases the editor when the routine is written',
+    '      routineEditorSaved();\n',
+    ''],
+  [APP, 'the client hands a refusal back to the editor',
+    '      routineEditorFailed(d.message);\n',
+    ''],
+  [APP, 'the client shows the refusal the server sent',
+    "      addSystemMsg(d.message || 'Routine could not be saved');",
+    "      addSystemMsg('');"],
+
+  // The write path. The first of these is why the broadcast test asserts what
+  // the message CARRIES: without the invalidation the roster goes out warm and
+  // the routine just written is not in it, which a test looking only at the
+  // message type cannot tell from success.
+  // The call text alone appears in four handlers and String.replace takes the
+  // first, so this mutation silently broke a different one and nothing turned
+  // red. It carries its neighbour now, which makes it unique to this handler.
+  [HANDLER, 'the roster is invalidated before it is rebroadcast',
+    "  ctx.agents.invalidateAgentCache();\n  ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents() }));",
+    "  ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents() }));"],
+  [HANDLER, 'a refusal from the data model is reported rather than swallowed',
+    "    fail(e && e.message ? e.message : 'That routine could not be written.');\n    return;",
+    '    return;'],
 ];
 
 // The reporter is named explicitly rather than left to the default, which
@@ -211,7 +254,7 @@ function run() {
   // Both files are read up front and both are restored in the same finally, so
   // a throw part way through cannot leave either one mutated.
   const originals = new Map();
-  for (const target of [MODEL, VIEW]) originals.set(target, fs.readFileSync(target.src, 'utf8'));
+  for (const target of [MODEL, VIEW, APP, HANDLER]) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];
   try {
     for (const [target, label, guard, without] of MUTATIONS) {

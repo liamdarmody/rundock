@@ -218,8 +218,12 @@
     const choice = m.skillChoices({ skills: state.skills, agentId: state.agentId });
     const option = selectedOption();
     let h = '';
-    if (state.agentName) {
-      h += `<a class="profile-back" onclick="routineEditorLeave()">&#8592; Back to ${escText(state.agentName)}</a>`;
+    // The breadcrumb names the agent it returns to, and returns to that
+    // agent. Rendered only when there IS one, so the label can never name a
+    // destination this editor does not have.
+    if (state.agentId && state.agentName) {
+      h += `<a class="profile-back" data-routine-editor="back" data-back-to="${escText(state.agentId)}"
+        onclick="routineEditorLeave()">&#8592; Back to ${escText(state.agentName)}</a>`;
     }
     h += '<div class="settings-section-title">Add routine</div>';
     if (state.step === 'schedule' && option) return h + scheduleStep(m, option);
@@ -371,8 +375,24 @@
     return navigable(destination) ? destination : 'team';
   }
 
+  /**
+   * Leave by the breadcrumb, which means going back where you came from.
+   *
+   * THIS IS NOT THE SAME EXIT AS A SAVE and the two must not share a
+   * destination. A save has produced a routine and belongs on the list of
+   * routines. The breadcrumb has produced nothing and says, in its own label,
+   * which agent it came from.
+   *
+   * They did share one, so a control reading "Back to Piper" went to the team
+   * chart instead. A control that does not do what its label says is worse
+   * than no control at all: the reader believes the label, and learns a wrong
+   * model of where things are from being shown one.
+   */
   function routineEditorLeave() {
+    const agentId = state && state.agentId;
     state = null;
+    if (agentId && typeof showProfile === 'function') { showProfile(agentId); return; }
+    // Opened without an agent, so there is no profile to go back to.
     if (typeof switchNav === 'function') switchNav(routinesListNav());
   }
 

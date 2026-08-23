@@ -64,6 +64,8 @@ function mount(opts = {}) {
   w.shownView = null;
   w.showView = (v) => { w.shownView = v; };
   w.setNavState = () => {};
+  w.profileShown = null;
+  w.showProfile = (id) => { w.profileShown = id; };
   w.startedConversationWith = null;
   w.startConversation = (id) => { w.startedConversationWith = id; };
   w.getGuide = () => ({ id: 'doc' });
@@ -245,6 +247,59 @@ describe('routine editor view: the two ways in', () => {
     w.routineEditorPick('ops-summary:piper');
     w.routineEditorStep('schedule');
     assert.ok(!text(doc).includes('Your time zone'));
+    dom.window.close();
+  });
+});
+
+describe('routine editor view: leaving without saving', () => {
+  // A control that does not do what its label says is worse than a missing
+  // control, because the reader believes the label. The breadcrumb named an
+  // agent and went to the team chart, because it shared its destination with
+  // the exit taken after a save, where the list IS right.
+  test('the breadcrumb goes to the agent it names', () => {
+    const { doc, w, dom } = mount({ agentId: 'piper', agentName: 'Piper' });
+    const back = doc.querySelector('[data-routine-editor="back"]');
+    assert.ok(back, 'a scoped editor offers a way back');
+    assert.match(back.textContent, /Back to Piper/);
+
+    back.click();
+    // The label and the destination are asserted against each other rather
+    // than each against a constant, so a rename of either alone fails.
+    assert.strictEqual(w.profileShown, back.getAttribute('data-back-to'),
+      'the breadcrumb goes to the agent whose name is written on it');
+    assert.strictEqual(w.profileShown, 'piper');
+    assert.strictEqual(w.navigatedTo, null, 'leaving by the breadcrumb is not the exit a save takes');
+    dom.window.close();
+  });
+
+  // The two exits are different destinations, which is the whole finding.
+  test('leaving by the breadcrumb and leaving after a save go to different places', () => {
+    const back = mount({ agentId: 'piper', agentName: 'Piper' });
+    back.doc.querySelector('[data-routine-editor="back"]').click();
+
+    const saved = mount({ agentId: 'piper', agentName: 'Piper' });
+    saved.w.routineEditorPick('ops-summary:piper');
+    saved.w.routineEditorStep('schedule');
+    saved.w.routineEditorStep('ready');
+    saved.w.saveRoutine();
+    saved.w.routineEditorSaved();
+
+    assert.strictEqual(back.w.profileShown, 'piper');
+    assert.strictEqual(back.w.navigatedTo, null);
+    assert.strictEqual(saved.w.profileShown, null, 'a save does not go back to the agent');
+    assert.strictEqual(saved.w.navigatedTo, saved.w.routinesListNav());
+    back.dom.window.close();
+    saved.dom.window.close();
+  });
+
+  // With no agent there is no profile to name, so there is no breadcrumb
+  // naming one.
+  test('an editor opened without an agent offers no breadcrumb to one', () => {
+    const { doc, w, dom } = mount({ agentId: null });
+    assert.strictEqual(doc.querySelector('[data-routine-editor="back"]'), null);
+    w.routineEditorLeave();
+    assert.strictEqual(w.profileShown, null, 'there is no agent to return to');
+    assert.strictEqual(w.navigatedTo, w.routinesListNav());
     dom.window.close();
   });
 });
@@ -555,10 +610,14 @@ describe('routine editor: the reply reaches the user', () => {
   // the reader on a list without the routine and with nothing said.
   const APP_SRC = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf-8');
 
+  // Up to the first break, so a case written on one line and a case written
+  // over several are both readable. The assertion that the case EXISTS is part
+  // of the extraction: a deleted case fails here rather than silently yielding
+  // an empty body that then passes every assertion about what it did not do.
   function caseBody(type) {
-    const re = new RegExp(`case '${type}':([\\s\\S]*?)\\n      break;`);
-    const m = APP_SRC.match(re);
+    const m = APP_SRC.match(new RegExp(`case '${type}':([\\s\\S]*?)\\bbreak;`));
     assert.ok(m, `the client dispatch has no case for ${type}`);
+    assert.ok(m[1].trim(), `the client dispatch handles ${type} with an empty body`);
     return m[1];
   }
 
@@ -588,6 +647,30 @@ describe('routine editor: the reply reaches the user', () => {
     const w = runCase('routine_error', { type: 'routine_error' });
     assert.strictEqual(w.said.length, 1);
     assert.ok(w.said[0] && w.said[0].trim(), 'silence is the failure this case exists to prevent');
+  });
+
+  // THE SKILL LIST'S ARRIVAL IS DISPATCH WIRING TOO, and it was reachable only
+  // by loading the whole shell. The view tests call the function directly and
+  // the view mutations break the view, so deleting the call from the client
+  // left every test green while an editor opened before the reply landed sat
+  // on its loading line for the rest of the session.
+  test('the arriving skill list is handed to an open editor', () => {
+    const w = new JSDOM('<!doctype html>', { runScripts: 'dangerously' }).window;
+    w.handed = null;
+    w.renderSkillsCalled = 0;
+    w.routineEditorSkillsArrived = (list) => { w.handed = list; };
+    w.renderSkills = () => { w.renderSkillsCalled++; };
+    w.selectSkill = () => {};
+    w.palettePendingSkill = null;
+    const list = skillFixture();
+    w.d = { type: 'skills', skills: list };
+    w.eval(`(function () {${caseBody('skills')}\n})()`);
+
+    assert.ok(w.handed, 'the editor is never told the list arrived');
+    assert.deepStrictEqual(w.handed.map((s) => s.id), list.map((s) => s.id),
+      'the editor is handed the list that arrived, not a different one');
+    assert.strictEqual(w.skillsLoaded, true, 'sanity: this is the case that marks the list loaded');
+    assert.strictEqual(w.renderSkillsCalled, 1, 'sanity: the skills view still renders');
   });
 
   test('a written routine is confirmed and the editor is released', () => {

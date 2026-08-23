@@ -180,16 +180,30 @@ describe('the save_routine handler', () => {
     // rather than the assertion having to allow for a write it did not cause.
     discoverAgents();
     const sent = [];
+    // What the handler did, in order. The roster cache expires on a two second
+    // timer, so "the broadcast carried the routine" discriminates only while
+    // the cache happens to still be warm, which makes it a statement about how
+    // fast the machine ran rather than about the code. Recording the calls
+    // pins the same behaviour with no clock in it: the invalidation happened,
+    // once, and before the roster went out.
+    const calls = [];
     const ctx = {
       agents: {
-        invalidateAgentCache: () => {},
+        // THE REAL ONE, not a no-op. The handler invalidates before it
+        // rediscovers precisely so the broadcast carries the routine it just
+        // wrote, and a stub that does nothing quietly removes the behaviour
+        // the broadcast assertions are there to check.
+        invalidateAgentCache: () => { calls.push('invalidate'); invalidateAgentCache(); },
         discoverSkills: () => [],
         flagRosterRefresh: () => {},
       },
       workspace: { isInsideWorkspace: (p) => p.startsWith(dir) },
     };
-    const ws = { send: (m) => sent.push(JSON.parse(m)), readyState: 1 };
-    return { dir, ctx, ws, sent, restore: () => { config.setWorkspace(original); invalidateAgentCache(); } };
+    const ws = {
+      send: (m) => { const parsed = JSON.parse(m); calls.push(parsed.type); sent.push(parsed); },
+      readyState: 1,
+    };
+    return { dir, ctx, ws, sent, calls, restore: () => { config.setWorkspace(original); invalidateAgentCache(); } };
   }
 
   test('a routine lands in the agent file it names', () => {
@@ -201,7 +215,27 @@ describe('the save_routine handler', () => {
       assert.ok(added, 'the routine is on disk');
       assert.strictEqual(added.schedule, 'every monday at 07:00');
       assert.ok(f.sent.some(m => m.type === 'routine_saved'), 'the client is told');
-      assert.ok(f.sent.some(m => m.type === 'agents'), 'the roster is refreshed so the list can show it');
+
+      // THE BROADCAST IS CHECKED FOR ITS CONTENT, not its type. The point of
+      // sending it is that the list can show the routine that was just made,
+      // and a roster that went out without it satisfies "a message of type
+      // agents was sent" exactly as well as one that carried it.
+      const broadcast = f.sent.filter(m => m.type === 'agents').pop();
+      assert.ok(broadcast, 'the roster is rebroadcast');
+      const piper = broadcast.agents.find(a => a.id === 'piper');
+      assert.ok(piper, 'the agent that gained the routine is in the broadcast');
+      const carried = (piper.routines || []).filter(r => r.name === NEW_ROUTINE.name);
+      assert.strictEqual(carried.length, 1, 'the broadcast carries the routine that was just written');
+      assert.strictEqual(carried[0].schedule, 'every monday at 07:00');
+      assert.strictEqual(carried[0].skill, 'ops-summary');
+      assert.strictEqual(carried[0].runOn, 'local');
+
+      // And the reason it carried it, with no clock in the assertion: the
+      // roster was invalidated, once, before it was read back and sent.
+      assert.strictEqual(f.calls.filter(c => c === 'invalidate').length, 1,
+        'the roster is invalidated exactly once');
+      assert.ok(f.calls.indexOf('invalidate') < f.calls.indexOf('agents'),
+        'the invalidation has to come before the roster is read back, or the broadcast goes out warm');
     } finally { f.restore(); }
   });
 

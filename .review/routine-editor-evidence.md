@@ -303,12 +303,20 @@ Run on the tree this file is committed with:
 | a skill list that has not arrived is not an empty one | 1 | `an editor opened before the skills arrive waits instead of offering` |
 | the editor asks for the skill list it is missing | 1 | `an editor opened before the skills arrive waits instead of offering` |
 | the skill list fills in when it arrives | 1 | `an editor opened before the skills arrive waits instead of offering` |
+| the breadcrumb returns to the agent it names | 2 | `the breadcrumb goes to the agent it names`<br>`leaving by the breadcrumb and leaving after a save go to different places` |
+| the breadcrumb names an agent only when there is one to return to | 1 | `an editor opened without an agent offers no breadcrumb to one` |
+| the client tells the editor its skill list arrived | 1 | `the arriving skill list is handed to an open editor` |
+| the client releases the editor when the routine is written | 1 | `a written routine is confirmed and the editor is released` |
+| the client hands a refusal back to the editor | 1 | `a refusal is shown to the user and handed back to the editor` |
+| the client shows the refusal the server sent | 2 | `a refusal is shown to the user and handed back to the editor`<br>`a refusal with no message still says something` |
+| the roster is invalidated before it is rebroadcast | 1 | `a routine lands in the agent file it names` |
+| a refusal from the data model is reported rather than swallowed | 2 | `a routine the data model refuses is an error, not a half written file`<br>`a file the routine cannot be placed in errors and is left byte identical` |
 
-**Both halves are mutated: the model and the view.** That is not thoroughness
+**Four things are mutated: the model, the view, the client's message dispatch and the handler that writes the routine.** That is not thoroughness
 for its own sake. The model can carry exactly the right words while the view
 renders different ones, and every model test still passes. The rule this editor
 exists to hold is a claim about what a person SEES, so the render is broken and
-noticed too. Nineteen of the thirty-seven break the render.
+noticed too. Nineteen break the render, four break the dispatch and two break the handler.
 
 **Four tests exist because a mutation asked for them, not because they were
 thought of first.** Two turned nothing red on the model's first run and two on
@@ -397,6 +405,55 @@ untouched file too. Asserting the MESSAGE turned it red, and it was red: a
 stale roster cache meant the append path was never reached. The fixture now
 clears that cache, and lets the lazy migration settle before it snapshots, so a
 byte comparison changes only if the code under test changed it.
+
+## Round two
+
+Three more findings, all real.
+
+**A control that did not do what its label said.** The breadcrumb read "Back to
+Piper" and went to the team chart, because it shared its exit with the one taken
+after a save, where the list IS the right destination. They are different exits
+and now have different destinations: the breadcrumb returns to the agent it
+names, a save goes to the list.
+
+The test asserts the label and the destination AGAINST EACH OTHER rather than
+each against a constant, so renaming either alone fails it. That is the shape
+this defect had: both halves were individually defensible and only the pairing
+was wrong.
+
+**The skill list's arrival was dispatch wiring with no test.** The view tests
+called the function directly and the view mutations broke the view, so deleting
+the call from the client left everything green while an editor opened before the
+reply landed sat on its loading line forever. It gets the same treatment the
+router got: the case body is cut out of the client source and RUN.
+
+The client dispatch is now a mutation target in its own right. Four mutations
+delete one call each, and each turns a test red.
+
+**A broadcast test that asserted a message shape rather than what produced it.**
+The handler's contract is that the roster it sends after a save carries the
+routine just written. The fixture stubbed the cache invalidation as a no-op, so
+the roster went out warm and without the routine, and the test passed because a
+message of type `agents` had been sent.
+
+The stub is the real invalidation now and the test reads the routine out of what
+was broadcast. **That alone was not enough, and the mutation tool is what said
+so.** The roster cache expires on a two second timer, so "the broadcast carried
+the routine" discriminates only while the cache happens to still be warm, which
+makes it a statement about how fast the machine ran. The test also records what
+the handler did, in order, and asserts the invalidation happened once and before
+the roster was read back. No clock in it.
+
+**And the mutation for it proved nothing twice before it proved anything.** The
+call text appears in six places in that file and a string replace takes the
+first, so the mutation was silently breaking a different handler. It carries its
+neighbouring line now, which makes it unique to this one. An instrument can
+assert the adjacent thing just as easily as a test can.
+
+**Two criteria are not discharged here and cannot be.** Whether the editor
+matches the frames in both themes, and whether the zero-skills state reads as an
+offer, are judgements about a built interface. They are for the owner looking at
+it, and no diff can carry them.
 
 ## Red-first and the gate
 
