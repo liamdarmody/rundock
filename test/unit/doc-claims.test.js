@@ -34,11 +34,143 @@ function useWorkspace(opts) {
 }
 
 const routinesDoc = fs.readFileSync(path.join(ROOT, 'docs', 'ROUTINES.md'), 'utf-8');
+const changelog = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf-8');
+// Only the entry being shipped. Matching the whole file lets an unrelated
+// release from two years ago satisfy a claim about this one: the exemption
+// pin below passed while the current entry named five of the six exempt
+// directories, because a 0.9 entry about PATH detection happened to mention
+// the sixth.
+const unreleased = changelog.slice(
+  changelog.indexOf('## Unreleased'),
+  changelog.indexOf('## 0.11.8'),
+);
+const architecture = fs.readFileSync(path.join(ROOT, 'ARCHITECTURE.md'), 'utf-8');
 const skillsDoc = fs.readFileSync(path.join(ROOT, 'docs', 'SKILLS.md'), 'utf-8');
 
 // ---------------------------------------------------------------------------
 // docs/SKILLS.md: what actually reaches the model
 // ---------------------------------------------------------------------------
+
+describe('the workspace boundary says what it enforces, per platform', () => {
+  // The claim, in the release notes and in the audit section: the operating
+  // system enforces the folder boundary on macOS, and on Windows the boundary
+  // is the approval card alone.
+  //
+  // Pinned because this is the claim whose falsity would mislead most. A user
+  // reading it decides how much to trust the product with their machine, and
+  // the honest half is the Windows half. If the sandbox were ever quietly
+  // written on a platform that has none, or quietly dropped on the one that
+  // has it, the sentence would keep reading correctly while meaning something
+  // else. Behavioural, not a source-shape grep: the words being there was
+  // never the half in doubt.
+  const { sandboxSettings } = require('../../lib/workspace/scaffold.js');
+  const HOME = '/Users/someone';
+
+  test('both documents name every platform the operating-system half does NOT cover', () => {
+    // Asserted per platform rather than by matching one phrase, because a
+    // phrase can survive a rewrite that drops a platform. Windows and Linux
+    // are the two where the approval card is the whole boundary, and a
+    // reader on either must not have to infer that from silence.
+    for (const [name, doc] of [['release notes', changelog], ['audit section', architecture]]) {
+      assert.match(doc, /Windows/, `${name} names Windows`);
+      assert.match(doc, /Linux/, `${name} names Linux`);
+      assert.match(doc, /macOS/, `${name} names macOS as the one that has it`);
+    }
+  });
+
+  test('the operating-system half is described as governing writes, not reads', () => {
+    // Measured: under the shipped block a command can still read ~/.ssh,
+    // ~/.gitconfig and /etc/hosts, and a read whose target is worked out
+    // while the command runs is caught on no platform. Copy that folds reads
+    // into the operating-system guarantee is the overclaim this whole change
+    // exists to remove, and it would be this change committing it.
+    assert.match(changelog, /governs writes, not reads|writes, not reads/i,
+      'the release notes say which act the operating system half covers');
+    assert.match(changelog, /read anything on the machine|caught by nothing/i,
+      'and say plainly that reads are not covered');
+    assert.match(architecture, /governs writes and not reads|writes and not reads/i,
+      'the audit section says the same');
+  });
+
+  test('the exemption the code enforces is the exemption the release notes state', () => {
+    // The hook deliberately does not card the system executable directories
+    // or the device paths, and for three rounds the release notes said a
+    // visible target is always carded. Read together, the enforcement and the
+    // statement disagreed, which is the defect this whole change removes.
+    // Read the list from the CODE so the two cannot drift apart silently.
+    const hook = fs.readFileSync(path.join(ROOT, 'scripts', 'permission-hook.js'), 'utf-8');
+    const declared = hook.match(/const EXEC_DIRS = \[([^\]]+)\]/);
+    assert.ok(declared, 'the hook declares the exempt directories in one place');
+    const dirs = declared[1].split(',').map(d => d.trim().replace(/^'|'$/g, '')).filter(Boolean);
+    assert.ok(dirs.length >= 3, 'sanity: the list was parsed');
+    for (const d of dirs) {
+      assert.ok(unreleased.includes(d), `the release notes name ${d}, which the code does not card`);
+    }
+    assert.match(unreleased, /\/dev\/null/, 'and the device paths');
+  });
+
+  test('the copy does not claim the command check sees every visible target', () => {
+    // Four review rounds failed the same criterion, each on a different
+    // spelling written plainly in the command and not carded. The
+    // implementation improved every round and the claim kept failing, because
+    // reading a shell command without running it has no complete answer. What
+    // changed is the claim: the guarantee is the operating-system half, and
+    // the card is a best effort that names where it stops.
+    assert.match(unreleased, /best effort/i, 'the release notes call the check what it is');
+    assert.match(unreleased, /raise no card|raises no card/i,
+      'and say plainly that some targets raise nothing');
+    assert.match(unreleased, /~someone\/file|-C\/tmp/,
+      'with at least one named example of a spelling it does not recognise');
+    assert.match(architecture, /best-effort check over common spellings/i,
+      'the audit section separates the guarantee from the best effort');
+    assert.match(architecture, /Not recognised/,
+      'and lists examples rather than implying completeness');
+  });
+
+  test('the audit section states the boundary per platform AND per act', () => {
+    // A sentence cannot carry this: the answer differs by platform, by
+    // whether the target is visible in the command, and by read versus
+    // write. Three rounds of review found the stated boundary wider than the
+    // enforced one, every time in a cell nobody had written down.
+    assert.match(architecture, /How the target is written/, 'the table exists');
+    assert.match(architecture, /a form the check does not recognise/,
+      'and the unrecognised-spelling case is a row, not an omission');
+    assert.match(architecture, /system executable directory/,
+      'and carries the exemption as a row rather than leaving it to the code');
+    for (const cell of ['macOS', 'Windows', 'Linux', 'computed while the command runs']) {
+      assert.ok(architecture.includes(cell), `the table covers ${cell}`);
+    }
+  });
+
+  test('the enforced macOS boundary is described as additive, not as a sealed machine', () => {
+    // The allowlist adds to the runtime's own default writable roots, so the
+    // enforced set is wider than the two Rundock names. Copy that says
+    // otherwise is the overclaim this whole change exists to remove, and it
+    // would be this change committing it.
+    assert.match(changelog, /npm cache/i, 'the release notes name what else is writable');
+    assert.match(changelog, /runtime's own default|default locations|does not remove/i,
+      'and say the runtime keeps defaults of its own');
+    assert.doesNotMatch(changelog, /the rest of the machine is not/i,
+      'the sentence that claimed a sealed machine must not come back');
+  });
+
+  test('and the code does exactly that: configured on macOS, absent on Windows', () => {
+    assert.ok(sandboxSettings('/ws', 'darwin', HOME), 'macOS gets the sandbox the docs promise');
+    assert.strictEqual(sandboxSettings('/ws', 'win32', HOME), null,
+      'Windows gets none, which is what the docs say rather than something they hide');
+  });
+
+  test('the audit section names the file a reader would have to open', () => {
+    // The section exists to be followed. A claim pointing at a name that has
+    // moved is worse than no pointer, because it costs the reader the search
+    // before they find out.
+    const named = architecture.match(/`(lib\/workspace\/scaffold\.js)`/);
+    assert.ok(named, 'the claim names a file');
+    assert.ok(fs.existsSync(path.join(ROOT, named[1])), `${named[1]} exists`);
+    assert.match(fs.readFileSync(path.join(ROOT, named[1]), 'utf-8'), /function sandboxSettings/,
+      'and it holds the function the claim credits');
+  });
+});
 
 describe('SKILLS.md: only slugs are injected into the prompt', () => {
   // The claim: "Rundock injects a bare list of slugs into the agent's prompt

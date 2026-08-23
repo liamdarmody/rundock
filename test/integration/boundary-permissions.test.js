@@ -29,7 +29,7 @@ before(async () => {
 after(async () => h.shutdown());
 
 // Run the real hook binary with a tool request; resolves with its decision.
-function runHook(toolName, toolInput) {
+function runHook(toolName, toolInput, extraEnv = {}) {
   return new Promise((resolve, reject) => {
     const proc = spawn(process.execPath, [HOOK], {
       cwd: h.workspaceDir,
@@ -39,6 +39,7 @@ function runHook(toolName, toolInput) {
         RUNDOCK_PORT: String(h.port),
         RUNDOCK_WORKSPACE: h.workspaceDir,
         RUNDOCK_CONVO_ID: 'boundary-test',
+        ...extraEnv,
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -117,6 +118,121 @@ describe('workspace file-access boundary', () => {
       && m.request && m.request.boundary === true, { since, label: 'read boundary card' });
     client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: 'boundary-test', allow: false });
     assert.strictEqual(decisionOf(await pending), 'deny');
+  });
+
+  test('CODE MODE: a shell command reaching outside cards, while one staying inside does not', async () => {
+    // The seam, replayed through the real hook process. Code mode auto-
+    // approves everything the classifier returns null for, and a shell
+    // command was never classified, so a write outside the workspace happened
+    // with no card at all while an Edit of the same file raised one.
+    //
+    // Both halves are asserted together on purpose. A test that only proved
+    // the card appears would still pass if the change carded EVERY command in
+    // code mode, which would make code mode unusable and is the obvious way
+    // to overshoot this fix.
+    const CODE = { RUNDOCK_CODE_MODE: '1' };
+
+    let since = client.messages.length;
+    const inside = await runHook('Bash', { command: 'npm test' }, CODE);
+    assert.strictEqual(decisionOf(inside), 'allow', 'code mode still runs ordinary commands without asking');
+    await h.delay(300);
+    assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0,
+      'an ordinary command raises no card in code mode');
+
+    since = client.messages.length;
+    const target = path.join(os.homedir(), 'stray-from-a-command.txt');
+    const pending = runHook('Bash', { command: `touch ${target}` }, CODE);
+    const { msg } = await client.waitFor(m => m.type === 'control_request'
+      && m.request && m.request.boundary === true, { since, label: 'shell boundary card' });
+    assert.strictEqual(msg.request.tool_name, 'Bash');
+    assert.strictEqual(msg.request.resolved_path, target, 'the card names where the command reaches');
+    client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: 'boundary-test', allow: false });
+    assert.strictEqual(decisionOf(await pending), 'deny', 'the command never runs');
+  });
+
+  test('CODE MODE: a command reaching two places names the one no decision covers', async () => {
+    // Shell requests are never answered from a standing folder grant (see the
+    // knowledge-mode test below for why), so what this pins is the reporting:
+    // a command that reaches more than one place outside carries all of them,
+    // and the card leads with the first. A single reported target was how a
+    // second one used to ride along unseen.
+    const CODE = { RUNDOCK_CODE_MODE: '1' };
+    const first = path.join(os.tmpdir(), 'boundary-two', 'export.md');
+    const second = path.join(os.homedir(), '.ssh-not-really', 'key');
+
+    const since = client.messages.length;
+    const pending = runHook('Bash', { command: `cp a.md ${first} && cp key ${second}` }, CODE);
+    const { msg } = await client.waitFor(m => m.type === 'control_request'
+      && m.request && m.request.boundary === true, { since, label: 'two-crossing card' });
+    const reported = (msg.request.crossings || []).map(c => c.path);
+    assert.deepStrictEqual(reported, [first, second], 'both targets reach the card, in order');
+    assert.strictEqual(msg.request.grant_dir, null,
+      'and no folder is offered to remember, because a folder does not answer a command');
+    client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: 'boundary-test', allow: false });
+    assert.strictEqual(decisionOf(await pending), 'deny');
+  });
+
+  test('CODE MODE: turning the sandbox off is itself the boundary question', async () => {
+    // The escape hatch, which is the only signal here that does not depend on
+    // reading command text. When the spawned runtime's sandbox denies a
+    // command it is retried with dangerouslyDisableSandbox, and the retry
+    // arrives at this hook carrying the flag. The command text is deliberately
+    // one that would NOT card on its own, so the flag alone is what is being
+    // proven.
+    const since = client.messages.length;
+    const pending = runHook('Bash',
+      { command: 'make install', dangerouslyDisableSandbox: true },
+      { RUNDOCK_CODE_MODE: '1' });
+    const { msg } = await client.waitFor(m => m.type === 'control_request'
+      && m.request && m.request.boundary === true, { since, label: 'sandbox escape card' });
+    assert.strictEqual(msg.request.grant_dir, null,
+      'no standing folder grant is offered: a sandbox escape is not about one folder');
+    client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: 'boundary-test', allow: false });
+    assert.strictEqual(decisionOf(await pending), 'deny');
+  });
+
+  test('a folder grant never lets a COMMAND run uncarded, however the folder was granted', async () => {
+    // A folder grant and a command approval answer different questions. The
+    // grant answers "may an agent touch this folder"; a shell card answers
+    // "may this command run". The second cannot be inferred from the first,
+    // because the command is arbitrary: everything in it runs, not only the
+    // part that touches the granted folder.
+    //
+    // Without this, granting one folder from one file card silently retires
+    // the per-command card for every later command that happens to name that
+    // folder. `rm -rf * ; touch <granted>/x` reaches the hook, its only
+    // crossing is covered, and it runs with nothing shown. That is a
+    // REGRESSION of a control that already existed, delivered by a change
+    // whose whole purpose is to add one.
+    const granted = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-cmd-'));
+
+    // Establish the grant through a FILE card, which is the only place a
+    // folder grant is offered.
+    let since = client.messages.length;
+    const pendingFile = runHook('Write', { file_path: path.join(granted, 'report.md'), content: 'x' });
+    const fileCard = await client.waitFor(m => m.type === 'control_request'
+      && m.request && m.request.boundary === true, { since, label: 'file card' });
+    client.send({ type: 'permission_response', requestId: fileCard.msg.request_id, conversationId: 'boundary-test', allow: true, grantDir: granted });
+    assert.strictEqual(decisionOf(await pendingFile), 'allow');
+
+    // The grant does what it promises for FILE access: silent, no card.
+    since = client.messages.length;
+    assert.strictEqual(decisionOf(await runHook('Write', { file_path: path.join(granted, 'again.md'), content: 'y' })), 'allow');
+    await h.delay(300);
+    assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0,
+      'the grant still answers file access without a card');
+
+    // A command whose only crossing is inside that same granted folder must
+    // still be shown, because what is being approved is the command.
+    since = client.messages.length;
+    const pendingCmd = runHook('Bash', { command: `rm -rf * ; touch ${path.join(granted, 'x')}` });
+    const cmdCard = await client.waitFor(m => m.type === 'control_request',
+      { since, label: 'the command is still shown despite the grant' });
+    assert.strictEqual(cmdCard.msg.request.tool_name, 'Bash');
+    assert.strictEqual(cmdCard.msg.request.grant_dir, null,
+      'and no folder grant is offered on it, because remembering a folder would not answer this question');
+    client.send({ type: 'permission_response', requestId: cmdCard.msg.request_id, conversationId: 'boundary-test', allow: false });
+    assert.strictEqual(decisionOf(await pendingCmd), 'deny');
   });
 
   test('the global ~/.claude protection still wins outright (deny, no card)', async () => {

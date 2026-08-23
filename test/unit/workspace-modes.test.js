@@ -8,6 +8,7 @@ const path = require('node:path');
 
 const { _internal: srv } = require('../../server.js');
 const { makeWorkspace, agentFile, standardTeam, cleanup } = require('../helpers/workspace.js');
+const scaffoldLib = require('../../lib/workspace/scaffold.js');
 
 after(cleanup);
 
@@ -165,6 +166,177 @@ describe('scaffoldWorkspace', () => {
     assert.ok(fs.readFileSync(launcher, 'utf-8').includes('permission-hook.js'));
   });
 
+  test('the runtime sandbox is written into the settings the runtime is given', () => {
+    // The wiring, not the decision function. Without this the block could be
+    // computed perfectly and never reach the file the runtime is started
+    // with (lib/runtime/claude.js passes --settings at this exact path), and
+    // every test of the decision would still be green.
+    //
+    // The platform is DRIVEN, not read off the runner. Branching on
+    // process.platform here means the macOS behaviour is asserted only on a
+    // macOS machine, so continuous integration, which runs Linux, checks
+    // nothing at all about it. Both platforms are stated below, so both are
+    // checked wherever this runs.
+    const read = (d) => JSON.parse(fs.readFileSync(path.join(d, '.claude', 'settings.local.json'), 'utf-8'));
+
+    const mac = useWorkspace({ claudeMd: '# x' });
+    srv.scaffoldWorkspace(mac, { platform: 'darwin' });
+    const settings = read(mac);
+    assert.ok(settings.sandbox, 'the sandbox block is present');
+    assert.strictEqual(settings.sandbox.enabled, true);
+    assert.ok(settings.sandbox.filesystem.allowWrite.includes(mac),
+      'the workspace it was scaffolded for is the writable root, not some other one');
+
+    const linux = useWorkspace({ claudeMd: '# x' });
+    srv.scaffoldWorkspace(linux, { platform: 'linux' });
+    assert.strictEqual(read(linux).sandbox, undefined,
+      'and no block at all on a platform Rundock writes none for');
+  });
+
+  test('an existing workspace gains the sandbox on the next open, with its hooks already current', () => {
+    // The upgrade path, and the only case where the sandbox alone decides
+    // whether the file is written at all. Every workspace that exists today
+    // has current hooks and no sandbox block, so if adding one does not by
+    // itself mark the settings dirty, nothing changes for anybody who is
+    // already using this product. Found by mutation: removing that term
+    // turned no test red, because a FRESH scaffold writes the file for the
+    // hooks regardless and hid the case that matters.
+    const dir = useWorkspace({ claudeMd: '# x' });
+    srv.scaffoldWorkspace(dir, { platform: 'darwin' });
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    delete settings.sandbox;
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+
+    srv.scaffoldWorkspace(dir, { platform: 'darwin' });
+
+    const after = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    assert.ok(after.sandbox && after.sandbox.enabled === true,
+      'the sandbox arrives even though the hooks needed no change');
+  });
+
+  test('a workspace that MOVED gets its sandbox root brought with it', () => {
+    // The block names the workspace by absolute path, and the file holding it
+    // lives inside the workspace, so both travel together when the folder is
+    // moved, renamed or copied to another machine. Written once and never
+    // revisited, the root then names where the workspace USED to be, and the
+    // operating system starts refusing every write INSIDE it: the retry
+    // raises a boundary card for a path that is in the workspace, while the
+    // release notes say the workspace is writable. A moved workspace is
+    // already a supported case here, so this is a real state, not a corner.
+    const from = useWorkspace({ claudeMd: '# x' });
+    srv.scaffoldWorkspace(from, { platform: 'darwin' });
+    const settingsPath = (d) => path.join(d, '.claude', 'settings.local.json');
+    const carried = fs.readFileSync(settingsPath(from), 'utf-8');
+
+    // The move: same settings file, new location.
+    const to = useWorkspace({ claudeMd: '# x' });
+    fs.mkdirSync(path.dirname(settingsPath(to)), { recursive: true });
+    fs.writeFileSync(settingsPath(to), carried);
+    srv.scaffoldWorkspace(to, { platform: 'darwin' });
+
+    const after = JSON.parse(fs.readFileSync(settingsPath(to), 'utf-8'));
+    assert.ok(after.sandbox.filesystem.allowWrite.includes(to),
+      'the writable root is where the workspace is now');
+    assert.ok(!after.sandbox.filesystem.allowWrite.includes(from),
+      'and not where it used to be');
+  });
+
+  test('a workspace copied to ANOTHER MACHINE gets both roots brought current', () => {
+    // The release note says copying a workspace keeps working. It did not.
+    // The block carries the npm cache under the home directory it was written
+    // on, so on a machine or account with a different home the regenerated
+    // block never matched, the block was read as user-authored, the stale
+    // workspace root survived, and the operating system then refused every
+    // write INSIDE the new location. Worse than an overclaim: it breaks a
+    // setup that was working before the copy.
+    const dir = useWorkspace({ claudeMd: '# x' });
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    // Exactly what Rundock would have written on the other machine.
+    const elsewhere = scaffoldLib.sandboxSettings('/Users/someone-else/their-workspace', 'darwin', '/Users/someone-else');
+    fs.writeFileSync(settingsPath, JSON.stringify({ sandbox: elsewhere }));
+
+    //
+    // Both machines are NAMED. Borrowing one of them from whatever runner the
+    // suite lands on is how this passed locally on macOS and failed on the
+    // Linux runner: there the reconcile correctly WITHDREW the block, while
+    // the branch written for that case asserted the block survived. A test
+    // about copying between machines cannot take either machine from the
+    // environment.
+    srv.scaffoldWorkspace(dir, { platform: 'darwin' });
+
+    const after = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')).sandbox;
+    assert.deepStrictEqual(after, scaffoldLib.sandboxSettings(dir, 'darwin'),
+      'both the workspace root and the cache root are the ones for the machine it landed on');
+  });
+
+  test('a sandbox block Rundock wrote is WITHDRAWN on a platform it would not write one for', () => {
+    // The reconcile recognised its own block only to update it, never to take
+    // it back. A workspace scaffolded on macOS and opened on Windows kept
+    // handing the runtime a block with a macOS absolute root, on a platform
+    // where the docs say none is written and where nothing was measured.
+    const dir = useWorkspace({ claudeMd: '# x' });
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify({
+      sandbox: scaffoldLib.sandboxSettings('/Users/me/ws', 'darwin', '/Users/me'),
+    }));
+
+    srv.scaffoldWorkspace(dir, { platform: 'win32' });
+
+    assert.strictEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf-8')).sandbox, undefined,
+      'ours is taken back where we would not have written one');
+  });
+
+  test('a sandbox block the user has EDITED is never brought with it', () => {
+    // Reconciliation must not become a licence to rewrite. The test above
+    // would pass just as well if the block were overwritten unconditionally,
+    // which would silently discard the extra roots somebody added because
+    // their work needs them.
+    const dir = useWorkspace({ claudeMd: '# x' });
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    const mine = {
+      enabled: true,
+      autoAllowBashIfSandboxed: true,
+      filesystem: { allowWrite: ['/somewhere/that/moved', '/a/root/I/added'] },
+      network: { allowedDomains: ['*'] },
+    };
+    fs.writeFileSync(settingsPath, JSON.stringify({ sandbox: mine }));
+    srv.scaffoldWorkspace(dir);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf-8')).sandbox, mine,
+      'an edited block is left exactly as written, stale root and all');
+  });
+
+  test('a user who turned the sandbox OFF stays off', () => {
+    // `false` is a decision, and the absence check has to tell it apart from
+    // an absent key or it silently switches the sandbox back on at the next
+    // workspace open, on a file the product invites people to edit. Someone
+    // writes `false` precisely because the sandbox is in their way.
+    const dir = useWorkspace({ claudeMd: '# x' });
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify({ sandbox: false }));
+    srv.scaffoldWorkspace(dir);
+    assert.strictEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf-8')).sandbox, false,
+      'the value the user wrote survives');
+  });
+
+  test('a sandbox block already in the file is left exactly as the user wrote it', () => {
+    // Whoever edited it knows something this scaffold does not: which extra
+    // roots their work needs. Overwriting on every workspace open would undo
+    // that silently, on a file they were invited to edit.
+    const dir = useWorkspace({ claudeMd: '# x' });
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    const mine = { enabled: true, filesystem: { allowWrite: ['/somewhere/of/my/own'] } };
+    fs.writeFileSync(settingsPath, JSON.stringify({ sandbox: mine }));
+    srv.scaffoldWorkspace(dir);
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    assert.deepStrictEqual(settings.sandbox, mine, 'untouched');
+  });
+
   test('idempotent: second run makes no changes and adds no duplicate hook entries', () => {
     const dir = useWorkspace({ claudeMd: '# x' });
     srv.scaffoldWorkspace(dir);
@@ -206,6 +378,11 @@ describe('scaffoldWorkspace', () => {
     // the entry to PowerShell and keep the call-operator command form.
     const dir = useWorkspace({ claudeMd: '# x' });
     srv.scaffoldWorkspace(dir, { platform: 'win32' });
+    assert.strictEqual(
+      JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf-8')).sandbox,
+      undefined,
+      'scaffolding FOR Windows writes no sandbox block, whatever host it runs on: '
+      + 'one seam has to govern both halves, or a Windows settings file gets macOS hook wiring\'s opposite');
     const settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf-8'));
     const launcher = path.join(dir, '.rundock', 'permission-hook.cmd');
     assert.ok(fs.existsSync(launcher), 'cmd launcher written');

@@ -604,16 +604,49 @@ function renderPermissionCard(d, convoId) {
   // Workspace-boundary requests get their own copy: the point is WHERE the
   // access lands, not which tool wants it.
   const boundary = req.boundary === true;
+  // A standing folder grant is only on offer when the crossing HAS a folder.
+  // A shell command denied by the runtime sandbox and retried with the sandbox
+  // turned off is a crossing established by the operating system, not by a
+  // path, so there is no directory to remember. respondPermission already
+  // drops a grant it has no directory for, which would leave the button inert
+  // while reading as a standing decision.
+  // Every place the request reaches, so the card cannot show one target while
+  // the command reaches three. A person approves what they can see.
+  const crossings = boundary && Array.isArray(req.crossings) ? req.crossings : [];
+  // A standing folder grant is on offer only when the server names a folder
+  // that could answer this request. It never does for a shell command: a
+  // folder grant says an agent may touch that folder, while approving here
+  // says this command may run, and everything in the command runs rather than
+  // only the part touching the folder.
+  const grantable = boundary && !!req.grant_dir;
   if (boundary) {
+    const shell = toolName === 'Bash' || toolName === 'PowerShell';
     const reads = toolName === 'Read' || toolName === 'Glob' || toolName === 'Grep';
-    summary = `Wants to ${reads ? 'read' : 'write'} outside your workspace`;
-    context = 'Outside-workspace access needs your approval. "Always allow this folder" remembers it for this workspace only.';
-    detail = req.resolved_path || detail;
+    // A shell crossing does not say which act it is. The command may read,
+    // write, or reach a host, and the request carries no direction, so naming
+    // one would be a guess printed as a fact. A file tool names its own act,
+    // so there it stays specific.
+    summary = shell
+      ? 'Wants to reach outside your workspace'
+      : `Wants to ${reads ? 'read' : 'write'} outside your workspace`;
+    if (crossings.length > 1) {
+      // Rendered as its own block below, one place per line. Folding the list
+      // behind the "Show command" toggle would hide the very thing the copy
+      // says is listed, and an inline code element renders the separators as
+      // spaces so the paths run together.
+      detail = crossings.map(c => c.path).join('\n');
+      context = 'This reaches more than one place outside your workspace. All of them are listed, and approving allows the whole request.';
+    } else {
+      detail = req.resolved_path || detail;
+      context = grantable
+        ? 'Outside-workspace access needs your approval. "Always allow this folder" remembers it for this workspace only.'
+        : 'Outside-workspace access needs your approval. This one is not remembered: approving it approves this request only.';
+    }
   }
 
   // Store callback data for safe event handling (no inline onclick injection).
   // toolInput is echoed back in control_response (required by Claude Code).
-  pendingPermissions.set(requestId, { convoId, key, toolInput: input, grantDir: boundary ? (req.grant_dir || null) : null });
+  pendingPermissions.set(requestId, { convoId, key, toolInput: input, grantDir: grantable ? req.grant_dir : null });
 
   const icons = {
     low: '<svg class="permission-icon" width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5"/><path d="M6 8l1.5 1.5L10.5 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -633,14 +666,16 @@ function renderPermissionCard(d, convoId) {
         <span class="permission-summary">${esc(summary)}</span>
       </div>
       ${context ? `<div class="permission-context">${esc(context)}</div>` : ''}
-      ${(toolName === 'Bash' && input.description && detail.length > 60)
-        ? `<details class="permission-detail-collapse"><summary>Show command</summary><code class="permission-detail">${esc(detail)}</code></details>`
-        : `<code class="permission-detail">${esc(detail)}</code>`}
+      ${crossings.length > 1
+        ? `<div class="permission-detail">${crossings.map(c => esc(c.path)).join('<br>')}</div>`
+        : (toolName === 'Bash' && input.description && detail.length > 60)
+          ? `<details class="permission-detail-collapse"><summary>Show command</summary><code class="permission-detail">${esc(detail)}</code></details>`
+          : `<code class="permission-detail">${esc(detail)}</code>`}
       <div class="permission-actions">
         <button class="btn-perm btn-allow" data-perm-id="${esc(requestId)}" data-perm-action="allow">Allow</button>
-        ${boundary
+        ${grantable
           ? `<button class="btn-perm btn-always" data-perm-id="${esc(requestId)}" data-perm-action="allow-folder">Always allow this folder</button>`
-          : (RundockPermissions.offersAlwaysAllow(risk) ? `<button class="btn-perm btn-always" data-perm-id="${esc(requestId)}" data-perm-action="always">Always allow</button>` : '')}
+          : (!boundary && RundockPermissions.offersAlwaysAllow(risk) ? `<button class="btn-perm btn-always" data-perm-id="${esc(requestId)}" data-perm-action="always">Always allow</button>` : '')}
         <button class="btn-perm btn-deny" data-perm-id="${esc(requestId)}" data-perm-action="deny">Deny</button>
       </div>
     </div>

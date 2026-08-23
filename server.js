@@ -1214,7 +1214,7 @@ wss.on('connection', (ws) => {
         subtype: 'can_use_tool',
         tool_name: pending.toolName,
         input: pending.toolInput || {},
-        ...(pending.boundary ? { boundary: true, resolved_path: pending.resolvedPath, grant_dir: pending.grantDir } : {})
+        ...(pending.boundary ? { boundary: true, resolved_path: pending.resolvedPath, grant_dir: pending.grantDir, crossings: pending.crossings || [] } : {})
       },
       _conversationId: pending.conversationId
     }));
