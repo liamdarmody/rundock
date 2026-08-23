@@ -310,12 +310,14 @@ Run on the tree this file is committed with:
 | the client hands a refusal back to the editor | 1 | `a refusal is shown to the user and handed back to the editor` |
 | the client shows the refusal the server sent | 2 | `a refusal is shown to the user and handed back to the editor`<br>`a refusal with no message still says something` |
 | the roster is invalidated before it is rebroadcast | 1 | `a routine lands in the agent file it names` |
-| a refusal from the data model is reported rather than swallowed | 2 | `a routine the data model refuses is an error, not a half written file`<br>`a file the routine cannot be placed in errors and is left byte identical` |
+| a refusal from the data model is reported rather than swallowed | 3 | `a routine the data model refuses is an error, not a half written file`<br>`a file the routine cannot be placed in errors and is left byte identical`<br>`a file declaring routines in an unreadable form errors and is left alone` |
 | an agent profile offers a way to schedule its skills | 3 | `an agent profile offers a way to schedule one of its skills`<br>`pressing it opens the editor scoped to that agent`<br>`an agent with no skills of its own still offers the way in` |
 | the way in carries the agent whose profile it is on | 2 | `pressing it opens the editor scoped to that agent`<br>`an agent with no skills of its own still offers the way in` |
 | the sidebar offers a way in that belongs to no agent | 6 | `no way into the editor exists that this file does not name`<br>`the sidebar door opens the editor across the whole team`<br>`the same journey from the sidebar door reaches another agent's skill`<br>`the confirmation step can be edited by pressing its own link`<br>`the offer in an empty workspace is pressed, not called`<br>`no rendered control names a handler that does not exist` |
+| a routines key in a form this module cannot address is refused | 2 | `is refused rather than joined by a second one`<br>`a file declaring routines in an unreadable form errors and is left alone` |
+| whether the file already declares routines is asked of the independent counter | 2 | `is refused rather than joined by a second one`<br>`a file declaring routines in an unreadable form errors and is left alone` |
 
-**Six things are mutated: the model, the view, the client's message dispatch, the handler that writes the routine, and the two views that render the ways in.** That is not thoroughness
+**Seven things are mutated: the model, the view, the client's message dispatch, the protocol handler, the data model's write path, and the two views that render the ways in.** That is not thoroughness
 for its own sake. The model can carry exactly the right words while the view
 renders different ones, and every model test still passes. The rule this editor
 exists to hold is a claim about what a person SEES, so the render is broken and
@@ -563,6 +565,56 @@ into the editor.
 routine exists, so the unscoped door appears with the first routine and not
 before. That is pinned, and it is why the routines view's own empty state is
 still needed and is a named exclusion rather than an oversight.
+
+## Two routines keys, and a read-back that could not see it
+
+**The defect.** The block locator recognises a `routines:` key only with nothing
+after it. `routines: []` and `routines: # none yet` are ordinary things to write
+and both read as no section at all, so a second `routines:` key was pushed onto
+the end of the frontmatter. The file then carried two mappings of the same name,
+which nothing can read, written into somebody's agent file by an editor that
+then reported the save.
+
+**And the guard added to catch causes nobody thought of was blind to this one by
+construction.** It parsed the result with this module's own locator, which found
+the section it had just appended and was satisfied. A read-back that parses with
+the writer's own parser confirms the writer is SELF-CONSISTENT. It cannot
+confirm the file is valid, because it asks the same question that produced the
+error.
+
+That is pinned as a test rather than left as a lesson.
+`the writer's own parser reads the broken file as fine` runs the exact broken
+document through `parseRoutineBlocks` and asserts it comes back clean, with the
+routine and its schedule present. The very next test puts the same document
+through the independent check and asserts it is refused.
+
+**The fix has two parts, and they ask different questions.**
+
+`topLevelKeyCounts` counts names appearing at the start of a line inside the
+frontmatter. It knows nothing about routines, items, indents or sections, and it
+shares no code with any locator. Whether the file already declares routines is
+now asked of THAT, not of the locator: "does this file declare routines" and
+"can I find the section" are two different questions, and answering the first
+with the machinery that answers the second is the whole of this defect.
+
+A file whose key exists in a form the locator cannot address is refused, by
+name, rather than rewritten. Turning `routines: []` into a block sequence is a
+transformation with its own decisions, and guessing at one inside a save is how
+the first version went wrong.
+
+**The property, asserted in its own terms rather than through the refusal.**
+`never leaves a file with two routines keys` runs all three unrecognised forms
+through the write path, allows it to refuse or to succeed, and asserts the
+outcome carries exactly one key either way. That test does not care how the
+guarantee is kept, so it survives a change of approach.
+
+**One backstop, named as one.** `assertFrontmatterKeysIntact` also runs after
+the write, comparing top-level key counts before and after and allowing only
+`routines` to appear where there was none. With the refusal in place no input
+reaches it, so its call site carries no mutation, for the same reason lines 371
+and 372 carry no test: it is a net under a named refusal rather than a
+substitute for one. The function itself IS tested, directly, including that it
+does not blame a pre-existing duplicate on this write.
 
 ## Red-first and the gate
 

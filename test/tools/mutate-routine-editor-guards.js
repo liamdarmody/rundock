@@ -59,6 +59,8 @@ const PROFILE = { src: path.join(ROOT, 'public', 'views', 'profile.js'), suite: 
 // The team sidebar, which renders the way into the unscoped editor. Watched by
 // the doors suite, which enumerates every way in and presses each one.
 const SIDEBAR = { src: path.join(ROOT, 'public', 'views', 'team.js'), suite: 'test/unit/routine-editor-doors.test.js' };
+// The data model's write path, where a routine becomes bytes in a file.
+const ROUTINES = { src: path.join(ROOT, 'lib', 'agents', 'routines.js'), suite: 'test/unit/routine-write.test.js' };
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -232,6 +234,15 @@ const MUTATIONS = [
   [SIDEBAR, 'the sidebar offers a way in that belongs to no agent',
     "    + ' data-sidebar-action=\"add-routine\" onclick=\"addRoutine()\">Add</button>'\n",
     "    + '>Add</button>'\n"],
+
+  // Writing a second routines key produces invalid YAML in somebody's file.
+  // Two guards stand between it and them, and each is broken on its own here.
+  [ROUTINES, 'a routines key in a form this module cannot address is refused',
+    '    if (declaredRoutines > 0) {',
+    '    if (false) {'],
+  [ROUTINES, 'whether the file already declares routines is asked of the independent counter',
+    "  const declaredRoutines = (topLevelKeyCounts(content) || new Map()).get('routines') || 0;",
+    '    const declaredRoutines = locateSection(content.split(\'\\n\')) ? 1 : 0;'],
 ];
 
 // The reporter is named explicitly rather than left to the default, which
@@ -274,7 +285,7 @@ function run() {
   // Both files are read up front and both are restored in the same finally, so
   // a throw part way through cannot leave either one mutated.
   const originals = new Map();
-  for (const target of [MODEL, VIEW, APP, HANDLER, PROFILE, SIDEBAR]) originals.set(target, fs.readFileSync(target.src, 'utf8'));
+  for (const target of [MODEL, VIEW, APP, HANDLER, PROFILE, SIDEBAR, ROUTINES]) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];
   try {
     for (const [target, label, guard, without] of MUTATIONS) {

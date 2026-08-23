@@ -14,7 +14,10 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { appendRoutineBlock, parseRoutineBlocks, normalizeRoutine } = require('../../lib/agents/routines.js');
+const {
+  appendRoutineBlock, parseRoutineBlocks, normalizeRoutine,
+  assertFrontmatterKeysIntact, topLevelKeyCounts,
+} = require('../../lib/agents/routines.js');
 const { extractFrontmatterText, parseRoutines } = require('../../lib/agents/discovery.js');
 const { handleSaveRoutine } = require('../../lib/protocol/handlers/team.js');
 const { invalidateAgentCache, discoverAgents } = require('../../lib/agents/discovery.js');
@@ -158,6 +161,109 @@ describe('appending a routine block', () => {
   });
 });
 
+// A routines key written in a form the block locator does not recognise. All
+// three are ordinary things for an author to write and all three read as no
+// section at all, so appending one produced a document with two `routines`
+// mappings: invalid YAML, in somebody's agent file, from an editor that then
+// reported the save.
+const UNRECOGNISED_FORMS = [
+  ['an empty inline list', 'routines: []'],
+  ['a key with a trailing comment', 'routines: # none yet'],
+  ['a populated inline list', 'routines: [morning-digest]'],
+];
+
+function fileDeclaring(form) {
+  return ['---', 'name: piper', 'displayName: Piper', form, 'trailingKey: still here',
+    '---', '', '# Piper', ''].join('\n');
+}
+
+describe('a routines key this module cannot address', () => {
+  test('is refused rather than joined by a second one', () => {
+    for (const [label, form] of UNRECOGNISED_FORMS) {
+      assert.throws(
+        () => appendRoutineBlock(fileDeclaring(form), NEW_ROUTINE),
+        /cannot add to yet/,
+        `${label} must be refused`,
+      );
+    }
+  });
+
+  // The property that matters, stated in its own terms rather than through the
+  // refusal: whatever this function does, the file never ends up with two.
+  test('never leaves a file with two routines keys', () => {
+    for (const [label, form] of UNRECOGNISED_FORMS) {
+      const before = fileDeclaring(form);
+      let after = before;
+      try { after = appendRoutineBlock(before, NEW_ROUTINE); } catch (e) { /* refused, which is the fix */ }
+      assert.strictEqual((after.match(/^routines:/gm) || []).length, 1,
+        `${label} ended up with more than one routines key`);
+    }
+  });
+
+  test('a file with no routines key at all still gains one', () => {
+    const next = appendRoutineBlock(WITHOUT_ROUTINES, NEW_ROUTINE);
+    assert.strictEqual((next.match(/^routines:/gm) || []).length, 1);
+  });
+});
+
+describe('the file is judged by something that is not the writer', () => {
+  // THE POINT OF THIS GROUP. A read-back that parses with the writer's own
+  // parser confirms the writer is self-consistent. It cannot confirm the file
+  // is valid, because it asks the same question that produced the error.
+  //
+  // Here is that in one assertion: the exact broken document the old code
+  // produced, judged both ways.
+  const BROKEN = ['---', 'name: piper', 'routines: []', 'trailingKey: still here',
+    'routines:', '  - name: Compile the ops summary', '    schedule: every monday at 07:00',
+    '---', '', '# Piper', ''].join('\n');
+
+  test('the writer\'s own parser reads the broken file as fine', () => {
+    const blocks = parseRoutineBlocks(BROKEN.match(/^---\n([\s\S]*?)\n---/)[1]);
+    assert.strictEqual(blocks.length, 1,
+      'the locator finds the section that was just appended and is satisfied');
+    assert.strictEqual(blocks[0].schedule, 'every monday at 07:00',
+      'so a read-back built on it would report the routine written and the save done');
+  });
+
+  test('the independent check refuses the same file, naming the key', () => {
+    assert.throws(
+      () => assertFrontmatterKeysIntact(fileDeclaring('routines: []'), BROKEN),
+      /2 "routines" keys/,
+      'a duplicated key has to be caught by something that does not use the locators',
+    );
+  });
+
+  test('it counts names at the start of a line and knows nothing about routines', () => {
+    const counts = topLevelKeyCounts(BROKEN);
+    assert.strictEqual(counts.get('routines'), 2);
+    assert.strictEqual(counts.get('name'), 1);
+    assert.strictEqual(counts.get('trailingKey'), 1);
+    // Indented lines are items and fields, never top-level keys.
+    assert.strictEqual(counts.has('schedule'), false);
+  });
+
+  test('creating the key where there was none is allowed', () => {
+    assert.doesNotThrow(() => assertFrontmatterKeysIntact(
+      WITHOUT_ROUTINES, appendRoutineBlock(WITHOUT_ROUTINES, NEW_ROUTINE)));
+  });
+
+  test('adding a routine to a file that already had the key is allowed', () => {
+    assert.doesNotThrow(() => assertFrontmatterKeysIntact(
+      WITH_ROUTINES, appendRoutineBlock(WITH_ROUTINES, NEW_ROUTINE)));
+  });
+
+  // A file that was already malformed is not blamed on this write, and not
+  // made worse by it either.
+  test('a duplicate that was already there is not blamed on this write', () => {
+    assert.doesNotThrow(() => assertFrontmatterKeysIntact(BROKEN, BROKEN));
+  });
+
+  test('frontmatter that stopped being readable is refused', () => {
+    assert.throws(() => assertFrontmatterKeysIntact(WITH_ROUTINES, '# no frontmatter at all\n'),
+      /no longer readable/);
+  });
+});
+
 describe('the save_routine handler', () => {
   // The roster cache is a time-based one shared by every test in this process,
   // so a fresh workspace is not enough on its own: a warm entry from a previous
@@ -285,6 +391,22 @@ describe('the save_routine handler', () => {
         assert.strictEqual(fs.readFileSync(file, 'utf-8'), before, `${slug}: the file is untouched`);
       } finally { f.restore(); }
     }
+  });
+
+  test('a file declaring routines in an unreadable form errors and is left alone', () => {
+    const f = fixture({ inline: fileDeclaring('routines: []') });
+    const file = path.join(f.dir, '.claude', 'agents', 'inline.md');
+    const before = fs.readFileSync(file, 'utf-8');
+    try {
+      handleSaveRoutine(f.ctx, f.ws, { type: 'save_routine', agentId: 'inline', routine: NEW_ROUTINE });
+      const errors = f.sent.filter(m => m.type === 'routine_error');
+      assert.strictEqual(errors.length, 1);
+      assert.match(errors[0].message, /cannot add to yet/, 'the refusal names why, not just that');
+      assert.ok(!f.sent.some(m => m.type === 'routine_saved'));
+      assert.strictEqual(fs.readFileSync(file, 'utf-8'), before, 'the file is untouched');
+      assert.strictEqual((fs.readFileSync(file, 'utf-8').match(/^routines:/gm) || []).length, 1,
+        'and still has exactly one routines key');
+    } finally { f.restore(); }
   });
 
   test('a routine with no message body is an error', () => {
