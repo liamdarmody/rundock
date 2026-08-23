@@ -184,6 +184,28 @@ const MANIFEST = {
   "profile.js": [
     "showProfile",
   ],
+  // The routine editor. Its surface is wider than the other views because
+  // every step and every field is reached from a generated handler, and a
+  // handler resolves by bare name at click time.
+  "routine-editor.js": [
+    "addRoutine",
+    "addRoutineForAgent",
+    "browserTimezone",
+    "openRoutineEditor",
+    "renderRoutineEditor",
+    "routineEditorBuildSkill",
+    "routineEditorFailed",
+    "routineEditorHtml",
+    "routineEditorLeave",
+    "routineEditorPick",
+    "routineEditorRunOn",
+    "routineEditorSaved",
+    "routineEditorSetField",
+    "routineEditorSkillsArrived",
+    "routineEditorStep",
+    "routinesListNav",
+    "saveRoutine",
+  ],
   "settings.js": [
     "changeWorkspace",
     "renderRuntimesCard",

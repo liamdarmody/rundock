@@ -91,6 +91,14 @@ function showProfile(agentId) {
       }
       h+=`</div>`;
     }
+    // Scheduling often starts from the agent: you are already looking at it
+    // and think of the schedule second. The editor opens scoped to this
+    // agent, so the picker offers only the skills it has.
+    h+=`<div class="profile-card-section"><div class="profile-section-label">Add a routine</div>
+      <div class="profile-card-text" style="padding-bottom:10px">Give one of ${esc(a.displayName)}'s skills a schedule.</div>
+      <button class="settings-btn-primary" type="button" data-profile-action="add-routine"
+        data-agent-id="${esc(a.id)}" onclick="addRoutineForAgent('${esc(a.id)}')">Add routine</button>
+    </div>`;
     if(hasConnectors) {
       h+=`<div class="profile-card-section"><div class="profile-section-label">Connectors</div>${a.capabilities.connectors.split(',').map(cn=>`<div class="profile-card-item" style="display:flex;align-items:center;justify-content:space-between">${cn.trim()}<span style="color:var(--success);font-size:var(--caption)">Connected</span></div>`).join('')}</div>`;
     }

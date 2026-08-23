@@ -413,3 +413,49 @@ describe('ROUTINES.md: same-day catch-up', () => {
       'ROUTINES.md must not contradict the catch-up window it documents');
   });
 });
+
+// ---------------------------------------------------------------------------
+// docs/ROUTINES.md: the always-on setup runs the routine on every machine
+//
+// The page RECOMMENDS keeping Rundock on a VPS with the workspace synced, and
+// until this was written it said nothing about what a second live instance
+// does. The reader most likely to follow that advice is exactly the reader who
+// ends up with two schedulers and one routine firing twice, so the caveat is
+// pinned to the two facts that make it true rather than left as prose.
+
+describe('ROUTINES.md: two live instances both fire', () => {
+  const { scaffoldWorkspace } = require('../../lib/workspace/scaffold.js');
+
+  test('the last-run guard is a file inside the workspace, so it is per machine', () => {
+    // The claim: the guard lives in .rundock/ inside the workspace folder. If
+    // it moved to a user-level or machine-level location, the whole caveat
+    // would be wrong in the reader's favour and the page would still say it.
+    const scheduler = fs.readFileSync(path.join(ROOT, 'lib', 'scheduler.js'), 'utf-8');
+    assert.match(scheduler, /routine-state\.json/,
+      'the guard file the caveat describes must still be the one the scheduler writes');
+    assert.match(routinesDoc, /last-run guard[\s\S]{0,120}`\.rundock\/`[\s\S]{0,120}per machine/,
+      'ROUTINES.md must say the guard is per machine, and where it lives');
+  });
+
+  test('a workspace shared through git does not carry the guard', () => {
+    // The claim the caveat makes about git specifically, checked against the
+    // real tool rather than by reading the scaffold: the entry is written, and
+    // git agrees the file is ignored.
+    const dir = makeWorkspace({});
+    scaffoldWorkspace(dir);
+    const gitignore = fs.readFileSync(path.join(dir, '.gitignore'), 'utf-8');
+    assert.match(gitignore, /^\.rundock\/$/m,
+      'the scaffold must ignore the state folder, which is what makes the git half of the caveat true');
+  });
+
+  test('the page states the caveat where it recommends the setup that hits it', () => {
+    // Placement is the claim. Stated only in the frontmatter reference, it
+    // would be absent from the section a reader acts on.
+    const alwaysOn = routinesDoc.slice(routinesDoc.indexOf('## Always-on routines'));
+    assert.ok(alwaysOn.length > 0, 'sanity: the always-on section exists');
+    assert.match(alwaysOn, /runs twice/,
+      'the always-on section must say what two live instances do');
+    assert.match(alwaysOn, /four synced machines|four times/,
+      'the always-on section must say what happens at more than two');
+  });
+});

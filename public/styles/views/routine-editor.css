@@ -1,0 +1,70 @@
+/* The routine editor: the skill picker, the sentence builder and the run-on
+   field.
+
+   Every colour, radius and duration is a token, so both themes come from
+   tokens.css and neither is written twice here. Class names are prefixed `re-`
+   rather than borrowing the picker and row vocabulary the routines list will
+   want, so the two surfaces can be styled apart before they are styled
+   together. */
+
+.routine-editor { max-width: 560px; padding: 32px; }
+
+.re-lead { font-size: var(--body); color: var(--text-2); line-height: 1.5; margin-bottom: 16px; }
+.re-caption { font-size: var(--caption); color: var(--text-2); line-height: 1.5; margin: 12px 0 0; }
+
+/* The picker and the run-on choice are the same object: a list of rows, each
+   with a mark, a name and a second line. They differ only in density. */
+.re-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
+
+.re-row { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-xl); cursor: pointer; transition: border-color var(--duration-base) ease, background var(--duration-base) ease; }
+.re-row:hover { border-color: var(--accent); }
+.re-row.sel { border-color: var(--accent); background: var(--accent-glow); }
+.re-row.re-compact { padding: 12px 14px; }
+
+/* The reserved option. Dashed rather than hidden: it is how someone learns the
+   other option exists, and it says so at the moment they are choosing where
+   this routine runs rather than in a banner they meet at another time. */
+.re-row.muted { border-style: dashed; cursor: default; background: transparent; }
+.re-row.muted:hover { border-color: var(--border); }
+.re-row.muted .re-name { color: var(--text-2); }
+
+.re-dot { width: 18px; height: 18px; flex-shrink: 0; margin-top: 1px; border-radius: var(--radius-circle); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: var(--label); color: var(--accent); }
+.re-row.sel .re-dot { border-color: var(--accent); }
+.re-body { min-width: 0; }
+.re-name { font-size: var(--body); font-weight: 600; color: var(--text-1); }
+.re-meta { font-size: var(--caption); color: var(--text-2); line-height: 1.5; margin-top: 2px; }
+
+/* The zero-skills state. Centred, one line, one thing to press: it is an offer
+   and it is shaped like one. */
+.re-offer { background: var(--card); border-radius: var(--radius-xl); padding: 44px 24px; text-align: center; }
+.re-offer-lead { font-size: var(--body); color: var(--text-1); line-height: 1.6; margin-bottom: 18px; }
+
+/* The sentence. Plain words with two fields set into them, so it reads as a
+   line of English rather than as a form. */
+.re-sentence { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 16px; background: var(--card); border-radius: var(--radius-xl); margin-bottom: 14px; }
+.re-word { font-size: var(--body); color: var(--text-1); }
+.re-select { font-family: inherit; font-size: var(--body); font-weight: 600; color: var(--text-1); background: var(--elevated); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 5px 8px; cursor: pointer; }
+.re-select:hover { border-color: var(--accent); }
+.re-pill { display: inline-flex; align-items: center; gap: 6px; font-size: var(--body); font-weight: 600; color: var(--text-1); background: var(--elevated); border: 1px solid var(--border); border-radius: var(--radius-pill); padding: 4px 12px; }
+.re-preview { font-size: var(--body); color: var(--text-2); line-height: 1.6; margin-bottom: 4px; }
+
+.re-field { margin-top: 18px; }
+.re-field-label { font-size: var(--label); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-2); margin-bottom: 8px; }
+
+/* The caveat sits inside the field, under the options it qualifies, because
+   where a routine runs and what that costs are one fact. */
+.re-caveat { font-size: var(--caption); color: var(--text-2); line-height: 1.5; margin: 0; }
+
+.re-confirm { background: var(--card); border-radius: var(--radius-xl); padding: 24px; }
+.re-confirm-sentence { font-size: var(--body); font-weight: 600; color: var(--text-1); line-height: 1.6; margin-bottom: 6px; }
+
+.re-actions { display: flex; gap: 10px; margin-top: 18px; }
+.re-actions .settings-btn-primary:disabled { opacity: 0.45; cursor: default; }
+.re-actions .settings-btn-primary:disabled:hover { background: var(--accent); }
+
+.re-link { font-family: inherit; font-size: inherit; color: var(--accent); background: none; border: none; padding: 0; cursor: pointer; }
+.re-link:hover { text-decoration: underline; }
+
+/* A refusal from the server, shown next to the button that caused it. The
+   editor is still on screen precisely so this has somewhere to go. */
+.re-problem { font-size: var(--caption); color: var(--danger); line-height: 1.5; margin: 0 0 4px; }

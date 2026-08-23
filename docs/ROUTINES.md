@@ -16,6 +16,8 @@ Every routine is declared on the agent it runs for. The agent file's frontmatter
             description: ...
 ```
 
+Routines can be added from the interface as well as by hand. An agent's page has an Add routine button, which opens a two-step editor: pick one of that agent's skills, then say when it runs in one plain sentence. The editor writes the same `routines:` array documented below, so a routine made either way is the same routine. There is no freeform prompt field in the editor: routines schedule skills, and the instruction is derived from the skill that was picked.
+
 Routines are a Rundock concept. The `routines:` array is read by Rundock's scheduler and ignored by Claude Code. An agent file with routines works in plain Claude Code; the routines just do not run there.
 
 ## Frontmatter reference
@@ -94,6 +96,8 @@ The constraint is real, though narrower than it looks. Rundock's scheduler runs 
 Keep Rundock running on a small cloud server (Hetzner, DigitalOcean, Hostinger, etc) and reach it from any device through a browser. The scheduler ticks 24/7, routines fire on cadence regardless of whether your laptop is open, and the workspace stays in sync via Obsidian Sync.
 
 For a working setup guide, see Liam's gist: [How to Build a 24/7 Personal AI Agent with Claude Code](https://gist.github.com/liamdarmody/4aba083c26ccb1b3b0f1068ec185ef66). It walks through Ubuntu 24.04 on a VPS, Claude Code installation and authentication, server hardening (ufw, fail2ban, unattended-upgrades), Obsidian Sync, and a systemd service so Rundock comes back up after a reboot. It is opinionated and worked end-to-end at the time of writing. The general pattern (VPS plus authenticated Claude Code plus Rundock as a service) is durable; the specific provider, hardening commands, and pricing will drift. Treat the gist as a starting point and verify each step against current docs before running it on a fresh server.
+
+**One machine runs the routines, or every machine does.** A routine records what it does and when, and nothing about where it was made. The last-run guard that stops a routine firing twice is a file in `.rundock/` inside the workspace, so it is per machine, and there is no coordination between two copies of the same workspace. If you keep Rundock open on the VPS and on your laptop with the workspace synced between them, both schedulers tick and each fires the routine on its own guard, so it runs twice. Whether the guard is shared or separate depends on whether your sync tool carries `.rundock/`, which is a property of that tool rather than of Rundock: a workspace shared through git does not carry it, because Rundock adds `.rundock/` to the workspace `.gitignore` when it sets one up. Neither outcome is coordinated, so treat the always-on machine as the one that runs routines and close Rundock elsewhere, or expect a routine on four synced machines to run four times.
 
 What this gives you:
 

@@ -249,7 +249,7 @@ function handle(d) {
       break;
     case 'needs_workspace': showView('workspace'); break;
     case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesSidebar(); renderConvoList(); break;
-    case 'skills': skills=d.skills; skillsLoaded=true; renderSkills(); if(palettePendingSkill){const s=palettePendingSkill;palettePendingSkill=null;selectSkill(s);} break;
+    case 'skills': skills=d.skills; skillsLoaded=true; renderSkills(); routineEditorSkillsArrived(d.skills); if(palettePendingSkill){const s=palettePendingSkill;palettePendingSkill=null;selectSkill(s);} break;
     case 'conversations':
       handlePersistedConversations(d.conversations, d.lastActiveConversationId);
       // Conversations are the last of the four payloads the client requests on
@@ -432,6 +432,19 @@ function handle(d) {
       break;
     case 'skill_error':
       addSystemMsg(d.message || 'Skill operation failed');
+      break;
+    // A routine write is the one save in this client the user waits on: the
+    // editor stays on screen until the server answers, so a refusal has
+    // somewhere to land. Both replies go to the editor AND to the message
+    // area, the way agent and skill replies do, because the editor may already
+    // have been left by hand.
+    case 'routine_saved':
+      addSystemMsg('Routine "' + (d.name || '') + '" added to ' + (d.agentId || '') );
+      routineEditorSaved();
+      break;
+    case 'routine_error':
+      addSystemMsg(d.message || 'Routine could not be saved');
+      routineEditorFailed(d.message);
       break;
     case 'skill_deleted':
       addSystemMsg('Skill "' + (d.skillId || '') + '" removed');
@@ -988,7 +1001,7 @@ function switchNav(nav) {
   else if(nav==='conversations') { if(activeConversation) { showView('chat'); if(unread.clearConvo(activeConversation.id)) { updateUnreadBadge(); renderConvoList(); } } else { const target = pickDefaultConversation(); if(target) { openConversation(target.id); } else { newConversation(); } } }
   else if(nav==='team') { showView('home'); renderOrgChart(); }
 }
-function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }
+function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings','routine-editor'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }
 function goHome() { discardIfEmpty(); activeConversation=null; switchNav('conversations'); }
 
 // Theme. One function applies it everywhere it shows (body class, toggle
