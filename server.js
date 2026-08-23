@@ -117,8 +117,33 @@ function setWorkspaceRoot(dir) {
   // in place. When there is no new workspace to serve, the stop is all that
   // happens, and it is the only thing standing between a deleted workspace and
   // a tick that keeps running over nothing.
+  //
+  // AND THE STATE IS LOADED BEFORE THE TICK IS ARMED, never after.
+  //
+  // The root is already the new workspace by the time this runs, so between an
+  // arm and a load the two stores disagree about which workspace they describe:
+  // getWorkspace() names the one being entered while routineState and the slot
+  // records still hold the one being left. A tick landing in that window judges
+  // the new roster against the old workspace's lastRun, and for any key the two
+  // workspaces share, which is every key when an agent and a routine keep their
+  // names, it suppresses a run that was due or releases one that was not.
+  //
+  // Closing that window by argument rather than by order would mean arguing
+  // that no tick can land there, which is true today only because the callers
+  // happen not to yield between the two. That is the kind of guarantee that
+  // holds until someone makes an open path asynchronous, and then fails in a
+  // way nobody can reproduce. Loading first means there is no window to argue
+  // about: at the instant the tick is armed, the state it will read already
+  // describes the workspace it will read it for.
+  //
+  // The open paths load again after this, and that is deliberate rather than
+  // redundant: healWorkspaceIfMoved runs between, and what it repairs belongs
+  // in the state a tick reads. This load is the floor, not the last word.
   stopScheduler();
-  if (dir) startScheduler();
+  if (dir) {
+    loadRoutineState();
+    startScheduler();
+  }
 }
 
 // Workspace boundary check. A bare `startsWith(resolve(WORKSPACE))`

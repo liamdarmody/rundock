@@ -204,6 +204,37 @@ new start*. The routine fires, the stub holds it open, the routine is asserted
 nothing: the prompt log still holds one entry after real elapsed time in which
 a second spawn would have appeared.
 
+### The ordering the lifecycle depends on
+
+Not one of the twelve criteria, and found in review of round 2. The root
+changes before the lifecycle runs, so a tick armed before `loadRoutineState()`
+is armed into a window where `getWorkspace()` names the workspace being entered
+while `routineState` and the slot records still describe the one being left. A
+tick landing there judges the new roster against the old workspace's `lastRun`,
+and for any key the two workspaces share, which is every key when an agent and
+a routine keep their names, it suppresses a run that was due.
+
+No caller yields between the two today, so no tick can land there today. That is
+an argument that ages badly, and it is the fourth time in this release that two
+stores have disagreed about the same question with nothing making them agree.
+So `setWorkspaceRoot` loads the state and then arms, and the window does not
+exist to be argued about. The open paths load again afterwards, deliberately:
+`healWorkspaceIfMoved` runs between, and what it repairs belongs in the state a
+tick reads. The load in the setter is the floor rather than the last word.
+
+Proven by `the state a tick will read is loaded before the tick is armed`. Two
+workspaces declare the same agent and the same routine, so they share a routine
+key; the one being left has a run recorded at 09:05 and the one being entered
+has never run it. The observation is taken at the ARMING rather than through a
+tick, because the window is inside one synchronous call: nothing yields, so no
+tick can be driven into it, and a test that advanced the clock would pass under
+either ordering and prove nothing. What differs between the orderings is the
+state that exists when the interval is created, so the test stands in front of
+`setInterval` and copies `routineState` at that instant. The scheduler's is the
+only sixty-second interval armed on that path.
+
+M18 arms before loading and turns that test red, and only that test.
+
 > **AC-12:** Each proof fails when its own guard is removed.
 
 Below, in full.
@@ -238,8 +269,8 @@ the blast radius is visible rather than asserted.
 
 | # | Mutation | Failing | Tests that turned red |
 |---|---|---|---|
-| M1 | remove `stopScheduler()` from the workspace setter | 7 | *choosing a workspace twice leaves one ticker, not two*; *switching away re-arms the tick rather than leaving the old one running*; *the previous workspace routine does not fire when its slot passes*; *a workspace that disappears takes its ticker with it*; *a routine mid-run when the workspace is switched is not re-fired by the new start*; *no product code arms or disarms the scheduler without being listed here*; *the function every workspace-setting path reaches runs the lifecycle* |
-| M2 | remove `startScheduler()` from the workspace setter | 8 | the seven above, plus *choosing a folder arms the tick, and the routine runs when its time comes* |
+| M1 | remove `stopScheduler()` from the workspace setter | 8 | *choosing a workspace twice leaves one ticker, not two*; *switching away re-arms the tick rather than leaving the old one running*; *the previous workspace routine does not fire when its slot passes*; *a workspace that disappears takes its ticker with it*; *the state a tick will read is loaded before the tick is armed*; *a routine mid-run when the workspace is switched is not re-fired by the new start*; *no product code arms or disarms the scheduler without being listed here*; *the function every workspace-setting path reaches runs the lifecycle* |
+| M2 | remove `startScheduler()` from the workspace setter | 9 | the eight above, plus *choosing a folder arms the tick, and the routine runs when its time comes* |
 | M3 | start before stop instead of after | 7 | as M2, without *no product code arms or disarms...* (both calls are still present, so only the order check fails) |
 | M4 | start even when there is no workspace (`if (dir)` dropped) | 1 | *a workspace that disappears takes its ticker with it* |
 | M5 | `schedulerRunning()` always returns true | 3 | *a first run has no workspace and nothing watching the clock*; *a workspace that disappears takes its ticker with it*; *booting with a workspace already set arms the tick...* |
@@ -255,13 +286,14 @@ the blast radius is visible rather than asserted.
 | M15 | an exclusion in the enumeration loses its reason | 2 | *a call left out of the enumeration says why* (plus one unrelated flake, below) |
 | M16 | a lifecycle proof arms the tick itself | 1 | *the lifecycle proofs never arm the tick themselves* |
 | M17 | the stop forgets the handle without clearing the interval | 6 | *choosing a workspace twice...*; *switching away re-arms...*; *the previous workspace routine does not fire when its slot passes*; *a workspace that disappears...*; plus two pre-existing scheduler tests |
+| M18 | arm the tick before the state it will read is loaded | 1 | *the state a tick will read is loaded before the tick is armed* |
 
 M11 and M12 are AC-8 read literally: a path that sets a workspace and starts
 nothing, added on purpose to check that it fails by name. Both do, and the
 failure names the file and the function.
 
 No mutation turned nothing red, and none turned the suite red. The largest
-blast radius is eight tests out of 2361.
+blast radius is nine tests out of 2361.
 
 ## Every proof, and the mutation that names it
 
@@ -279,6 +311,7 @@ naming it is a proof that cannot fail.
 | *the previous workspace routine does not fire when its slot passes* | M1, M2, M3, M17 |
 | *a workspace that disappears takes its ticker with it* | M1, M2, M3, M4, M5, M17 |
 | *choosing a workspace does not write the value suppression reads* | M13 |
+| *the state a tick will read is loaded before the tick is armed* | M1, M2, M18 |
 | *a routine mid-run when the workspace is switched is not re-fired by the new start* | M1, M2, M3 |
 | *booting with a workspace already set arms the tick, with nobody calling the starter* | M5, M10, M14 |
 | *no product code arms or disarms the scheduler without being listed here* | M1, M2, M8, M14 |
@@ -293,6 +326,11 @@ Every proof is named by at least one mutation. Four of these mutations, M13
 through M16, exist only because this table was built: the proofs they name had
 no mutation before it, and two of them, the AC-10 proof and the boot proof, were
 passing regardless of the change.
+
+M18 arrived the other way round, from review of round 2 rather than from the
+table: the ordering it mutates was a defect first and a proof second. The rule
+held anyway, because the proof written for it was required to have a mutation
+that names it before it counted as a proof at all.
 
 ## What the mutations exposed, reported rather than tidied away
 

@@ -395,6 +395,67 @@ describe('what the lifecycle must not disturb', () => {
     }
   });
 
+  // The tick reads two stores that have to describe the same workspace: the
+  // roster, through getWorkspace() at use time, and routineState. The root
+  // changes first, so anything armed before the state is loaded is armed into a
+  // window where the two disagree, and a tick landing there judges the new
+  // roster against the old workspace's lastRun.
+  //
+  // WHY THIS IS OBSERVED AT THE ARMING RATHER THAN THROUGH A TICK. The window
+  // is inside one synchronous call: nothing yields between the arm and the load
+  // today, so no tick can be driven into it, and a test that advanced the clock
+  // would pass under either ordering and prove nothing. What distinguishes the
+  // two orderings is the state that EXISTS at the moment the interval is
+  // created, so that is what this reads, by standing in front of setInterval
+  // and taking a copy. The scheduler's is the only sixty-second interval armed
+  // on this path.
+  //
+  // Both workspaces declare the same agent and the same routine name, so they
+  // share a routine key. That is the case the disagreement actually bites in,
+  // and the one a workspace copied or renamed produces by accident.
+  test('the state a tick will read is loaded before the tick is armed', async (t) => {
+    const ranAt = new Date(2026, 6, 1, 9, 5, 0);
+    const left = punctualWorkspace();
+    const leftState = path.join(left, '.rundock', 'routine-state.json');
+    fs.mkdirSync(path.dirname(leftState), { recursive: true });
+    fs.writeFileSync(leftState, JSON.stringify(
+      { [KEY]: { lastRun: ranAt.toISOString(), status: 'completed', duration: 3 } }, null, 2));
+    // Same agent, same routine, so the same key. Never run.
+    const entered = punctualWorkspace();
+
+    const client = await h.connect();
+    await armOnRealTimers(client);
+    const clock = { at: AFTER_NINE };
+    const prevDeps = scheduler.wireSchedulerDeps({ now: () => clock.at });
+    t.mock.timers.enable({ apis: ['setInterval'] });
+    const armed = [];
+    const wrapped = global.setInterval;
+    global.setInterval = (fn, ms, ...rest) => {
+      if (ms === 60_000) armed.push(JSON.parse(JSON.stringify(h.internal.routineState)));
+      return wrapped(fn, ms, ...rest);
+    };
+    try {
+      await choose(client, left);
+      assert.strictEqual(h.internal.routineState[KEY].lastRun, ranAt.toISOString(),
+        'the workspace being left has a run recorded for the shared key');
+
+      armed.length = 0;
+      await choose(client, entered);
+
+      assert.strictEqual(armed.length, 1,
+        'exactly one tick was armed while entering the workspace');
+      assert.strictEqual(armed[0][KEY], undefined,
+        'and at the moment it was armed the state already described the workspace being ENTERED, '
+        + 'which has never run this routine. Armed first, it would have held the run the workspace '
+        + 'being LEFT recorded at 09:05, and suppressed a routine that was due');
+    } finally {
+      global.setInterval = wrapped;
+      t.mock.timers.reset();
+      scheduler.wireSchedulerDeps(prevDeps);
+      client.close();
+    }
+  });
+
   // AC-11. A run that was in flight when the workspace changed must not be
   // fired again by the scheduler the change arms. The hold that prevents it is
   // deliberately not cleared by the state reload a switch performs, and this
