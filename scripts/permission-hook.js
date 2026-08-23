@@ -160,7 +160,15 @@ function shellPathTokens(command) {
   let m;
   while ((m = re.exec(String(command))) !== null) {
     const t = m[1] !== undefined ? m[1] : (m[2] !== undefined ? m[2] : m[0]);
-    if (t) out.push(t);
+    if (!t) continue;
+    out.push(t);
+    // Also the value after the first `=`. Flag values (`--output=/etc/x`) and
+    // shell assignments (`OUT=$HOME/x`) are the two commonest places a target
+    // sits in plain sight inside a larger word. The whole token is kept too,
+    // so nothing that used to be seen stops being seen; a value that is not
+    // path-shaped falls out at the same filter everything else does.
+    const eq = t.indexOf('=');
+    if (eq > 0 && eq < t.length - 1) out.push(t.slice(eq + 1));
   }
   return out;
 }

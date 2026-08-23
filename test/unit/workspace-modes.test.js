@@ -8,6 +8,7 @@ const path = require('node:path');
 
 const { _internal: srv } = require('../../server.js');
 const { makeWorkspace, agentFile, standardTeam, cleanup } = require('../helpers/workspace.js');
+const scaffoldLib = require('../../lib/workspace/scaffold.js');
 
 after(cleanup);
 
@@ -239,6 +240,50 @@ describe('scaffoldWorkspace', () => {
     } else {
       assert.strictEqual(after.sandbox, undefined);
     }
+  });
+
+  test('a workspace copied to ANOTHER MACHINE gets both roots brought current', () => {
+    // The release note says copying a workspace keeps working. It did not.
+    // The block carries the npm cache under the home directory it was written
+    // on, so on a machine or account with a different home the regenerated
+    // block never matched, the block was read as user-authored, the stale
+    // workspace root survived, and the operating system then refused every
+    // write INSIDE the new location. Worse than an overclaim: it breaks a
+    // setup that was working before the copy.
+    const dir = useWorkspace({ claudeMd: '# x' });
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    // Exactly what Rundock would have written on the other machine.
+    const elsewhere = scaffoldLib.sandboxSettings('/Users/someone-else/their-workspace', 'darwin', '/Users/someone-else');
+    fs.writeFileSync(settingsPath, JSON.stringify({ sandbox: elsewhere }));
+
+    srv.scaffoldWorkspace(dir);
+
+    const after = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')).sandbox;
+    if (process.platform === 'darwin') {
+      assert.deepStrictEqual(after, scaffoldLib.sandboxSettings(dir, 'darwin'),
+        'both the workspace root and the cache root are the ones for THIS machine');
+    } else {
+      assert.deepStrictEqual(after, elsewhere, 'nothing to reconcile to on a platform with no sandbox');
+    }
+  });
+
+  test('a sandbox block Rundock wrote is WITHDRAWN on a platform it would not write one for', () => {
+    // The reconcile recognised its own block only to update it, never to take
+    // it back. A workspace scaffolded on macOS and opened on Windows kept
+    // handing the runtime a block with a macOS absolute root, on a platform
+    // where the docs say none is written and where nothing was measured.
+    const dir = useWorkspace({ claudeMd: '# x' });
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify({
+      sandbox: scaffoldLib.sandboxSettings('/Users/me/ws', 'darwin', '/Users/me'),
+    }));
+
+    srv.scaffoldWorkspace(dir, { platform: 'win32' });
+
+    assert.strictEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf-8')).sandbox, undefined,
+      'ours is taken back where we would not have written one');
   });
 
   test('a sandbox block the user has EDITED is never brought with it', () => {

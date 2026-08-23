@@ -109,15 +109,35 @@ describe('the workspace boundary says what it enforces, per platform', () => {
     assert.match(unreleased, /\/dev\/null/, 'and the device paths');
   });
 
+  test('the copy does not claim the command check sees every visible target', () => {
+    // Four review rounds failed the same criterion, each on a different
+    // spelling written plainly in the command and not carded. The
+    // implementation improved every round and the claim kept failing, because
+    // reading a shell command without running it has no complete answer. What
+    // changed is the claim: the guarantee is the operating-system half, and
+    // the card is a best effort that names where it stops.
+    assert.match(unreleased, /best effort/i, 'the release notes call the check what it is');
+    assert.match(unreleased, /raise no card|raises no card/i,
+      'and say plainly that some targets raise nothing');
+    assert.match(unreleased, /~someone\/file|-C\/tmp/,
+      'with at least one named example of a spelling it does not recognise');
+    assert.match(architecture, /best-effort check over common spellings/i,
+      'the audit section separates the guarantee from the best effort');
+    assert.match(architecture, /Not recognised/,
+      'and lists examples rather than implying completeness');
+  });
+
   test('the audit section states the boundary per platform AND per act', () => {
     // A sentence cannot carry this: the answer differs by platform, by
     // whether the target is visible in the command, and by read versus
     // write. Three rounds of review found the stated boundary wider than the
     // enforced one, every time in a cell nobody had written down.
     assert.match(architecture, /How the target is written/, 'the table exists');
+    assert.match(architecture, /a form the check does not recognise/,
+      'and the unrecognised-spelling case is a row, not an omission');
     assert.match(architecture, /system executable directory/,
       'and carries the exemption as a row rather than leaving it to the code');
-    for (const cell of ['macOS', 'Windows', 'Linux', 'Computed while the command runs']) {
+    for (const cell of ['macOS', 'Windows', 'Linux', 'computed while the command runs']) {
       assert.ok(architecture.includes(cell), `the table covers ${cell}`);
     }
   });

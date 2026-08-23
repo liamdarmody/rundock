@@ -220,6 +220,24 @@ describe('classifyShellAccess (hook-side)', () => {
     assert.strictEqual(r.resolvedPath, first);
   });
 
+  test('a path written after an equals sign is recognised too', () => {
+    // Flag values and shell assignments are the two commonest places a target
+    // hides in plain sight. Widening to them is an improvement to a
+    // best-effort check, NOT a claim that the check is now complete: the
+    // copy says what it recognises and says a spelling it does not recognise
+    // raises no card.
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'tar --output=/etc/x .' }, ws, []).crossings[0].path, '/etc/x');
+    const home = os.homedir();
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'OUT=$HOME/x; cp a "$OUT"' }, ws, []).crossings[0].path, path.join(home, 'x'));
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'run --dest=../../elsewhere' }, ws, []).where, 'outside');
+  });
+
+  test('an equals sign that is not naming a path is still not a crossing', () => {
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'FOO=bar npm test' }, ws, []), null);
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'rsync --exclude=*.js a b' }, ws, []), null);
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'cc -DPATH=/usr/bin/env x.c' }, ws, []), null);
+  });
+
   test('the same target named twice is reported once', () => {
     const home = os.homedir();
     const t = path.join(home, 'notes.md');
@@ -261,6 +279,10 @@ describe('classifyShellAccess: native Windows command forms', () => {
 
   test('backslash-delimited traversal climbs out just as ../ does', () => {
     outside('cp a.md ..\\..\\elsewhere\\');
+  });
+
+  test('a Windows path after an equals sign is recognised too', () => {
+    outside('run --out=C:\\\\Users\\\\me\\\\probe.txt');
   });
 
   test('a target inside the workspace is not a crossing, on either separator', () => {
