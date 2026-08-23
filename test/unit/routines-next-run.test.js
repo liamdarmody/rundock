@@ -195,7 +195,7 @@ describe('one path produces every row\'s next-run time', () => {
       sched.wireSchedulerDeps({ now: () => NOW });
       assert.strictEqual(sched.nextRunFor(KEY, SCHEDULE), null);
       assert.deepStrictEqual(sched.routineDisplayFacts(KEY, SCHEDULE),
-        { nextRun: null, lastSlot: null, missedSlot: null });
+        { nextRun: null, lastStart: null, lastSlot: null, missedSlot: null });
     });
   });
 
@@ -205,7 +205,7 @@ describe('one path produces every row\'s next-run time', () => {
       anchor(sched, TODAYS_SLOT);
       assert.strictEqual(sched.nextRunFor(KEY, '0 7 * * *'), null);
       assert.deepStrictEqual(sched.routineDisplayFacts(KEY, '0 7 * * *'),
-        { nextRun: null, lastSlot: null, missedSlot: null });
+        { nextRun: null, lastStart: null, lastSlot: null, missedSlot: null });
     });
   });
 
@@ -246,6 +246,85 @@ describe('one path produces every row\'s next-run time', () => {
       sched.routineState[KEY] = { lastRun: 'not a time', status: 'completed', duration: 3 };
       assert.strictEqual(sched.routineDisplayFacts(KEY, SCHEDULE).lastSlot, null);
       assert.deepStrictEqual(sched.nextRunFor(KEY, SCHEDULE), TODAYS_SLOT);
+    });
+  });
+});
+
+describe('when the last run began', () => {
+  // `routineState.lastRun` is the moment a finished run ENDED, and `duration`
+  // is how long it took. A row that measured lateness against the stamp would
+  // be measuring the run's own length as much as its lateness, and an agent
+  // run routinely lasts longer than the boundary the row uses.
+  test('a finished run reports the moment it started, not the moment it ended', () => {
+    withWorkspace((sched) => {
+      sched.wireSchedulerDeps({ now: () => NOW });
+      anchor(sched, TODAYS_SLOT);
+      // Fired on its slot, worked for eleven minutes.
+      sched.routineState[KEY] = {
+        lastRun: new Date(2026, 7, 20, 7, 11, 12).toISOString(), status: 'completed', duration: 11 * 60,
+      };
+      assert.strictEqual(sched.lastRunStartedAt(KEY).toISOString(),
+        new Date(2026, 7, 20, 7, 0, 12).toISOString());
+      assert.strictEqual(sched.routineDisplayFacts(KEY, SCHEDULE).lastStart,
+        new Date(2026, 7, 20, 7, 0, 12).toISOString());
+    });
+  });
+
+  // Every writer that leaves the duration unset has already stamped the start:
+  // a run in flight, one a dead process left behind, and a start that threw.
+  //
+  // The last two entries are not writers, they are FILES. routine-state.json
+  // is on the user's disk, survives upgrades, and can be hand edited, so a
+  // duration that is missing or is not a number is reachable without any code
+  // producing it. Subtracting one of those gives an invalid date, and the row
+  // would lose its whole second line rather than saying anything wrong, which
+  // is the kind of failure nobody reports.
+  test('a stamp with no duration is already the start', () => {
+    withWorkspace((sched) => {
+      sched.wireSchedulerDeps({ now: () => NOW });
+      anchor(sched, TODAYS_SLOT);
+      for (const state of [
+        { lastRun: TODAYS_SLOT.toISOString(), status: 'running', duration: null },
+        { lastRun: TODAYS_SLOT.toISOString(), status: 'interrupted', duration: null },
+        { lastRun: TODAYS_SLOT.toISOString(), status: 'failed', duration: 0, error: 'spawn refused' },
+        { lastRun: TODAYS_SLOT.toISOString(), status: 'completed' },
+        { lastRun: TODAYS_SLOT.toISOString(), status: 'completed', duration: 'fast' },
+      ]) {
+        sched.routineState[KEY] = state;
+        assert.strictEqual(sched.lastRunStartedAt(KEY).toISOString(), TODAYS_SLOT.toISOString(),
+          `${state.status} moved the start`);
+      }
+    });
+  });
+
+  test('a routine that has never run has no start', () => {
+    withWorkspace((sched) => {
+      sched.wireSchedulerDeps({ now: () => NOW });
+      assert.strictEqual(sched.lastRunStartedAt(KEY), null);
+      sched.routineState[KEY] = { lastRun: 'not a time', status: 'completed', duration: 3 };
+      assert.strictEqual(sched.lastRunStartedAt(KEY), null);
+    });
+  });
+
+  // A run that began at 23:58 and finished after midnight served the slot on
+  // the day it STARTED. Taking the slot from the end names the wrong day, and
+  // the row would call a punctual run late by a whole period.
+  test('the slot a run served is the one on the day it started', () => {
+    withWorkspace((sched) => {
+      const lateNight = new Date(2026, 7, 20, 23, 58);
+      sched.wireSchedulerDeps({ now: () => new Date(2026, 7, 21, 9, 0) });
+      sched.routineSlots.routines[KEY] = {
+        due: new Date(2026, 7, 21, 23, 58).toISOString(), schedule: 'daily:23:58', missed: [],
+      };
+      sched.routineState[KEY] = {
+        // Started 23:58 on the twentieth, ran nine minutes, finished on the
+        // twenty first.
+        lastRun: new Date(2026, 7, 21, 0, 7).toISOString(), status: 'completed', duration: 9 * 60,
+      };
+      const facts = sched.routineDisplayFacts(KEY, 'every day at 23:58');
+      assert.strictEqual(facts.lastSlot, lateNight.toISOString(),
+        'the slot was taken from the day the run ended rather than the day it began');
+      assert.strictEqual(facts.lastStart, lateNight.toISOString());
     });
   });
 });

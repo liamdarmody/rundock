@@ -30,20 +30,21 @@ const TOMORROWS_SLOT = new Date(2026, 7, 21, 7, 0);
 const ZONE = 'Europe/London';
 
 // The four rows of the locked frame, as inputs. One routine, four outcomes.
+// `lastStart` throughout, never a completion time: see the model's own note.
 const RAN_ON_TIME = {
-  lastRun: new Date(2026, 7, 20, 7, 0, 12), lastRunStatus: 'completed', lastSlot: TODAYS_SLOT,
+  lastStart: new Date(2026, 7, 20, 7, 0, 12), lastRunStatus: 'completed', lastSlot: TODAYS_SLOT,
   missedSlot: null, nextRun: TOMORROWS_SLOT,
 };
 const CAUGHT_UP = {
-  lastRun: new Date(2026, 7, 20, 9, 14), lastRunStatus: 'completed', lastSlot: TODAYS_SLOT,
+  lastStart: new Date(2026, 7, 20, 9, 14), lastRunStatus: 'completed', lastSlot: TODAYS_SLOT,
   missedSlot: null, nextRun: TOMORROWS_SLOT,
 };
 const MISSED = {
-  lastRun: new Date(2026, 7, 18, 7, 0), lastRunStatus: 'completed', lastSlot: new Date(2026, 7, 18, 7, 0),
+  lastStart: new Date(2026, 7, 18, 7, 0), lastRunStatus: 'completed', lastSlot: new Date(2026, 7, 18, 7, 0),
   missedSlot: YESTERDAYS_SLOT, nextRun: TODAYS_SLOT,
 };
 const FAILED = {
-  lastRun: new Date(2026, 7, 20, 7, 0), lastRunStatus: 'failed', lastSlot: TODAYS_SLOT,
+  lastStart: new Date(2026, 7, 20, 7, 0), lastRunStatus: 'failed', lastSlot: TODAYS_SLOT,
   missedSlot: null, nextRun: TOMORROWS_SLOT,
 };
 const ALL_FOUR = [
@@ -69,22 +70,35 @@ describe('the four outcomes, each in its own tone and its own leading word', () 
 
   // The ruling, as an assertion rather than as a note. A late run is a
   // success; a slot nobody served is a non-event; only a failure is a failure.
+  //
+  // WHAT EACH TONE LOOKS LIKE IS NOT ASSERTED HERE, deliberately. The page's
+  // colour and weight come from the stylesheet, so the place to hold the
+  // ruling to account is what the page resolves, which is done in "the ruling,
+  // against what the page resolves" in test/unit/routines-view.test.js. A
+  // table of colours in this module would be a second statement of the ruling
+  // that nothing consumes, and it could agree with its tests forever while the
+  // stylesheet said something else.
   test('a late run keeps the success tone and a passed slot does not take the failure one', () => {
     assert.strictEqual(status(RAN_ON_TIME).tone, 'ok');
     assert.strictEqual(status(CAUGHT_UP).tone, 'ok-quiet');
     assert.strictEqual(status(MISSED).tone, 'neutral');
     assert.strictEqual(status(FAILED).tone, 'failed');
-    // The two successes share a hue and differ by weight, which is what the
-    // tone names carry: ok and ok-quiet are one colour, neutral is not.
-    assert.ok(m.TONES.ok.colour === m.TONES['ok-quiet'].colour);
-    assert.ok(m.TONES.ok.weight > m.TONES['ok-quiet'].weight);
-    assert.notStrictEqual(m.TONES.neutral.colour, m.TONES.ok.colour);
-    assert.notStrictEqual(m.TONES.failed.colour, m.TONES.neutral.colour);
-    // Nothing here reaches for amber. The legend spends that colour on
-    // "needs the user, not an error", which none of these four states is.
-    for (const tone of Object.values(m.TONES)) {
-      assert.notStrictEqual(tone.colour, 'var(--attention)');
-    }
+  });
+
+  // WHAT MAKES A RUN LATE IS WHEN IT STARTED, and nothing about how long it
+  // then took. An agent run routinely lasts longer than the catch-up boundary,
+  // so a tone measured from a completion time would put the quieter tone on
+  // almost every ordinary row, which is the exact outcome the ruling exists to
+  // prevent.
+  test('a punctual run that took a long time is still punctual', () => {
+    const elevenMinutes = {
+      ...RAN_ON_TIME, lastStart: new Date(2026, 7, 20, 7, 0, 12),
+    };
+    assert.strictEqual(status(elevenMinutes).kind, 'on-time');
+    assert.strictEqual(status(elevenMinutes).text, 'Ran today, 7:00am, London time',
+      'the row says when the run began, not when it finished');
+    // And the boundary still bites on a run that genuinely started late.
+    assert.strictEqual(status({ ...RAN_ON_TIME, lastStart: new Date(2026, 7, 20, 7, 11) }).kind, 'caught-up');
   });
 
   test('the text of each row is the text the locked frame draws', () => {
@@ -109,7 +123,7 @@ describe('the four outcomes, each in its own tone and its own leading word', () 
   });
 
   test('a routine that has never run names no outcome', () => {
-    assert.strictEqual(status({ lastRun: null, lastRunStatus: null, lastSlot: null, missedSlot: null }), null);
+    assert.strictEqual(status({ lastStart: null, lastRunStatus: null, lastSlot: null, missedSlot: null }), null);
   });
 
   // A run the process died inside did not succeed, so it takes the failure
@@ -132,9 +146,9 @@ describe('the four outcomes, each in its own tone and its own leading word', () 
   // The line between the two successes. Inside a few ticks of its slot a run
   // is the scheduler doing its ordinary work, not a catch-up.
   test('a run within a few ticks of its slot is on time, not caught up', () => {
-    const justLate = { ...RAN_ON_TIME, lastRun: new Date(2026, 7, 20, 7, 1, 30) };
+    const justLate = { ...RAN_ON_TIME, lastStart: new Date(2026, 7, 20, 7, 1, 30) };
     assert.strictEqual(status(justLate).kind, 'on-time');
-    const wellLate = { ...RAN_ON_TIME, lastRun: new Date(2026, 7, 20, 7, 30) };
+    const wellLate = { ...RAN_ON_TIME, lastStart: new Date(2026, 7, 20, 7, 30) };
     assert.strictEqual(status(wellLate).kind, 'caught-up');
   });
 });
@@ -368,7 +382,8 @@ describe('the copy this card ships', () => {
       'public/routines-model.js', 'public/views/routines.js', 'public/rail-presence.js',
       'public/styles/views/routines.css',
       'test/unit/routines-model.test.js', 'test/unit/routines-view.test.js',
-      'test/unit/routines-next-run.test.js', 'test/tools/mutate-routines-guards.js',
+      'test/unit/routines-next-run.test.js', 'test/unit/routines-end-to-end.test.js',
+      'test/tools/mutate-routines-guards.js',
     ]) {
       const text = fs.readFileSync(path.join(root, rel), 'utf-8');
       assert.ok(!/[\u2014\u2013]/.test(text), `${rel} carries a dash the repository check refuses`);

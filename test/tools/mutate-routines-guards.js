@@ -50,10 +50,24 @@ const ROOT = path.join(__dirname, '..', '..');
 const MODEL = { src: path.join(ROOT, 'public', 'routines-model.js'), suite: 'test/unit/routines-model.test.js' };
 const VIEW = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/routines-view.test.js' };
 const RAIL = { src: path.join(ROOT, 'public', 'rail-presence.js'), suite: 'test/unit/routines-view.test.js' };
+// THE STYLESHEET IS A MUTATION TARGET, and that is the point of it being one.
+// The three-tone ruling is about what a reader SEES, and what they see is
+// resolved from these rules, not from any table in a module. An earlier
+// version of this card asserted the ruling against a constant in the model
+// that nothing rendered, so giving Missed the danger colour moved the page and
+// moved no test. These break the rules a browser actually applies.
+const STYLES = { src: path.join(ROOT, 'public', 'styles', 'views', 'routines.css'), suite: 'test/unit/routines-view.test.js' };
 // The scheduler, where the two stores meet and must not.
 const SCHEDULER = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/routines-next-run.test.js' };
-// The roster, which is how a row ever sees any of it.
-const DISCOVERY = { src: path.join(ROOT, 'lib', 'agents', 'discovery.js'), suite: 'test/unit/routines-next-run.test.js' };
+// The roster, which is how a row ever sees any of it, watched by the walk that
+// goes from real agent files through the real stores to the rendered page.
+// Watched from anywhere else, these lines can be deleted with every test green
+// while Missed and Caught up become unreachable in the product.
+const DISCOVERY = { src: path.join(ROOT, 'lib', 'agents', 'discovery.js'), suite: 'test/unit/routines-end-to-end.test.js' };
+// The same walk watches the instant the row measures lateness from, because
+// that is a claim about what a real routine's real state renders as.
+const END_TO_END = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/routines-end-to-end.test.js' };
+const VIEW_E2E = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/routines-end-to-end.test.js' };
 // The handlers behind the row's two controls, and the data model they write
 // through.
 const HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/unit/routine-actions.test.js' };
@@ -78,14 +92,78 @@ const MUTATIONS = [
     'step < MAX_SLOTS_PER_WAKE; step++',
     'step < 100000; step++'],
   [SCHEDULER, 'the slot the last run served is named',
-    '    lastSlot: lastRun && !isNaN(lastRun.getTime()) ? slotFor(parsed, lastRun).toISOString() : null,',
-    '    lastSlot: null,'],
+    '    lastSlot: started ? slotFor(parsed, started).toISOString() : null,\n',
+    '    lastSlot: null,\n'],
   [SCHEDULER, 'the most recent recorded miss is the one reported',
     '  const missed = entry && entry.missed.length ? entry.missed[entry.missed.length - 1].slot : null;',
     '  const missed = null;'],
-  [DISCOVERY, 'the roster carries what a routine row needs',
-    '        r.nextRun = facts.nextRun;',
-    '        r.nextRun = null;'],
+  [DISCOVERY, 'the roster carries when a routine runs next',
+    '        r.nextRun = facts.nextRun;\n',
+    ''],
+  [DISCOVERY, 'the roster carries when the last run began',
+    '        r.lastStart = facts.lastStart;\n',
+    ''],
+  [DISCOVERY, 'the roster carries the slot the last run served',
+    '        r.lastSlot = facts.lastSlot;\n',
+    ''],
+  [DISCOVERY, 'the roster carries the slot that passed unserved',
+    '        r.missedSlot = facts.missedSlot;\n',
+    ''],
+
+  // ===== WHICH INSTANT LATENESS IS MEASURED FROM =====
+  // The second one this file exists for. routineState.lastRun is the moment a
+  // finished run ENDED, and an agent run routinely takes longer than the
+  // catch-up boundary, so measuring from it would put the quieter tone on
+  // almost every ordinary row: the ruling inverted in the commonest case.
+  [END_TO_END, 'lateness is measured from when the run began, not when it ended',
+    '  return new Date(ended.getTime() - seconds * 1000);',
+    '  return ended;'],
+  [SCHEDULER, 'a stamp with no duration is already the start',
+    "  if (typeof seconds !== 'number' || !isFinite(seconds)) return ended;\n",
+    ''],
+  [SCHEDULER, 'the slot a run served is the one on the day it started',
+    '    lastSlot: started ? slotFor(parsed, started).toISOString() : null,',
+    '    lastSlot: lastRunStartedAt(key) ? slotFor(parsed, new Date(routineState[key].lastRun)).toISOString() : null,'],
+  [VIEW_E2E, 'the row asks the roster for the instant the run began',
+    '    lastStart: r.lastStart,',
+    '    lastStart: r.state ? r.state.lastRun : null,'],
+
+  // ===== WHICH ROUTINE OF ITS NAME =====
+  [VIEW, 'a row says which routine of its name it is',
+    '      out.push({ routine, agent, occurrence });',
+    '      out.push({ routine, agent, occurrence: 0 });'],
+  [VIEW, 'a delete says which routine of its name it means',
+    '  const entry = allRoutines()[pendingDelete];',
+    '  const entry = allRoutines()[0];'],
+  [VIEW, 'a pause says which routine of its name it means',
+    "    occurrence: entry.occurrence, paused,",
+    "    occurrence: 0, paused,"],
+  [HANDLER, 'which routine of a name is required rather than assumed to be the first',
+    '  if (!Number.isInteger(occurrence) || occurrence < 0) {\n    fail(\'Which routine of that name is required.\');\n    return null;\n  }',
+    '  if (false) { return null; }'],
+  [HANDLER, 'the routine is found on the roster before anything is read or written',
+    '  const namesakes = (target.routines || []).filter(r => r.name === name);\n  if (!namesakes[occurrence]) { fail(`Routine "${name}" is not in that agent.`); return null; }\n',
+    ''],
+  [HANDLER, 'the delete tells the writer which block',
+    '  const next = removeRoutineBlock(before, found.name, found.occurrence);',
+    '  const next = removeRoutineBlock(before, found.name);'],
+  [HANDLER, 'the pause tells the writer which block',
+    '  const next = updateRoutineBlock(before, found.name, { paused }, found.occurrence);',
+    '  const next = updateRoutineBlock(before, found.name, { paused });'],
+
+  // ===== THE THREE TONES, AS THE PAGE RESOLVES THEM =====
+  [STYLES, 'a late run keeps the success colour, and no state is amber',
+    '.run-status.ok-quiet { font-weight: 500; color: var(--success); }',
+    '.run-status.ok-quiet { font-weight: 500; color: var(--attention); }'],
+  [STYLES, 'a late run is quieter than a punctual one',
+    '.run-status.ok { font-weight: 600; color: var(--success); }',
+    '.run-status.ok { font-weight: 500; color: var(--success); }'],
+  [STYLES, 'a slot nobody served is not dressed as a failure',
+    '.run-status.neutral { font-weight: 500; color: var(--idle); }',
+    '.run-status.neutral { font-weight: 500; color: var(--danger); }'],
+  [STYLES, 'a failure is not dressed as a success',
+    '.run-status.failed { font-weight: 600; color: var(--danger); }',
+    '.run-status.failed { font-weight: 600; color: var(--success); }'],
 
   // ===== THE VALUE THAT IS CONSTRAINED, NOT COPY =====
   // The second one this file exists for: the literal two design frames wrote.
@@ -94,15 +172,6 @@ const MUTATIONS = [
     "    const words = 'tomorrow, 7:00am, London time';"],
 
   // ===== THE THREE TONES =====
-  [MODEL, 'a late run keeps the success colour',
-    "    'ok-quiet': { colour: 'var(--success)', weight: 500 },",
-    "    'ok-quiet': { colour: 'var(--attention)', weight: 500 },"],
-  [MODEL, 'a late run is quieter than a punctual one',
-    "    'ok': { colour: 'var(--success)', weight: 600 },",
-    "    'ok': { colour: 'var(--success)', weight: 500 },"],
-  [MODEL, 'a slot nobody served is idle, not a failure',
-    "    'neutral': { colour: 'var(--idle)', weight: 500 },",
-    "    'neutral': { colour: 'var(--danger)', weight: 500 },"],
   [MODEL, 'each outcome carries its own leading word',
     "    'caught-up': { tone: 'ok-quiet', lead: 'Caught up' },",
     "    'caught-up': { tone: 'ok-quiet', lead: 'Ran' },"],
@@ -113,7 +182,7 @@ const MUTATIONS = [
     "    if (statusWord === 'running') return null;",
     ''],
   [MODEL, 'a miss later than the last run is what happened last',
-    '    if (missedSlot && (!lastRun || missedSlot > lastRun)) return \'missed\';',
+    '    if (missedSlot && (!started || missedSlot > started)) return \'missed\';',
     '    if (missedSlot) return \'missed\';'],
   [MODEL, 'a run the process died inside is a failure',
     "    if (statusWord === 'failed' || statusWord === 'interrupted') return 'failed';",
@@ -124,11 +193,11 @@ const MUTATIONS = [
     "      text = `Missed: Rundock was closed at ${place ? `${when}, ${place} time` : when}`;",
     '      text = `Missed: the routine did not run at ${when}`;'],
   [MODEL, 'a caught-up row names the time it was due as well as the time it ran',
-    '      text = `Caught up: ran ${timeWords(input.lastRun, now, zone)}, due ${clockWords(input.lastSlot)}`;',
-    '      text = `Caught up: ran ${timeWords(input.lastRun, now, zone)}`;'],
+    '      text = `Caught up: ran ${timeWords(input.lastStart, now, zone)}, due ${clockWords(input.lastSlot)}`;',
+    '      text = `Caught up: ran ${timeWords(input.lastStart, now, zone)}`;'],
   [MODEL, 'a punctual row reads as the time, with no label in front of it',
-    '      text = `Ran ${timeWords(input.lastRun, now, zone)}`;',
-    '      text = `Ran on time: ${timeWords(input.lastRun, now, zone)}`;'],
+    '      text = `Ran ${timeWords(input.lastStart, now, zone)}`;',
+    '      text = `Ran on time: ${timeWords(input.lastStart, now, zone)}`;'],
   [MODEL, 'a day near now is a word rather than a date',
     "    if (gap === 1) return 'tomorrow';",
     "    if (gap === 1) return DAYS[when.getDay()];"],
@@ -184,9 +253,9 @@ const MUTATIONS = [
   [VIEW, 'delete asks before it acts',
     'function routinesAskDelete(index) {\n  pendingDelete = index;',
     'function routinesAskDelete(index) {\n  pendingDelete = null;'],
-  [VIEW, 'cancelling a delete sends nothing',
-    "    ws.send(JSON.stringify({ type: 'delete_routine', agentId: entry.agent.id, name: entry.routine.name }));",
-    "    ws.send(JSON.stringify({ type: 'delete_routine', agentId: entry.agent.id, name: 'anything' }));"],
+  [VIEW, 'a delete names the routine that was confirmed',
+    "      type: 'delete_routine', agentId: entry.agent.id, name: entry.routine.name, occurrence: entry.occurrence,",
+    "      type: 'delete_routine', agentId: entry.agent.id, name: 'anything', occurrence: entry.occurrence,"],
   [VIEW, 'the empty state offers something to press',
     '    + \'<button class="settings-btn-primary" type="button" data-routines-action="add"\'',
     '    + \'<button class="settings-btn-primary" type="button" data-routines-action="nothing"\''],
@@ -198,9 +267,13 @@ const MUTATIONS = [
     "    entry.style.display = 'none';"],
 
   // ===== THE TWO CONTROLS =====
-  [HANDLER, 'a write that changes nothing is not a delete',
-    '  if (next === before) { fail(`Routine "${found.name}" is not in that agent.`); return; }\n  fs.writeFileSync(found.filePath, next, \'utf-8\');\n  console.log(`[Routine] Deleted from ${found.target.id}: ${found.name}`);',
-    "  fs.writeFileSync(found.filePath, next, 'utf-8');"],
+  // The byte check in the delete handler is a backstop against a WRITER that
+  // silently removes nothing, which the roster check above it cannot see: the
+  // roster and the block addresser are different parsers. So the mutation
+  // breaks the writer rather than the check, which is the only way to reach it.
+  [ROUTINES, 'a removal that removes nothing is not announced as a deletion',
+    '  lines.splice(from, target.end - from);\n',
+    ''],
   [HANDLER, 'the roster is invalidated before it is rebroadcast',
     "  ws.send(JSON.stringify(message));\n  ctx.agents.invalidateAgentCache();\n  ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents() }));",
     "  ws.send(JSON.stringify(message));\n  ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents() }));"],
@@ -246,7 +319,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [MODEL, VIEW, RAIL, SCHEDULER, DISCOVERY, HANDLER, ROUTINES];
+  const targets = [MODEL, VIEW, VIEW_E2E, RAIL, STYLES, SCHEDULER, END_TO_END, DISCOVERY, HANDLER, ROUTINES];
   const originals = new Map();
   for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];

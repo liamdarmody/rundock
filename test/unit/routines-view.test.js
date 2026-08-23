@@ -39,7 +39,7 @@ function routine(name, facts) {
   return {
     name, schedule: 'every day at 07:00', prompt: 'p', runOn: 'local',
     enabled: true, paused: false,
-    state: null, nextRun: null, lastSlot: null, missedSlot: null,
+    state: null, nextRun: null, lastStart: null, lastSlot: null, missedSlot: null,
     ...facts,
   };
 }
@@ -47,26 +47,31 @@ function routine(name, facts) {
 // The four rows of the locked frame.
 const FOUR_ROWS = [
   routine('Ran on time', {
-    state: { lastRun: iso(new Date(2026, 7, 20, 7, 0, 12)), status: 'completed', duration: 3 },
+    state: { status: 'completed', duration: 3 }, lastStart: iso(new Date(2026, 7, 20, 7, 0, 12)),
     lastSlot: iso(TODAYS_SLOT), nextRun: iso(TOMORROWS_SLOT),
   }),
   routine('Caught up', {
-    state: { lastRun: iso(new Date(2026, 7, 20, 9, 14)), status: 'completed', duration: 3 },
+    state: { status: 'completed', duration: 3 }, lastStart: iso(new Date(2026, 7, 20, 9, 14)),
     lastSlot: iso(TODAYS_SLOT), nextRun: iso(TOMORROWS_SLOT),
   }),
   routine('Missed', {
-    state: { lastRun: iso(new Date(2026, 7, 18, 7, 0)), status: 'completed', duration: 3 },
+    state: { status: 'completed', duration: 3 }, lastStart: iso(new Date(2026, 7, 18, 7, 0)),
     lastSlot: iso(new Date(2026, 7, 18, 7, 0)), missedSlot: iso(YESTERDAYS_SLOT),
     nextRun: iso(TODAYS_SLOT),
   }),
   routine('Failed', {
-    state: { lastRun: iso(TODAYS_SLOT), status: 'failed', duration: 0 },
+    state: { status: 'failed', duration: 0 }, lastStart: iso(TODAYS_SLOT),
     lastSlot: iso(TODAYS_SLOT), nextRun: iso(TOMORROWS_SLOT),
   }),
 ];
 
+// The shipped stylesheets, loaded into the document so that what a tone LOOKS
+// like can be read off the page rather than off a table beside it.
+const ROUTINES_CSS = read('public', 'styles', 'views', 'routines.css');
+const TOKENS_CSS = read('public', 'styles', 'tokens.css');
+
 function shell(routines = FOUR_ROWS) {
-  const dom = new JSDOM('<!doctype html><html><body>'
+  const dom = new JSDOM('<!doctype html><html><head><style>' + ROUTINES_CSS + '</style></head><body>'
     + '<nav class="nav-rail">'
     + '<button class="nav-item" data-nav="skills"></button>'
     + '<button class="nav-item" data-nav="routines"></button>'
@@ -273,6 +278,81 @@ describe('the four rows', () => {
   });
 });
 
+describe('the ruling, against what the page resolves', () => {
+  // WHY THIS READS THE PAGE AND NOT A TABLE. An earlier version of this card
+  // declared colour and weight per tone in the model and asserted on that.
+  // Nothing rendered it: the page's colour comes from .run-status.ok and its
+  // neighbours in the stylesheet. So the headline proof of a ruling this
+  // project spent three design rounds on was measuring a constant, and giving
+  // Missed the danger colour in CSS moved the page and moved no test.
+  //
+  // These render the real view, with the real stylesheet in the document, and
+  // read the resolved declaration off the spans the view actually emitted. A
+  // rule added later that overrides these changes the answer, which is the
+  // property a string search of the file would not have.
+  function resolved() {
+    const { doc, w, dom } = shell();
+    w.renderRoutines();
+    const out = {};
+    for (const span of doc.querySelectorAll('.run-status')) {
+      const tone = [...span.classList].filter(c => c !== 'run-status')[0];
+      const style = dom.window.getComputedStyle(span);
+      out[tone] = { colour: style.color, weight: Number(style.fontWeight) };
+    }
+    dom.window.close();
+    return out;
+  }
+
+  test('the two successes resolve to one colour, and the late one is quieter', () => {
+    const tone = resolved();
+    assert.strictEqual(tone['ok'].colour, tone['ok-quiet'].colour,
+      'a late run is a success and must share the success colour');
+    assert.ok(tone['ok'].weight > tone['ok-quiet'].weight,
+      'the two successes are told apart by weight, so they cannot share one');
+  });
+
+  test('the state where nothing ran resolves to neither success nor failure', () => {
+    const tone = resolved();
+    assert.notStrictEqual(tone['neutral'].colour, tone['ok'].colour,
+      'a slot nobody served must not read as a run that happened');
+    assert.notStrictEqual(tone['neutral'].colour, tone['failed'].colour,
+      'the machine being off is not the routine failing');
+  });
+
+  test('a failure resolves to something neither success wears', () => {
+    const tone = resolved();
+    assert.notStrictEqual(tone['failed'].colour, tone['ok'].colour);
+    assert.notStrictEqual(tone['failed'].colour, tone['ok-quiet'].colour);
+  });
+
+  test('nothing on this row reaches for amber', () => {
+    // The palette spends that colour on "needs the user, not an error", which
+    // none of these four states is, and amber reads as an alert whatever a
+    // legend says. An interface that turns amber every time a laptop was shut
+    // overnight teaches its user to stop trusting amber.
+    for (const [tone, style] of Object.entries(resolved())) {
+      assert.notStrictEqual(style.colour, 'var(--attention)', `${tone} is amber`);
+    }
+  });
+
+  // The four tokens the rules above name are four different colours. Without
+  // this, "neutral resolves to a different token" would still hold if two
+  // tokens happened to carry the same value.
+  test('the tokens those rules name are distinct colours', () => {
+    const used = Object.values(resolved()).map(s => s.colour);
+    const value = (token) => {
+      const m = new RegExp(`--${token}:\\s*([^;]+);`).exec(TOKENS_CSS);
+      assert.ok(m, `--${token} is declared nowhere`);
+      return m[1].trim();
+    };
+    const names = [...new Set(used)].map(c => /^var\(--([\w-]+)\)$/.exec(c)[1]);
+    const values = names.map(value);
+    assert.strictEqual(new Set(values).size, values.length,
+      `two of ${names.join(', ')} are the same colour, so the rows do not separate`);
+    assert.ok(!names.includes('attention'));
+  });
+});
+
 describe('the empty state', () => {
   // AC-12. The way in belongs to no agent.
   test('the empty state offers an add that names no agent', () => {
@@ -329,7 +409,51 @@ describe('delete says what stops', () => {
     w.renderRoutines();
     press(doc, '.routine-row [data-routines-action="delete"]');
     press(doc, '[data-routines-action="confirm-delete"]');
-    assert.deepStrictEqual(w.sent, [{ type: 'delete_routine', agentId: 'piper', name: 'Ran on time' }]);
+    assert.deepStrictEqual(w.sent,
+      [{ type: 'delete_routine', agentId: 'piper', name: 'Ran on time', occurrence: 0 }]);
+    dom.window.close();
+  });
+});
+
+describe('a namesake is identified, not assumed', () => {
+  // Nothing makes a routine name unique within an agent, and the writer counts
+  // namesakes on purpose so a second can be created here. A row that sent only
+  // a name would have the server act on the first block of that name whatever
+  // the reader pointed at, while the confirmation named the one they chose.
+  const twins = [
+    routine('Compile the ops summary', { nextRun: iso(TOMORROWS_SLOT) }),
+    routine('Compile the ops summary', { nextRun: iso(TOMORROWS_SLOT) }),
+    routine('Something else', { nextRun: iso(TOMORROWS_SLOT) }),
+  ];
+
+  test('deleting the second of two namesakes says which one', () => {
+    const { doc, w, dom } = shell(twins);
+    w.renderRoutines();
+    rows(doc)[1].querySelector('[data-routines-action="delete"]').click();
+    press(doc, '[data-routines-action="confirm-delete"]');
+    assert.deepStrictEqual(w.sent, [{
+      type: 'delete_routine', agentId: 'piper', name: 'Compile the ops summary', occurrence: 1,
+    }]);
+    dom.window.close();
+  });
+
+  test('pausing the second of two namesakes says which one', () => {
+    const { doc, w, dom } = shell(twins);
+    w.renderRoutines();
+    rows(doc)[1].querySelector('[data-routines-action="pause"]').click();
+    assert.strictEqual(w.sent[0].occurrence, 1);
+    dom.window.close();
+  });
+
+  test('the count is per agent and per name, not a position in the list', () => {
+    const { doc, w, dom } = shell(twins);
+    w.renderRoutines();
+    // The third row is the first routine of ITS name, so it is occurrence
+    // zero even though it is third on the page.
+    rows(doc)[2].querySelector('[data-routines-action="pause"]').click();
+    assert.deepStrictEqual(w.sent, [{
+      type: 'set_routine_paused', agentId: 'piper', name: 'Something else', occurrence: 0, paused: true,
+    }]);
     dom.window.close();
   });
 });
@@ -339,7 +463,8 @@ describe('pause stops what it says it stops', () => {
     const { doc, w, dom } = shell();
     w.renderRoutines();
     press(doc, '.routine-row [data-routines-action="pause"]');
-    assert.deepStrictEqual(w.sent, [{ type: 'set_routine_paused', agentId: 'piper', name: 'Ran on time', paused: true }]);
+    assert.deepStrictEqual(w.sent,
+      [{ type: 'set_routine_paused', agentId: 'piper', name: 'Ran on time', occurrence: 0, paused: true }]);
     dom.window.close();
   });
 
@@ -348,7 +473,8 @@ describe('pause stops what it says it stops', () => {
     w.renderRoutines();
     assert.strictEqual(doc.querySelector('[data-routines-action="pause"]'), null);
     press(doc, '[data-routines-action="resume"]');
-    assert.deepStrictEqual(w.sent, [{ type: 'set_routine_paused', agentId: 'piper', name: 'Paused one', paused: false }]);
+    assert.deepStrictEqual(w.sent,
+      [{ type: 'set_routine_paused', agentId: 'piper', name: 'Paused one', occurrence: 0, paused: false }]);
     dom.window.close();
   });
 });

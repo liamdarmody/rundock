@@ -42,21 +42,21 @@
   const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December'];
 
-  /**
-   * The three tones, as data, with the fourth state sharing a hue with the
-   * first.
-   *
-   * COLOUR AND WEIGHT ARE HERE RATHER THAN ONLY IN THE STYLESHEET so that the
-   * ruling can be asserted. "Caught up keeps the success colour" is the half
-   * of it most likely to be lost, and a stylesheet is not something a test can
-   * hold to account.
-   */
-  const TONES = {
-    'ok': { colour: 'var(--success)', weight: 600 },
-    'ok-quiet': { colour: 'var(--success)', weight: 500 },
-    'neutral': { colour: 'var(--idle)', weight: 500 },
-    'failed': { colour: 'var(--danger)', weight: 600 },
-  };
+  // WHERE THE THREE TONES ACTUALLY LIVE, and why they are not declared here.
+  //
+  // An earlier version of this file carried a table of colours and weights per
+  // tone, so that the ruling "could be asserted". Nothing read it. The page's
+  // colour comes from .run-status.ok and its neighbours in
+  // public/styles/views/routines.css, so the table was a second statement of
+  // the ruling that could agree with its tests forever while the stylesheet
+  // said something else entirely: giving Missed the danger colour in CSS moved
+  // the page and moved no test.
+  //
+  // A ruling this project spent three design rounds on cannot ship proven
+  // against something nobody consumes. So the tone is a CLASS NAME here, the
+  // colour and weight are the stylesheet's, and the ruling is asserted against
+  // what the page resolves, in "the ruling, against what the page resolves" in
+  // test/unit/routines-view.test.js.
 
   /**
    * The four outcomes, each carrying its own leading word and its own tone.
@@ -99,6 +99,15 @@
    * slot, which is what the word describes.
    */
   const CATCH_UP_AFTER_MS = 5 * 60 * 1000;
+
+  // THE INSTANT EVERY COMPARISON BELOW USES IS `lastStart`, THE MOMENT THE RUN
+  // BEGAN, and the name is deliberate. The scheduler's stored `lastRun` is the
+  // moment a finished run ENDED, so measuring against it would fold the run's
+  // own duration into how late it was, and an agent run routinely takes longer
+  // than the boundary above. A routine that fired exactly on its slot and
+  // worked for eleven minutes would read as caught up. The server recovers the
+  // start (lastRunStartedAt in lib/scheduler.js) and sends that; nothing here
+  // ever sees the completion time, because nothing on this row is about it.
 
   function asDate(value) {
     if (!value) return null;
@@ -211,17 +220,18 @@
    * and the row falls back to the single line revision 6 drew.
    */
   function outcomeOf(input) {
-    const lastRun = asDate(input && input.lastRun);
+    const started = asDate(input && input.lastStart);
     const missedSlot = asDate(input && input.missedSlot);
     const statusWord = (input && input.lastRunStatus) || null;
     if (statusWord === 'running') return null;
-    if (missedSlot && (!lastRun || missedSlot > lastRun)) return 'missed';
-    if (!lastRun) return null;
+    if (missedSlot && (!started || missedSlot > started)) return 'missed';
+    if (!started) return null;
     // A run the process died inside did not succeed. It borrows the failure
     // tone rather than adding a fifth state nothing in the frame draws.
     if (statusWord === 'failed' || statusWord === 'interrupted') return 'failed';
     const lastSlot = asDate(input && input.lastSlot);
-    if (lastSlot && lastRun - lastSlot >= CATCH_UP_AFTER_MS) return 'caught-up';
+    // How late the run STARTED, with nothing about how long it then took.
+    if (lastSlot && started - lastSlot >= CATCH_UP_AFTER_MS) return 'caught-up';
     return 'on-time';
   }
 
@@ -245,11 +255,11 @@
       const when = `${clockWords(slot)} ${dayWords(slot, now)}`;
       text = `Missed: Rundock was closed at ${place ? `${when}, ${place} time` : when}`;
     } else if (kind === 'caught-up') {
-      text = `Caught up: ran ${timeWords(input.lastRun, now, zone)}, due ${clockWords(input.lastSlot)}`;
+      text = `Caught up: ran ${timeWords(input.lastStart, now, zone)}, due ${clockWords(input.lastSlot)}`;
     } else if (kind === 'failed') {
-      text = `Failed: ${timeWords(input.lastRun, now, zone)}`;
+      text = `Failed: ${timeWords(input.lastStart, now, zone)}`;
     } else {
-      text = `Ran ${timeWords(input.lastRun, now, zone)}`;
+      text = `Ran ${timeWords(input.lastStart, now, zone)}`;
     }
     return { kind: kind, tone: outcome.tone, lead: outcome.lead, text: text };
   }
@@ -306,7 +316,7 @@
   }
 
   return {
-    TONES, OUTCOMES, LEAD, EMPTY, CATCH_UP_AFTER_MS,
+    OUTCOMES, LEAD, EMPTY, CATCH_UP_AFTER_MS,
     dayWords, clockWords, zoneWords, timeWords,
     scheduleWords, routineSentence,
     outcomeOf, runStatus, nextRunLabel, row, deleteConfirmation,

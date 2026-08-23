@@ -58,13 +58,31 @@ function routinesModel() {
   return typeof RundockRoutinesModel !== 'undefined' ? RundockRoutinesModel : null;
 }
 
-/** Every routine on the team, flattened, with the agent that declares it. */
+/**
+ * Every routine on the team, flattened, with the agent that declares it and
+ * WHICH OF THAT AGENT'S ROUTINES OF THAT NAME IT IS.
+ *
+ * NOTHING MAKES A ROUTINE NAME UNIQUE WITHIN A FILE, and the writer counts
+ * namesakes deliberately so a second can be created through this interface. A
+ * name alone therefore does not identify a routine, and a delete that sent one
+ * would act on the first block of that name whatever the reader pointed at.
+ * That is worse than an unlabelled delete: the confirmation names one routine
+ * and the server removes another, so the dialogue is specific and wrong.
+ *
+ * The count runs in roster order, which is file order, so the nth namesake
+ * here is the nth block in the file.
+ */
 function allRoutines() {
   const out = [];
   const roster = typeof agents !== 'undefined' && agents ? agents : [];
   for (const agent of roster) {
     if (!agent.routines) continue;
-    for (const routine of agent.routines) out.push({ routine, agent });
+    const seen = {};
+    for (const routine of agent.routines) {
+      const occurrence = seen[routine.name] || 0;
+      seen[routine.name] = occurrence + 1;
+      out.push({ routine, agent, occurrence });
+    }
   }
   return out;
 }
@@ -98,7 +116,9 @@ function rowHtml(entry, index, withActions) {
     schedule: r.schedule,
     agentName: a.displayName || a.name,
     runOn: r.runOn,
-    lastRun: r.state ? r.state.lastRun : null,
+    // The moment the run BEGAN, computed by the server. Deliberately not
+    // r.state.lastRun, which is when a finished run ENDED.
+    lastStart: r.lastStart,
     lastRunStatus: r.state ? r.state.status : null,
     lastSlot: r.lastSlot,
     missedSlot: r.missedSlot,
@@ -238,7 +258,9 @@ function routinesConfirmDelete() {
   const entry = allRoutines()[pendingDelete];
   pendingDelete = null;
   if (entry && typeof ws !== 'undefined' && ws) {
-    ws.send(JSON.stringify({ type: 'delete_routine', agentId: entry.agent.id, name: entry.routine.name }));
+    ws.send(JSON.stringify({
+      type: 'delete_routine', agentId: entry.agent.id, name: entry.routine.name, occurrence: entry.occurrence,
+    }));
   }
   renderRoutines();
 }
@@ -247,7 +269,8 @@ function routinesSetPaused(index, paused) {
   const entry = allRoutines()[index];
   if (!entry || typeof ws === 'undefined' || !ws) return;
   ws.send(JSON.stringify({
-    type: 'set_routine_paused', agentId: entry.agent.id, name: entry.routine.name, paused,
+    type: 'set_routine_paused', agentId: entry.agent.id, name: entry.routine.name,
+    occurrence: entry.occurrence, paused,
   }));
 }
 
