@@ -45,6 +45,10 @@ function skillFixture() {
       assignedAgents: [{ id: 'piper', name: 'Piper' }] },
     { id: 'reading-digest', slug: 'reading-digest', name: 'Refresh the reading digest',
       assignedAgents: [{ id: 'doc', name: 'Doc' }] },
+    // Assigned to nobody. A routine is declared on an agent file, so this
+    // one has no file to be written into and must not be offered.
+    { id: 'weekly-digest', slug: 'weekly-digest', name: 'Send the weekly digest',
+      assignedAgents: [] },
   ];
 }
 
@@ -84,6 +88,19 @@ describe('routine editor: choosing a skill', () => {
   test('a scoped row does not repeat the agent it was scoped to', () => {
     const choice = model.skillChoices({ skills: skillFixture(), agentId: 'piper' });
     for (const option of choice.options) assert.strictEqual(option.agentName, null);
+  });
+
+  // A skill nothing is assigned to cannot be scheduled: a routine lives in an
+  // agent file, so there is no file to write it into. Offering it would build
+  // a picker whose selection has nowhere to go.
+  test('a skill assigned to no agent is not offered', () => {
+    for (const agentId of [null, 'piper']) {
+      const choice = model.skillChoices({ skills: skillFixture(), agentId });
+      assert.ok(
+        !choice.options.some(o => o.id === 'weekly-digest'),
+        'a skill with no agent has no file a routine could be written into',
+      );
+    }
   });
 
   // AC-4, AC-13. Driven through the same function the editor calls, with an
