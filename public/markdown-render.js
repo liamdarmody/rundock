@@ -158,6 +158,54 @@
     // Same extensions and same exclusions the post-processing regex used.
     const WORKSPACE_FILE_HREF = /^(?!https?:\/\/|mailto:|obsidian:\/\/).*\.(?:md|yaml|yml|json|txt)$/;
 
+    // Character references a destination may be written with.
+    //
+    // A destination is decoded BEFORE it is judged and before it is written,
+    // which is the ordering that makes both halves correct. CommonMark says a
+    // reference in a destination means the character it stands for, so
+    // `a&amp;b.md` names the file `a&b.md` and delivering the undecoded text
+    // opens nothing. And the scheme check has to run on the value the BROWSER
+    // will act on, or a scheme spelled `&#106;avascript:` walks past a check
+    // looking at something else and is decoded into a scheme afterwards.
+    //
+    // Decode, judge the decoded value, write the decoded value escaped. Check
+    // and write agree, so what was approved is what the page acts on.
+    //
+    // The named table is the references that can change what a URL MEANS, plus
+    // the everyday punctuation. It is not the full HTML set, and it does not
+    // need to be: an unrecognised name is left exactly as written, so it is
+    // judged as the literal text it still is and written as that same text. The
+    // cost of missing one is a file whose name nobody writes that way; the cost
+    // of decoding after judging would be a bypass.
+    const NAMED_REFERENCES = {
+      amp: '&', lt: '<', gt: '>', quot: '"', apos: "'",
+      colon: ':', sol: '/', num: '#', quest: '?', equals: '=', semi: ';',
+      Tab: '\t', NewLine: '\n', nbsp: '\u00a0',
+      lpar: '(', rpar: ')', lbrack: '[', rbrack: ']', lbrace: '{', rbrace: '}',
+      comma: ',', period: '.', excl: '!', ast: '*', plus: '+', dollar: '$',
+      commat: '@', lowbar: '_', percnt: '%', verbar: '|', grave: '`', tilde: '~',
+    };
+    const CHARACTER_REFERENCE = /&(#\d+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);/g;
+
+    /** One left-to-right pass, so `&amp;amp;` decodes to `&amp;` and stops. */
+    function decodeCharacterReferences(value) {
+      return String(value == null ? '' : value).replace(CHARACTER_REFERENCE, (whole, body) => {
+        if (body[0] !== '#') {
+          return Object.prototype.hasOwnProperty.call(NAMED_REFERENCES, body)
+            ? NAMED_REFERENCES[body]
+            : whole;
+        }
+        const code = body[1] === 'x' || body[1] === 'X'
+          ? parseInt(body.slice(2), 16)
+          : parseInt(body.slice(1), 10);
+        // Nothing outside a real scalar value: a lone surrogate or an
+        // out-of-range code point is left as the text it was written as.
+        if (!Number.isFinite(code) || code < 1 || code > 0x10FFFF) return whole;
+        if (code >= 0xD800 && code <= 0xDFFF) return whole;
+        return String.fromCodePoint(code);
+      });
+    }
+
     // Destinations a link or an image may point at.
     //
     // A FIFTH way in, found while closing the fourth and named in none of the
@@ -429,14 +477,15 @@
         // has always delivered.
         // Every link is written here, not only the rewritten ones. marked's own
         // link renderer escapes an href in a mode that deliberately leaves
-        // existing character references intact, which is correct for a URL and
-        // wrong for this: `[x](&#106;avascript:alert(1))` reaches the attribute
-        // with the reference unchanged, and the browser decodes it to
-        // `javascript:` before deciding what the URL means. Writing the
-        // attribute here, escaped as an attribute value, means the bytes
-        // checked below are the bytes the browser reads.
+        // existing character references intact, which is right for a URL and
+        // leaves the decision about what the URL MEANS to the browser, after
+        // this renderer has stopped looking. `[x](&#106;avascript:alert(1))`
+        // reached the attribute with the reference unchanged and the browser
+        // decoded it into a scheme. Decoding first, judging the decoded value
+        // and writing that same value escaped keeps the decision and the
+        // destination in agreement.
         link(token) {
-          const href = token.href;
+          const href = decodeCharacterReferences(token.href);
           const text = this.parser.parseInline(token.tokens);
           if (!isNavigableHref(href)) return text;
           if (WORKSPACE_FILE_HREF.test(href)) {
@@ -448,10 +497,11 @@
         // An image destination is a URL the page fetches, so it is the same
         // question as a link destination and gets the same answer.
         image(token) {
+          const src = decodeCharacterReferences(token.href);
           const alt = escapeAttr(token.text || '');
-          if (!isNavigableHref(token.href)) return escapeHtml(token.text || '');
+          if (!isNavigableHref(src)) return escapeHtml(token.text || '');
           const title = token.title ? ` title="${escapeAttr(token.title)}"` : '';
-          return `<img src="${escapeAttr(token.href)}" alt="${alt}"${title}>`;
+          return `<img src="${escapeAttr(src)}" alt="${alt}"${title}>`;
         },
         // Syntax-highlight fenced code blocks (highlight.js, vendored locally)
         // and wrap them with a header bar showing the language label and a copy

@@ -209,6 +209,7 @@ nothing. The destination as written is what opens now, which is what a
 |---|---|
 | A wikilink in a callout title renders as text, not a link | reason in the callout tokenizer's comment |
 | A workspace link's target reaches the opener as written, not URI-encoded | `a relative link still opens the same target`, last two cases |
+| A destination is decoded before it is judged and written, so a script scheme spelled with references is refused | `a script scheme cannot reach an href or a src` |
 | A tag or highlight inside fenced code is left alone | `a fenced block containing #tag or ==text== keeps its own text` |
 | A tag at the start of a line keeps its line break | `a tag at the start of a line no longer swallows the line break` |
 
@@ -223,6 +224,14 @@ gets: `lib/http-router.js` serves `node_modules/marked/lib/marked.umd.js` at
 `/marked.min.js`, and the harness loads that exact file the way a script tag
 does, because requiring it as CommonJS returns an empty object and would have
 tested a different build.
+
+That parity is asserted rather than described. `the harness parses with the same
+marked build the browser is served` drives the real route handler for
+`/marked.min.js` and compares the bytes it answers with against the file the
+harness evaluates, then checks that file loads into a working parser. Every
+proof in this suite is a claim about what a browser does with a document, and it
+is only that while the two are the same build; pointing the route at another
+file turns this red.
 
 > **AC-13:** Each of the four injection points has its own payload and its own
 > assertion.
@@ -265,10 +274,12 @@ Run on the tree this file is committed with:
 | raw-block text escaped rather than emitted verbatim | 2 | `a tag marked rejects and the browser accepts cannot survive a raw block`<br>`the escaped payload is legible as characters` |
 | raw HTML escaped | 4 | `a tag written in the document becomes text, not an element`<br>`the escaped tag is still legible to the reader`<br>`a tag marked rejects and the browser accepts cannot survive a raw block`<br>`the escaped payload is legible as characters` |
 | HTML comments dropped rather than escaped | 1 | `an HTML comment stays invisible instead of becoming visible text` |
+| link destination decoded before it is judged | 4 | `a character reference in a filename opens the file it names`<br>`a decoded quote in an ordinary destination cannot open an attribute`<br>`an ordinary link resolves to the destination the document names`<br>`a script scheme cannot reach an href or a src` |
+| image destination decoded before it is judged | 1 | `a script scheme cannot reach an href or a src` |
 | link destination checked before it is written | 1 | `a script scheme cannot reach an href or a src` |
 | image destination checked before it is written | 1 | `a script scheme cannot reach an href or a src` |
-| href written as an attribute value, not left to the parser | 2 | `an ordinary link keeps its destination exactly as the document wrote it`<br>`a script scheme cannot reach an href or a src` |
-| workspace-file href escaped into its attribute | 1 | `a character reference in a filename stays those characters` |
+| href written as an attribute value, not left to the parser | 2 | `a decoded quote in an ordinary destination cannot open an attribute`<br>`an ordinary link resolves to the destination the document names` |
+| workspace-file href escaped into its attribute | 1 | `a character reference in a filename opens the file it names` |
 | image alt escaped into its attribute | 2 | `a hostile image alt or title cannot become an attribute`<br>`an image alt and title round-trip the characters the document wrote` |
 | image title escaped into its attribute | 1 | `a hostile image alt or title cannot become an attribute` |
 | tag keeps the whitespace that precedes it | 4 | `the benign document renders to the recorded bytes`<br>`the benign document keeps the structure and text it had before this change`<br>`code blocks, tables, task lists and callouts still render`<br>`a tag renders after any inline construct, not only after plain prose` |
@@ -287,6 +298,31 @@ the commit `Make two escaping guards testable by mutating them`:
   The parser percent-encodes quotes, angle brackets and backslashes in a
   destination, so the only character that reaches the attribute able to change
   its meaning is the ampersand of a character reference, and no test used one.
+
+A destination is decoded BEFORE it is judged and before it is written, and the
+ordering is the whole of it. An earlier version of this change wrote the
+destination out with its character references intact, on the reasoning that
+checking and writing the same bytes is what closes the hole. It does, and it
+also broke what a destination MEANS: CommonMark decodes references in a
+destination, so a link written with a destination of `a&amp;b.md` names the
+file `a&b.md`, and delivering `a&amp;b.md` to the opener matched no file. The pre-change renderer delivered
+`a&b.md`, so that was a regression against the criterion requiring a wikilink
+click to reach the opener with the same target value, and the tests of the time
+pinned it as intended.
+
+Decode, judge the decoded value, write that same value escaped. Check and write
+still agree, `&amp;` means an ampersand again, and `&#106;avascript:` is refused
+rather than written out and decoded into a scheme afterwards. Verified against
+the pre-change renderer: `a&amp;b.md`, `&#39;.md` and `?a=1&amp;b=2` all deliver
+what they used to, and the only remaining differences on that path are the two
+this change intends.
+
+Decoding also created a case that could not arise before: the parser
+percent-encodes a LITERAL quote in a destination, but a reference decodes to
+one, so the attribute escape became load-bearing where it had been belt and
+braces. A destination of `&quot;.md`, and a decoded quote in an ordinary href,
+are both asserted. The mutation table found that gap: the escape stopped discriminating
+when its old payload was corrected, and the tool refused to pass.
 
 One row looks untestable and is not, which is worth writing down because the
 reasoning against it is nearly right. The `href written as an attribute value`
@@ -341,6 +377,30 @@ mutation table is covered, which is a stronger statement about this file than
 its branch percentage is.
 
 `node test/tools/coverage-areas.js coverage.lcov`: all 50 floors hold.
+
+## The nine call sites
+
+`formatMd` and `formatMdFull` are called from eight places across chat, the
+conversation list and the file preview. Raw HTML in the input now renders as its
+own characters, which is right for a document and would be wrong for markup the
+app built, so every caller was traced to its source:
+
+| Call site | What it passes |
+|---|---|
+| `app.js` x3 | agent response text: finalised, re-rendered after streaming, or promoted from a handoff |
+| `views/chat.js` x3 | the raw stream, a stored message body, and the same text through `addAgentMsg` |
+| `views/conversations.js` | the raw stream |
+| `views/files.js` | a file body read from disk |
+
+None passes markup the app built. The chat surfaces compose their bubble around
+the rendered output through `chat-markup.js`, which is the safe order: build
+after rendering, never render what is already built.
+
+`nothing renders markup the app built through the markdown renderer` pins that
+ordering, reading each call's argument and failing on a markup literal or a call
+into the markup module. It also fails rather than skips if a call is ever
+written across lines, since a check that silently reads nothing is worse than no
+check.
 
 ## Raised rather than absorbed
 

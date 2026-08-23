@@ -310,21 +310,47 @@ describe('renderMarkdown: a relative link cannot rewrite its own handler', () =>
     }
   });
 
-  test('a character reference in a filename stays those characters', () => {
-    // The guard against the payload above, seen from the benign side. A
-    // destination is written into the attribute escaped as an attribute value,
-    // so what the browser decodes back is what the document said, not one
-    // decoding further on. Without that, `&#39;` would arrive as a quote, which
-    // is exactly how the old rewrite was broken.
-    for (const [src, expected] of [['[x](<&#39;.md>)', '&#39;.md'], ['[x](<a&amp;b.md>)', 'a&amp;b.md']]) {
+  test('a character reference in a filename opens the file it names', () => {
+    // A destination is decoded BEFORE it is judged and before it is written, so
+    // the opener receives the characters the reference stands for. `&#39;.md`
+    // names a file called `'.md` and `a&amp;b.md` names `a&b.md`; delivering
+    // the undecoded text would match no file at all.
+    //
+    // Decoding first is also what makes the scheme check honest: it runs on the
+    // same value the browser will act on, which is why `&#106;avascript:` is
+    // refused rather than written out and decoded into a scheme afterwards.
+    // The quote cases are the ones decoding creates. The parser percent-encodes
+    // a LITERAL quote in a destination, so before decoding none could reach the
+    // attribute; a reference decodes to one, and from there only the attribute
+    // escape stops it ending the attribute it is written into.
+    for (const [src, expected] of [
+      ['[x](<&#39;.md>)', "'.md"],
+      ['[x](<a&amp;b.md>)', 'a&b.md'],
+      ['[x](<&quot;.md>)', '".md'],
+      ['[x](<a&quot; onmouseover=&quot;alert(1).md>)', 'a" onmouseover="alert(1).md'],
+    ]) {
       const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost/' });
       const doc = dom.window.document;
       doc.getElementById('root').innerHTML = render(src);
       const seen = [];
       attachWikilinkHandler(doc, (value) => seen.push(value));
-      doc.querySelector('a.wikilink').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+      const anchor = doc.querySelector('a.wikilink');
+      assert.ok(anchor, `no wikilink anchor for: ${src}`);
+      assert.deepStrictEqual(
+        Array.from(anchor.attributes).map((a) => a.name).filter((n) => n.startsWith('on')), [],
+        `a decoded quote opened an attribute: ${src}`);
+      anchor.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
       assert.deepStrictEqual(seen, [expected], src);
     }
+  });
+
+  test('a decoded quote in an ordinary destination cannot open an attribute', () => {
+    const d = new JSDOM(`<div id="root">${render('[a](<https://example.com/&quot; onmouseover=&quot;alert(1)>)')}</div>`)
+      .window.document;
+    const anchor = d.querySelector('a');
+    assert.deepStrictEqual(
+      Array.from(anchor.attributes).map((a) => a.name).filter((n) => n.startsWith('on')), []);
+    assert.strictEqual(anchor.getAttribute('href'), 'https://example.com/" onmouseover="alert(1)');
   });
 
   test('a link or image title still reaches the attribute, escaped', () => {
@@ -336,19 +362,14 @@ describe('renderMarkdown: a relative link cannot rewrite its own handler', () =>
     assert.strictEqual(d.querySelector('img').getAttribute('alt'), 'y');
   });
 
-  test('an ordinary link keeps its destination exactly as the document wrote it', () => {
-    // The same guard as the payload above, on a destination nobody would call
-    // hostile, so what the escape does is visible without having to work out
-    // how a payload is classified first.
-    //
-    // marked's own link renderer escapes an href in a mode that leaves an
-    // existing character reference intact, which is correct for a URL and wrong
-    // once the reference is the attack. Writing the attribute here means the
-    // browser decodes back to the characters the document actually wrote:
-    // `&amp;` stays `&amp;` rather than becoming a bare ampersand.
+  test('an ordinary link resolves to the destination the document names', () => {
+    // The benign side of the same guard. A character reference in a destination
+    // means the character it stands for, which is what CommonMark says and what
+    // the parser's own renderer produced, so the href a reader clicks is the
+    // one the document wrote and not a literal `&amp;`.
     for (const [src, expected] of [
-      ['[a](https://example.com/?a=1&amp;b=2)', 'https://example.com/?a=1&amp;b=2'],
-      ['[a](<https://example.com/?q=&quot;x>)', 'https://example.com/?q=&quot;x'],
+      ['[a](https://example.com/?a=1&amp;b=2)', 'https://example.com/?a=1&b=2'],
+      ['[a](<https://example.com/?q=&quot;x>)', 'https://example.com/?q="x'],
     ]) {
       const d = new JSDOM(`<div id="root">${render(src)}</div>`).window.document;
       const anchor = d.querySelector('a');
@@ -491,9 +512,20 @@ describe('renderMarkdown: markdown cannot carry HTML into the page', () => {
   });
 
   test('a script scheme cannot reach an href or a src', () => {
-    for (const src of ['[click](javascript:alert(1))', '[click](JaVaScRiPt:alert(1))',
+    const payloads = ['[click](javascript:alert(1))', '[click](JaVaScRiPt:alert(1))',
       '[x](vbscript:msgbox)', '[x](data:text/html;base64,PHN2Zz4=)',
-      '![x](javascript:alert(1))', '[x](java&Tab;script:alert(1))', '[x](&#106;avascript:alert(1))']) {
+      '![x](javascript:alert(1))', '[x](java&Tab;script:alert(1))', '[x](&#106;avascript:alert(1))',
+      '[x](&#106;&#97;&#118;&#97;script:alert(1))', '[x](java&colon;script:alert(1))',
+      '![x](&#106;avascript:alert(1))', '![x](java&colon;script:alert(1))'];
+    for (const src of payloads) {
+      // The destination is decoded before it is judged, so a scheme spelled
+      // with character references is refused outright and no anchor is written
+      // at all. Assert that first: an anchor that does not exist cannot be
+      // checked by the loop below, and a loop over nothing passes silently.
+      if (/&#|&colon;|&Tab;/.test(src)) {
+        assert.strictEqual(doc(render(src)).querySelectorAll('a[href], img[src]').length, 0,
+          `a destination was written for an encoded script scheme: ${src}`);
+      }
       // The RESOLVED url, which is what the browser would act on: a relative
       // href against the page's origin comes back as http:, and only a
       // destination that really carries a scheme keeps one of its own.
@@ -580,6 +612,93 @@ describe('renderMarkdown: the copy button is a listener, not an attribute', () =
     button.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
     assert.deepStrictEqual(copied, ['const x = 1;\nconsole.log(x);']);
   });
+});
+
+test('nothing renders markup the app built through the markdown renderer', () => {
+  // HTML in the input renders as its own characters now. That is right for a
+  // document and wrong for markup the APP wrote, which would show as visible
+  // tags. So the contract is an ordering one: build markup AROUND rendered
+  // output, never render markup that has already been built.
+  //
+  // Every caller today passes document text: agent response text (finalised,
+  // streaming or promoted from a handoff), a stored message body, or a file
+  // read from disk. The chat surfaces compose their bubble around the result,
+  // which is the safe order. This fails if one starts passing a fragment in.
+  const publicDir = path.join(__dirname, '..', '..', 'public');
+  const scripts = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === 'vendor') continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith('.js') && !entry.name.endsWith('.min.js')) scripts.push(full);
+    }
+  };
+  walk(publicDir);
+
+  const CALL = /\bformatMd(?:Full)?\s*\(/g;
+  const offenders = [];
+  let calls = 0;
+  for (const file of scripts) {
+    const src = fs.readFileSync(file, 'utf-8');
+    for (const line of src.split('\n')) {
+      if (/function formatMd/.test(line)) continue;
+      CALL.lastIndex = 0;
+      let match;
+      while ((match = CALL.exec(line))) {
+        // The argument, up to the paren that closes this call. Every call site
+        // is one line today; a call broken across lines would read as an empty
+        // argument here, so it is reported rather than skipped.
+        let depth = 1;
+        let i = match.index + match[0].length;
+        const start = i;
+        for (; i < line.length && depth > 0; i++) {
+          if (line[i] === '(') depth++;
+          else if (line[i] === ')') depth--;
+        }
+        const argument = line.slice(start, i - 1);
+        calls++;
+        const where = `${path.relative(publicDir, file)}: formatMd(${argument})`;
+        if (depth > 0) offenders.push(`${where} [call spans lines; this check reads one line]`);
+        else if (argument.includes('<')) offenders.push(`${where} [passes a markup literal]`);
+        else if (/Markup|Html\b/.test(argument)) offenders.push(`${where} [passes built markup]`);
+      }
+    }
+  }
+  assert.ok(calls >= 8, `sanity: found ${calls} call sites, expected the known eight or more`);
+  assert.deepStrictEqual(offenders, [],
+    'these render markup the app built, which now shows as visible tags; build it around the rendered output instead');
+});
+
+test('the harness parses with the same marked build the browser is served', () => {
+  // Every hostile-payload proof in this suite is a claim about what the BROWSER
+  // does with a document, and it is only that if the parser under test is the
+  // parser the app runs. That was asserted in a comment. This asks the route.
+  //
+  // It drives the real handler for /marked.min.js, which is the URL index.html
+  // loads, and compares the bytes it serves against the file the harness
+  // evaluates. A vendored copy, a version bump or a changed route turns this
+  // suite red rather than leaving it quietly testing a parser the app no longer
+  // has.
+  const { handleHttpRequest } = require('../../lib/http-router.js');
+  const served = [];
+  handleHttpRequest(
+    { url: '/marked.min.js', method: 'GET' },
+    { writeHead() {}, end(payload) { served.push(payload); } },
+  );
+  assert.strictEqual(served.length, 1, 'the route answered once');
+
+  const harnessCopy = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'node_modules', 'marked', 'lib', 'marked.umd.js'));
+  assert.ok(harnessCopy.length > 1000, 'sanity: the harness file is a real build');
+  assert.ok(Buffer.from(served[0]).equals(harnessCopy),
+    'the bytes served to the browser are not the bytes this suite parses with');
+
+  // And that file really is what the harness evaluates: loading it the way a
+  // script tag would has to produce a working parser, not an empty object.
+  const marked = loadBrowserMarked();
+  assert.strictEqual(typeof marked.Marked, 'function', 'the served build exposes Marked');
+  assert.strictEqual(new marked.Marked().parse('*x*').trim(), '<p><em>x</em></p>');
 });
 
 test('markdown-render.js is the only client script that drives marked', () => {
