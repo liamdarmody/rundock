@@ -35,6 +35,15 @@ function useWorkspace(opts) {
 
 const routinesDoc = fs.readFileSync(path.join(ROOT, 'docs', 'ROUTINES.md'), 'utf-8');
 const changelog = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf-8');
+// Only the entry being shipped. Matching the whole file lets an unrelated
+// release from two years ago satisfy a claim about this one: the exemption
+// pin below passed while the current entry named five of the six exempt
+// directories, because a 0.9 entry about PATH detection happened to mention
+// the sixth.
+const unreleased = changelog.slice(
+  changelog.indexOf('## Unreleased'),
+  changelog.indexOf('## 0.11.8'),
+);
 const architecture = fs.readFileSync(path.join(ROOT, 'ARCHITECTURE.md'), 'utf-8');
 const skillsDoc = fs.readFileSync(path.join(ROOT, 'docs', 'SKILLS.md'), 'utf-8');
 
@@ -83,14 +92,32 @@ describe('the workspace boundary says what it enforces, per platform', () => {
       'the audit section says the same');
   });
 
+  test('the exemption the code enforces is the exemption the release notes state', () => {
+    // The hook deliberately does not card the system executable directories
+    // or the device paths, and for three rounds the release notes said a
+    // visible target is always carded. Read together, the enforcement and the
+    // statement disagreed, which is the defect this whole change removes.
+    // Read the list from the CODE so the two cannot drift apart silently.
+    const hook = fs.readFileSync(path.join(ROOT, 'scripts', 'permission-hook.js'), 'utf-8');
+    const declared = hook.match(/const EXEC_DIRS = \[([^\]]+)\]/);
+    assert.ok(declared, 'the hook declares the exempt directories in one place');
+    const dirs = declared[1].split(',').map(d => d.trim().replace(/^'|'$/g, '')).filter(Boolean);
+    assert.ok(dirs.length >= 3, 'sanity: the list was parsed');
+    for (const d of dirs) {
+      assert.ok(unreleased.includes(d), `the release notes name ${d}, which the code does not card`);
+    }
+    assert.match(unreleased, /\/dev\/null/, 'and the device paths');
+  });
+
   test('the audit section states the boundary per platform AND per act', () => {
     // A sentence cannot carry this: the answer differs by platform, by
     // whether the target is visible in the command, and by read versus
     // write. Three rounds of review found the stated boundary wider than the
     // enforced one, every time in a cell nobody had written down.
-    assert.match(architecture, /Is the target visible in the command text\?/,
-      'the table exists');
-    for (const cell of ['macOS', 'Windows', 'Linux', 'computed at run time']) {
+    assert.match(architecture, /How the target is written/, 'the table exists');
+    assert.match(architecture, /system executable directory/,
+      'and carries the exemption as a row rather than leaving it to the code');
+    for (const cell of ['macOS', 'Windows', 'Linux', 'Computed while the command runs']) {
       assert.ok(architecture.includes(cell), `the table covers ${cell}`);
     }
   });

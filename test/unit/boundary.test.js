@@ -206,6 +206,20 @@ describe('classifyShellAccess (hook-side)', () => {
     assert.ok(paths.includes(path.join(home, '.ssh', 'x')), 'and so is the second');
   });
 
+  test('crossings follow the order the command names them, quoted or not', () => {
+    // Quoted segments used to be collected before everything else, so a
+    // command whose second target was quoted reported it FIRST, and the
+    // card's headline target was the wrong one. The earlier order test
+    // passed only because its command had no quotes.
+    const home = os.homedir();
+    const first = '/etc/one';
+    const second = path.join(home, 'two');
+    const r = classifyShellAccess('Bash', { command: `cp a ${first} && cp b "${second}"` }, ws, []);
+    assert.deepStrictEqual(r.crossings.map(c => c.path), [first, second],
+      'source order, so the headline target is the one named first');
+    assert.strictEqual(r.resolvedPath, first);
+  });
+
   test('the same target named twice is reported once', () => {
     const home = os.homedir();
     const t = path.join(home, 'notes.md');

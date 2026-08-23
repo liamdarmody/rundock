@@ -146,13 +146,22 @@ const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
 // command would therefore delete the Bash card knowledge mode shows today.
 // A crossing is reported; everything else returns null and keeps whatever
 // card it already had.
+// Tokens IN SOURCE ORDER.
+//
+// A quoted segment is one token, because a path with a space in it is one
+// path and splitting it on whitespace would resolve two wrong ones. Order
+// matters beyond tidiness: the first crossing becomes the card's headline
+// target, so collecting all the quoted segments first made a command whose
+// second target happened to be quoted report that one as the first place it
+// reaches.
 function shellPathTokens(command) {
   const out = [];
-  const rest = String(command)
-    // Quoted segments are single tokens: a path with a space in it is one
-    // path, and splitting it on whitespace would resolve two wrong ones.
-    .replace(/'([^']*)'|"([^"]*)"/g, (m, a, b) => { out.push(a !== undefined ? a : b); return ' '; });
-  for (const t of rest.split(/[\s;|&<>()`]+/)) if (t) out.push(t);
+  const re = /'([^']*)'|"([^"]*)"|[^\s;|&<>()`'"]+/g;
+  let m;
+  while ((m = re.exec(String(command))) !== null) {
+    const t = m[1] !== undefined ? m[1] : (m[2] !== undefined ? m[2] : m[0]);
+    if (t) out.push(t);
+  }
   return out;
 }
 

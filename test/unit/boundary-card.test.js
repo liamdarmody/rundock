@@ -93,6 +93,28 @@ describe('the boundary card', () => {
     assert.match(html, /\/home\/u\/\.ssh\/k/, 'and so is the second');
   });
 
+  test('the list of places is visible, not folded behind a toggle labelled as the command', () => {
+    // Bash cards collapse a long detail behind "Show command", which is right
+    // for a command string and wrong for this: the card says all the places
+    // are listed while hiding them, and an inline code element renders the
+    // newlines between them as spaces, so they run together on one line.
+    const html = render({
+      tool_name: 'Bash',
+      input: { command: 'cp a ~/Exports/a && cp k ~/.ssh/k', description: 'Copy two files to two different places outside the workspace' },
+      boundary: true, resolved_path: '/home/u/Exports/quarterly-report-final.md', grant_dir: null,
+      crossings: [
+        { path: '/home/u/Exports/quarterly-report-final.md' },
+        { path: '/home/u/.ssh/id_rsa_deployment_key' },
+      ],
+    });
+    // Long enough to cross the collapse threshold, which is the only state
+    // where the toggle appears at all.
+    assert.doesNotMatch(html, /Show command/, 'the places are not hidden behind a toggle');
+    assert.match(html, /quarterly-report-final\.md/);
+    assert.match(html, /id_rsa_deployment_key/);
+    assert.match(html, /<br|<div|\n/, 'and they are on separate lines rather than run together');
+  });
+
   test('a single crossing is not dressed up as a list', () => {
     const html = render({
       tool_name: 'Write', input: { file_path: '/etc/x' },

@@ -210,6 +210,57 @@ describe('scaffoldWorkspace', () => {
     }
   });
 
+  test('a workspace that MOVED gets its sandbox root brought with it', () => {
+    // The block names the workspace by absolute path, and the file holding it
+    // lives inside the workspace, so both travel together when the folder is
+    // moved, renamed or copied to another machine. Written once and never
+    // revisited, the root then names where the workspace USED to be, and the
+    // operating system starts refusing every write INSIDE it: the retry
+    // raises a boundary card for a path that is in the workspace, while the
+    // release notes say the workspace is writable. A moved workspace is
+    // already a supported case here, so this is a real state, not a corner.
+    const from = useWorkspace({ claudeMd: '# x' });
+    srv.scaffoldWorkspace(from);
+    const settingsPath = (d) => path.join(d, '.claude', 'settings.local.json');
+    const carried = fs.readFileSync(settingsPath(from), 'utf-8');
+
+    // The move: same settings file, new location.
+    const to = useWorkspace({ claudeMd: '# x' });
+    fs.mkdirSync(path.dirname(settingsPath(to)), { recursive: true });
+    fs.writeFileSync(settingsPath(to), carried);
+    srv.scaffoldWorkspace(to);
+
+    const after = JSON.parse(fs.readFileSync(settingsPath(to), 'utf-8'));
+    if (process.platform === 'darwin') {
+      assert.ok(after.sandbox.filesystem.allowWrite.includes(to),
+        'the writable root is where the workspace is now');
+      assert.ok(!after.sandbox.filesystem.allowWrite.includes(from),
+        'and not where it used to be');
+    } else {
+      assert.strictEqual(after.sandbox, undefined);
+    }
+  });
+
+  test('a sandbox block the user has EDITED is never brought with it', () => {
+    // Reconciliation must not become a licence to rewrite. The test above
+    // would pass just as well if the block were overwritten unconditionally,
+    // which would silently discard the extra roots somebody added because
+    // their work needs them.
+    const dir = useWorkspace({ claudeMd: '# x' });
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    const mine = {
+      enabled: true,
+      autoAllowBashIfSandboxed: true,
+      filesystem: { allowWrite: ['/somewhere/that/moved', '/a/root/I/added'] },
+      network: { allowedDomains: ['*'] },
+    };
+    fs.writeFileSync(settingsPath, JSON.stringify({ sandbox: mine }));
+    srv.scaffoldWorkspace(dir);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf-8')).sandbox, mine,
+      'an edited block is left exactly as written, stale root and all');
+  });
+
   test('a user who turned the sandbox OFF stays off', () => {
     // `false` is a decision, and the absence check has to tell it apart from
     // an absent key or it silently switches the sandbox back on at the next

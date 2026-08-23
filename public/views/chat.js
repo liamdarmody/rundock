@@ -630,6 +630,10 @@ function renderPermissionCard(d, convoId) {
       ? 'Wants to reach outside your workspace'
       : `Wants to ${reads ? 'read' : 'write'} outside your workspace`;
     if (crossings.length > 1) {
+      // Rendered as its own block below, one place per line. Folding the list
+      // behind the "Show command" toggle would hide the very thing the copy
+      // says is listed, and an inline code element renders the separators as
+      // spaces so the paths run together.
       detail = crossings.map(c => c.path).join('\n');
       context = 'This reaches more than one place outside your workspace. All of them are listed, and approving allows the whole request.';
     } else {
@@ -662,9 +666,11 @@ function renderPermissionCard(d, convoId) {
         <span class="permission-summary">${esc(summary)}</span>
       </div>
       ${context ? `<div class="permission-context">${esc(context)}</div>` : ''}
-      ${(toolName === 'Bash' && input.description && detail.length > 60)
-        ? `<details class="permission-detail-collapse"><summary>Show command</summary><code class="permission-detail">${esc(detail)}</code></details>`
-        : `<code class="permission-detail">${esc(detail)}</code>`}
+      ${crossings.length > 1
+        ? `<div class="permission-detail">${crossings.map(c => esc(c.path)).join('<br>')}</div>`
+        : (toolName === 'Bash' && input.description && detail.length > 60)
+          ? `<details class="permission-detail-collapse"><summary>Show command</summary><code class="permission-detail">${esc(detail)}</code></details>`
+          : `<code class="permission-detail">${esc(detail)}</code>`}
       <div class="permission-actions">
         <button class="btn-perm btn-allow" data-perm-id="${esc(requestId)}" data-perm-action="allow">Allow</button>
         ${grantable
