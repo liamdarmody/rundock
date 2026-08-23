@@ -26,6 +26,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const os = require('node:os');
+const { preflight } = require('../helpers/temp-root.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 const SRC = path.join(ROOT, 'public', 'markdown-render.js');
@@ -172,7 +174,34 @@ function report(results, markdown) {
   return failed;
 }
 
+// REFUSE TO START ON A MACHINE THAT WOULD MISREPORT.
+//
+// This harness runs a suite once per guard, so it is the single
+// largest producer of test fixtures on the machine and the tool most likely to
+// meet a full disk. When it does, the write failures surface as tests going
+// red, and red tests are exactly what this instrument reports as a guard
+// nobody was watching. Two runs did precisely that, reporting 293 and 32
+// failures that were out of space rather than unguarded. Wrong numbers in the
+// direction that looks like work to do are worse than no numbers.
+//
+// The check sweeps roots whose owning process is gone before it counts, so a
+// machine dirtied by earlier runs repairs itself rather than stopping.
+function requireSaneTempRoot() {
+  const verdict = preflight(os.tmpdir());
+  if (verdict.ok) return;
+  console.error(verdict.message);
+  process.exit(2);
+}
+
 if (require.main === module) {
+  requireSaneTempRoot();
+  // Check and stop. Exists so the test that proves this entry point runs the
+  // preflight does not have to let a harness loose to prove it: without it, the
+  // only way to observe a MISSING preflight is to watch the harness start
+  // mutating and then kill it, which skips the restore below and leaves a
+  // source file mutated on every red run. The flag is read after the check, so
+  // deleting the check still fails that test rather than passing it.
+  if (process.argv.includes('--preflight-only')) process.exit(0);
   const failed = report(run(), process.argv.includes('--markdown'));
   if (failed) {
     console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded.`);

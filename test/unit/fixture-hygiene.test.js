@@ -3,10 +3,10 @@
 //
 // WHY THIS FILE EXISTS
 //
-// A suite run used to leave 140 directories and 100 MB under the system temp
-// root. `mutate:guards` runs the whole suite once per guard, and the release
-// carrying 196 guards turned that into 10,087 directories by one measurement
-// and 20,708 four hours later. The disk hit 100 percent twice in an evening.
+// A suite run used to leave 160 directories and 103 MB under the system temp
+// root, and nothing ever removed them, so every run of anything added to the
+// pile permanently. A day of builds reached 10,087 directories by one
+// measurement and 20,708 four hours later. The disk hit 100 percent twice.
 //
 // The expensive part was not the disk. Two mutation runs reported 293 and 32
 // tests red that were out-of-space rather than guards nobody was watching, so
@@ -51,6 +51,18 @@ function childEnv(tmpRoot) {
   const env = { ...process.env, TMPDIR: tmpRoot, TEMP: tmpRoot, TMP: tmpRoot };
   delete env.NODE_TEST_CONTEXT;
   return env;
+}
+
+// A pid that is certainly not running.
+//
+// NOT a large literal like 999999. That is a guess about the machine: Linux
+// allows pids up to 4194304, so the guess can name a live process on a busy
+// host and the test would then assert the opposite of what it means. Spawning
+// something and letting it exit is the only way to know.
+function deadPid() {
+  const kid = spawnSync(process.execPath, ['-e', '0']);
+  assert.ok(kid.pid, 'could not start a throwaway process to retire');
+  return kid.pid;
 }
 
 // A child that builds one fixture, prints where it went, then does as it is told.
@@ -195,7 +207,7 @@ describe('sweeping leftovers from runs that never got to tidy up', () => {
   test('a root owned by a live process is never swept', (t) => {
     const tmpRoot = scratch(t, 'live');
     const mine = path.join(tmpRoot, `${PREFIX}p${process.pid}-alive`);
-    const dead = path.join(tmpRoot, `${PREFIX}p999999-gone`);
+    const dead = path.join(tmpRoot, `${PREFIX}p${deadPid()}-gone`);
     fs.mkdirSync(mine);
     fs.mkdirSync(dead);
 
@@ -244,7 +256,8 @@ describe('a mutation harness refuses to start on a machine that would misreport'
 
   test('it sweeps first, so a machine dirtied by earlier runs repairs itself', (t) => {
     const tmpRoot = scratch(t, 'repairs');
-    for (let i = 0; i < 12; i++) fs.mkdirSync(path.join(tmpRoot, `${PREFIX}p99999${i}-gone`));
+    const gone = deadPid();
+    for (let i = 0; i < 12; i++) fs.mkdirSync(path.join(tmpRoot, `${PREFIX}p${gone}-gone${i}`));
     const verdict = preflight(tmpRoot, { limit: 5 });
     assert.equal(verdict.swept, 12);
     assert.equal(verdict.count, 0);
@@ -265,21 +278,39 @@ describe('a mutation harness refuses to start on a machine that would misreport'
     assert.match(verdict.message, /rm -rf/, 'the message says how to clear it');
   });
 
-  test('every mutation harness calls the preflight', () => {
-    // Named individually rather than globbed: a harness added later should
-    // fail this by absence, and a glob would silently include and excuse it.
-    const harnesses = [
-      'test/tools/mutate-render-guards.js',
-      'test/tools/mutate-routine-editor-guards.js',
-      'test/tools/mutate-routines-guards.js',
-    ];
-    for (const rel of harnesses) {
-      const src = fs.readFileSync(path.join(REPO, rel), 'utf8');
-      // assert.ok rather than assert.match, because a failing match prints the
-      // whole harness into the report and buries every other failure with it.
-      assert.ok(/require\(['"][^'"]*temp-root(?:\.js)?['"]\)/.test(src),
-        `${rel} does not load the temp-root guard`);
-      assert.ok(/preflight\(/.test(src), `${rel} does not call the preflight`);
-    }
-  });
+  // DRIVEN, NOT GREPPED. The first version of this read the harness sources
+  // for a `preflight(` call. That version stayed green when the call was
+  // deleted from the entry point, because the word survived in the function
+  // the entry point no longer reached: a test asserting the shape of the fix
+  // rather than the property it exists for. Each harness is started here for
+  // real, on a temp root it must refuse.
+  //
+  // Named individually rather than globbed, so a harness added later fails
+  // this by absence instead of being silently included and excused.
+  for (const rel of [
+    'test/tools/mutate-render-guards.js',
+    'test/tools/mutate-routine-editor-guards.js',
+    'test/tools/mutate-routines-guards.js',
+  ]) {
+    test(`${path.basename(rel)} refuses to run on a temp root full of fixtures`, (t) => {
+      const tmpRoot = scratch(t, 'harness');
+      // Owned by this process, so the harness's own sweep cannot clear them
+      // and the refusal is the only way out.
+      for (let i = 0; i <= 100; i++) {
+        fs.mkdirSync(path.join(tmpRoot, `${PREFIX}p${process.pid}-crowd${i}`));
+      }
+      // --preflight-only, and the reason is worth stating. Without it the only
+      // way to observe a MISSING preflight is to let the harness start
+      // mutating and then kill it, which skips its restore and leaves a source
+      // file mutated in the working tree on every red run. Measured: doing it
+      // that way left three mutated files behind. The flag is read AFTER the
+      // preflight call, so a harness that has lost its check exits 0 here and
+      // this still goes red.
+      const run = spawnSync(process.execPath, [rel, '--preflight-only'],
+        { cwd: REPO, env: childEnv(tmpRoot), encoding: 'utf8', timeout: 30000 });
+      assert.equal(run.status, 2,
+        `${rel} should refuse with exit 2, got ${run.status}. Output:\n${run.stdout}\n${run.stderr}`);
+      assert.match(run.stderr, /Refusing to start/, `${rel} refused without saying why`);
+    });
+  }
 });

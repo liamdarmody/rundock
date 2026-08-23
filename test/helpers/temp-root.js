@@ -5,11 +5,11 @@
 //
 // Every test process used to scatter its fixtures directly into the system
 // temp root and remove none of them. A `cleanup()` was written and exported,
-// but of the 53 files that build fixtures only two ever called it, so a single
-// suite run left 140 directories and 100 MB behind. `mutate:guards` runs the
-// whole suite once per guard, and the release carrying 196 guards turned that
-// into tens of thousands of directories in an evening. The disk reached 100
-// percent twice, and the failures did not arrive labelled as disk failures:
+// but of the 79 files that build fixtures only 20 ever wired it, so a single
+// suite run left 160 directories and 103 MB behind and nothing ever removed
+// them. Every run of anything added to the pile permanently, and a day of runs
+// reached 10,087 directories and then 20,708. The disk hit 100 percent twice,
+// and the failures did not arrive labelled as disk failures:
 // two mutation runs reported 293 and 32 tests red that were out-of-space
 // rather than unguarded. A harness that calls a mutation caught because the
 // disk refused the write is worse than one that reports nothing.
@@ -132,8 +132,8 @@ function sweepStale(tmpRoot, opts = {}) {
 /**
  * Decide whether a mutation harness should start.
  *
- * A harness runs the whole suite once per guard, so it is the tool that turns
- * a nearly-full disk into hundreds of misreported red tests. It sweeps first,
+ * A harness runs a suite once per guard, so it is the tool that turns a nearly
+ * full disk into hundreds of misreported red tests. It sweeps first,
  * because a machine dirtied by pre-fix runs repairs itself and should not be
  * made to stop for a condition that no longer holds. It refuses only when
  * roots remain that it cannot account for.
@@ -159,7 +159,7 @@ function preflight(tmpRoot, opts = {}) {
     message:
       `${count} test fixture roots are still under ${tmpRoot} after sweeping `
       + `${removed.length}, and the sane ceiling is ${limit}.\n`
-      + 'Refusing to start. This harness runs the whole suite once per guard, so on a '
+      + 'Refusing to start. This harness runs a suite once per guard, so on a '
       + 'machine in this state it fills the disk and then reports the resulting '
       + 'write failures as guards nobody was watching. Those numbers would be wrong '
       + 'in the direction that looks like work to do.\n'
