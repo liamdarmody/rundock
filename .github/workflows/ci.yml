@@ -113,6 +113,51 @@ jobs:
       - name: Run both type-check configs
         run: npm run typecheck
 
+  # Guard mutation: each of the renderer's escaping guards is removed in turn and
+  # the renderer's suite must go red for it. A guard no test notices is not
+  # guarded, and two of these were exactly that when the check was first run, so
+  # this holds the evidence table in .review/ to something machine-checked
+  # instead of transcribed. Not part of `npm test`: it runs that suite once per
+  # guard, which is too slow to pay on every run and cheap to pay once per push.
+  mutation:
+    name: Renderer guards and fixture provenance
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        # Full history: the fixture check below reads the pre-change renderer
+        # out of it. The default depth-1 checkout does not contain that commit.
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install runtime dependencies
+        run: npm ci --omit=dev
+
+      - name: Install test-only DOM dependency
+        run: npm install --no-save --ignore-scripts jsdom@29.1.1
+
+      - name: Remove each renderer guard and require a red test
+        run: node test/tools/mutate-render-guards.js --markdown
+
+      # The file is restored by the tool, including when a run throws. If a
+      # failure ever leaves it modified, that is itself worth seeing.
+      - name: Fail if the tool left the renderer modified
+        run: git diff --exit-code -- public/markdown-render.js
+
+      # The frozen "before" fixture is the only record of how ordinary markdown
+      # rendered before this work, and every claim that it is unchanged is taken
+      # against it. This rebuilds it from the pre-change public/app.js and fails
+      # if the committed bytes are not what that code produces.
+      - name: Check the before fixture against the pre-change renderer
+        run: npm run check:fixture
+
   # Coverage floors: the suite runs WITH coverage and the per-area floors in
   # test/tools/coverage-floors.json are enforced. Deleting a covered test, or
   # moving code without carrying its area definition, fails here. Floors
