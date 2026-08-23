@@ -163,7 +163,8 @@ function renderRoutinesSidebar() {
   // agent's skills and each row names which agent runs it.
   let h = '<div class="sidebar-section-divider" style="margin:12px 16px 0;padding-top:16px">'
     + '<span class="sidebar-label">Routines</span>'
-    + '<button class="re-link" type="button" style="float:right" onclick="addRoutine()">Add</button>'
+    + '<button class="re-link" type="button" style="float:right"'
+    + ' data-sidebar-action="add-routine" onclick="addRoutine()">Add</button>'
     + '</div>';
   h += '<div style="padding:8px 8px 16px">';
   for (const r of allRoutines) {

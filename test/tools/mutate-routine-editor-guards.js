@@ -56,6 +56,9 @@ const APP = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routin
 const HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/unit/routine-write.test.js' };
 // The agent profile, which renders the only way into the scoped editor.
 const PROFILE = { src: path.join(ROOT, 'public', 'views', 'profile.js'), suite: 'test/unit/routine-editor-view.test.js' };
+// The team sidebar, which renders the way into the unscoped editor. Watched by
+// the doors suite, which enumerates every way in and presses each one.
+const SIDEBAR = { src: path.join(ROOT, 'public', 'views', 'team.js'), suite: 'test/unit/routine-editor-doors.test.js' };
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -224,6 +227,11 @@ const MUTATIONS = [
   [PROFILE, 'the way in carries the agent whose profile it is on',
     'onclick="addRoutineForAgent(\'${esc(a.id)}\')"',
     'onclick="addRoutineForAgent(\'\')"'],
+
+  // The other door, and the one four rounds of review reached last.
+  [SIDEBAR, 'the sidebar offers a way in that belongs to no agent',
+    "    + ' data-sidebar-action=\"add-routine\" onclick=\"addRoutine()\">Add</button>'\n",
+    "    + '>Add</button>'\n"],
 ];
 
 // The reporter is named explicitly rather than left to the default, which
@@ -266,7 +274,7 @@ function run() {
   // Both files are read up front and both are restored in the same finally, so
   // a throw part way through cannot leave either one mutated.
   const originals = new Map();
-  for (const target of [MODEL, VIEW, APP, HANDLER, PROFILE]) originals.set(target, fs.readFileSync(target.src, 'utf8'));
+  for (const target of [MODEL, VIEW, APP, HANDLER, PROFILE, SIDEBAR]) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];
   try {
     for (const [target, label, guard, without] of MUTATIONS) {

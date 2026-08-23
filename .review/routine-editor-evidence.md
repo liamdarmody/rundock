@@ -313,12 +313,13 @@ Run on the tree this file is committed with:
 | a refusal from the data model is reported rather than swallowed | 2 | `a routine the data model refuses is an error, not a half written file`<br>`a file the routine cannot be placed in errors and is left byte identical` |
 | an agent profile offers a way to schedule its skills | 3 | `an agent profile offers a way to schedule one of its skills`<br>`pressing it opens the editor scoped to that agent`<br>`an agent with no skills of its own still offers the way in` |
 | the way in carries the agent whose profile it is on | 2 | `pressing it opens the editor scoped to that agent`<br>`an agent with no skills of its own still offers the way in` |
+| the sidebar offers a way in that belongs to no agent | 6 | `no way into the editor exists that this file does not name`<br>`the sidebar door opens the editor across the whole team`<br>`the same journey from the sidebar door reaches another agent's skill`<br>`the confirmation step can be edited by pressing its own link`<br>`the offer in an empty workspace is pressed, not called`<br>`no rendered control names a handler that does not exist` |
 
-**Five things are mutated: the model, the view, the client's message dispatch, the handler that writes the routine, and the agent profile that renders the way in.** That is not thoroughness
+**Six things are mutated: the model, the view, the client's message dispatch, the handler that writes the routine, and the two views that render the ways in.** That is not thoroughness
 for its own sake. The model can carry exactly the right words while the view
 renders different ones, and every model test still passes. The rule this editor
 exists to hold is a claim about what a person SEES, so the render is broken and
-noticed too. Nineteen break the render, four break the dispatch, two break the handler and two break the entry point.
+noticed too. Nineteen break the render, four break the dispatch, two break the handler and three break a way in.
 
 **Four tests exist because a mutation asked for them, not because they were
 thought of first.** Two turned nothing red on the model's first run and two on
@@ -495,6 +496,73 @@ AMBIGUOUS: the guard text matches 3 places, so it would break whichever came fir
 The table's authority rests on each mutation breaking the thing it says it
 breaks, and until now nothing was checking that. The fix for an ambiguous guard
 is to make its search text unique, usually by including a neighbouring line.
+
+## Every way into this editor, enumerated
+
+Four separate reviews each found a different way in with no test behind it: a
+destination resolved inside the router, a message case in the client dispatch, a
+control on an agent's profile, a control in the team sidebar. Every fix was
+correct and every one covered exactly the door that had been named, so the next
+one arrived.
+
+The rule is the one the last round produced: **an entry point is tested by the
+surface a user touches, or it is not tested.** Applied to all of them rather
+than to the one most recently found.
+
+`test/unit/routine-editor-doors.test.js` carries the list, and checks it against
+the source.
+
+| Way in | Surface | Scope | Pressed by |
+|---|---|---|---|
+| `addRoutineForAgent` in `views/profile.js` | the Add routine control on an agent profile | that agent | `the profile door opens the editor scoped to that agent` |
+| `addRoutine` in `views/team.js` | the Add control in the sidebar Routines section | the whole team | `the sidebar door opens the editor across the whole team` |
+
+**Deliberately not pressed, with the reason:**
+
+- **The routines view empty state.** Not built; it belongs to the routines list,
+  which is separate work. When it lands it adds a row and a test, and this file
+  fails until it does.
+- **A keyboard or command-palette route.** There is none. The palette indexes
+  files, conversations, agents and skills, not routines. Checked by a test
+  rather than asserted here.
+
+### The check that ends this
+
+`no way into the editor exists that this file does not name` scans every client
+file for a call to any function that OPENS the editor and requires the set to
+equal the table above. A new way in fails by name until somebody lists it and
+names the test that presses its surface. `every door names a test, and every
+named test exists` closes the other half, so a row cannot name a test that was
+never written.
+
+**Verified by adding a fifth door rather than by trusting the check.** A call
+placed in an unrelated view failed it with exactly that message; deleting the
+sidebar control turned six tests red.
+
+### Pressed, never called
+
+Two walks drive the whole journey through the DOM only: press the door, press a
+skill row, press Continue, choose from the two lists and fire their change
+events, press the run-on row, press Continue, press Save. Not one handler is
+called directly, because calling the handler is exactly what let four doors look
+covered while being untested. One walk goes through the scoped door, the other
+through the unscoped one to a second agent's skill, so the two entries are
+proven to carry different agents through to the message that gets sent.
+
+The remaining controls are pressed too: the Edit link on the confirmation step,
+the offer in an empty workspace, and the breadcrumb.
+
+`no rendered control names a handler that does not exist` collects every
+`onclick` and `onchange` across the editor's states and requires each to resolve
+to a published function, which covers the controls a walk does not reach. `both
+doors name handlers the editor actually publishes` does the same for the two
+views that hold the doors and for the three calls the client dispatch makes back
+into the editor.
+
+**One property worth knowing:** the sidebar section renders nothing until a
+routine exists, so the unscoped door appears with the first routine and not
+before. That is pinned, and it is why the routines view's own empty state is
+still needed and is a named exclusion rather than an oversight.
 
 ## Red-first and the gate
 
