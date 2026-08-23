@@ -78,6 +78,22 @@
     lead: 'Every scheduled skill across your team, and when it runs next.',
   };
 
+  /**
+   * What the list says when the server refused a pause or a delete.
+   *
+   * The server's own words are used whenever it sent any: it knows which of
+   * several things went wrong and says so. This is the line for a refusal that
+   * arrived with nothing in it, and the second sentence is the half that
+   * matters to somebody who has just pressed Delete: every refusal on that
+   * road returns before writing, so nothing has happened.
+   */
+  const ACTION_PROBLEM = 'That routine could not be changed. Nothing has been altered.';
+
+  function actionProblem(input) {
+    const message = input && typeof input.message === 'string' ? input.message.trim() : '';
+    return message || ACTION_PROBLEM;
+  }
+
   const EMPTY = {
     lead: 'No routines yet.',
     // Locked copy. Four options went to the owner and this is the one picked.
@@ -316,7 +332,8 @@
   }
 
   return {
-    OUTCOMES, LEAD, EMPTY, CATCH_UP_AFTER_MS,
+    OUTCOMES, LEAD, EMPTY, ACTION_PROBLEM, CATCH_UP_AFTER_MS,
+    actionProblem,
     dayWords, clockWords, zoneWords, timeWords,
     scheduleWords, routineSentence,
     outcomeOf, runStatus, nextRunLabel, row, deleteConfirmation,

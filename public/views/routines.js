@@ -38,6 +38,15 @@
 // an attribute, unescaped out of one, and matched again on the server.
 let pendingDelete = null;
 
+// What the server said when it refused the last pause or delete, or null.
+//
+// IT IS HELD HERE BECAUSE THIS IS THE SCREEN THAT ASKED. A refused action used
+// to answer on the save road, which posts to the conversation transcript and
+// calls the editor's save-failure callback, so the reader pressed a control on
+// this list and the only reply appeared somewhere else. An answer belongs to
+// the surface the question was asked on.
+let pendingProblem = null;
+
 // The clock, taken from the global so a test can supply one. Undeclared
 // identifiers are safe under typeof, so this works when the module is
 // required in node with no global at all.
@@ -173,7 +182,13 @@ function rowHtml(entry, index, withActions) {
 
 function headerHtml() {
   const model = routinesModel();
-  return `<div class="settings-section-title">${esc(model.LEAD.title)}</div>`;
+  let h = `<div class="settings-section-title">${esc(model.LEAD.title)}</div>`;
+  // On the header rather than in one of the three branches below, so the
+  // refusal is on the page whichever state the list is in when it arrives.
+  if (pendingProblem) {
+    h += `<p class="routines-problem" role="alert" data-routines-problem>${esc(pendingProblem)}</p>`;
+  }
+  return h;
 }
 
 function emptyHtml() {
@@ -244,18 +259,43 @@ function renderRoutines() {
   else content.innerHTML = listHtml(list);
 }
 
+/**
+ * The server refused the last pause or delete.
+ *
+ * Rendered where the control was pressed. The words are the server's whenever
+ * it sent any, because it knows which of several things went wrong.
+ */
+function routinesActionFailed(reply) {
+  pendingProblem = routinesModel().actionProblem(reply);
+  renderRoutines();
+}
+
+/**
+ * A routine change went through, so last time's refusal is history.
+ *
+ * Cleared without redrawing: the roster broadcast that follows every
+ * successful change is what redraws, and drawing twice would be a flicker for
+ * no reason.
+ */
+function routinesActionCleared() {
+  pendingProblem = null;
+}
+
 function routinesAskDelete(index) {
+  pendingProblem = null;
   pendingDelete = index;
   renderRoutines();
 }
 
 function routinesCancelDelete() {
+  pendingProblem = null;
   pendingDelete = null;
   renderRoutines();
 }
 
 function routinesConfirmDelete() {
   const entry = allRoutines()[pendingDelete];
+  pendingProblem = null;
   pendingDelete = null;
   if (entry && typeof ws !== 'undefined' && ws) {
     ws.send(JSON.stringify({
@@ -267,6 +307,7 @@ function routinesConfirmDelete() {
 
 function routinesSetPaused(index, paused) {
   const entry = allRoutines()[index];
+  pendingProblem = null;
   if (!entry || typeof ws === 'undefined' || !ws) return;
   ws.send(JSON.stringify({
     type: 'set_routine_paused', agentId: entry.agent.id, name: entry.routine.name,
@@ -276,5 +317,6 @@ function routinesSetPaused(index, paused) {
 
 return {
   renderRoutines, routinesAskDelete, routinesCancelDelete, routinesConfirmDelete, routinesSetPaused,
+  routinesActionFailed, routinesActionCleared,
 };
 }));

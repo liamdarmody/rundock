@@ -80,6 +80,37 @@ const RENDERERS = [
     surface: 'Delete routine on the confirmation, which redraws the list',
     pressedBy: 'the view redraws itself for its own controls',
   },
+  {
+    file: 'views/routines.js',
+    line: 'function routinesActionFailed(reply)',
+    surface: 'a refused pause or delete coming back from the server',
+    pressedBy: 'a refused action is answered on this list and nowhere else',
+  },
+];
+
+// Every call the client's message dispatch makes INTO this view. A reply that
+// is correct and lands on another screen is the defect the editor card was
+// built around, and it happened three times on this one, so the calls that
+// carry a reply here are enumerated like the ones that draw.
+const REPLIES = [
+  {
+    call: 'routinesActionFailed',
+    on: "case 'routine_action_error':",
+    surface: 'the refusal a pause or delete came back with',
+    pressedBy: 'a refused action is answered on this list and nowhere else',
+  },
+  {
+    call: 'routinesActionCleared',
+    on: "case 'routine_deleted':",
+    surface: 'a delete that went through, which retires the last refusal',
+    pressedBy: 'a change that goes through retires the last refusal',
+  },
+  {
+    call: 'routinesActionCleared',
+    on: "case 'routine_paused':",
+    surface: 'a pause that went through, which retires the last refusal',
+    pressedBy: 'a change that goes through retires the last refusal',
+  },
 ];
 
 // Every way the shell arrives at the routines section.
@@ -170,8 +201,8 @@ describe('every way this list gets drawn is enumerated', () => {
 
   test('every renderer names a test, and every named test exists', () => {
     const suite = fs.readFileSync(__filename, 'utf-8');
-    for (const entry of [...RENDERERS, ...ROUTES]) {
-      assert.ok(entry.pressedBy, `${entry.file || entry.what} needs a test`);
+    for (const entry of [...RENDERERS, ...ROUTES, ...REPLIES]) {
+      assert.ok(entry.pressedBy, `${entry.file || entry.what || entry.call} needs a test`);
       assert.ok(suite.includes(`test('${entry.pressedBy}'`),
         `this file names "${entry.pressedBy}" but no test here has that name`);
     }
@@ -328,6 +359,107 @@ describe('the ways this list gets drawn, pressed', () => {
       'the editor cannot reach this view, so a saved routine goes somewhere else');
     assert.strictEqual(w.RundockRoutineEditorModel.SAVE_DESTINATION, 'routines');
     dom.window.close();
+  });
+});
+
+describe('every reply that reaches this view is enumerated', () => {
+  // The same check as the one above, on the other kind of path: a call added
+  // to the dispatch fails here by name until it is listed with its test.
+  test('no reply reaches this view that this file does not name', () => {
+    const published = Object.keys(require(path.join(ROOT, 'public', 'views', 'routines.js')));
+    const found = [];
+    for (const rel of clientFiles()) {
+      if (rel === 'public/views/routines.js') continue;
+      const src = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
+      for (const call of published) {
+        if (call === 'renderRoutines') continue;  // enumerated above, as a render
+        if (new RegExp(`(?<![.\\w$])${call}\\(`).test(src)) found.push(call);
+      }
+    }
+    assert.deepStrictEqual([...new Set(found)].sort(), [...new Set(REPLIES.map(r => r.call))].sort(),
+      'the client calls into this view from somewhere this file does not list, or a listed '
+      + 'call no longer exists. Add the row and the test that drives it, or remove the row.');
+  });
+
+  test('every reply is on the case this file says it is on', () => {
+    for (const reply of REPLIES) {
+      const body = appPiece(new RegExp(`${reply.on}([\\s\\S]*?)\\bbreak;`), `the ${reply.on} case`);
+      assert.ok(new RegExp(`(?<![.\\w$])${reply.call}\\(`).test(body),
+        `${reply.on} no longer calls ${reply.call}`);
+    }
+  });
+
+  // THE DEFECT THIS EXISTS FOR, driven rather than described. A refused pause
+  // or delete used to travel the SAVE road, whose case posts to the
+  // conversation transcript and calls the editor's save-failure callback. The
+  // reader pressed a control on this list and the reply arrived on a screen
+  // they were not looking at, while the editor was poked outside any save.
+  test('a refused action is answered on this list and nowhere else', () => {
+    const { w, doc, dom } = shell();
+    w.renderRoutines();
+    w.said = [];
+    w.addSystemMsg = (t) => w.said.push(t);
+    w.editorTold = [];
+    w.routineEditorFailed = (m) => w.editorTold.push(m);
+    const body = appPiece(/case 'routine_action_error':([\s\S]*?)\bbreak;/, 'the refusal case');
+    w.d = {
+      type: 'routine_action_error', agentId: 'piper',
+      name: 'Compile the ops summary', message: 'Routine "Compile the ops summary" could not be paused.',
+    };
+    w.eval(`(function () {${body}\n})()`);
+
+    const problem = doc.querySelector('[data-routines-problem]');
+    assert.ok(problem, 'the list the control was pressed on says nothing');
+    assert.strictEqual(problem.textContent.trim(),
+      'Routine "Compile the ops summary" could not be paused.',
+      'the server knows which of several things went wrong, so its words are the ones shown');
+    assert.deepStrictEqual(w.said, [], 'the refusal went to the conversation transcript as well');
+    assert.deepStrictEqual(w.editorTold, [],
+      'a refused delete called the editor\'s save-failure callback outside any save');
+    dom.window.close();
+  });
+
+  test('a refusal with nothing in it still says something', () => {
+    const { w, doc, dom } = shell();
+    w.renderRoutines();
+    w.routinesActionFailed({ type: 'routine_action_error' });
+    const problem = doc.querySelector('[data-routines-problem]');
+    assert.ok(problem && problem.textContent.trim(), 'silence is the failure this path exists to prevent');
+    dom.window.close();
+  });
+
+  test('a change that goes through retires the last refusal', () => {
+    for (const type of ['routine_deleted', 'routine_paused']) {
+      const { w, doc, dom } = shell();
+      w.routinesActionFailed({ message: 'Routine could not be paused.' });
+      assert.ok(doc.querySelector('[data-routines-problem]'));
+      w.said = [];
+      w.addSystemMsg = (t) => w.said.push(t);
+      const body = appPiece(new RegExp(`case '${type}':([\\s\\S]*?)\\bbreak;`), `the ${type} case`);
+      w.d = { type, agentId: 'piper', name: 'Compile the ops summary' };
+      w.eval(`(function () {${body}\n})()`);
+      w.renderRoutines();
+      assert.strictEqual(doc.querySelector('[data-routines-problem]'), null,
+        `${type} left last time's refusal on the page`);
+      dom.window.close();
+    }
+  });
+
+  // And the refusal does not outlive the reader's next attempt, whichever
+  // control they reach for.
+  test('the next action the reader takes clears the last refusal', () => {
+    for (const press of [
+      (doc) => doc.querySelector('[data-routines-action="pause"]').click(),
+      (doc) => doc.querySelector('[data-routines-action="delete"]').click(),
+    ]) {
+      const { w, doc, dom } = shell();
+      w.renderRoutines();
+      w.routinesActionFailed({ message: 'Routine could not be paused.' });
+      press(doc);
+      w.renderRoutines();
+      assert.strictEqual(doc.querySelector('[data-routines-problem]'), null);
+      dom.window.close();
+    }
   });
 });
 

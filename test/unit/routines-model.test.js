@@ -325,6 +325,18 @@ describe('the rest of the row', () => {
     assert.ok(!/are you sure/i.test(confirm.body));
   });
 
+  // A refused pause or delete says what happened and, for somebody who has
+  // just pressed Delete, that nothing happened.
+  test('a refusal with no words of its own still says something useful', () => {
+    assert.strictEqual(m.actionProblem({ message: 'Routine "x" could not be paused.' }),
+      'Routine "x" could not be paused.', 'the server knows what went wrong, so its words win');
+    for (const empty of [{}, { message: '' }, { message: '   ' }, null]) {
+      assert.strictEqual(m.actionProblem(empty), m.ACTION_PROBLEM);
+    }
+    assert.match(m.ACTION_PROBLEM, /Nothing has been altered/,
+      'the half that matters to somebody who just pressed Delete');
+  });
+
   // AC-12. The empty state's Add belongs to no agent.
   test('the empty state offers an add that names no agent', () => {
     assert.strictEqual(m.EMPTY.lead, 'No routines yet.');
@@ -353,7 +365,7 @@ describe('the copy this card ships', () => {
 
   function copyShipped() {
     return everyString([
-      m.LEAD, m.EMPTY, m.OUTCOMES,
+      m.LEAD, m.EMPTY, m.OUTCOMES, m.ACTION_PROBLEM,
       ALL_FOUR.map(([, input]) => [status(input), next(input)]),
       m.deleteConfirmation({ agentName: 'Piper', name: 'Compile the ops summary', schedule: 'every day at 07:00' }),
     ]);

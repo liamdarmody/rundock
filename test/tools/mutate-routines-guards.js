@@ -73,6 +73,9 @@ const VIEW_E2E = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite
 // roster case and deleting that call left every test green while the rail
 // entry never appeared and the list never refreshed.
 const APP = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routines-view-doors.test.js' };
+// The view's half of the reply path, watched by the file that enumerates the
+// replies and drives the dispatch cases that carry them.
+const VIEW_REPLY = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/routines-view-doors.test.js' };
 const INDEX = { src: path.join(ROOT, 'public', 'index.html'), suite: 'test/unit/routines-view-doors.test.js' };
 // The handlers behind the row's two controls, and the data model they write
 // through.
@@ -158,6 +161,41 @@ const MUTATIONS = [
   [ROUTINES, 'a block is read back through the same pair the roster is built from',
     '    .map(raw => normalizeRoutine(raw))\n',
     ''],
+
+  // ===== A REFUSAL BELONGS TO THE SCREEN THAT ASKED =====
+  // Sending a refused pause or delete down the SAVE road calls the editor's
+  // save-failure callback outside any save and puts the only reply in the
+  // conversation view, while the list the control was pressed on says nothing.
+  [HANDLER, 'a refused action answers on the routines surface, not the save road',
+    "    type: 'routine_action_error',",
+    "    type: 'routine_error',"],
+  [HANDLER, 'a refusal names the routine it is about',
+    "    name: msg && msg.name ? msg.name : null,\n",
+    ''],
+  [APP, 'the refusal reaches the list that asked',
+    '      routinesActionFailed(d);\n',
+    ''],
+  [APP, 'a delete that goes through retires the last refusal',
+    "    case 'routine_deleted':\n      routinesActionCleared();",
+    "    case 'routine_deleted':"],
+  [APP, 'a pause that goes through retires the last refusal',
+    "    case 'routine_paused':\n      routinesActionCleared();",
+    "    case 'routine_paused':"],
+  [VIEW_REPLY, 'the refusal is drawn on the list',
+    '    h += `<p class="routines-problem" role="alert" data-routines-problem>${esc(pendingProblem)}</p>`;\n',
+    ''],
+  [VIEW_REPLY, 'a refusal with nothing in it still says something',
+    '  pendingProblem = routinesModel().actionProblem(reply);',
+    '  pendingProblem = reply && reply.message ? reply.message : null;'],
+  [VIEW_REPLY, 'the next action the reader takes clears the last refusal',
+    '  const entry = allRoutines()[index];\n  pendingProblem = null;',
+    '  const entry = allRoutines()[index];'],
+  [MODEL, 'a refusal says nothing was changed',
+    "  const ACTION_PROBLEM = 'That routine could not be changed. Nothing has been altered.';",
+    "  const ACTION_PROBLEM = 'That routine could not be changed.';"],
+  [MODEL, 'the server\'s own words are the ones shown',
+    "    const message = input && typeof input.message === 'string' ? input.message.trim() : '';\n    return message || ACTION_PROBLEM;",
+    '    return ACTION_PROBLEM;'],
 
   // ===== WHO DRAWS THIS LIST, AND HOW A READER ARRIVES AT IT =====
   [APP, 'the arriving roster redraws the list',
@@ -299,8 +337,8 @@ const MUTATIONS = [
     "    actions += r.paused\n      ? iconButton('resume', 'Resume', ICONS.play, `routinesSetPaused(${index}, false)`, false)\n      : iconButton('pause', 'Pause', ICONS.pause, `routinesSetPaused(${index}, true)`, false);",
     "    actions += iconButton('pause', 'Pause', ICONS.pause, `routinesSetPaused(${index}, true)`, false);"],
   [VIEW, 'delete asks before it acts',
-    'function routinesAskDelete(index) {\n  pendingDelete = index;',
-    'function routinesAskDelete(index) {\n  pendingDelete = null;'],
+    'function routinesAskDelete(index) {\n  pendingProblem = null;\n  pendingDelete = index;',
+    'function routinesAskDelete(index) {\n  pendingProblem = null;\n  pendingDelete = null;'],
   [VIEW, 'a delete names the routine that was confirmed',
     "      type: 'delete_routine', agentId: entry.agent.id, name: entry.routine.name, occurrence: entry.occurrence,",
     "      type: 'delete_routine', agentId: entry.agent.id, name: 'anything', occurrence: entry.occurrence,"],
@@ -367,7 +405,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [MODEL, VIEW, VIEW_E2E, RAIL, STYLES, SCHEDULER, END_TO_END, DISCOVERY, HANDLER, ROUTINES, APP, INDEX];
+  const targets = [MODEL, VIEW, VIEW_E2E, VIEW_REPLY, RAIL, STYLES, SCHEDULER, END_TO_END, DISCOVERY, HANDLER, ROUTINES, APP, INDEX];
   const originals = new Map();
   for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];

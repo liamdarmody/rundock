@@ -61,3 +61,8 @@
 .routines-empty-card { text-align: center; padding: 44px 24px; }
 .routines-empty-actions { justify-content: center; }
 .routines-empty-aside { text-align: center; margin-top: 16px; }
+
+/* A refused pause or delete, said on the list the control was pressed on.
+   Not the danger colour: nothing broke and nothing was changed, so this is
+   the interface answering a question rather than reporting a fault. */
+.routines-problem { font-size: var(--caption); color: var(--attention); line-height: 1.6; margin: -8px 0 16px; }

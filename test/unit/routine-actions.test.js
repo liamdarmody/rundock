@@ -195,7 +195,7 @@ describe('the handlers behind the row', () => {
       const before = f.read('piper');
       handleDeleteRoutine(f.ctx, f.ws, { type: 'delete_routine', agentId: 'piper', name: 'never-existed', occurrence: 0 });
       assert.strictEqual(f.read('piper'), before, 'the file was written to anyway');
-      assert.strictEqual(f.sent[0].type, 'routine_error');
+      assert.strictEqual(f.sent[0].type, 'routine_action_error');
       assert.ok(!f.calls.includes('routine_deleted'));
     } finally { f.restore(); }
   });
@@ -204,7 +204,7 @@ describe('the handlers behind the row', () => {
     const f = fixture();
     try {
       handleDeleteRoutine(f.ctx, f.ws, { type: 'delete_routine', agentId: 'nobody', name: 'morning-digest', occurrence: 0 });
-      assert.strictEqual(f.sent[0].type, 'routine_error');
+      assert.strictEqual(f.sent[0].type, 'routine_action_error');
       assert.match(f.sent[0].message, /nobody/);
     } finally { f.restore(); }
   });
@@ -213,7 +213,7 @@ describe('the handlers behind the row', () => {
     const f = fixture();
     try {
       handleDeleteRoutine(f.ctx, f.ws, { type: 'delete_routine', agentId: 'piper' });
-      assert.strictEqual(f.sent[0].type, 'routine_error');
+      assert.strictEqual(f.sent[0].type, 'routine_action_error');
     } finally { f.restore(); }
   });
 
@@ -222,7 +222,7 @@ describe('the handlers behind the row', () => {
     try {
       f.ctx.workspace.isInsideWorkspace = () => false;
       handleDeleteRoutine(f.ctx, f.ws, { type: 'delete_routine', agentId: 'piper', name: 'morning-digest', occurrence: 0 });
-      assert.strictEqual(f.sent[0].type, 'routine_error');
+      assert.strictEqual(f.sent[0].type, 'routine_action_error');
       assert.deepStrictEqual(namesIn(f.read('piper'), 'piper'), ['morning-digest', 'ops-summary']);
     } finally { f.restore(); }
   });
@@ -262,7 +262,7 @@ describe('the handlers behind the row', () => {
         type: 'set_routine_paused', agentId: 'piper', name: 'never-existed', occurrence: 0, paused: true,
       });
       assert.strictEqual(f.read('piper'), before);
-      assert.strictEqual(f.sent[0].type, 'routine_error');
+      assert.strictEqual(f.sent[0].type, 'routine_action_error');
     } finally { f.restore(); }
   });
 
@@ -272,7 +272,7 @@ describe('the handlers behind the row', () => {
       handleSetRoutinePaused(f.ctx, f.ws, {
         type: 'set_routine_paused', agentId: 'nobody', name: 'morning-digest', occurrence: 0, paused: true,
       });
-      assert.strictEqual(f.sent[0].type, 'routine_error');
+      assert.strictEqual(f.sent[0].type, 'routine_action_error');
     } finally { f.restore(); }
   });
 
@@ -283,7 +283,7 @@ describe('the handlers behind the row', () => {
       handleSetRoutinePaused(f.ctx, f.ws, {
         type: 'set_routine_paused', agentId: 'piper', name: 'morning-digest', occurrence: 0, paused: true,
       });
-      assert.strictEqual(f.sent[0].type, 'routine_error');
+      assert.strictEqual(f.sent[0].type, 'routine_action_error');
     } finally { f.restore(); }
   });
 
@@ -339,7 +339,7 @@ describe('the handlers behind the row', () => {
         type: 'delete_routine', agentId: 'twin', name: 'ops-summary', occurrence: 2,
       });
       assert.strictEqual(f.read('twin'), before);
-      assert.strictEqual(f.sent[0].type, 'routine_error');
+      assert.strictEqual(f.sent[0].type, 'routine_action_error');
     } finally { f.restore(); }
   });
 
@@ -352,7 +352,7 @@ describe('the handlers behind the row', () => {
         const before = f.read('twin');
         handler(f.ctx, f.ws, { type, agentId: 'twin', name: 'ops-summary' });
         assert.strictEqual(f.read('twin'), before, `${type} acted without being told which`);
-        assert.strictEqual(f.sent[0].type, 'routine_error');
+        assert.strictEqual(f.sent[0].type, 'routine_action_error');
       } finally { f.restore(); }
     }
   });
@@ -365,7 +365,7 @@ describe('the handlers behind the row', () => {
         handleDeleteRoutine(f.ctx, f.ws, {
           type: 'delete_routine', agentId: 'twin', name: 'ops-summary', occurrence,
         });
-        assert.strictEqual(f.sent[0].type, 'routine_error', `${occurrence} was accepted`);
+        assert.strictEqual(f.sent[0].type, 'routine_action_error', `${occurrence} was accepted`);
       }
     } finally { f.restore(); }
   });
@@ -405,7 +405,7 @@ describe('the handlers behind the row', () => {
         type: 'set_routine_paused', agentId: 'crlf', name: 'morning-digest', occurrence: 0, paused: true,
       });
       assert.strictEqual(f.read('crlf'), before, 'nothing was written, which is correct');
-      assert.strictEqual(f.sent[0].type, 'routine_error',
+      assert.strictEqual(f.sent[0].type, 'routine_action_error',
         'nothing was written and the user was told it was paused');
     } finally { f.restore(); }
   });
@@ -418,7 +418,7 @@ describe('the handlers behind the row', () => {
         type: 'delete_routine', agentId: 'crlf', name: 'morning-digest', occurrence: 0,
       });
       assert.strictEqual(f.read('crlf'), before);
-      assert.strictEqual(f.sent[0].type, 'routine_error');
+      assert.strictEqual(f.sent[0].type, 'routine_action_error');
     } finally { f.restore(); }
   });
 
@@ -430,6 +430,43 @@ describe('the handlers behind the row', () => {
       const agent = discoverAgents().find(a => a.id === 'crlf');
       assert.deepStrictEqual(agent.routines.map(r => r.name), ['morning-digest', 'ops-summary'],
         'if discovery stopped reading this file the case above would prove nothing');
+    } finally { f.restore(); }
+  });
+
+  // ===== A REFUSAL BELONGS TO THE SCREEN THAT ASKED =====
+  //
+  // These two roads used to refuse with the same message type the SAVE road
+  // uses. The client's case for that posts to the conversation transcript and
+  // calls the editor's save-failure callback, so refusing a delete invoked a
+  // save callback outside any save flow and the only thing the user saw
+  // appeared on a screen they were not looking at. The server was right and
+  // the client had nowhere to put the answer, which is the same shape as the
+  // defect the editor card fixed.
+  test('a refused action answers the surface it was taken on, not the save road', () => {
+    const f = fixture();
+    try {
+      handleDeleteRoutine(f.ctx, f.ws, {
+        type: 'delete_routine', agentId: 'piper', name: 'never-existed', occurrence: 0,
+      });
+      handleSetRoutinePaused(f.ctx, f.ws, {
+        type: 'set_routine_paused', agentId: 'piper', name: 'never-existed', occurrence: 0, paused: true,
+      });
+      assert.deepStrictEqual(f.sent.map(m => m.type), ['routine_action_error', 'routine_action_error']);
+      for (const message of f.sent) {
+        assert.strictEqual(message.agentId, 'piper', 'the refusal says which agent it belongs to');
+        assert.strictEqual(message.name, 'never-existed', 'and which routine');
+        assert.ok(message.message && message.message.trim(), 'a refusal with nothing in it is silence');
+      }
+    } finally { f.restore(); }
+  });
+
+  test('the save road keeps its own refusal, which the editor is listening for', () => {
+    const f = fixture();
+    try {
+      const { handleSaveRoutine } = require('../../lib/protocol/handlers/team.js');
+      handleSaveRoutine(f.ctx, f.ws, { type: 'save_routine', agentId: 'nobody', routine: { name: 'x' } });
+      assert.strictEqual(f.sent[0].type, 'routine_error',
+        'the editor waits on this one, and moving it would leave a refused save silent');
     } finally { f.restore(); }
   });
 

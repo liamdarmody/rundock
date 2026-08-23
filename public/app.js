@@ -446,10 +446,19 @@ function handle(d) {
       addSystemMsg(d.message || 'Routine could not be saved');
       routineEditorFailed(d.message);
       break;
+    case 'routine_action_error':
+      // The routines list asked, so the routines list is told. Deliberately
+      // NOT routine_error: that one belongs to the save flow, and sending a
+      // refused delete down it would call the editor's save-failure callback
+      // outside any save and put the only reply in the conversation view.
+      routinesActionFailed(d);
+      break;
     case 'routine_deleted':
+      routinesActionCleared();
       addSystemMsg('Routine "' + (d.name || '') + '" deleted');
       break;
     case 'routine_paused':
+      routinesActionCleared();
       // No message of its own. The roster broadcast that follows redraws the
       // row, which says Paused or names the next run, and that is the change
       // the reader asked for. A line in the conversation as well would be a

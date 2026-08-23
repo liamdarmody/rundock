@@ -208,6 +208,8 @@ const MANIFEST = {
   ],
   "routines.js": [
     "renderRoutines",
+    "routinesActionCleared",
+    "routinesActionFailed",
     "routinesAskDelete",
     "routinesCancelDelete",
     "routinesConfirmDelete",
