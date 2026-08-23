@@ -47,9 +47,9 @@ the migration directly, so no workspace, cache or agent roster is involved.
 
 > **AC-1:** A schedule stores its timezone as location words.
 
-`normalizeRoutine` reads a `timezone` key through `readTimezone`, and
-`appendRoutineBlock` writes one, refusing anything that is not an area and a
-place. `a timezone is read off the file as the location words it carries` and
+`normalizeRoutine` reads a `timezone` key through `readTimezone`, and the
+writer refuses anything that is not an area and a place. `a timezone is read
+off the file as the location words it carries` and
 `a value that is not location words is refused rather than stored`, which walks
 `+01:00`, `-05:00`, `GMT+1`, `UTC+2`, `BST`, `PST`, `UTC`, the empty string,
 `Europe`, `Europe//London` and `../../etc/passwd` through the write path and
@@ -69,6 +69,44 @@ rather than an offset is.
 identifier and it names no place, and it is what a machine in a container
 reports, so accepting it would mean accepting the one value that cannot be
 distinguished from a default. A caller that means it can say `Etc/UTC`.
+
+**THE CHECK SITS ON THE WRITER RATHER THAN ON THE PATH THAT CREATES A
+ROUTINE**, and that placement is the point. `appendRoutineBlock` makes a
+routine that is not in the file yet; `updateRoutineBlock` changes one that is,
+and it is the only path that writes a key at all, so creating goes through it
+too. A rule enforced on the creating road alone holds for exactly as long as
+nothing edits a routine, and an edit flow is the next thing to be built: by
+then the gap would read as a decision somebody made rather than a road nobody
+had built yet. `a value that is not location words is refused on the road every
+edit takes` drives the writer directly, including a write that carries a good
+prompt beside a bad zone and must land neither.
+
+Two things follow from putting it there, both deliberate.
+
+**Quotes come off before the question is asked.** Authors quote things and this
+module writes a value literally, so `"Europe/London"` is a zone written with
+quotation marks around it rather than a zone with quotation marks in it. The
+question the rule asks is what the value will read back as, which is what the
+reader will report, so a quoted zone is accepted on both roads.
+
+**Clearing stays available on the edit road and is refused on the create
+road**, which is the one place the two roads differ and it is a difference
+between the acts rather than an oversight. Empty is how this module clears a
+field. For this field it reads back as blank rather than absent, which is the
+honest record of an edit that removed a zone: the key was declared and then
+emptied. A routine being made has no way to have reached that state, so
+`appendRoutineBlock` refuses an empty zone, in either the bare or the quoted
+form. `a zone somebody recorded can still be cleared, which is what an edit
+that removes one did` holds the first half; the refusal list in the create test
+holds the second.
+
+**One thing the rule table is not.** It is a `Map` rather than an object
+because the key is caller-supplied and `\w+` admits every name on Object's
+prototype. Nothing on that prototype does damage when called as a rule, so that
+is hygiene rather than a guard, and it carries no mutation row for that reason:
+a mutation that swaps the container breaks `.get` and reddens the whole suite,
+which would prove that the code stopped running rather than that anything is
+guarded.
 
 > **AC-2:** The value round-trips byte-for-byte, on the same terms as every
 > other field the data model already carries.
@@ -259,15 +297,16 @@ every pull request. It exits non-zero if any mutation turns nothing red, so
 this is a check rather than a report and the table below is machine-verified
 rather than transcribed.
 
-The eight rows this card adds, run on the tree this file is committed with:
+The nine rows this card adds, run on the tree this file is committed with:
 
 | Guard broken | Tests red | Which |
 |---|---|---|
 | an absent timezone is left absent rather than filled in from the machine | 1 | `a routine created without a timezone is left without one rather than filled in from the machine` |
-| absent and blank are read as different answers | 1 | `a routine with no timezone is distinguishable from one whose timezone is blank` |
-| the timezone is a field the model reads, not a string carried through | 5 | `a timezone is read off the file as the location words it carries`<br>`a timezone survives a write-then-read cycle on a file carrying fields this card never touches`<br>`a routine with no timezone is distinguishable from one whose timezone is blank`<br>`a routine created without a timezone is left without one rather than filled in from the machine`<br>`the migration invents no timezone, least of all the machine's` |
-| a written timezone is checked before it becomes bytes in a file | 1 | `a value that is not location words is refused rather than stored` |
-| a timezone is location words rather than any text at all | 1 | `a value that is not location words is refused rather than stored` |
+| absent and blank are read as different answers | 2 | `a routine with no timezone is distinguishable from one whose timezone is blank`<br>`a zone somebody recorded can still be cleared, which is what an edit that removes one did` |
+| the timezone is a field the model reads, not a string carried through | 6 | `a timezone is read off the file as the location words it carries`<br>`a timezone survives a write-then-read cycle on a file carrying fields this card never touches`<br>`a routine with no timezone is distinguishable from one whose timezone is blank`<br>`a routine created without a timezone is left without one rather than filled in from the machine`<br>`a value that is not location words is refused on the road every edit takes`<br>`the migration invents no timezone, least of all the machine's` |
+| a written timezone is checked on the road every write takes | 2 | `a value that is not location words is refused rather than stored`<br>`a value that is not location words is refused on the road every edit takes` |
+| a routine is not created carrying an empty timezone | 1 | `a value that is not location words is refused rather than stored` |
+| a timezone is location words rather than any text at all | 2 | `a value that is not location words is refused rather than stored`<br>`a value that is not location words is refused on the road every edit takes` |
 | a created routine carries its timezone into the file | 2 | `the stored timezone is the one that was set, never the one this machine is in`<br>`a value that is not location words is refused rather than stored` |
 | the timezone stays out of the plan hash | 2 | `a timezone does not reach the plan hash, so changing one does not invalidate an approval`<br>`the hash a migration stamps is the same whether or not the routine names a zone` |
 | the migration does not invent a timezone for a routine that never recorded one | 1 | `running the migration twice over a routine that predates the field changes nothing and says nothing` |

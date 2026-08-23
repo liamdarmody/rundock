@@ -266,9 +266,14 @@ const MUTATIONS = [
   [ROUTINES_TZ, 'the timezone is a field the model reads, not a string carried through',
     '    timezone: readTimezone(raw),\n',
     ''],
-  [ROUTINES_TZ, 'a written timezone is checked before it becomes bytes in a file',
-    '  if (timezone !== null) assertTimezoneWords(timezone);\n',
+  // The check sits on the writer, which is the road an edit takes as well as
+  // the road a creation takes. Removing it has to be noticed from both.
+  [ROUTINES_TZ, 'a written timezone is checked on the road every write takes',
+    '    assertFieldValue(key, formatted);\n',
     ''],
+  [ROUTINES_TZ, 'a routine is not created carrying an empty timezone',
+    "  if (timezone !== null && unquote(timezone) === '') {",
+    '  if (false) {'],
   [ROUTINES_TZ, 'a timezone is location words rather than any text at all',
     'const TIMEZONE_WORDS = /^[A-Za-z][A-Za-z0-9_-]*(?:\\/[A-Za-z0-9_+-]+)+$/;',
     'const TIMEZONE_WORDS = /^[^\\n]*$/;'],

@@ -90,6 +90,12 @@ function readRoutine(content, name) {
     .find(r => r.name === name);
 }
 
+// What a quoted value reads back as, so the assertion says the zone rather
+// than repeating the writer's own unquoting.
+function unquoted(value) {
+  return value.replace(/^"(.*)"$/, '$1');
+}
+
 function splitFile(content) {
   const end = content.indexOf('\n---\n', 4);
   return { frontmatter: content.slice(4, end), body: content.slice(end + 5) };
@@ -216,7 +222,8 @@ describe('a schedule stores the timezone it was set in', () => {
       'BST',         // an abbreviation names several places at once
       'PST',
       'UTC',         // names no place, and is what a machine in a container says
-      '',            // an empty zone is not a zone to create
+      '',            // an empty zone is not a zone to CREATE: see the road below
+      '""',          // the same thing written the way an author writes things
       'Europe',      // an area with no place in it
       'Europe//London',
       '../../etc/passwd',
@@ -241,6 +248,47 @@ describe('a schedule stores the timezone it was set in', () => {
       });
       assert.strictEqual(readRoutine(created, 'evening-digest').timezone, value);
     }
+  });
+});
+
+describe('the road every edit takes', () => {
+  // THE CHECK BELONGS TO THE WRITER, NOT TO THE PATH THAT CREATES A ROUTINE.
+  //
+  // `appendRoutineBlock` makes a routine that is not in the file yet.
+  // `updateRoutineBlock` changes one that is, and it is the only path that
+  // writes a key at all: creating goes through it too. A rule enforced on the
+  // creating road alone would hold for exactly as long as nothing edits a
+  // routine, and an edit flow is the next thing to be built.
+  //
+  // So these tests go through the writer directly rather than through append.
+  test('a value that is not location words is refused on the road every edit takes', () => {
+    for (const value of ['+01:00', '-05:00', 'GMT+1', 'UTC+2', 'BST', 'PST', 'UTC', 'Europe', 'Europe//London']) {
+      assert.throws(
+        () => updateRoutineBlock(FIXTURE, 'morning-digest', { timezone: value }),
+        /timezone/i,
+        `"${value}" was written into a file by the general writer`);
+    }
+    // A refusal is a refusal on every key in the same write, so an edit that
+    // carries a good prompt and a bad zone writes neither.
+    assert.throws(
+      () => updateRoutineBlock(FIXTURE, 'morning-digest', { prompt: 'Run it differently', timezone: 'BST' }),
+      /timezone/i);
+    // Location words land, quoted or bare, on this road as on the other.
+    for (const value of ['Europe/London', `"${SET_ZONE}"`]) {
+      const updated = updateRoutineBlock(FIXTURE, 'morning-digest', { timezone: value });
+      assert.strictEqual(readRoutine(updated, 'morning-digest').timezone, unquoted(value));
+    }
+  });
+
+  test('a zone somebody recorded can still be cleared, which is what an edit that removes one did', () => {
+    // Empty is how this module clears a field, and removing a zone is an
+    // ordinary edit. It is not the same as never having recorded one: the key
+    // stays, declared and blank, which is the honest record of what happened.
+    const set = updateRoutineBlock(FIXTURE, 'morning-digest', { timezone: SET_ZONE });
+    const cleared = updateRoutineBlock(set, 'morning-digest', { timezone: '' });
+    assert.strictEqual(readRoutine(cleared, 'morning-digest').timezone, '');
+    assert.notStrictEqual(readRoutine(cleared, 'morning-digest').timezone, null);
+    assert.ok(cleared.includes('    timezone:'), 'the key was removed rather than emptied');
   });
 });
 
