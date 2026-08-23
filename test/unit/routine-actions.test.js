@@ -135,8 +135,8 @@ describe('removing a routine block', () => {
 });
 
 describe('the handlers behind the row', () => {
-  function fixture() {
-    const dir = makeWorkspace({ agents: { piper: TWO_ROUTINES, doc: ONE_ROUTINE, twin: NAMESAKES } });
+  function fixture(extra = {}) {
+    const dir = makeWorkspace({ agents: { piper: TWO_ROUTINES, doc: ONE_ROUTINE, twin: NAMESAKES, ...extra } });
     const original = config.getWorkspace();
     config.setWorkspace(dir);
     invalidateAgentCache();
@@ -380,6 +380,56 @@ describe('the handlers behind the row', () => {
       handleSetRoutinePaused(f.ctx, f.ws, msg);
       assert.strictEqual(f.sent[0].type, 'routine_paused');
       assert.strictEqual(f.sent[0].paused, true);
+    } finally { f.restore(); }
+  });
+
+  // ===== UNCHANGED BYTES ARE NOT AN ANSWER =====
+  //
+  // A file checked out with CRLF endings, which Windows with a default git
+  // config produces routinely. Discovery normalises line endings when it READS
+  // one, so the routine is on the roster and every lookup before the write
+  // succeeds. The writer reads the file raw, its frontmatter pattern never
+  // matches, and it returns the content untouched.
+  //
+  // Unchanged bytes therefore mean two different things: the field already
+  // held this value, and the file could not be addressed at all. Inferring
+  // success from them announces a pause that never happened. So the question
+  // asked is whether the write HAPPENED, not whether the bytes moved.
+  const CRLF = TWO_ROUTINES.replace(/\n/g, '\r\n');
+
+  test('a file the writer cannot address is refused rather than reported paused', () => {
+    const f = fixture({ crlf: CRLF });
+    try {
+      const before = f.read('crlf');
+      handleSetRoutinePaused(f.ctx, f.ws, {
+        type: 'set_routine_paused', agentId: 'crlf', name: 'morning-digest', occurrence: 0, paused: true,
+      });
+      assert.strictEqual(f.read('crlf'), before, 'nothing was written, which is correct');
+      assert.strictEqual(f.sent[0].type, 'routine_error',
+        'nothing was written and the user was told it was paused');
+    } finally { f.restore(); }
+  });
+
+  test('a file the writer cannot address is refused rather than reported deleted', () => {
+    const f = fixture({ crlf: CRLF });
+    try {
+      const before = f.read('crlf');
+      handleDeleteRoutine(f.ctx, f.ws, {
+        type: 'delete_routine', agentId: 'crlf', name: 'morning-digest', occurrence: 0,
+      });
+      assert.strictEqual(f.read('crlf'), before);
+      assert.strictEqual(f.sent[0].type, 'routine_error');
+    } finally { f.restore(); }
+  });
+
+  // The roster is what makes the case reachable: without it the file would
+  // never get as far as the writer.
+  test('the routine the writer cannot reach is on the roster all the same', () => {
+    const f = fixture({ crlf: CRLF });
+    try {
+      const agent = discoverAgents().find(a => a.id === 'crlf');
+      assert.deepStrictEqual(agent.routines.map(r => r.name), ['morning-digest', 'ops-summary'],
+        'if discovery stopped reading this file the case above would prove nothing');
     } finally { f.restore(); }
   });
 

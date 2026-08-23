@@ -76,12 +76,12 @@ function seedStores() {
 }
 
 /** The roster a connected client would be sent, from real files and real stores. */
-function roster(fn) {
+function roster(fn, seed = seedStores, names = NAMES) {
   const dir = makeWorkspace({
     agents: {
       piper: agentFile({
         name: 'piper', displayName: 'Piper', type: 'specialist', order: 1,
-        routines: NAMES.map(name => ({ name, schedule: SCHEDULE, prompt: 'p' })),
+        routines: names.map(name => ({ name, schedule: SCHEDULE, prompt: 'p' })),
       }),
     },
   });
@@ -96,7 +96,7 @@ function roster(fn) {
     // happen before the stores are seeded and the roster is taken.
     discoverAgents();
     invalidateAgentCache();
-    seedStores();
+    seed();
     return fn(discoverAgents());
   } finally {
     config.setWorkspace(originalWorkspace);
@@ -205,6 +205,46 @@ describe('the roster carries what the row renders', () => {
       assert.strictEqual(byName['Missed'].nextRun, iso(TODAYS_SLOT),
         'a missed row pairs with today, all the way from the slot store');
     });
+  });
+
+  // THE MOMENT A CLOSED MACHINE IS REOPENED, which is the situation the missed
+  // row exists to describe and the one a stale anchor gets wrong.
+  //
+  // The stores here hold exactly what four days of being shut leaves behind:
+  // an anchor from the last tick that was ever awake, the misses that tick had
+  // recorded, and a run older than both. The client asks for the roster the
+  // moment it connects, which is BEFORE the first tick sixty seconds later,
+  // and the tick does not rebroadcast. So this is the roster a real user sees
+  // first, and the row it draws must not name a next run that has already
+  // gone by.
+  function seedReopened() {
+    for (const key of Object.keys(sched.routineState)) delete sched.routineState[key];
+    for (const key of Object.keys(sched.routineSlots.routines)) delete sched.routineSlots.routines[key];
+    sched.routineState['piper:Missed'] = {
+      lastRun: iso(new Date(2026, 7, 15, 7, 0, 20)), status: 'completed', duration: 20,
+    };
+    sched.routineSlots.routines['piper:Missed'] = {
+      due: iso(new Date(2026, 7, 16, 7, 0)),
+      schedule: 'daily:7:0',
+      missed: [{ slot: iso(new Date(2026, 7, 19, 7, 0)) }],
+    };
+  }
+
+  test('a machine reopened after days closed shows today, not a weekday that has gone', () => {
+    roster((agents) => {
+      const { doc, dom } = render(agents);
+      const row = doc.querySelector('.routine-row');
+      assert.match(text(row.querySelector('.run-status')), /^Missed: Rundock was closed/);
+      assert.strictEqual(text(row.querySelector('.next-run')), 'Next run: today, 7:00am, London time');
+      // The named failure, said as itself: no day word on this row is one
+      // that has already been and gone.
+      const line = text(row.querySelector('.rr-run-line'));
+      for (const past of ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']) {
+        assert.ok(!line.includes(`Next run: ${past}`), `the next run is ${past}, which has gone`);
+      }
+      assert.ok(!/Next run: yesterday/.test(line));
+      dom.window.close();
+    }, seedReopened, ['Missed']);
   });
 
   // AC-8 at the far end of the same walk: taking the roster and rendering the

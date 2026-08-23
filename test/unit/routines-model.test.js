@@ -383,6 +383,7 @@ describe('the copy this card ships', () => {
       'public/styles/views/routines.css',
       'test/unit/routines-model.test.js', 'test/unit/routines-view.test.js',
       'test/unit/routines-next-run.test.js', 'test/unit/routines-end-to-end.test.js',
+      'test/unit/routines-view-doors.test.js',
       'test/tools/mutate-routines-guards.js',
     ]) {
       const text = fs.readFileSync(path.join(root, rel), 'utf-8');

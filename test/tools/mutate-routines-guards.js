@@ -68,6 +68,12 @@ const DISCOVERY = { src: path.join(ROOT, 'lib', 'agents', 'discovery.js'), suite
 // that is a claim about what a real routine's real state renders as.
 const END_TO_END = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/routines-end-to-end.test.js' };
 const VIEW_E2E = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/routines-end-to-end.test.js' };
+// The shell: who draws this list and how a reader arrives at it. Watched by
+// the enumeration, because renderRoutines was once reached only through the
+// roster case and deleting that call left every test green while the rail
+// entry never appeared and the list never refreshed.
+const APP = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routines-view-doors.test.js' };
+const INDEX = { src: path.join(ROOT, 'public', 'index.html'), suite: 'test/unit/routines-view-doors.test.js' };
 // The handlers behind the row's two controls, and the data model they write
 // through.
 const HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/unit/routine-actions.test.js' };
@@ -85,9 +91,6 @@ const MUTATIONS = [
   [SCHEDULER, 'a period the last run already served is stepped over',
     '  for (let step = 0; served && served >= slot && step < MAX_SLOTS_PER_WAKE; step++) {\n    slot = stepSlots(parsed, slot, 1);\n  }',
     ''],
-  [SCHEDULER, 'the anchor is the slot store\'s own due instant',
-    '  let slot = new Date(entry.due);\n  if (isNaN(slot.getTime())) return null;',
-    '  let slot = stepSlots(parsed, new Date(entry.due), 1);\n  if (isNaN(slot.getTime())) return null;'],
   [SCHEDULER, 'the walk is bounded rather than counting every day since the anchor',
     'step < MAX_SLOTS_PER_WAKE; step++',
     'step < 100000; step++'],
@@ -128,6 +131,54 @@ const MUTATIONS = [
     '    lastStart: r.lastStart,',
     '    lastStart: r.state ? r.state.lastRun : null,'],
 
+  // ===== THE ANCHOR MEANS NOW, NOT WHENEVER THIS MACHINE WAS LAST AWAKE =====
+  // The third one this file exists for. The slot store's `due` is refreshed by
+  // the tick and by nothing else, so a machine reopened after days closed
+  // answers the client's first roster request with an anchor days old, and the
+  // missed row renders a next run that has already gone by. That is the value
+  // the criteria call constrained rather than chosen, failing in exactly the
+  // situation the row exists for.
+  [END_TO_END, 'the anchor is the period now falls in, not the last one a tick recorded',
+    '  let slot = slotFor(parsed, deps.now());',
+    '  const anchored = routineSlots.routines[key];\n  if (!anchored) return null;\n  let slot = new Date(anchored.due);'],
+  [SCHEDULER, 'a row can name a next run before any tick has seen the routine',
+    '  let slot = slotFor(parsed, deps.now());',
+    '  const anchored = routineSlots.routines[key];\n  if (!anchored) return null;\n  let slot = new Date(anchored.due);'],
+
+  // ===== UNCHANGED BYTES ARE NOT AN ANSWER =====
+  // A file this module cannot address returns unchanged content, exactly as a
+  // no-op edit does. Reading that as success announces a routine stopped that
+  // is still scheduled to run.
+  [HANDLER, 'a pause asks whether the write happened, not whether the bytes moved',
+    '  if (!written || written.paused !== paused) {',
+    '  if (next === before && false) {'],
+  [HANDLER, 'a delete counts the blocks rather than looking one up by index',
+    '  if (readRoutineBlocks(next, found.name).length !== readRoutineBlocks(before, found.name).length - 1) {',
+    '  if (readRoutineBlock(next, found.name, found.occurrence)) {'],
+  [ROUTINES, 'a block is read back through the same pair the roster is built from',
+    '    .map(raw => normalizeRoutine(raw))\n',
+    ''],
+
+  // ===== WHO DRAWS THIS LIST, AND HOW A READER ARRIVES AT IT =====
+  [APP, 'the arriving roster redraws the list',
+    'renderRoutinesSidebar(); renderRoutines(); renderConvoList();',
+    'renderRoutinesSidebar(); renderConvoList();'],
+  [APP, 'the rail entry draws something into the view it shows',
+    "  else if(nav==='routines') { showView('routines'); renderRoutines(); }",
+    "  else if(nav==='routines') { showView('routines'); }"],
+  [APP, 'the routines section reveals a sidebar the reader can see',
+    "const SIDEBAR_FOR = { routines: 'team' };",
+    'const SIDEBAR_FOR = {};'],
+  [APP, 'the routines panel is one showView knows how to reveal',
+    "'settings','routine-editor','routines']",
+    "'settings','routine-editor']"],
+  [INDEX, 'the rail carries a way to this section',
+    '<button class="nav-item" data-nav="routines" onclick="switchNav(\'routines\')" data-tooltip="Routines" style="display:none">',
+    '<button class="nav-item" data-nav="not-routines" onclick="switchNav(\'not-routines\')" data-tooltip="Routines" style="display:none">'],
+  [INDEX, 'the page carries the element this list renders into',
+    '<div class="routines-content" id="routines-content"></div>',
+    '<div class="routines-content"></div>'],
+
   // ===== WHICH ROUTINE OF ITS NAME =====
   [VIEW, 'a row says which routine of its name it is',
     '      out.push({ routine, agent, occurrence });',
@@ -141,9 +192,6 @@ const MUTATIONS = [
   [HANDLER, 'which routine of a name is required rather than assumed to be the first',
     '  if (!Number.isInteger(occurrence) || occurrence < 0) {\n    fail(\'Which routine of that name is required.\');\n    return null;\n  }',
     '  if (false) { return null; }'],
-  [HANDLER, 'the routine is found on the roster before anything is read or written',
-    '  const namesakes = (target.routines || []).filter(r => r.name === name);\n  if (!namesakes[occurrence]) { fail(`Routine "${name}" is not in that agent.`); return null; }\n',
-    ''],
   [HANDLER, 'the delete tells the writer which block',
     '  const next = removeRoutineBlock(before, found.name, found.occurrence);',
     '  const next = removeRoutineBlock(before, found.name);'],
@@ -319,7 +367,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [MODEL, VIEW, VIEW_E2E, RAIL, STYLES, SCHEDULER, END_TO_END, DISCOVERY, HANDLER, ROUTINES];
+  const targets = [MODEL, VIEW, VIEW_E2E, RAIL, STYLES, SCHEDULER, END_TO_END, DISCOVERY, HANDLER, ROUTINES, APP, INDEX];
   const originals = new Map();
   for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];

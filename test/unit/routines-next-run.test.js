@@ -184,18 +184,66 @@ describe('one path produces every row\'s next-run time', () => {
     withWorkspace((sched) => {
       sched.wireSchedulerDeps({ now: () => NOW });
       const thisMonday = new Date(2026, 7, 24, 8, 0);   // the coming Monday
-      sched.routineSlots.routines[KEY] = { due: thisMonday.toISOString(), schedule: 'weekly:1:8:0', missed: [] };
-      sched.routineState[KEY] = { lastRun: thisMonday.toISOString(), status: 'completed', duration: 3 };
+      sched.routineState[KEY] = { lastRun: thisMonday.toISOString(), status: 'completed', duration: 0 };
       assert.deepStrictEqual(sched.nextRunFor(KEY, 'every monday at 08:00'), new Date(2026, 7, 31, 8, 0));
     });
   });
 
-  test('a routine the slot records have never seen names no next run', () => {
+  // THE SCENARIO THIS ROW EXISTS FOR, and the one a stale anchor breaks.
+  //
+  // The slot store's `due` is refreshed by the tick and by nothing else. A
+  // machine closed for days reopens with an anchor days old, the client asks
+  // for the roster the moment it connects, and the first tick is up to sixty
+  // seconds after that and does not rebroadcast. So the anchor a row is built
+  // from means "whenever this machine was last awake", and anchoring on it
+  // renders a next run in the PAST: a weekday that has already gone.
+  //
+  // A missed row pairs with a next run TODAY. That value is constrained rather
+  // than chosen, and this is precisely the case it is constrained in.
+  test('a machine reopened after days closed does not show a next run in the past', () => {
     withWorkspace((sched) => {
       sched.wireSchedulerDeps({ now: () => NOW });
-      assert.strictEqual(sched.nextRunFor(KEY, SCHEDULE), null);
+      // Sunday the sixteenth: the last time a tick was awake to record one.
+      anchor(sched, new Date(2026, 7, 16, 7, 0));
+      sched.routineSlots.routines[KEY].missed = [{ slot: new Date(2026, 7, 16, 7, 0).toISOString() }];
+      sched.routineState[KEY] = {
+        lastRun: new Date(2026, 7, 15, 7, 0, 20).toISOString(), status: 'completed', duration: 20,
+      };
+      const next = sched.nextRunFor(KEY, SCHEDULE);
+      assert.ok(next >= NOW || next.toDateString() === NOW.toDateString(),
+        `a next run of ${next} is already in the past`);
+      assert.deepStrictEqual(next, TODAYS_SLOT);
+      assert.strictEqual(sched.routineDisplayFacts(KEY, SCHEDULE).nextRun, TODAYS_SLOT.toISOString());
+    });
+  });
+
+  // The same property said as a rule rather than as one scenario: whatever the
+  // slot store was left holding, the row never names an instant that has
+  // already gone by on an earlier day.
+  test('no anchor the slot store can hold produces a next run on an earlier day', () => {
+    withWorkspace((sched) => {
+      sched.wireSchedulerDeps({ now: () => NOW });
+      for (const stale of [
+        new Date(2020, 0, 1, 7, 0), new Date(2026, 7, 16, 7, 0),
+        new Date(2026, 7, 19, 7, 0), TODAYS_SLOT, new Date(2026, 8, 1, 7, 0),
+      ]) {
+        anchor(sched, stale);
+        const next = sched.nextRunFor(KEY, SCHEDULE);
+        assert.ok(next.toDateString() === NOW.toDateString() || next > NOW,
+          `an anchor of ${stale.toISOString()} produced ${next.toISOString()}`);
+      }
+    });
+  });
+
+  test('a routine the slot records have never seen still knows when it runs next', () => {
+    withWorkspace((sched) => {
+      sched.wireSchedulerDeps({ now: () => NOW });
+      // A routine made a moment ago, before the first tick has ever seen it.
+      // Its schedule and the clock are enough, which is the whole reason the
+      // anchor is not read out of a store that a tick has to fill in first.
+      assert.deepStrictEqual(sched.nextRunFor(KEY, SCHEDULE), TODAYS_SLOT);
       assert.deepStrictEqual(sched.routineDisplayFacts(KEY, SCHEDULE),
-        { nextRun: null, lastStart: null, lastSlot: null, missedSlot: null });
+        { nextRun: TODAYS_SLOT.toISOString(), lastStart: null, lastSlot: null, missedSlot: null });
     });
   });
 
@@ -209,23 +257,28 @@ describe('one path produces every row\'s next-run time', () => {
     });
   });
 
-  test('an anchor that is not a time names no next run', () => {
+  test('a slot record with nothing readable in it does not stop the row', () => {
     withWorkspace((sched) => {
       sched.wireSchedulerDeps({ now: () => NOW });
+      // A hand edit or a truncated write. The anchor never came from here, so
+      // an unreadable record costs the row its missed slot and nothing else.
       sched.routineSlots.routines[KEY] = { due: 'not a time', schedule: 'daily:7:0', missed: [] };
-      assert.strictEqual(sched.nextRunFor(KEY, SCHEDULE), null);
+      assert.deepStrictEqual(sched.nextRunFor(KEY, SCHEDULE), TODAYS_SLOT);
     });
   });
 
-  test('an anchor left absurdly far behind stops walking rather than counting the years', () => {
+  test('a last run absurdly far in the future stops walking rather than counting the years', () => {
     withWorkspace((sched) => {
       sched.wireSchedulerDeps({ now: () => NOW });
-      // What a restored backup or a clock set wrong produces. The walk is
-      // bounded so a display value cannot cost thousands of steps.
-      anchor(sched, new Date(2020, 0, 1, 7, 0));
-      sched.routineState[KEY] = { lastRun: NOW.toISOString(), status: 'completed', duration: 3 };
+      // What a clock set wrong or a restored backup produces. The walk steps
+      // over periods a run has already served, so a run stamped years ahead
+      // would step for years; it is bounded instead.
+      anchor(sched, TODAYS_SLOT);
+      sched.routineState[KEY] = {
+        lastRun: new Date(2030, 0, 1, 7, 0).toISOString(), status: 'completed', duration: 3,
+      };
       const next = sched.nextRunFor(KEY, SCHEDULE);
-      assert.ok(next < NOW, 'the bound was reached and the walk stopped rather than running to today');
+      assert.ok(next < new Date(2030, 0, 1), 'the bound was reached and the walk stopped');
       assert.strictEqual(next.getHours(), 7, 'and it stopped on a slot, not part way through one');
     });
   });
