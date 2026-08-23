@@ -14,6 +14,10 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 - **A tag or a highlight written inside a code block stays inside it:** a `#tag` or `==highlight==` typed into fenced code was turned into page markup and rendered as visible angle brackets in the middle of your code, and enough of them that the block was sometimes labelled as the wrong language. Both are left alone inside code now.
 - **A tag at the start of a line no longer joins it to the line above:** writing a tag as the first thing on a new line quietly swallowed the line break, running the two lines together.
 
+### Changed
+
+- **Rundock now ships a current browser engine:** the engine that draws every page in the app was several patch releases behind, and almost all of what it had missed were security backports to the part that reads and runs page content. That is the same part the render hardening above is about, and this release is the one that has agents producing that content on a schedule with nobody watching, so being behind on it mattered more here than it usually would. The engine is now the newest release of its line, and it is pinned exactly rather than described by a range, so which one ships is stated rather than inferred. Two supporting libraries moved with it: the one that reads the update feed, which could be made to spin on a malformed feed, and the one the release process uses to talk to the download host, which under some redirects could pass a credential on to a destination it should not have. Neither was reachable in normal use. On Windows, the app could also fail to close after you quit it if a system "Open with" dialog was still waiting; that is fixed by the same change.
+
 ## 0.11.8: Editor Hardening (2026-08-20)
 
 ### Fixed
