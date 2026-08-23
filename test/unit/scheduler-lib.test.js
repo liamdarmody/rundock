@@ -21,6 +21,7 @@ const { createCodexAppServer } = require('../../codex-appserver.js');
 const { discoverAgents, invalidateAgentCache } = require('../../lib/agents/discovery.js');
 const { agentFile } = require('../helpers/workspace.js');
 const asfx = require('../fixtures/codex-appserver-protocol.js');
+const fx = require('../fixtures/session-transcript.js');
 const PROMPT_KEY = require.resolve('../../lib/agents/prompt.js');
 const STUB_CODEX = path.join(__dirname, '..', 'helpers', 'stub-codex', 'codex');
 const WORKSPACE_HANDLERS_KEY = require.resolve('../../lib/protocol/handlers/workspace.js');
@@ -733,6 +734,336 @@ test('a run left "running" by a dead server loads back as "interrupted", still s
     assert.strictEqual(sched.routineState['cos:briefing'].lastRun, '2026-08-12T09:00:00Z',
       'lastRun survives so the window suppression still holds');
     assert.strictEqual(sched.routineState['bad:entry'], undefined, 'entries without a lastRun string are dropped');
+  });
+});
+
+// ===== A RUN CUT OFF BY A RESTART =====
+// The routine state and the run's own record are two stores answering one
+// question, and only the first of them was ever corrected on startup. A run
+// the process died in the middle of loaded back as 'interrupted' in the state
+// and stayed 'running' in its record, permanently, in the file the run-detail
+// screen renders. The reason written there, 'running', is untrue: a run that
+// will never run again is not running.
+//
+// WHAT THESE TESTS ARE CAREFUL OF, and it is the trap the observation card's
+// own suite was built around: an unknown file list and an empty one look
+// identical to a careless assertion. Every case below asserts the status and
+// the reason that separate them, and the case with a transcript asserts a
+// NON-EMPTY list whose contents could only have come from the file it wrote.
+//
+// $HOME IS CONSTRUCTED RATHER THAN INHERITED, in every one of them. The
+// transcript root is $HOME/.claude/projects, so a test running under the
+// developer's own home reads whatever transcripts happen to be on that machine
+// and answers differently on the next one. A run with no transcript is the
+// case two of these tests are about, and inheriting a home is how that case
+// stops being reachable.
+
+function enterTempHome() {
+  const real = Object.prototype.hasOwnProperty.call(process.env, 'HOME') ? process.env.HOME : null;
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduler-restart-home-'));
+  process.env.HOME = home;
+  return {
+    home,
+    leave() {
+      // Restored by ABSENCE where it was absent: assigning back an undefined
+      // leaves the string "undefined" behind, which is a home directory that
+      // exists nowhere and would quietly change what every later test reads.
+      if (real === null) delete process.env.HOME;
+      else process.env.HOME = real;
+      fs.rmSync(home, { recursive: true, force: true });
+    },
+  };
+}
+
+function withTempHome(fn) {
+  const t = enterTempHome();
+  try { return fn(t.home); } finally { t.leave(); }
+}
+
+async function withTempHomeAsync(fn) {
+  const t = enterTempHome();
+  try { return await fn(t.home); } finally { t.leave(); }
+}
+
+// A transcript filed the way the agent tool files one: named for the session,
+// under a directory named for the working directory the run happened in.
+function writeTranscript(home, sessionId, lines) {
+  const dir = path.join(home, '.claude', 'projects', '-w-restart');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${sessionId}.jsonl`), lines.join(''));
+}
+
+// Read straight off the disk rather than through readRunRecords, so what is
+// asserted is the file a restarted process would meet rather than a reading
+// performed by the module under test.
+function runRecords(ws) {
+  const dir = path.join(ws, '.rundock', 'runs');
+  let names;
+  try { names = fs.readdirSync(dir); } catch (e) { return []; }
+  return names.map(n => JSON.parse(fs.readFileSync(path.join(dir, n), 'utf-8')));
+}
+
+// The real workspace open path, driven for a scheduler that has only just been
+// created. Boot calls loadRoutineState directly and the switch calls it through
+// this handler, so driving the handler exercises the larger of the two, and
+// neither one is the closer this card must not be proven by.
+function openWorkspace(sched, dir, config) {
+  const noop = () => {};
+  const sent = [];
+  const ws = { send: (raw) => sent.push(JSON.parse(raw)) };
+  const ctx = {
+    signals: { phaseTimer: () => ({ mark: noop, summary: () => '' }), reportStartup: noop },
+    runtime: { killAllChildren: noop, cleanOrphanedProcesses: noop },
+    workspace: {
+      setWorkspaceRoot: (d) => config.setWorkspace(d),
+      armAgentsDirWatcher: noop, armFileTreeWatcher: noop, healWorkspaceIfMoved: noop,
+      saveRecentWorkspace: noop, fileTreeForSend: () => [],
+    },
+    agents: { armAgentsDirWatcher: noop, invalidateAgentCache: noop },
+    store: { clearSearchFailure: noop, ensureSearchEngine: noop },
+  };
+  freshWorkspaceHandlers(sched).handleSetWorkspace(ctx, ws, { type: 'set_workspace', path: dir });
+  assert.ok(sent.some(m => m.type === 'workspace_set'),
+    'the open path ran to the end rather than into the rollback');
+}
+
+/**
+ * Start a run, lose the process it was running in, and open the workspace
+ * again in a scheduler that never saw it.
+ *
+ * A SECOND PRIVATE MODULE INSTANCE IS WHAT A RESTART IS, from this file's
+ * point of view. Which runs this process opened is module state, so a new
+ * instance starts without it exactly as a new process does. Ending the child
+ * would defeat the whole test: what is being reproduced is a run with no
+ * ending, because the process that would have written one is gone.
+ *
+ * `beforeRestart` is handed the open record, so a test can put a transcript on
+ * disk under the session id the run really allocated rather than one it made
+ * up. The two are separate uuids and nothing may assume they match.
+ */
+async function restartAcrossALiveRun(dir, config, beforeRestart) {
+  const child = new EventEmitter();
+  await withFakeSpawn(() => child, async (dying) => {
+    assert.strictEqual(dying.executeRoutine(AGENT, ROUTINE, KEY), true, 'the run started');
+  });
+  const open = runRecords(dir);
+  assert.strictEqual(open.length, 1, 'the dead process left one record behind');
+  assert.strictEqual(open[0].status, 'running', 'open, because only an ending closes one');
+  if (beforeRestart) beforeRestart(open[0]);
+
+  const restarted = freshScheduler();
+  restarted.wireSchedulerDeps({ getWssClients: () => [] });
+  openWorkspace(restarted, dir, config);
+
+  const after = runRecords(dir);
+  assert.strictEqual(after.length, 1, 'still one record, not a second one beside it');
+  assert.strictEqual(after[0].id, open[0].id, 'and it is the one the run itself opened');
+  return { before: open[0], record: after[0], sched: restarted };
+}
+
+// AC-1, AC-5 and AC-6. The restart is real: the run is live when the first
+// scheduler is abandoned, and the second one is driven through the workspace
+// open path rather than by calling the closer.
+test('a run cut off by a restart stops claiming it is running, and agrees with the routine state', async () => {
+  await withTempWorkspaceAsync(async (dir, config) => {
+    await withTempHomeAsync(async () => {
+      const { record, sched } = await restartAcrossALiveRun(dir, config);
+      assert.notStrictEqual(record.status, 'running',
+        'a run that will never run again is not running, and its record no longer says it is');
+      assert.strictEqual(record.status, 'interrupted',
+        'it carries the routine state own word for a run the process died inside');
+      assert.strictEqual(sched.routineState[KEY].status, 'interrupted',
+        'which is what the routine state says about that same run');
+      assert.strictEqual(record.status, sched.routineState[KEY].status,
+        'so the two stores agree about whether that run is still going');
+    });
+  });
+});
+
+// AC-3. 'running' was the untrue reason. What replaces it names which way the
+// answer was lost rather than going quiet about it.
+test('a run cut off by a restart names the reason its changes cannot be established', async () => {
+  await withTempWorkspaceAsync(async (dir, config) => {
+    await withTempHomeAsync(async () => {
+      const { record } = await restartAcrossALiveRun(dir, config);
+      assert.strictEqual(record.filesStatus, 'unknown',
+        'nobody can say what a run interrupted with no transcript changed');
+      assert.strictEqual(record.filesReason, 'no-transcript',
+        'and the record names which way it could not be told, rather than keeping the untrue "running"');
+    });
+  });
+});
+
+// AC-4. The distinction the observation card went to real trouble to keep. A
+// default of [] anywhere on this path erases it permanently and silently: the
+// record would read as a run that changed nothing.
+test('a restart never turns an unknown file list into an empty one', async () => {
+  await withTempWorkspaceAsync(async (dir, config) => {
+    await withTempHomeAsync(async () => {
+      const { record } = await restartAcrossALiveRun(dir, config);
+      // THE SETUP, ASSERTED BEFORE ANYTHING IS CONCLUDED FROM IT. An open
+      // record already carries a null list, so a load that closed nothing
+      // satisfies every assertion below without the closing existing at all.
+      assert.strictEqual(record.status, 'interrupted',
+        'the record really was closed by the restart, so the list below is one the closing wrote');
+      assert.strictEqual(record.files, null, 'the list is absent');
+      assert.ok(!Array.isArray(record.files),
+        'and absent rather than empty, because an empty array is an answer and this is the lack of one');
+      assert.strictEqual(record.filesStatus, 'unknown', 'with the status that says which of the two this is');
+    });
+  });
+});
+
+// AC-2. The transcript surviving a restart mid-run was one of the three named
+// reasons the transcript was chosen over the live stream. This is the card
+// collecting that.
+test('where the transcript survives the restart, the record reports what the run changed', async () => {
+  await withTempWorkspaceAsync(async (dir, config) => {
+    await withTempHomeAsync(async (home) => {
+      const { record } = await restartAcrossALiveRun(dir, config, (open) => {
+        assert.ok(open.sessionId, 'the run opened a session of its own, which is what ties it to a transcript');
+        writeTranscript(home, open.sessionId, [
+          fx.prompt(open.sessionId, 'go'),
+          fx.completed(open.sessionId, { file: '/w/written-before-the-restart.md', outcome: 'create' }),
+        ]);
+      });
+      assert.strictEqual(record.filesStatus, 'known', 'the transcript on disk answered the question');
+      assert.strictEqual(record.filesReason, null, 'with nothing standing in the way');
+      assert.deepStrictEqual((record.files || []).map(f => f.path), ['/w/written-before-the-restart.md'],
+        'and it names the file the transcript recorded, which is the only place that path could have come from');
+    });
+  });
+});
+
+// AC-8. The startup path is also the workspace-switch path, and a switch
+// happens while runs of this process are still going. Their records are the
+// one kind that is open for a true reason.
+test('a run that is still going in this process keeps reporting running', async () => {
+  await withTempWorkspaceAsync(async (dir) => {
+    await withTempHomeAsync(async () => {
+      const child = new EventEmitter();
+      await withFakeSpawn(() => child, async (sched) => {
+        assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true, 'the run started');
+        assert.strictEqual(runRecords(dir)[0].status, 'running', 'and its record says so');
+
+        sched.loadRoutineState();
+
+        const [record] = runRecords(dir);
+        assert.strictEqual(record.status, 'running',
+          'a run whose child is alive in this very process is not closed by a reload');
+        assert.strictEqual(record.endedAt, null, 'nothing was written as its ending');
+        assert.strictEqual(record.filesReason, 'running',
+          'and its list is unsettled for the true reason, because it really has not finished');
+
+        // WHERE THE TWO STORES DELIBERATELY DISAGREE, asserted here rather
+        // than smoothed over, because a divergence nothing states is one the
+        // next reader meets as a bug.
+        //
+        // The criterion behind the test above asks the record and the routine
+        // state to agree about whether a run is still going. ON THIS PATH THEY
+        // DO NOT, and the record is the one telling the truth.
+        //
+        // Why. loadRoutineState rewrites a routine whose PERSISTED status is
+        // 'running' to 'interrupted', because a file on disk cannot tell a
+        // dead process's leftovers from a run that is still going. That is
+        // pre-existing behaviour, is what the workspace-switch test above
+        // relies on to prove the resets ran, and is untouched by this card.
+        // The RECORD can tell the two apart, because this process knows which
+        // runs it opened, so it stays 'running'.
+        //
+        // WHICH REQUIREMENT WINS, AND WHY. Keeping a live run's record open
+        // wins. Closing it to make the two stores agree would write that a run
+        // still going was cut short: a false statement, produced to satisfy a
+        // criterion, about the exact case the criterion for this test exists
+        // to protect. Agreement is worth having where both stores can be
+        // right, and it is not worth buying with a lie. Making the ROUTINE
+        // STATE respect a live run instead would fix the disagreement from the
+        // other side, and that is a change to startup behaviour older than
+        // this card and is not made here.
+        //
+        // If that pre-existing behaviour is ever fixed, this assertion is
+        // where it lands: it fails, and this comment is the account of what
+        // changed and why the divergence used to be tolerated.
+        assert.strictEqual(sched.routineState[KEY].status, 'interrupted',
+          'the routine state was rewritten by the load, which is behaviour older than this card');
+        assert.notStrictEqual(record.status, sched.routineState[KEY].status,
+          'so the two stores disagree here, knowingly, and the record is the one that is right');
+
+        child.emit('close', 0);
+      });
+    });
+  });
+});
+
+// A record that is not open is not this card business. Rewriting one would
+// replace a settled outcome, and the file list that came with it, on every
+// startup for the life of the workspace.
+test('a restart leaves a run that already reached an outcome exactly as it was', async () => {
+  await withTempWorkspaceAsync(async (dir, config) => {
+    await withTempHomeAsync(async () => {
+      const child = new EventEmitter();
+      await withFakeSpawn(() => child, async (sched) => {
+        assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true, 'the run started');
+        child.emit('close', 0);
+      });
+      const [closed] = runRecords(dir);
+      assert.strictEqual(closed.status, 'succeeded', 'the run reached its outcome before the process died');
+
+      const restarted = freshScheduler();
+      restarted.wireSchedulerDeps({ getWssClients: () => [] });
+      openWorkspace(restarted, dir, config);
+
+      assert.deepStrictEqual(runRecords(dir)[0], closed, 'and the restart rewrote no field of it');
+    });
+  });
+});
+
+// AC-7, and it is the way this card most likely breaks something already
+// shipped. routineState.lastRun is the ONLY input to double-fire suppression.
+// This card touches startup, which is where the stores are loaded together, so
+// it is one line from stamping the moment an orphan was noticed into lastRun:
+// that would type-check, would read as a tidy simplification, and would cost
+// the routine the catch-up run it is still owed today.
+//
+// Both instants are constructed in LOCAL time, because getNextRun compares
+// calendar days and hours in local time. A test that mixed a UTC literal into
+// that comparison would answer differently by timezone, which is a test whose
+// result depends on the machine it runs on.
+test('closing a restart-orphaned record writes nothing to the value double-fire suppression reads', () => {
+  withTempWorkspace((ws) => {
+    withTempHome(() => {
+      const cutOff = new Date(2026, 7, 11, 9, 0, 0);       // yesterday's run, cut off mid-flight
+      const nextMorning = new Date(2026, 7, 12, 10, 0, 0);  // the restart, after today's slot passed
+      const dir = path.join(ws, '.rundock');
+      fs.mkdirSync(path.join(dir, 'runs'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'routine-state.json'), JSON.stringify({
+        [KEY]: { lastRun: cutOff.toISOString(), status: 'running', duration: null },
+      }));
+      fs.writeFileSync(path.join(dir, 'runs', 'orphan.json'), JSON.stringify({
+        id: 'orphan', agent: 'runner', routine: 'r', sessionId: null,
+        status: 'running', startedAt: cutOff.toISOString(), endedAt: null,
+        durationMs: null, error: null, files: null, filesStatus: 'unknown', filesReason: 'running',
+      }));
+
+      const sched = freshScheduler();
+      sched.wireSchedulerDeps({ getWssClients: () => [], now: () => nextMorning });
+      sched.loadRoutineState();
+
+      // THE SETUP, ASSERTED BEFORE ANYTHING IS CONCLUDED FROM IT. A load that
+      // closed nothing would satisfy every assertion below while proving
+      // nothing about the closing.
+      assert.strictEqual(runRecords(ws)[0].status, 'interrupted',
+        'the orphaned record really was closed by this load');
+
+      assert.deepStrictEqual(sched.routineState[KEY],
+        { lastRun: cutOff.toISOString(), status: 'interrupted', duration: null },
+        'and the run state carries what it carried, with only the status the load already rewrote');
+      assert.strictEqual(sched.routineState[KEY].lastRun, cutOff.toISOString(),
+        'lastRun byte for byte the value on disk, untouched by the closing');
+      assert.deepStrictEqual(sched.getNextRun('every day at 09:00', sched.routineState[KEY].lastRun),
+        new Date(2026, 7, 12, 9, 0, 0),
+        'so the catch-up run this routine is still owed today is still owed');
+    });
   });
 });
 
