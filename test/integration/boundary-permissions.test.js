@@ -150,6 +150,49 @@ describe('workspace file-access boundary', () => {
     assert.strictEqual(decisionOf(await pending), 'deny', 'the command never runs');
   });
 
+  test('CODE MODE: a grant covering one target does not carry a second, ungranted one', async () => {
+    // The way a standing grant leaks. The server answers a boundary request
+    // from a grant without a card, which is what keeps a granted folder
+    // usable when no browser is open. If the request names only the FIRST
+    // target, a command whose first target sits in the granted folder is
+    // allowed outright and everything else in that command rides along
+    // unseen. On macOS the sandbox may still stop the second write; on
+    // Windows there is no sandbox, and the card is the whole boundary.
+    const CODE = { RUNDOCK_CODE_MODE: '1' };
+    const granted = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-two-'));
+    const first = path.join(granted, 'export.md');
+    const second = path.join(os.homedir(), '.ssh-not-really', 'key');
+
+    // Establish the grant on the first folder through the real card flow.
+    let since = client.messages.length;
+    const pending1 = runHook('Bash', { command: `cp a.md ${first}` }, CODE);
+    const card1 = await client.waitFor(m => m.type === 'control_request'
+      && m.request && m.request.boundary === true, { since, label: 'first card' });
+    client.send({ type: 'permission_response', requestId: card1.msg.request_id, conversationId: 'boundary-test', allow: true, grantDir: granted });
+    assert.strictEqual(decisionOf(await pending1), 'allow');
+
+    // The granted folder alone is now silent, which is the behaviour the
+    // grant exists to provide and the reason this leak was reachable.
+    since = client.messages.length;
+    const solo = await runHook('Bash', { command: `cp b.md ${path.join(granted, 'other.md')}` }, CODE);
+    assert.strictEqual(decisionOf(solo), 'allow');
+    await h.delay(300);
+    assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0,
+      'the grant still answers without a card');
+
+    // Two targets, the first covered by that grant and the second not.
+    since = client.messages.length;
+    const pending2 = runHook('Bash', { command: `cp a.md ${first} && cp key ${second}` }, CODE);
+    const card2 = await client.waitFor(m => m.type === 'control_request'
+      && m.request && m.request.boundary === true, { since, label: 'card for the ungranted second target' });
+    assert.strictEqual(card2.msg.request.resolved_path, second,
+      'the card names the target the grant does NOT cover, not the one it does');
+    assert.strictEqual(card2.msg.request.grant_dir, path.dirname(second),
+      'and any folder it offers to remember is that one');
+    client.send({ type: 'permission_response', requestId: card2.msg.request_id, conversationId: 'boundary-test', allow: false });
+    assert.strictEqual(decisionOf(await pending2), 'deny', 'the command never runs');
+  });
+
   test('CODE MODE: turning the sandbox off is itself the boundary question', async () => {
     // The escape hatch, which is the only signal here that does not depend on
     // reading command text. When the spawned runtime's sandbox denies a

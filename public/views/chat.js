@@ -610,7 +610,14 @@ function renderPermissionCard(d, convoId) {
   // path, so there is no directory to remember. respondPermission already
   // drops a grant it has no directory for, which would leave the button inert
   // while reading as a standing decision.
-  const grantable = boundary && !!req.grant_dir;
+  // Every place the request reaches, so the card cannot show one target while
+  // the command reaches three. A person approves what they can see.
+  const crossings = boundary && Array.isArray(req.crossings) ? req.crossings : [];
+  // A standing folder grant is only on offer when there is ONE folder it
+  // would be about. Offering it for the first of several would remember that
+  // one and silently do nothing about the rest, while reading as a decision
+  // covering the whole command.
+  const grantable = boundary && !!req.grant_dir && crossings.length < 2;
   if (boundary) {
     const shell = toolName === 'Bash' || toolName === 'PowerShell';
     const reads = toolName === 'Read' || toolName === 'Glob' || toolName === 'Grep';
@@ -625,6 +632,10 @@ function renderPermissionCard(d, convoId) {
       ? 'Outside-workspace access needs your approval. "Always allow this folder" remembers it for this workspace only.'
       : 'Outside-workspace access needs your approval. This one cannot be remembered: it is not about a single folder.';
     detail = req.resolved_path || detail;
+    if (crossings.length > 1) detail = crossings.map(c => c.path).join('\n');
+    if (crossings.length > 1) {
+      context = 'This command reaches more than one place outside your workspace. All of them are listed, and approving allows the command as a whole.';
+    }
   }
 
   // Store callback data for safe event handling (no inline onclick injection).

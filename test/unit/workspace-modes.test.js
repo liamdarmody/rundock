@@ -265,6 +265,11 @@ describe('scaffoldWorkspace', () => {
     // the entry to PowerShell and keep the call-operator command form.
     const dir = useWorkspace({ claudeMd: '# x' });
     srv.scaffoldWorkspace(dir, { platform: 'win32' });
+    assert.strictEqual(
+      JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf-8')).sandbox,
+      undefined,
+      'scaffolding FOR Windows writes no sandbox block, whatever host it runs on: '
+      + 'one seam has to govern both halves, or a Windows settings file gets macOS hook wiring\'s opposite');
     const settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf-8'));
     const launcher = path.join(dir, '.rundock', 'permission-hook.cmd');
     assert.ok(fs.existsSync(launcher), 'cmd launcher written');

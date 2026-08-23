@@ -69,6 +69,27 @@ const FILE_TOOL_PATH_FIELD = {
   Read: 'file_path', Write: 'file_path', Edit: 'file_path', MultiEdit: 'file_path',
   NotebookEdit: 'notebook_path', Glob: 'path', Grep: 'path',
 };
+
+// The two pieces every boundary decision in this file needs, in one place
+// each. The prefix rule is the load-bearing detail: comparing with a bare
+// startsWith would put `/ws-evil/x` inside `/ws`, so the separator has to be
+// part of the comparison. It was written out three times before this and any
+// one of them could have drifted alone.
+//
+// `pmod` is the path flavour to compare in. It is `path` for everything
+// except a Windows-shaped token evaluated on a non-Windows host, which only
+// happens in tests; on Windows `path` IS `path.win32`. Windows filesystems
+// are case-insensitive, so a comparison there that respected case would call
+// the same folder two different folders.
+function isUnder(resolved, root, pmod = path) {
+  const fold = (v) => (pmod === path.win32 ? v.toLowerCase() : v);
+  const r = fold(resolved);
+  const b = fold(root);
+  return r === b || r.startsWith(b + pmod.sep);
+}
+function buildRoots(workspaceRoot, extraDirs = [], pmod = path) {
+  return [pmod.resolve(workspaceRoot), ...extraDirs.map(d => pmod.resolve(d))];
+}
 function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = []) {
   const field = FILE_TOOL_PATH_FIELD[toolName];
   if (!field) return null;
@@ -80,9 +101,7 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = []) 
     return (toolName === 'Glob' || toolName === 'Grep') ? { where: 'inside' } : null;
   }
   const resolvedPath = path.resolve(workspaceRoot, target);
-  const roots = [path.resolve(workspaceRoot), ...extraDirs.map(d => path.resolve(d))];
-  const under = (root) => resolvedPath === root || resolvedPath.startsWith(root + path.sep);
-  const inside = roots.some(under);
+  const inside = buildRoots(workspaceRoot, extraDirs).some(r => isUnder(resolvedPath, r));
   // The folder a standing grant would cover: the directory itself for the
   // directory-scanning tools, the parent directory for file targets.
   const grantDir = (toolName === 'Glob' || toolName === 'Grep') ? resolvedPath : path.dirname(resolvedPath);
@@ -135,49 +154,109 @@ function shellPathTokens(command) {
   return out;
 }
 
-function shellCrossing(command, workspaceRoot, roots) {
+// Home shorthands, in the forms each shell actually writes them. PowerShell
+// uses `~` and `$env:USERPROFILE`; cmd uses `%USERPROFILE%`; POSIX shells use
+// `~` and `$HOME`. All of them resolve outside a workspace that is not itself
+// the home directory, and none of them contain an absolute path, which is
+// what makes them the forms a literal-path scan misses.
+const HOME_PREFIX = [
+  /^~(?=[\\/]|$)/,
+  /^\$HOME(?=[\\/]|$)/,
+  /^\$\{HOME\}(?=[\\/]|$)/,
+  /^\$env:USERPROFILE(?=[\\/]|$)/i,
+  /^\$\{env:USERPROFILE\}(?=[\\/]|$)/i,
+  /^%USERPROFILE%(?=[\\/]|$)/i,
+];
+
+// Windows-shaped absolutes. A drive letter is not a relative path and never
+// resolves under a POSIX workspace root, and a UNC name is not even this
+// machine.
+const WIN_DRIVE = /^[A-Za-z]:[\\/]/;
+const WIN_UNC = /^\\\\[^\\]/;
+// `..` as a whole segment, delimited by EITHER separator. Backslash matters:
+// `..\..\elsewhere` climbs out exactly as `../../elsewhere` does, and is what
+// a PowerShell agent writes.
+const TRAVERSAL = /(^|[\\/])\.\.(?=[\\/]|$)/;
+
+// Tokens that name something other than a place in the user's files.
+//
+// The null device and its siblings discard what is written to them, so a
+// write there stores nothing anyone can read back; the executable lookup
+// directories are where interpreters live and appear in a large share of
+// ordinary commands, including inside every shebang line an agent writes into
+// a script. Carding these would put a boundary card on ordinary work, and a
+// card that fires on ordinary work is one people learn to click through,
+// which costs more than it protects.
+//
+// This is an exemption from the TEXT heuristic only. On macOS the command
+// sandbox still refuses a real write to any of them, and on Windows, where
+// there is no sandbox, it is part of the seam the release notes state.
+const DEVICE_PATHS = new Set(['/dev/null', '/dev/zero', '/dev/tty', '/dev/stdin', '/dev/stdout', '/dev/stderr', '/dev/random', '/dev/urandom']);
+const EXEC_DIRS = ['/bin', '/sbin', '/usr/bin', '/usr/sbin', '/usr/local/bin', '/opt/homebrew/bin'];
+function isExemptToken(resolved) {
+  if (DEVICE_PATHS.has(resolved) || resolved.startsWith('/dev/fd/')) return true;
+  return EXEC_DIRS.some(d => resolved === d || resolved.startsWith(d + '/'));
+}
+
+// Which path flavour to judge a token in. On Windows `path` is already
+// `path.win32`, so this only ever differs on a non-Windows host judging a
+// Windows-shaped token, which is what the tests do.
+function flavourFor(token, workspaceRoot) {
+  if (WIN_DRIVE.test(token) || WIN_UNC.test(token) || token.includes('\\')) return path.win32;
+  if (WIN_DRIVE.test(workspaceRoot) || WIN_UNC.test(workspaceRoot)) return path.win32;
+  return path;
+}
+
+// EVERY distinct target in the command that resolves outside, not the first.
+//
+// One reported path is not enough, because the server decides a standing
+// folder grant against what it is handed. Given only the first, a command
+// whose first target sits in an already-granted folder is allowed outright
+// and a second target somewhere else rides along with no card at all.
+function shellCrossings(command, workspaceRoot, extraDirs) {
+  const found = [];
+  const seen = new Set();
   for (const raw of shellPathTokens(command)) {
     let t = raw;
-    if (t === '~' || t.startsWith('~/')) t = os.homedir() + t.slice(1);
-    else if (t === '$HOME' || t.startsWith('$HOME/')) t = os.homedir() + t.slice(5);
-    else if (t === '${HOME}' || t.startsWith('${HOME}/')) t = os.homedir() + t.slice(7);
-    // Skip tokens that could not cross anyway: anything without a leading
-    // slash and without a `..` segment.
-    //
-    // THIS IS A FILTER, NOT A GUARD, and the difference is recorded because
-    // both lines that used to sit here read like guards. An explicit
-    // `includes('://')` URL test was deleted when mutating it turned no test
-    // red, and mutating THIS line turns none red either. Neither can: a
-    // relative token resolves against the workspace root, so it lands inside
-    // whatever it looks like, URL or Windows path or compiler flag. What
-    // decides a crossing is the resolve base below and nothing here. Left in
-    // for cost and legibility, labelled so it is never credited with safety.
-    else if (!t.startsWith('/') && !/(^|\/)\.\.(\/|$)/.test(t)) continue;
-    const resolved = path.resolve(workspaceRoot, t);
-    const under = (root) => resolved === root || resolved.startsWith(root + path.sep);
-    if (!roots.some(under)) return resolved;
+    let homed = false;
+    for (const re of HOME_PREFIX) {
+      if (re.test(t)) { t = t.replace(re, os.homedir()); homed = true; break; }
+    }
+    // Skip tokens that could not cross. A relative token resolves against the
+    // workspace root and lands inside whatever it looks like, so a URL, a
+    // compiler flag and a bare filename all fall out here without needing a
+    // rule of their own. What must NOT fall out here is any Windows shape:
+    // a drive letter and a backslash traversal both reach outside while
+    // containing no leading forward slash and no `/`-delimited `..`.
+    if (!homed && !t.startsWith('/') && !WIN_DRIVE.test(t) && !WIN_UNC.test(t) && !TRAVERSAL.test(t)) continue;
+    const pmod = flavourFor(t, workspaceRoot);
+    const resolved = pmod.resolve(pmod.resolve(workspaceRoot), t);
+    if (buildRoots(workspaceRoot, extraDirs, pmod).some(r => isUnder(resolved, r, pmod))) continue;
+    if (isExemptToken(resolved)) continue;
+    const key = pmod === path.win32 ? resolved.toLowerCase() : resolved;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    found.push({ path: resolved, grantDir: pmod.dirname(resolved) });
   }
-  return null;
+  return found;
 }
 
 function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = []) {
   if (!SHELL_TOOLS.has(toolName)) return null;
   const ti = toolInput || {};
   // Signal 1. No grant folder is offered: a sandbox escape is not about one
-  // folder, so "always allow this folder" would remember nothing and the
-  // button would be a lie.
+  // folder, so "always allow this folder" would remember nothing.
   if (ti.dangerouslyDisableSandbox === true) {
-    return { where: 'outside', resolvedPath: null, grantDir: null };
+    return { where: 'outside', resolvedPath: null, grantDir: null, crossings: [] };
   }
   // Signal 2.
   if (typeof ti.command !== 'string' || !ti.command) return null;
-  const roots = [path.resolve(workspaceRoot), ...extraDirs.map(d => path.resolve(d))];
-  const resolvedPath = shellCrossing(ti.command, workspaceRoot, roots);
-  if (!resolvedPath) return null;
-  return { where: 'outside', resolvedPath, grantDir: path.dirname(resolvedPath) };
+  const crossings = shellCrossings(ti.command, workspaceRoot, extraDirs);
+  if (!crossings.length) return null;
+  return { where: 'outside', resolvedPath: crossings[0].path, grantDir: crossings[0].grantDir, crossings };
 }
 
-module.exports = { isProtectedClaudeEdit, isMcpReadTool, classifyFileAccess, classifyShellAccess };
+module.exports = { isProtectedClaudeEdit, isMcpReadTool, classifyFileAccess, classifyShellAccess, isUnder, buildRoots };
 
 if (require.main === module) main();
 function main() {
@@ -208,11 +287,10 @@ process.stdin.on('end', () => {
   // reach the same card. classifyShellAccess only ever answers 'outside' or
   // null, so an ordinary command keeps whatever card it already had: the
   // instant-allow branch below stays reachable only by file tools.
-  const classified = (typeof data.tool_name === 'string' && !isProtectedClaudeEdit(data.tool_name, data.tool_input))
+  const access = (typeof data.tool_name === 'string' && !isProtectedClaudeEdit(data.tool_name, data.tool_input))
     ? classifyFileAccess(data.tool_name, data.tool_input, wsRoot, extraDirs)
       || classifyShellAccess(data.tool_name, data.tool_input, wsRoot, extraDirs)
     : null;
-  const access = classified;
   if (access && access.where === 'inside') {
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: {
@@ -281,7 +359,17 @@ process.stdin.on('end', () => {
     session_id: data.session_id,
     conversation_id: convoId,
     ...(access && access.where === 'outside'
-      ? { boundary: true, resolved_path: access.resolvedPath || null, grant_dir: access.grantDir || null }
+      ? {
+          boundary: true,
+          resolved_path: access.resolvedPath || null,
+          grant_dir: access.grantDir || null,
+          // Every crossing, so the server can refuse to answer from a
+          // standing grant unless EVERY one of them is covered. A file tool
+          // has exactly one; a shell command can have several; a sandbox
+          // escape has none, because no path established it.
+          crossings: access.crossings
+            || (access.resolvedPath ? [{ path: access.resolvedPath, grantDir: access.grantDir }] : []),
+        }
       : {})
   });
 

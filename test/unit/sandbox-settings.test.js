@@ -17,7 +17,8 @@
 //   - The npm cache: without the cache root, `npm install` fails on its own
 //     cache directory (npm reports it as an ownership error, which it is not).
 //   - Platform: the sandbox is macOS and Linux. Native Windows has none, and
-//     Windows is one of the two platforms this product builds for.
+//     Windows is one of the two platforms this product builds for. Linux is
+//     left off because it was not measured here.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
@@ -71,10 +72,8 @@ describe('sandboxSettings', () => {
 
   test('on Linux nothing is written either, because nothing was measured there', () => {
     // The runtime documents Linux support and it would very likely work. It
-    // was not RUN here, and every other value in this file was. Shipping a
-    // configuration on the strength of a documentation page is the exact
-    // move that produced the decision this card had to rewrite, so Linux
-    // stays off until someone measures it rather than reads about it.
+    // was not RUN here, and every other value in this file was. Linux stays
+    // off until someone measures it rather than reads about it.
     assert.strictEqual(sandboxSettings(WS, 'linux', HOME), null);
   });
 });

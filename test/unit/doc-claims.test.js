@@ -57,9 +57,28 @@ describe('the workspace boundary says what it enforces, per platform', () => {
   const { sandboxSettings } = require('../../lib/workspace/scaffold.js');
   const HOME = '/Users/someone';
 
-  test('both documents state the macOS-only limit, in those words', () => {
-    assert.match(changelog, /macOS only/i, 'the release notes say so where a user reads them');
-    assert.match(architecture, /macOS only/i, 'and the audit section says so too');
+  test('both documents name every platform the operating-system half does NOT cover', () => {
+    // Asserted per platform rather than by matching one phrase, because a
+    // phrase can survive a rewrite that drops a platform. Windows and Linux
+    // are the two where the approval card is the whole boundary, and a
+    // reader on either must not have to infer that from silence.
+    for (const [name, doc] of [['release notes', changelog], ['audit section', architecture]]) {
+      assert.match(doc, /Windows/, `${name} names Windows`);
+      assert.match(doc, /Linux/, `${name} names Linux`);
+      assert.match(doc, /macOS/, `${name} names macOS as the one that has it`);
+    }
+  });
+
+  test('the enforced macOS boundary is described as additive, not as a sealed machine', () => {
+    // The allowlist adds to the runtime's own default writable roots, so the
+    // enforced set is wider than the two Rundock names. Copy that says
+    // otherwise is the overclaim this whole change exists to remove, and it
+    // would be this change committing it.
+    assert.match(changelog, /npm cache/i, 'the release notes name what else is writable');
+    assert.match(changelog, /runtime's own default|default locations|does not remove/i,
+      'and say the runtime keeps defaults of its own');
+    assert.doesNotMatch(changelog, /the rest of the machine is not/i,
+      'the sentence that claimed a sealed machine must not come back');
   });
 
   test('and the code does exactly that: configured on macOS, absent on Windows', () => {

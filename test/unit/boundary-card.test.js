@@ -79,6 +79,47 @@ describe('the boundary card', () => {
     assert.doesNotMatch(html, /Wants to write outside/);
   });
 
+  test('a command reaching several places names all of them', () => {
+    // A card that shows one target while the command reaches three is the
+    // same defect as no card: the person approves what they can see. The
+    // first is what a standing grant would be about, so it stays the headline
+    // target, and the rest are listed rather than dropped.
+    const html = render({
+      tool_name: 'Bash', input: { command: 'cp a ~/Exports/a && cp k ~/.ssh/k' },
+      boundary: true, resolved_path: '/home/u/Exports/a', grant_dir: '/home/u/Exports',
+      crossings: [
+        { path: '/home/u/Exports/a', grantDir: '/home/u/Exports' },
+        { path: '/home/u/.ssh/k', grantDir: '/home/u/.ssh' },
+      ],
+    });
+    assert.match(html, /\/home\/u\/Exports\/a/, 'the first target is shown');
+    assert.match(html, /\/home\/u\/\.ssh\/k/, 'and so is the second');
+  });
+
+  test('a single crossing is not dressed up as a list', () => {
+    const html = render({
+      tool_name: 'Write', input: { file_path: '/etc/x' },
+      boundary: true, resolved_path: '/etc/x', grant_dir: '/etc',
+      crossings: [{ path: '/etc/x', grantDir: '/etc' }],
+    });
+    assert.doesNotMatch(html, /and 0 more|also reaches/i);
+  });
+
+  test('a command reaching several folders does not offer to remember one of them', () => {
+    // "Always allow this folder" would remember the first and silently do
+    // nothing about the others, which reads as a decision covering the whole
+    // command and is not.
+    const html = render({
+      tool_name: 'Bash', input: { command: 'cp a ~/Exports/a && cp k ~/.ssh/k' },
+      boundary: true, resolved_path: '/home/u/Exports/a', grant_dir: '/home/u/Exports',
+      crossings: [
+        { path: '/home/u/Exports/a', grantDir: '/home/u/Exports' },
+        { path: '/home/u/.ssh/k', grantDir: '/home/u/.ssh' },
+      ],
+    });
+    assert.doesNotMatch(html, /Always allow this folder/);
+  });
+
   test('a file crossing still says read or write, because there the act is known', () => {
     const wHtml = render({ tool_name: 'Write', input: { file_path: '/etc/x' }, boundary: true, resolved_path: '/etc/x', grant_dir: '/etc' });
     assert.match(wHtml, /write outside your workspace/);
