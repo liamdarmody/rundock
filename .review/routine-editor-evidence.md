@@ -324,7 +324,7 @@ the view's:
 ## Red-first and the gate
 
 `node scripts/red-first.js --base origin/main --tests "npm test"` reports
-`proven`: 2120 tests passing with the change, 19 failing without it.
+`proven`: 2122 tests passing with the change, 19 failing without it.
 
 **The base is `origin/main`, not `main`.** In a worktree the local branch ref
 does not move, so `--base main` can compare against a stale tree and report
