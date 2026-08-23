@@ -61,6 +61,11 @@ const PROFILE = { src: path.join(ROOT, 'public', 'views', 'profile.js'), suite: 
 const SIDEBAR = { src: path.join(ROOT, 'public', 'views', 'team.js'), suite: 'test/unit/routine-editor-doors.test.js' };
 // The data model's write path, where a routine becomes bytes in a file.
 const ROUTINES = { src: path.join(ROOT, 'lib', 'agents', 'routines.js'), suite: 'test/unit/routine-write.test.js' };
+// The same file, watched by the suite that owns the timezone a schedule was
+// set in. It is a second entry rather than a second suite on the first because
+// each mutation runs exactly one suite, and these guards are watched by that
+// one. Both entries read and restore the same file, one mutation at a time.
+const ROUTINES_TZ = { src: path.join(ROOT, 'lib', 'agents', 'routines.js'), suite: 'test/unit/routine-timezone.test.js' };
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -243,6 +248,42 @@ const MUTATIONS = [
   [ROUTINES, 'whether the file already declares routines is asked of the independent counter',
     "  const declaredRoutines = (topLevelKeyCounts(content) || new Map()).get('routines') || 0;",
     '    const declaredRoutines = locateSection(content.split(\'\\n\')) ? 1 : 0;'],
+
+  // The timezone a schedule was set in.
+  //
+  // THE ONE THESE EXIST FOR is the first: fill an absent zone in from the
+  // machine. It is the defect in its exact form, it type-checks, it returns
+  // location words, and on the computer a routine was made on it returns the
+  // right answer, which is why no test that inherits the runner's zone can
+  // see it. The suite pins the process zone and stores a different one, so
+  // this mutation has nowhere to hide.
+  [ROUTINES_TZ, 'an absent timezone is left absent rather than filled in from the machine',
+    '  const timezone = routine.timezone === undefined || routine.timezone === null\n    ? null\n    : String(routine.timezone);',
+    '  const timezone = routine.timezone === undefined || routine.timezone === null\n    ? Intl.DateTimeFormat().resolvedOptions().timeZone\n    : String(routine.timezone);'],
+  [ROUTINES_TZ, 'absent and blank are read as different answers',
+    '  const value = raw.timezone;\n  if (value === undefined || value === null) return null;\n  return unquote(value);',
+    "  return readString(raw, 'timezone');"],
+  [ROUTINES_TZ, 'the timezone is a field the model reads, not a string carried through',
+    '    timezone: readTimezone(raw),\n',
+    ''],
+  [ROUTINES_TZ, 'a written timezone is checked before it becomes bytes in a file',
+    '  if (timezone !== null) assertTimezoneWords(timezone);\n',
+    ''],
+  [ROUTINES_TZ, 'a timezone is location words rather than any text at all',
+    'const TIMEZONE_WORDS = /^[A-Za-z][A-Za-z0-9_-]*(?:\\/[A-Za-z0-9_+-]+)+$/;',
+    'const TIMEZONE_WORDS = /^[^\\n]*$/;'],
+  [ROUTINES_TZ, 'a created routine carries its timezone into the file',
+    '    runOn,\n    timezone,\n',
+    '    runOn,\n'],
+  // The decision, as a thing that can be broken rather than a comment. Adding
+  // the field to either list reverses it silently, which is exactly how it
+  // would happen.
+  [ROUTINES_TZ, 'the timezone stays out of the plan hash',
+    "const PLAN_FIELDS = ['prompt', 'skill', 'runOn'];",
+    "const PLAN_FIELDS = ['prompt', 'skill', 'runOn', 'timezone'];"],
+  [ROUTINES_TZ, 'the migration does not invent a timezone for a routine that never recorded one',
+    "const MIGRATED_KEYS = ['runOn', 'enabled', 'paused', 'planHash'];",
+    "const MIGRATED_KEYS = ['runOn', 'enabled', 'paused', 'planHash', 'timezone'];"],
 ];
 
 // The reporter is named explicitly rather than left to the default, which
@@ -285,7 +326,7 @@ function run() {
   // Both files are read up front and both are restored in the same finally, so
   // a throw part way through cannot leave either one mutated.
   const originals = new Map();
-  for (const target of [MODEL, VIEW, APP, HANDLER, PROFILE, SIDEBAR, ROUTINES]) originals.set(target, fs.readFileSync(target.src, 'utf8'));
+  for (const target of [MODEL, VIEW, APP, HANDLER, PROFILE, SIDEBAR, ROUTINES, ROUTINES_TZ]) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];
   try {
     for (const [target, label, guard, without] of MUTATIONS) {
