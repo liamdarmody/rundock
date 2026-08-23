@@ -32,15 +32,18 @@ async function liveChild(pad = '') {
 }
 const { pidRecordAlive, processCommand, readProcCmdline, parseProcCmdline, psCommand, commandLineCapability } = srv._internal;
 
-// Decided once, at load, so a skip can name what is missing rather than
-// reporting an environment as a defect.
+// What this machine can do, decided once at load from the ONE report that owns
+// both the probing and the names, so a skip names the missing source in the
+// same words the product uses and a rename lands in one place.
 const capability = commandLineCapability();
+const [freeSource, spawningSource] = capability.sources;
+const procWorks = freeSource.available;
+const psWorks = spawningSource.available;
+const absent = (...needed) => `missing capability: ${needed.filter(s => !s.available).map(s => s.name).join(' and ')} unreadable here`;
 const noLookup = capability.ok ? false : `missing capability: ${capability.missing}`;
-const procWorks = readProcCmdline(process.pid) != null;
-const psWorks = psCommand(process.pid) != null;
-const noComparison = procWorks && psWorks ? false : 'missing capability: '
-  + [!procWorks && 'the non-spawning source /proc/<pid>/cmdline is unreadable here',
-     !psWorks && 'the spawning source `ps -p <pid> -o args=` is unavailable here'].filter(Boolean).join(', and ');
+const noComparison = procWorks && psWorks ? false : absent(freeSource, spawningSource);
+const noFreeSource = procWorks ? false : absent(freeSource);
+const noSpawningSource = psWorks ? false : absent(spawningSource);
 
 describe('child pid records', () => {
   test('a live process spawned as the recorded command is recognised', async () => {
@@ -98,7 +101,7 @@ describe('child pid records', () => {
   // Asserted: that the non-spawning source is FAITHFUL, which is the property
   // the guard is given. The disagreement itself is printed rather than
   // asserted, so a `ps` that stops escaping does not fail a suite for improving.
-  test('the non-spawning source returns argv as spawned, control characters and all', { skip: procWorks ? false : noComparison }, async (t) => {
+  test('the non-spawning source returns argv as spawned, control characters and all', { skip: noFreeSource }, async (t) => {
     const script = 'setInterval(() => {}, 1e9) //ONE\nTWO\tTHREE ';
     const kid = spawn(process.execPath, ['-e', script], { stdio: 'ignore' });
     await new Promise((resolve, reject) => { kid.once('spawn', resolve); kid.once('error', reject); });
@@ -155,6 +158,23 @@ describe('child pid records', () => {
     }
   });
 
+  // The same length question asked of the SPAWNING source alone, because on the
+  // platform where it is the only source the test above cannot run at all: it
+  // needs both. Without this, a `ps` that starts fitting its output to a width
+  // would degrade the guard there and no test would notice.
+  test('the spawning source does not truncate a long command line', { skip: noSpawningSource }, async (t) => {
+    const pad = 'A'.repeat(16384);
+    const kid = await liveChild(pad);
+    try {
+      const viaPs = psCommand(kid.pid);
+      t.diagnostic(`ps -p <pid> -o args= -> ${String(viaPs).length} chars, ends ${JSON.stringify(String(viaPs).slice(-8))}`);
+      assert.ok(String(viaPs).length > pad.length, `ps truncated a long command line to ${String(viaPs).length} chars`);
+      assert.ok(String(viaPs).endsWith(pad.slice(-64)), 'the end of the command line must survive');
+    } finally {
+      try { kid.kill('SIGKILL'); } catch (e) {}
+    }
+  });
+
   test('a pid running a DIFFERENT command is refused, so a recycled pid is not signalled', { skip: noLookup }, async () => {
     const kid = await liveChild();
     try {
@@ -201,12 +221,17 @@ describe('child pid records', () => {
     assert.match(String(none.missing), /ps -p <pid> -o args=/, 'the missing report must name the spawning source');
 
     const free = commandLineCapability(() => '/x/node -e code', () => 'ps would have said this');
-    assert.deepStrictEqual(free, { ok: true, source: '/proc/<pid>/cmdline', missing: null },
-      'the non-spawning source is preferred when it answers');
+    assert.strictEqual(free.ok, true);
+    assert.strictEqual(free.missing, null);
+    assert.strictEqual(free.source, '/proc/<pid>/cmdline', 'the non-spawning source is preferred when it answers');
 
     const spawned = commandLineCapability(() => null, () => '/x/node -e code');
-    assert.deepStrictEqual(spawned, { ok: true, source: 'ps -p <pid> -o args=', missing: null },
-      'the spawning source remains for platforms with no other');
+    assert.strictEqual(spawned.source, 'ps -p <pid> -o args=', 'the spawning source remains for platforms with no other');
+    assert.deepStrictEqual(spawned.sources.map(s => s.available), [false, true],
+      'the report says which source answered, not merely that one did');
+    assert.deepStrictEqual(none.sources.map(s => s.available), [false, false]);
+    assert.deepStrictEqual(free.sources.map(s => s.spawns), [false, true],
+      'and which of them costs a spawn, since that is what the order exists for');
   });
 
   // The separator question, covered on every machine including the ones with no
@@ -219,6 +244,8 @@ describe('child pid records', () => {
       '/usr/bin/node -e setInterval(() => {}, 1e9)', 'NULs become single spaces and the trailing one goes');
     assert.strictEqual(parseProcCmdline('/usr/bin/node\0'), '/usr/bin/node', 'a one-argument command line survives');
     assert.strictEqual(parseProcCmdline('/usr/bin/node\0-e\0x'), '/usr/bin/node -e x', 'a missing trailing NUL is not a missing argument');
+    assert.strictEqual(parseProcCmdline('/usr/bin/node\0-e\0a\nb'), '/usr/bin/node -e a\nb',
+      'a newline INSIDE an argument is kept as it was spawned; only ps escapes it for a human');
     assert.strictEqual(parseProcCmdline(''), null, 'an empty cmdline is no answer, not an empty command line');
     assert.strictEqual(parseProcCmdline('\0\0'), null, 'nor is one that is all separator');
   });
@@ -251,7 +278,7 @@ describe('child pid records', () => {
   // the spawning primitive underneath instead, which the guard resolves at call
   // time, so a default that reaches for `ps` is caught wherever the free source
   // works at all.
-  test('the DEFAULT reader is the non-spawning one, with nothing injected', { skip: procWorks ? false : noComparison }, async () => {
+  test('the DEFAULT reader is the non-spawning one, with nothing injected', { skip: noFreeSource }, async () => {
     const childProcess = require('node:child_process');
     const kid = await liveChild();
     const realExecFileSync = childProcess.execFileSync;
