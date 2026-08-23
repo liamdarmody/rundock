@@ -23,6 +23,8 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const os = require('node:os');
+const { execFileSync } = require('node:child_process');
+const SCAFFOLD = path.join(__dirname, '..', '..', 'lib', 'workspace', 'scaffold.js');
 
 const { sandboxSettings } = require('../../lib/workspace/scaffold.js');
 
@@ -62,6 +64,71 @@ describe('sandboxSettings', () => {
     } else {
       assert.strictEqual(s, null);
     }
+  });
+
+  test('a block written on macOS is still recognised as ours by a WINDOWS host', () => {
+    // The block is a macOS artefact: sandboxSettings only ever produces one
+    // for darwin, so every path in it is POSIX by construction. Recognition
+    // has to read it back with POSIX rules whatever host is doing the
+    // reading. Judged with the host's separator instead, a Windows machine
+    // opening a workspace scaffolded on a Mac saw `/Users/me/.npm`, did not
+    // match `\\.npm`, called the block somebody's edit, and then neither
+    // reconciled nor withdrew it: the runtime kept being handed a macOS
+    // absolute root on the one platform where nothing has been measured.
+    //
+    // Run in a child process, because a Windows host is not something this
+    // one can be asked about directly. Two details make the simulation
+    // faithful, and the first version of this test got both wrong:
+    //
+    //   - `path` is REPLACED for the module under test rather than mutated in
+    //     place. On a POSIX host `require('path') === require('path').posix`,
+    //     so mutating the default turns `path.posix` into win32 as well, and
+    //     the code being tested then has no correct implementation to reach
+    //     for. The stand-in behaves as win32 while `path.posix` stays real,
+    //     which is exactly what a Windows host looks like.
+    //   - The assertion checks the separator the child actually used, so a
+    //     simulation that quietly failed to take effect reports as a failure
+    //     rather than as a pass.
+    const script = `
+      const Module = require('module');
+      const real = require('path');
+      const fake = Object.create(real.win32);
+      fake.posix = real.posix;
+      fake.win32 = real.win32;
+      const load = Module._load;
+      let handed = 0;
+      Module._load = function (request, ...rest) {
+        if (request === 'path' || request === 'node:path') { handed++; return fake; }
+        return load.call(this, request, ...rest);
+      };
+      const s = require(${JSON.stringify('SCAFFOLD_PATH')});
+      Module._load = load;
+      const block = ${JSON.stringify({
+        enabled: true,
+        autoAllowBashIfSandboxed: true,
+        filesystem: { allowWrite: ['/Users/me/ws', '/Users/me/.npm'] },
+        network: { allowedDomains: ['*'] },
+      })};
+      const stranger = JSON.parse(JSON.stringify(block));
+      stranger.filesystem.allowWrite[1] = '/somewhere/else';
+      process.stdout.write(JSON.stringify({
+        sep: fake.sep,
+        handed,
+        cacheRoot: s.sandboxSettings('/Users/me/ws', 'darwin', '/Users/me').filesystem.allowWrite[1],
+        ours: s.isRundockSandbox(block, 'darwin'),
+        stranger: s.isRundockSandbox(stranger, 'darwin'),
+      }));
+    `.replace('SCAFFOLD_PATH', SCAFFOLD);
+    const r = JSON.parse(execFileSync(process.execPath, ['-e', script], { encoding: 'utf-8' }));
+    assert.strictEqual(r.sep, '\\', 'the stand-in is a Windows one');
+    // Counted rather than inferred. Asserting on the stand-in's separator
+    // only proves the stand-in was BUILT: it says nothing about whether the
+    // module under test ever received it, so a simulation that quietly
+    // failed to take effect reported a pass.
+    assert.ok(r.handed > 0, 'and the module under test was actually handed it');
+    assert.strictEqual(r.cacheRoot, '/Users/me/.npm', 'and still WRITES the cache root with POSIX separators');
+    assert.strictEqual(r.ours, true, 'so our own block is recognised there');
+    assert.strictEqual(r.stranger, false, 'while a block we did not write is still refused');
   });
 
   test('on Windows there is no sandbox to configure, so nothing is written', () => {
