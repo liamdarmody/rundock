@@ -88,6 +88,62 @@ function setWorkspaceRoot(dir) {
   // accumulate with nothing ever clearing it. Housekeeping must never be able
   // to break a switch, hence the guard.
   try { pruneScratch(); } catch (e) { /* not worth failing a switch over */ }
+  // THE SCHEDULER'S LIFECYCLE, AND IT LIVES HERE FOR A REASON.
+  //
+  // It used to live at exactly one place, the boot path, inside `if
+  // (WORKSPACE)`. So a workspace remembered at startup got a scheduler and a
+  // workspace CHOSEN got none, which is the ordinary first run: install, open,
+  // pick a folder, and nothing is watching the clock until a restart. Found by
+  // a real routine that was correctly written, correctly migrated, on the
+  // roster, and never fired.
+  //
+  // Putting it here rather than in the handler that opens a workspace is the
+  // whole fix. There is more than one way to arrive at a new workspace (open
+  // one, create one, roll back to the previous one after a failed open, clear
+  // the pointer to one that has gone), and every one of them reaches this
+  // function, because the root's mirror and lib/config must never drift and
+  // this is the only place that writes both. Anything that sets a workspace
+  // therefore gets a scheduler without having to remember to, and the next
+  // path someone adds gets one too.
+  //
+  // NOT from the roster or the file watcher, deliberately. Both fire often and
+  // for reasons that have nothing to do with a workspace being chosen, and a
+  // scheduler armed from a path like that is how two tickers happen. This
+  // function fires only when the workspace actually changes.
+  //
+  // Stop THEN start, always in that order and unconditionally. The stop is
+  // what ends the tick that was running for the workspace being left; without
+  // it the start would meet a live handle, decline, and leave the old ticker
+  // in place. When there is no new workspace to serve, the stop is all that
+  // happens, and it is the only thing standing between a deleted workspace and
+  // a tick that keeps running over nothing.
+  //
+  // AND THE STATE IS LOADED BEFORE THE TICK IS ARMED, never after.
+  //
+  // The root is already the new workspace by the time this runs, so between an
+  // arm and a load the two stores disagree about which workspace they describe:
+  // getWorkspace() names the one being entered while routineState and the slot
+  // records still hold the one being left. A tick landing in that window judges
+  // the new roster against the old workspace's lastRun, and for any key the two
+  // workspaces share, which is every key when an agent and a routine keep their
+  // names, it suppresses a run that was due or releases one that was not.
+  //
+  // Closing that window by argument rather than by order would mean arguing
+  // that no tick can land there, which is true today only because the callers
+  // happen not to yield between the two. That is the kind of guarantee that
+  // holds until someone makes an open path asynchronous, and then fails in a
+  // way nobody can reproduce. Loading first means there is no window to argue
+  // about: at the instant the tick is armed, the state it will read already
+  // describes the workspace it will read it for.
+  //
+  // The open paths load again after this, and that is deliberate rather than
+  // redundant: healWorkspaceIfMoved runs between, and what it repairs belongs
+  // in the state a tick reads. This load is the floor, not the last word.
+  stopScheduler();
+  if (dir) {
+    loadRoutineState();
+    startScheduler();
+  }
 }
 
 // Workspace boundary check. A bare `startsWith(resolve(WORKSPACE))`
@@ -471,7 +527,7 @@ const schedulerLib = require('./lib/scheduler.js');
 const {
   routineState, loadRoutineState, saveRoutineState, recordRoutineRun,
   routineSlots, loadRoutineSlots, saveRoutineSlots,
-  startScheduler, stopScheduler, getNextRun, executeRoutine,
+  startScheduler, stopScheduler, schedulerRunning, getNextRun, executeRoutine,
 } = schedulerLib;
 // Hand lib/agents its root-owned dependencies (see the module headers).
 // (routineState needs no wiring: discovery requires lib/scheduler.js
@@ -3082,7 +3138,7 @@ module.exports._internal = {
   armFileTreeWatcher, fileTreeForSend, broadcastFileTree,
   flatFileListCached, invalidateFileListCache,
   // scheduler
-  getNextRun, executeRoutine, routineState, startScheduler, stopScheduler,
+  getNextRun, executeRoutine, routineState, startScheduler, stopScheduler, schedulerRunning,
   loadRoutineState, saveRoutineState, recordRoutineRun,
   routineSlots, loadRoutineSlots, saveRoutineSlots,
   // agent + skill discovery / parsing
