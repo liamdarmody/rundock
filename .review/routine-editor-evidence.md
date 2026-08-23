@@ -611,15 +611,15 @@ guarantee is kept, so it survives a change of approach.
 **One backstop, named as one.** `assertFrontmatterKeysIntact` also runs after
 the write, comparing top-level key counts before and after and allowing only
 `routines` to appear where there was none. With the refusal in place no input
-reaches it, so its call site carries no mutation, for the same reason lines 371
-and 372 carry no test: it is a net under a named refusal rather than a
+reaches it, so its call site carries no mutation, for the same reason lines 445
+and 446 carry no test: it is a net under a named refusal rather than a
 substitute for one. The function itself IS tested, directly, including that it
 does not blame a pre-existing duplicate on this write.
 
 ## Red-first and the gate
 
 `node scripts/red-first.js --base origin/main --tests "npm test"` reports
-`proven`: 2161 tests passing with the change, 24 failing without it.
+`proven`: 2175 tests passing with the change, 33 failing without it.
 
 **The base is `origin/main`, not `main`.** In a worktree the local branch ref
 does not move, so `--base main` can compare against a stale tree and report
@@ -643,14 +643,14 @@ tracked file would change the tree it names.
 
 ```
 public/routine-editor-model.js   |  99.7 (357/358)  | uncovered: line 30
-lib/agents/routines.js           |  99.6 (491/493)  | uncovered: lines 371, 372
+lib/agents/routines.js           |  99.7 (570/572)  | uncovered: lines 445, 446
 lib/protocol/handlers/team.js    |  99.2 (248/250)  | uncovered: lines 56, 57
 ```
 
 Line 30 of the model is the browser half of the module wrapper, which cannot
 execute under node. It is the only uncovered line in the file.
 
-**Lines 371 and 372 are a backstop with no test, and that is stated rather than
+**Lines 445 and 446 are a backstop with no test, and that is stated rather than
 papered over.** They are the throw inside the read-back check: the append path
 parses its own result and requires the routine to be in it. Every cause anyone
 has met is refused earlier and by name, so no input reaches this throw, which is
