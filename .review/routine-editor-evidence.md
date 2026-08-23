@@ -458,7 +458,7 @@ it, and no diff can carry them.
 ## Red-first and the gate
 
 `node scripts/red-first.js --base origin/main --tests "npm test"` reports
-`proven`: 2140 tests passing with the change, 23 failing without it.
+`proven`: 2144 tests passing with the change, 23 failing without it.
 
 **The base is `origin/main`, not `main`.** In a worktree the local branch ref
 does not move, so `--base main` can compare against a stale tree and report
