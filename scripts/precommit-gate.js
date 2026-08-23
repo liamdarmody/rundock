@@ -67,6 +67,16 @@ const STEPS = [
   { name: 'typecheck', args: ['run', 'typecheck'] },
   { name: 'lint:styles', args: ['run', 'lint:styles'] },
   { name: 'check:refs', args: ['run', 'check:refs'] },
+  // Removes each of the renderer's escaping guards in turn and requires a test
+  // to go red for it. Slower than the rest because it runs a suite per guard,
+  // and worth it here: two of these guards were removable with nothing going
+  // red when the check was first written, which no other step in this list
+  // would ever have reported.
+  { name: 'mutate:guards', args: ['run', 'mutate:guards'] },
+  // Reproduces the frozen "before" fixture from the pre-change renderer read
+  // out of git history. Needs history, so it lives here and in CI rather than
+  // in the unit suite, which runs against a depth-1 checkout.
+  { name: 'check:fixture', args: ['run', 'check:fixture'] },
 ];
 
 function git(args, root = ROOT) {
