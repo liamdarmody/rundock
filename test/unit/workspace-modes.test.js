@@ -171,18 +171,26 @@ describe('scaffoldWorkspace', () => {
     // computed perfectly and never reach the file the runtime is started
     // with (lib/runtime/claude.js passes --settings at this exact path), and
     // every test of the decision would still be green.
-    const dir = useWorkspace({ claudeMd: '# x' });
-    srv.scaffoldWorkspace(dir);
-    const settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf-8'));
-    if (process.platform === 'darwin') {
-      assert.ok(settings.sandbox, 'the sandbox block is present');
-      assert.strictEqual(settings.sandbox.enabled, true);
-      assert.ok(settings.sandbox.filesystem.allowWrite.includes(dir),
-        'the workspace it was scaffolded for is the writable root, not some other one');
-    } else {
-      assert.strictEqual(settings.sandbox, undefined,
-        'no sandbox block on a platform with no sandbox');
-    }
+    //
+    // The platform is DRIVEN, not read off the runner. Branching on
+    // process.platform here means the macOS behaviour is asserted only on a
+    // macOS machine, so continuous integration, which runs Linux, checks
+    // nothing at all about it. Both platforms are stated below, so both are
+    // checked wherever this runs.
+    const read = (d) => JSON.parse(fs.readFileSync(path.join(d, '.claude', 'settings.local.json'), 'utf-8'));
+
+    const mac = useWorkspace({ claudeMd: '# x' });
+    srv.scaffoldWorkspace(mac, { platform: 'darwin' });
+    const settings = read(mac);
+    assert.ok(settings.sandbox, 'the sandbox block is present');
+    assert.strictEqual(settings.sandbox.enabled, true);
+    assert.ok(settings.sandbox.filesystem.allowWrite.includes(mac),
+      'the workspace it was scaffolded for is the writable root, not some other one');
+
+    const linux = useWorkspace({ claudeMd: '# x' });
+    srv.scaffoldWorkspace(linux, { platform: 'linux' });
+    assert.strictEqual(read(linux).sandbox, undefined,
+      'and no block at all on a platform Rundock writes none for');
   });
 
   test('an existing workspace gains the sandbox on the next open, with its hooks already current', () => {
@@ -194,21 +202,17 @@ describe('scaffoldWorkspace', () => {
     // turned no test red, because a FRESH scaffold writes the file for the
     // hooks regardless and hid the case that matters.
     const dir = useWorkspace({ claudeMd: '# x' });
-    srv.scaffoldWorkspace(dir);
+    srv.scaffoldWorkspace(dir, { platform: 'darwin' });
     const settingsPath = path.join(dir, '.claude', 'settings.local.json');
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
     delete settings.sandbox;
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
 
-    srv.scaffoldWorkspace(dir);
+    srv.scaffoldWorkspace(dir, { platform: 'darwin' });
 
     const after = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-    if (process.platform === 'darwin') {
-      assert.ok(after.sandbox && after.sandbox.enabled === true,
-        'the sandbox arrives even though the hooks needed no change');
-    } else {
-      assert.strictEqual(after.sandbox, undefined);
-    }
+    assert.ok(after.sandbox && after.sandbox.enabled === true,
+      'the sandbox arrives even though the hooks needed no change');
   });
 
   test('a workspace that MOVED gets its sandbox root brought with it', () => {
@@ -221,7 +225,7 @@ describe('scaffoldWorkspace', () => {
     // release notes say the workspace is writable. A moved workspace is
     // already a supported case here, so this is a real state, not a corner.
     const from = useWorkspace({ claudeMd: '# x' });
-    srv.scaffoldWorkspace(from);
+    srv.scaffoldWorkspace(from, { platform: 'darwin' });
     const settingsPath = (d) => path.join(d, '.claude', 'settings.local.json');
     const carried = fs.readFileSync(settingsPath(from), 'utf-8');
 
@@ -229,17 +233,13 @@ describe('scaffoldWorkspace', () => {
     const to = useWorkspace({ claudeMd: '# x' });
     fs.mkdirSync(path.dirname(settingsPath(to)), { recursive: true });
     fs.writeFileSync(settingsPath(to), carried);
-    srv.scaffoldWorkspace(to);
+    srv.scaffoldWorkspace(to, { platform: 'darwin' });
 
     const after = JSON.parse(fs.readFileSync(settingsPath(to), 'utf-8'));
-    if (process.platform === 'darwin') {
-      assert.ok(after.sandbox.filesystem.allowWrite.includes(to),
-        'the writable root is where the workspace is now');
-      assert.ok(!after.sandbox.filesystem.allowWrite.includes(from),
-        'and not where it used to be');
-    } else {
-      assert.strictEqual(after.sandbox, undefined);
-    }
+    assert.ok(after.sandbox.filesystem.allowWrite.includes(to),
+      'the writable root is where the workspace is now');
+    assert.ok(!after.sandbox.filesystem.allowWrite.includes(from),
+      'and not where it used to be');
   });
 
   test('a workspace copied to ANOTHER MACHINE gets both roots brought current', () => {
@@ -257,15 +257,18 @@ describe('scaffoldWorkspace', () => {
     const elsewhere = scaffoldLib.sandboxSettings('/Users/someone-else/their-workspace', 'darwin', '/Users/someone-else');
     fs.writeFileSync(settingsPath, JSON.stringify({ sandbox: elsewhere }));
 
-    srv.scaffoldWorkspace(dir);
+    //
+    // Both machines are NAMED. Borrowing one of them from whatever runner the
+    // suite lands on is how this passed locally on macOS and failed on the
+    // Linux runner: there the reconcile correctly WITHDREW the block, while
+    // the branch written for that case asserted the block survived. A test
+    // about copying between machines cannot take either machine from the
+    // environment.
+    srv.scaffoldWorkspace(dir, { platform: 'darwin' });
 
     const after = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')).sandbox;
-    if (process.platform === 'darwin') {
-      assert.deepStrictEqual(after, scaffoldLib.sandboxSettings(dir, 'darwin'),
-        'both the workspace root and the cache root are the ones for THIS machine');
-    } else {
-      assert.deepStrictEqual(after, elsewhere, 'nothing to reconcile to on a platform with no sandbox');
-    }
+    assert.deepStrictEqual(after, scaffoldLib.sandboxSettings(dir, 'darwin'),
+      'both the workspace root and the cache root are the ones for the machine it landed on');
   });
 
   test('a sandbox block Rundock wrote is WITHDRAWN on a platform it would not write one for', () => {

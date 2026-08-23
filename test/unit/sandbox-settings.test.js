@@ -57,13 +57,16 @@ describe('sandboxSettings', () => {
     // module had no `os` import at all: the default that reads the home
     // directory would have thrown on the first real call. A decision function
     // exercised only through arguments its caller never passes is not covered.
-    const s = sandboxSettings(WS);
-    if (process.platform === 'darwin') {
-      assert.ok(s && s.filesystem.allowWrite.includes(path.join(os.homedir(), '.npm')),
-        'the real home directory resolves');
-    } else {
-      assert.strictEqual(s, null);
-    }
+    //
+    // Stated as an equivalence rather than a branch, so the same property is
+    // checked on every machine. Branching on process.platform here would put
+    // the interesting half behind a macOS runner and leave continuous
+    // integration, which runs Linux, asserting only that null is null.
+    assert.deepStrictEqual(
+      sandboxSettings(WS),
+      sandboxSettings(WS, process.platform, os.homedir()),
+      'omitting both arguments resolves to this platform and this home',
+    );
   });
 
   test('a block written on macOS is still recognised as ours by a WINDOWS host', () => {
