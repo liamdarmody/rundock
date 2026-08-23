@@ -16,6 +16,7 @@ let srv = null;
 let internal = null;
 let port = null;
 let workspaceDir = null;
+let schedulerBeforeListen = null;
 const clients = [];
 
 /**
@@ -29,6 +30,14 @@ const clients = [];
  *   run starts in, where the folder is chosen afterwards through the interface.
  *   The fixture is still built and h.workspaceDir still names it, so a test can
  *   choose it over the wire; the server just has not been told about it.
+ * @param {boolean} [opts.presetWorkspace=false] - hand the server its workspace
+ *   the way a REMEMBERED one arrives: in process.env.WORKSPACE, before
+ *   server.js is required, so lib/config seeds the root at require time and the
+ *   workspace setter is never called. Implies opts.workspace false, because the
+ *   whole point is that nothing has touched the root before the server boots.
+ *   Use this to test the boot path itself; opts.workspace true reaches the same
+ *   end state through the setter, which arms things the boot path is supposed
+ *   to arm for itself.
  */
 async function boot(opts = {}) {
   assert.strictEqual(srv, null, 'boot() must only be called once per test file');
@@ -43,10 +52,18 @@ async function boot(opts = {}) {
   for (const [k, v] of Object.entries(opts.env || {})) process.env[k] = v;
 
   workspaceDir = makeWorkspace({ agents: opts.agents || standardTeam(), claudeMd: '# Test Workspace\n', ...(opts.workspaceOpts || {}) });
+  // Set AFTER the fixture exists and BEFORE server.js is required, which is the
+  // only window in which it does anything: lib/config reads it once, at require
+  // time, and never again.
+  if (opts.presetWorkspace) process.env.WORKSPACE = workspaceDir;
 
   srv = require('../../server.js');
   internal = srv._internal;
-  if (opts.workspace !== false) internal.setWorkspace(workspaceDir);
+  if (opts.workspace !== false && !opts.presetWorkspace) internal.setWorkspace(workspaceDir);
+  // Read between require and listen, which is a window no test can otherwise
+  // reach: boot() owns both halves. It is the only place the question "was
+  // anything armed before the server started" can be asked at all.
+  schedulerBeforeListen = internal.schedulerRunning();
 
   // Hard safety gate: never run integration scenarios against a real claude
   // or a real codex.
@@ -323,5 +340,8 @@ module.exports = {
   get internal() { return internal; },
   get port() { return port; },
   get workspaceDir() { return workspaceDir; },
+  // Whether a tick was armed after server.js was required and before it
+  // listened. See the read in boot().
+  get schedulerBeforeListen() { return schedulerBeforeListen; },
   STUB_DIR, CODEX_STUB_DIR,
 };

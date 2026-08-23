@@ -235,20 +235,58 @@ describe('switching away stops the scheduler that was running', () => {
 
   // AC-5 and AC-6. The clock is advanced past a slot the workspace that was
   // LEFT was due at, and nothing about that workspace moves.
+  //
+  // THE THREE ABSENCES AT THE END OF THIS TEST DO NOT, ON THEIR OWN, PROVE
+  // ANYTHING ABOUT THE STOP, and saying so is the point of this comment. The
+  // tick reads the workspace root at use time, through discoverAgents, so a
+  // ticker that survived the switch would discover the roster of the workspace
+  // just ENTERED. It could never fire a routine belonging to the one that was
+  // left, whether it was stopped, left running, or never armed. An absence
+  // guaranteed by the scheduler's use-time read is not evidence about the
+  // lifecycle, and a first version of this test asserted only that.
+  //
+  // So the absences stay, because they are what the criterion asks for in so
+  // many words, and the observation that DOES differ is made beside them:
+  // whether the ticker armed for the workspace that was left is still there
+  // afterwards. That is read through the phase of the tick rather than through
+  // anything it spawned. The pre-switch ticker is left thirty seconds from its
+  // minute; if it survived, those thirty seconds would run a pass. They run
+  // none, and the thirty after them run one, which is what proves a ticker
+  // exists to have been counted at all.
   test('the previous workspace routine does not fire when its slot passes', async (t) => {
     const left = punctualWorkspace();
     const entered = idleWorkspace();
     const client = await h.connect();
     await armOnRealTimers(client);
     const clock = { at: BEFORE_NINE };
-    const prevDeps = scheduler.wireSchedulerDeps({ now: () => clock.at });
+    let reads = 0;
+    const prevDeps = scheduler.wireSchedulerDeps({ now: () => { reads++; return clock.at; } });
     t.mock.timers.enable({ apis: ['setInterval'] });
     try {
       await choose(client, left);
+
+      // The premise, asserted rather than assumed: choosing the workspace armed
+      // a ticker, and it is the mocked one this test can drive. Everything
+      // below is about that ticker, so silence from a ticker that was never
+      // armed would otherwise read as silence from one that was stopped.
+      t.mock.timers.tick(60_000);
+      assert.ok(reads > 0, 'the workspace that is about to be left had a ticker of its own');
+
+      // Thirty seconds into its next minute, so the switch catches it mid-cycle
+      // and its survival is a question the next thirty seconds answer.
+      t.mock.timers.tick(30_000);
+
       await choose(client, entered);
 
       clock.at = AFTER_NINE;
-      t.mock.timers.tick(60_000);
+      reads = 0;
+      t.mock.timers.tick(30_000);
+      assert.strictEqual(reads, 0,
+        'past 09:00, and the ticker that was running for the workspace that was left did not '
+        + 'complete the minute it was thirty seconds from: it is gone, not merely looking elsewhere');
+
+      t.mock.timers.tick(30_000);
+      assert.ok(reads > 0, 'while the workspace switched to has a ticker on its own minute');
 
       assert.strictEqual(h.internal.routineState[KEY], undefined,
         'past 09:00 and the routine belonging to the workspace that was left has no run state');

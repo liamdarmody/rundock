@@ -114,10 +114,38 @@ goes through the real handler.
 
 Same file, test *the previous workspace routine does not fire when its slot
 passes*. A workspace with a routine due at 09:00 is chosen at 08:00 and
-switched away from. The wired clock then moves to 09:30 and a tick runs. Three
-assertions, none of them about the scheduler's internals: the routine has no
-run state, the stub was never spawned in that workspace (its own prompt log,
-read from that directory), and no `routine-state.json` was written there.
+switched away from. The wired clock then moves to 09:30 and ticks run.
+
+**The three absences this criterion asks for do not, on their own, prove
+anything about the stop, and the first version of this test asserted only
+them.** The tick reads the workspace root at use time, through
+`discoverAgents`, so a ticker that survived the switch would discover the
+roster of the workspace just ENTERED. It could never fire a routine belonging
+to the one that was left, whether it was stopped, left running, or never armed
+at all. An absence guaranteed by the scheduler's use-time read is not evidence
+about the lifecycle. Round 1 of review rejected it on exactly that, and it was
+right to.
+
+So the absences stay, because they are what the criterion asks for in so many
+words, and the observation that DOES differ is made beside them: whether the
+ticker armed for the workspace that was left is still there afterwards, read
+through the tick's phase rather than through anything it spawned.
+
+- The premise is asserted rather than assumed: after choosing the workspace, a
+  tick pass runs, so the ticker under test exists and is the mocked one.
+- It is then left thirty seconds from its next minute, and the switch happens.
+- Those thirty seconds run no pass, which is what a stopped ticker looks like
+  and a surviving one does not.
+- The thirty after them run one, which is what proves a ticker exists to have
+  been counted at all.
+- Then the three absences: no run state for the routine, nothing spawned in the
+  left workspace (its own prompt log, read from that directory), no
+  `routine-state.json` written there.
+
+M17 is the mutation that fires the surviving-ticker assertion specifically: the
+stop forgets the handle without clearing the interval, so the pre-switch ticker
+lives on. It fails with `1 !== 0` on the line that says *it is gone, not merely
+looking elsewhere*.
 
 Both workspaces are built by the test.
 
@@ -180,6 +208,28 @@ a second spawn would have appeared.
 
 Below, in full.
 
+## The boot proof, and why it is booted the way it is
+
+`test/integration/scheduler-boot-lifecycle.test.js` is the test the `CALLERS`
+row for the boot caller names. It has to reach `startServer` with nothing
+already armed, which the obvious harness boot does not do: pointing the server
+at the fixture through `internal.setWorkspace` goes through `setWorkspaceRoot`,
+which now arms the tick, so `startServer` would meet a live handle, decline,
+and the test would stay green with the boot call deleted. Round 1 of review
+caught that; the first version of this test proved nothing.
+
+The harness gained a `presetWorkspace` option, documented beside the `workspace`
+one. It puts the fixture path in `process.env.WORKSPACE` after the fixture
+exists and before `server.js` is required, which is the only window in which
+that variable does anything: `lib/config` reads it once, at require time. The
+setter is never called. `boot()` also records `schedulerRunning()` between the
+require and the listen, a window no test can otherwise reach because `boot()`
+owns both halves.
+
+The test then asserts all three: the root came from the environment, nothing had
+armed a tick before the server listened, and a tick is armed after. M14 removes
+`startScheduler()` from `startServer` and turns it red.
+
 ## Mutation results
 
 Each mutation applied alone, `npm test` run in full (2361 tests), source
@@ -188,48 +238,111 @@ the blast radius is visible rather than asserted.
 
 | # | Mutation | Failing | Tests that turned red |
 |---|---|---|---|
-| M1 | remove `stopScheduler()` from the workspace setter | 6 | *choosing a workspace twice leaves one ticker, not two*; *switching away re-arms the tick rather than leaving the old one running*; *a workspace that disappears takes its ticker with it*; *a routine mid-run when the workspace is switched is not re-fired by the new start*; *no product code arms or disarms the scheduler without being listed here*; *the function every workspace-setting path reaches runs the lifecycle* |
-| M2 | remove `startScheduler()` from the workspace setter | 6 | *choosing a folder arms the tick, and the routine runs when its time comes*, plus the five above other than the vanished-workspace one |
-| M3 | start before stop instead of after | 5 | *choosing a folder arms the tick...*; *choosing a workspace twice...*; *switching away re-arms...*; *a routine mid-run...*; *the function every workspace-setting path reaches runs the lifecycle* |
+| M1 | remove `stopScheduler()` from the workspace setter | 7 | *choosing a workspace twice leaves one ticker, not two*; *switching away re-arms the tick rather than leaving the old one running*; *the previous workspace routine does not fire when its slot passes*; *a workspace that disappears takes its ticker with it*; *a routine mid-run when the workspace is switched is not re-fired by the new start*; *no product code arms or disarms the scheduler without being listed here*; *the function every workspace-setting path reaches runs the lifecycle* |
+| M2 | remove `startScheduler()` from the workspace setter | 8 | the seven above, plus *choosing a folder arms the tick, and the routine runs when its time comes* |
+| M3 | start before stop instead of after | 7 | as M2, without *no product code arms or disarms...* (both calls are still present, so only the order check fails) |
 | M4 | start even when there is no workspace (`if (dir)` dropped) | 1 | *a workspace that disappears takes its ticker with it* |
-| M5 | `schedulerRunning()` always returns true | 1 | *a first run has no workspace and nothing watching the clock* |
-| M6 | remove the pre-existing `if (tickTimer) return` double-arm guard | 1 | *starting the scheduler twice leaves exactly one tick running* (`test/unit/scheduler-lib.test.js`, pre-existing) |
+| M5 | `schedulerRunning()` always returns true | 3 | *a first run has no workspace and nothing watching the clock*; *a workspace that disappears takes its ticker with it*; *booting with a workspace already set arms the tick...* |
+| M6 | remove the pre-existing `if (tickTimer) return` double-arm guard | 1 | *starting the scheduler twice leaves exactly one tick running* (pre-existing) |
 | M7 | let a workspace switch clear the in-flight hold | 1 | *the workspace switch does not release a run that is still going* (pre-existing) |
 | M8 | drop the boot caller from `CALLERS` | 1 | *no product code arms or disarms the scheduler without being listed here* |
 | M9 | point a `CALLERS` row at a test nobody wrote | 1 | *every caller names a test, and every named test exists* |
-| M10 | the no-workspace boot seam ignores its option | 1 | *a first run has no workspace and nothing watching the clock* |
+| M10 | the no-workspace boot seam ignores its option | 2 | *a first run has no workspace and nothing watching the clock*; *booting with a workspace already set arms the tick...* |
 | M11 | a new handler sets the workspace root directly, bypassing the setter | 1 | *the workspace root cannot be written except through the function that runs the lifecycle* |
 | M12 | a new handler reaches the setter and is not listed | 1 | *no product code sets a workspace without being listed here* |
+| M13 | the open re-stamps the value suppression reads | 6 | *choosing a workspace does not write the value suppression reads*, plus five pre-existing suppression tests |
+| M14 | remove `startScheduler()` from the boot path | 2 | *booting with a workspace already set arms the tick...*; *no product code arms or disarms the scheduler without being listed here* |
+| M15 | an exclusion in the enumeration loses its reason | 2 | *a call left out of the enumeration says why* (plus one unrelated flake, below) |
+| M16 | a lifecycle proof arms the tick itself | 1 | *the lifecycle proofs never arm the tick themselves* |
+| M17 | the stop forgets the handle without clearing the interval | 6 | *choosing a workspace twice...*; *switching away re-arms...*; *the previous workspace routine does not fire when its slot passes*; *a workspace that disappears...*; plus two pre-existing scheduler tests |
 
 M11 and M12 are AC-8 read literally: a path that sets a workspace and starts
 nothing, added on purpose to check that it fails by name. Both do, and the
 failure names the file and the function.
 
-No mutation turned nothing red, and none turned the suite red: the largest
-blast radius is six tests out of 2361, and every one of those six is about this
-lifecycle.
+No mutation turned nothing red, and none turned the suite red. The largest
+blast radius is eight tests out of 2361.
 
-### What the mutations exposed, reported rather than tidied away
+## Every proof, and the mutation that names it
 
-**M1 initially missed the test written for it.** *a workspace that disappears
-takes its ticker with it* passed with the stop removed. Each test in that file
-has to arm the scheduler on real timers before enabling mock timers (see
-below), and with the stop gone the start met that live handle, declined, and no
+Round 1 of review found two proofs that no mutation named. The answer to that is
+not to fix the two, it is to ask the question of all of them, so this table
+covers every test in the three files this change adds. A proof with no mutation
+naming it is a proof that cannot fail.
+
+| Test | Turned red by |
+|---|---|
+| *a first run has no workspace and nothing watching the clock* | M5, M10 |
+| *choosing a folder arms the tick, and the routine runs when its time comes* | M2, M3 |
+| *choosing a workspace twice leaves one ticker, not two* | M1, M2, M3, M17 |
+| *switching away re-arms the tick rather than leaving the old one running* | M1, M2, M3, M17 |
+| *the previous workspace routine does not fire when its slot passes* | M1, M2, M3, M17 |
+| *a workspace that disappears takes its ticker with it* | M1, M2, M3, M4, M5, M17 |
+| *choosing a workspace does not write the value suppression reads* | M13 |
+| *a routine mid-run when the workspace is switched is not re-fired by the new start* | M1, M2, M3 |
+| *booting with a workspace already set arms the tick, with nobody calling the starter* | M5, M10, M14 |
+| *no product code arms or disarms the scheduler without being listed here* | M1, M2, M8, M14 |
+| *every caller names a test, and every named test exists* | M9 |
+| *a call left out of the enumeration says why* | M15 |
+| *the lifecycle proofs never arm the tick themselves* | M16 |
+| *no product code sets a workspace without being listed here* | M12 |
+| *the workspace root cannot be written except through the function that runs the lifecycle* | M11 |
+| *the function every workspace-setting path reaches runs the lifecycle* | M1, M2, M3 |
+
+Every proof is named by at least one mutation. Four of these mutations, M13
+through M16, exist only because this table was built: the proofs they name had
+no mutation before it, and two of them, the AC-10 proof and the boot proof, were
+passing regardless of the change.
+
+## What the mutations exposed, reported rather than tidied away
+
+**Two proofs could not fail, and one of them I found and one review found.** M1
+initially turned nothing red on *a workspace that disappears takes its ticker
+with it*: with the stop gone the start met a live handle, declined, and no
 mocked interval was ever created, so counting zero tick bodies proved nothing.
-The test was strengthened to assert `schedulerRunning()` is false after the
-clear, and M1 was re-run: it now fails, and that is the M1 row above. The
-weaker version is not in the diff.
+I strengthened that test and re-ran M1. I did not then ask the same question of
+its siblings, and review found the AC-5/AC-6 proof failing in the same way for a
+different reason. The table above is the answer to the class rather than to
+either instance.
 
 **M6 does not turn the AC-3 test red, and that is correct.** With stop before
 start, a second choose stops the ticker first, so `if (tickTimer) return` never
-fires on that path. AC-3 is guarded here by the stop, which M1 turns red; the
-pre-existing guard keeps its own pre-existing test.
+fires on that path. AC-3 is guarded here by the stop, which M1 and M17 turn red;
+the pre-existing guard keeps its own pre-existing test.
 
-**M7 does not turn the AC-11 test red.** With the hold cleared on switch, the
+**M7 does not turn the AC-11 test red.** With the hold cleared on switch the
 routine is still not re-fired, because `lastRun` was stamped when the run began
-and suppression holds. The hold itself has its own pre-existing test, which M7
-does turn red. The AC-11 test proves the criterion as written, that the new
-start does not re-fire the run, and it is turned red by M1, M2 and M3.
+and suppression holds. The hold has its own pre-existing test, which M7 turns
+red. The AC-11 test proves the criterion as written, that the new start does not
+re-fire the run, and M1, M2 and M3 turn it red.
+
+**M13's blast radius is five pre-existing tests, and they are the right five.**
+It re-stamps `lastRun` on load, so everything that depends on the suppression
+value surviving a load fails with it. That is the property AC-10 is about.
+
+**Two mutation runs had to be discarded and re-run.** M16 first reported 293
+failures and M17 reported 32, all `ENOSPC`. The suite's `makeWorkspace` registers
+each temp fixture for a `cleanup()` that nothing calls, so seventeen full-suite
+runs left 20,708 fixture directories and filled the volume. The numbers in the
+table are from re-runs on a clean disk, and every run is checked for `ENOSPC`
+before its result is recorded. This is a pre-existing property of the suite
+rather than anything this change introduced, and it is not fixed here.
+
+**A gate run failed one unrelated test twice, and it is not this change.**
+*agent CRUD while an orchestrator is live flags it...* in
+`test/integration/delegation.test.js` asserts a spawn count of one and saw two,
+during two gate runs taken while the disk cleanup above was still running. Two
+things settle it. Structurally, that file boots `standardTeam()`, which declares
+no routines at all, so the tick cannot spawn anything in it: `startScheduler`'s
+loop skips an agent with no routines, and no scheduler behaviour can add an
+invocation there. Empirically, five full coverage runs on `origin/main` and five
+on this branch, taken once the machine was quiet, are all green. Recorded as a
+load-sensitive pre-existing flake rather than fixed, because fixing it is not
+this card.
+
+**M15's run also failed one unrelated test, *zombie interrupt*.** It is a
+process-timing test with no connection to an enumeration comment, it passes on
+the unmutated tree, and it is recorded here as a flake rather than as a result.
 
 ## A node behaviour that shapes the test file
 
@@ -274,17 +387,26 @@ other way.
 
 ## Gate
 
-```
-git add -A && npm run precommit
-```
-
-PASS, six steps: `test:coverage`, `typecheck`, `lint:styles`, `check:refs`,
-`mutate:guards`, `check:fixture`.
+Run in the order the gate documents, so that one record describes one tree:
 
 ```
-node scripts/red-first.js --base origin/main --tests "npm test"
+git add -A && npm run precommit    # checks, and the record for the staged tree
+git commit                         # same content, so the same tree hash
+npm run red-first                  # folds the discrimination result into that record
 ```
 
-PROVEN: the tests fail without the change and pass with it. That check carries
-its own limit, which travels with this record: reverting proves the tests
-notice the change, not that they assert the right thing.
+`npm run precommit`: PASS, six steps: `test:coverage`, `typecheck`,
+`lint:styles`, `check:refs`, `mutate:guards`, `check:fixture`.
+
+`npm run red-first --base origin/main`: PROVEN, the tests fail without the
+change and pass with it, and the result is in the below-the-line record for the
+measured tree rather than only in this file.
+
+Round 1 of review flagged that those two records disagreed, because red-first
+had been run by hand against an earlier tree and the gate was then re-run for a
+later one, which cleared the field. The order above is what stops that: the
+gate record and this file now describe the same tree.
+
+Red-first carries its own limit, which travels with this record: reverting
+proves the tests notice the change, not that they assert the right thing. That
+is the gap the mutation table and the per-proof audit above exist to close.
