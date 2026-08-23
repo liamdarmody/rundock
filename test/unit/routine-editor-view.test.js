@@ -682,3 +682,88 @@ describe('routine editor: the reply reaches the user', () => {
     assert.deepStrictEqual(w.failedWith, []);
   });
 });
+
+describe('routine editor: the way in from an agent', () => {
+  // THE ONLY DOOR TO THE SCOPED EDITOR, and nothing rendered it.
+  //
+  // Every other test of the scoped entry calls the entry function directly,
+  // which proves the function works and says nothing about whether anything
+  // calls it. Delete the control from the profile, or break the agent id
+  // written into it, and the whole suite stays green while the scoped entry
+  // point no longer exists.
+  //
+  // Same shape as the router line and the skill dispatch case, and the same
+  // treatment: render the real profile and press the real control.
+  const PROFILE_SRC = fs.readFileSync(path.join(ROOT, 'public', 'views', 'profile.js'), 'utf-8');
+
+  function profileFor(agent) {
+    const dom = new JSDOM('<!doctype html><html><body>'
+      + '<div id="profile-content"></div>'
+      + '<div id="view-routine-editor"><div id="routine-editor-content"></div></div>'
+      + '</body></html>', { runScripts: 'dangerously' });
+    const w = dom.window;
+    w.eval(MODEL_SRC);
+    w.eval(VIEW_SRC);
+    w.eval(PROFILE_SRC);
+    w.agents = [agent];
+    w.conversations = [];
+    w.skills = skillFixture();
+    w.skillsLoaded = true;
+    w.esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    w.formatTimeAgo = () => 'a while ago';
+    w.getGuide = () => ({ id: 'doc' });
+    w.switchNav = () => {};
+    w.setNavState = () => {};
+    w.showView = () => {};
+    w.startConversation = () => {};
+    w.addToTeam = () => {};
+    w.openConversation = () => {};
+    w.selectSkill = () => {};
+    w.Intl = { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'Europe/London' }) }) };
+    w.showProfile(agent.id);
+    return { w, doc: w.document, dom };
+  }
+
+  const PIPER = {
+    id: 'piper', displayName: 'Piper', role: 'Ops summaries', colour: '#E87A5A',
+    icon: 'P', status: 'active', runtime: 'claude',
+  };
+
+  test('an agent profile offers a way to schedule one of its skills', () => {
+    const { doc, dom } = profileFor(PIPER);
+    const control = doc.querySelector('[data-profile-action="add-routine"]');
+    assert.ok(control, 'the profile is the only door to the scoped editor and it has to be on the page');
+    assert.match(control.textContent, /Add routine/);
+    dom.window.close();
+  });
+
+  test('pressing it opens the editor scoped to that agent', () => {
+    const { doc, w, dom } = profileFor(PIPER);
+    const control = doc.querySelector('[data-profile-action="add-routine"]');
+    control.click();
+
+    // The agent the control was rendered for and the agent the editor opened
+    // for, asserted against each other rather than each against a constant, so
+    // a wrong id written into the handler fails even though both halves look
+    // right on their own.
+    assert.strictEqual(control.getAttribute('data-agent-id'), PIPER.id, 'sanity: the control names the agent it was rendered for');
+    const body = doc.getElementById('routine-editor-content').textContent.replace(/\s+/g, ' ');
+    assert.match(body, /Pick a skill Piper already has/, 'the editor opened scoped to the agent whose profile it was pressed on');
+
+    const offered = [...doc.querySelectorAll('[data-skill-key]')].map(r => r.getAttribute('data-skill-key'));
+    assert.deepStrictEqual(offered, ['ops-summary:piper'], 'and it offers that agent\'s skills, not the whole team\'s');
+    dom.window.close();
+  });
+
+  // A profile for an agent with no skills still offers the way in; what it
+  // reaches is the offer to build one, which is a different state and not a
+  // reason to hide the door.
+  test('an agent with no skills of its own still offers the way in', () => {
+    const { doc, dom } = profileFor({ ...PIPER, id: 'solo', displayName: 'Solo' });
+    const control = doc.querySelector('[data-profile-action="add-routine"]');
+    assert.ok(control, 'the control does not depend on the agent already having a skill');
+    control.click();
+    assert.ok(doc.querySelector('[data-routine-editor="create-skill"]'));
+    dom.window.close();
+  });
+});

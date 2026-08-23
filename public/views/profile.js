@@ -96,7 +96,8 @@ function showProfile(agentId) {
     // agent, so the picker offers only the skills it has.
     h+=`<div class="profile-card-section"><div class="profile-section-label">Add a routine</div>
       <div class="profile-card-text" style="padding-bottom:10px">Give one of ${esc(a.displayName)}'s skills a schedule.</div>
-      <button class="settings-btn-primary" type="button" onclick="addRoutineForAgent('${esc(a.id)}')">Add routine</button>
+      <button class="settings-btn-primary" type="button" data-profile-action="add-routine"
+        data-agent-id="${esc(a.id)}" onclick="addRoutineForAgent('${esc(a.id)}')">Add routine</button>
     </div>`;
     if(hasConnectors) {
       h+=`<div class="profile-card-section"><div class="profile-section-label">Connectors</div>${a.capabilities.connectors.split(',').map(cn=>`<div class="profile-card-item" style="display:flex;align-items:center;justify-content:space-between">${cn.trim()}<span style="color:var(--success);font-size:var(--caption)">Connected</span></div>`).join('')}</div>`;

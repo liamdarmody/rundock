@@ -288,8 +288,8 @@ Run on the tree this file is committed with:
 | the run-on row reads its name off the option | 1 | `the local option on the page promises nothing about the computer being off` |
 | the caveat is rendered inside the field | 1 | `the caveat is rendered inside the run-on field` |
 | the reserved option cannot be selected by pressing its row | 1 | `the always-on option cannot be picked` |
-| the zero-skills state offers something to press | 3 | `a workspace with no skills renders the create-a-skill path`<br>`the create-a-skill path leads somewhere`<br>`a loaded and empty workspace still gets the offer` |
-| the zero-skills state does not ask the reader to pick from nothing | 4 | `a workspace with no skills renders the create-a-skill path`<br>`the zero-skills state does not ask the reader to pick from nothing`<br>`the create-a-skill path leads somewhere`<br>`a loaded and empty workspace still gets the offer` |
+| the zero-skills state offers something to press | 4 | `a workspace with no skills renders the create-a-skill path`<br>`the create-a-skill path leads somewhere`<br>`a loaded and empty workspace still gets the offer`<br>`an agent with no skills of its own still offers the way in` |
+| the zero-skills state does not ask the reader to pick from nothing | 5 | `a workspace with no skills renders the create-a-skill path`<br>`the zero-skills state does not ask the reader to pick from nothing`<br>`the create-a-skill path leads somewhere`<br>`a loaded and empty workspace still gets the offer`<br>`an agent with no skills of its own still offers the way in` |
 | a save that cannot be built does not leave the editor | 1 | `a schedule value that was never offered saves nothing and stays put` |
 | a save asks for the routine it built | 1 | `saving sends the routine that was built` |
 | a skill name reaches the page as text, not as markup | 1 | `a skill name carrying markup renders as text` |
@@ -311,12 +311,14 @@ Run on the tree this file is committed with:
 | the client shows the refusal the server sent | 2 | `a refusal is shown to the user and handed back to the editor`<br>`a refusal with no message still says something` |
 | the roster is invalidated before it is rebroadcast | 1 | `a routine lands in the agent file it names` |
 | a refusal from the data model is reported rather than swallowed | 2 | `a routine the data model refuses is an error, not a half written file`<br>`a file the routine cannot be placed in errors and is left byte identical` |
+| an agent profile offers a way to schedule its skills | 3 | `an agent profile offers a way to schedule one of its skills`<br>`pressing it opens the editor scoped to that agent`<br>`an agent with no skills of its own still offers the way in` |
+| the way in carries the agent whose profile it is on | 2 | `pressing it opens the editor scoped to that agent`<br>`an agent with no skills of its own still offers the way in` |
 
-**Four things are mutated: the model, the view, the client's message dispatch and the handler that writes the routine.** That is not thoroughness
+**Five things are mutated: the model, the view, the client's message dispatch, the handler that writes the routine, and the agent profile that renders the way in.** That is not thoroughness
 for its own sake. The model can carry exactly the right words while the view
 renders different ones, and every model test still passes. The rule this editor
 exists to hold is a claim about what a person SEES, so the render is broken and
-noticed too. Nineteen break the render, four break the dispatch and two break the handler.
+noticed too. Nineteen break the render, four break the dispatch, two break the handler and two break the entry point.
 
 **Four tests exist because a mutation asked for them, not because they were
 thought of first.** Two turned nothing red on the model's first run and two on
@@ -454,6 +456,45 @@ assert the adjacent thing just as easily as a test can.
 matches the frames in both themes, and whether the zero-skills state reads as an
 offer, are judgements about a built interface. They are for the owner looking at
 it, and no diff can carry them.
+
+## Round three
+
+One finding, and it is the third instance of a class already fixed twice here.
+
+**The only door into the scoped editor had no test.** The way in is a control
+rendered on an agent's profile, and every test of the scoped entry called the
+entry function directly. That proves the function works and says nothing about
+whether anything calls it. The control could be deleted, or the agent id written
+into it broken, with the suite, the mutation table and the contract test all
+staying green while the scoped entry point no longer existed.
+
+Same treatment as the router line and the skill dispatch case: the profile is
+rendered for real and the control is pressed for real, then the editor is read
+back to check it opened scoped to that agent. The profile is a mutation target
+now, and deleting the control turns three tests red.
+
+The agent the control was RENDERED for and the agent the editor OPENED for are
+asserted against each other, not each against a constant, which is the same
+pairing the breadcrumb needed: a wrong id in the handler leaves both halves
+looking right on their own.
+
+## The instrument had the defect it exists to find
+
+A mutation whose search text appears more than once was silently breaking
+whichever came first. One did: the text appeared six times in its file, the
+mutation broke a different handler, and the row read as a proven guard while the
+guard it named was never touched.
+
+That is now structural rather than a habit. A guard matching more than one place
+is REFUSED, with the count, and the run fails:
+
+```
+AMBIGUOUS: the guard text matches 3 places, so it would break whichever came first
+```
+
+The table's authority rests on each mutation breaking the thing it says it
+breaks, and until now nothing was checking that. The fix for an ambiguous guard
+is to make its search text unique, usually by including a neighbouring line.
 
 ## Red-first and the gate
 

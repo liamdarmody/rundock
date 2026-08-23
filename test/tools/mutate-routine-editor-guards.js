@@ -54,6 +54,8 @@ const VIEW = { src: path.join(ROOT, 'public', 'views', 'routine-editor.js'), sui
 const APP = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routine-editor-view.test.js' };
 // The handler that writes the routine.
 const HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/unit/routine-write.test.js' };
+// The agent profile, which renders the only way into the scoped editor.
+const PROFILE = { src: path.join(ROOT, 'public', 'views', 'profile.js'), suite: 'test/unit/routine-editor-view.test.js' };
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -212,6 +214,16 @@ const MUTATIONS = [
   [HANDLER, 'a refusal from the data model is reported rather than swallowed',
     "    fail(e && e.message ? e.message : 'That routine could not be written.');\n    return;",
     '    return;'],
+
+  // The door. Every other test of the scoped entry calls the entry function
+  // directly, which says nothing about whether anything calls it.
+  [PROFILE, 'an agent profile offers a way to schedule its skills',
+    '      <button class="settings-btn-primary" type="button" data-profile-action="add-routine"\n'
+    + '        data-agent-id="${esc(a.id)}" onclick="addRoutineForAgent(\'${esc(a.id)}\')">Add routine</button>\n',
+    ''],
+  [PROFILE, 'the way in carries the agent whose profile it is on',
+    'onclick="addRoutineForAgent(\'${esc(a.id)}\')"',
+    'onclick="addRoutineForAgent(\'\')"'],
 ];
 
 // The reporter is named explicitly rather than left to the default, which
@@ -254,13 +266,31 @@ function run() {
   // Both files are read up front and both are restored in the same finally, so
   // a throw part way through cannot leave either one mutated.
   const originals = new Map();
-  for (const target of [MODEL, VIEW, APP, HANDLER]) originals.set(target, fs.readFileSync(target.src, 'utf8'));
+  for (const target of [MODEL, VIEW, APP, HANDLER, PROFILE]) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];
   try {
     for (const [target, label, guard, without] of MUTATIONS) {
       const original = originals.get(target);
-      if (!original.includes(guard)) {
+      const matches = original.split(guard).length - 1;
+      if (matches === 0) {
         results.push({ label, applied: false, red: [] });
+        continue;
+      }
+      // A GUARD THAT MATCHES MORE THAN ONCE IS REFUSED RATHER THAN TAKING THE
+      // FIRST.
+      //
+      // String.replace takes the first occurrence, so a search text that also
+      // appears somewhere else quietly breaks the wrong code and reports on
+      // whatever that turns red. One entry here did exactly that: the text
+      // appeared six times in its file, the mutation broke a different
+      // handler, and the row read as a proven guard while the guard it names
+      // was never touched.
+      //
+      // The table's authority rests on each mutation breaking the thing it
+      // says it breaks, and nothing was checking that. This is the check: make
+      // the search text unique, usually by including a neighbouring line.
+      if (matches > 1) {
+        results.push({ label, applied: false, ambiguous: matches, red: [] });
         continue;
       }
       fs.writeFileSync(target.src, original.replace(guard, without));
@@ -276,7 +306,13 @@ function run() {
 function report(results, markdown) {
   let failed = 0;
   const lines = [];
-  for (const { label, applied, red } of results) {
+  for (const { label, applied, red, ambiguous } of results) {
+    if (ambiguous) {
+      failed++;
+      const why = `the guard text matches ${ambiguous} places, so it would break whichever came first`;
+      lines.push(markdown ? `| ${label} | **${why}** | |` : `${label}\n  AMBIGUOUS: ${why}`);
+      continue;
+    }
     if (!applied) {
       failed++;
       lines.push(markdown
@@ -308,7 +344,8 @@ function report(results, markdown) {
 if (require.main === module) {
   const failed = report(run(), process.argv.includes('--markdown'));
   if (failed) {
-    console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded.`);
+    console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded,`
+      + ' and a mutation that could break more than one place proves nothing about either.');
     process.exit(1);
   }
 }
