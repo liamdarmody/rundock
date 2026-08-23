@@ -249,7 +249,7 @@ function handle(d) {
       break;
     case 'needs_workspace': showView('workspace'); break;
     case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesSidebar(); renderConvoList(); break;
-    case 'skills': skills=d.skills; skillsLoaded=true; renderSkills(); if(palettePendingSkill){const s=palettePendingSkill;palettePendingSkill=null;selectSkill(s);} break;
+    case 'skills': skills=d.skills; skillsLoaded=true; renderSkills(); routineEditorSkillsArrived(d.skills); if(palettePendingSkill){const s=palettePendingSkill;palettePendingSkill=null;selectSkill(s);} break;
     case 'conversations':
       handlePersistedConversations(d.conversations, d.lastActiveConversationId);
       // Conversations are the last of the four payloads the client requests on
@@ -432,6 +432,19 @@ function handle(d) {
       break;
     case 'skill_error':
       addSystemMsg(d.message || 'Skill operation failed');
+      break;
+    // A routine write is the one save in this client the user waits on: the
+    // editor stays on screen until the server answers, so a refusal has
+    // somewhere to land. Both replies go to the editor AND to the message
+    // area, the way agent and skill replies do, because the editor may already
+    // have been left by hand.
+    case 'routine_saved':
+      addSystemMsg('Routine "' + (d.name || '') + '" added to ' + (d.agentId || '') );
+      routineEditorSaved();
+      break;
+    case 'routine_error':
+      addSystemMsg(d.message || 'Routine could not be saved');
+      routineEditorFailed(d.message);
       break;
     case 'skill_deleted':
       addSystemMsg('Skill "' + (d.skillId || '') + '" removed');
@@ -963,12 +976,6 @@ function switchNav(nav) {
   // and search state don't survive into a context where they no longer make
   // sense or reference DOM that's about to be replaced.
   closeFindBar();
-  // Where a saved routine lands. The routines surface does not have its own
-  // rail entry yet, so the destination resolves to the section that lists
-  // routines today. Resolved HERE rather than at each caller, so the editor
-  // keeps one answer for where a save goes and gains the real list the day
-  // the rail entry exists, without being edited.
-  if (nav === 'routines' && !document.querySelector('[data-nav="routines"]')) nav = 'team';
   setNavState(nav);
   if(nav==='settings') { showView('settings'); showSettingsSection('workspace'); }
   else if(nav==='files') {

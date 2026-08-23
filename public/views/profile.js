@@ -91,9 +91,9 @@ function showProfile(agentId) {
       }
       h+=`</div>`;
     }
-    // Scheduling starts from the agent, which is Journey 2's original entry:
-    // you are already looking at the agent and think of the schedule second.
-    // The editor opens scoped to it, so the picker is this agent's skills.
+    // Scheduling often starts from the agent: you are already looking at it
+    // and think of the schedule second. The editor opens scoped to this
+    // agent, so the picker offers only the skills it has.
     h+=`<div class="profile-card-section"><div class="profile-section-label">Add a routine</div>
       <div class="profile-card-text" style="padding-bottom:10px">Give one of ${esc(a.displayName)}'s skills a schedule.</div>
       <button class="settings-btn-primary" type="button" onclick="addRoutineForAgent('${esc(a.id)}')">Add routine</button>

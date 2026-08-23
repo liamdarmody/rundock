@@ -117,13 +117,15 @@
     pickAny: 'Step 1 of 2. Pick a skill any of your agents already has.',
     schedule: 'Step 2 of 2. Say when to run it, in plain terms.',
     empty: 'Routines schedule skills your agents already have. Build one and it will show up here.',
+    loading: 'Looking for skills your agents can run.',
     build: 'Build a skill',
   };
 
-  // Where save goes. Journey 2 ends at the routines list, so the editor's job
-  // finishes by leaving. Named here rather than in the view because it is a
-  // fact about the flow, and a view that decides its own exit is how two
-  // entries into one editor end up leaving to two different places.
+  // Where save goes. A routine that has been written belongs on the list of
+  // routines, so the editor's job finishes by leaving. Named here rather than
+  // in the view because it is a fact about the flow, and a view that decides
+  // its own exit is how two entries into one editor end up leaving to two
+  // different places.
   const SAVE_DESTINATION = 'routines';
 
   // ===== THE RUN-ON FIELD =====

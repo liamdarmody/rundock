@@ -64,3 +64,7 @@
 
 .re-link { font-family: inherit; font-size: inherit; color: var(--accent); background: none; border: none; padding: 0; cursor: pointer; }
 .re-link:hover { text-decoration: underline; }
+
+/* A refusal from the server, shown next to the button that caused it. The
+   editor is still on screen precisely so this has somewhere to go. */
+.re-problem { font-size: var(--caption); color: var(--danger); line-height: 1.5; margin: 0 0 4px; }

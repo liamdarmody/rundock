@@ -288,18 +288,27 @@ Run on the tree this file is committed with:
 | the run-on row reads its name off the option | 1 | `the local option on the page promises nothing about the computer being off` |
 | the caveat is rendered inside the field | 1 | `the caveat is rendered inside the run-on field` |
 | the reserved option cannot be selected by pressing its row | 1 | `the always-on option cannot be picked` |
-| the zero-skills state offers something to press | 2 | `a workspace with no skills renders the create-a-skill path`<br>`the create-a-skill path leads somewhere` |
-| the zero-skills state does not ask the reader to pick from nothing | 3 | `a workspace with no skills renders the create-a-skill path`<br>`the zero-skills state does not ask the reader to pick from nothing`<br>`the create-a-skill path leads somewhere` |
+| the zero-skills state offers something to press | 3 | `a workspace with no skills renders the create-a-skill path`<br>`the create-a-skill path leads somewhere`<br>`a loaded and empty workspace still gets the offer` |
+| the zero-skills state does not ask the reader to pick from nothing | 4 | `a workspace with no skills renders the create-a-skill path`<br>`the zero-skills state does not ask the reader to pick from nothing`<br>`the create-a-skill path leads somewhere`<br>`a loaded and empty workspace still gets the offer` |
 | a save that cannot be built does not leave the editor | 1 | `a schedule value that was never offered saves nothing and stays put` |
-| a save sends the routine before it leaves | 1 | `saving sends the routine that was built` |
+| a save asks for the routine it built | 1 | `saving sends the routine that was built` |
 | a skill name reaches the page as text, not as markup | 1 | `a skill name carrying markup renders as text` |
 | the time zone reaches the page | 2 | `the browser's zone reaches the schedule step as words`<br>`the time zone reads as a place and never as an offset` |
+| sending is not saving | 2 | `save returns to the list, and only once the routine is written`<br>`a refused save stays put and says why` |
+| a refusal is shown where the reader is looking | 1 | `a refused save stays put and says why` |
+| a refused save does not leave the editor | 1 | `a refused save stays put and says why` |
+| a save in flight is not sent twice | 1 | `a save in flight cannot be sent twice` |
+| the destination is checked for a sidebar panel, not just a rail entry | 1 | `a destination the shell only half has is not used` |
+| an unreachable destination falls back to one the shell has | 3 | `save returns to the list, and only once the routine is written`<br>`the destination is the routines surface once the shell can reach it`<br>`a destination the shell only half has is not used` |
+| a skill list that has not arrived is not an empty one | 1 | `an editor opened before the skills arrive waits instead of offering` |
+| the editor asks for the skill list it is missing | 1 | `an editor opened before the skills arrive waits instead of offering` |
+| the skill list fills in when it arrives | 1 | `an editor opened before the skills arrive waits instead of offering` |
 
 **Both halves are mutated: the model and the view.** That is not thoroughness
 for its own sake. The model can carry exactly the right words while the view
 renders different ones, and every model test still passes. The rule this editor
 exists to hold is a claim about what a person SEES, so the render is broken and
-noticed too. Ten of the twenty-eight break the render.
+noticed too. Nineteen of the thirty-seven break the render.
 
 **Four tests exist because a mutation asked for them, not because they were
 thought of first.** Two turned nothing red on the model's first run and two on
@@ -320,6 +329,74 @@ the view's:
   schedule value that was never offered saves nothing and stays put` picks a
   skill and sets a time the builder never offered, which is the case that
   reaches the second.
+
+## What an independent review found, and what changed
+
+Four blocking findings. All four were real and all four are fixed here. Two of
+them compounded into the worst outcome this flow had.
+
+**A save that changed nothing reported success.** `appendRoutineBlock` handed
+back the content it was given when the frontmatter pattern did not match, and
+the handler wrote those unchanged bytes, logged the add and announced the save.
+The pattern fails on a file with Windows line endings, which the migration path
+in that same module already says exist, and on a file with no frontmatter.
+
+It now refuses, and says which of the two it means. It also READS THE ROUTINE
+BACK before returning: every named refusal covers a cause somebody thought of,
+and the read-back covers the ones nobody has met yet. The handler keeps a
+backstop of its own, refusing when the bytes are identical, because announcing
+a save that did not happen is worse than any error.
+
+**And no refusal could have reached the user anyway.** The client dispatch had
+no case for either reply, so both fell out of the switch in silence, unlike
+every other error the client handles. Both are handled now, and the editor no
+longer leaves on send: it waits to be told, so a refusal has somewhere to land,
+and it says so next to the button that caused it. `a refused save stays put and
+says why` and the three tests in `routine editor: the reply reaches the user`
+cover it. Those last three cut the two case bodies out of the client source and
+RUN them against stubs, which is the difference between checking the words are
+there and checking what they do.
+
+**AC-11's proof would have passed with the feature deleted.** It asserted that a
+stubbed router had been handed a string. The line that actually resolved that
+destination lived inside the router, could only be reached by loading the whole
+shell, and could be deleted with the suite green.
+
+The resolution is now a function in the view, `routinesListNav`, and the router
+line is gone. The test drives it against a real DOM and checks the destination
+for the property that makes it one: the shell must have BOTH a rail entry
+carrying the name and the sidebar panel revealed by it. Half of a destination is
+worse than none, because the router hides every sidebar and matches no branch,
+which leaves the editor on screen with the save looking like it did nothing.
+Three tests, three mutations, and `a destination the shell only half has is not
+used` exists because a mutation asked for it.
+
+**The picker's fixture had never been compared to what produces the list.** Every
+picker test asserted against a hand-written fixture shaped the way the picker
+reads it, which proves the picker agrees with its author and not that it agrees
+with discovery.
+
+This is the same shape as the absence this card is built around, and the
+reviewer was right to name it that way: an assertion that matches only your own
+reader passes whether or not it matches the producer.
+`test/unit/routine-editor-contract.test.js` scaffolds a real workspace, runs the
+same discovery the server runs to answer a client asking for skills, and feeds
+the result into the picker unmodified. The shape turned out to be right. It is
+now proven rather than assumed, and it fails with the key named if discovery
+moves.
+
+**One advisory was worth taking with them:** an unloaded skill list is not an
+empty one, and the two were indistinguishable, so the offer to build a first
+skill was shown to anyone who opened the editor before the reply arrived. The
+editor now asks for the list, waits, and fills in when it lands.
+
+**One test was passing for the wrong reason and the fix found it.** Asserting
+only that a refusal was sent left the two unwritable files green even when
+discovery never saw them, because a missing agent produces a refusal and an
+untouched file too. Asserting the MESSAGE turned it red, and it was red: a
+stale roster cache meant the append path was never reached. The fixture now
+clears that cache, and lets the lazy migration settle before it snapshots, so a
+byte comparison changes only if the code under test changed it.
 
 ## Red-first and the gate
 

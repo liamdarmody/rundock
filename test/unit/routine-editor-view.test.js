@@ -42,6 +42,11 @@ function skillFixture() {
 // time zone is handed in.
 function mount(opts = {}) {
   const dom = new JSDOM('<!doctype html><html><body>'
+    // The shell as it stands today: a rail button and a sidebar panel for each
+    // section the router can reach. The routines surface has neither yet, which
+    // is the condition the save destination has to resolve against.
+    + '<button class="nav-item" data-nav="team"></button><div id="sidebar-team"></div>'
+    + '<button class="nav-item" data-nav="skills"></button><div id="sidebar-skills"></div>'
     + '<div id="view-routine-editor" class="hidden"><div id="routine-editor-content"></div></div>'
     + '</body></html>',
     // The modules are evaluated inside the window, the way index.html loads
@@ -172,6 +177,56 @@ describe('routine editor view: the two ways in', () => {
     const { doc, dom } = withRoster(null);
     assert.match(text(doc), /Pick a skill any of your agents already has/);
     assert.strictEqual(doc.querySelectorAll('[data-skill-key]').length, 2);
+    dom.window.close();
+  });
+
+  // An empty list before the reply arrives is not a workspace with no skills.
+  // Shown as one, it offers to build a first skill to somebody whose agents
+  // already have several.
+  test('an editor opened before the skills arrive waits instead of offering', () => {
+    const dom = new JSDOM('<!doctype html><html><body>'
+      + '<div id="view-routine-editor"><div id="routine-editor-content"></div></div>'
+      + '</body></html>', { runScripts: 'dangerously' });
+    const w = dom.window;
+    w.eval(MODEL_SRC);
+    w.eval(VIEW_SRC);
+    w.showView = () => {};
+    w.setNavState = () => {};
+    w.agents = [{ id: 'piper', displayName: 'Piper' }];
+    w.skills = [];
+    w.skillsLoaded = false;
+    w.sent = [];
+    w.ws = { send: (m) => w.sent.push(JSON.parse(m)) };
+    w.Intl = { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'Europe/London' }) }) };
+
+    w.addRoutineForAgent('piper');
+    const body = w.document.getElementById('routine-editor-content').textContent;
+    assert.ok(!body.includes('Build a skill'), 'nothing is known yet, so nothing is offered');
+    assert.ok(!w.document.querySelector('[data-routine-editor="create-skill"]'));
+    assert.ok(w.sent.some(m => m.type === 'get_skills'), 'it asks for the list it is missing');
+
+    // And it fills in when the reply lands, rather than sitting there.
+    w.routineEditorSkillsArrived(skillFixture());
+    assert.strictEqual(w.document.querySelectorAll('[data-skill-key]').length, 1);
+    dom.window.close();
+  });
+
+  // A workspace that genuinely has none still gets the offer.
+  test('a loaded and empty workspace still gets the offer', () => {
+    const dom = new JSDOM('<!doctype html><html><body>'
+      + '<div id="view-routine-editor"><div id="routine-editor-content"></div></div>'
+      + '</body></html>', { runScripts: 'dangerously' });
+    const w = dom.window;
+    w.eval(MODEL_SRC);
+    w.eval(VIEW_SRC);
+    w.showView = () => {};
+    w.setNavState = () => {};
+    w.agents = [{ id: 'piper', displayName: 'Piper' }];
+    w.skills = [];
+    w.skillsLoaded = true;
+    w.Intl = { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'Europe/London' }) }) };
+    w.addRoutineForAgent('piper');
+    assert.ok(w.document.querySelector('[data-routine-editor="create-skill"]'), 'this one really has none');
     dom.window.close();
   });
 
@@ -352,11 +407,88 @@ describe('routine editor view: saving', () => {
     dom.window.close();
   });
 
-  // AC-11.
-  test('save returns to the list', () => {
+  // AC-11, and it does NOT assert that a stub was handed a string.
+  //
+  // The editor waits for the server, so the sequence is the claim: sending
+  // alone must not leave, and the reply is what does. Then the destination is
+  // checked for the property that makes it a destination at all, which is the
+  // half that was missing: a section the router cannot reach hides every
+  // sidebar and matches no branch, so the editor stays on screen and the save
+  // looks like it did nothing.
+  test('save returns to the list, and only once the routine is written', () => {
+    const { w, doc, dom } = atReady();
+    w.saveRoutine();
+    assert.strictEqual(w.navigatedTo, null, 'sending is not saving');
+
+    w.routineEditorSaved();
+    assert.strictEqual(w.navigatedTo, w.routinesListNav(), 'the reply is what leaves');
+    assert.ok(w.navigatedTo, 'a destination was chosen');
+    // Both halves, because the router needs both: the rail button it marks
+    // active and the sidebar panel it reveals by the same name.
+    assert.ok(doc.querySelector(`[data-nav="${w.navigatedTo}"]`),
+      `the router has no rail entry for "${w.navigatedTo}", so it cannot go there`);
+    assert.ok(doc.getElementById(`sidebar-${w.navigatedTo}`),
+      `the router has no sidebar panel for "${w.navigatedTo}", so it would hide every one`);
+    dom.window.close();
+  });
+
+  // The resolution itself, both ways round. Today there is no routines rail
+  // entry and it lands on the section that lists routines; the day that entry
+  // exists it lands on the routines surface, with nothing here edited.
+  test('the destination is the routines surface once the shell can reach it', () => {
+    const { w, doc, dom } = atReady();
+    assert.strictEqual(w.routinesListNav(), 'team', 'no routines rail entry yet');
+
+    const button = doc.createElement('button');
+    button.setAttribute('data-nav', 'routines');
+    const panel = doc.createElement('div');
+    panel.id = 'sidebar-routines';
+    doc.body.append(button, panel);
+    assert.strictEqual(w.routinesListNav(), w.RundockRoutineEditorModel.SAVE_DESTINATION);
+    dom.window.close();
+  });
+
+  // Half a destination is not one. A rail button with no panel would make the
+  // router hide every sidebar and reveal nothing.
+  test('a destination the shell only half has is not used', () => {
+    const { w, doc, dom } = atReady();
+    const button = doc.createElement('button');
+    button.setAttribute('data-nav', 'routines');
+    doc.body.append(button);
+    assert.strictEqual(w.routinesListNav(), 'team', 'a rail entry with no panel is not a destination');
+    dom.window.close();
+  });
+
+  // The refusal has to reach the reader, and the editor is still on screen so
+  // that it has somewhere to go.
+  test('a refused save stays put and says why', () => {
+    const { w, doc, dom } = atReady();
+    w.saveRoutine();
+    w.routineEditorFailed('That agent was removed.');
+    assert.strictEqual(w.navigatedTo, null, 'a refused save does not return to the list');
+    const shown = doc.querySelector('[data-routine-editor="error"]');
+    assert.ok(shown, 'the refusal is on the page');
+    assert.match(shown.textContent, /That agent was removed\./);
+    dom.window.close();
+  });
+
+  test('a refused save can be tried again', () => {
+    const { w, doc, dom } = atReady();
+    w.saveRoutine();
+    w.routineEditorFailed('Temporary problem.');
+    assert.ok(!doc.querySelector('[data-routine-editor="save"]').hasAttribute('disabled'));
+    w.saveRoutine();
+    assert.strictEqual(w.sent.length, 2, 'the second attempt is sent');
+    w.routineEditorSaved();
+    assert.strictEqual(w.navigatedTo, w.routinesListNav());
+    dom.window.close();
+  });
+
+  test('a save in flight cannot be sent twice', () => {
     const { w, dom } = atReady();
     w.saveRoutine();
-    assert.strictEqual(w.navigatedTo, w.RundockRoutineEditorModel.SAVE_DESTINATION);
+    w.saveRoutine();
+    assert.strictEqual(w.sent.length, 1, 'the button is spent until the server answers');
     dom.window.close();
   });
 
@@ -372,6 +504,10 @@ describe('routine editor view: saving', () => {
     w.saveRoutine();
     assert.deepStrictEqual(w.sent, [], 'nothing the builder refuses reaches an agent file');
     assert.strictEqual(w.navigatedTo, null, 'a failed save does not return to a list without it');
+    // And a reply that arrives for some other save cannot move an editor that
+    // never sent one.
+    w.routineEditorSaved();
+    assert.strictEqual(w.navigatedTo, null, 'nothing was in flight, so nothing leaves');
     dom.window.close();
   });
 
@@ -405,5 +541,61 @@ describe('routine editor view: the words on the page', () => {
     assert.strictEqual(doc.querySelectorAll('img').length, 0, 'a skill name is text, never markup');
     assert.match(text(doc), /<img src=x onerror=alert\(1\)>/);
     dom.window.close();
+  });
+});
+
+describe('routine editor: the reply reaches the user', () => {
+  // The dispatch lives in app.js, which the suite does not load. So rather
+  // than matching strings in it, the two case BODIES are cut out and RUN,
+  // against stubs, which is the difference between checking the words are
+  // there and checking what they do.
+  //
+  // This exists because both replies previously fell out of the switch in
+  // silence, unlike every other error the client handles. A refused save left
+  // the reader on a list without the routine and with nothing said.
+  const APP_SRC = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf-8');
+
+  function caseBody(type) {
+    const re = new RegExp(`case '${type}':([\\s\\S]*?)\\n      break;`);
+    const m = APP_SRC.match(re);
+    assert.ok(m, `the client dispatch has no case for ${type}`);
+    return m[1];
+  }
+
+  function runCase(type, message) {
+    const w = new JSDOM('<!doctype html>', { runScripts: 'dangerously' }).window;
+    w.said = [];
+    w.addSystemMsg = (text) => w.said.push(text);
+    w.savedCalled = 0;
+    w.failedWith = [];
+    w.routineEditorSaved = () => { w.savedCalled++; };
+    w.routineEditorFailed = (m) => { w.failedWith.push(m); };
+    w.d = message;
+    w.eval(`(function () {${caseBody(type)}\n})()`);
+    return w;
+  }
+
+  test('a refusal is shown to the user and handed back to the editor', () => {
+    const w = runCase('routine_error', { type: 'routine_error', message: 'That agent was removed.' });
+    assert.deepStrictEqual(w.said, ['That agent was removed.'],
+      'the server message is what the user sees, not a generic one');
+    assert.deepStrictEqual(w.failedWith, ['That agent was removed.'],
+      'the editor is told, so it can stay put and show it');
+    assert.strictEqual(w.savedCalled, 0);
+  });
+
+  test('a refusal with no message still says something', () => {
+    const w = runCase('routine_error', { type: 'routine_error' });
+    assert.strictEqual(w.said.length, 1);
+    assert.ok(w.said[0] && w.said[0].trim(), 'silence is the failure this case exists to prevent');
+  });
+
+  test('a written routine is confirmed and the editor is released', () => {
+    const w = runCase('routine_saved', { type: 'routine_saved', agentId: 'piper', name: 'Compile the ops summary' });
+    assert.strictEqual(w.savedCalled, 1, 'the editor leaves on the reply, not on send');
+    assert.strictEqual(w.said.length, 1);
+    assert.match(w.said[0], /Compile the ops summary/);
+    assert.match(w.said[0], /piper/);
+    assert.deepStrictEqual(w.failedWith, []);
   });
 });

@@ -17,6 +17,7 @@ const path = require('node:path');
 const { appendRoutineBlock, parseRoutineBlocks, normalizeRoutine } = require('../../lib/agents/routines.js');
 const { extractFrontmatterText, parseRoutines } = require('../../lib/agents/discovery.js');
 const { handleSaveRoutine } = require('../../lib/protocol/handlers/team.js');
+const { invalidateAgentCache, discoverAgents } = require('../../lib/agents/discovery.js');
 const config = require('../../lib/config.js');
 const { makeWorkspace, cleanup } = require('../helpers/workspace.js');
 
@@ -134,17 +135,50 @@ describe('appending a routine block', () => {
     );
   });
 
-  test('a file with no frontmatter is left exactly as it was', () => {
-    const plain = '# Just a document\n';
-    assert.strictEqual(appendRoutineBlock(plain, NEW_ROUTINE), plain);
+  // THIS TEST ASSERTED THE OPPOSITE AND THE OPPOSITE WAS THE DEFECT. Handing
+  // back the content it was given makes a file this cannot edit look exactly
+  // like one it edited, and the caller then writes unchanged bytes and reports
+  // a routine that is not there.
+  test('a file with nowhere to put a routine is refused, not returned unchanged', () => {
+    assert.throws(() => appendRoutineBlock('# Just a document\n', NEW_ROUTINE), /no frontmatter/);
+  });
+
+  // The same match fails on a checkout with Windows line endings, which the
+  // migration path in this module already says exist.
+  test('a file with Windows line endings is refused by name', () => {
+    const crlf = WITH_ROUTINES.replace(/\n/g, '\r\n');
+    assert.throws(() => appendRoutineBlock(crlf, NEW_ROUTINE), /Windows line endings/);
+  });
+
+  test('a name that is not text is refused rather than written as its characters', () => {
+    for (const name of [null, 42, '   ', {}]) {
+      assert.throws(() => appendRoutineBlock(WITH_ROUTINES, { ...NEW_ROUTINE, name }), /needs a name/,
+        `${JSON.stringify(name)} is not a name`);
+    }
   });
 });
 
 describe('the save_routine handler', () => {
-  function fixture() {
-    const dir = makeWorkspace({ agents: { piper: WITH_ROUTINES, doc: WITHOUT_ROUTINES } });
+  // The roster cache is a time-based one shared by every test in this process,
+  // so a fresh workspace is not enough on its own: a warm entry from a previous
+  // test answers for this one and the handler reports the agent as missing.
+  //
+  // WORTH KNOWING WHY THIS IS HERE. Without it the two files below produced a
+  // routine_error and an untouched file, which is what the test asserted, so
+  // it passed green while the code it was written to exercise was never
+  // reached. It was the assertion on the MESSAGE that found it.
+  function fixture(extraAgents) {
+    const dir = makeWorkspace({
+      agents: { piper: WITH_ROUTINES, doc: WITHOUT_ROUTINES, ...(extraAgents || {}) },
+    });
     const original = config.getWorkspace();
     config.setWorkspace(dir);
+    invalidateAgentCache();
+    // Discovery migrates a routine's representation lazily, on read, and
+    // writes the file when it does. Letting that happen HERE means a snapshot
+    // taken after this call changes only if the code under test changed it,
+    // rather than the assertion having to allow for a write it did not cause.
+    discoverAgents();
     const sent = [];
     const ctx = {
       agents: {
@@ -155,7 +189,7 @@ describe('the save_routine handler', () => {
       workspace: { isInsideWorkspace: (p) => p.startsWith(dir) },
     };
     const ws = { send: (m) => sent.push(JSON.parse(m)), readyState: 1 };
-    return { dir, ctx, ws, sent, restore: () => config.setWorkspace(original) };
+    return { dir, ctx, ws, sent, restore: () => { config.setWorkspace(original); invalidateAgentCache(); } };
   }
 
   test('a routine lands in the agent file it names', () => {
@@ -191,6 +225,32 @@ describe('the save_routine handler', () => {
       assert.ok(f.sent.some(m => m.type === 'routine_error'));
       assert.strictEqual(fs.readFileSync(file, 'utf-8'), before, 'the file is untouched');
     } finally { f.restore(); }
+  });
+
+  // The two files the append path cannot edit, driven through the handler,
+  // which is where the damage was: it wrote the unchanged bytes, logged the
+  // add and announced success.
+  test('a file the routine cannot be placed in errors and is left byte identical', () => {
+    for (const [slug, content, reason] of [
+      ['crlf', WITH_ROUTINES.replace(/\n/g, '\r\n'), /Windows line endings/],
+      ['nofm', '# Just a document\n', /no frontmatter/],
+    ]) {
+      const f = fixture({ [slug]: content });
+      const file = path.join(f.dir, '.claude', 'agents', `${slug}.md`);
+      const before = fs.readFileSync(file, 'utf-8');
+      try {
+        handleSaveRoutine(f.ctx, f.ws, { type: 'save_routine', agentId: slug, routine: NEW_ROUTINE });
+        const errors = f.sent.filter(m => m.type === 'routine_error');
+        assert.strictEqual(errors.length, 1, `${slug}: the refusal reaches the client`);
+        // THE MESSAGE IS ASSERTED, not just its existence. An agent discovery
+        // that failed to see this file would also produce a routine_error and
+        // an untouched file, so a test that only counted errors would pass
+        // without the append path ever being reached.
+        assert.match(errors[0].message, reason, `${slug}: the refusal names why`);
+        assert.ok(!f.sent.some(m => m.type === 'routine_saved'), `${slug}: nothing claims it saved`);
+        assert.strictEqual(fs.readFileSync(file, 'utf-8'), before, `${slug}: the file is untouched`);
+      } finally { f.restore(); }
+    }
   });
 
   test('a routine with no message body is an error', () => {

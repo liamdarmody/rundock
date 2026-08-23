@@ -60,6 +60,14 @@
       // The default is the only value this release can honour. It is read from
       // the supported set rather than typed, so it cannot drift from it.
       runOn: model().RUN_ON_SUPPORTED[0],
+      saving: false,
+      error: null,
+      // Whether the skill list has arrived. NOT the same as it being
+      // empty, and the two were indistinguishable: an empty array before
+      // the reply lands looks exactly like a workspace with nothing to
+      // schedule, so the offer to build a first skill was shown to people
+      // whose agents already have several.
+      loading: !!(input && input.loading),
     };
   }
 
@@ -72,6 +80,12 @@
   // ===== RENDER =====
 
   function pickStep(m, choice) {
+    // Nothing is known yet, so nothing is claimed. A workspace with no
+    // skills and a workspace whose skills have not arrived are different
+    // states and only one of them is an offer.
+    if (state.loading) {
+      return `<p class="re-lead">${escText(m.STEP_LEADS.loading)}</p>`;
+    }
     if (choice.createSkill) {
       // NO LEAD LINE HERE. The lead asks the reader to pick a skill, and there
       // is nothing to pick. Printed above an offer to build one it reads as an
@@ -181,12 +195,20 @@
       // it beats a confirmation page with a blank sentence on it.
       return scheduleStep(m, option);
     }
+    // A refusal from the server is shown HERE, next to the button that caused
+    // it, rather than only as a passing notice elsewhere. The editor is still
+    // on screen precisely so this has somewhere to go.
+    const problem = state.error
+      ? `<p class="re-problem" data-routine-editor="error">${escText(state.error)}</p>`
+      : '';
     return `<div class="re-confirm">
       <p class="re-confirm-sentence">${escText(sentence)}</p>
       <p class="re-caption">${escText(caption)}
         <button class="re-link" type="button" onclick="routineEditorStep('schedule')">Edit</button></p>
+      ${problem}
       <div class="re-actions">
-        <button class="settings-btn-primary" type="button" onclick="saveRoutine()">Save routine</button>
+        <button class="settings-btn-primary" type="button" data-routine-editor="save"
+          ${state.saving ? 'disabled' : ''} onclick="saveRoutine()">${state.saving ? 'Saving' : 'Save routine'}</button>
       </div>
     </div>`;
   }
@@ -249,12 +271,31 @@
   function addRoutineForAgent(agentId) {
     const roster = typeof agents !== 'undefined' && agents ? agents : [];
     const agent = agentId ? roster.filter(a => a.id === agentId)[0] : null;
+    // An empty list is only meaningful once the reply has arrived. Until then
+    // the editor asks for it and waits, rather than reading nothing as none.
+    const loaded = typeof skillsLoaded === 'undefined' || skillsLoaded;
     openRoutineEditor({
       agentId: agent ? agent.id : null,
       agentName: agent ? agent.displayName : null,
-      skills: typeof skills !== 'undefined' && skills ? skills : [],
+      skills: loaded && typeof skills !== 'undefined' && skills ? skills : [],
+      loading: !loaded,
       zone: browserTimezone(),
     });
+    if (!loaded && typeof ws !== 'undefined' && ws) ws.send(JSON.stringify({ type: 'get_skills' }));
+  }
+
+  /**
+   * The skill list arrived while the editor was open. Show it.
+   *
+   * Called from the client's own skills dispatch, so an editor opened before
+   * the reply landed fills in rather than sitting on a loading line for the
+   * rest of the session.
+   */
+  function routineEditorSkillsArrived(list) {
+    if (!state || !state.loading) return;
+    state.skills = list || [];
+    state.loading = false;
+    renderRoutineEditor();
   }
 
   function addRoutine() { addRoutineForAgent(null); }
@@ -302,20 +343,56 @@
     if (guide && typeof startConversation === 'function') startConversation(guide.id);
   }
 
+  /**
+   * The section to leave to, resolved against what the shell actually has.
+   *
+   * WHY THIS IS A FUNCTION AND NOT A LINE IN THE ROUTER. The routines surface
+   * has no rail entry yet, and handing the router a section it does not know
+   * is not a no-op: it hides every sidebar, reveals one that is nested inside
+   * another, and matches no branch, so the editor stays on screen and the save
+   * appears to have done nothing. Written inside the router that line could
+   * only be reached by loading the whole shell, so it had no test and could be
+   * deleted with the suite green.
+   *
+   * A destination is usable only if the shell has BOTH halves of it: a rail
+   * button carrying the name, and the sidebar panel the router reveals by that
+   * name. Checking the pair is what makes this a resolution rather than a
+   * guess, and it is why this returns the section that lists routines today
+   * and the routines surface itself the day that one is built, with nothing
+   * here edited.
+   */
+  function navigable(nav) {
+    if (typeof document === 'undefined') return false;
+    return !!(document.querySelector(`[data-nav="${nav}"]`) && document.getElementById(`sidebar-${nav}`));
+  }
+
+  function routinesListNav() {
+    const destination = model().SAVE_DESTINATION;
+    return navigable(destination) ? destination : 'team';
+  }
+
   function routineEditorLeave() {
     state = null;
-    if (typeof switchNav === 'function') switchNav('team');
+    if (typeof switchNav === 'function') switchNav(routinesListNav());
   }
 
   /**
-   * Write the routine and leave.
+   * Ask for the routine to be written.
    *
-   * A draft that cannot be built sends nothing AND does not navigate. Leaving
-   * on a failed save returns the reader to a list that does not contain what
-   * they think they just made, which is worse than staying put.
+   * IT DOES NOT LEAVE HERE, and that is the point. Writing a routine can be
+   * refused by the server for reasons this screen cannot know: the agent was
+   * removed since the editor opened, its file is outside the workspace, or the
+   * file is one a routine cannot be placed in. Navigating on send means a
+   * refusal arrives after the editor is gone, and the reader is looking at a
+   * list that does not contain the routine with nothing to explain it. That is
+   * the worst outcome this flow has, so the editor waits to be told.
+   *
+   * A draft that cannot be built sends nothing and does not navigate either,
+   * for the same reason.
    */
   function saveRoutine() {
     const m = model();
+    if (!state || state.saving) return;
     const option = selectedOption();
     if (!option) return;
     const draft = m.routineDraft({
@@ -326,24 +403,45 @@
       runOn: state.runOn,
     });
     if (!draft) return;
-    if (typeof ws !== 'undefined' && ws) {
-      ws.send(JSON.stringify({
-        type: 'save_routine',
-        agentId: draft.agentId,
-        routine: {
-          name: draft.name, schedule: draft.schedule, skill: draft.skill,
-          prompt: draft.prompt, runOn: draft.runOn,
-        },
-      }));
-    }
+    if (typeof ws === 'undefined' || !ws) return;
+    state.saving = true;
+    state.error = null;
+    renderRoutineEditor();
+    ws.send(JSON.stringify({
+      type: 'save_routine',
+      agentId: draft.agentId,
+      routine: {
+        name: draft.name, schedule: draft.schedule, skill: draft.skill,
+        prompt: draft.prompt, runOn: draft.runOn,
+      },
+    }));
+  }
+
+  /**
+   * The server wrote it. Now leave.
+   *
+   * One fact with one reader: where a save goes is the model's answer, so both
+   * entries into this editor leave to the same place.
+   */
+  function routineEditorSaved() {
+    if (!state || !state.saving) return;
     state = null;
-    // One fact with one reader: where a save goes is the model's answer, so
-    // both entries into this editor leave to the same place.
-    if (typeof switchNav === 'function') switchNav(m.SAVE_DESTINATION);
+    if (typeof switchNav === 'function') switchNav(routinesListNav());
+  }
+
+  /**
+   * The server refused it. Stay, and say so where the reader is looking.
+   */
+  function routineEditorFailed(message) {
+    if (!state || !state.saving) return;
+    state.saving = false;
+    state.error = message || 'That routine could not be saved.';
+    renderRoutineEditor();
   }
 
   return {
     openRoutineEditor, addRoutineForAgent, addRoutine, browserTimezone,
+    routinesListNav, routineEditorSaved, routineEditorFailed, routineEditorSkillsArrived,
     renderRoutineEditor, routineEditorHtml,
     routineEditorPick, routineEditorStep, routineEditorSetField, routineEditorRunOn,
     routineEditorBuildSkill, routineEditorLeave, saveRoutine,
