@@ -401,7 +401,7 @@ byte comparison changes only if the code under test changed it.
 ## Red-first and the gate
 
 `node scripts/red-first.js --base origin/main --tests "npm test"` reports
-`proven`: 2122 tests passing with the change, 19 failing without it.
+`proven`: 2140 tests passing with the change, 23 failing without it.
 
 **The base is `origin/main`, not `main`.** In a worktree the local branch ref
 does not move, so `--base main` can compare against a stale tree and report
@@ -424,13 +424,24 @@ tracked file would change the tree it names.
 `npm run test:coverage`:
 
 ```
-public/routine-editor-model.js   |  99.72 |    79.73 |  100.00 | uncovered: line 30
-lib/agents/routines.js           | 100.00                     | uncovered: none
-lib/protocol/handlers/team.js    |  99.20                     | uncovered: lines 56, 57
+public/routine-editor-model.js   |  99.7 (357/358)  | uncovered: line 30
+lib/agents/routines.js           |  99.6 (491/493)  | uncovered: lines 371, 372
+lib/protocol/handlers/team.js    |  99.2 (248/250)  | uncovered: lines 56, 57
 ```
 
 Line 30 of the model is the browser half of the module wrapper, which cannot
 execute under node. It is the only uncovered line in the file.
+
+**Lines 371 and 372 are a backstop with no test, and that is stated rather than
+papered over.** They are the throw inside the read-back check: the append path
+parses its own result and requires the routine to be in it. Every cause anyone
+has met is refused earlier and by name, so no input reaches this throw, which is
+the point of it: it covers the shapes nobody has met yet. The reachable half of
+the same guarantee IS tested, through the handler, by `a file the routine cannot
+be placed in errors and is left byte identical` and by the identical-bytes
+refusal beside it. A guard no test notices is normally not a guard; this one is
+a net under the named refusals rather than a substitute for them, and the honest
+report is that it has never fired.
 
 Branch coverage at 80% is the honest number and lower than the line figure. The
 uncovered branches are absent-argument fallbacks (`input && input.x` where the
