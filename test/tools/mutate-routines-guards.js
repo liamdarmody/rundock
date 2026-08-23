@@ -77,6 +77,14 @@ const APP = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routin
 // replies and drives the dispatch cases that carry them.
 const VIEW_REPLY = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/routines-view-doors.test.js' };
 const INDEX = { src: path.join(ROOT, 'public', 'index.html'), suite: 'test/unit/routines-view-doors.test.js' };
+// The Skills pane, which the permanent rail makes reachable and which had no
+// empty state at all until this pass. Its copy and its two guards are watched
+// by the file that presses the pane.
+const SKILLS_MODEL = { src: path.join(ROOT, 'public', 'skills-model.js'), suite: 'test/unit/skills-empty.test.js' };
+const SKILLS_VIEW = { src: path.join(ROOT, 'public', 'views', 'skills.js'), suite: 'test/unit/skills-empty.test.js' };
+// The dispatch call that settles which routines empty state is shown, watched
+// by the enumeration of everything that draws this list.
+const APP_SKILLS = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routines-view-doors.test.js' };
 // The handlers behind the row's two controls, and the data model they write
 // through.
 const HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/unit/routine-actions.test.js' };
@@ -343,8 +351,62 @@ const MUTATIONS = [
     "      type: 'delete_routine', agentId: entry.agent.id, name: entry.routine.name, occurrence: entry.occurrence,",
     "      type: 'delete_routine', agentId: entry.agent.id, name: 'anything', occurrence: entry.occurrence,"],
   [VIEW, 'the empty state offers something to press',
-    '    + \'<button class="settings-btn-primary" type="button" data-routines-action="add"\'',
-    '    + \'<button class="settings-btn-primary" type="button" data-routines-action="nothing"\''],
+    "      + `<button class=\"settings-btn-primary\" type=\"button\" data-routines-action=\"${action.marker}\"`",
+    "      + '<button class=\"settings-btn-primary\" type=\"button\" data-routines-action=\"nothing\"'"],
+
+  // ===== WHICH EMPTY STATE, AND WHETHER IT WAITS =====
+  // The locked copy presupposes a tested skill, which gating quietly
+  // guaranteed and permanence removes. Every guard below is one half of that.
+  [MODEL, 'a workspace with no skills gets the variant written for it',
+    '    if (choice.createSkill) {',
+    '    if (false) {'],
+  [MODEL, 'the build-a-skill variant drops the aside',
+    '        // No aside: the second way in it names is a skill\'s own page, and this\n'
+    + '        // workspace has no skill to have one.\n        aside: null,',
+    '        aside: EMPTY.aside,'],
+  [MODEL, 'the offer waits for the skill list to arrive',
+    '    if (input && input.loading) {\n'
+    + '      return { lead: EMPTY.lead, body: editor.STEP_LEADS.loading, action: null, actionKind: null, aside: null };\n'
+    + '    }\n',
+    ''],
+  [MODEL, 'the build offer goes with the agent that fulfils it',
+    "        action: hasGuide ? choice.createSkillLabel : null,",
+    '        action: choice.createSkillLabel,'],
+  [VIEW, 'the list tells the model whether the skills have arrived',
+    '    loading: !skillsHaveArrived(),',
+    '    loading: false,'],
+  [VIEW, 'the list tells the model whether there is a guide',
+    '    hasGuide: typeof getGuide === \'function\' ? !!getGuide() : false,',
+    '    hasGuide: true,'],
+  [VIEW, 'the aside is drawn only where the model kept one',
+    '  if (state.aside) h += `<p class="settings-caption routines-empty-aside">${esc(state.aside)}</p>`;',
+    '  h += `<p class="settings-caption routines-empty-aside">${esc(model.EMPTY.aside)}</p>`;'],
+  [APP_SKILLS, 'the skill list arriving redraws the list that asks about skills',
+    "renderSkills(); renderRoutines(); routineEditorSkillsArrived(d.skills);",
+    'renderSkills(); routineEditorSkillsArrived(d.skills);'],
+
+  // ===== THE SKILLS PANE =====
+  // It had none of this until now: renderSkills returned before rendering, so
+  // a workspace with no skills had no pane at all.
+  [SKILLS_VIEW, 'a workspace with no skills gets a pane rather than a blank one',
+    '  if (!skillsHaveArrived() || !skills.length) {\n    renderSkillsEmpty(!skillsHaveArrived());\n    return;\n  }\n',
+    '  if (!skills.length) return;\n'],
+  [SKILLS_VIEW, 'the pane waits for the reply rather than reading nothing as none',
+    '    renderSkillsEmpty(!skillsHaveArrived());',
+    '    renderSkillsEmpty(false);'],
+  [SKILLS_VIEW, 'the pane offers the build only where a guide can fulfil it',
+    '  if (state.action) {',
+    '  if (true) {'],
+  [SKILLS_MODEL, 'the pane claims nothing about skills that have not arrived',
+    '    if (input && input.loading) {\n'
+    + '      return { lead: null, body: editor.STEP_LEADS.loading, action: null, aside: null };\n    }\n',
+    ''],
+  [SKILLS_MODEL, 'the sentence naming the guide goes when there is no guide',
+    '      body: hasGuide ? `${EMPTY.body} ${EMPTY.guideLine}` : EMPTY.body,',
+    '      body: `${EMPTY.body} ${EMPTY.guideLine}`,'],
+  [SKILLS_MODEL, 'the action goes with the agent that fulfils it',
+    '      action: hasGuide ? EMPTY.action : null,',
+    '      action: EMPTY.action,'],
   [VIEW, 'a routine name reaches the page as text, not as markup',
     '`<div class="rr-sentence">${esc(sentence)}</div>',
     '`<div class="rr-sentence">${sentence}</div>'],
@@ -405,7 +467,8 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [MODEL, VIEW, VIEW_E2E, VIEW_REPLY, RAIL, STYLES, SCHEDULER, END_TO_END, DISCOVERY, HANDLER, ROUTINES, APP, INDEX];
+  const targets = [MODEL, VIEW, VIEW_E2E, VIEW_REPLY, RAIL, STYLES, SCHEDULER, END_TO_END, DISCOVERY,
+    HANDLER, ROUTINES, APP, APP_SKILLS, INDEX, SKILLS_MODEL, SKILLS_VIEW];
   const originals = new Map();
   for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];

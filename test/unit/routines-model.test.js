@@ -350,6 +350,79 @@ describe('the rest of the row', () => {
   });
 });
 
+describe('which empty state, decided mechanically', () => {
+  // THE CHAIN, which is what makes this decidable. A skill is declared on an
+  // agent and a routine schedules a skill, so the surfaces are a chain: agents,
+  // then skills, then routines. Every empty state points one step back up that
+  // chain, and the FIRST MISSING PREREQUISITE picks the variant. Not taste.
+  const WITH_SKILL = [{ id: 'sk', name: 'Compile the ops summary', assignedAgents: [{ id: 'piper', name: 'Piper' }] }];
+
+  test('a workspace with a skill gets the locked copy, word for word', () => {
+    const state = m.emptyState({ skills: WITH_SKILL, hasGuide: true });
+    assert.strictEqual(state.lead, 'No routines yet.');
+    assert.strictEqual(state.body, 'Pick a tested skill and give it a schedule. Your agents take it from there.');
+    assert.strictEqual(state.action, 'Add routine');
+    assert.strictEqual(state.aside,
+      'Looking at a skill you already trust? You can also schedule it right from its own page.');
+  });
+
+  test('a workspace with no skill is told where a skill comes from', () => {
+    const state = m.emptyState({ skills: [], hasGuide: true });
+    assert.strictEqual(state.lead, 'No routines yet.');
+    assert.strictEqual(state.body,
+      'Routines schedule skills your agents already have. Build one and it will show up here.');
+    assert.strictEqual(state.action, 'Build a skill');
+    assert.strictEqual(state.aside, null, 'the aside names a skill page this workspace has no skill for');
+  });
+
+  // BOTH REPLACEMENT LINES ALREADY SHIP, one screen away, in the routine
+  // editor's own zero-skills state. Writing a second sentence for a fact the
+  // product already has a sentence for is the drift this pass argues against,
+  // so this asserts they are the SAME strings rather than equal ones.
+  test('the no-skills lines belong to the editor, not to a second pair written here', () => {
+    const editor = require('../../public/routine-editor-model.js');
+    const state = m.emptyState({ skills: [], hasGuide: true });
+    assert.strictEqual(state.body, editor.STEP_LEADS.empty);
+    assert.strictEqual(state.action, editor.STEP_LEADS.build);
+  });
+
+  // The condition is the same question the picker already answers, so the two
+  // surfaces cannot disagree about whether a workspace has skills.
+  test('the variant is the question skillChoices already answers', () => {
+    const editor = require('../../public/routine-editor-model.js');
+    for (const skills of [[], WITH_SKILL, [{ id: 'orphan', name: 'Orphan', assignedAgents: [] }]]) {
+      const offers = editor.skillChoices({ skills }).createSkill;
+      const state = m.emptyState({ skills, hasGuide: true });
+      assert.strictEqual(state.action === 'Build a skill', offers,
+        'the empty state and the picker disagree about whether this workspace has skills');
+    }
+  });
+
+  test('skills that have not arrived are not a workspace with no skills', () => {
+    const state = m.emptyState({ skills: [], loading: true, hasGuide: true });
+    assert.strictEqual(state.action, null, 'an offer was made before anything was known');
+    assert.strictEqual(state.aside, null);
+    assert.strictEqual(state.lead, 'No routines yet.', 'the routines fact is known either way');
+    assert.strictEqual(state.body, require('../../public/routine-editor-model.js').STEP_LEADS.loading,
+      'the editor already has a line for this state and the two must not disagree');
+  });
+
+  test('the action goes with the agent that fulfils it, and the words stay', () => {
+    const state = m.emptyState({ skills: [], hasGuide: false });
+    assert.strictEqual(state.action, null);
+    assert.strictEqual(state.lead, 'No routines yet.');
+    assert.strictEqual(state.body,
+      'Routines schedule skills your agents already have. Build one and it will show up here.');
+  });
+
+  // The locked variant's Add routine is not the guide's to fulfil: it opens
+  // the picker, which is on this side of the app. It stays whatever the team
+  // looks like.
+  test('the locked variant keeps its add with no guide on the team', () => {
+    assert.strictEqual(m.emptyState({ skills: WITH_SKILL, hasGuide: false }).action, 'Add routine');
+  });
+});
+
 describe('the copy this card ships', () => {
   // AC-13, narrowed to the files this card adds and to the word list the
   // workspace guide states, so the criterion is discharged from the diff
@@ -388,7 +461,7 @@ describe('the copy this card ships', () => {
     }
   });
 
-  test('the files this card adds carry no em dash or en dash', () => {
+  test('the files these surfaces ship carry no em dash or en dash', () => {
     const root = path.join(__dirname, '..', '..');
     for (const rel of [
       'public/routines-model.js', 'public/views/routines.js', 'public/rail-presence.js',
@@ -397,6 +470,10 @@ describe('the copy this card ships', () => {
       'test/unit/routines-next-run.test.js', 'test/unit/routines-end-to-end.test.js',
       'test/unit/routines-view-doors.test.js',
       'test/tools/mutate-routines-guards.js',
+      // The empty states the permanent rail requires, which ship copy on the
+      // same rule and would otherwise be held to it by nothing.
+      'public/skills-model.js', 'public/views/skills.js',
+      'public/styles/views/skills.css', 'test/unit/skills-empty.test.js',
     ]) {
       const text = fs.readFileSync(path.join(root, rel), 'utf-8');
       assert.ok(!/[\u2014\u2013]/.test(text), `${rel} carries a dash the repository check refuses`);

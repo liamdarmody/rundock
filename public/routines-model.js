@@ -105,6 +105,66 @@
   };
 
   /**
+   * WHICH empty state, decided mechanically rather than by taste.
+   *
+   * THE CHAIN IS WHAT MAKES THIS DECIDABLE. A skill is declared on an agent
+   * and a routine schedules a skill, so the three surfaces are a chain: agents,
+   * then skills, then routines. An empty one points one step back up that
+   * chain, and the FIRST MISSING PREREQUISITE picks the variant.
+   *
+   * WHY THE LOCKED BODY CANNOT COVER BOTH. "Pick a tested skill and give it a
+   * schedule" presupposes a tested skill. Gating quietly guaranteed one: you
+   * could not reach this view without having had a routine, and you could not
+   * have had a routine without a skill. A permanent rail entry removes the
+   * guarantee and exposes a state the locked copy was never written for. Where
+   * any skill exists the locked copy is untouched, aside included.
+   *
+   * BOTH REPLACEMENT LINES ALREADY SHIP, in the routine editor's own
+   * zero-skills state, which is the same reader in the same state one screen
+   * away. Writing a second sentence for a fact the product already has a
+   * sentence for is the drift this reconciliation exists to remove, so these
+   * are the editor's strings rather than copies of them.
+   *
+   * THE CONDITION IS THE PICKER'S OWN QUESTION, `skillChoices`, and not a new
+   * one, so the two surfaces cannot disagree about whether a workspace has
+   * skills. A skill no agent is assigned cannot be scheduled and therefore
+   * does not count, which the picker already decides and this inherits.
+   *
+   * AND IT WAITS. "Skills have not arrived yet" and "there are no skills" are
+   * different states and only one of them is an offer. Without the wait, a
+   * workspace that does have skills is told to build one for a beat on every
+   * open.
+   *
+   * @param {{skills?: any[], loading?: boolean, hasGuide?: boolean}} [input]
+   */
+  function emptyState(input) {
+    if (input && input.loading) {
+      return { lead: EMPTY.lead, body: editor.STEP_LEADS.loading, action: null, actionKind: null, aside: null };
+    }
+    const choice = editor.skillChoices({ skills: (input && input.skills) || [] });
+    if (choice.createSkill) {
+      // The offer disappears with the agent that fulfils it. The state and the
+      // mechanism stay, because they are still true.
+      const hasGuide = !!(input && input.hasGuide);
+      return {
+        lead: EMPTY.lead,
+        body: choice.emptyLead,
+        action: hasGuide ? choice.createSkillLabel : null,
+        actionKind: hasGuide ? 'build-skill' : null,
+        // No aside: the second way in it names is a skill's own page, and this
+        // workspace has no skill to have one.
+        aside: null,
+      };
+    }
+    return {
+      lead: EMPTY.lead, body: EMPTY.body,
+      // Add routine opens the picker, which belongs to no agent, so it is not
+      // the guide's to fulfil and does not go with them.
+      action: EMPTY.action, actionKind: 'add-routine', aside: EMPTY.aside,
+    };
+  }
+
+  /**
    * How late a run has to be before it is a catch-up rather than the ordinary
    * path.
    *
@@ -333,7 +393,7 @@
 
   return {
     OUTCOMES, LEAD, EMPTY, ACTION_PROBLEM, CATCH_UP_AFTER_MS,
-    actionProblem,
+    actionProblem, emptyState,
     dayWords, clockWords, zoneWords, timeWords,
     scheduleWords, routineSentence,
     outcomeOf, runStatus, nextRunLabel, row, deleteConfirmation,

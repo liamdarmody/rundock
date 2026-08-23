@@ -63,6 +63,12 @@ const RENDERERS = [
     pressedBy: 'the rail entry shows the view and draws the list',
   },
   {
+    file: 'app.js',
+    line: "case 'skills':",
+    surface: 'the skill list arriving from the server, which settles which empty state this shows',
+    pressedBy: 'the skill list arriving redraws the list that asks about skills',
+  },
+  {
     file: 'views/routines.js',
     line: 'function routinesAskDelete(index)',
     surface: 'the Delete control on a row, which redraws into the confirmation',
@@ -255,10 +261,16 @@ function shellMarkup() {
   assert.ok(rail, 'index.html no longer carries a nav rail');
   const panel = /<div id="view-routines"[\s\S]*?<\/div>\s*<\/div>/.exec(INDEX_SRC);
   assert.ok(panel, 'index.html no longer carries the routines view panel');
-  return '<!doctype html><html><body>' + rail[0]
-    + '<div id="sidebar-team"><div id="sidebar-routines"></div></div>'
-    + '<div id="sidebar-conversations"></div><div id="sidebar-skills"></div>'
-    + '<div id="sidebar-files"></div><div id="sidebar-settings"></div>'
+  // THE SIDEBAR IS CUT OUT OF THE PAGE TOO, and that is a correction rather
+  // than tidiness. It used to be written here, which made the destination
+  // check below unfalsifiable: the editor resolves where a save goes by
+  // asking whether the shell has BOTH a rail entry called routines and a panel
+  // called sidebar-routines, and a test that supplies that panel itself
+  // answers its own question. Rename the panel in index.html and the editor
+  // silently starts landing saves on the team chart, with this file green.
+  const sidebar = /<aside class="sidebar"[\s\S]*?<\/aside>/.exec(INDEX_SRC);
+  assert.ok(sidebar, 'index.html no longer carries a sidebar');
+  return '<!doctype html><html><body>' + rail[0] + sidebar[0]
     + '<div id="view-home"></div>' + panel[0] + '</body></html>';
 }
 
@@ -308,6 +320,34 @@ describe('the ways this list gets drawn, pressed', () => {
     w.eval(`(function () {${body}\n})()`);
     assert.strictEqual(w.drawn, 1, 'a roster arrived and the routines list was not redrawn');
     assert.strictEqual(w.document.querySelectorAll('.routine-row').length, 1);
+    dom.window.close();
+  });
+
+  // THE REPLY THAT SETTLES WHICH EMPTY STATE THIS SHOWS. The list asks whether
+  // the workspace has a skill, so the message that answers that question has
+  // to redraw it. Without this call the pane sits on its waiting line until
+  // the next roster broadcast, which on a workspace with no routines is the
+  // rest of the session.
+  test('the skill list arriving redraws the list that asks about skills', () => {
+    const { w, doc, dom } = shell({ routines: [] });
+    w.skills = [];
+    w.skillsLoaded = false;
+    w.getGuide = () => ({ id: 'doc' });
+    w.renderRoutines();
+    assert.match(doc.getElementById('routines-content').textContent, /Looking for skills/,
+      'sanity: the list is waiting on the reply before it arrives');
+
+    const body = appPiece(/case 'skills':([\s\S]*?)\bbreak;/, 'the skills case of the client dispatch');
+    w.renderSkills = () => {};
+    w.selectSkill = () => {};
+    w.routineEditorSkillsArrived = () => {};
+    w.palettePendingSkill = null;
+    w.d = { type: 'skills', skills: [] };
+    w.eval(`(function () {${body}\n})()`);
+
+    assert.match(doc.getElementById('routines-content').textContent,
+      /Routines schedule skills your agents already have/,
+      'the reply arrived and the list was left on its waiting line');
     dom.window.close();
   });
 

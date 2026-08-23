@@ -22,13 +22,35 @@
   }
 }(typeof self !== 'undefined' ? self : this, function () {
 
+function skillsModel() {
+  return typeof RundockSkillsModel !== 'undefined' ? RundockSkillsModel : null;
+}
+
+// Whether the skill list has arrived. NOT the same as it being empty, and the
+// two are indistinguishable from the array alone: an empty list before the
+// reply lands looks exactly like a workspace with nothing in it. The routine
+// editor carries the same guard for the same reason, and the two must not
+// disagree. Undeclared identifiers are safe under typeof, so this works when
+// the module is required in node with no shell around it.
+function skillsHaveArrived() {
+  return typeof skillsLoaded === 'undefined' || skillsLoaded;
+}
+
 function renderSkills() {
   // Progressive disclosure: the Skills entry appears with the first skill.
   // The rule itself lives in public/rail-presence.js, because the routines
   // rail needs the same one and two copies of it would drift.
-  if (!railPresence('skills', skills.length > 0)) return;
+  railPresence('skills', skills.length > 0);
 
   renderSkillsSidebar(skills);
+
+  // A section with nothing in it says what it is for. Skills had no such pane
+  // at all: this function used to return here, which is why the rail entry was
+  // withdrawn rather than the other way round.
+  if (!skillsHaveArrived() || !skills.length) {
+    renderSkillsEmpty(!skillsHaveArrived());
+    return;
+  }
 
   // Only refresh the detail panel if the user is already on the skills view.
   // Without this guard, background saves (SAVE_SKILL markers) would yank
@@ -40,6 +62,50 @@ function renderSkills() {
       selectSkill(skills[0].id);
     }
   }
+}
+
+// The glyph the Skills surface is known by. The same bolt selectSkill draws,
+// in the same box, so an empty pane and a full one are recognisably the same
+// place.
+const BOLT_SVG = '<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" stroke="none">'
+  + '<path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>';
+
+/**
+ * The pane a workspace with no skills opens onto.
+ *
+ * The action is omitted along with the sentence naming the guide when there is
+ * no guide on the team, which is how every other call to action in this app
+ * that names Doc is already guarded. The state and the mechanism stay, because
+ * they are still true.
+ */
+function renderSkillsEmpty(loading) {
+  const detail = document.getElementById('skill-detail-content');
+  if (!detail) return;
+  const model = skillsModel();
+  const guide = typeof getGuide === 'function' ? getGuide() : null;
+  const state = model.emptyState({ loading: !!loading, hasGuide: !!guide });
+
+  let h = `<div class="profile-header">
+      <div class="profile-avatar skill-avatar">${BOLT_SVG}</div>
+      <div>
+        <div class="profile-name">${esc(model.TITLE)}</div>
+        ${state.lead ? `<div class="skills-empty-state">${esc(state.lead)}</div>` : ''}
+      </div>
+    </div>
+    <div class="settings-card flow skills-empty-card">
+      <p class="settings-lead">${esc(state.body)}</p>`;
+  if (state.action) {
+    // Skills are built by talking to the agent that builds them; this screen
+    // never writes one itself. The same handler the routine editor's own
+    // zero-skills offer uses, so the two ways into that conversation cannot
+    // drift apart.
+    h += '<div class="card-actions skills-empty-actions">'
+      + '<button class="settings-btn-primary" type="button" data-skills-action="build-skill"'
+      + ` onclick="routineEditorBuildSkill()">${esc(state.action)}</button></div>`;
+  }
+  h += '</div>';
+  detail.innerHTML = h;
+  detail.scrollTop = 0;
 }
 
 function renderSkillsSidebar(list) {
@@ -123,5 +189,5 @@ function selectSkill(id) {
   detail.scrollTop = 0;
 }
 
-return { renderSkills, renderSkillsSidebar, selectSkill };
+return { renderSkills, renderSkillsEmpty, renderSkillsSidebar, selectSkill };
 }));

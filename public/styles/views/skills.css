@@ -12,3 +12,10 @@
 .agent-chip-name { font-size: var(--body); font-weight: 500; color: var(--text-1); }
 .agent-chip-role { font-size: var(--caption); color: var(--text-2); }
 
+/* The pane a workspace with no skills opens onto. The state line sits in the
+   header, under the section's own name, the way a selected skill's kind does.
+   The card below it is the settings card the routines empty state already
+   uses, so the two read as one pattern rather than two. */
+.skills-empty-state { font-size: var(--body); color: var(--text-2); }
+.skills-empty-card { text-align: center; padding: 44px 24px; }
+.skills-empty-actions { justify-content: center; }

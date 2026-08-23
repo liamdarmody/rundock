@@ -70,7 +70,7 @@ const FOUR_ROWS = [
 const ROUTINES_CSS = read('public', 'styles', 'views', 'routines.css');
 const TOKENS_CSS = read('public', 'styles', 'tokens.css');
 
-function shell(routines = FOUR_ROWS) {
+function shell(routines = FOUR_ROWS, opts = {}) {
   const dom = new JSDOM('<!doctype html><html><head><style>' + ROUTINES_CSS + '</style></head><body>'
     + '<nav class="nav-rail">'
     + '<button class="nav-item" data-nav="skills"></button>'
@@ -91,7 +91,16 @@ function shell(routines = FOUR_ROWS) {
     id: 'piper', displayName: 'Piper', colour: '#E87A5A', icon: 'P',
     status: 'onTeam', runtime: 'claude', routines,
   }];
-  w.skills = [];
+  if (opts.guide) w.agents.push({ id: 'doc', displayName: 'Doc', type: 'platform', status: 'onTeam' });
+  // A workspace with a skill by default, because that is the state the locked
+  // empty-state copy was written for. The variant is a property of the
+  // workspace, so the tests that want the other one say so.
+  w.skills = opts.skills === undefined
+    ? [{ id: 'sk', name: 'Compile the ops summary', assignedAgents: [{ id: 'piper', name: 'Piper' }] }]
+    : opts.skills;
+  w.skillsLoaded = opts.skillsLoaded === undefined ? true : opts.skillsLoaded;
+  w.getGuide = () => w.agents.filter(a => a.type === 'platform')[0];
+  w.routineEditorBuildSkill = () => { w.buildSkillFrom = 'routines'; };
   w.currentSkillId = null;
   w.esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   w.sent = [];
@@ -353,7 +362,7 @@ describe('the ruling, against what the page resolves', () => {
   });
 });
 
-describe('the empty state', () => {
+describe('the empty state, where a skill exists', () => {
   // AC-12. The way in belongs to no agent.
   test('the empty state offers an add that names no agent', () => {
     const { doc, w, dom } = shell([]);
@@ -372,6 +381,125 @@ describe('the empty state', () => {
     w.renderRoutines();
     press(doc, '[data-routines-action="add"]');
     assert.strictEqual(w.editorOpened, 'unscoped');
+    dom.window.close();
+  });
+
+  // THE LOCKED COPY, WORD FOR WORD, and the point of asserting it at the
+  // surface as well as in the model is that this state is the one the
+  // amendment does NOT touch. A variant added beside it that quietly reworded
+  // this one would be the amendment doing more than it was asked to.
+  test('where any skill exists the locked copy is untouched, aside included', () => {
+    const { doc, w, dom } = shell([]);
+    w.renderRoutines();
+    const page = text(doc.getElementById('routines-content'));
+    assert.ok(page.includes('Pick a tested skill and give it a schedule. Your agents take it from there.'));
+    assert.ok(page.includes('Looking at a skill you already trust? You can also schedule it right '
+      + 'from its own page.'));
+    assert.ok(!page.includes('Build a skill'), 'the build offer reached a workspace that has skills');
+    assert.ok(!page.includes('Routines schedule skills your agents already have'),
+      'the no-skills line reached a workspace that has skills');
+    dom.window.close();
+  });
+});
+
+describe('the empty state, where no skill exists', () => {
+  // AMENDMENT 5. The locked body presupposes a tested skill, which gating
+  // quietly guaranteed: you could not reach this view without having had a
+  // routine, and you could not have had a routine without a skill. A permanent
+  // rail entry removes the guarantee and exposes a state the locked copy was
+  // never written for.
+  test('a workspace with no skills is pointed one step back up the chain', () => {
+    const { doc, w, dom } = shell([], { skills: [], guide: true });
+    w.renderRoutines();
+    const page = text(doc.getElementById('routines-content'));
+    assert.match(page, /No routines yet\./);
+    assert.match(page, /Routines schedule skills your agents already have\. Build one and it will show up here\./);
+    assert.ok(!page.includes('Pick a tested skill'), 'the locked body was shown with nothing to pick');
+    dom.window.close();
+  });
+
+  // The aside names the skill's own page as a second way in. With no skill
+  // there is no such page, so the aside goes with it.
+  test('the aside goes, because the path it names does not exist yet', () => {
+    const { doc, w, dom } = shell([], { skills: [], guide: true });
+    w.renderRoutines();
+    const page = text(doc.getElementById('routines-content'));
+    assert.ok(!/Looking at a skill you already trust/.test(page),
+      'the aside points at a skill page this workspace has no skill for');
+    assert.strictEqual(doc.querySelectorAll('.routines-empty-aside').length, 0);
+    dom.window.close();
+  });
+
+  test('the one action offered builds a skill, and is pressed rather than called', () => {
+    const { doc, w, dom } = shell([], { skills: [], guide: true });
+    w.renderRoutines();
+    const buttons = doc.querySelectorAll('#routines-content button');
+    assert.strictEqual(buttons.length, 1, 'an empty state offers one action, never two');
+    assert.strictEqual(buttons[0].textContent.trim(), 'Build a skill');
+    buttons[0].click();
+    assert.strictEqual(w.buildSkillFrom, 'routines',
+      'the action does not reach the flow that opens a conversation with the guide');
+    assert.strictEqual(w.editorOpened, undefined, 'a workspace with no skills was offered the picker');
+    dom.window.close();
+  });
+
+  // The variant is chosen by the same question the picker answers, so the two
+  // surfaces cannot disagree about whether a workspace has skills. A skill
+  // nothing is assigned to cannot be scheduled, so it is not a skill this
+  // question counts.
+  test('an unassigned skill is not a skill this view can offer to schedule', () => {
+    const { doc, w, dom } = shell([], { skills: [{ id: 'sk', name: 'Orphan', assignedAgents: [] }], guide: true });
+    w.renderRoutines();
+    const page = text(doc.getElementById('routines-content'));
+    assert.match(page, /Routines schedule skills your agents already have\./);
+    assert.ok(!page.includes('Pick a tested skill'),
+      'the picker would open on nothing, so the offer to pick is false');
+    dom.window.close();
+  });
+
+  test('with no guide the action goes and the state and the mechanism stay', () => {
+    const { doc, w, dom } = shell([], { skills: [], guide: false });
+    w.renderRoutines();
+    const page = text(doc.getElementById('routines-content'));
+    assert.match(page, /No routines yet\./);
+    assert.match(page, /Routines schedule skills your agents already have\./);
+    assert.strictEqual(doc.querySelectorAll('#routines-content button').length, 0,
+      'a button was offered with no agent to fulfil it');
+    dom.window.close();
+  });
+});
+
+describe('the variant does not flash', () => {
+  // THE DEFECT THE DESIGNER FOUND BY DRAWING IT. "Skills have not arrived yet"
+  // and "there are no skills" are different states and only one of them is an
+  // offer. Without this guard a workspace that DOES have skills is told to
+  // build one for a beat on every open.
+  test('skills still in flight are not read as no skills', () => {
+    const { doc, w, dom } = shell([], { skills: [], skillsLoaded: false, guide: true });
+    w.renderRoutines();
+    const page = text(doc.getElementById('routines-content'));
+    assert.ok(!page.includes('Build a skill'),
+      'the build offer was made before the skill list had arrived');
+    assert.match(page, /No routines yet\./, 'the routines fact is known and is still said');
+    assert.match(page, /Looking for skills your agents can run\./);
+    dom.window.close();
+  });
+
+  test('the skill list arriving settles the variant', () => {
+    const { doc, w, dom } = shell([], { skills: [], skillsLoaded: false, guide: true });
+    w.renderRoutines();
+    const waiting = text(doc.getElementById('routines-content'));
+    // Both halves, or this test passes against a view that never waited: a
+    // page showing the locked copy throughout would satisfy the second
+    // assertion on its own.
+    assert.ok(!waiting.includes('Pick a tested skill'),
+      'the locked copy was shown before anything was known about skills');
+    w.skills = [{ id: 'sk', name: 'Compile the ops summary', assignedAgents: [{ id: 'piper', name: 'Piper' }] }];
+    w.skillsLoaded = true;
+    w.renderRoutines();
+    const page = text(doc.getElementById('routines-content'));
+    assert.match(page, /Pick a tested skill and give it a schedule\./);
+    assert.ok(!page.includes('Looking for skills'), 'the wait outlived the reply');
     dom.window.close();
   });
 });

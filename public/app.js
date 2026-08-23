@@ -249,7 +249,11 @@ function handle(d) {
       break;
     case 'needs_workspace': showView('workspace'); break;
     case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesSidebar(); renderRoutines(); renderConvoList(); break;
-    case 'skills': skills=d.skills; skillsLoaded=true; renderSkills(); routineEditorSkillsArrived(d.skills); if(palettePendingSkill){const s=palettePendingSkill;palettePendingSkill=null;selectSkill(s);} break;
+    // renderRoutines as well as renderSkills: the routines empty state asks
+    // whether the workspace has a skill, so the reply that answers that
+    // question is the reply that has to redraw it. Without this the list sits
+    // on its waiting line until the next roster broadcast.
+    case 'skills': skills=d.skills; skillsLoaded=true; renderSkills(); renderRoutines(); routineEditorSkillsArrived(d.skills); if(palettePendingSkill){const s=palettePendingSkill;palettePendingSkill=null;selectSkill(s);} break;
     case 'conversations':
       handlePersistedConversations(d.conversations, d.lastActiveConversationId);
       // Conversations are the last of the four payloads the client requests on
@@ -1022,7 +1026,7 @@ function switchNav(nav) {
       showView('editor');
     }
   }
-  else if(nav==='skills') { showView('skills'); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } else if(skills.length && !currentSkillId) { selectSkill(skills[0].id); } }
+  else if(nav==='skills') { showView('skills'); if(!skillsLoaded) { renderSkills(); ws.send(JSON.stringify({type:'get_skills'})); } else if(skills.length && !currentSkillId) { selectSkill(skills[0].id); } }
   else if(nav==='conversations') { if(activeConversation) { showView('chat'); if(unread.clearConvo(activeConversation.id)) { updateUnreadBadge(); renderConvoList(); } } else { const target = pickDefaultConversation(); if(target) { openConversation(target.id); } else { newConversation(); } } }
   else if(nav==='team') { showView('home'); renderOrgChart(); }
   else if(nav==='routines') { showView('routines'); renderRoutines(); }
