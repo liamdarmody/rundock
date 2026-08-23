@@ -78,6 +78,14 @@ reconcile.
 ending never ran. It does not say the run failed, and the work may have finished
 a moment before the machine went down.
 
+**AC-5 does not hold on one path, knowingly, and the exception is asserted
+rather than avoided.** See the AC-8 section below. In short: on a same-process
+workspace switch the routine state is rewritten to `interrupted` while the
+record correctly stays `running`, because only the record can tell a live run
+from a dead process's leftovers. AC-8 wins there. Making them agree would mean
+writing that a run still going had been cut short, which is a false statement
+produced to satisfy a criterion, about the exact case AC-8 exists to protect.
+
 > **AC-6:** AC-5 is proven by a test that restarts across a live run, rather than
 > by inspection.
 
@@ -144,6 +152,36 @@ both.
 the other side: a record that already has an outcome is compared field by field
 across a restart, so the startup close cannot rewrite settled history, or the
 file list that came with it, on every open thereafter.
+
+### Where AC-8 and AC-5 conflict, and which one wins
+
+The AC-8 test now asserts the routine state beside the record and states the
+divergence, because a divergence nothing writes down is one the next reader
+meets as a bug.
+
+On this path the record says `running` and the routine state says
+`interrupted`, so AC-5 does not hold. `loadRoutineState` rewrites a routine
+whose PERSISTED status is `running`, because a file on disk cannot tell a dead
+process's leftovers from a run still going. The record can tell, because the
+process knows which runs it opened.
+
+**AC-8 wins and AC-5 is the criterion that is too strong here.** Closing a live
+run's record to make the two agree would write that a run still going had been
+cut short: a false statement, produced to satisfy a criterion, about the exact
+case AC-8 was written for. Agreement is worth having where both stores can be
+right and is not worth buying with a lie.
+
+The other way to close the gap is to make the routine state respect a live run.
+That is a change to startup behaviour older than this card, so it is not made
+here. **The pre-existing behaviour, stated plainly for whoever picks it up:** a
+same-process workspace switch marks a routine whose run is still going as
+`interrupted`, from the switch until that run ends, at which point the outcome
+write corrects it. Double-fire suppression is unaffected, because `lastRun` is
+untouched and the in-flight set still holds the routine. What it costs is the
+Routines panel reporting a live run as interrupted for the length of that
+window. The existing test `the workspace switch does not release a run that is
+still going` relies on that rewrite to prove the resets ran, so anything
+changing it lands there too.
 
 ## Proof
 

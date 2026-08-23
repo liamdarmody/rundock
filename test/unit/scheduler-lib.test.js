@@ -954,6 +954,41 @@ test('a run that is still going in this process keeps reporting running', async 
         assert.strictEqual(record.endedAt, null, 'nothing was written as its ending');
         assert.strictEqual(record.filesReason, 'running',
           'and its list is unsettled for the true reason, because it really has not finished');
+
+        // WHERE THE TWO STORES DELIBERATELY DISAGREE, asserted here rather
+        // than smoothed over, because a divergence nothing states is one the
+        // next reader meets as a bug.
+        //
+        // The criterion behind the test above asks the record and the routine
+        // state to agree about whether a run is still going. ON THIS PATH THEY
+        // DO NOT, and the record is the one telling the truth.
+        //
+        // Why. loadRoutineState rewrites a routine whose PERSISTED status is
+        // 'running' to 'interrupted', because a file on disk cannot tell a
+        // dead process's leftovers from a run that is still going. That is
+        // pre-existing behaviour, is what the workspace-switch test above
+        // relies on to prove the resets ran, and is untouched by this card.
+        // The RECORD can tell the two apart, because this process knows which
+        // runs it opened, so it stays 'running'.
+        //
+        // WHICH REQUIREMENT WINS, AND WHY. Keeping a live run's record open
+        // wins. Closing it to make the two stores agree would write that a run
+        // still going was cut short: a false statement, produced to satisfy a
+        // criterion, about the exact case the criterion for this test exists
+        // to protect. Agreement is worth having where both stores can be
+        // right, and it is not worth buying with a lie. Making the ROUTINE
+        // STATE respect a live run instead would fix the disagreement from the
+        // other side, and that is a change to startup behaviour older than
+        // this card and is not made here.
+        //
+        // If that pre-existing behaviour is ever fixed, this assertion is
+        // where it lands: it fails, and this comment is the account of what
+        // changed and why the divergence used to be tolerated.
+        assert.strictEqual(sched.routineState[KEY].status, 'interrupted',
+          'the routine state was rewritten by the load, which is behaviour older than this card');
+        assert.notStrictEqual(record.status, sched.routineState[KEY].status,
+          'so the two stores disagree here, knowingly, and the record is the one that is right');
+
         child.emit('close', 0);
       });
     });
