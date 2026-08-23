@@ -24,6 +24,11 @@ const clients = [];
  * @param {object} [opts.agents] - agent fixture map (default standardTeam)
  * @param {object} [opts.workspaceOpts] - extra makeWorkspace options
  * @param {object} [opts.env] - extra process.env entries set BEFORE require
+ * @param {boolean} [opts.workspace=true] - point the server at the fixture
+ *   before it listens. Pass false to boot with NO workspace: the state a first
+ *   run starts in, where the folder is chosen afterwards through the interface.
+ *   The fixture is still built and h.workspaceDir still names it, so a test can
+ *   choose it over the wire; the server just has not been told about it.
  */
 async function boot(opts = {}) {
   assert.strictEqual(srv, null, 'boot() must only be called once per test file');
@@ -41,7 +46,7 @@ async function boot(opts = {}) {
 
   srv = require('../../server.js');
   internal = srv._internal;
-  internal.setWorkspace(workspaceDir);
+  if (opts.workspace !== false) internal.setWorkspace(workspaceDir);
 
   // Hard safety gate: never run integration scenarios against a real claude
   // or a real codex.
