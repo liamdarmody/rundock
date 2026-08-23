@@ -1,0 +1,506 @@
+'use strict';
+// Every way the routines list gets drawn, and every way the shell arrives at
+// it, enumerated and pressed.
+//
+// WHY THIS FILE IS A MANIFEST AND NOT A LIST OF TESTS.
+//
+// The routine editor's doors file exists because four separate reviews each
+// found a different way IN with no test behind it, and each was fixed by
+// testing the one that had been named. None asked what the next one was, so
+// the next one arrived. The rule that ended it: an entry point is tested by
+// the surface a user touches, applied to all of them rather than to the one
+// most recently found.
+//
+// That file covers who opens the EDITOR. Nothing covered who renders this
+// VIEW, and the same class turned up here immediately: renderRoutines was
+// reached only through the roster case of the client dispatch, and deleting
+// that call left the whole suite green while the rail entry never appeared and
+// the list never refreshed.
+//
+// So this enumerates two things, because a list that is never drawn and a list
+// that cannot be reached are the same defect from a user's side:
+//
+//   RENDERERS  every call to renderRoutines in the client
+//   ROUTES     every way the shell arrives at the routines section
+//
+// Both are checked against the source, so one added later fails here until
+// somebody lists it and names the test that presses it. And the surfaces are
+// PRESSED: a rail button is clicked as markup, and a dispatch case is cut out
+// of app.js and run, rather than matched as a string.
+const { test, describe } = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
+const { JSDOM } = require('jsdom');
+
+const ROOT = path.join(__dirname, '..', '..');
+const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf-8');
+const APP_SRC = read('public', 'app.js');
+const INDEX_SRC = read('public', 'index.html');
+const VIEW_SRC = read('public', 'views', 'routines.js');
+const MODEL_SRC = read('public', 'routines-model.js');
+const EDITOR_MODEL_SRC = read('public', 'routine-editor-model.js');
+const RAIL_SRC = read('public', 'rail-presence.js');
+const EDITOR_VIEW_SRC = read('public', 'views', 'routine-editor.js');
+
+// ===== THE ENUMERATION =====
+//
+// Every call to renderRoutines anywhere in the client, keyed by the text of
+// the line it sits on so two calls in one file are two rows rather than one.
+// Adding a way to draw this list means adding a row here, which means naming
+// the test.
+const RENDERERS = [
+  {
+    file: 'app.js',
+    line: "case 'agents':",
+    surface: 'the roster arriving from the server',
+    pressedBy: 'the roster arriving from the server draws the list',
+  },
+  {
+    file: 'app.js',
+    line: "else if(nav==='routines')",
+    surface: 'the Routines entry on the nav rail',
+    pressedBy: 'the rail entry shows the view and draws the list',
+  },
+  {
+    file: 'views/routines.js',
+    line: 'function routinesAskDelete(index)',
+    surface: 'the Delete control on a row, which redraws into the confirmation',
+    pressedBy: 'the view redraws itself for its own controls',
+  },
+  {
+    file: 'views/routines.js',
+    line: 'function routinesCancelDelete()',
+    surface: 'Cancel on the confirmation, which redraws back into the list',
+    pressedBy: 'the view redraws itself for its own controls',
+  },
+  {
+    file: 'views/routines.js',
+    line: 'function routinesConfirmDelete()',
+    surface: 'Delete routine on the confirmation, which redraws the list',
+    pressedBy: 'the view redraws itself for its own controls',
+  },
+  {
+    file: 'views/routines.js',
+    line: 'function routinesActionFailed(reply)',
+    surface: 'a refused pause or delete coming back from the server',
+    pressedBy: 'a refused action is answered on this list and nowhere else',
+  },
+];
+
+// Every call the client's message dispatch makes INTO this view. A reply that
+// is correct and lands on another screen is the defect the editor card was
+// built around, and it happened three times on this one, so the calls that
+// carry a reply here are enumerated like the ones that draw.
+const REPLIES = [
+  {
+    call: 'routinesActionFailed',
+    on: "case 'routine_action_error':",
+    surface: 'the refusal a pause or delete came back with',
+    pressedBy: 'a refused action is answered on this list and nowhere else',
+  },
+  {
+    call: 'routinesActionCleared',
+    on: "case 'routine_deleted':",
+    surface: 'a delete that went through, which retires the last refusal',
+    pressedBy: 'a change that goes through retires the last refusal',
+  },
+  {
+    call: 'routinesActionCleared',
+    on: "case 'routine_paused':",
+    surface: 'a pause that went through, which retires the last refusal',
+    pressedBy: 'a change that goes through retires the last refusal',
+  },
+];
+
+// Every way the shell arrives at the routines section.
+const ROUTES = [
+  {
+    what: "the rail entry's own onclick",
+    pressedBy: 'the rail entry shows the view and draws the list',
+  },
+  {
+    what: 'the routine editor leaving for the list after a save',
+    pressedBy: 'a saved routine leaves the editor for this view',
+  },
+  {
+    what: 'the section the rail entry reveals in the sidebar',
+    pressedBy: 'every section the rail carries reveals a sidebar the reader can see',
+  },
+];
+
+// Ways in that exist in the flow and are deliberately not pressed here, each
+// with the reason. A named exclusion is a decision; an unnamed one is how the
+// editor's version of this file went round four times.
+const NOT_PRESSED = [
+  {
+    what: 'a keyboard or command-palette route to the routines section',
+    why: 'there is none. The palette indexes files, conversations, agents and skills, and it '
+      + 'reaches no nav section directly. Asserted below rather than asserted by me.',
+  },
+  {
+    what: 'a deep link or a URL',
+    why: 'the client has no router and no URL state at all: every view change goes through '
+      + 'switchNav or a destination function. Asserted below rather than asserted by me.',
+  },
+];
+
+function clientFiles() {
+  const out = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
+      const rel = `${dir}/${entry.name}`;
+      if (entry.name === 'vendor') continue;
+      if (entry.isDirectory()) walk(rel);
+      else if (entry.name.endsWith('.js')) out.push(rel);
+    }
+  };
+  walk('public');
+  return out;
+}
+
+// The call site of every renderRoutines call, as "file: the line it is on or
+// the function it is in". A call inside a function is attributed to that
+// function's declaration, which is the stable thing to name: the body around
+// it moves, the declaration does not.
+function renderCallSites() {
+  const sites = [];
+  for (const rel of clientFiles()) {
+    const src = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
+    const lines = src.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      if (!/(?<![.\w$])renderRoutines\(/.test(lines[i])) continue;
+      if (/^\s*function renderRoutines/.test(lines[i])) continue;  // the declaration itself
+      let owner = lines[i].trim();
+      // A branch is named by its condition and a function by its declaration,
+      // both without the body: the body moves, the construct that carries the
+      // call does not, so a row here survives an unrelated edit on the same
+      // line and still fails when the call moves somewhere new.
+      if (/^case /.test(owner)) owner = owner.slice(0, owner.indexOf(':') + 1);
+      else if (/^(else if|if )/.test(owner)) owner = owner.slice(0, owner.indexOf('{')).trim();
+      else {
+        for (let j = i; j >= 0; j--) {
+          if (/^(async )?function \w+\(/.test(lines[j])) { owner = lines[j].replace(/\s*\{\s*$/, '').trim(); break; }
+        }
+      }
+      sites.push(`${rel.replace('public/', '')}: ${owner}`);
+    }
+  }
+  return [...new Set(sites)].sort();
+}
+
+describe('every way this list gets drawn is enumerated', () => {
+  // THE CHECK THAT ENDS THE LOOP. A new call fails here, by name, until it is
+  // listed with the test that presses its surface.
+  test('no call that draws this list exists that this file does not name', () => {
+    const named = RENDERERS.map(r => `${r.file}: ${r.line}`).sort();
+    assert.deepStrictEqual(renderCallSites(), named,
+      'something draws the routines list from a place this file does not list, or a listed '
+      + 'one no longer exists. Add the row and the test that presses its surface, or remove it.');
+  });
+
+  test('every renderer names a test, and every named test exists', () => {
+    const suite = fs.readFileSync(__filename, 'utf-8');
+    for (const entry of [...RENDERERS, ...ROUTES, ...REPLIES]) {
+      assert.ok(entry.pressedBy, `${entry.file || entry.what || entry.call} needs a test`);
+      assert.ok(suite.includes(`test('${entry.pressedBy}'`),
+        `this file names "${entry.pressedBy}" but no test here has that name`);
+    }
+  });
+
+  test('a way in left unpressed says why', () => {
+    for (const excluded of NOT_PRESSED) {
+      assert.ok(excluded.what && excluded.why && excluded.why.length > 40,
+        'an exclusion without a reason is how the editor version went round four times');
+    }
+  });
+
+  // The two exclusions, checked rather than asserted by me.
+  test('nothing reaches the routines section except the routes named here', () => {
+    for (const rel of clientFiles()) {
+      if (rel === 'public/app.js') continue;
+      const src = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
+      for (const m of src.matchAll(/(?:switchNav|showView|setNavState)\((['"])([\w-]+)\1\)/g)) {
+        if (m[2] !== 'routines') continue;
+        assert.ok(/routine-editor\.js$/.test(rel),
+          `${rel} navigates to the routines section and is not a listed route`);
+      }
+    }
+    // The palette navigates, but only to the sections it indexes: files and
+    // skills. It has never indexed routines, which is why it is excluded here
+    // rather than enumerated.
+    const palette = read('public', 'palette-model.js') + read('public', 'views', 'palette.js');
+    const reached = [...palette.matchAll(/switchNav\((['"])([\w-]+)\1\)/g)].map(m => m[2]);
+    assert.deepStrictEqual([...new Set(reached)].sort(), ['files', 'skills'],
+      'the palette now reaches another section; if it reaches routines it needs a row');
+  });
+
+  test('the client has no URL router, so there is no route this file cannot see', () => {
+    for (const rel of clientFiles()) {
+      const src = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
+      assert.ok(!/window\.location\.hash|popstate|pushState/.test(src),
+        `${rel} reads or writes URL state, so a deep link can reach a view and needs a row`);
+    }
+  });
+});
+
+// ===== PRESSING THEM =====
+
+// A shell carrying the REAL nav rail and the REAL view panel, cut out of
+// index.html rather than written again here. A view that renders into an
+// element the page does not have is a silent no-op, and a copy of the markup
+// in this file would keep passing after the page stopped carrying it.
+function shellMarkup() {
+  const rail = /<nav class="nav-rail"[\s\S]*?<\/nav>/.exec(INDEX_SRC);
+  assert.ok(rail, 'index.html no longer carries a nav rail');
+  const panel = /<div id="view-routines"[\s\S]*?<\/div>\s*<\/div>/.exec(INDEX_SRC);
+  assert.ok(panel, 'index.html no longer carries the routines view panel');
+  return '<!doctype html><html><body>' + rail[0]
+    + '<div id="sidebar-team"><div id="sidebar-routines"></div></div>'
+    + '<div id="sidebar-conversations"></div><div id="sidebar-skills"></div>'
+    + '<div id="sidebar-files"></div><div id="sidebar-settings"></div>'
+    + '<div id="view-home"></div>' + panel[0] + '</body></html>';
+}
+
+const ROUTINE = {
+  name: 'Compile the ops summary', schedule: 'every day at 07:00', prompt: 'p', runOn: 'local',
+  enabled: true, paused: false, state: null,
+  nextRun: new Date(2026, 7, 21, 7, 0).toISOString(), lastStart: null, lastSlot: null, missedSlot: null,
+};
+
+function shell({ routines = [ROUTINE] } = {}) {
+  const dom = new JSDOM(shellMarkup(), { runScripts: 'dangerously' });
+  const w = dom.window;
+  w.eval(EDITOR_MODEL_SRC);
+  w.eval(MODEL_SRC);
+  w.eval(RAIL_SRC);
+  w.eval(VIEW_SRC);
+  w.agents = [{ id: 'piper', displayName: 'Piper', colour: '#E87A5A', icon: 'P', status: 'onTeam', routines }];
+  w.esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  w.ws = { send: () => {} };
+  w.routinesNow = () => new Date(2026, 7, 20, 9, 20);
+  w.Intl = { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'Europe/London' }) }) };
+  return { w, doc: w.document, dom };
+}
+
+// A named piece of app.js, cut out and RUN against stubs, which is the
+// difference between checking the words are there and checking what they do.
+// The extraction asserts the piece EXISTS, so a deleted one fails here rather
+// than yielding an empty body that then passes every assertion about what it
+// did not do.
+function appPiece(pattern, label) {
+  const m = APP_SRC.match(pattern);
+  assert.ok(m && m[1] && m[1].trim(), `app.js no longer carries ${label}`);
+  return m[1];
+}
+
+describe('the ways this list gets drawn, pressed', () => {
+  test('the roster arriving from the server draws the list', () => {
+    const { w, dom } = shell();
+    const body = appPiece(/case 'agents':([\s\S]*?)\bbreak;/, 'the roster case of the client dispatch');
+    w.drawn = 0;
+    const realRender = w.renderRoutines;
+    w.renderRoutines = () => { w.drawn++; realRender(); };
+    for (const name of ['renderAgentList', 'renderOrgChart', 'renderRoutinesSidebar', 'renderConvoList']) {
+      w[name] = () => {};
+    }
+    w.d = { type: 'agents', agents: w.agents };
+    w.eval(`(function () {${body}\n})()`);
+    assert.strictEqual(w.drawn, 1, 'a roster arrived and the routines list was not redrawn');
+    assert.strictEqual(w.document.querySelectorAll('.routine-row').length, 1);
+    dom.window.close();
+  });
+
+  test('the rail entry shows the view and draws the list', () => {
+    const { w, doc, dom } = shell();
+    // The rail entry is PRESSED as it sits in index.html, so what it calls is
+    // read off the page rather than out of this file.
+    const entry = doc.querySelector('.nav-item[data-nav="routines"]');
+    assert.ok(entry, 'index.html no longer carries a Routines rail entry');
+    const body = appPiece(/else if\(nav==='routines'\)\s*\{([\s\S]*?)\}/, "switchNav's routines arm");
+    w.shown = null;
+    w.showView = (v) => { w.shown = v; };
+    w.drawn = 0;
+    const realRender = w.renderRoutines;
+    w.renderRoutines = () => { w.drawn++; realRender(); };
+    w.closeFindBar = () => {};
+    w.setNavState = () => {};
+    w.switchNav = (nav) => {
+      assert.strictEqual(nav, 'routines', 'the rail entry asks for another section');
+      w.eval(`(function () {${body}\n})()`);
+    };
+    entry.click();
+    assert.strictEqual(w.shown, 'routines', 'the rail entry does not show this view');
+    assert.strictEqual(w.drawn, 1, 'the rail entry shows the view without drawing anything into it');
+    assert.strictEqual(doc.querySelectorAll('.routine-row').length, 1);
+    dom.window.close();
+  });
+
+  test('the view redraws itself for its own controls', () => {
+    const { w, doc, dom } = shell();
+    w.renderRoutines();
+    doc.querySelector('[data-routines-action="delete"]').click();
+    assert.ok(doc.querySelector('.confirm-card'), 'Delete did not redraw into the confirmation');
+    doc.querySelector('[data-routines-action="cancel-delete"]').click();
+    assert.strictEqual(doc.querySelector('.confirm-card'), null, 'Cancel did not redraw back');
+    doc.querySelector('[data-routines-action="delete"]').click();
+    doc.querySelector('[data-routines-action="confirm-delete"]').click();
+    assert.strictEqual(doc.querySelector('.confirm-card'), null, 'Confirm did not redraw');
+    dom.window.close();
+  });
+
+  test('a saved routine leaves the editor for this view', () => {
+    // The editor decides where to go by asking whether the shell can reach a
+    // section: a rail entry AND a sidebar panel for it. Both have to be true
+    // of the real page, or a save silently lands somewhere else.
+    const { w, dom } = shell();
+    w.eval(EDITOR_VIEW_SRC);
+    assert.strictEqual(w.routinesListNav(), 'routines',
+      'the editor cannot reach this view, so a saved routine goes somewhere else');
+    assert.strictEqual(w.RundockRoutineEditorModel.SAVE_DESTINATION, 'routines');
+    dom.window.close();
+  });
+});
+
+describe('every reply that reaches this view is enumerated', () => {
+  // The same check as the one above, on the other kind of path: a call added
+  // to the dispatch fails here by name until it is listed with its test.
+  test('no reply reaches this view that this file does not name', () => {
+    const published = Object.keys(require(path.join(ROOT, 'public', 'views', 'routines.js')));
+    const found = [];
+    for (const rel of clientFiles()) {
+      if (rel === 'public/views/routines.js') continue;
+      const src = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
+      for (const call of published) {
+        if (call === 'renderRoutines') continue;  // enumerated above, as a render
+        if (new RegExp(`(?<![.\\w$])${call}\\(`).test(src)) found.push(call);
+      }
+    }
+    assert.deepStrictEqual([...new Set(found)].sort(), [...new Set(REPLIES.map(r => r.call))].sort(),
+      'the client calls into this view from somewhere this file does not list, or a listed '
+      + 'call no longer exists. Add the row and the test that drives it, or remove the row.');
+  });
+
+  test('every reply is on the case this file says it is on', () => {
+    for (const reply of REPLIES) {
+      const body = appPiece(new RegExp(`${reply.on}([\\s\\S]*?)\\bbreak;`), `the ${reply.on} case`);
+      assert.ok(new RegExp(`(?<![.\\w$])${reply.call}\\(`).test(body),
+        `${reply.on} no longer calls ${reply.call}`);
+    }
+  });
+
+  // THE DEFECT THIS EXISTS FOR, driven rather than described. A refused pause
+  // or delete used to travel the SAVE road, whose case posts to the
+  // conversation transcript and calls the editor's save-failure callback. The
+  // reader pressed a control on this list and the reply arrived on a screen
+  // they were not looking at, while the editor was poked outside any save.
+  test('a refused action is answered on this list and nowhere else', () => {
+    const { w, doc, dom } = shell();
+    w.renderRoutines();
+    w.said = [];
+    w.addSystemMsg = (t) => w.said.push(t);
+    w.editorTold = [];
+    w.routineEditorFailed = (m) => w.editorTold.push(m);
+    const body = appPiece(/case 'routine_action_error':([\s\S]*?)\bbreak;/, 'the refusal case');
+    w.d = {
+      type: 'routine_action_error', agentId: 'piper',
+      name: 'Compile the ops summary', message: 'Routine "Compile the ops summary" could not be paused.',
+    };
+    w.eval(`(function () {${body}\n})()`);
+
+    const problem = doc.querySelector('[data-routines-problem]');
+    assert.ok(problem, 'the list the control was pressed on says nothing');
+    assert.strictEqual(problem.textContent.trim(),
+      'Routine "Compile the ops summary" could not be paused.',
+      'the server knows which of several things went wrong, so its words are the ones shown');
+    assert.deepStrictEqual(w.said, [], 'the refusal went to the conversation transcript as well');
+    assert.deepStrictEqual(w.editorTold, [],
+      'a refused delete called the editor\'s save-failure callback outside any save');
+    dom.window.close();
+  });
+
+  test('a refusal with nothing in it still says something', () => {
+    const { w, doc, dom } = shell();
+    w.renderRoutines();
+    w.routinesActionFailed({ type: 'routine_action_error' });
+    const problem = doc.querySelector('[data-routines-problem]');
+    assert.ok(problem && problem.textContent.trim(), 'silence is the failure this path exists to prevent');
+    dom.window.close();
+  });
+
+  test('a change that goes through retires the last refusal', () => {
+    for (const type of ['routine_deleted', 'routine_paused']) {
+      const { w, doc, dom } = shell();
+      w.routinesActionFailed({ message: 'Routine could not be paused.' });
+      assert.ok(doc.querySelector('[data-routines-problem]'));
+      w.said = [];
+      w.addSystemMsg = (t) => w.said.push(t);
+      const body = appPiece(new RegExp(`case '${type}':([\\s\\S]*?)\\bbreak;`), `the ${type} case`);
+      w.d = { type, agentId: 'piper', name: 'Compile the ops summary' };
+      w.eval(`(function () {${body}\n})()`);
+      w.renderRoutines();
+      assert.strictEqual(doc.querySelector('[data-routines-problem]'), null,
+        `${type} left last time's refusal on the page`);
+      dom.window.close();
+    }
+  });
+
+  // And the refusal does not outlive the reader's next attempt, whichever
+  // control they reach for.
+  test('the next action the reader takes clears the last refusal', () => {
+    for (const press of [
+      (doc) => doc.querySelector('[data-routines-action="pause"]').click(),
+      (doc) => doc.querySelector('[data-routines-action="delete"]').click(),
+    ]) {
+      const { w, doc, dom } = shell();
+      w.renderRoutines();
+      w.routinesActionFailed({ message: 'Routine could not be paused.' });
+      press(doc);
+      w.renderRoutines();
+      assert.strictEqual(doc.querySelector('[data-routines-problem]'), null);
+      dom.window.close();
+    }
+  });
+});
+
+describe('the shell can actually show what it navigates to', () => {
+  // THE BUG THIS CATCHES, and it is a silent one rather than a throw. The
+  // routines section has no sidebar panel of its own; its panel is the team
+  // one, which already carries a Routines section inside it. There IS an
+  // element called sidebar-routines, NESTED in the team panel, so revealing it
+  // by name succeeds, throws nothing, and leaves the reader looking at an
+  // empty sidebar because the parent stayed hidden. So the assertion is not
+  // that an element was found: it is that what was revealed can actually be
+  // seen.
+  test('every section the rail carries reveals a sidebar the reader can see', () => {
+    const { doc, w, dom } = shell();
+    // Both cut out of app.js and run, so the mapping under test is the one
+    // the page ships rather than one restated here. `const` at the top of an
+    // eval binds inside it, so the declaration is taken as a `var` to put it
+    // where the function body will look for it.
+    w.eval(appPiece(/(const SIDEBAR_FOR = \{[^}]*\};)/, 'the sidebar map').replace('const ', 'var '));
+    const body = appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState');
+    w.eval(`function setNavState(nav) {${body}\n}`);
+    for (const entry of doc.querySelectorAll('.nav-item[data-nav]')) {
+      const nav = entry.getAttribute('data-nav');
+      w.setNavState(nav);
+      assert.strictEqual(entry.classList.contains('active'), true, `${nav} did not become the active entry`);
+      const panel = doc.getElementById(`sidebar-${w.SIDEBAR_FOR[nav] || nav}`);
+      assert.ok(panel, `${nav} reveals no sidebar panel`);
+      for (let el = panel; el; el = el.parentElement) {
+        assert.ok(!el.classList.contains('hidden'),
+          `${nav} reveals a panel that stays out of sight inside #${el.id || el.tagName}`);
+      }
+    }
+    dom.window.close();
+  });
+
+  test('the view panel this list renders into is on the page', () => {
+    const { doc, dom } = shell();
+    assert.ok(doc.getElementById('view-routines'), 'index.html carries no routines view panel');
+    assert.ok(doc.getElementById('routines-content'), 'index.html carries no element to render into');
+    // And showView knows about it, or the panel never becomes visible.
+    assert.match(APP_SRC, /showView\(v\) \{[\s\S]*?'routines'/, 'showView does not list the routines panel');
+    dom.window.close();
+  });
+});

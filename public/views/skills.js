@@ -23,12 +23,10 @@
 }(typeof self !== 'undefined' ? self : this, function () {
 
 function renderSkills() {
-  // Progressive disclosure: hide skills nav tab when 0 skills
-  const skillsNav = document.querySelector('.nav-item[data-nav="skills"]');
-  if (skillsNav) {
-    if (skills.length === 0) { skillsNav.style.display = 'none'; return; }
-    else { skillsNav.style.display = ''; }
-  }
+  // Progressive disclosure: the Skills entry appears with the first skill.
+  // The rule itself lives in public/rail-presence.js, because the routines
+  // rail needs the same one and two copies of it would drift.
+  if (!railPresence('skills', skills.length > 0)) return;
 
   renderSkillsSidebar(skills);
 

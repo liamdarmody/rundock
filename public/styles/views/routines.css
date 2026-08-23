@@ -1,0 +1,68 @@
+/* Routines list: the row, its three tones and the delete confirmation.
+   Drawn against the locked mock, revision 6 for the shape and revision 7 for
+   the run-status line.
+
+   THE THREE TONES ARE THE POINT OF THIS FILE, and they are a ruling rather
+   than a palette choice. A run that happened late is a SUCCESS, so Caught up
+   keeps the success colour and is told apart from Ran on time by weight and by
+   its leading word. A slot that passed unserved is HISTORY, so Missed takes the
+   idle grey, the one state where nothing ran at all. Only a real failure is
+   red.
+
+   AMBER APPEARS NOWHERE, deliberately. var(--attention) is spent on "needs the
+   user, not an error", which none of these states is, and amber reads as an
+   alert whatever a legend says. For someone on a laptop, missing runs is the
+   ordinary case: an interface that turns amber every time the machine was shut
+   overnight teaches its user to stop trusting amber. */
+
+.routines-content { max-width: 640px; padding: 32px; }
+.routines-lead { margin-bottom: 18px; }
+.routines-empty-lead { margin-bottom: 24px; }
+
+/* The list */
+.routine-table { display: flex; flex-direction: column; gap: 10px; }
+.routine-row { display: flex; align-items: center; gap: 14px; padding: 14px 16px; background: var(--card); border-radius: var(--radius-lg); }
+.routine-row.paused { opacity: 0.72; }
+.rr-body { flex: 1; min-width: 0; }
+.rr-sentence { font-size: var(--body); font-weight: 600; color: var(--text-1); margin-bottom: 3px; }
+
+/* The meta lines WRAP. Both of a row's facts have to survive together at any
+   width, and the row with the longest status text is exactly the one a
+   no-wrap line would drop the next-run time from. */
+.rr-meta { font-size: var(--caption); color: var(--text-2); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.rr-meta .sep { color: var(--text-3); }
+.rr-run-line { margin-top: 2px; }
+
+.run-status { font-size: var(--caption); }
+.run-status.ok { font-weight: 600; color: var(--success); }
+.run-status.ok-quiet { font-weight: 500; color: var(--success); }
+.run-status.neutral { font-weight: 500; color: var(--idle); }
+.run-status.failed { font-weight: 600; color: var(--danger); }
+
+.next-run { font-size: var(--caption); font-weight: 600; color: var(--success); }
+.next-run.paused-label { color: var(--text-3); font-weight: 500; }
+
+/* One tap each, directly on the row: no overflow menu, because pause and
+   delete are named as immediate actions. */
+.rr-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.icon-btn { width: 32px; height: 32px; border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; color: var(--text-2); background: transparent; border: 1px solid transparent; cursor: pointer; }
+.icon-btn:hover { color: var(--text-1); background: var(--elevated); border-color: var(--border); }
+.icon-btn.danger:hover { color: var(--danger); }
+
+/* Delete: a real fork, so confirming and cancelling are equal weight (danger
+   fill against plain outline, not accent against a muted link). */
+.routines-confirm-subject { margin-bottom: 18px; }
+.confirm-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 18px 20px; }
+.confirm-card h4 { margin: 0 0 8px; font-size: var(--body); font-weight: 700; color: var(--text-1); }
+.confirm-card p { margin: 0 0 16px; font-size: var(--caption); color: var(--text-2); line-height: 1.65; }
+.confirm-actions { display: flex; gap: 8px; }
+
+/* The empty state: one job, so one primary action and nothing competing. */
+.routines-empty-card { text-align: center; padding: 44px 24px; }
+.routines-empty-actions { justify-content: center; }
+.routines-empty-aside { text-align: center; margin-top: 16px; }
+
+/* A refused pause or delete, said on the list the control was pressed on.
+   Not the danger colour: nothing broke and nothing was changed, so this is
+   the interface answering a question rather than reporting a fault. */
+.routines-problem { font-size: var(--caption); color: var(--attention); line-height: 1.6; margin: -8px 0 16px; }

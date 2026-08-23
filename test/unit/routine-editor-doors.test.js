@@ -31,6 +31,9 @@ const MODEL_SRC = read('public', 'routine-editor-model.js');
 const VIEW_SRC = read('public', 'views', 'routine-editor.js');
 const PROFILE_SRC = read('public', 'views', 'profile.js');
 const TEAM_SRC = read('public', 'views', 'team.js');
+const ROUTINES_MODEL_SRC = read('public', 'routines-model.js');
+const RAIL_SRC = read('public', 'rail-presence.js');
+const ROUTINES_SRC = read('public', 'views', 'routines.js');
 const APP_SRC = read('public', 'app.js');
 
 // ===== THE ENUMERATION =====
@@ -53,17 +56,22 @@ const DOORS = [
     scoped: false,
     pressedBy: 'the sidebar door opens the editor across the whole team',
   },
+  // The door this file named as missing while the routines view did not exist.
+  // It arrived with that view, this row arrived with it, and the enumeration
+  // above went red in between, which is the whole point of the check.
+  {
+    call: 'addRoutine',
+    file: 'views/routines.js',
+    surface: 'the Add control in the routines view empty state',
+    scoped: false,
+    pressedBy: 'the empty state door opens the editor across the whole team',
+  },
 ];
 
 // Doors that exist in the flow but are deliberately not pressed here, each
 // with the reason. A named exclusion is a decision; an unnamed one is how this
 // went round four times.
 const NOT_PRESSED = [
-  {
-    what: 'the routines view empty state',
-    why: 'it is not built yet and belongs to the routines list, which is a separate piece of work. '
-      + 'When it lands it adds a row above and a test with it, and this file fails until it does.',
-  },
   {
     what: 'a keyboard or command-palette route',
     why: 'there is none. The palette indexes files, conversations, agents and skills, not routines. '
@@ -144,12 +152,16 @@ function shell() {
     + '<div id="sidebar-routines"></div></div>'
     + '<div id="profile-content"></div>'
     + '<div id="view-routine-editor"><div id="routine-editor-content"></div></div>'
+    + '<div id="view-routines"><div id="routines-content"></div></div>'
     + '</body></html>', { runScripts: 'dangerously' });
   const w = dom.window;
   w.eval(MODEL_SRC);
   w.eval(VIEW_SRC);
   w.eval(PROFILE_SRC);
   w.eval(TEAM_SRC);
+  w.eval(ROUTINES_MODEL_SRC);
+  w.eval(RAIL_SRC);
+  w.eval(ROUTINES_SRC);
 
   w.agents = [
     {
@@ -240,10 +252,28 @@ describe('the doors, pressed', () => {
     dom.window.close();
   });
 
+  // The third door, and the one the sidebar cannot be: with no routines yet
+  // the sidebar section is not on the page at all (pinned below), so a
+  // workspace that has never scheduled anything reaches the editor through
+  // this control and no other.
+  test('the empty state door opens the editor across the whole team', () => {
+    const { doc, w, dom } = shell();
+    w.agents = w.agents.map(a => ({ ...a, routines: [] }));
+    w.renderRoutines();
+    press(doc, '[data-routines-action="add"]');
+    assert.match(editorText(doc), /Pick a skill any of your agents already has/);
+    assert.deepStrictEqual(
+      [...doc.querySelectorAll('[data-skill-key]')].map(r => r.getAttribute('data-skill-key')),
+      ['ops-summary:piper', 'reading-digest:doc'],
+      'the empty state door offers every agent\'s skills',
+    );
+    dom.window.close();
+  });
+
   // The sidebar section renders nothing until a routine exists, so the
   // unscoped door appears with the first one. Worth pinning: it is why the
-  // routines view's own empty state is still needed, and why its absence is a
-  // named exclusion above rather than an oversight.
+  // routines view's own empty state is a door in its own right rather than a
+  // duplicate of this one.
   test('the sidebar door appears with the first routine and not before', () => {
     const { doc, w, dom } = shell();
     w.agents = w.agents.map(a => ({ ...a, routines: [] }));

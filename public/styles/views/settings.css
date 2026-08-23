@@ -17,6 +17,17 @@
 .settings-btn:hover { border-color: var(--accent); color: var(--accent); }
 .settings-btn-primary { padding: 6px 14px; font-size: var(--caption); font-weight: 600; border-radius: var(--radius-md); background: var(--accent); color: white; border: none; transition: all var(--duration-base) ease; cursor: pointer; }
 .settings-btn-primary:hover { background: var(--accent-hover); }
+/* The danger fill, for a fork where confirming and cancelling are equal
+   weight rather than a primary path with an escape hatch. */
+.settings-btn-danger { padding: 6px 14px; font-size: var(--caption); font-weight: 600; border-radius: var(--radius-md); background: var(--danger); color: white; border: none; transition: all var(--duration-base) ease; cursor: pointer; }
+.settings-btn-danger:hover { opacity: 0.9; }
+/* The prose primitives a settings-shaped page needs: a lead paragraph, a
+   quiet caption beneath a card, a row of actions inside one, and the padded
+   variant of a card that holds prose rather than rows. */
+.settings-lead { color: var(--text-2); font-size: var(--body); line-height: 1.6; margin: 0 0 20px; }
+.settings-caption { font-size: var(--caption); color: var(--text-3); line-height: 1.6; margin-top: 10px; }
+.settings-card.flow { padding: 24px; }
+.card-actions { margin-top: 2px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* 10px is NOT off-scale drift. It is the outer half of a concentric pair:
    four pixels of padding around an inner at --radius-md, so inner equals
    outer minus padding and the two curves agree. Forcing this onto the
