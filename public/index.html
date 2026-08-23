@@ -29,6 +29,8 @@
 <script src="/markdown-render.js"></script>
 <script src="/file-tree-diff.js"></script>
 <script src="/routine-editor-model.js"></script>
+<script src="/rail-presence.js"></script>
+<script src="/routines-model.js"></script>
 <!-- Tokens first: everything below resolves var(--x) against this file. -->
 <link rel="stylesheet" href="/styles/tokens.css">
 <link rel="stylesheet" href="/styles/fonts.css">
@@ -51,6 +53,7 @@
 <link rel="stylesheet" href="/styles/views/workspace.css">
 <link rel="stylesheet" href="/styles/views/conversations.css">
 <link rel="stylesheet" href="/styles/views/routine-editor.css">
+<link rel="stylesheet" href="/styles/views/routines.css">
 </head>
 <body>
 <div class="app">
@@ -87,6 +90,13 @@
       <button class="nav-item" data-nav="skills" onclick="switchNav('skills')" data-tooltip="Skills">
         <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
         <svg class="icon-filled" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+      </button>
+      <!-- Routines. Withdrawn until the first routine exists, by the same
+           gate the Skills entry uses: a workspace with nothing scheduled
+           should not carry a section that can only be empty. -->
+      <button class="nav-item" data-nav="routines" onclick="switchNav('routines')" data-tooltip="Routines" style="display:none">
+        <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/></svg>
+        <svg class="icon-filled" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 5v4.4l3.3 2a1 1 0 1 1-1 1.7l-3.8-2.3a1 1 0 0 1-.5-.9V7a1 1 0 0 1 2 0z"/></svg>
       </button>
       <button class="nav-item" data-nav="files" onclick="switchNav('files')" data-tooltip="Files">
         <svg class="icon-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
@@ -255,6 +265,10 @@
       </div>
     </div>
     <!-- Routine editor: pick a skill, then say when it runs. -->
+    <!-- Routines -->
+    <div id="view-routines" class="hidden view-panel view-scroll">
+      <div class="routines-content" id="routines-content"></div>
+    </div>
     <div id="view-routine-editor" class="hidden view-panel view-scroll">
       <div class="routine-editor" id="routine-editor-content"></div>
     </div>
@@ -297,6 +311,7 @@
 <script src="/views/palette.js"></script>
 <script src="/views/find.js"></script>
 <script src="/views/routine-editor.js"></script>
+<script src="/views/routines.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

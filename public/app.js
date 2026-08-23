@@ -248,7 +248,7 @@ function handle(d) {
       if (currentView === 'settings') renderSettingsSection('workspace');
       break;
     case 'needs_workspace': showView('workspace'); break;
-    case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesSidebar(); renderConvoList(); break;
+    case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesSidebar(); renderRoutines(); renderConvoList(); break;
     case 'skills': skills=d.skills; skillsLoaded=true; renderSkills(); routineEditorSkillsArrived(d.skills); if(palettePendingSkill){const s=palettePendingSkill;palettePendingSkill=null;selectSkill(s);} break;
     case 'conversations':
       handlePersistedConversations(d.conversations, d.lastActiveConversationId);
@@ -445,6 +445,15 @@ function handle(d) {
     case 'routine_error':
       addSystemMsg(d.message || 'Routine could not be saved');
       routineEditorFailed(d.message);
+      break;
+    case 'routine_deleted':
+      addSystemMsg('Routine "' + (d.name || '') + '" deleted');
+      break;
+    case 'routine_paused':
+      // No message of its own. The roster broadcast that follows redraws the
+      // row, which says Paused or names the next run, and that is the change
+      // the reader asked for. A line in the conversation as well would be a
+      // second answer to a question the list already answers.
       break;
     case 'skill_deleted':
       addSystemMsg('Skill "' + (d.skillId || '') + '" removed');
@@ -960,11 +969,18 @@ function initSidebarResize() {
 // workspace routing). Before this existed, callers had to remember to pair
 // switchNav with their navigation and several forgot, leaving the rail
 // highlighting one section while the main pane showed another.
+// Sections whose sidebar belongs to another one. Routines sits beside the
+// team and the locked mock draws it with the team panel for a reason worth
+// keeping: a routine belongs to an agent, and the panel that lists your agents
+// is the one that answers "whose?". Its own Routines section already lives
+// inside that panel.
+const SIDEBAR_FOR = { routines: 'team' };
+
 function setNavState(nav) {
   document.querySelectorAll('.nav-item[data-nav]').forEach(n=>n.classList.remove('active'));
   document.querySelector(`[data-nav="${nav}"]`)?.classList.add('active');
   ['team','conversations','skills','files','settings'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
-  document.getElementById(`sidebar-${nav}`).classList.remove('hidden');
+  document.getElementById(`sidebar-${SIDEBAR_FOR[nav] || nav}`).classList.remove('hidden');
   // The New conversation footer lives at sidebar level (so the update strip
   // can sit above it without ever moving it), which makes its visibility
   // this function's job rather than the panel's.
@@ -1000,8 +1016,9 @@ function switchNav(nav) {
   else if(nav==='skills') { showView('skills'); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } else if(skills.length && !currentSkillId) { selectSkill(skills[0].id); } }
   else if(nav==='conversations') { if(activeConversation) { showView('chat'); if(unread.clearConvo(activeConversation.id)) { updateUnreadBadge(); renderConvoList(); } } else { const target = pickDefaultConversation(); if(target) { openConversation(target.id); } else { newConversation(); } } }
   else if(nav==='team') { showView('home'); renderOrgChart(); }
+  else if(nav==='routines') { showView('routines'); renderRoutines(); }
 }
-function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings','routine-editor'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }
+function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings','routine-editor','routines'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }
 function goHome() { discardIfEmpty(); activeConversation=null; switchNav('conversations'); }
 
 // Theme. One function applies it everywhere it shows (body class, toggle

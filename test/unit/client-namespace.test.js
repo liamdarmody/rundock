@@ -206,6 +206,13 @@ const MANIFEST = {
     "routinesListNav",
     "saveRoutine",
   ],
+  "routines.js": [
+    "renderRoutines",
+    "routinesAskDelete",
+    "routinesCancelDelete",
+    "routinesConfirmDelete",
+    "routinesSetPaused",
+  ],
   "settings.js": [
     "changeWorkspace",
     "renderRuntimesCard",
