@@ -117,6 +117,16 @@ describe('routine editor view: choosing a skill', () => {
     dom.window.close();
   });
 
+  // The lead line asks the reader to pick a skill. Above an offer to build the
+  // first one it reads as an instruction the page has already made impossible,
+  // which is how a state that is not an error comes across as one.
+  test('the zero-skills state does not ask the reader to pick from nothing', () => {
+    const { doc, dom } = mount({ skills: [] });
+    assert.ok(!text(doc).includes('Pick a skill'), 'there is nothing to pick, so nothing asks');
+    assert.match(text(doc), /Build a skill/, 'what it offers instead is still there');
+    dom.window.close();
+  });
+
   // Pressing the offer hands over to the agent that builds skills rather than
   // opening a skill editor this screen does not have.
   test('the create-a-skill path leads somewhere', () => {
@@ -261,6 +271,12 @@ describe('routine editor view: where it runs', () => {
       alwaysOn.textContent.toLowerCase().includes(OFF_COMPUTER_PROMISE),
       'the promise is on the page, on the other option, so its absence here means something',
     );
+    // The two rows are two options and say so. Without this, a render that
+    // printed the local option's name on both would pass every assertion
+    // above: the promise would still be present on one row and absent from the
+    // other, and the page would name one option twice.
+    assert.match(local.textContent, /This computer/);
+    assert.match(alwaysOn.textContent, /Your Agent Computer/);
     dom.window.close();
   });
 
@@ -341,6 +357,21 @@ describe('routine editor view: saving', () => {
     const { w, dom } = atReady();
     w.saveRoutine();
     assert.strictEqual(w.navigatedTo, w.RundockRoutineEditorModel.SAVE_DESTINATION);
+    dom.window.close();
+  });
+
+  // A skill IS picked here, so this reaches the guard on the DRAFT rather than
+  // the earlier one on the selection. Mutation showed that the two are not the
+  // same guard and only the first had a test: a value the builder never
+  // offered can be set on a field, and the routine it would make is refused.
+  test('a schedule value that was never offered saves nothing and stays put', () => {
+    const { w, dom } = mount({ agentId: 'piper', agentName: 'Piper' });
+    w.routineEditorPick('ops-summary:piper');
+    w.routineEditorSetField('time', '07:15');
+    w.routineEditorStep('ready');
+    w.saveRoutine();
+    assert.deepStrictEqual(w.sent, [], 'nothing the builder refuses reaches an agent file');
+    assert.strictEqual(w.navigatedTo, null, 'a failed save does not return to a list without it');
     dom.window.close();
   });
 

@@ -36,67 +36,108 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 const ROOT = path.join(__dirname, '..', '..');
-const SRC = path.join(ROOT, 'public', 'routine-editor-model.js');
-const SUITE = 'test/unit/routine-editor-model.test.js';
 
-// [label, the guard as it is written, what it becomes without it]
+// The two halves of the editor, each with the suite that watches it.
+//
+// THE VIEW IS MUTATED TOO, and that is not thoroughness for its own sake. The
+// model can carry exactly the right words while a view renders different ones,
+// and every model test still passes. The copy rule this editor exists to hold
+// is a claim about what a person SEES, so the render has to be broken and
+// noticed as well.
+const MODEL = { src: path.join(ROOT, 'public', 'routine-editor-model.js'), suite: 'test/unit/routine-editor-model.test.js' };
+const VIEW = { src: path.join(ROOT, 'public', 'views', 'routine-editor.js'), suite: 'test/unit/routine-editor-view.test.js' };
+
+// [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
   // THE ONE THIS FILE EXISTS FOR. Copy the always-on option's promise onto the
   // option a user can actually pick. This is the defect in its exact form.
-  ['the local option carries its own words, not the always-on option\'s',
+  [MODEL, 'the local option carries its own words, not the always-on option\'s',
     "      meta: 'Runs while Rundock is open here.',",
     "      meta: 'Not set up yet. Keeps your files synced, and keeps this routine running while your computer is off.',"],
-  ['selectability is membership of the supported set',
+  [MODEL, 'selectability is membership of the supported set',
     '      selectable: RUN_ON_SUPPORTED.indexOf(option.value) !== -1,',
     '      selectable: true,'],
-  ['the supported set is the one the data model supports',
+  [MODEL, 'the supported set is the one the data model supports',
     "  const RUN_ON_SUPPORTED = ['local'];",
     "  const RUN_ON_SUPPORTED = ['local', 'agent-computer'];"],
-  ['the preview sentence reads the run-on words off the option',
+  [MODEL, 'the preview sentence reads the run-on words off the option',
     '    return `Every ${freq.label} at ${time.label}, run: ${skillName}, on ${option.sentence}.`;',
     '    return `Every ${freq.label} at ${time.label}, run: ${skillName}, on this computer.`;'],
-  ['the confirmation line reads its second sentence off the option',
+  [MODEL, 'the confirmation line reads its second sentence off the option',
     '    return words ? `${words} time. ${option.meta}` : option.meta;',
     '    return words ? `${words} time. Runs while Rundock is open here.` : option.meta;'],
-  ['both halves of the schedule are looked up, never taken from the input',
+  [MODEL, 'both halves of the schedule are looked up, never taken from the input',
     '    if (!freq || !time) return null;\n    return `every ${freq.value} at ${time.value}`;',
     '    return `every ${input.frequency} at ${input.time}`;'],
-  ['the picker is scoped to the agent it was opened from',
+  [MODEL, 'the picker is scoped to the agent it was opened from',
     '        if (agentId && agent.id !== agentId) continue;\n',
     ''],
-  ['a scoped row does not repeat the agent',
+  [MODEL, 'a scoped row does not repeat the agent',
     '          agentName: agentId ? null : (agent.name || null),',
     '          agentName: agent.name || null,'],
-  ['an unscoped row names the agent that runs it',
+  [MODEL, 'an unscoped row names the agent that runs it',
     '          agentName: agentId ? null : (agent.name || null),',
     '          agentName: null,'],
-  ['a skill with no agent is not offered',
+  [MODEL, 'a skill with no agent is not offered',
     '      for (const agent of assigned) {',
     '      for (const agent of (assigned.length ? assigned : [{ id: null, name: null }])) {'],
-  ['the zero-skills state offers a way to make one',
+  [MODEL, 'the zero-skills state offers a way to make one',
     '      createSkill: options.length === 0,',
     '      createSkill: false,'],
-  ['the reserved target is refused where a routine is made',
+  [MODEL, 'the reserved target is refused where a routine is made',
     '    if (RUN_ON_SUPPORTED.indexOf(runOn) === -1) return null;\n',
     ''],
-  ['the caveat names the machine a routine was made on',
+  [MODEL, 'the caveat names the machine a routine was made on',
     "  const RUN_ON_CAVEAT = 'Routines run on the machine they were made on. '",
     "  const RUN_ON_CAVEAT = 'Routines run when Rundock is open here. '"],
-  ['the caveat names what a workspace on several computers does',
+  [MODEL, 'the caveat names what a workspace on several computers does',
     "    + 'A workspace open on more than one computer runs its routines on each of them.';",
     "    + '';"],
-  ['the caveat travels with the field the choice is made in',
+  [MODEL, 'the caveat travels with the field the choice is made in',
     '    return { label: RUN_ON_LABEL, options: runOnOptions(), caveat: RUN_ON_CAVEAT };',
     '    return { label: RUN_ON_LABEL, options: runOnOptions(), caveat: null };'],
-  ['save leaves the editor for the list',
+  [MODEL, 'save leaves the editor for the list',
     "  const SAVE_DESTINATION = 'routines';",
     "  const SAVE_DESTINATION = 'editor';"],
-  ['midnight and noon read as twelve rather than zero',
+  [MODEL, 'midnight and noon read as twelve rather than zero',
     '      const hour12 = hour % 12 === 0 ? 12 : hour % 12;',
     '      const hour12 = hour % 12;'],
-  ['the lead line names the agent the choice was scoped to',
+  [MODEL, 'the lead line names the agent the choice was scoped to',
     "    return STEP_LEADS.pick.replace('{agent}', agentName);",
     '    return STEP_LEADS.pickAny;'],
+
+  // The render. THE DEFECT IN ITS OTHER FORM: a model with the right words and
+  // a view that prints the wrong ones.
+  [VIEW, 'the run-on row reads its second line off the option',
+    '          <div class="re-meta">${escText(option.meta)}</div>',
+    '          <div class="re-meta">Keeps this routine running while your computer is off.</div>'],
+  [VIEW, 'the run-on row reads its name off the option',
+    '          <div class="re-name">${escText(option.name)}</div>',
+    '          <div class="re-name">This computer</div>'],
+  [VIEW, 'the caveat is rendered inside the field',
+    '    h += `<p class="re-caveat" data-routine-editor="caveat">${escText(field.caveat)}</p>`;\n',
+    ''],
+  [VIEW, 'the reserved option cannot be selected by pressing its row',
+    '    if (!option || !option.selectable) return state.runOn;',
+    '    if (!option) return state.runOn;'],
+  [VIEW, 'the zero-skills state offers something to press',
+    '        <button class="settings-btn-primary" type="button" data-routine-editor="create-skill"',
+    '        <button class="settings-btn-primary" type="button" data-routine-editor="nothing"'],
+  [VIEW, 'the zero-skills state does not ask the reader to pick from nothing',
+    '    if (choice.createSkill) {',
+    '    if (choice.createSkill && false) {'],
+  [VIEW, 'a save that cannot be built does not leave the editor',
+    '    if (!draft) return;',
+    '    if (!draft) { if (typeof switchNav === \'function\') switchNav(m.SAVE_DESTINATION); return; }'],
+  [VIEW, 'a save sends the routine before it leaves',
+    "        type: 'save_routine',",
+    "        type: 'not_save_routine',"],
+  [VIEW, 'a skill name reaches the page as text, not as markup',
+    '<div class="re-name">${escText(option.name)}</div>${meta}',
+    '<div class="re-name">${option.name}</div>${meta}'],
+  [VIEW, 'the time zone reaches the page',
+    '    if (zone) h += `<p class="re-caption">${escText(zone)}</p>`;\n',
+    ''],
 ];
 
 // The reporter is named explicitly rather than left to the default, which
@@ -106,11 +147,11 @@ const MUTATIONS = [
 // unguarded guards instead of one clear message about the reporter.
 const REPORTER = ['--test-reporter=spec', '--test-reporter-destination=stdout'];
 
-function redTests() {
+function redTests(suite) {
   let out = '';
   let failed = false;
   try {
-    out = execFileSync('node', ['--test', ...REPORTER, SUITE],
+    out = execFileSync('node', ['--test', ...REPORTER, suite],
       { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (e) {
     failed = true;
@@ -136,19 +177,24 @@ function redTests() {
 }
 
 function run() {
-  const original = fs.readFileSync(SRC, 'utf8');
+  // Both files are read up front and both are restored in the same finally, so
+  // a throw part way through cannot leave either one mutated.
+  const originals = new Map();
+  for (const target of [MODEL, VIEW]) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];
   try {
-    for (const [label, guard, without] of MUTATIONS) {
+    for (const [target, label, guard, without] of MUTATIONS) {
+      const original = originals.get(target);
       if (!original.includes(guard)) {
         results.push({ label, applied: false, red: [] });
         continue;
       }
-      fs.writeFileSync(SRC, original.replace(guard, without));
-      results.push({ label, applied: true, red: redTests() });
+      fs.writeFileSync(target.src, original.replace(guard, without));
+      results.push({ label, applied: true, red: redTests(target.suite) });
+      fs.writeFileSync(target.src, original);
     }
   } finally {
-    fs.writeFileSync(SRC, original);
+    for (const [target, original] of originals) fs.writeFileSync(target.src, original);
   }
   return results;
 }

@@ -72,19 +72,23 @@
   // ===== RENDER =====
 
   function pickStep(m, choice) {
-    let h = `<p class="re-lead">${escText(m.stepLead({ agentName: state.agentName }))}</p>`;
-
     if (choice.createSkill) {
+      // NO LEAD LINE HERE. The lead asks the reader to pick a skill, and there
+      // is nothing to pick. Printed above an offer to build one it reads as an
+      // instruction the page has already made impossible, which is how a state
+      // that is not an error comes across as one.
+
       // The zero-skills state is an OFFER, so it gets the shape an offer has:
       // one line saying where a skill comes from and one thing to press. It
       // deliberately reads nothing like a fault, because nothing has failed.
-      return h + `<div class="re-offer">
+      return `<div class="re-offer">
         <p class="re-offer-lead">${escText(choice.emptyLead)}</p>
         <button class="settings-btn-primary" type="button" data-routine-editor="create-skill"
           onclick="routineEditorBuildSkill()">${escText(choice.createSkillLabel)}</button>
       </div>`;
     }
 
+    let h = `<p class="re-lead">${escText(m.stepLead({ agentName: state.agentName }))}</p>`;
     h += '<div class="re-list">';
     for (const option of choice.options) {
       const on = option.key === state.selectedKey;

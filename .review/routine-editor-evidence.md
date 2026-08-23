@@ -284,15 +284,42 @@ Run on the tree this file is committed with:
 | save leaves the editor for the list | 1 | `save returns to the list` |
 | midnight and noon read as twelve rather than zero | 1 | `times read as plain clock words` |
 | the lead line names the agent the choice was scoped to | 1 | `the lead line names the agent when the choice was scoped to one` |
+| the run-on row reads its second line off the option | 2 | `the local option renders its two lines`<br>`the local option on the page promises nothing about the computer being off` |
+| the run-on row reads its name off the option | 1 | `the local option on the page promises nothing about the computer being off` |
+| the caveat is rendered inside the field | 1 | `the caveat is rendered inside the run-on field` |
+| the reserved option cannot be selected by pressing its row | 1 | `the always-on option cannot be picked` |
+| the zero-skills state offers something to press | 2 | `a workspace with no skills renders the create-a-skill path`<br>`the create-a-skill path leads somewhere` |
+| the zero-skills state does not ask the reader to pick from nothing | 3 | `a workspace with no skills renders the create-a-skill path`<br>`the zero-skills state does not ask the reader to pick from nothing`<br>`the create-a-skill path leads somewhere` |
+| a save that cannot be built does not leave the editor | 1 | `a schedule value that was never offered saves nothing and stays put` |
+| a save sends the routine before it leaves | 1 | `saving sends the routine that was built` |
+| a skill name reaches the page as text, not as markup | 1 | `a skill name carrying markup renders as text` |
+| the time zone reaches the page | 2 | `the browser's zone reaches the schedule step as words`<br>`the time zone reads as a place and never as an offset` |
 
-Two of these were added BECAUSE a mutation asked for them, not because they were
-thought of first, and both are in the commit `Require each of the editor's
-guards to be noticed by a test`:
+**Both halves are mutated: the model and the view.** That is not thoroughness
+for its own sake. The model can carry exactly the right words while the view
+renders different ones, and every model test still passes. The rule this editor
+exists to hold is a claim about what a person SEES, so the render is broken and
+noticed too. Ten of the twenty-eight break the render.
+
+**Four tests exist because a mutation asked for them, not because they were
+thought of first.** Two turned nothing red on the model's first run and two on
+the view's:
 
 - Offering a skill assigned to no agent turned nothing red, because the fixture
   had no such skill. The fixture gained one and the rule gained a test.
 - Dropping the agent's name from the picker's lead line turned nothing red,
   because nothing exercised it.
+- **Printing the local option's NAME on both rows turned nothing red.** Every
+  assertion still held: the promise was present on one row and absent from the
+  other, and the page named one option twice while the tests reported the copy
+  was right. `the local option on the page promises nothing about the computer
+  being off` now asserts both names, so the two rows have to be two options.
+- **Making a failed save navigate anyway turned nothing red.** The only
+  unbuildable save on record had no skill picked, so it returned at an earlier
+  guard and never reached this one: two guards with one test between them. `a
+  schedule value that was never offered saves nothing and stays put` picks a
+  skill and sets a time the builder never offered, which is the case that
+  reaches the second.
 
 ## Red-first and the gate
 
