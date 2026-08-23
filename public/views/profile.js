@@ -91,6 +91,13 @@ function showProfile(agentId) {
       }
       h+=`</div>`;
     }
+    // Scheduling starts from the agent, which is Journey 2's original entry:
+    // you are already looking at the agent and think of the schedule second.
+    // The editor opens scoped to it, so the picker is this agent's skills.
+    h+=`<div class="profile-card-section"><div class="profile-section-label">Add a routine</div>
+      <div class="profile-card-text" style="padding-bottom:10px">Give one of ${esc(a.displayName)}'s skills a schedule.</div>
+      <button class="settings-btn-primary" type="button" onclick="addRoutineForAgent('${esc(a.id)}')">Add routine</button>
+    </div>`;
     if(hasConnectors) {
       h+=`<div class="profile-card-section"><div class="profile-section-label">Connectors</div>${a.capabilities.connectors.split(',').map(cn=>`<div class="profile-card-item" style="display:flex;align-items:center;justify-content:space-between">${cn.trim()}<span style="color:var(--success);font-size:var(--caption)">Connected</span></div>`).join('')}</div>`;
     }

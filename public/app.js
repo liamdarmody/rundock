@@ -963,6 +963,12 @@ function switchNav(nav) {
   // and search state don't survive into a context where they no longer make
   // sense or reference DOM that's about to be replaced.
   closeFindBar();
+  // Where a saved routine lands. The routines surface does not have its own
+  // rail entry yet, so the destination resolves to the section that lists
+  // routines today. Resolved HERE rather than at each caller, so the editor
+  // keeps one answer for where a save goes and gains the real list the day
+  // the rail entry exists, without being edited.
+  if (nav === 'routines' && !document.querySelector('[data-nav="routines"]')) nav = 'team';
   setNavState(nav);
   if(nav==='settings') { showView('settings'); showSettingsSection('workspace'); }
   else if(nav==='files') {
@@ -988,7 +994,7 @@ function switchNav(nav) {
   else if(nav==='conversations') { if(activeConversation) { showView('chat'); if(unread.clearConvo(activeConversation.id)) { updateUnreadBadge(); renderConvoList(); } } else { const target = pickDefaultConversation(); if(target) { openConversation(target.id); } else { newConversation(); } } }
   else if(nav==='team') { showView('home'); renderOrgChart(); }
 }
-function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }
+function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings','routine-editor'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }
 function goHome() { discardIfEmpty(); activeConversation=null; switchNav('conversations'); }
 
 // Theme. One function applies it everywhere it shows (body class, toggle

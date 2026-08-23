@@ -28,6 +28,7 @@
 <script src="/chat-markup.js"></script>
 <script src="/markdown-render.js"></script>
 <script src="/file-tree-diff.js"></script>
+<script src="/routine-editor-model.js"></script>
 <!-- Tokens first: everything below resolves var(--x) against this file. -->
 <link rel="stylesheet" href="/styles/tokens.css">
 <link rel="stylesheet" href="/styles/fonts.css">
@@ -49,6 +50,7 @@
 <link rel="stylesheet" href="/styles/views/settings.css">
 <link rel="stylesheet" href="/styles/views/workspace.css">
 <link rel="stylesheet" href="/styles/views/conversations.css">
+<link rel="stylesheet" href="/styles/views/routine-editor.css">
 </head>
 <body>
 <div class="app">
@@ -252,6 +254,10 @@
         <div id="tiptap-toolbar" class="floating-toolbar"></div>
       </div>
     </div>
+    <!-- Routine editor: pick a skill, then say when it runs. -->
+    <div id="view-routine-editor" class="hidden view-panel view-scroll">
+      <div class="routine-editor" id="routine-editor-content"></div>
+    </div>
     <!-- Settings -->
     <div id="view-settings" class="hidden view-panel view-scroll">
       <div class="settings-content" id="settings-content"></div>
@@ -290,6 +296,7 @@
 <script src="/views/chat.js"></script>
 <script src="/views/palette.js"></script>
 <script src="/views/find.js"></script>
+<script src="/views/routine-editor.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>
