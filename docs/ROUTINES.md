@@ -135,9 +135,9 @@ If neither applies, schedule routines for whenever you tend to be at the machine
 
 ## Where routine output goes
 
-When a routine fires, the spawned Claude Code subprocess produces output on stdout (stream-json) and stderr. **Rundock discards both.** The child's stdout and stderr are attached to the null device, so a routine can print as much as it likes and every write completes. (Pinned by `test/unit/doc-claims.test.js`, which reads this sentence and the configuration the scheduler really passes to the spawn, and fails if either moves without the other.) The model's response, any tool calls it made, any files it produced via Write or Bash: none of these flow back into a Rundock conversation or notification.
+When a routine fires, the spawned Claude Code subprocess produces output on stdout (stream-json) and stderr. **Rundock discards both.** The child's stdout and stderr are attached to the null device, so a routine can print as much as it likes and every write completes. (Pinned by `test/unit/doc-claims.test.js`, which reads this sentence and the configuration the scheduler really passes to the spawn, and fails if either moves without the other.) The model's response and its running commentary do not flow back into a Rundock conversation or notification. What the run *changed* is a separate question with a separate answer: see **What a run can say it changed**, below.
 
-This page used to say the pipes were open but unread, and described that as a deliberate choice. It was a hang. Nothing was reading them, and an unread pipe fills: past roughly 128 KB of output the subprocess could no longer complete its writes and so never exited, so the run never recorded an outcome, the routine stayed marked as in flight, and it did not run again until Rundock was restarted. Verbose stream output passes that in the opening list of available tools alone, and stderr filled the same way. Discarding the output removes the hazard; whether Rundock should read it instead is an open question, and this page will say so if that changes.
+This page used to say the pipes were open but unread, and described that as a deliberate choice. It was a hang. Nothing was reading them, and an unread pipe fills: past roughly 128 KB of output the subprocess could no longer complete its writes and so never exited, so the run never recorded an outcome, the routine stayed marked as in flight, and it did not run again until Rundock was restarted. Verbose stream output passes that in the opening list of available tools alone, and stderr filled the same way. Discarding the output removes the hazard. Whether Rundock should read the output instead was left open here, and the answer is no: it reads Claude Code's session transcript, which needs nothing from the spawn and is the only source that records whether a write succeeded rather than only that the model asked for one.
 
 What Rundock does record:
 
@@ -147,6 +147,34 @@ What Rundock does record:
 - An `error` string, written only when a start never produced a subprocess at all. A routine whose spawn throws is recorded as `failed` with the reason the failure gave, and with a `duration` of zero, because nothing ran. Its `lastRun` is the instant the start was attempted, so the ordinary guard holds it for the rest of its period rather than retrying it every 60 seconds; the next period attempts it again. One routine failing this way does not stop any other routine on the same tick.
 
 These fields update in the Routines panel and on the agent profile in real time over the WebSocket, except after a failed start, which the next update carries.
+
+### What a run can say it changed
+
+Every run keeps a record of its own under `.rundock/runs/`, and that record lists the files the run changed: the path, the tool that touched it, whether the file was created or edited, and when.
+
+It comes from the session transcript Claude Code writes for the run, not from the run's output. Each run tells Claude Code which session to be, so its transcript is found by an identity the run chose rather than by looking for whatever changed most recently, which would answer with another run's files and look perfectly plausible doing it. The transcript records each tool call's outcome, so a write that failed is not listed as a file the run changed.
+
+Three limits, stated rather than implied. A file written through a shell command is invisible, because there is no path argument to read: the list covers the file tools and nothing else. A run whose changes cannot be established reports that it does not know, which is a different answer from a run that changed nothing; nothing here turns the first into the second. And a run that **delegated work to a subagent** reports that it does not know, for the reason below.
+
+**Delegation.** When a run hands work to a subagent, the subagent gets a session transcript of its own, filed under a directory named for the run's session rather than inside the run's own transcript. That file records which tool the subagent asked for and the file it named, and it records the outcome as an English sentence with no structured payload at all. So Rundock can see that a subagent asked to change a file and cannot say what came of it, and reading the sentence to decide whether a file was created or overwritten would be a guess. A run whose subagent asked to change any file therefore reports `delegated`: its changes are not known. A run that delegated work which touched no files keeps its list.
+
+**Web tools.** A run that searches the web is read normally. This was an open question, because a research digest is the leading example of a routine and every one of them searches: on Claude Code 2.1.240 a web search appears in the transcript as an ordinary tool call and produces no shape the reader refuses. The capture that settles it exercises a search on every re-capture, so the day that stops being true the capture fails rather than the product going quiet.
+
+The second limit covers more than a missing file. The transcript format belongs to Claude Code, so Rundock pins it to a transcript captured from a real run (`scripts/transcript-truth`, re-captured with `npm run transcript:truth -- --capture`). If a run's transcript arrives in a shape that capture has not shown, the run reports that it does not know rather than reporting a shorter list. A quietly incomplete list would be worse than no list, because the record is what a later revert would act on.
+
+### Do the permission hooks run for a routine?
+
+**Yes.** A routine spawns with `--dangerously-skip-permissions`, and it is reasonable to assume that means Claude Code's `PreToolUse` hooks are skipped too. They are not: the hooks still run, and they still run *before* the tool does.
+
+This was established by running it rather than by reading, and it is re-run every time the transcript capture is taken, so the answer carries a runtime version instead of a date. The capture harness configures a `PreToolUse` hook in the shape Rundock scaffolds (matchers `Bash` and `Read|Write|Edit|MultiEdit|NotebookEdit|Glob|Grep`, a fail-open script that records what it was asked about and exits 0), spawns a real run in the routine's own shape (`--print --output-format stream-json --verbose --dangerously-skip-permissions --session-id <uuid>`, output discarded), and records what the hook saw:
+
+```
+npm run transcript:truth -- --capture
+```
+
+On Claude Code 2.1.240 the hook was consulted 12 times, about `Bash`, `Edit`, `NotebookEdit`, `Read` and `Write`, including the write that then failed. Each payload named the tool about to run and the path of the run's own transcript. (These numbers are read out of the capture by `test/unit/doc-claims.test.js` and asserted against this sentence, so a re-capture that moves them fails rather than leaving the prose stale.) The recorded answer, the matchers, the spawn shape and the tools it was consulted about all live in `scripts/transcript-truth/captured-transcript.json` under `permissionHook`, and `test/unit/session-transcript-capture.test.js` asserts them.
+
+Why it matters beyond the curiosity: a hook is the only thing that runs *before* a write, so it is the only place that can copy a file's bytes before they are overwritten. Reading a transcript afterwards can say what changed but never what it used to be. Any future feature that needs to undo a routine's work depends on the answer above being yes.
 
 The practical implication: any routine that needs to leave a trace should write that trace itself, through the agent's tools. A morning briefing that creates a file in the daily note, a research digest that writes a markdown report to a folder, an end-of-day sync that updates Todoist via MCP: all of these work because the agent's system prompt instructs the agent to write its output to a known location. A routine that simply asks the model to think out loud will produce output that nobody ever reads.
 

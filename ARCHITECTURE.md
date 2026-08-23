@@ -85,7 +85,7 @@ Contents:
 | `state.json` | Workspace-level settings: setup completion flag, workspace mode (Knowledge or Code), version. |
 | `conversations.json` | Index of every Rundock conversation: ID, title, owning agent, last Claude Code session ID, timestamps. |
 | `transcripts/<convoId>.json` | Lightweight conversation transcript for fast UI replay (role, agent, text). Capped to keep file size reasonable. |
-| `child-pids.json` | Running Claude Code subprocess PIDs, used to clean up zombie processes on server restart. |
+| `child-pids.json` | Running Claude Code subprocess PIDs, used to clean up zombie processes on server restart. Each record carries the command it was spawned as, so a pid the OS has since recycled onto an unrelated process is not signalled. Not every platform can read a command line, and where none can be read the record is assumed to be ours rather than discarded: `pidRecordAlive` in `lib/runtime/claude.js` documents which sources exist, what each costs, and what that assumption gives up. |
 | `search-index.db` | SQLite FTS5 index behind universal search (plus its `-wal`/`-shm` journal files). A **derived artifact**: delete it and the next workspace open rebuilds it from the files and transcripts it indexes. Never a source of truth. See Universal search, below. |
 
 What does **not** live in `.rundock/`:

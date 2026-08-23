@@ -26,6 +26,7 @@
  * Usage, and the order matters:
  *   git add -A                 # stage first: the record names the STAGED tree
  *   npm run precommit          # run the checks, write the record
+ *   npm run red-first          # fold the discrimination result into the record
  *   git commit                 # the hook refuses unless the record matches
  *
  * Running the checks before staging records the tree as it was, which the hook
@@ -53,11 +54,29 @@ const RECORD = path.join(ROOT, '.precommit-gate.json');
 // The checks that belong on a commit: fast, deterministic, and the ones whose
 // absence has actually cost a red pipeline. The browser suite and the live
 // smoke stay in the release gate, where their cost is affordable.
+//
+// COVERAGE RUNS HERE RATHER THAN BESIDE THE GATE, and it replaces the plain
+// test run rather than joining it. `test:coverage` drives the same suite over
+// the same glob and then enforces the committed floors, so the suite is still
+// run once. What changes is where the number comes from: a floor measured by
+// hand and quoted in a report is a claim about a tree nobody can identify,
+// and it fails on the next run. Measured inside the gate, the floors are
+// enforced against the exact tree this record names.
 const STEPS = [
-  { name: 'test', args: ['test'] },
+  { name: 'test:coverage', args: ['run', 'test:coverage'] },
   { name: 'typecheck', args: ['run', 'typecheck'] },
   { name: 'lint:styles', args: ['run', 'lint:styles'] },
   { name: 'check:refs', args: ['run', 'check:refs'] },
+  // Removes each of the renderer's escaping guards in turn and requires a test
+  // to go red for it. Slower than the rest because it runs a suite per guard,
+  // and worth it here: two of these guards were removable with nothing going
+  // red when the check was first written, which no other step in this list
+  // would ever have reported.
+  { name: 'mutate:guards', args: ['run', 'mutate:guards'] },
+  // Reproduces the frozen "before" fixture from the pre-change renderer read
+  // out of git history. Needs history, so it lives here and in CI rather than
+  // in the unit suite, which runs against a depth-1 checkout.
+  { name: 'check:fixture', args: ['run', 'check:fixture'] },
 ];
 
 function git(args, root = ROOT) {

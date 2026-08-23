@@ -23,7 +23,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawn, spawnSync } = require('node:child_process');
 
-const { redFirst, recordOutcome } = require('../../scripts/red-first.js');
+const { redFirst, recordOutcome, namesFrom, NAME_LIMIT } = require('../../scripts/red-first.js');
 // The REAL record writer, not a local idea of one. scripts/precommit-gate.js
 // says why in its own docstring: "a test that hand-builds the JSON proves the
 // reader can read the test's idea of a record". These tests hand-built it
@@ -477,6 +477,16 @@ describe('the record carries test counts, not a count of files', () => {
       const rec = JSON.parse(fs.readFileSync(path.join(dir, '.precommit-gate.json'), 'utf8'));
       assert.strictEqual(rec.redFirst.testsPassedWithChange, 2);
       assert.strictEqual(rec.redFirst.testsFailedWithoutChange, 2);
+      // THE NAMES, not only the count. A count says the suite noticed
+      // something; it cannot say the proofs a criterion names are among what it
+      // noticed, so a reviewer asked to check a claim against criteria has
+      // nothing to check it with. These are the two tests the fixture wrote,
+      // and they are named because they really went red without the change.
+      assert.deepStrictEqual(rec.redFirst.namesFailedWithoutChange.sort(), ['b is a function', 'b is two'],
+        'the record names which tests failed when the source was taken away');
+      assert.strictEqual(rec.redFirst.namesTruncated, false, 'and says whether the list is the whole of it');
+      assert.ok(rec.redFirst.namesFailedWithoutChange.length <= NAME_LIMIT,
+        'the list is capped, and the cap is the thing namesTruncated reports on');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -495,9 +505,32 @@ describe('the record carries test counts, not a count of files', () => {
       assert.strictEqual(outcome.outcome, 'proven', outcome.reason);
       assert.strictEqual(outcome.testsPassedWithChange, null);
       assert.strictEqual(outcome.testsFailedWithoutChange, null);
+      assert.deepStrictEqual(outcome.namesFailedWithoutChange, [],
+        'and no names either: a name invented from output nobody could read is worse than none');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('reading test names out of a run', () => {
+  // Two reporters, because this project's suite and its neighbours do not
+  // agree on one. Driven directly rather than through a repository, so a
+  // shape this cannot read is a failure here rather than an empty list in a
+  // record somebody trusts.
+  test('the spec reporter\'s crosses and TAP\'s not-ok lines are both read', () => {
+    const spec = '  \u2716 a write with no outcome yet (1.06ms)\n'
+      + '\u2716 failing tests:\n'
+      + '  \u2716 a write with no outcome yet (1.06ms)\n'
+      + '  \u2714 something that passed (0.2ms)\n';
+    assert.deepStrictEqual(namesFrom(spec), ['a write with no outcome yet'],
+      'named once, with the summary heading and the passing test left out');
+    assert.deepStrictEqual(namesFrom('not ok 3 - the guard was removed\nok 4 - fine\n'),
+      ['the guard was removed']);
+  });
+
+  test('output in a shape this cannot read yields no names rather than invented ones', () => {
+    assert.deepStrictEqual(namesFrom('everything went wrong, somehow\n'), []);
   });
 });
 
