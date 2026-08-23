@@ -59,15 +59,17 @@ describe('child pid records', () => {
     }
   });
 
-  // THE MEASUREMENT the whole non-spawning path rests on. The two sources must
-  // agree, character for character, INCLUDING how arguments are separated:
+  // THE MEASUREMENT the whole non-spawning path rests on. For PRINTABLE argv the
+  // two sources must agree, character for character, INCLUDING how arguments
+  // are separated. Printable is the real limit and is measured below, not a
+  // hedge:
   // /proc gives NUL-separated argv, `ps -o args=` gives them joined by spaces,
   // and a wrong join here would show up as a guard that quietly stops matching.
   //
   // It also pins WHAT the value is. A thread name ("MainThread" on Node 24) or
   // an executable name ("node", or a full path on macOS) cannot contain the
   // script text this child was spawned with; a command line must.
-  test('the non-spawning source gives the same command line as ps, not a thread or executable name', { skip: noComparison }, async (t) => {
+  test('for printable argv the non-spawning source gives the same command line as ps, not a thread or executable name', { skip: noComparison }, async (t) => {
     const kid = await liveChild();
     try {
       const viaProc = readProcCmdline(kid.pid);
@@ -80,6 +82,54 @@ describe('child pid records', () => {
         `the value must be the command line, not a thread or executable name. got ${JSON.stringify(viaProc)}`);
       assert.strictEqual(processCommand(kid.pid), viaProc,
         'processCommand must return the non-spawning value where one is available');
+    } finally {
+      try { kid.kill('SIGKILL'); } catch (e) {}
+    }
+  });
+
+  // WHERE THE TWO STOP AGREEING, measured after the equality above was claimed
+  // too broadly. `ps` renders a command line for a human and escapes what a
+  // human could not read: on Linux a newline becomes a space and a tab becomes
+  // `?`, on macOS they become `\\012` and `\\011`. /proc returns the bytes as
+  // spawned. This matters here rather than in theory, because a spawn from this
+  // codebase carries an agent's system prompt in argv and prompts contain
+  // newlines, so the real command lines are the disagreeing case.
+  //
+  // Asserted: that the non-spawning source is FAITHFUL, which is the property
+  // the guard is given. The disagreement itself is printed rather than
+  // asserted, so a `ps` that stops escaping does not fail a suite for improving.
+  test('the non-spawning source returns argv as spawned, control characters and all', { skip: procWorks ? false : noComparison }, async (t) => {
+    const script = 'setInterval(() => {}, 1e9) //ONE\nTWO\tTHREE ';
+    const kid = spawn(process.execPath, ['-e', script], { stdio: 'ignore' });
+    await new Promise((resolve, reject) => { kid.once('spawn', resolve); kid.once('error', reject); });
+    try {
+      const expected = `${process.execPath} -e ${script}`;
+      const viaProc = readProcCmdline(kid.pid);
+      const viaPs = psCommand(kid.pid);
+      t.diagnostic(`argv as spawned      -> ${JSON.stringify(expected)}`);
+      t.diagnostic(`/proc/<pid>/cmdline  -> ${JSON.stringify(viaProc)}`);
+      t.diagnostic(`ps -p <pid> -o args= -> ${JSON.stringify(viaPs)}`);
+      t.diagnostic(`proc===ps ${viaProc === viaPs}, proc===argv ${viaProc === expected}, ps===argv ${viaPs === expected}`);
+      assert.strictEqual(viaProc, expected, 'the non-spawning source must return argv unmodified');
+    } finally {
+      try { kid.kill('SIGKILL'); } catch (e) {}
+    }
+  });
+
+  // And the statement that is NOT the same statement: that the disagreement
+  // above cannot reach the decision. The recorded value is a basename and it
+  // sits in argv[0], ahead of anything a system prompt could contain, so the
+  // escaping happens past the part that is matched. Runs wherever either source
+  // works, so it covers the platform where `ps` is the only one.
+  test('a child spawned with control characters in argv is still recognised', { skip: noLookup }, async () => {
+    const script = 'setInterval(() => {}, 1e9) //ONE\nTWO\tTHREE ';
+    const kid = spawn(process.execPath, ['-e', script], { stdio: 'ignore' });
+    await new Promise((resolve, reject) => { kid.once('spawn', resolve); kid.once('error', reject); });
+    try {
+      const rec = { pid: kid.pid, at: Date.now(), cmd: path.basename(process.execPath) };
+      assert.strictEqual(pidRecordAlive(rec), true,
+        'a prompt full of newlines in argv must not make our own child look foreign. '
+        + `command=${JSON.stringify(processCommand(kid.pid))}`);
     } finally {
       try { kid.kill('SIGKILL'); } catch (e) {}
     }
@@ -188,6 +238,36 @@ describe('child pid records', () => {
     const viaPs = processCommand(process.pid, () => null, () => { fallbacks++; return '/x/node -e code'; });
     assert.strictEqual(viaPs, '/x/node -e code', 'and it must still be reached when the free one cannot answer');
     assert.strictEqual(fallbacks, 1);
+  });
+
+  // The same property against the REAL default binding, with nothing injected.
+  // The test above counts calls on two fakes, so it covers a model of this
+  // function rather than the function the guard actually calls: bind the first
+  // reader to the spawning one and it stays green, because where both sources
+  // answer they answer identically. The seam added to make the behaviour
+  // testable was itself the untested part.
+  //
+  // What makes this one different is that it never names a reader. It replaces
+  // the spawning primitive underneath instead, which the guard resolves at call
+  // time, so a default that reaches for `ps` is caught wherever the free source
+  // works at all.
+  test('the DEFAULT reader is the non-spawning one, with nothing injected', { skip: procWorks ? false : noComparison }, async () => {
+    const childProcess = require('node:child_process');
+    const kid = await liveChild();
+    const realExecFileSync = childProcess.execFileSync;
+    let spawns = 0;
+    childProcess.execFileSync = (...args) => {
+      spawns++;
+      throw new Error('the guard spawned a process to read a command line it could have read for free');
+    };
+    try {
+      const command = processCommand(kid.pid); // no readers named: this is the shipped path
+      assert.ok(command, `the default path must return a command line, got ${JSON.stringify(command)}`);
+      assert.strictEqual(spawns, 0, 'the default path must not spawn anything where the free source works');
+    } finally {
+      childProcess.execFileSync = realExecFileSync;
+      try { kid.kill('SIGKILL'); } catch (e) {}
+    }
   });
 
   // Neither reader may invent an answer for a process that is not there. A '' or
