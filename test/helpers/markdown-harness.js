@@ -38,4 +38,15 @@ function makeRenderer() {
   });
 }
 
-module.exports = { makeRenderer, loadBrowserMarked, attachWikilinkHandler, attachCodeCopyHandler };
+// hljs, resolveCodeLanguage and emptyOrderedListText are re-exported so the
+// fixture-provenance tool resolves the browser's dependency set the same way
+// this harness does, from one place.
+module.exports = {
+  makeRenderer,
+  loadBrowserMarked,
+  attachWikilinkHandler,
+  attachCodeCopyHandler,
+  hljs,
+  resolveCodeLanguage,
+  emptyOrderedListText,
+};

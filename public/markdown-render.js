@@ -188,6 +188,42 @@
     // is a callout's own body, which renders with callouts on either way.
     let calloutsEnabled = true;
 
+    // The second door into the page, closed at lex time.
+    //
+    // Escaping the `html` token closes only the markup marked's own tag regex
+    // recognises. That tokenizer also keeps state: an opening <pre>, <code>,
+    // <kbd> or <script> sets `lexer.state.inRawBlock`, and every text token
+    // made while it is set carries `escaped: true`, which tells the default
+    // text renderer to emit the characters verbatim until the close tag. A tag
+    // shape the browser accepts but the regex rejects therefore never becomes
+    // an html token at all: it arrives as text and goes to innerHTML raw, with
+    // the wrapper around it escaped and the payload inside it not.
+    //
+    //   x <code><img/src=x onerror=alert(1)></code>
+    //
+    // The slash before the attribute name is what the regex rejects and the
+    // browser does not mind, and the result is a live element with a handler
+    // that fires on render.
+    //
+    // WHY HERE AND NOT IN A RENDERER. Clearing the flag is the whole fix: with
+    // it gone marked escapes that text itself, using the rule it uses for all
+    // other text, which leaves a character reference already written in the
+    // prose alone so `a &amp; b` stays one ampersand.
+    //
+    // walkTokens runs after lexing and before parsing, so it can only ever see
+    // tokens the LEXER produced. A renderer-level override would also see every
+    // token the PARSER synthesises, and a parser is entitled to build a text
+    // token out of already-rendered HTML: marked has done exactly that for
+    // loose list items and task checkboxes in earlier majors. Escaping one of
+    // those turns a document's own formatting into visible tags. In 17.0.5 the
+    // only producer of `escaped` is the inline text tokenizer, so the two
+    // placements happen to agree today; this one cannot stop agreeing.
+    instance.use({
+      walkTokens(token) {
+        if (token.type === 'text' && token.escaped) token.escaped = false;
+      },
+    });
+
     instance.use({
       extensions: [{
         // Obsidian callouts, as a block tokenizer rather than a source rewrite.
@@ -215,9 +251,16 @@
         },
         tokenizer(src) {
           if (!calloutsEnabled) return undefined;
-          const lines = src.split('\n');
-          const head = /^>\s*\[!(\w+)\]([+-])?\s*(.*)/.exec(lines[0]);
+          // Test the FIRST LINE before splitting anything. Block extension
+          // tokenizers are tried at every block boundary, so splitting the
+          // whole remaining source here costs a full-document scan per block:
+          // quadratic in document length, paid on every document, to answer a
+          // question about one line. Almost every position answers no.
+          const firstBreak = src.indexOf('\n');
+          const firstLine = firstBreak === -1 ? src : src.slice(0, firstBreak);
+          const head = /^>\s*\[!(\w+)\]([+-])?\s*(.*)/.exec(firstLine);
           if (!head) return undefined;
+          const lines = src.split('\n');
           const calloutType = head[1].toLowerCase();
           const title = head[3] || calloutType.charAt(0).toUpperCase() + calloutType.slice(1);
 
@@ -284,6 +327,18 @@
         //
         // A tag that opens the source needs no offer: the tokenizer is called
         // at that position before any text is consumed.
+        //
+        // It is also called at every position a previous token ended on, and
+        // there the separating space is still in front: after `**done**` the
+        // remaining source is ` #project`. So the pattern takes an OPTIONAL
+        // leading space or tab and gives it back, which is what the old
+        // whole-document regex did by consuming the whitespace and writing one
+        // space in its place. Anchoring on the hash alone silently turned every
+        // tag after an inline construct into prose.
+        //
+        // A space or a tab, never a newline: with `breaks: true` a newline is a
+        // <br>, and swallowing it here is exactly the line-joining defect the
+        // old regex had.
         name: 'tag',
         level: 'inline',
         start(src) {
@@ -291,12 +346,12 @@
           return match ? match.index + 1 : undefined;
         },
         tokenizer(src) {
-          const match = /^#([a-zA-Z][a-zA-Z0-9_/-]*)/.exec(src);
+          const match = /^([ \t]?)#([a-zA-Z][a-zA-Z0-9_/-]*)/.exec(src);
           if (!match) return undefined;
-          return { type: 'tag', raw: match[0], name: match[1] };
+          return { type: 'tag', raw: match[0], space: match[1], name: match[2] };
         },
         renderer(token) {
-          return `<span class="md-tag">#${escapeHtml(token.name)}</span>`;
+          return `${token.space}<span class="md-tag">#${escapeHtml(token.name)}</span>`;
         },
       }, {
         // Obsidian wikilinks, as a tokenizer rather than a source rewrite.
@@ -336,36 +391,6 @@
         },
       }],
       renderer: {
-        // Text, and the second door into the page.
-        //
-        // Escaping the `html` token above closes only the markup marked's own
-        // tag regex recognises. That tokenizer also keeps state: an opening
-        // <pre>, <code>, <kbd> or <script> sets `lexer.state.inRawBlock`, and
-        // every text token made while it is set carries `escaped: true`, which
-        // tells the default text renderer to emit the characters verbatim until
-        // the close tag. A tag shape the browser accepts but the regex rejects
-        // therefore never becomes an html token at all: it arrives as text and
-        // goes to innerHTML raw, with the wrapper around it escaped and the
-        // payload inside it not.
-        //
-        //   x <code><img/src=x onerror=alert(1)></code>
-        //
-        // The slash before the attribute name is what the regex rejects and the
-        // browser does not mind, and the result is a live element with a
-        // handler that fires on render.
-        //
-        // Ordinary text is handed BACK to marked rather than escaped here, and
-        // that is the point of the shape below. marked stores the raw capture
-        // in the token and escapes at render time, using a rule that leaves a
-        // character reference already written in the prose alone, so `a &amp; b`
-        // stays one ampersand. Re-escaping it here would double-encode every
-        // entity in every message. The only branch this file takes over is the
-        // one marked would emit verbatim.
-        text(token) {
-          if ('tokens' in token && token.tokens) return false; // marked parses the children
-          if (!token.escaped) return false;                    // marked escapes it, correctly
-          return escapeAttr(token.text);
-        },
         // Raw HTML in the document. See THE DECISION at the top of this file:
         // it renders as its own characters, so nothing the document says can
         // become an element or an attribute. Comments are dropped instead of
@@ -479,15 +504,11 @@
     function renderMarkdown(text, options = {}) {
       let src = text;
 
-      // Pre-processing: Obsidian-specific syntax (before marked processes it)
-
-      // Obsidian comments: %%text%% - hide completely
+      // Obsidian comments: %%text%% are stripped from the source. The only
+      // construct still handled before the parser runs: every other one is a
+      // tokenizer, and a comment has to disappear before anything can tokenize
+      // what it contains.
       src = src.replace(/%%[\s\S]*?%%/g, '');
-
-      // Wikilinks are a marked extension now, not a source rewrite. See the
-      // tokenizer above.
-
-      // Highlights and tags are marked extensions now, not source rewrites.
 
       // Callouts are a marked extension now, not a source rewrite. The flag
       // it reads is set here so the per-call option still means what it did.
@@ -504,9 +525,6 @@
       // marked emits a bare, non-nested <table>, so this non-greedy wrap is
       // safe.
       html = html.replace(/<table>([\s\S]*?)<\/table>/g, '<div class="md-table-wrap"><table>$1</table></div>');
-
-      // Relative file links become wikilinks in the link renderer now, not by
-      // rewriting the finished HTML. See WORKSPACE_FILE_HREF above.
 
       // Checkboxes: add accent colour
       html = html.replace(/<input.*?checked.*?disabled.*?>/g, '<input type="checkbox" checked disabled style="margin-right:8px;accent-color:var(--accent)">');

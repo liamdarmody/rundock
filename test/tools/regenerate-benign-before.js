@@ -58,17 +58,13 @@ function oldRenderer(base) {
   }
   const section = lines.slice(start, end).join('\n');
 
-  // marked as the browser gets it: the UMD file the router serves, evaluated
-  // with no module/exports/define in scope. Requiring it returns an empty
-  // object, which would silently render nothing.
-  const globalObj = {};
-  const markedSrc = fs.readFileSync(path.join(ROOT, 'node_modules', 'marked', 'lib', 'marked.umd.js'), 'utf8');
-  new Function('globalThis', 'self', 'module', 'exports', 'define', markedSrc)
-    .call(globalObj, globalObj, globalObj, undefined, undefined, undefined);
-
-  const hljs = require(path.join(ROOT, 'public', 'vendor', 'highlight', 'highlight.min.js'));
-  const resolveCodeLanguage = require(path.join(ROOT, 'public', 'code-language.js'));
-  const emptyOrderedListText = require(path.join(ROOT, 'public', 'empty-list.js'));
+  // Dependencies come from the suite's harness, not from a second copy here.
+  // The browser-marked loader in particular is fiddly (the UMD file returns an
+  // empty object through require, so it has to be evaluated as a script tag
+  // would), and two copies of it would let the fixture check and the suite
+  // silently test different parsers.
+  const { loadBrowserMarked, hljs, resolveCodeLanguage, emptyOrderedListText } =
+    require('../helpers/markdown-harness.js');
   const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const documentStub = {
     body: { classList: { contains: () => false } },
@@ -78,7 +74,7 @@ function oldRenderer(base) {
   const factory = new Function('marked', 'hljs', 'window', 'esc', 'document',
     'emptyOrderedListText', 'resolveCodeLanguage',
     `${section}\nreturn { formatMdFull };`);
-  return factory(globalObj.marked, hljs, { resolveCodeLanguage, hljs }, esc, documentStub,
+  return factory(loadBrowserMarked(), hljs, { resolveCodeLanguage, hljs }, esc, documentStub,
     emptyOrderedListText, resolveCodeLanguage);
 }
 

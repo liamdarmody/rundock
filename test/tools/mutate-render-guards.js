@@ -40,8 +40,8 @@ const MUTATIONS = [
     '<div class="callout-title">${escapeHtml(token.title)}</div>',
     '<div class="callout-title">${token.title}</div>'],
   ['raw-block text escaped rather than emitted verbatim',
-    "          if (!token.escaped) return false;                    // marked escapes it, correctly\n          return escapeAttr(token.text);",
-    '          return false;'],
+    "        if (token.type === 'text' && token.escaped) token.escaped = false;",
+    '        return;'],
   ['raw HTML escaped',
     "return escapeHtml(token.text.replace(/<!--[\\s\\S]*?-->/g, ''));",
     "return token.text.replace(/<!--[\\s\\S]*?-->/g, '');"],
@@ -66,6 +66,9 @@ const MUTATIONS = [
   ['image title escaped into its attribute',
     '          const title = token.title ? ` title="${escapeAttr(token.title)}"` : \'\';\n          return `<img src="${escapeAttr(token.href)}" alt="${alt}"${title}>`;',
     '          const title = token.title ? ` title="${token.title}"` : \'\';\n          return `<img src="${escapeAttr(token.href)}" alt="${alt}"${title}>`;'],
+  ['tag keeps the whitespace that precedes it',
+    "          const match = /^([ \\t]?)#([a-zA-Z][a-zA-Z0-9_/-]*)/.exec(src);",
+    "          const match = /^()#([a-zA-Z][a-zA-Z0-9_/-]*)/.exec(src);"],
   ['tag offered only where a hash follows whitespace',
     '          const match = /\\s#[a-zA-Z]/.exec(src);\n          return match ? match.index + 1 : undefined;',
     "          const match = /(?:^|\\s)#[a-zA-Z]/.exec(src);\n          if (!match) return undefined;\n          return match[0].startsWith('#') ? match.index : match.index + 1;"],
@@ -77,15 +80,34 @@ const MUTATIONS = [
     '<a class="wikilink" data-wikilink="${escapeAttr(token.target)}" onclick="openWikilink(\'x\')">'],
 ];
 
+// The reporter is named explicitly rather than left to the default, which
+// varies with whether stdout is a TTY. This parses the spec reporter's summary,
+// so a different reporter would yield no names, every mutation would read as
+// "nothing turned red", and a passing gate would fail as fourteen phantom
+// unguarded guards instead of one clear message about the reporter.
+const REPORTER = ['--test-reporter=spec', '--test-reporter-destination=stdout'];
+
 function redTests() {
   let out = '';
+  let failed = false;
   try {
-    out = execFileSync('node', ['--test', SUITE], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    out = execFileSync('node', ['--test', ...REPORTER, SUITE],
+      { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (e) {
+    failed = true;
     out = (e.stdout || '') + (e.stderr || '');
   }
   const marker = out.indexOf('failing tests:');
-  if (marker === -1) return [];
+  if (marker === -1) {
+    if (!failed) return [];
+    // The suite failed and the summary this reads is not in its output. That is
+    // a reporting problem, not a result, and reporting it as "no tests noticed"
+    // would be a lie in the dangerous direction.
+    throw new Error(
+      'the suite failed but its output carries no "failing tests:" summary, so no '
+      + 'test names could be read. The spec reporter\'s format is what this parses; '
+      + 'if it changed, fix this parser rather than trusting the empty result.');
+  }
   const names = [];
   for (const line of out.slice(marker).split('\n')) {
     const m = /^✖ (.+?) \(\d/.exec(line.trim());
