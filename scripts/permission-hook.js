@@ -52,9 +52,8 @@ function isProtectedClaudeEdit(toolName, toolInput) {
   const target = ti.file_path || ti.notebook_path || ti.path;
   if (typeof target !== 'string') return false;
   const resolved = path.resolve(target);
-  const under = (root) => resolved === root || resolved.startsWith(root + path.sep);
-  return under(path.join(os.homedir(), '.claude', 'agents'))
-      || under(path.join(os.homedir(), '.claude', 'skills'));
+  return isUnder(resolved, path.join(os.homedir(), '.claude', 'agents'))
+      || isUnder(resolved, path.join(os.homedir(), '.claude', 'skills'));
 }
 
 // Workspace file-access boundary (spec: anything outside the workspace
@@ -64,7 +63,10 @@ function isProtectedClaudeEdit(toolName, toolInput) {
 // targets flow to the permission card with the resolved path attached.
 // Grep/Glob with no explicit path scan the working directory and are inside
 // by construction. Symlinked escapes are not chased here (path resolution
-// only); Bash can also reach outside but is already carded on every call.
+// only). Shell commands reach outside too and are NOT handled here: see
+// classifyShellAccess below, which also records why the sentence that used
+// to sit in this comment, that Bash is carded on every call, was false in
+// the mode where coding agents run.
 const FILE_TOOL_PATH_FIELD = {
   Read: 'file_path', Write: 'file_path', Edit: 'file_path', MultiEdit: 'file_path',
   NotebookEdit: 'notebook_path', Glob: 'path', Grep: 'path',
@@ -191,12 +193,27 @@ const TRAVERSAL = /(^|[\\/])\.\.(?=[\\/]|$)/;
 // This is an exemption from the TEXT heuristic only. On macOS the command
 // sandbox still refuses a real write to any of them, and on Windows, where
 // there is no sandbox, it is part of the seam the release notes state.
+//
+// Judged on the TOKEN, normalised with POSIX rules, rather than on the
+// resolved path. These names are POSIX names: on a Windows host `path` is
+// `path.win32`, so resolving `/dev/null` first would produce `C:\dev\null`
+// and match nothing, and every Git Bash command containing `2>/dev/null`
+// would raise a card. Normalising first is what keeps `/dev/../etc/hosts`
+// out of the exemption: it is `/etc/hosts` and nothing is being discarded.
 const DEVICE_PATHS = new Set(['/dev/null', '/dev/zero', '/dev/tty', '/dev/stdin', '/dev/stdout', '/dev/stderr', '/dev/random', '/dev/urandom']);
 const EXEC_DIRS = ['/bin', '/sbin', '/usr/bin', '/usr/sbin', '/usr/local/bin', '/opt/homebrew/bin'];
-function isExemptToken(resolved) {
-  if (DEVICE_PATHS.has(resolved) || resolved.startsWith('/dev/fd/')) return true;
-  return EXEC_DIRS.some(d => resolved === d || resolved.startsWith(d + '/'));
+function isExemptToken(token) {
+  if (!token.startsWith('/')) return false;
+  const norm = path.posix.normalize(token);
+  if (DEVICE_PATHS.has(norm) || norm.startsWith('/dev/fd/')) return true;
+  return EXEC_DIRS.some(d => isUnder(norm, d, path.posix));
 }
+
+// A URL is not a path, and unlike the filter below this one earns its place:
+// `https://example.com/a/../../..` carries `..` segments, so it reaches the
+// traversal test, resolves to somewhere above the workspace and produces a
+// card naming a folder nobody is touching.
+const URL_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
 
 // Which path flavour to judge a token in. On Windows `path` is already
 // `path.win32`, so this only ever differs on a non-Windows host judging a
@@ -228,15 +245,16 @@ function shellCrossings(command, workspaceRoot, extraDirs) {
     // rule of their own. What must NOT fall out here is any Windows shape:
     // a drive letter and a backslash traversal both reach outside while
     // containing no leading forward slash and no `/`-delimited `..`.
+    if (URL_SCHEME.test(t)) continue;
+    if (isExemptToken(t)) continue;
     if (!homed && !t.startsWith('/') && !WIN_DRIVE.test(t) && !WIN_UNC.test(t) && !TRAVERSAL.test(t)) continue;
     const pmod = flavourFor(t, workspaceRoot);
     const resolved = pmod.resolve(pmod.resolve(workspaceRoot), t);
     if (buildRoots(workspaceRoot, extraDirs, pmod).some(r => isUnder(resolved, r, pmod))) continue;
-    if (isExemptToken(resolved)) continue;
     const key = pmod === path.win32 ? resolved.toLowerCase() : resolved;
     if (seen.has(key)) continue;
     seen.add(key);
-    found.push({ path: resolved, grantDir: pmod.dirname(resolved) });
+    found.push({ path: resolved });
   }
   return found;
 }
@@ -247,16 +265,16 @@ function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [])
   // Signal 1. No grant folder is offered: a sandbox escape is not about one
   // folder, so "always allow this folder" would remember nothing.
   if (ti.dangerouslyDisableSandbox === true) {
-    return { where: 'outside', resolvedPath: null, grantDir: null, crossings: [] };
+    return { where: 'outside', resolvedPath: null, grantDir: null, grantable: false, crossings: [] };
   }
   // Signal 2.
   if (typeof ti.command !== 'string' || !ti.command) return null;
   const crossings = shellCrossings(ti.command, workspaceRoot, extraDirs);
   if (!crossings.length) return null;
-  return { where: 'outside', resolvedPath: crossings[0].path, grantDir: crossings[0].grantDir, crossings };
+  return { where: 'outside', resolvedPath: crossings[0].path, grantDir: null, grantable: false, crossings };
 }
 
-module.exports = { isProtectedClaudeEdit, isMcpReadTool, classifyFileAccess, classifyShellAccess, isUnder, buildRoots };
+module.exports = { isProtectedClaudeEdit, isMcpReadTool, classifyFileAccess, classifyShellAccess };
 
 if (require.main === module) main();
 function main() {
@@ -363,12 +381,24 @@ process.stdin.on('end', () => {
           boundary: true,
           resolved_path: access.resolvedPath || null,
           grant_dir: access.grantDir || null,
+          // WHETHER A STANDING FOLDER GRANT MAY ANSWER THIS AT ALL.
+          //
+          // False for every shell command. A folder grant and a command
+          // approval answer different questions: the grant says an agent may
+          // touch that folder, and a shell card says this command may run.
+          // The second cannot be inferred from the first, because everything
+          // in the command runs, not only the part that touches the granted
+          // folder. Letting a grant answer a command would retire the
+          // per-command card that already exists, which is the opposite of
+          // what this boundary is for.
+          grantable: access.grantable !== false,
           // Every crossing, so the server can refuse to answer from a
-          // standing grant unless EVERY one of them is covered. A file tool
-          // has exactly one; a shell command can have several; a sandbox
-          // escape has none, because no path established it.
-          crossings: access.crossings
-            || (access.resolvedPath ? [{ path: access.resolvedPath, grantDir: access.grantDir }] : []),
+          // standing grant unless EVERY one is covered. A file tool has
+          // exactly one; a shell command can have several; a sandbox escape
+          // has none, because no path established it. Always sent, so the
+          // server never has to reconstruct it: this is the only producer of
+          // boundary requests in the product.
+          crossings: access.crossings || [{ path: access.resolvedPath, grantDir: access.grantDir }],
         }
       : {})
   });

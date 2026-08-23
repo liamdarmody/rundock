@@ -69,6 +69,32 @@ describe('the workspace boundary says what it enforces, per platform', () => {
     }
   });
 
+  test('the operating-system half is described as governing writes, not reads', () => {
+    // Measured: under the shipped block a command can still read ~/.ssh,
+    // ~/.gitconfig and /etc/hosts, and a read whose target is worked out
+    // while the command runs is caught on no platform. Copy that folds reads
+    // into the operating-system guarantee is the overclaim this whole change
+    // exists to remove, and it would be this change committing it.
+    assert.match(changelog, /governs writes, not reads|writes, not reads/i,
+      'the release notes say which act the operating system half covers');
+    assert.match(changelog, /read anything on the machine|caught by nothing/i,
+      'and say plainly that reads are not covered');
+    assert.match(architecture, /governs writes and not reads|writes and not reads/i,
+      'the audit section says the same');
+  });
+
+  test('the audit section states the boundary per platform AND per act', () => {
+    // A sentence cannot carry this: the answer differs by platform, by
+    // whether the target is visible in the command, and by read versus
+    // write. Three rounds of review found the stated boundary wider than the
+    // enforced one, every time in a cell nobody had written down.
+    assert.match(architecture, /Is the target visible in the command text\?/,
+      'the table exists');
+    for (const cell of ['macOS', 'Windows', 'Linux', 'computed at run time']) {
+      assert.ok(architecture.includes(cell), `the table covers ${cell}`);
+    }
+  });
+
   test('the enforced macOS boundary is described as additive, not as a sealed machine', () => {
     // The allowlist adds to the runtime's own default writable roots, so the
     // enforced set is wider than the two Rundock names. Copy that says

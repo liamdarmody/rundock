@@ -210,6 +210,20 @@ describe('scaffoldWorkspace', () => {
     }
   });
 
+  test('a user who turned the sandbox OFF stays off', () => {
+    // `false` is a decision, and the absence check has to tell it apart from
+    // an absent key or it silently switches the sandbox back on at the next
+    // workspace open, on a file the product invites people to edit. Someone
+    // writes `false` precisely because the sandbox is in their way.
+    const dir = useWorkspace({ claudeMd: '# x' });
+    const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify({ sandbox: false }));
+    srv.scaffoldWorkspace(dir);
+    assert.strictEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf-8')).sandbox, false,
+      'the value the user wrote survives');
+  });
+
   test('a sandbox block already in the file is left exactly as the user wrote it', () => {
     // Whoever edited it knows something this scaffold does not: which extra
     // roots their work needs. Overwriting on every workspace open would undo

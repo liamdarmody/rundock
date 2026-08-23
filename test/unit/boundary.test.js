@@ -100,6 +100,8 @@ describe('classifyShellAccess (hook-side)', () => {
     assert.strictEqual(r.where, 'outside');
     assert.strictEqual(r.grantDir, null,
       'a standing folder grant must never be offered for a sandbox escape: there is no one folder it is about');
+    assert.strictEqual(r.grantable, false,
+      'and the server is told no grant may answer it, so this does not rest on the crossing list happening to be empty');
   });
 
   test('a path outside the workspace in the command text is a crossing', () => {
@@ -154,6 +156,38 @@ describe('classifyShellAccess (hook-side)', () => {
     // whole of the system tree.
     assert.strictEqual(classifyShellAccess('Bash', { command: 'touch /etc/hosts' }, ws, []).where, 'outside');
     assert.strictEqual(classifyShellAccess('Bash', { command: 'cat /dev/../etc/hosts' }, ws, []).where, 'outside');
+  });
+
+  test('a URL carrying enough dot-dot segments to climb out is not a crossing', () => {
+    // The scheme guard is load-bearing and this is the input that shows it:
+    // a URL reaches the traversal test, and with enough `..` segments it
+    // resolves ABOVE the workspace and produces a card naming a folder
+    // nobody is touching. Fewer segments land back on the workspace root and
+    // pass either way, which is why the example has four.
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'curl https://example.com/../../../..' }, ws, []), null);
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'curl https://ex.com/../../../../../x' }, ws, []), null);
+  });
+
+  test('a system path that climbs out of an exempt directory is still a crossing', () => {
+    // `/usr/bin/...` is exempt because interpreters live there, and the
+    // exemption is judged on the NORMALISED token for this reason: matched
+    // raw, `/usr/bin/../../etc/passwd` begins with an exempt prefix and would
+    // be waved through while reading the password file.
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'cat /usr/bin/../../etc/passwd' }, ws, []).crossings[0].path, '/etc/passwd');
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'cat /dev/fd/../../etc/passwd' }, ws, []).crossings[0].path, '/etc/passwd');
+  });
+
+  test('a shell crossing never carries a folder to remember, and says so', () => {
+    // A folder grant answers "may an agent touch this folder"; approving a
+    // shell request answers "may this command run". The second cannot be
+    // inferred from the first, so the classifier refuses to supply the folder
+    // that would let the server answer one with the other.
+    const home = os.homedir();
+    const r = classifyShellAccess('Bash', { command: `cp a ${path.join(home, 'Exports', 'a')}` }, ws, []);
+    assert.strictEqual(r.where, 'outside');
+    assert.strictEqual(r.grantDir, null, 'no folder is offered');
+    assert.strictEqual(r.grantable, false, 'and the server is told a grant must not answer this');
+    assert.ok(r.crossings.every(c => c.grantDir === undefined), 'nor is one smuggled in per crossing');
   });
 
   test('EVERY distinct crossing is reported, not just the first', () => {
@@ -219,6 +253,17 @@ describe('classifyShellAccess: native Windows command forms', () => {
     assert.strictEqual(classifyShellAccess('PowerShell', { command: 'ni C:\\Users\\me\\ws\\sub\\file.txt' }, ws, []), null);
     assert.strictEqual(classifyShellAccess('PowerShell', { command: 'ni C:/Users/me/ws/sub/file.txt' }, ws, []), null);
     assert.strictEqual(classifyShellAccess('PowerShell', { command: 'ni sub\\file.txt' }, ws, []), null);
+  });
+
+  test('the POSIX exemptions still apply when the host is Windows', () => {
+    // On a Windows host `path` is `path.win32`, so resolving `/dev/null`
+    // first yields `C:\\dev\\null` and matches nothing. Every Git Bash
+    // command carrying `2>/dev/null` or a `/usr/bin/env` shebang would then
+    // raise a boundary card, which is the ordinary-work carding the
+    // exemption exists to prevent. Judging the token rather than the
+    // resolved path is what makes it platform-independent.
+    assert.strictEqual(classifyShellAccess('Bash', { command: 'npm test 2>/dev/null' }, ws, []), null);
+    assert.strictEqual(classifyShellAccess('Bash', { command: '/usr/bin/env node build.js' }, ws, []), null);
   });
 
   test('Windows path comparison ignores case, because the filesystem does', () => {
