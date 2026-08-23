@@ -40,7 +40,6 @@ const INDEX_SRC = read('public', 'index.html');
 const VIEW_SRC = read('public', 'views', 'routines.js');
 const MODEL_SRC = read('public', 'routines-model.js');
 const EDITOR_MODEL_SRC = read('public', 'routine-editor-model.js');
-const RAIL_SRC = read('public', 'rail-presence.js');
 const EDITOR_VIEW_SRC = read('public', 'views', 'routine-editor.js');
 
 // ===== THE ENUMERATION =====
@@ -285,7 +284,6 @@ function shell({ routines = [ROUTINE] } = {}) {
   const w = dom.window;
   w.eval(EDITOR_MODEL_SRC);
   w.eval(MODEL_SRC);
-  w.eval(RAIL_SRC);
   w.eval(VIEW_SRC);
   w.agents = [{ id: 'piper', displayName: 'Piper', colour: '#E87A5A', icon: 'P', status: 'onTeam', routines }];
   w.esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

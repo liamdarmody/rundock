@@ -111,7 +111,6 @@ function roster(fn, seed = seedStores, names = NAMES) {
 
 const EDITOR_MODEL_SRC = read('public', 'routine-editor-model.js');
 const MODEL_SRC = read('public', 'routines-model.js');
-const RAIL_SRC = read('public', 'rail-presence.js');
 const VIEW_SRC = read('public', 'views', 'routines.js');
 const ROUTINES_CSS = read('public', 'styles', 'views', 'routines.css');
 
@@ -124,7 +123,6 @@ function render(agents) {
   const w = dom.window;
   w.eval(EDITOR_MODEL_SRC);
   w.eval(MODEL_SRC);
-  w.eval(RAIL_SRC);
   w.eval(VIEW_SRC);
   w.agents = agents;
   w.esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

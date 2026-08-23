@@ -23,9 +23,10 @@ const ROOT = path.join(__dirname, '..', '..');
 const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf-8');
 const EDITOR_MODEL_SRC = read('public', 'routine-editor-model.js');
 const MODEL_SRC = read('public', 'routines-model.js');
-const RAIL_SRC = read('public', 'rail-presence.js');
 const VIEW_SRC = read('public', 'views', 'routines.js');
+const INDEX_SRC = read('public', 'index.html');
 const SKILLS_SRC = read('public', 'views', 'skills.js');
+const SKILLS_MODEL_SRC = read('public', 'skills-model.js');
 
 // Thursday 20 August 2026, twenty past nine. One routine, one agent, one
 // execution target, only the outcome changing: the locked frame's own setup.
@@ -70,21 +71,31 @@ const FOUR_ROWS = [
 const ROUTINES_CSS = read('public', 'styles', 'views', 'routines.css');
 const TOKENS_CSS = read('public', 'styles', 'tokens.css');
 
+// The rail, the sidebar and both view panels are CUT OUT OF index.html rather
+// than written here. Whether an entry is on the rail is a claim about the
+// shipped page, and a hand-built rail in this file answers that question
+// itself: the page could carry an inline style withdrawing an entry and every
+// assertion here would still pass.
+function pageParts() {
+  const rail = /<nav class="nav-rail"[\s\S]*?<\/nav>/.exec(INDEX_SRC);
+  assert.ok(rail, 'index.html no longer carries a nav rail');
+  const sidebar = /<aside class="sidebar"[\s\S]*?<\/aside>/.exec(INDEX_SRC);
+  assert.ok(sidebar, 'index.html no longer carries a sidebar');
+  const routinesPanel = /<div id="view-routines"[\s\S]*?<\/div>\s*<\/div>/.exec(INDEX_SRC);
+  assert.ok(routinesPanel, 'index.html no longer carries the routines view panel');
+  const skillsPanel = /<div id="view-skills"[\s\S]*?<\/div>\s*<\/div>/.exec(INDEX_SRC);
+  assert.ok(skillsPanel, 'index.html no longer carries the skills view panel');
+  return rail[0] + sidebar[0] + routinesPanel[0] + skillsPanel[0];
+}
+
 function shell(routines = FOUR_ROWS, opts = {}) {
   const dom = new JSDOM('<!doctype html><html><head><style>' + ROUTINES_CSS + '</style></head><body>'
-    + '<nav class="nav-rail">'
-    + '<button class="nav-item" data-nav="skills"></button>'
-    + '<button class="nav-item" data-nav="routines"></button>'
-    + '</nav>'
-    + '<div id="sidebar-team"><div id="sidebar-routines"></div></div>'
-    + '<div id="sidebar-skills"><div class="skills-sidebar-list" id="skills-sidebar-list"></div></div>'
-    + '<div id="view-routines"><div id="routines-content"></div></div>'
-    + '</body></html>', { runScripts: 'dangerously' });
+    + pageParts() + '</body></html>', { runScripts: 'dangerously' });
   const w = dom.window;
   w.eval(EDITOR_MODEL_SRC);
   w.eval(MODEL_SRC);
-  w.eval(RAIL_SRC);
   w.eval(VIEW_SRC);
+  w.eval(SKILLS_MODEL_SRC);
   w.eval(SKILLS_SRC);
 
   w.agents = [{
@@ -125,39 +136,84 @@ function press(doc, selector) {
 const rows = (doc) => [...doc.querySelectorAll('.routine-row')];
 const text = (el) => el.textContent.replace(/\s+/g, ' ').trim();
 
-describe('the rail icon appears with the first routine', () => {
-  // AC-10. The same mechanism the Skills rail uses, not a second
-  // implementation of the same rule.
-  test('the rail entry is hidden until a routine exists', () => {
-    const { doc, w, dom } = shell([]);
+describe('the rail is a map of places, always the same size', () => {
+  // THE RULE THE WHOLE CHANGE BUYS. The rail names what the app can do. A user
+  // learns it once, so it does not change shape underneath them. What a place
+  // holds is that place's own business, and an empty place says what it is
+  // for.
+  //
+  // AND IT IS ONE RULE, NOT TWO. Routines permanent while Skills is still
+  // gated is the one outcome worse than gating both: the rail would carry two
+  // rules with no way for a reader to tell which surfaces are permanent.
+  test('both entries are on the rail on a workspace that has neither', () => {
+    const { doc, w, dom } = shell([], { skills: [] });
     w.renderRoutines();
-    assert.strictEqual(doc.querySelector('[data-nav="routines"]').style.display, 'none',
-      'a workspace with no routines carries no Routines entry');
+    w.renderSkills();
+    for (const nav of ['skills', 'routines']) {
+      const entry = doc.querySelector(`.nav-item[data-nav="${nav}"]`);
+      assert.ok(entry, `the rail carries no ${nav} entry at all`);
+      assert.notStrictEqual(entry.style.display, 'none',
+        `the ${nav} entry was withdrawn from a workspace that has none`);
+      assert.ok(!entry.classList.contains('hidden'), `the ${nav} entry is hidden by class`);
+    }
     dom.window.close();
   });
 
-  test('the rail entry appears with the first routine', () => {
-    const { doc, w, dom } = shell([routine('First', { nextRun: iso(TOMORROWS_SLOT) })]);
-    w.renderRoutines();
-    assert.strictEqual(doc.querySelector('[data-nav="routines"]').style.display, '');
-    dom.window.close();
-  });
-
-  test('both rails are gated by the one helper, not by two copies of the rule', () => {
-    const { w, dom } = shell([]);
-    // Behaviour first: the Skills rail answers to the same call, so the two
-    // are not merely similar.
+  test('nothing withdraws an entry as the workspace fills and empties', () => {
+    const { doc, w, dom } = shell([], { skills: [] });
+    const displays = [];
+    const note = () => {
+      for (const nav of ['skills', 'routines']) {
+        displays.push(doc.querySelector(`.nav-item[data-nav="${nav}"]`).style.display);
+      }
+    };
+    w.renderRoutines(); w.renderSkills(); note();
+    w.agents[0].routines = [routine('First', { nextRun: iso(TOMORROWS_SLOT) })];
+    w.skills = [{ id: 's', name: 'A skill', assignedAgents: [] }];
+    w.renderRoutines(); w.renderSkills(); note();
+    w.agents[0].routines = [];
     w.skills = [];
-    w.renderSkills();
-    assert.strictEqual(dom.window.document.querySelector('[data-nav="skills"]').style.display, 'none');
-    w.skills = [{ id: 's', name: 'A skill' }];
-    w.renderSkills();
-    assert.strictEqual(dom.window.document.querySelector('[data-nav="skills"]').style.display, '');
-    // And structurally: neither view reaches for the rail on its own.
+    w.renderRoutines(); w.renderSkills(); note();
+    assert.deepStrictEqual(displays, ['', '', '', '', '', ''],
+      'the rail changed size as the workspace filled or emptied');
+    dom.window.close();
+  });
+
+  // The page's own markup, because an entry can be withdrawn there as easily
+  // as at runtime and this was where the routines entry was withdrawn.
+  test('the page ships no rail entry it has hidden', () => {
+    const rail = /<nav class="nav-rail"[\s\S]*?<\/nav>/.exec(INDEX_SRC)[0];
+    for (const entry of rail.match(/<button class="nav-item[^>]*>/g) || []) {
+      assert.ok(!/display\s*:\s*none/.test(entry), `index.html ships a hidden rail entry: ${entry}`);
+    }
+  });
+
+  // THE HELPER IS DELETED, NOT LEFT WITH ONE CALLER OR NONE. A rule with no
+  // callers is a rule the next person reinstates by finding it and assuming it
+  // was meant.
+  test('the gate is gone rather than left enforcing a rule nothing asks for', () => {
+    assert.strictEqual(fs.existsSync(path.join(ROOT, 'public', 'rail-presence.js')), false,
+      'the shared gate is still in the tree');
+    assert.ok(!/rail-presence\.js/.test(INDEX_SRC), 'index.html still loads the shared gate');
     for (const [src, label] of [[VIEW_SRC, 'views/routines.js'], [SKILLS_SRC, 'views/skills.js']]) {
-      assert.match(src, /railPresence\(/, `${label} does not use the shared gate`);
-      assert.ok(!/nav-item\[data-nav/.test(src.replace(/railPresence\([^)]*\)/g, '')),
-        `${label} reaches into the rail itself instead of going through the gate`);
+      assert.ok(!/railPresence\(/.test(src), `${label} still calls the withdrawn gate`);
+      assert.ok(!/nav-item\[data-nav/.test(src),
+        `${label} reaches into the rail itself, which is the rule coming back by hand`);
+    }
+  });
+
+  // The condition the owner attached to permanence, checked at the surface:
+  // an entry that can be opened onto nothing is what the gate existed to
+  // prevent, so permanence is only safe once neither pane can be empty.
+  test('neither permanent entry opens onto a pane with nothing in it', () => {
+    const { doc, w, dom } = shell([], { skills: [], guide: true });
+    w.renderRoutines();
+    w.renderSkills();
+    for (const id of ['routines-content', 'skill-detail-content']) {
+      const pane = doc.getElementById(id);
+      assert.ok(pane, `the page carries no ${id} to render into`);
+      assert.ok(pane.textContent.replace(/\s+/g, ' ').trim().length > 20,
+        `#${id} is a blank pane on a workspace with nothing in it`);
     }
     dom.window.close();
   });

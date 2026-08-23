@@ -464,7 +464,7 @@ describe('the copy this card ships', () => {
   test('the files these surfaces ship carry no em dash or en dash', () => {
     const root = path.join(__dirname, '..', '..');
     for (const rel of [
-      'public/routines-model.js', 'public/views/routines.js', 'public/rail-presence.js',
+      'public/routines-model.js', 'public/views/routines.js',
       'public/styles/views/routines.css',
       'test/unit/routines-model.test.js', 'test/unit/routines-view.test.js',
       'test/unit/routines-next-run.test.js', 'test/unit/routines-end-to-end.test.js',

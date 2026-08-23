@@ -32,7 +32,6 @@ const VIEW_SRC = read('public', 'views', 'routine-editor.js');
 const PROFILE_SRC = read('public', 'views', 'profile.js');
 const TEAM_SRC = read('public', 'views', 'team.js');
 const ROUTINES_MODEL_SRC = read('public', 'routines-model.js');
-const RAIL_SRC = read('public', 'rail-presence.js');
 const ROUTINES_SRC = read('public', 'views', 'routines.js');
 const APP_SRC = read('public', 'app.js');
 
@@ -160,7 +159,6 @@ function shell() {
   w.eval(PROFILE_SRC);
   w.eval(TEAM_SRC);
   w.eval(ROUTINES_MODEL_SRC);
-  w.eval(RAIL_SRC);
   w.eval(ROUTINES_SRC);
 
   w.agents = [

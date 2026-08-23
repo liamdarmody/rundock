@@ -37,11 +37,12 @@ function skillsHaveArrived() {
 }
 
 function renderSkills() {
-  // Progressive disclosure: the Skills entry appears with the first skill.
-  // The rule itself lives in public/rail-presence.js, because the routines
-  // rail needs the same one and two copies of it would drift.
-  railPresence('skills', skills.length > 0);
-
+  // NOTHING HERE TOUCHES THE RAIL, and that is the rule rather than an
+  // omission. The Skills entry is permanent, like every other one: the rail is
+  // a map of places, always the same size, so a user learns it once. This
+  // function used to withdraw the entry whenever the list was empty, which was
+  // never a decision about what a rail entry means. It was a workaround for
+  // this pane not existing.
   renderSkillsSidebar(skills);
 
   // A section with nothing in it says what it is for. Skills had no such pane

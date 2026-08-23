@@ -49,7 +49,6 @@ const ROOT = path.join(__dirname, '..', '..');
 
 const MODEL = { src: path.join(ROOT, 'public', 'routines-model.js'), suite: 'test/unit/routines-model.test.js' };
 const VIEW = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/routines-view.test.js' };
-const RAIL = { src: path.join(ROOT, 'public', 'rail-presence.js'), suite: 'test/unit/routines-view.test.js' };
 // THE STYLESHEET IS A MUTATION TARGET, and that is the point of it being one.
 // The three-tone ruling is about what a reader SEES, and what they see is
 // resolved from these rules, not from any table in a module. An earlier
@@ -81,6 +80,13 @@ const INDEX = { src: path.join(ROOT, 'public', 'index.html'), suite: 'test/unit/
 // empty state at all until this pass. Its copy and its two guards are watched
 // by the file that presses the pane.
 const SKILLS_MODEL = { src: path.join(ROOT, 'public', 'skills-model.js'), suite: 'test/unit/skills-empty.test.js' };
+// THE RAIL'S PERMANENCE IS AN ABSENCE, so its mutations put the withdrawal
+// BACK rather than take a guard away. A rule whose whole content is "nothing
+// does this" is otherwise unmutatable, and an unmutatable rule is one the next
+// person reinstates without anything going red.
+const INDEX_RAIL = { src: path.join(ROOT, 'public', 'index.html'), suite: 'test/unit/routines-view.test.js' };
+const VIEW_RAIL = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/routines-view.test.js' };
+const SKILLS_VIEW_RAIL = { src: path.join(ROOT, 'public', 'views', 'skills.js'), suite: 'test/unit/routines-view.test.js' };
 const SKILLS_VIEW = { src: path.join(ROOT, 'public', 'views', 'skills.js'), suite: 'test/unit/skills-empty.test.js' };
 // The dispatch call that settles which routines empty state is shown, watched
 // by the enumeration of everything that draws this list.
@@ -219,8 +225,8 @@ const MUTATIONS = [
     "'settings','routine-editor','routines']",
     "'settings','routine-editor']"],
   [INDEX, 'the rail carries a way to this section',
-    '<button class="nav-item" data-nav="routines" onclick="switchNav(\'routines\')" data-tooltip="Routines" style="display:none">',
-    '<button class="nav-item" data-nav="not-routines" onclick="switchNav(\'not-routines\')" data-tooltip="Routines" style="display:none">'],
+    '<button class="nav-item" data-nav="routines" onclick="switchNav(\'routines\')" data-tooltip="Routines">',
+    '<button class="nav-item" data-nav="not-routines" onclick="switchNav(\'not-routines\')" data-tooltip="Routines">'],
   [INDEX, 'the page carries the element this list renders into',
     '<div class="routines-content" id="routines-content"></div>',
     '<div class="routines-content"></div>'],
@@ -338,9 +344,6 @@ const MUTATIONS = [
   [VIEW, 'the second line appears only once there is something to say',
     '  if (row.status) {',
     '  if (true) {'],
-  [VIEW, 'the rail entry is gated on the first routine',
-    "  railPresence('routines', list.length > 0);\n",
-    ''],
   [VIEW, 'a paused row offers resume rather than pause again',
     "    actions += r.paused\n      ? iconButton('resume', 'Resume', ICONS.play, `routinesSetPaused(${index}, false)`, false)\n      : iconButton('pause', 'Pause', ICONS.pause, `routinesSetPaused(${index}, true)`, false);",
     "    actions += iconButton('pause', 'Pause', ICONS.pause, `routinesSetPaused(${index}, true)`, false);"],
@@ -407,12 +410,26 @@ const MUTATIONS = [
   [SKILLS_MODEL, 'the action goes with the agent that fulfils it',
     '      action: hasGuide ? EMPTY.action : null,',
     '      action: EMPTY.action,'],
+
+  // ===== THE RAIL IS A MAP OF PLACES =====
+  // Each of these is the gate coming back in one of the three shapes it could
+  // come back in: hidden in the markup, withdrawn by the routines render, or
+  // withdrawn by the skills render.
+  [INDEX_RAIL, 'no rail entry is withdrawn in the page it ships in',
+    '<button class="nav-item" data-nav="routines" onclick="switchNav(\'routines\')" data-tooltip="Routines">',
+    '<button class="nav-item" data-nav="routines" onclick="switchNav(\'routines\')" data-tooltip="Routines"'
+    + ' style="display:none">'],
+  [VIEW_RAIL, 'the routines render leaves the rail alone',
+    '  const list = allRoutines();\n',
+    '  const list = allRoutines();\n'
+    + '  document.querySelector(\'.nav-item[data-nav="routines"]\').style.display = list.length ? \'\' : \'none\';\n'],
+  [SKILLS_VIEW_RAIL, 'the skills render leaves the rail alone',
+    '  renderSkillsSidebar(skills);\n',
+    '  document.querySelector(\'.nav-item[data-nav="skills"]\').style.display = skills.length ? \'\' : \'none\';\n'
+    + '  renderSkillsSidebar(skills);\n'],
   [VIEW, 'a routine name reaches the page as text, not as markup',
     '`<div class="rr-sentence">${esc(sentence)}</div>',
     '`<div class="rr-sentence">${sentence}</div>'],
-  [RAIL, 'a withdrawn rail entry comes back',
-    "    entry.style.display = present ? '' : 'none';",
-    "    entry.style.display = 'none';"],
 
   // ===== THE TWO CONTROLS =====
   // The byte check in the delete handler is a backstop against a WRITER that
@@ -467,8 +484,9 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [MODEL, VIEW, VIEW_E2E, VIEW_REPLY, RAIL, STYLES, SCHEDULER, END_TO_END, DISCOVERY,
-    HANDLER, ROUTINES, APP, APP_SKILLS, INDEX, SKILLS_MODEL, SKILLS_VIEW];
+  const targets = [MODEL, VIEW, VIEW_E2E, VIEW_REPLY, VIEW_RAIL, STYLES, SCHEDULER, END_TO_END,
+    DISCOVERY, HANDLER, ROUTINES, APP, APP_SKILLS, INDEX, INDEX_RAIL, SKILLS_MODEL, SKILLS_VIEW,
+    SKILLS_VIEW_RAIL];
   const originals = new Map();
   for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];

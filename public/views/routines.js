@@ -272,17 +272,17 @@ function listHtml(list) {
 }
 
 /**
- * Draw the list, and decide whether the rail carries a Routines entry at all.
+ * Draw the list.
  *
- * The rail is gated on the first routine through the shared helper, which is
- * the same rule and the same code the Skills rail uses. The VIEW still renders
- * its empty state: a reader who deletes their last routine while looking at
- * this page is told what to do next rather than left with a blank pane, even
- * though the rail entry goes with it.
+ * IT DOES NOT DECIDE WHETHER THE RAIL CARRIES A ROUTINES ENTRY, and the
+ * absence is the rule rather than an oversight. The entry is permanent, like
+ * every other one. The rail names what the app can do: a map of places, always
+ * the same size, so a user learns it once. What a place holds is that place's
+ * own business, which is this function's, and an empty place says what it is
+ * for, which is the empty state below.
  */
 function renderRoutines() {
   const list = allRoutines();
-  railPresence('routines', list.length > 0);
   const content = document.getElementById('routines-content');
   if (!content) return;
   if (pendingDelete !== null && !list[pendingDelete]) pendingDelete = null;

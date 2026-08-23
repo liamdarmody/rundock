@@ -28,7 +28,6 @@ const INDEX_SRC = read('public', 'index.html');
 const EDITOR_MODEL_SRC = read('public', 'routine-editor-model.js');
 const SKILLS_MODEL_SRC = read('public', 'skills-model.js');
 const SKILLS_SRC = read('public', 'views', 'skills.js');
-const RAIL_SRC = read('public', 'rail-presence.js');
 // The real handler behind the button, not a stub. The offer this pane makes
 // and the offer the routine editor makes are the same offer, and a stub here
 // would let the two drift into two different conversations.
@@ -65,7 +64,6 @@ function shell({ skills = [], skillsLoaded = true, guide = true } = {}) {
   const w = dom.window;
   w.eval(EDITOR_MODEL_SRC);
   w.eval(SKILLS_MODEL_SRC);
-  w.eval(RAIL_SRC);
   w.eval(SKILLS_SRC);
   w.eval(EDITOR_VIEW_SRC);
   w.skills = skills;
