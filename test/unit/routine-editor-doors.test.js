@@ -28,6 +28,9 @@ const { JSDOM } = require('jsdom');
 const ROOT = path.join(__dirname, '..', '..');
 const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf-8');
 const MODEL_SRC = read('public', 'routine-editor-model.js');
+// Loaded before the routines model, which reads the shared no-guide next step
+// off it, in the order index.html loads them.
+const SKILLS_MODEL_SRC = read('public', 'skills-model.js');
 const VIEW_SRC = read('public', 'views', 'routine-editor.js');
 const PROFILE_SRC = read('public', 'views', 'profile.js');
 const TEAM_SRC = read('public', 'views', 'team.js');
@@ -158,6 +161,7 @@ function shell() {
   w.eval(VIEW_SRC);
   w.eval(PROFILE_SRC);
   w.eval(TEAM_SRC);
+  w.eval(SKILLS_MODEL_SRC);
   w.eval(ROUTINES_MODEL_SRC);
   w.eval(ROUTINES_SRC);
 

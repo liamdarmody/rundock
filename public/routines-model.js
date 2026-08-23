@@ -34,9 +34,10 @@
  * and so does every test of it.
  */
 (/** @param {any} root @param {(editor: any) => object} factory */ function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('./routine-editor-model.js'));
-  else root.RundockRoutinesModel = factory(root.RundockRoutineEditorModel);
-}(typeof self !== 'undefined' ? self : this, function (editor) {
+  if (typeof module === 'object' && module.exports) {
+    module.exports = factory(require('./routine-editor-model.js'), require('./skills-model.js'));
+  } else root.RundockRoutinesModel = factory(root.RundockRoutineEditorModel, root.RundockSkillsModel);
+}(typeof self !== 'undefined' ? self : this, function (editor, skills) {
 
   const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
@@ -143,14 +144,24 @@
     }
     const choice = editor.skillChoices({ skills: (input && input.skills) || [] });
     if (choice.createSkill) {
-      // The offer disappears with the agent that fulfils it. The state and the
-      // mechanism stay, because they are still true.
-      const hasGuide = !!(input && input.hasGuide);
+      // THE ACTION GOES WITH THE AGENT THAT FULFILS IT, AND THE NEXT STEP DOES
+      // NOT. Dropping the button on its own would leave a line instructing an
+      // action with nothing to press, so the agent-independent next step is
+      // APPENDED to the shipped line rather than replacing it. The shipped
+      // string stays whole: it already carries its own next step ("Build one
+      // and it will show up here"), and it is the same string the editor ships
+      // one screen away, so splitting it here would be this pass writing a
+      // second version of a sentence the product already has.
+      //
+      // The appended sentence is the Skills pane's own, not a second copy of
+      // it: both readers are missing the same fact, which is where a skill is
+      // declared.
+      const guideName = (input && input.guideName) || null;
       return {
         lead: EMPTY.lead,
-        body: choice.emptyLead,
-        action: hasGuide ? choice.createSkillLabel : null,
-        actionKind: hasGuide ? 'build-skill' : null,
+        body: guideName ? choice.emptyLead : `${choice.emptyLead} ${skills.EMPTY.nextStepNoGuide}`,
+        action: guideName ? choice.createSkillLabel : null,
+        actionKind: guideName ? 'build-skill' : null,
         // No aside: the second way in it names is a skill's own page, and this
         // workspace has no skill to have one.
         aside: null,

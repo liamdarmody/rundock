@@ -110,6 +110,9 @@ function roster(fn, seed = seedStores, names = NAMES) {
 }
 
 const EDITOR_MODEL_SRC = read('public', 'routine-editor-model.js');
+// Loaded before the routines model, which reads the shared no-guide next step
+// off it, in the order index.html loads them.
+const SKILLS_MODEL_SRC = read('public', 'skills-model.js');
 const MODEL_SRC = read('public', 'routines-model.js');
 const VIEW_SRC = read('public', 'views', 'routines.js');
 const ROUTINES_CSS = read('public', 'styles', 'views', 'routines.css');
@@ -122,6 +125,7 @@ function render(agents) {
     + '</body></html>', { runScripts: 'dangerously' });
   const w = dom.window;
   w.eval(EDITOR_MODEL_SRC);
+  w.eval(SKILLS_MODEL_SRC);
   w.eval(MODEL_SRC);
   w.eval(VIEW_SRC);
   w.agents = agents;

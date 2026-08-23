@@ -14,13 +14,33 @@
  * dozen skills that they have none, which is the interface saying something
  * false to the most confident reader it has.
  *
+ * THE FOUR SLOTS, AND WHERE THE SEAM BETWEEN THEM GOES. State, mechanism, next
+ * step, aside. The seam that matters is between the middle two, and it was in
+ * the wrong place until review found it: the mechanism slot was saying what a
+ * skill is AND telling you what to do about it, and because the second half
+ * named an agent, a workspace with no guide lost both. So:
+ *
+ *   THE MECHANISM NEVER NAMES AN AGENT AND NEVER MOVES. It is true on every
+ *   workspace, so nothing can take it away.
+ *
+ *   THE NEXT STEP IS WHAT SWAPS, and it has an agent-independent form, so the
+ *   slot is never empty and no state is a dead end. A next step is a sentence
+ *   or a sentence plus one action, and never a generic encouragement.
+ *
  * IT POINTS ONE STEP BACK UP THE CHAIN. A skill is declared on an agent, in
  * the agent file's `skills:` frontmatter; a routine schedules a skill. So the
  * three surfaces are a chain, agents then skills then routines, and an empty
- * one names the step before it rather than something sideways. The step before
- * a skill is the agent that writes skills, which is why this sentence names
- * the guide and why it is the sentence that goes when there is no guide to
- * name.
+ * one names the step before it rather than something sideways. Both next steps
+ * below name that same step: one through the agent that writes skills, one
+ * through the file they are written in.
+ *
+ * THE GUIDE'S NAME IS A SLOT, NEVER A LITERAL. `getGuide()` matches on
+ * `type === 'platform'` and checks no name, so a sentence that hard-codes one
+ * tells a workspace whose platform agent is called something else to talk to
+ * somebody it does not have. The token is substituted rather than
+ * concatenated, for the reason the editor's own STEP_LEADS already states:
+ * every word this surface ships stays readable in one object, so a copy check
+ * can read all of it.
  *
  * THE ACTION IS THE EDITOR'S WORD, NOT A SECOND ONE. `Build a skill` and the
  * loading line both come from routine-editor-model.js, because the reader
@@ -37,33 +57,51 @@
   // every other section heading.
   const TITLE = 'Skills';
 
-  /**
-   * The four slots, in the shape every empty state in this product uses.
-   *
-   * STATE says what is true right now, in three or four words, and is never a
-   * welcome. MECHANISM says what the thing is and what happens after, so the
-   * reader knows what they are choosing rather than being told to choose. The
-   * ACTION is the one thing to press, never two. There is no ASIDE, because
-   * an aside names a second real way in and there is no second way to get a
-   * skill.
-   *
-   * The Doc sentence is its own field rather than the tail of the body, and
-   * that split is load-bearing: it is the half that has to go when there is no
-   * guide on the team, and a sentence spliced out of a paragraph at render
-   * time is a sentence nothing can assert.
-   */
   const EMPTY = {
     lead: 'No skills yet.',
-    body: 'A skill is a job written down once, so an agent does it the same way every time '
+    // Never names an agent, so nothing about the team can remove it.
+    mechanism: 'A skill is a job written down once, so an agent does it the same way every time '
       + 'and you can put it on a schedule.',
-    guideLine: 'Tell Doc what you find yourself repeating and he will write the first one.',
+    // The next step where there is a guide to name. `{agent}` is substituted,
+    // never concatenated, and the sentence carries no pronoun for the agent it
+    // names, because the name is the only thing this code knows about it.
+    nextStep: 'Tell {agent} what you find yourself repeating, and that becomes your first skill.',
+    // The next step where there is not.
+    //
+    // TRUE, AND CHECKED RATHER THAN ASSUMED. A skill is declared in an agent
+    // file's `skills:` frontmatter, which parseSkills in lib/agents/discovery.js
+    // reads. IT CARRIES NO ACTION, because opening a folder from an empty state
+    // is a mechanism nobody has built, and a button that promises one would be
+    // the same fault as copy that promises what the product cannot do.
+    //
+    // Shared with the routines no-skills state, which appends it to its own
+    // shipped line, because both readers are missing the same fact and two
+    // sentences for one fact is the drift this pass exists to remove.
+    nextStepNoGuide: 'Skills are listed on each agent, so add one to an agent\'s file under '
+      + 'skills: and it appears here.',
     action: editor.STEP_LEADS.build,
   };
 
   /**
+   * The next step for a workspace, named through a slot or not named at all.
+   *
+   * A GUIDE WITH NO NAME IS NOT A GUIDE THIS SENTENCE CAN NAME. The roster
+   * always resolves a display name, falling back to the agent's id, so this is
+   * a guard rather than a state anybody should meet. It resolves the way an
+   * absent guide does, because a sentence with an empty slot in it is worse
+   * than the agent-independent one.
+   *
+   * @param {string|null} [guideName]
+   */
+  function nextStep(guideName) {
+    const name = guideName || null;
+    return name ? EMPTY.nextStep.replace('{agent}', name) : EMPTY.nextStepNoGuide;
+  }
+
+  /**
    * The pane, in whichever of its three states the workspace is in.
    *
-   * @param {{loading?: boolean, hasGuide?: boolean}} [input]
+   * @param {{loading?: boolean, guideName?: string|null}} [input]
    * @returns {{lead: string|null, body: string, action: string|null, aside: null}}
    */
   function emptyState(input) {
@@ -72,16 +110,19 @@
     if (input && input.loading) {
       return { lead: null, body: editor.STEP_LEADS.loading, action: null, aside: null };
     }
-    const hasGuide = !!(input && input.hasGuide);
+    const guideName = (input && input.guideName) || null;
     return {
       lead: EMPTY.lead,
-      // The state and the mechanism are true whoever is on the team. Only the
-      // sentence naming an agent goes when that agent is not there.
-      body: hasGuide ? `${EMPTY.body} ${EMPTY.guideLine}` : EMPTY.body,
-      action: hasGuide ? EMPTY.action : null,
+      // Mechanism then next step, always both, in that order.
+      body: `${EMPTY.mechanism} ${nextStep(guideName)}`,
+      // The action belongs to the guide's next step and goes with it. The
+      // other next step has none to offer, and says so by being a sentence.
+      action: guideName ? EMPTY.action : null,
+      // No aside: an aside names a second real way in, and there is no second
+      // way to get a skill.
       aside: null,
     };
   }
 
-  return { TITLE, EMPTY, emptyState };
+  return { TITLE, EMPTY, nextStep, emptyState };
 }));

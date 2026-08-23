@@ -16,6 +16,14 @@
 // arrived, there are no skills, and there are skills. Only the middle one is
 // an offer, and showing it while the reply is still in flight tells somebody
 // with a dozen skills that they have none.
+//
+// WHAT THIS FILE DOES NOT PROVE, said here so nobody reads it as proving more.
+// Every test below CALLS renderSkills. That is right for a file about the
+// words on a pane, and it says nothing about whether pressing the Skills entry
+// reaches that render. The press is proved in test/unit/routines-view.test.js,
+// by clicking the rail entry as it sits in index.html and running switchNav's
+// own skills arm cut out of app.js, and that file's CALLED_NOT_PRESSED list
+// records the exemption this comment describes.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -42,8 +50,18 @@ const editor = require(path.join(ROOT, 'public', 'routine-editor-model.js'));
 const STATE_LINE = 'No skills yet.';
 const MECHANISM = 'A skill is a job written down once, so an agent does it the same way every '
   + 'time and you can put it on a schedule.';
-const DOC_LINE = 'Tell Doc what you find yourself repeating and he will write the first one.';
+// The next step, in its two forms. The first carries a slot, not a name: the
+// pane knows only that some agent has type platform, so a literal there names
+// an agent a workspace may not have.
+const NEXT_STEP = 'Tell {agent} what you find yourself repeating, and that becomes your first skill.';
+const NEXT_STEP_NO_GUIDE = 'Skills are listed on each agent, so add one to an agent\'s file under '
+  + 'skills: and it appears here.';
 const ACTION = 'Build a skill';
+
+// The guide this workspace has, and it is deliberately NOT called Doc. Every
+// test below that names an agent names this one, so a literal anywhere in the
+// copy fails rather than passing on the default workspace's name.
+const GUIDE = { id: 'archivist', displayName: 'Wren', type: 'platform' };
 
 // A shell built out of the REAL page: the skills panel and the skills view
 // panel are cut from index.html rather than restated here. A copy of the
@@ -70,7 +88,7 @@ function shell({ skills = [], skillsLoaded = true, guide = true } = {}) {
   w.skillsLoaded = skillsLoaded;
   w.currentSkillId = null;
   w.currentView = 'skills';
-  w.agents = guide ? [{ id: 'doc', displayName: 'Doc', type: 'platform' }] : [];
+  w.agents = guide ? [Object.assign({}, GUIDE)] : [];
   w.getGuide = () => w.agents.filter(a => a.type === 'platform')[0];
   w.esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   w.showView = () => {};
@@ -87,9 +105,19 @@ describe('the words the empty pane ships', () => {
     assert.ok(!/welcome/i.test(m.EMPTY.lead));
   });
 
-  test('the mechanism says what a skill is and what happens after', () => {
-    assert.strictEqual(m.EMPTY.body, MECHANISM);
-    assert.strictEqual(m.EMPTY.guideLine, DOC_LINE);
+  // THE SEAM, and it is the thing review found in the wrong place. The
+  // mechanism says what a skill IS and nothing else. It names no agent, so
+  // nothing about the team can take it away, which is what let the no-guide
+  // state end in nothing at all when the two jobs shared one slot.
+  test('the mechanism says what a skill is, and names nobody', () => {
+    assert.strictEqual(m.EMPTY.mechanism, MECHANISM);
+    assert.ok(!/\{agent\}|\bDoc\b|\bhe\b/.test(m.EMPTY.mechanism),
+      'the mechanism names an agent, so a workspace without one would lose it');
+  });
+
+  test('the next step has a form for a workspace with a guide and one for a workspace without', () => {
+    assert.strictEqual(m.EMPTY.nextStep, NEXT_STEP);
+    assert.strictEqual(m.EMPTY.nextStepNoGuide, NEXT_STEP_NO_GUIDE);
   });
 
   // The action is the editor's word, not a second one written here. Two
@@ -100,15 +128,78 @@ describe('the words the empty pane ships', () => {
     assert.strictEqual(m.EMPTY.action, editor.STEP_LEADS.build);
   });
 
-  test('the empty state ends in a specific next step', () => {
-    const state = m.emptyState({ hasGuide: true });
-    assert.strictEqual(state.body, `${MECHANISM} ${DOC_LINE}`);
-    assert.strictEqual(state.action, ACTION);
+  // EVERY STATE ENDS IN A NEXT STEP, which may be an action or a sentence and
+  // is never a generic encouragement. No state ends with only what the thing
+  // is, which is what a surface whose whole job is teaching that a feature
+  // exists cannot afford.
+  test('every state of this pane ends in a specific next step', () => {
+    for (const [label, state] of [
+      ['with a guide', m.emptyState({ guideName: 'Wren' })],
+      ['with no guide', m.emptyState({})],
+    ]) {
+      assert.ok(state.body.startsWith(`${MECHANISM} `), `${label}: the mechanism moved`);
+      const step = state.body.slice(MECHANISM.length + 1);
+      assert.ok(step.length > 20, `${label}: the state ends with only what a skill is`);
+      assert.ok(!/get started|dive in|explore/i.test(step), `${label}: a generic encouragement`);
+      assert.ok(/\.$/.test(step), `${label}: the next step is not a sentence`);
+    }
+    assert.strictEqual(m.emptyState({ guideName: 'Wren' }).action, ACTION);
   });
 
   test('there is no aside, because there is no second way to get a skill', () => {
-    assert.strictEqual(m.emptyState({ hasGuide: true }).aside, null);
+    assert.strictEqual(m.emptyState({ guideName: 'Wren' }).aside, null);
     assert.ok(!('aside' in m.EMPTY), 'an aside on this surface would name a path that does not exist');
+  });
+});
+
+describe('the guide is named through a slot, never as a literal', () => {
+  // WHAT THIS EXISTS FOR. getGuide matches on type === 'platform' and checks
+  // no name. A sentence that hard-codes one tells a workspace whose platform
+  // agent is called something else to talk to somebody it does not have, and
+  // the button beside it then opens a conversation with a differently named
+  // agent.
+  test('the sentence carries the name the workspace actually has', () => {
+    for (const name of ['Wren', 'Doc', 'Atlas']) {
+      assert.strictEqual(m.emptyState({ guideName: name }).body, `${MECHANISM} `
+        + NEXT_STEP.replace('{agent}', name));
+    }
+  });
+
+  test('no shipped line hard-codes a name or a pronoun for the guide', () => {
+    for (const line of Object.values(m.EMPTY)) {
+      if (typeof line !== 'string') continue;
+      assert.ok(!/\bDoc\b/.test(line), `a guide's name is written into: ${line}`);
+      assert.ok(!/\b(he|she|they)\b/i.test(line), `a pronoun stands in for the guide in: ${line}`);
+    }
+  });
+
+  test('the token is substituted rather than concatenated, so every word is in one object', () => {
+    assert.ok(m.EMPTY.nextStep.includes('{agent}'), 'the sentence carries no slot to substitute');
+    const built = m.nextStep('Wren');
+    assert.ok(!built.includes('{agent}'), 'the slot reached the page unsubstituted');
+    // The same token and the same rule the editor's own step lead uses, one
+    // file away.
+    assert.ok(editor.STEP_LEADS.pick.includes('{agent}'),
+      'sanity: the substitution rule this follows is the editor\'s');
+  });
+
+  // A guard rather than a state anybody should meet: the roster resolves a
+  // display name for every agent, falling back to the id. A sentence with an
+  // empty slot in it is worse than the one that names nobody.
+  test('a guide with no name takes the sentence that names nobody', () => {
+    const state = m.emptyState({ guideName: null });
+    assert.strictEqual(state.body, `${MECHANISM} ${NEXT_STEP_NO_GUIDE}`);
+    assert.ok(!state.body.includes('{agent}'));
+  });
+
+  test('the pane names the guide this workspace actually has, on the page', () => {
+    const { w, doc, dom } = shell({ skills: [] });
+    w.renderSkills();
+    const shown = text(pane(doc));
+    assert.match(shown, /Tell Wren what you find yourself repeating/,
+      'the pane names an agent this workspace does not have');
+    assert.ok(!/\bDoc\b/.test(shown), 'a literal name reached the page');
+    dom.window.close();
   });
 });
 
@@ -154,7 +245,7 @@ describe('the pane a workspace with no skills opens onto', () => {
     assert.ok(shown, 'the skills pane is still blank on a workspace with no skills');
     assert.match(shown, /No skills yet\./);
     assert.match(shown, /A skill is a job written down once/);
-    assert.match(shown, /Tell Doc what you find yourself repeating/);
+    assert.match(shown, /Tell Wren what you find yourself repeating/);
     dom.window.close();
   });
 
@@ -165,7 +256,7 @@ describe('the pane a workspace with no skills opens onto', () => {
     assert.strictEqual(buttons.length, 1, 'an empty state offers one action, never two');
     assert.strictEqual(buttons[0].textContent.trim(), ACTION);
     buttons[0].click();
-    assert.strictEqual(w.conversationWith, 'doc',
+    assert.strictEqual(w.conversationWith, GUIDE.id,
       'the action does not open a conversation with the agent that writes skills');
     dom.window.close();
   });
@@ -183,28 +274,40 @@ describe('the pane a workspace with no skills opens onto', () => {
   });
 });
 
-describe('the action disappears with the agent that fulfils it', () => {
-  // Every other call to action in the app that names the guide is guarded on
-  // the guide existing. The STATE and the MECHANISM stay, because they are
-  // still true; the sentence naming an agent that is not there does not.
-  test('with no guide there is no button and no sentence naming one', () => {
-    const state = m.emptyState({ hasGuide: false });
-    assert.strictEqual(state.action, null);
+describe('the next step swaps with the guide, and the mechanism never moves', () => {
+  // Every call to action in the app that names the guide is guarded on the
+  // guide existing. What changed after review is what happens to the sentence
+  // beside it: dropping the action used to drop the only thing telling the
+  // reader what to do, leaving a state that ended in what a skill is. The next
+  // step now swaps rather than disappearing.
+  test('with no guide the action goes and the next step swaps rather than going with it', () => {
+    const state = m.emptyState({});
+    assert.strictEqual(state.action, null, 'a button was offered with no agent to fulfil it');
     assert.strictEqual(state.lead, STATE_LINE, 'the state is still true with no guide');
-    assert.strictEqual(state.body, MECHANISM, 'the mechanism is still true with no guide');
-    assert.ok(!/Doc/.test(state.body), 'the pane names an agent the workspace does not have');
+    assert.ok(state.body.startsWith(`${MECHANISM} `), 'the mechanism moved with the guide');
+    assert.strictEqual(state.body, `${MECHANISM} ${NEXT_STEP_NO_GUIDE}`);
+    assert.ok(!/Doc|Wren/.test(state.body), 'the pane names an agent the workspace does not have');
   });
 
-  test('the pane with no guide says what the section is for and offers nothing', () => {
+  test('the pane with no guide still ends in something to do', () => {
     const { w, doc, dom } = shell({ skills: [], guide: false });
     w.renderSkills();
     const shown = text(pane(doc));
     assert.match(shown, /No skills yet\./);
     assert.match(shown, /A skill is a job written down once/);
-    assert.ok(!/Doc/.test(shown), 'the pane names a guide this workspace does not have');
+    assert.match(shown, /Skills are listed on each agent, so add one to an agent's file under skills: and it appears here\./);
+    assert.ok(!/Doc|Wren/.test(shown), 'the pane names a guide this workspace does not have');
     assert.strictEqual(doc.querySelectorAll('#skill-detail-content button').length, 0,
       'a button was offered with no agent to fulfil it');
     dom.window.close();
+  });
+
+  // The one thing the no-guide state must not do: promise a way in that does
+  // not exist. Opening a folder from an empty state is a mechanism nobody has
+  // built, so the sentence says where the file is and offers nothing to press.
+  test('the no-guide next step promises nothing the product cannot do', () => {
+    assert.strictEqual(m.emptyState({}).action, null);
+    assert.ok(!/click|open the folder|browse/i.test(m.EMPTY.nextStepNoGuide));
   });
 });
 
@@ -214,7 +317,7 @@ describe('the copy this surface ships', () => {
   function copyShipped() {
     const out = [];
     for (const value of Object.values(m.EMPTY)) if (typeof value === 'string') out.push(value);
-    for (const input of [{ hasGuide: true }, { hasGuide: false }, { loading: true }]) {
+    for (const input of [{ guideName: 'Wren' }, {}, { loading: true }]) {
       for (const value of Object.values(m.emptyState(input))) if (typeof value === 'string') out.push(value);
     }
     return out;

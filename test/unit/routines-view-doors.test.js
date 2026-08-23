@@ -40,6 +40,9 @@ const INDEX_SRC = read('public', 'index.html');
 const VIEW_SRC = read('public', 'views', 'routines.js');
 const MODEL_SRC = read('public', 'routines-model.js');
 const EDITOR_MODEL_SRC = read('public', 'routine-editor-model.js');
+// Loaded before the routines model, which reads the shared no-guide next step
+// off it, in the order index.html loads them.
+const SKILLS_MODEL_SRC = read('public', 'skills-model.js');
 const EDITOR_VIEW_SRC = read('public', 'views', 'routine-editor.js');
 
 // ===== THE ENUMERATION =====
@@ -283,6 +286,7 @@ function shell({ routines = [ROUTINE] } = {}) {
   const dom = new JSDOM(shellMarkup(), { runScripts: 'dangerously' });
   const w = dom.window;
   w.eval(EDITOR_MODEL_SRC);
+  w.eval(SKILLS_MODEL_SRC);
   w.eval(MODEL_SRC);
   w.eval(VIEW_SRC);
   w.agents = [{ id: 'piper', displayName: 'Piper', colour: '#E87A5A', icon: 'P', status: 'onTeam', routines }];
@@ -391,11 +395,42 @@ describe('the ways this list gets drawn, pressed', () => {
     // The editor decides where to go by asking whether the shell can reach a
     // section: a rail entry AND a sidebar panel for it. Both have to be true
     // of the real page, or a save silently lands somewhere else.
-    const { w, dom } = shell();
+    //
+    // AND THE SAVE IS DRIVEN, not just the resolution read. Asserting what
+    // routinesListNav returns says where the editor WOULD go. The failure this
+    // is written against is a rename of either half in index.html sending a
+    // real save to the team chart with nothing thrown, so the save has to
+    // actually travel: the editor is opened, a routine is picked and written,
+    // and the server's confirmation is what makes it leave.
+    const { doc, w, dom } = shell();
     w.eval(EDITOR_VIEW_SRC);
-    assert.strictEqual(w.routinesListNav(), 'routines',
-      'the editor cannot reach this view, so a saved routine goes somewhere else');
-    assert.strictEqual(w.RundockRoutineEditorModel.SAVE_DESTINATION, 'routines');
+    // Both halves of the destination, read off the real page rather than
+    // supplied here, so a rename of either fails this rather than falling back
+    // to the team panel in silence.
+    assert.ok(doc.querySelector('[data-nav="routines"]'),
+      'index.html carries no routines rail entry, so the editor cannot reach this view');
+    assert.ok(doc.getElementById('sidebar-routines'),
+      'index.html carries no routines sidebar panel, so the editor cannot reach this view');
+
+    w.skills = [{ id: 'sk', name: 'Compile the ops summary', slug: 'ops', assignedAgents: [{ id: 'piper', name: 'Piper' }] }];
+    w.skillsLoaded = true;
+    w.setNavState = () => {};
+    w.showView = () => {};
+    w.sent = [];
+    w.ws = { send: (msg) => w.sent.push(JSON.parse(msg)) };
+    w.navigatedTo = null;
+    w.switchNav = (nav) => { w.navigatedTo = nav; };
+    w.addRoutine();
+    const option = w.RundockRoutineEditorModel.skillChoices({ skills: w.skills }).options[0];
+    w.routineEditorPick(option.key);
+    w.saveRoutine();
+    assert.strictEqual(w.sent.length, 1, 'sanity: the editor asked for the routine to be written');
+    assert.strictEqual(w.navigatedTo, null, 'the editor left on send rather than on the reply');
+
+    w.routineEditorSaved();
+    assert.strictEqual(w.navigatedTo, w.RundockRoutineEditorModel.SAVE_DESTINATION,
+      'a written routine landed somewhere other than the list of routines');
+    assert.strictEqual(w.navigatedTo, 'routines');
     dom.window.close();
   });
 });

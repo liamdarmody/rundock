@@ -219,10 +219,14 @@ function emptyHtml() {
   // WHICH VARIANT IS THE MODEL'S DECISION, not this file's. All this does is
   // hand it what the shell knows: the skills, whether they have arrived, and
   // whether there is a guide to fulfil an offer that names one.
+  const guide = typeof getGuide === 'function' ? getGuide() : null;
   const state = model.emptyState({
     skills: typeof skills !== 'undefined' && skills ? skills : [],
     loading: !skillsHaveArrived(),
-    hasGuide: typeof getGuide === 'function' ? !!getGuide() : false,
+    // The name rather than a flag, for the same reason the Skills pane passes
+    // one: the offer belongs to a named agent, and a workspace with none takes
+    // the next step that names no agent at all.
+    guideName: guide ? (guide.displayName || guide.name || null) : null,
   });
   const action = state.actionKind ? EMPTY_ACTIONS[state.actionKind] : null;
 

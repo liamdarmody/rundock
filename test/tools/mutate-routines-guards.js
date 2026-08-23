@@ -91,6 +91,9 @@ const SKILLS_VIEW = { src: path.join(ROOT, 'public', 'views', 'skills.js'), suit
 // The dispatch call that settles which routines empty state is shown, watched
 // by the enumeration of everything that draws this list.
 const APP_SKILLS = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routines-view-doors.test.js' };
+// The two openers, watched by the file that presses them rather than by the
+// file that calls what they draw.
+const APP_OPENER = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routines-view.test.js' };
 // The handlers behind the row's two controls, and the data model they write
 // through.
 const HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/unit/routine-actions.test.js' };
@@ -373,20 +376,38 @@ const MUTATIONS = [
     + '    }\n',
     ''],
   [MODEL, 'the build offer goes with the agent that fulfils it',
-    "        action: hasGuide ? choice.createSkillLabel : null,",
+    '        action: guideName ? choice.createSkillLabel : null,',
     '        action: choice.createSkillLabel,'],
+  // The half review found missing: dropping the button used to drop the only
+  // thing telling the reader what to do, leaving a line that instructs an
+  // action with nothing to press.
+  [MODEL, 'the no-guide state gains a next step rather than only losing its button',
+    '        body: guideName ? choice.emptyLead : `${choice.emptyLead} ${skills.EMPTY.nextStepNoGuide}`,',
+    '        body: choice.emptyLead,'],
+  [MODEL, 'the shipped line is kept whole rather than replaced',
+    '        body: guideName ? choice.emptyLead : `${choice.emptyLead} ${skills.EMPTY.nextStepNoGuide}`,',
+    '        body: skills.EMPTY.nextStepNoGuide,'],
   [VIEW, 'the list tells the model whether the skills have arrived',
     '    loading: !skillsHaveArrived(),',
     '    loading: false,'],
-  [VIEW, 'the list tells the model whether there is a guide',
-    '    hasGuide: typeof getGuide === \'function\' ? !!getGuide() : false,',
-    '    hasGuide: true,'],
+  [VIEW, 'the list tells the model which guide the workspace has',
+    "    guideName: guide ? (guide.displayName || guide.name || null) : null,",
+    "    guideName: 'Doc',"],
   [VIEW, 'the aside is drawn only where the model kept one',
     '  if (state.aside) h += `<p class="settings-caption routines-empty-aside">${esc(state.aside)}</p>`;',
     '  h += `<p class="settings-caption routines-empty-aside">${esc(model.EMPTY.aside)}</p>`;'],
   [APP_SKILLS, 'the skill list arriving redraws the list that asks about skills',
     "renderSkills(); renderRoutines(); routineEditorSkillsArrived(d.skills);",
     'renderSkills(); routineEditorSkillsArrived(d.skills);'],
+  // THE OPENER, not the render behind it. This is the line whose absence left
+  // the first press of Skills in a session opening onto a blank pane while
+  // every test that called renderSkills stayed green.
+  [APP_OPENER, 'pressing the Skills entry draws into the pane it reveals',
+    "  else if(nav==='skills') { showView('skills'); renderSkills(); if(!skillsLoaded)",
+    "  else if(nav==='skills') { showView('skills'); if(!skillsLoaded)"],
+  [APP_OPENER, 'pressing the Routines entry draws into the pane it reveals',
+    "  else if(nav==='routines') { showView('routines'); renderRoutines(); }",
+    "  else if(nav==='routines') { showView('routines'); }"],
 
   // ===== THE SKILLS PANE =====
   // It had none of this until now: renderSkills returned before rendering, so
@@ -400,15 +421,24 @@ const MUTATIONS = [
   [SKILLS_VIEW, 'the pane offers the build only where a guide can fulfil it',
     '  if (state.action) {',
     '  if (true) {'],
+  [SKILLS_VIEW, 'the pane names the guide the workspace has rather than a literal',
+    "    guideName: guide ? (guide.displayName || guide.name || null) : null,",
+    "    guideName: guide ? 'Doc' : null,"],
   [SKILLS_MODEL, 'the pane claims nothing about skills that have not arrived',
     '    if (input && input.loading) {\n'
     + '      return { lead: null, body: editor.STEP_LEADS.loading, action: null, aside: null };\n    }\n',
     ''],
-  [SKILLS_MODEL, 'the sentence naming the guide goes when there is no guide',
-    '      body: hasGuide ? `${EMPTY.body} ${EMPTY.guideLine}` : EMPTY.body,',
-    '      body: `${EMPTY.body} ${EMPTY.guideLine}`,'],
+  [SKILLS_MODEL, 'the next step swaps with the guide rather than disappearing',
+    "    return name ? EMPTY.nextStep.replace('{agent}', name) : EMPTY.nextStepNoGuide;",
+    "    return name ? EMPTY.nextStep.replace('{agent}', name) : '';"],
+  [SKILLS_MODEL, 'the guide is named through a slot rather than as a literal',
+    "    return name ? EMPTY.nextStep.replace('{agent}', name) : EMPTY.nextStepNoGuide;",
+    '    return name ? EMPTY.nextStep : EMPTY.nextStepNoGuide;'],
+  [SKILLS_MODEL, 'the mechanism is on every state, ahead of whichever next step it has',
+    '      body: `${EMPTY.mechanism} ${nextStep(guideName)}`,',
+    '      body: nextStep(guideName),'],
   [SKILLS_MODEL, 'the action goes with the agent that fulfils it',
-    '      action: hasGuide ? EMPTY.action : null,',
+    '      action: guideName ? EMPTY.action : null,',
     '      action: EMPTY.action,'],
 
   // ===== THE RAIL IS A MAP OF PLACES =====
@@ -485,7 +515,7 @@ function redTests(suite) {
 
 function run() {
   const targets = [MODEL, VIEW, VIEW_E2E, VIEW_REPLY, VIEW_RAIL, STYLES, SCHEDULER, END_TO_END,
-    DISCOVERY, HANDLER, ROUTINES, APP, APP_SKILLS, INDEX, INDEX_RAIL, SKILLS_MODEL, SKILLS_VIEW,
+    DISCOVERY, HANDLER, ROUTINES, APP, APP_SKILLS, APP_OPENER, INDEX, INDEX_RAIL, SKILLS_MODEL, SKILLS_VIEW,
     SKILLS_VIEW_RAIL];
   const originals = new Map();
   for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));

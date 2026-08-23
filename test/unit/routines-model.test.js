@@ -358,7 +358,7 @@ describe('which empty state, decided mechanically', () => {
   const WITH_SKILL = [{ id: 'sk', name: 'Compile the ops summary', assignedAgents: [{ id: 'piper', name: 'Piper' }] }];
 
   test('a workspace with a skill gets the locked copy, word for word', () => {
-    const state = m.emptyState({ skills: WITH_SKILL, hasGuide: true });
+    const state = m.emptyState({ skills: WITH_SKILL, guideName: 'Wren' });
     assert.strictEqual(state.lead, 'No routines yet.');
     assert.strictEqual(state.body, 'Pick a tested skill and give it a schedule. Your agents take it from there.');
     assert.strictEqual(state.action, 'Add routine');
@@ -367,7 +367,7 @@ describe('which empty state, decided mechanically', () => {
   });
 
   test('a workspace with no skill is told where a skill comes from', () => {
-    const state = m.emptyState({ skills: [], hasGuide: true });
+    const state = m.emptyState({ skills: [], guideName: 'Wren' });
     assert.strictEqual(state.lead, 'No routines yet.');
     assert.strictEqual(state.body,
       'Routines schedule skills your agents already have. Build one and it will show up here.');
@@ -381,7 +381,7 @@ describe('which empty state, decided mechanically', () => {
   // so this asserts they are the SAME strings rather than equal ones.
   test('the no-skills lines belong to the editor, not to a second pair written here', () => {
     const editor = require('../../public/routine-editor-model.js');
-    const state = m.emptyState({ skills: [], hasGuide: true });
+    const state = m.emptyState({ skills: [], guideName: 'Wren' });
     assert.strictEqual(state.body, editor.STEP_LEADS.empty);
     assert.strictEqual(state.action, editor.STEP_LEADS.build);
   });
@@ -392,14 +392,14 @@ describe('which empty state, decided mechanically', () => {
     const editor = require('../../public/routine-editor-model.js');
     for (const skills of [[], WITH_SKILL, [{ id: 'orphan', name: 'Orphan', assignedAgents: [] }]]) {
       const offers = editor.skillChoices({ skills }).createSkill;
-      const state = m.emptyState({ skills, hasGuide: true });
+      const state = m.emptyState({ skills, guideName: 'Wren' });
       assert.strictEqual(state.action === 'Build a skill', offers,
         'the empty state and the picker disagree about whether this workspace has skills');
     }
   });
 
   test('skills that have not arrived are not a workspace with no skills', () => {
-    const state = m.emptyState({ skills: [], loading: true, hasGuide: true });
+    const state = m.emptyState({ skills: [], loading: true, guideName: 'Wren' });
     assert.strictEqual(state.action, null, 'an offer was made before anything was known');
     assert.strictEqual(state.aside, null);
     assert.strictEqual(state.lead, 'No routines yet.', 'the routines fact is known either way');
@@ -407,19 +407,60 @@ describe('which empty state, decided mechanically', () => {
       'the editor already has a line for this state and the two must not disagree');
   });
 
-  test('the action goes with the agent that fulfils it, and the words stay', () => {
-    const state = m.emptyState({ skills: [], hasGuide: false });
-    assert.strictEqual(state.action, null);
+  // AFTER REVIEW: the action goes with the guide and the SHIPPED LINE STAYS
+  // WHOLE, with the agent-independent next step appended to it. Splitting the
+  // shipped string would be this pass writing a second version of a sentence
+  // the product already has, which is the thing it exists to stop.
+  test('with no guide the shipped line is kept whole and a next step is appended', () => {
+    const editor = require('../../public/routine-editor-model.js');
+    const skillsModel = require('../../public/skills-model.js');
+    const state = m.emptyState({ skills: [], guideName: null });
+    assert.strictEqual(state.action, null, 'a button was offered with no agent to fulfil it');
     assert.strictEqual(state.lead, 'No routines yet.');
     assert.strictEqual(state.body,
-      'Routines schedule skills your agents already have. Build one and it will show up here.');
+      `${editor.STEP_LEADS.empty} ${skillsModel.EMPTY.nextStepNoGuide}`);
+    assert.ok(state.body.startsWith(editor.STEP_LEADS.empty),
+      'the shipped line was rewritten rather than kept whole');
+  });
+
+  // ONE SENTENCE, ONE PLACE. Both readers are missing the same fact, so the
+  // routines state appends the Skills pane's own sentence rather than a second
+  // copy of it that can drift.
+  test('the appended next step is the Skills pane\'s own sentence, not a copy', () => {
+    const skillsModel = require('../../public/skills-model.js');
+    const routines = m.emptyState({ skills: [], guideName: null }).body;
+    const skillsPane = skillsModel.emptyState({}).body;
+    const sentence = skillsModel.EMPTY.nextStepNoGuide;
+    assert.ok(routines.endsWith(sentence));
+    assert.ok(skillsPane.endsWith(sentence));
+  });
+
+  // Neither no-guide state is a dead end: each ends in a next step, which may
+  // be a sentence rather than an action.
+  test('every empty state this card ships ends in a next step', () => {
+    const skillsModel = require('../../public/skills-model.js');
+    for (const [label, state] of [
+      ['routines, skills exist', m.emptyState({ skills: WITH_SKILL, guideName: 'Wren' })],
+      ['routines, no skills, guide', m.emptyState({ skills: [], guideName: 'Wren' })],
+      ['routines, no skills, no guide', m.emptyState({ skills: [], guideName: null })],
+      ['skills, guide', skillsModel.emptyState({ guideName: 'Wren' })],
+      ['skills, no guide', skillsModel.emptyState({})],
+    ]) {
+      const ends = state.action || state.body.split('. ').filter(Boolean).pop();
+      assert.ok(ends && ends.length > 3, `${label} ends in nothing to do`);
+      assert.ok(!/get started|dive in|explore/i.test(ends), `${label} ends in a generic encouragement`);
+    }
   });
 
   // The locked variant's Add routine is not the guide's to fulfil: it opens
   // the picker, which is on this side of the app. It stays whatever the team
   // looks like.
   test('the locked variant keeps its add with no guide on the team', () => {
-    assert.strictEqual(m.emptyState({ skills: WITH_SKILL, hasGuide: false }).action, 'Add routine');
+    const state = m.emptyState({ skills: WITH_SKILL, guideName: null });
+    assert.strictEqual(state.action, 'Add routine');
+    assert.strictEqual(state.body,
+      'Pick a tested skill and give it a schedule. Your agents take it from there.',
+      'the locked copy gained a sentence it was not amended to carry');
   });
 });
 
@@ -473,6 +514,7 @@ describe('the copy this card ships', () => {
       // The empty states the permanent rail requires, which ship copy on the
       // same rule and would otherwise be held to it by nothing.
       'public/skills-model.js', 'public/views/skills.js',
+      'test/unit/routines-view-doors.test.js',
       'public/styles/views/skills.css', 'test/unit/skills-empty.test.js',
     ]) {
       const text = fs.readFileSync(path.join(root, rel), 'utf-8');

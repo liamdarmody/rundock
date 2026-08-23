@@ -25,6 +25,7 @@ const EDITOR_MODEL_SRC = read('public', 'routine-editor-model.js');
 const MODEL_SRC = read('public', 'routines-model.js');
 const VIEW_SRC = read('public', 'views', 'routines.js');
 const INDEX_SRC = read('public', 'index.html');
+const APP_SRC = read('public', 'app.js');
 const SKILLS_SRC = read('public', 'views', 'skills.js');
 const SKILLS_MODEL_SRC = read('public', 'skills-model.js');
 
@@ -88,21 +89,35 @@ function pageParts() {
   return rail[0] + sidebar[0] + routinesPanel[0] + skillsPanel[0];
 }
 
+// A named piece of app.js, cut out and RUN against the shell, which is the
+// difference between checking the words are there and checking what they do.
+// The extraction asserts the piece EXISTS, so a deleted one fails here rather
+// than yielding an empty body that then passes every assertion about what it
+// did not do.
+function appPiece(pattern, label) {
+  const found = APP_SRC.match(pattern);
+  assert.ok(found && found[1] && found[1].trim(), `app.js no longer carries ${label}`);
+  return found[1];
+}
+
 function shell(routines = FOUR_ROWS, opts = {}) {
   const dom = new JSDOM('<!doctype html><html><head><style>' + ROUTINES_CSS + '</style></head><body>'
     + pageParts() + '</body></html>', { runScripts: 'dangerously' });
   const w = dom.window;
   w.eval(EDITOR_MODEL_SRC);
+  w.eval(SKILLS_MODEL_SRC);
   w.eval(MODEL_SRC);
   w.eval(VIEW_SRC);
-  w.eval(SKILLS_MODEL_SRC);
   w.eval(SKILLS_SRC);
 
   w.agents = [{
     id: 'piper', displayName: 'Piper', colour: '#E87A5A', icon: 'P',
     status: 'onTeam', runtime: 'claude', routines,
   }];
-  if (opts.guide) w.agents.push({ id: 'doc', displayName: 'Doc', type: 'platform', status: 'onTeam' });
+  // Deliberately not called Doc: getGuide matches on type and checks no name,
+  // so a workspace whose platform agent is called something else is the case a
+  // hard-coded name gets wrong.
+  if (opts.guide) w.agents.push({ id: 'archivist', displayName: 'Wren', type: 'platform', status: 'onTeam' });
   // A workspace with a skill by default, because that is the state the locked
   // empty-state copy was written for. The variant is a property of the
   // workspace, so the tests that want the other one say so.
@@ -135,6 +150,94 @@ function press(doc, selector) {
 
 const rows = (doc) => [...doc.querySelectorAll('.routine-row')];
 const text = (el) => el.textContent.replace(/\s+/g, ' ').trim();
+
+// EVERY PROOF ON THIS CARD THAT CALLS A RENDER RATHER THAN PRESSING THE THING
+// THAT DRAWS IT, with the reason it may.
+//
+// WHY THIS LIST EXISTS. A test that calls renderSkills proves the pane can be
+// drawn. It does not prove anything draws it when a reader presses Skills, and
+// the press is the only moment a criterion about opening an entry is about.
+// That gap shipped once on this card: the line the opener gained had no test
+// that went through the opener, so deleting it left the suite green while the
+// first press of a session opened onto nothing.
+//
+// The rule that follows: a proof about a pane may call the render, but a proof
+// about OPENING one may not, and every caller names the pressing proof it
+// leans on. An unnamed exemption is how the routine editor's doors file went
+// round four times.
+const CALLED_NOT_PRESSED = [
+  {
+    file: 'test/unit/routines-view.test.js',
+    test: 'both entries are on the rail on a workspace that has neither',
+    why: 'the claim is that the two renders do not touch the rail, so the render is itself the '
+      + 'surface under test: pressing an entry would exercise the opener instead of the thing '
+      + 'that used to withdraw it.',
+    pressedBy: 'pressing an entry on an empty workspace opens onto a pane that says what it is for',
+  },
+  {
+    file: 'test/unit/routines-view.test.js',
+    test: 'nothing withdraws an entry as the workspace fills and empties',
+    why: 'the same claim across four renders. Filling and emptying a workspace is done by the '
+      + 'renders, and pressing between each would test the opener four times and the rule once.',
+    pressedBy: 'pressing an entry on an empty workspace opens onto a pane that says what it is for',
+  },
+  {
+    file: 'test/unit/routines-view.test.js',
+    test: 'skills still in flight are not read as no skills',
+    why: 'what the pane SAYS is a property of the render. That a press reaches the render, with '
+      + 'the list still in flight, is the pressing proof named beside it.',
+    pressedBy: 'pressing Skills before the reply lands opens onto a pane that is waiting',
+  },
+  {
+    file: 'test/unit/skills-empty.test.js',
+    test: 'a workspace with no skills gets a pane rather than a blank one',
+    why: 'every test in that file is about the words on the pane, which are the render\'s. '
+      + 'Restating the press in each would prove the opener eight times and the copy once.',
+    pressedBy: 'pressing an entry on an empty workspace opens onto a pane that says what it is for',
+  },
+  {
+    file: 'test/unit/skills-empty.test.js',
+    test: 'the pane says it is looking rather than offering, while it is looking',
+    why: 'the same, for the waiting state. The press that reaches this state, and the message '
+      + 'the press sends to end it, are in the pressing proof named beside it.',
+    pressedBy: 'pressing Skills before the reply lands opens onto a pane that is waiting',
+  },
+];
+
+describe('what this card proves by pressing, and what it proves by calling', () => {
+  test('a proof that calls rather than presses names a reason and a pressing proof', () => {
+    for (const entry of CALLED_NOT_PRESSED) {
+      assert.ok(entry.why && entry.why.length > 60,
+        `${entry.test} calls a render with no stated reason`);
+      const suite = fs.readFileSync(path.join(ROOT, entry.file), 'utf-8');
+      assert.ok(suite.includes(`test('${entry.test.replace(/'/g, "\\'")}'`),
+        `this file exempts "${entry.test}" but ${entry.file} has no test by that name`);
+      assert.ok(fs.readFileSync(__filename, 'utf-8').includes(`test('${entry.pressedBy}'`),
+        `"${entry.test}" leans on "${entry.pressedBy}" and no test here has that name`);
+    }
+  });
+
+  // THE OTHER HALF OF THE RULE, and the half a list cannot enforce on its own:
+  // the opener has to be reached by running the shipped one, not by a copy of
+  // it written here. Both arms are cut out of app.js at the moment they are
+  // pressed, which is what makes a deleted call fail rather than a stale copy
+  // keep passing.
+  test('the openers this card presses are the shipped ones, cut out of the client', () => {
+    for (const [pattern, label] of [
+      [/else if\(nav==='routines'\)\s*\{([\s\S]*?)\}/, "switchNav's routines arm"],
+      [/^\s*else if\(nav==='skills'\) \{(.*)\}\s*$/m, "switchNav's skills arm"],
+      [/^function showView\(v\) \{(.*)\}\s*$/m, 'showView'],
+    ]) {
+      assert.ok(appPiece(pattern, label).trim(), `${label} could not be cut out of app.js`);
+    }
+    // And each arm draws something, rather than only revealing a panel. A
+    // reveal with no draw is the defect the pressing proofs above exist for.
+    assert.match(appPiece(/^\s*else if\(nav==='skills'\) \{(.*)\}\s*$/m, "switchNav's skills arm"),
+      /(?<![.\w$])renderSkills\(/, 'the Skills opener reveals a panel without drawing into it');
+    assert.match(appPiece(/else if\(nav==='routines'\)\s*\{([\s\S]*?)\}/, "switchNav's routines arm"),
+      /(?<![.\w$])renderRoutines\(/, 'the Routines opener reveals a panel without drawing into it');
+  });
+});
 
 describe('the rail is a map of places, always the same size', () => {
   // THE RULE THE WHOLE CHANGE BUYS. The rail names what the app can do. A user
@@ -202,19 +305,95 @@ describe('the rail is a map of places, always the same size', () => {
     }
   });
 
-  // The condition the owner attached to permanence, checked at the surface:
-  // an entry that can be opened onto nothing is what the gate existed to
-  // prevent, so permanence is only safe once neither pane can be empty.
-  test('neither permanent entry opens onto a pane with nothing in it', () => {
-    const { doc, w, dom } = shell([], { skills: [], guide: true });
-    w.renderRoutines();
-    w.renderSkills();
-    for (const id of ['routines-content', 'skill-detail-content']) {
-      const pane = doc.getElementById(id);
-      assert.ok(pane, `the page carries no ${id} to render into`);
-      assert.ok(pane.textContent.replace(/\s+/g, ' ').trim().length > 20,
-        `#${id} is a blank pane on a workspace with nothing in it`);
+  // The condition the owner attached to permanence, and it is checked BY
+  // OPENING THE ENTRY rather than by calling what the entry draws.
+  //
+  // WHY THAT DISTINCTION IS THE WHOLE TEST. Calling renderSkills proves the
+  // pane can be drawn. It does not prove anything draws it when a reader
+  // presses Skills, and the press is the only moment AC-11 is about. The one
+  // line this change adds to the opener is the renderSkills call in switchNav's
+  // skills arm, which is what fills the pane on the first press of a session,
+  // before the skill list has arrived. Called rather than pressed, that line
+  // can be deleted with every assertion here still passing while the first
+  // press opens onto nothing.
+  //
+  // So the rail button is clicked as it sits in index.html, switchNav's own arm
+  // is cut out of app.js and run, and showView is the shipped one, so "opens
+  // onto" means the panel is revealed and has something in it.
+  const ARMS = {
+    routines: { pane: 'routines-content', panel: 'view-routines' },
+    skills: { pane: 'skill-detail-content', panel: 'view-skills' },
+  };
+
+  function pressEntry(w, doc, nav) {
+    const arm = nav === 'routines'
+      ? appPiece(/else if\(nav==='routines'\)\s*\{([\s\S]*?)\}/, "switchNav's routines arm")
+      : appPiece(/^\s*else if\(nav==='skills'\) \{(.*)\}\s*$/m, "switchNav's skills arm");
+    w.eval(`function showView(v) {${appPiece(/^function showView\(v\) \{(.*)\}\s*$/m, 'showView')}}`);
+    w.closeFindBar = () => {};
+    w.setNavState = () => {};
+    w.selectSkill = () => { w.selected = true; };
+    let asked = null;
+    w.switchNav = (asked_nav) => { asked = asked_nav; w.eval(`(function () {${arm}\n})()`); };
+    const entry = doc.querySelector(`.nav-item[data-nav="${nav}"]`);
+    assert.ok(entry, `the rail carries no ${nav} entry to press`);
+    entry.click();
+    assert.strictEqual(asked, nav, `the ${nav} entry asks the shell for another section`);
+  }
+
+  function paneText(doc, nav) {
+    const panel = doc.getElementById(ARMS[nav].panel);
+    assert.ok(panel, `the page carries no ${ARMS[nav].panel}`);
+    assert.ok(!panel.classList.contains('hidden'),
+      `pressing ${nav} left its panel hidden, so nothing was opened onto`);
+    const pane = doc.getElementById(ARMS[nav].pane);
+    assert.ok(pane, `the page carries no ${ARMS[nav].pane} to render into`);
+    return pane.textContent.replace(/\s+/g, ' ').trim();
+  }
+
+  test('pressing an entry on an empty workspace opens onto a pane that says what it is for', () => {
+    for (const nav of ['routines', 'skills']) {
+      const { doc, w, dom } = shell([], { skills: [], guide: true });
+      pressEntry(w, doc, nav);
+      assert.ok(paneText(doc, nav).length > 20,
+        `pressing ${nav} on a workspace with nothing in it opens onto a blank pane`);
+      dom.window.close();
     }
+  });
+
+  // THE FIRST PRESS OF A SESSION, which is the one the opener's new line
+  // exists for and the one a shell with skillsLoaded already true never
+  // reaches. Nothing has replied yet, so the pane says it is looking and
+  // offers nothing, and the press is what asks for the list.
+  test('pressing Skills before the reply lands opens onto a pane that is waiting', () => {
+    const { doc, w, dom } = shell([], { skills: [], skillsLoaded: false, guide: true });
+    pressEntry(w, doc, 'skills');
+    const shown = paneText(doc, 'skills');
+    assert.match(shown, /Looking for skills your agents can run\./,
+      'the first press of Skills in a session opens onto a blank pane');
+    assert.ok(!shown.includes('Build a skill'),
+      'the build offer was made before the skill list had arrived');
+    assert.deepStrictEqual(w.sent, [{ type: 'get_skills' }],
+      'the press did not ask for the list it is waiting on');
+    dom.window.close();
+  });
+
+  // And the same entry, after the reply. The list is made to arrive by running
+  // the client's own skills case rather than by setting the flag here: setting
+  // it by hand would model a state the app never reaches, and it is that case
+  // which draws the pane the press then reveals.
+  test('pressing Skills after an empty reply opens onto the offer', () => {
+    const { doc, w, dom } = shell([], { skills: [], skillsLoaded: false, guide: true });
+    w.routineEditorSkillsArrived = () => {};
+    w.palettePendingSkill = null;
+    w.selectSkill = () => {};
+    w.d = { type: 'skills', skills: [] };
+    w.eval(`(function () {${appPiece(/case 'skills':([\s\S]*?)\bbreak;/, 'the skills case of the client dispatch')}\n})()`);
+    assert.strictEqual(w.skillsLoaded, true, 'sanity: the reply is what marks the list arrived');
+    pressEntry(w, doc, 'skills');
+    const shown = paneText(doc, 'skills');
+    assert.match(shown, /No skills yet\./);
+    assert.match(shown, /Build a skill/);
     dom.window.close();
   });
 });
@@ -513,14 +692,33 @@ describe('the empty state, where no skill exists', () => {
     dom.window.close();
   });
 
-  test('with no guide the action goes and the state and the mechanism stay', () => {
+  // WITH NO GUIDE THE BUTTON GOES AND THE LINE MUST NOT BE LEFT INSTRUCTING AN
+  // ACTION WITH NOTHING TO PRESS. "Build one and it will show up here" with no
+  // Build a skill beside it is a dead end, so the same agent-independent
+  // sentence the Skills pane uses is appended, and the shipped line is kept
+  // whole rather than split.
+  test('with no guide the action goes and a next step is appended', () => {
     const { doc, w, dom } = shell([], { skills: [], guide: false });
     w.renderRoutines();
     const page = text(doc.getElementById('routines-content'));
     assert.match(page, /No routines yet\./);
-    assert.match(page, /Routines schedule skills your agents already have\./);
+    assert.match(page, /Routines schedule skills your agents already have\. Build one and it will show up here\./);
+    assert.match(page, /Skills are listed on each agent, so add one to an agent's file under skills: and it appears here\./);
     assert.strictEqual(doc.querySelectorAll('#routines-content button').length, 0,
       'a button was offered with no agent to fulfil it');
+    dom.window.close();
+  });
+
+  // And the guide variant is unchanged by any of that: it already ends in a
+  // next step of its own, so nothing is appended to it.
+  test('with a guide the shipped line stands alone and keeps its action', () => {
+    const { doc, w, dom } = shell([], { skills: [], guide: true });
+    w.renderRoutines();
+    const page = text(doc.getElementById('routines-content'));
+    assert.match(page, /Routines schedule skills your agents already have\. Build one and it will show up here\./);
+    assert.ok(!page.includes('Skills are listed on each agent'),
+      'the no-guide sentence reached a workspace that has a guide');
+    assert.ok(!/Wren|Doc/.test(page), 'this state names no agent in either variant');
     dom.window.close();
   });
 });

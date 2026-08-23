@@ -83,8 +83,16 @@ function renderSkillsEmpty(loading) {
   const detail = document.getElementById('skill-detail-content');
   if (!detail) return;
   const model = skillsModel();
+  // The guide's NAME, not merely whether one exists. getGuide matches on type
+  // and checks no name, so a sentence built from a literal would name an agent
+  // this workspace may not have. The roster always resolves a display name, and
+  // the fallback is there so a nameless one takes the agent-independent next
+  // step rather than a sentence with a hole in it.
   const guide = typeof getGuide === 'function' ? getGuide() : null;
-  const state = model.emptyState({ loading: !!loading, hasGuide: !!guide });
+  const state = model.emptyState({
+    loading: !!loading,
+    guideName: guide ? (guide.displayName || guide.name || null) : null,
+  });
 
   let h = `<div class="profile-header">
       <div class="profile-avatar skill-avatar">${BOLT_SVG}</div>
