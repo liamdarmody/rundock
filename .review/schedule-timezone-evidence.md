@@ -145,14 +145,32 @@ source, beside the list.
 
 Proven rather than argued, in `migrating a routine that predates the field`:
 
-- `running the migration twice over a routine that carries a timezone changes
+- `running the migration twice over a routine that predates the field changes
   nothing and says nothing` (AC-5, and the two-pass comparison AC-13 asks for).
+- `running the migration twice over a routine that carries a timezone changes
+  nothing and says nothing`, the same walk over a file that has the field.
 - `a routine already carrying the field is left byte-identical by a migration
   pass` (AC-6), on a file made by migrating one and then adding the timezone to
   the result, so the only thing the pass could react to is this field.
 - `the pre-migration backup still holds the file as it was before anything
   touched it` (AC-7), including the second migrating write that must not
   overwrite it.
+
+**WHICH FIXTURE THE IDEMPOTENCE PROOF RUNS ON IS THE PROOF, not a detail of
+it.** A routine that already exists carries no `timezone` key, by definition:
+it was written before the field was. That is the only population AC-5 is about
+and the only one that can exhibit the defect. A file that already carries the
+field answers `needsMigration` with false on a second pass whether or not
+`timezone` is a migrated key, so a two-pass comparison over one of those cannot
+fail for the thing it is written to guard: it reads as a proof and is not one.
+
+Over the legacy fixture it can fail. Were `timezone` a migrated key, that file
+would never be finished: the writer skips an absent value, so the key is never
+written, `needsMigration` stays true for ever, and every read rewrites the file
+and announces it. The bytes would still match. **The silence is what notices**,
+which is why the log capture is an assertion rather than a courtesy, and why
+the first pass's single line is asserted too: without that, a suite in which
+nothing is ever migrated passes by doing nothing twice.
 
 > **AC-8:** Whether the timezone participates in the plan hash is decided in
 > the source with its reason.
@@ -222,13 +240,16 @@ The AC-2 fixture, described above. Nothing in the file except the routine's own
 > **AC-13:** A test proves the migration idempotent by running it twice and
 > comparing bytes.
 
-`running the migration twice over a routine that carries a timezone changes
-nothing and says nothing`. Both the returned content and the file on disk are
-compared with `strictEqual` against the first pass's bytes, and `console.log`
-is captured for the run: identical bytes alone would not be enough, because a
-second pass that rewrites the same content and announces it has still done
-something. The existing migration returns the content it was given and touches
-no disk when nothing is pending, and that is what is asserted.
+`running the migration twice over a routine that predates the field changes
+nothing and says nothing`, on the legacy fixture for the reason given under
+AC-5, and `running the migration twice over a routine that carries a timezone
+changes nothing and says nothing` for the file that has the field. Both the
+returned content and the file on disk are compared with `strictEqual` against
+the first pass's bytes, and `console.log` is captured for the run: identical
+bytes alone would not be enough, because a second pass that rewrites the same
+content and announces it has still done something. The existing migration
+returns the content it was given and touches no disk when nothing is pending,
+and that is what is asserted.
 
 > **AC-14:** Each proof fails when its own guard is removed.
 
@@ -249,7 +270,7 @@ The eight rows this card adds, run on the tree this file is committed with:
 | a timezone is location words rather than any text at all | 1 | `a value that is not location words is refused rather than stored` |
 | a created routine carries its timezone into the file | 2 | `the stored timezone is the one that was set, never the one this machine is in`<br>`a value that is not location words is refused rather than stored` |
 | the timezone stays out of the plan hash | 2 | `a timezone does not reach the plan hash, so changing one does not invalidate an approval`<br>`the hash a migration stamps is the same whether or not the routine names a zone` |
-| the migration does not invent a timezone for a routine that never recorded one | 1 | `the migration invents no timezone, least of all the machine's` |
+| the migration does not invent a timezone for a routine that never recorded one | 1 | `running the migration twice over a routine that predates the field changes nothing and says nothing` |
 
 **The first row is the one these exist for.** It rewrites the absent branch of
 the write path to read the machine's zone: it type-checks, it returns location
@@ -259,7 +280,9 @@ process zone and stores a different one, so it has nowhere to hide.
 
 **The last two are the decision made breakable.** Adding `timezone` to
 `PLAN_FIELDS` or to `MIGRATED_KEYS` reverses a decision this card was required
-to make, silently, which is exactly how it would happen. Both turn a test red.
+to make, silently, which is exactly how it would happen. Both turn a test red,
+and both turn it red through behaviour: no test in this suite asserts the shape
+of either constant. An earlier version did, which is recorded below.
 
 ## Red first
 
@@ -272,10 +295,28 @@ not that they assert the right thing. The mutation table above is the other
 half, and the pinned process zone is what stops the AC-3 assertions measuring a
 proxy.
 
-## What the suite could not have caught on its own
+## Two proofs that were aimed at a case which could not fail
 
-Before the round-trip test's last assertion was added, every assertion in it
-passed against the reader as it was, because the block parser already carried
-an unrecognised `timezone` through as raw text. That is recorded here rather
-than quietly fixed: a round-trip test for a new field on this module starts out
-unable to fail, and the quoted value is what gives it teeth.
+Both are recorded rather than quietly fixed, because they are the same fault
+and this suite produced it twice.
+
+**The round trip, found while writing it.** Before its last assertion was
+added, every assertion in that test passed against the reader as it was,
+because the block parser already carried an unrecognised `timezone` through as
+raw text. A round-trip test for a new field on this module starts out unable to
+fail; the quoted value is what gives it teeth.
+
+**The idempotence proof, found in review.** Both two-pass tests originally ran
+on a file that already carried the field, which is not the population AC-5 is
+about and is the one population that cannot exhibit the defect. The mutation
+that should have caught that was passing for the matching reason: it turned red
+only through an assertion on the shape of `MIGRATED_KEYS`, so the row in the
+table was a statement about a constant rather than about the migration. Deleted
+that one line and the harness would have reported nothing red while the mutated
+migration rewrote and logged every legacy file on every read.
+
+Fixed by adding the two-pass run over the legacy fixture and by removing both
+assertions on the shape of a constant, from this test and from the plan-hash
+one, so every red in the table above is behaviour. The mutation now goes red
+through `running the migration twice over a routine that predates the field
+changes nothing and says nothing`.

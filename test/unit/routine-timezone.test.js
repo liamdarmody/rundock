@@ -30,7 +30,7 @@ const path = require('node:path');
 
 const {
   normalizeRoutine, parseRoutineBlocks, updateRoutineBlock, appendRoutineBlock,
-  computePlanHash, migrateAgentRoutines, PLAN_FIELDS, MIGRATED_KEYS,
+  computePlanHash, migrateAgentRoutines,
 } = require('../../lib/agents/routines.js');
 
 // The machine's zone, as a constant this file controls rather than a reading
@@ -265,7 +265,6 @@ describe('whether a timezone invalidates a plan approval', () => {
     // And the hash still notices what a routine DOES, so the equalities above
     // are not two hashes of nothing.
     assert.notStrictEqual(plan({ skill: 'voice-editor' }), base);
-    assert.strictEqual(PLAN_FIELDS.includes('timezone'), false);
   });
 
   test('the hash a migration stamps is the same whether or not the routine names a zone', () => {
@@ -339,7 +338,45 @@ describe('migrating a routine that predates the field', () => {
       assert.strictEqual(readRoutine(migrated, 'morning-digest').timezone, null);
       assert.ok(!/timezone:/.test(migrated), 'the migration wrote a timezone');
       assert.ok(!migrated.includes(HOST_ZONE), 'the machine\'s zone reached the file');
-      assert.strictEqual(MIGRATED_KEYS.includes('timezone'), false);
+    });
+  });
+
+  // AC-5 AND AC-13 BELONG TO THIS FIXTURE, and which fixture they run on is
+  // the whole proof rather than a detail of it.
+  //
+  // A routine that already exists carries no `timezone` key, by definition: it
+  // was written before the field was. That is the only population the
+  // idempotence question is about, and the only one that can exhibit the
+  // defect. A file that already carries the field answers `needsMigration`
+  // with false on a second pass whether or not `timezone` is a migrated key,
+  // so a two-pass comparison over one of those cannot fail for the thing it is
+  // written to guard. It reads as a proof and is not one.
+  //
+  // Here it can fail. Were `timezone` a migrated key, this file would never be
+  // finished: the writer skips an absent value, so the key is never written,
+  // `needsMigration` stays true for ever, and every read rewrites the file and
+  // announces it. Byte-identical content would still be byte-identical. The
+  // silence is what notices.
+  test('running the migration twice over a routine that predates the field changes nothing and says nothing', () => {
+    withFile(LEGACY, (file) => {
+      let first;
+      const firstLogs = capturingLogs(() => { first = migrate(file); });
+      // The first pass did something. Without this, a suite in which nothing
+      // is ever migrated passes the comparison below by doing nothing twice.
+      assert.strictEqual(firstLogs.length, 1, `the first pass said: ${JSON.stringify(firstLogs)}`);
+      assert.strictEqual(fs.readFileSync(file, 'utf-8'), first, 'the first pass did not persist');
+      assert.ok(!/timezone:/.test(first), 'the migration wrote a timezone');
+
+      let second;
+      const logs = capturingLogs(() => { second = migrate(file); });
+
+      // Byte for byte, both in what came back and in what is on disk.
+      assert.strictEqual(second, first);
+      assert.strictEqual(fs.readFileSync(file, 'utf-8'), first);
+      // And nothing happened at all: a pass that rewrites the same content and
+      // announces it has still done something, on every read, for ever.
+      assert.deepStrictEqual(logs, [],
+        'the second pass migrated a file with nothing left to migrate');
     });
   });
 
