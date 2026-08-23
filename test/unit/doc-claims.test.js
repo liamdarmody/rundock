@@ -335,6 +335,17 @@ describe('ROUTINES.md: the hook experiment reports the capture\'s own numbers', 
     assert.match(routinesDoc, /reports `delegated`/,
       'ROUTINES.md must name the reason a delegating run reports, so the page and the run record agree');
   });
+
+  test('the word a restart-orphaned record reports is the routine state\'s own', () => {
+    // The page and the two stores have to use ONE word here. A run cut off by
+    // a restart is described in three places (the routine's status, the run's
+    // record, and this page), and the whole point of the startup close is that
+    // they agree.
+    assert.match(routinesDoc, /the record reports `interrupted`/,
+      'ROUTINES.md must name the word a record left open by a restart reports');
+    assert.match(routinesDoc, /rather than reporting an empty list/,
+      'and must keep saying that an unknown list is not an empty one, which is the distinction the record carries');
+  });
 });
 
 // ---------------------------------------------------------------------------
