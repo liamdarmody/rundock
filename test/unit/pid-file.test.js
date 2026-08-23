@@ -30,7 +30,8 @@ async function liveChild(pad = '') {
   });
   return kid;
 }
-const { pidRecordAlive, processCommand, readProcCmdline, parseProcCmdline, psCommand, commandLineCapability } = srv._internal;
+const { pidRecordAlive, processCommand, readProcCmdline, parseProcCmdline, psCommand,
+  commandLineCapability, COMMAND_LINE_SOURCES } = srv._internal;
 
 // What this machine can do, decided once at load from the ONE report that owns
 // both the probing and the names, so a skip names the missing source in the
@@ -294,6 +295,31 @@ describe('child pid records', () => {
     } finally {
       childProcess.execFileSync = realExecFileSync;
       try { kid.kill('SIGKILL'); } catch (e) {}
+    }
+  });
+
+  // The capability report has the same hole processCommand had, one function
+  // over: its two sources are named POSITIONALLY, so a swapped default reports
+  // the free source while probing the spawning one, and every skip reason and
+  // diagnostic in this file would then name the wrong thing. A test that
+  // injects readers cannot see it, because it supplies the positions itself.
+  //
+  // So nothing is injected. The spawning primitive is made to fail underneath,
+  // which on a machine where the free source works makes the two distinguishable
+  // by what they ANSWERED rather than by where they sit.
+  test('the DEFAULT capability report names the source that actually answered', { skip: noFreeSource }, () => {
+    const childProcess = require('node:child_process');
+    const realExecFileSync = childProcess.execFileSync;
+    childProcess.execFileSync = () => { throw new Error('the spawning source is unavailable for this test'); };
+    try {
+      const report = commandLineCapability(); // no readers named: this is the shipped path
+      assert.strictEqual(report.ok, true, 'the free source still answers with the spawning one broken');
+      assert.strictEqual(report.source, COMMAND_LINE_SOURCES.free,
+        'the report must name the source that answered, not whichever one sits in that position');
+      assert.deepStrictEqual(report.sources.map(source => source.available), [true, false],
+        'and must attribute the failure to the source that actually failed');
+    } finally {
+      childProcess.execFileSync = realExecFileSync;
     }
   });
 
