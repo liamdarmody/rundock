@@ -121,6 +121,43 @@ const MUTATIONS = [
   [APP, 'every rail entry has an arm that shows a view',
     "  else if(nav==='team') { showView('home'); renderOrgChart(); }\n",
     ''],
+
+  // ===== THE SCAN'S OWN REACH =====
+  // Every check here is only as wide as what it reads, so the width is
+  // mutated too. Each of these is a way a real destination could exist and be
+  // invisible to a scan that looked only where the first version looked.
+  //
+  // A destination written in the page's own handlers. The rail is written in
+  // these, so they are code the shell runs, and they were outside the scan
+  // until they were not.
+  [INDEX, 'a destination in an inline handler is enumerated like any other',
+    '<button class="nav-item" data-nav="files" onclick="switchNav(\'files\')" data-tooltip="Files">',
+    '<button class="nav-item" data-nav="files" onclick="showView(\'editor\')" data-tooltip="Files">'],
+  // A destination reached through a property rather than by name. Skipping
+  // these was how the first version of the scan could be walked around.
+  [SKILLS, 'a destination reached through a property is enumerated like any other',
+    'function selectSkill(id) {',
+    "function selectSkillElsewhere(id) { window.showView('profile'); }\n\nfunction selectSkill(id) {"],
+  // A call the scan cannot read, refused rather than missed.
+  [SKILLS, 'a call broken across lines is refused rather than read wrongly',
+    "  currentSkillId = id;\n  showView('skills');",
+    "  currentSkillId = id;\n  showView(\n    'skills');"],
+  // The variable behind the one row whose view is not a literal.
+  [FILES, 'the view Back returns to is one the table knows',
+    "  editorReturnView = 'skills';",
+    '  editorReturnView = currentView;'],
+
+  // ===== WHETHER THERE IS ANY CHROME AT ALL =====
+  // The reason both no-section rows give is that the chrome comes down on the
+  // way to the picker. It was true of one route and not the other.
+  [APP, 'every route to the picker takes the chrome down through one place',
+    "    case 'needs_workspace': setWorkspaceChrome(false); showView('workspace'); break;",
+    "    case 'needs_workspace': showView('workspace'); break;"],
+  [APP, 'nothing takes the chrome down beside the one place that owns it',
+    '  setWorkspaceChrome(false);\n  showView(\'workspace\');',
+    "  document.querySelector('.nav-rail').style.display = 'none';\n"
+    + "  document.querySelector('.sidebar').style.display = 'none';\n"
+    + "  showView('workspace');"],
 ];
 
 // The reporter is named explicitly rather than left to the default, which

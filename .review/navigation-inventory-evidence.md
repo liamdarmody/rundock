@@ -74,6 +74,36 @@ compares the derived list against the manifest with `deepStrictEqual`. A call
 site added later fails by name until somebody lists it with the section it
 lands on, and a listed row whose call no longer exists fails the same way.
 
+**The universe it is over, because an inventory that scans less than the client
+runs is worse than none: everyone downstream reads it as total.** The page runs
+two kinds of code and both are scanned:
+
+- every `.js` under `public/`, which the shell loads by script tag
+- the inline `on*` handler attributes in `public/index.html`, which resolve bare
+  window names and are how the nav rail itself calls `switchNav`
+
+Calls written through a property (`window.showView(...)`, `self.`, `root.`,
+`globalThis.`) are enumerated rather than skipped, so writing one is not a way
+around the list. Handlers built into markup by a view module are already text in
+a `.js` file, so the scan reads them like any other call.
+
+`vendor/` is outside the universe and that is a decision: third-party code the
+page loads is not this product's navigation. Nothing else under `public/` is
+excluded.
+
+Two things the scan cannot read are refused rather than missed:
+
+- a call whose arguments do not close on the line they open on, by
+  `every navigation call is one the enumeration can see`. Keeping a navigation
+  call on one line costs nothing and is what makes it checkable.
+- code assembled at runtime, by `no destination arrives as text at runtime`,
+  which asserts the client contains no `eval`, no `new Function` and no computed
+  global access. A destination spelled at runtime is the one kind no reading of
+  the source could find, so its absence is asserted rather than assumed.
+
+Comments are stripped before scanning, block and line, so a call written in prose
+is neither counted nor missed.
+
 **What it disagrees with.** The two lists differing in either direction is a
 failure, not a warning. The message names which side is short.
 
@@ -127,14 +157,30 @@ destination did for itself, which is why several did not do it, and a rule you
 have to remember is not a rule.
 
 **Two sites set no nav state, both showing the workspace picker, and the reason
-is the same for both.** The workspace picker is the screen shown when there is
-no workspace to be a section of. `showWorkspacePicker` sets the
-display of the nav rail and the sidebar to `none`, so lighting an entry behind
-them would name a place the reader can neither reach nor see. It is
-recorded in the table as `workspace: null`, which is a decision written down
-rather than a row somebody forgot. `the workspace picker takes no nav state,
-because it has no rail to take one on` presses it: the rail is set to a section,
-the picker is then shown, and the rail must be exactly where it was.
+is the same for both: a rail entry names a section of a workspace, and that
+screen is what you see when there is none, so there is no section to set.** It is
+recorded in the table as `workspace: null`, a decision written down rather than a
+row somebody forgot.
+
+The reason each row gives has to be true of that row, and one of them was not.
+Both said the chrome comes down on the way to that screen. That was true of
+`showWorkspacePicker`, which hid the rail and the sidebar itself, and false of
+the `needs_workspace` route, which showed the screen and hid nothing. It is
+reachable: the server drops its workspace pointer when the directory stops
+existing (`lib/protocol/handlers/workspace.js:23`) or when a switch fails and the
+previous root was null (`:77`), and the next roster request answers
+`needs_workspace`. The picker then opened with the rail still up and the previous
+entry still lit over a screen meaning you have no workspace.
+
+So the route now holds the reason rather than being excused from it. Taking the
+chrome down had two writers, one in each of the functions that happened to need
+it, which is the same shape as the two panel lists; it now has one,
+`setWorkspaceChrome`, and `one place decides whether there is any chrome at all`
+holds it there. Each row is pressed by the route it names: `the route that says
+there is no workspace takes the chrome down with it` cuts that dispatch case out
+of `app.js` and runs it, and `the workspace picker takes no nav state, because it
+has no rail to take one on` sets the rail to a real section first, then requires
+both the lit entry and the open panel to be exactly where they were.
 
 `every destination either names its section or says why it has none` fails a row
 that has neither, and fails a reason under sixty characters, because an
@@ -196,7 +242,11 @@ The three lesser ones: a view panel un-hidden by hand rather than through
 which the scan addresses by id and would miss; and `onWorkspaceReady` pressed
 only at the line this change touches rather than end to end.
 
-**Everything else is held mechanically**, and each of these is a named test:
+**Everything else named here is held mechanically**, and each of these is a
+named test. What is not on this list is on the one above it, in `NOT_CAUGHT`:
+the scans read one line at a time, so a lookup and a class change split across
+two lines pass, and every row is pressed through `showView` rather than through
+the destination function itself.
 
 | Drift | What fails |
 |---|---|
@@ -208,7 +258,12 @@ only at the line this change touches rather than end to end.
 | a second place lighting a rail entry | `nothing outside setNavState decides which rail entry is lit` |
 | a second place hiding a sidebar panel | `nothing outside setNavState decides which sidebar panel is visible` |
 | a panel added to the page and not to the list, or the reverse | `the panels setNavState hides are the panels the page carries` |
-| `editorReturnView` gaining a third value | `the one destination whose view is a variable can only hold views the table knows` |
+| `editorReturnView` gaining a third value, or being assigned anything but a name | `the one destination whose view is a variable can only hold views the table knows` |
+| a destination written in an inline handler in the page | `no call that lands the reader somewhere exists that this file does not name` |
+| a destination written through a property (`window.showView`) | `no call that lands the reader somewhere exists that this file does not name` |
+| a navigation call broken across lines, which the scan could not read | `every navigation call is one the enumeration can see` |
+| code built at runtime, which no scan of the source could find | `no destination arrives as text at runtime` |
+| a second place deciding whether the rail and sidebar are on screen at all | `one place decides whether there is any chrome at all` |
 
 ## The proofs are pressed, not matched
 
@@ -228,9 +283,9 @@ because the source now has one mechanism, not because the test was written wide.
 ## Red first
 
 The guards were written and run against the unmodified tree before the change
-existed. Twelve of the eighteen were red, and the six that were green are the
-drift guards and the manifest's self-checks, which describe what is already true
-and exist to fail later. Reproduce with:
+existed. Fifteen of the twenty-two were red, and the seven that were green are
+the drift guards and the manifest's self-checks, which describe what is already
+true and exist to fail later. Reproduce with:
 
 ```
 git checkout origin/main -- public/app.js public/views/conversations.js \
@@ -246,7 +301,9 @@ node scripts/red-first.js --base origin/main --tests "npm test"
 ```
 
 **PROVEN: the tests fail without the change and pass with it.** 2,438 tests pass
-with it; reverting the seven source files and keeping the tests turns 17 red.
+with it; reverting every non-test file the change touches and keeping the tests
+turns 17 red. The four the reproduce command above checks out are the client
+files; the rest are documentation, the changelog and `package.json`.
 The full record, including every name, is written to `.precommit-gate.json`
 against the tree the gate passed on.
 
@@ -268,9 +325,9 @@ is the correct response to a flake and means a run may need repeating.
 
 ## Mutation results
 
-Thirteen mutations, each a form the defect actually took, including three that
-put back the exact code that shipped before this change. Every one turns a named test
-red.
+Eighteen mutations, each a form the defect actually took, including three that
+put back the exact code that shipped before this change and five that test the
+reach of the scans rather than the rules. Every one turns a named test red.
 
 ```
 node test/tools/mutate-nav-guards.js --markdown
@@ -278,26 +335,53 @@ node test/tools/mutate-nav-guards.js --markdown
 
 | Guard broken | Tests red | Which |
 |---|---|---|
-| showing a view is what sets the section | 3 | `nothing but showView asks for a section`<br>`every view the shell can show lands the rail on the section its own table names`<br>`the routine editor is a routines surface and the rail says so` |
-| a view with no section is shown without one rather than with a missing one | 2 | `the routine editor is a routines surface and the rail says so`<br>`the workspace picker takes no nav state, because it has no rail to take one on` |
+| showing a view is what sets the section | 5 | `nothing but showView asks for a section`<br>`every view the shell can show lands the rail on the section its own table names`<br>`the routine editor is a routines surface and the rail says so`<br>`the route that says there is no workspace takes the chrome down with it`<br>`the workspace picker takes no nav state, because it has no rail to take one on` |
+| a view with no section is shown without one rather than with a missing one | 2 | `the route that says there is no workspace takes the chrome down with it`<br>`the workspace picker takes no nav state, because it has no rail to take one on` |
 | the table answers for every view the shell can show | 4 | `the section every destination names is the one the source resolves`<br>`every view the shell can show has a section, or an explicit none`<br>`every view the shell can show lands the rail on the section its own table names`<br>`the routine editor is a routines surface and the rail says so` |
 | the table is the one showView reads, not a second opinion beside it | 2 | `the section every destination names is the one the source resolves`<br>`the routine editor is a routines surface and the rail says so` |
 | the workspace switch asks for the chrome rather than repeating it | 4 | `nothing but showView asks for a section`<br>`nothing outside setNavState decides which sidebar panel is visible`<br>`nothing outside setNavState decides which rail entry is lit`<br>`switching workspace resets the chrome through the one place that owns it` |
 | the panel list knows every panel the page carries | 1 | `the panels setNavState hides are the panels the page carries` |
-| the panel list names no panel the page has stopped carrying | 5 | `the panels setNavState hides are the panels the page carries`<br>`every view the shell can show lands the rail on the section its own table names`<br>`the routine editor is a routines surface and the rail says so`<br>`exactly one sidebar panel is visible after any section is set`<br>`switching workspace resets the chrome through the one place that owns it` |
+| the panel list names no panel the page has stopped carrying | 7 | `the panels setNavState hides are the panels the page carries`<br>`every view the shell can show lands the rail on the section its own table names`<br>`the routine editor is a routines surface and the rail says so`<br>`the route that says there is no workspace takes the chrome down with it`<br>`the workspace picker takes no nav state, because it has no rail to take one on`<br>`exactly one sidebar panel is visible after any section is set`<br>`switching workspace resets the chrome through the one place that owns it` |
 | the routine editor does not name a section of its own | 1 | `nothing but showView asks for a section` |
 | selecting a skill does not name a section of its own | 1 | `nothing but showView asks for a section` |
 | opening a skill's file does not name a section of its own | 1 | `nothing but showView asks for a section` |
 | a destination nobody listed fails the enumeration by name | 1 | `no call that lands the reader somewhere exists that this file does not name` |
 | every rail entry has an arm that shows a view | 2 | `no call that lands the reader somewhere exists that this file does not name`<br>`every entry on the rail has an arm that shows a view` |
+| a destination in an inline handler is enumerated like any other | 1 | `no call that lands the reader somewhere exists that this file does not name` |
+| a destination reached through a property is enumerated like any other | 1 | `no call that lands the reader somewhere exists that this file does not name` |
+| a call broken across lines is refused rather than read wrongly | 2 | `no call that lands the reader somewhere exists that this file does not name`<br>`every navigation call is one the enumeration can see` |
+| the view Back returns to is one the table knows | 1 | `the one destination whose view is a variable can only hold views the table knows` |
+| every route to the picker takes the chrome down through one place | 1 | `the route that says there is no workspace takes the chrome down with it` |
+| nothing takes the chrome down beside the one place that owns it | 1 | `one place decides whether there is any chrome at all` |
 
 The three that put shipped code back are the ones the enumeration is judged on.
 Written as a table check alone, none of them would turn anything red, and the
 change would have bought a comment.
 
+## What goes beyond what was asked, declared rather than folded in
+
+Two consolidations were not asked for. Both are the same defect as the one that
+was, one level out, and both change what a user sees, so they are named here and
+in the changelog rather than left inside a navigation inventory.
+
+- **The workspace-switch reset.** It carried a second hard-coded list of the
+  sidebar panels. Replacing it with a `setNavState` call also brings back the New
+  conversation footer, which the copy never learned about. A reader who switched
+  workspace from any section but Conversations previously arrived with no way to
+  start one.
+- **Taking the chrome down for the workspace picker.** It had two writers and one
+  route to that screen went through neither, so the picker could open with the
+  rail up and an entry lit over it. It now has one writer and every route goes
+  through it. This one is required by the finding that a stated reason must be
+  true of the site it is stated for: the alternative was to write a
+  justification for a state that is wrong.
+
+Whether either belongs in this change or in one of its own is the owner's call.
+The point of this section is that neither is silent.
+
 ## What this change does not do
 
-Out of scope and untouched, as the criteria state:
+Out of scope and untouched:
 
 - **What any view renders.** No view module's output changes. The one behaviour
   a reader will notice beyond a corrected rail entry is that opening a skill's

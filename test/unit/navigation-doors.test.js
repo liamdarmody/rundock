@@ -73,18 +73,23 @@ const DESTINATIONS = [
     site: "app.js: case 'needs_workspace': -> showView('workspace')",
     view: 'workspace',
     noSection: true,
-    why: 'the workspace picker is the screen shown when there is no workspace to be a section of. '
-      + 'The rail and the sidebar are hidden outright while it is up, so lighting an icon behind '
-      + 'them would name a place the reader cannot reach and cannot see.',
+    why: 'a rail entry names a section of a workspace, and this is the screen shown when there is '
+      + 'no workspace to have a section of, so there is no section it could set. It reaches that '
+      + 'screen when the server says it has no workspace, which can happen after it had one: the '
+      + 'server drops the pointer when the directory stops existing or a switch fails. So this '
+      + 'route takes the chrome down itself rather than assuming the other one already did, and '
+      + 'both routes take it down through the same function.',
     surface: 'the server saying there is no workspace open',
-    pressedBy: 'the workspace picker takes no nav state, because it has no rail to take one on',
+    pressedBy: 'the route that says there is no workspace takes the chrome down with it',
   },
   {
     site: "app.js: function showWorkspacePicker(recent, discovered) -> showView('workspace')",
     view: 'workspace',
     noSection: true,
-    why: 'the same screen reached the other way, and this is the function that hides the rail and '
-      + 'the sidebar. It is the reason the workspace view has no section rather than an oversight.',
+    why: 'the same screen reached the other way, with the same reason: there is no section to set '
+      + 'for a screen that means you have no workspace. This route takes the chrome down through '
+      + 'the same function as the other one, which is what makes the reason true of both rather '
+      + 'than of whichever was written first.',
     surface: 'the workspace picker being drawn',
     pressedBy: 'the workspace picker takes no nav state, because it has no rail to take one on',
   },
@@ -280,13 +285,24 @@ const NOT_CAUGHT = [
       + 'locked mock, whose chrome-parity rule is what decides these values.',
   },
   {
-    what: 'a pane or a panel revealed without going through the two functions that own it',
+    what: 'a pane or a panel revealed without going through the functions that own it',
     why: 'a view panel and a sidebar panel are both divs, and any code can un-hide one directly. '
       + 'The scans below catch a file that lights a rail item, or that hides a panel it addressed '
-      + 'by its id, which is the form this took both times. They do not catch a view-* panel '
-      + 'un-hidden by hand, or a sidebar panel reached by walking the DOM rather than by id. What '
-      + 'a person has to notice: a change that adds or removes the hidden class on a view-* or '
-      + 'sidebar-* element anywhere but showView and setNavState.',
+      + 'by its id, which is the form this took both times. Three things they do not catch: a '
+      + 'view-* panel un-hidden by hand, a sidebar panel reached by walking the DOM rather than by '
+      + 'id, and a write split across two lines, since the scans read one line at a time and need '
+      + 'the lookup and the class change on the same one. What a person has to notice: a change '
+      + 'that adds or removes the hidden class on a view-* or sidebar-* element, or the active '
+      + 'class on a rail entry, anywhere but showView and setNavState.',
+  },
+  {
+    what: 'a destination that shows the right view and then navigates away from it',
+    why: 'every row is pressed by a test that presses showView, because showView is what carries '
+      + 'the section now. A destination that calls showView and then calls switchNav to another '
+      + 'section would end on the wrong rail with every test here green, since nothing presses the '
+      + 'destination functions themselves end to end. Nothing in the client does this today. What '
+      + 'a person has to notice: two navigation calls in one function, which is the shape every '
+      + 'defect this file was built for already had.',
   },
   {
     what: 'the workspace-switch reset pressed end to end',
@@ -321,6 +337,50 @@ function clientFiles() {
   return out;
 }
 
+// THE UNIVERSE THE ENUMERATION IS OVER, and it is stated here because an
+// inventory that scans less than the client runs is worse than no inventory:
+// everyone downstream reads it as total.
+//
+// The page runs two kinds of code. Every `.js` under `public/`, which the shell
+// loads by script tag, and the inline `on*` attributes in `public/index.html`,
+// which resolve bare window names and are how the nav rail itself calls
+// switchNav. A call written in the second kind reaches exactly the same
+// functions as one written in the first, so both are scanned.
+//
+// `vendor/` is outside it, and that is a decision rather than an oversight:
+// third-party code the page loads is not this product's navigation, and a
+// destination written there would be a defect of a different kind. Nothing
+// else under `public/` is excluded.
+//
+// What is NOT scanned, and cannot be: code that arrives at runtime. There is
+// none today, and `no destination arrives as text at runtime` below asserts
+// that rather than leaving it to be believed.
+function commentsStripped(src) {
+  // Block comments go first, newlines kept so line numbers survive. Then line
+  // comments, but only where the slashes are not part of a URL, because
+  // stripping those would eat half the strings in the file.
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+    .replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1');
+}
+
+// Every inline handler attribute in the page, as {file, owner, text}. The owner
+// names the element the way a reader would find it: its id or data-nav if it
+// has one, otherwise its tag.
+function inlineHandlers() {
+  const src = INDEX_SRC.replace(/<!--[\s\S]*?-->/g, '');
+  const out = [];
+  for (const m of src.matchAll(/\son([a-z]+)\s*=\s*"([^"]*)"/g)) {
+    const open = src.lastIndexOf('<', m.index);
+    const tag = /<\s*([a-z][\w-]*)/i.exec(src.slice(open, m.index + 1));
+    const element = src.slice(open, m.index + 1);
+    const named = /\s(?:id|data-nav)="([^"]*)"/.exec(element);
+    const who = named ? `<${tag ? tag[1] : '?'} ${named[0].trim()}>` : `<${tag ? tag[1] : '?'}>`;
+    out.push({ file: 'index.html', owner: `${who} on${m[1]}`, text: m[2] });
+  }
+  return out;
+}
+
 // The construct that carries a call, as "the case label", "the nav arm" or
 // "the function declaration", whichever is nearest above it. Named rather than
 // numbered: a line number moves on every edit above it, and a row keyed by one
@@ -345,25 +405,61 @@ function ownerOf(lines, i) {
 
 // Every call to `name` in the client, as "file: owner", skipping the
 // declaration itself so a function is never counted as its own caller.
+//
+// Both kinds of source, and both kinds of call. A call written `showView(x)`
+// and one written `window.showView(x)` reach the same function, so the second
+// is matched rather than skipped: skipping it was how the first version of
+// this scan could be walked around without failing anything.
 function callSites(name, { withArgument = false } = {}) {
   const sites = [];
-  const call = new RegExp(`(?<![.\\w$])${name}\\(([^)]*)\\)`, 'g');
+  const call = new RegExp(`(?<![.\\w$])(?:(?:window|self|root|globalThis)\\.)?${name}\\(([^)]*)\\)`, 'g');
   for (const rel of clientFiles()) {
-    const lines = fs.readFileSync(path.join(ROOT, rel), 'utf-8').split('\n');
+    const lines = commentsStripped(fs.readFileSync(path.join(ROOT, rel), 'utf-8')).split('\n');
     for (let i = 0; i < lines.length; i++) {
-      const t = lines[i].trim();
-      if (t.startsWith('//') || t.startsWith('*') || t.startsWith('/*')) continue;
       const declaration = new RegExp(`^\\s*function ${name}\\s*\\(`).test(lines[i]);
       for (const m of lines[i].matchAll(call)) {
         // The declaration's own line still carries real calls when the body is
         // on it, so only the declaring call is skipped, not the line.
-        if (declaration && lines[i].indexOf(`function ${name}(`) === m.index - `function `.length) continue;
+        if (declaration && lines[i].indexOf(`function ${name}(`) === m.index - 'function '.length) continue;
         const owner = `${rel.replace('public/', '')}: ${ownerOf(lines, i)}`;
         sites.push(withArgument ? `${owner} -> ${name}(${m[1].trim()})` : owner);
       }
     }
   }
+  // The page's own handlers, which are code the shell runs and were outside
+  // this scan until a reviewer pointed out that the rail is written in them.
+  for (const handler of inlineHandlers()) {
+    for (const m of handler.text.matchAll(call)) {
+      const owner = `${handler.file}: ${handler.owner}`;
+      sites.push(withArgument ? `${owner} -> ${name}(${m[1].trim()})` : owner);
+    }
+  }
   return [...new Set(sites)].sort();
+}
+
+// A call this scan can see is one whose arguments end on the line they start
+// on, because the scan reads lines. Rather than silently miss a call broken
+// across lines, they are refused: keeping a navigation call on one line costs
+// nothing and is what makes the inventory checkable.
+function callsSpanningLines(name) {
+  const bad = [];
+  for (const rel of clientFiles()) {
+    const lines = commentsStripped(fs.readFileSync(path.join(ROOT, rel), 'utf-8')).split('\n');
+    const open = new RegExp(`(?<![.\\w$])(?:(?:window|self|root|globalThis)\\.)?${name}\\(`, 'g');
+    for (let i = 0; i < lines.length; i++) {
+      for (const m of lines[i].matchAll(open)) {
+        const rest = lines[i].slice(m.index + m[0].length);
+        let depth = 1;
+        let closed = false;
+        for (const ch of rest) {
+          if (ch === '(') depth++;
+          else if (ch === ')') { depth--; if (depth === 0) { closed = true; break; } }
+        }
+        if (!closed) bad.push(`${rel.replace('public/', '')}:${i + 1}`);
+      }
+    }
+  }
+  return bad;
 }
 
 // Every showView call in the client, as "file: owner -> showView(argument)".
@@ -469,15 +565,27 @@ function chromeWriters() {
   return { panels: [...new Set(panels)].sort(), rail: [...new Set(rail)].sort() };
 }
 
-// Every literal ever assigned to editorReturnView, which is the argument of
-// the one showView call whose view is not a literal.
+// Every assignment to editorReturnView, which is the argument of the one
+// showView call whose view is not a literal.
+//
+// BOTH KINDS, and that is the point of returning two lists. Collecting only the
+// string literals made the check that reads this vacuous the moment somebody
+// wrote `editorReturnView = currentView`: the asserted set stayed
+// ['editor','skills'] while Back could land anywhere. A non-literal assignment
+// is now a failure rather than an absence.
 function editorReturnViews() {
-  const found = [];
+  const literals = [];
+  const computed = [];
   for (const rel of clientFiles()) {
-    const src = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
-    for (const m of src.matchAll(/editorReturnView\s*=\s*'([\w-]+)'/g)) found.push(m[1]);
+    const src = commentsStripped(fs.readFileSync(path.join(ROOT, rel), 'utf-8'));
+    for (const m of src.matchAll(/editorReturnView\s*=\s*([^;\n]+)/g)) {
+      const value = m[1].trim();
+      const literal = /^'([\w-]+)'$/.exec(value);
+      if (literal) literals.push(literal[1]);
+      else computed.push(`${rel.replace('public/', '')}: editorReturnView = ${value}`);
+    }
   }
-  return [...new Set(found)].sort();
+  return { literals: [...new Set(literals)].sort(), computed: [...new Set(computed)].sort() };
 }
 
 // ===== THE CHECKS THAT END THE LOOP =====
@@ -537,11 +645,15 @@ describe('every destination in this client is enumerated', () => {
 
   test('the one destination whose view is a variable can only hold views the table knows', () => {
     const table = navForView();
-    const held = editorReturnViews();
-    assert.deepStrictEqual(held, ['editor', 'skills'],
+    const { literals, computed } = editorReturnViews();
+    assert.deepStrictEqual(computed, [],
+      'editorReturnView is assigned something that is not a view name written out, so what Back '
+      + 'shows cannot be read from the source and this check would pass while saying nothing. '
+      + 'Assign a literal, or bound it here another way.');
+    assert.deepStrictEqual(literals, ['editor', 'skills'],
       'editorReturnView now holds another view, so Back can land somewhere this file has not '
       + 'checked. Add it here once the table has a section for it.');
-    for (const v of held) {
+    for (const v of literals) {
       assert.ok(Object.prototype.hasOwnProperty.call(table, v),
         `Back can return to ${v} and the table has no section for it`);
     }
@@ -580,6 +692,33 @@ describe('every destination in this client is enumerated', () => {
   // for every arm; it is now set by the view each arm shows. An arm that shows
   // no view would therefore leave the rail alone, so every entry the rail
   // carries has to have one.
+  // THE SCAN'S OWN REACH, asserted rather than assumed. Every check above is
+  // only as wide as what it reads, so what it reads is checked too.
+  test('every navigation call is one the enumeration can see', () => {
+    for (const name of ['showView', 'setNavState']) {
+      assert.deepStrictEqual(callsSpanningLines(name), [],
+        `a ${name} call is broken across lines, so the enumeration cannot read its arguments and `
+        + 'would list it wrongly or not at all. Keep a navigation call on one line.');
+    }
+  });
+
+  test('no destination arrives as text at runtime', () => {
+    for (const rel of clientFiles()) {
+      const src = commentsStripped(fs.readFileSync(path.join(ROOT, rel), 'utf-8'));
+      // Handlers written into generated markup are still text in a .js file, so
+      // the scan sees them like any other call. What it could not see is a name
+      // assembled at runtime, and there is none: asserted here rather than left
+      // as a claim, because it is the one way a destination could exist that no
+      // reading of the source would find.
+      assert.doesNotMatch(src, /new Function\(|(?:^|[^.\w$])eval\(/,
+        `${rel} builds code at runtime, so a destination could exist that no scan of the source `
+        + 'can find. Enumerate it here or stop building it.');
+      assert.doesNotMatch(src, /(?:window|self|globalThis|root)\s*\[/,
+        `${rel} reaches a global by computed name, which can spell showView or setNavState `
+        + 'without either appearing in the source. Call it by its name.');
+    }
+  });
+
   test('every entry on the rail has an arm that shows a view', () => {
     const body = appPiece(/function switchNav\(nav\) \{([\s\S]*?)\n\}/, 'switchNav');
     for (const section of railSections()) {
@@ -623,6 +762,27 @@ describe('one place decides what the chrome shows', () => {
       + 'it at least once. Show the view and let showView resolve the section.');
   });
 
+  // THE REASON THE TWO NO-SECTION ROWS GIVE, held rather than asserted. Both say
+  // the chrome comes down on the way to the picker. That was true of one route
+  // and not the other: the hide and the show were written into the two
+  // functions that happened to need them, so the reply carrying "no workspace"
+  // reached the picker with the rail still up. One owner, and every route to
+  // that screen goes through it.
+  test('one place decides whether there is any chrome at all', () => {
+    const writers = [];
+    for (const rel of clientFiles()) {
+      const lines = commentsStripped(fs.readFileSync(path.join(ROOT, rel), 'utf-8')).split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        if (!/\.(?:nav-rail|sidebar)['"`]\s*\)\s*(?:\?\.)?\.?style|['"`]no-workspace['"`]/.test(lines[i])) continue;
+        writers.push(`${rel.replace('public/', '')}: ${ownerOf(lines, i)}`);
+      }
+    }
+    assert.deepStrictEqual([...new Set(writers)].sort(), ['app.js: function setWorkspaceChrome(present)'],
+      'a second place decides whether the rail and the sidebar are on screen. There were two, and '
+      + 'a third route to the workspace picker went through neither, showing that screen with the '
+      + 'rail still up and the previous entry still lit over it.');
+  });
+
   test('the panels setNavState hides are the panels the page carries', () => {
     assert.deepStrictEqual(panelsSetNavStateHides(), panelsOnPage(),
       'the sidebar carries a panel setNavState does not know about, or knows about one the page '
@@ -647,7 +807,11 @@ function shellMarkup(views) {
   // comes from showView's own list, checked against the real page by the
   // enumeration above.
   const panes = views.map(v => `<div id="view-${v}" class="hidden"></div>`).join('');
-  return `<!doctype html><html><body>${rail[0]}${sidebar[0]}${panes}</body></html>`;
+  // The app wrapper and the search control, because taking the chrome down
+  // touches both and a function that silently found neither would assert
+  // nothing about them.
+  return `<!doctype html><html><body><div class="app">${rail[0]}${sidebar[0]}`
+    + `<div id="tb-search"></div>${panes}</div></body></html>`;
 }
 
 // The shipped setNavState and the shipped showView, cut out of app.js and run.
@@ -665,6 +829,7 @@ function shell() {
     NAV_FOR_VIEW_SRC[0],
     `function setNavState(nav) {${appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState')}\n}`,
     `function showView(v) {${appPiece(/^function showView\(v\) \{(.*)\}\s*$/m, 'showView')}}`,
+    `function setWorkspaceChrome(present) {${appPiece(/function setWorkspaceChrome\(present\) \{([\s\S]*?)\n\}/, 'setWorkspaceChrome')}\n}`,
   ].join('\n'));
   return { w, doc: w.document, dom, views };
 }
@@ -707,7 +872,12 @@ describe('the chrome, pressed', () => {
   // the editor.
   test('the routine editor is a routines surface and the rail says so', () => {
     const { w, doc, dom } = shell();
-    w.showView('team');            // any other section first, so the assertion has something to move
+    // A REAL VIEW, and it has to be: 'team' is a rail section and not a view, so
+    // showing it moved nothing and left the assertion below with nothing to
+    // discriminate. The org chart is the view that lands on Team.
+    w.showView('home');
+    assert.deepStrictEqual(litSections(doc), ['team'],
+      'sanity: the rail is on another section before the editor is opened, or this proves nothing');
     w.showView('routine-editor');
     assert.deepStrictEqual(litSections(doc), ['routines'],
       'opening the routine editor lights the wrong entry. It lit Team for as long as the editor '
@@ -715,14 +885,54 @@ describe('the chrome, pressed', () => {
     dom.window.close();
   });
 
+  // THE ROUTE THAT SAYS THERE IS NO WORKSPACE, pressed as the dispatch runs it.
+  // It is a different route to the same screen from the picker's own, and it
+  // used to differ: it showed the screen and left the chrome up, so the rail
+  // stayed lit over a page meaning you have no workspace to have a section of.
+  test('the route that says there is no workspace takes the chrome down with it', () => {
+    const { w, doc, dom } = shell();
+    // THE CHROME HAS TO BE UP FIRST. The rail ships hidden in index.html, which
+    // the shell cuts out whole, so a test that presses this without raising it
+    // asserts 'none' against a rail that was never up: the mutation that takes
+    // the hide away turns nothing red and the proof is an ornament.
+    w.setWorkspaceChrome(true);
+    w.showView('home');
+    const before = litSections(doc);
+    assert.deepStrictEqual(before, ['team'], 'sanity: a section is lit before the reply arrives');
+    assert.strictEqual(doc.querySelector('.nav-rail').style.display, '',
+      'sanity: the rail is up before the reply arrives, or hiding it proves nothing');
+    const body = appPiece(/case 'needs_workspace':([\s\S]*?)break;/,
+      'the needs_workspace case of the client dispatch');
+    w.eval(`(function () {${body}\n})()`);
+    assert.strictEqual(doc.querySelector('.nav-rail').style.display, 'none',
+      'the reply saying there is no workspace showed that screen with the rail still up');
+    assert.strictEqual(doc.querySelector('.sidebar').style.display, 'none',
+      'the reply saying there is no workspace showed that screen with the sidebar still up');
+    assert.deepStrictEqual(litSections(doc), before,
+      'the reply saying there is no workspace moved the rail as well as hiding it');
+    assert.ok(!doc.getElementById('view-workspace').classList.contains('hidden'),
+      'the reply saying there is no workspace did not show the picker');
+    dom.window.close();
+  });
+
   test('the workspace picker takes no nav state, because it has no rail to take one on', () => {
     const { w, doc, dom } = shell();
-    w.showView('team');
+    // The rail has to be somewhere before this can show it stays there. It used
+    // to be set with showView('team'), which is a section and not a view, so
+    // nothing was lit and the assertion compared an empty list with an empty
+    // one: it could not have caught the picker clearing the rail, which is the
+    // defect its own message describes.
+    w.showView('home');
     const before = litSections(doc);
+    const panelsBefore = visiblePanels(doc);
+    assert.deepStrictEqual(before, ['team'], 'sanity: a section is lit before the picker is shown');
+    assert.strictEqual(panelsBefore.length, 1, 'sanity: a panel is open before the picker is shown');
     w.showView('workspace');
     assert.deepStrictEqual(litSections(doc), before,
       'showing the workspace picker moved the rail behind it. There is no section to be on when '
-      + 'there is no workspace, and the rail is hidden while it is up.');
+      + 'there is no workspace, and the chrome is taken down while it is up.');
+    assert.deepStrictEqual(visiblePanels(doc), panelsBefore,
+      'showing the workspace picker changed which sidebar panel is open behind it');
     dom.window.close();
   });
 

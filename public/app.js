@@ -247,7 +247,10 @@ function handle(d) {
       // Re-render settings if currently viewing workspace settings
       if (currentView === 'settings') renderSettingsSection('workspace');
       break;
-    case 'needs_workspace': showView('workspace'); break;
+    // Takes the chrome down as well as showing the screen. This arrives when
+    // the server has no workspace, which can happen after it had one, so the
+    // rail cannot be assumed to be down already.
+    case 'needs_workspace': setWorkspaceChrome(false); showView('workspace'); break;
     case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesSidebar(); renderRoutines(); renderConvoList(); break;
     // renderRoutines as well as renderSkills: the routines empty state asks
     // whether the workspace has a skill, so the reply that answers that
@@ -1097,6 +1100,33 @@ function switchNav(nav) {
 function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings','routine-editor','routines'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');} const nav=NAV_FOR_VIEW[v]; if(nav) setNavState(nav); }
 function goHome() { discardIfEmpty(); activeConversation=null; switchNav('conversations'); }
 
+// Whether there is any chrome at all.
+//
+// A SECTION AND A SCREEN WITH NO SECTIONS ARE DIFFERENT QUESTIONS, and this is
+// the second one. setNavState answers which section you are on; this answers
+// whether the rail and the sidebar are on screen to answer it. The workspace
+// picker is the only screen where they are not, because a rail entry names a
+// section of a workspace and that screen is what you see when there is none.
+//
+// ONE OWNER, for the reason the panel list has one. The hide and the show were
+// written into the two functions that happened to need them, so a third route
+// to the picker went through neither: the server clears its workspace when the
+// directory stops existing or a switch fails, and the reply that carries that
+// news reached the picker with the rail still up and the previous entry still
+// lit, over a screen that means you have no workspace to have a section of.
+function setWorkspaceChrome(present) {
+  const value = present ? '' : 'none';
+  document.querySelector('.nav-rail').style.display = value;
+  document.querySelector('.sidebar').style.display = value;
+  // The top bar itself stays either way: it carries the window's only drag
+  // region once the OS title bar is removed. Only search hides, since there is
+  // nothing to search yet. Help deliberately remains, because the picker is
+  // the screen where a new user is most likely to want it.
+  const tbs = document.getElementById('tb-search');
+  if (tbs) tbs.style.display = value;
+  document.querySelector('.app')?.classList.toggle('no-workspace', !present);
+}
+
 // Theme. One function applies it everywhere it shows (body class, toggle
 // icon, code highlighting, Windows caption colours); which theme applies is
 // decided by chooseTheme (public/theme-choice.js): an explicit choice wins
@@ -1248,16 +1278,7 @@ function handleWorkspaces(d) {
 }
 
 function showWorkspacePicker(recent, discovered) {
-  // Hide nav and sidebar when picking workspace
-  document.querySelector('.nav-rail').style.display = 'none';
-  document.querySelector('.sidebar').style.display = 'none';
-  // The top bar itself stays: it carries the window's only drag region once
-  // the OS title bar is removed. Only search hides, since there is nothing to
-  // search yet. Help deliberately remains, because this is the screen where a
-  // new user is most likely to want it.
-  const tbs = document.getElementById('tb-search');
-  if (tbs) tbs.style.display = 'none';
-  document.querySelector('.app')?.classList.add('no-workspace');
+  setWorkspaceChrome(false);
   showView('workspace');
   // Reset create form
   const createBtn = document.getElementById('create-workspace-btn');
@@ -1361,12 +1382,7 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   if (scaffoldError) {
     console.warn('[Workspace] Scaffold error:', scaffoldError);
   }
-  // Show nav and sidebar
-  document.querySelector('.nav-rail').style.display = '';
-  document.querySelector('.sidebar').style.display = '';
-  const tbsOn = document.getElementById('tb-search');
-  if (tbsOn) tbsOn.style.display = '';
-  document.querySelector('.app')?.classList.remove('no-workspace');
+  setWorkspaceChrome(true);
   // Load workspace data
   ws.send(JSON.stringify({ type: 'get_agents' }));
   ws.send(JSON.stringify({ type: 'get_files' }));
