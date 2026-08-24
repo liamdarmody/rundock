@@ -296,7 +296,18 @@ function listHtml(list) {
  * for, which is the empty state below.
  */
 function renderRoutines() {
-  const list = allRoutines();
+  let list = allRoutines();
+  // A FILTER WITH NOTHING LEFT TO SHOW IS DROPPED RATHER THAN DRAWN EMPTY.
+  // The empty state speaks for the whole team: it says nothing is scheduled and
+  // offers a picker spanning every agent's skills. Under a scope that is a lie,
+  // because the emptiness is the filter's doing and other agents still have
+  // routines, and nothing on this page names the scope, so a reader has no way
+  // to tell. Deleting an agent's last routine from a scoped list is the way in.
+  // The scope goes and the whole list is shown, which is true.
+  if (scopeAgentId && list.length === 0) {
+    scopeAgentId = null;
+    list = allRoutines();
+  }
   const content = document.getElementById('routines-content');
   if (!content) return;
   if (pendingDelete !== null && !list[pendingDelete]) pendingDelete = null;
@@ -321,6 +332,19 @@ function renderRoutines() {
  * @param {string|null} agentId
  */
 function showRoutinesForAgent(agentId) {
+  // ARRIVING CLEARS THE PENDING CONFIRMATION, AND THAT IS NOT TIDINESS.
+  // `pendingDelete` is a POSITION in the list, and the scope decides what the
+  // list contains, so a confirmation opened under one scope addresses a
+  // different routine under the next. The guard in the render only drops the
+  // index when it falls off the end, so whenever the new list is long enough
+  // the reader is shown a confirmation they never asked for, naming one
+  // routine, and confirming it deletes that one. A destructive action must not
+  // be re-aimed by navigating.
+  //
+  // The refusal goes with it, for the reason it is held at all: it answers a
+  // control pressed on a list the reader has now left.
+  pendingDelete = null;
+  pendingProblem = null;
   scopeAgentId = agentId || null;
   if (typeof setNavState === 'function') setNavState('routines');
   if (typeof showView === 'function') showView('routines');

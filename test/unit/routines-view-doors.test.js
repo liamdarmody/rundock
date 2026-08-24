@@ -343,6 +343,46 @@ function appPiece(pattern, label) {
   return m[1];
 }
 
+// A shell with two agents and a real profile panel, cut out of index.html. The
+// second agent is what makes a scope observable at all: on a workspace with one
+// agent, a scoped list and an unscoped one are the same list.
+function twoAgentShell() {
+  const { w, doc, dom } = shell();
+  const profilePanel = /<div id="view-profile"[\s\S]*?<\/div>\s*<\/div>/.exec(INDEX_SRC);
+  assert.ok(profilePanel, 'index.html no longer carries a profile panel');
+  doc.body.insertAdjacentHTML('beforeend', profilePanel[0]);
+  w.eval(PROFILE_VIEW_SRC);
+  w.agents = [
+    w.agents[0],
+    { id: 'ted', displayName: 'Ted', colour: '#6BC67E', icon: 'T', status: 'onTeam',
+      routines: [{ ...ROUTINE, name: 'Reconcile the delivery log' }] },
+  ];
+  w.conversations = [];
+  w.skills = [];
+  w.formatTimeAgo = () => 'a while ago';
+  w.getGuide = () => ({ id: 'doc' });
+  w.showView = () => {};
+  w.setNavState = () => {};
+  w.switchNav = () => {};
+  w.startConversation = () => {};
+  w.addToTeam = () => {};
+  w.openConversation = () => {};
+  w.selectSkill = () => {};
+  w.addRoutineForAgent = () => {};
+  return { w, doc, dom };
+}
+
+// Arrive by the route a reader takes: render that agent's profile and press a
+// routine row on it. Never by calling the destination function, which would say
+// nothing about whether any row reaches it.
+function pressProfileRow(w, doc, agentId) {
+  w.showProfile(agentId);
+  const row = doc.querySelector('#profile-content .profile-card-item[onclick^="showRoutinesForAgent"]');
+  assert.ok(row, `the profile for ${agentId} carries no routine row that opens this list`);
+  row.click();
+  return row;
+}
+
 describe('the ways this list gets drawn, pressed', () => {
   test('the roster arriving from the server draws the list', () => {
     const { w, dom } = shell();
@@ -421,33 +461,8 @@ describe('the ways this list gets drawn, pressed', () => {
   // that never clears is a list that has silently lost rows the next time
   // somebody arrives from the rail.
   test('a routine row on a profile opens this list scoped to that agent', () => {
-    const { w, doc, dom } = shell();
-    const profilePanel = /<div id="view-profile"[\s\S]*?<\/div>\s*<\/div>/.exec(INDEX_SRC);
-    assert.ok(profilePanel, 'index.html no longer carries a profile panel');
-    doc.body.insertAdjacentHTML('beforeend', profilePanel[0]);
-    w.eval(PROFILE_VIEW_SRC);
-    w.agents = [
-      w.agents[0],
-      { id: 'ted', displayName: 'Ted', colour: '#6BC67E', icon: 'T', status: 'onTeam',
-        routines: [{ ...ROUTINE, name: 'Reconcile the delivery log' }] },
-    ];
-    w.conversations = [];
-    w.skills = [];
-    w.formatTimeAgo = () => 'a while ago';
-    w.getGuide = () => ({ id: 'doc' });
-    w.showView = () => {};
-    w.setNavState = () => {};
-    w.switchNav = () => {};
-    w.startConversation = () => {};
-    w.addToTeam = () => {};
-    w.openConversation = () => {};
-    w.selectSkill = () => {};
-    w.addRoutineForAgent = () => {};
-
-    w.showProfile('piper');
-    const row = doc.querySelector('#profile-content .profile-card-item[onclick^="showRoutinesForAgent"]');
-    assert.ok(row, 'the profile carries no routine row that opens this list');
-    row.click();
+    const { w, doc, dom } = twoAgentShell();
+    pressProfileRow(w, doc, 'piper');
     let listed = doc.getElementById('routines-content').textContent;
     assert.match(listed, /Compile the ops summary/, 'the list does not carry the agent whose row was pressed');
     assert.ok(!listed.includes('Reconcile the delivery log'),
@@ -458,6 +473,68 @@ describe('the ways this list gets drawn, pressed', () => {
     listed = doc.getElementById('routines-content').textContent;
     assert.match(listed, /Reconcile the delivery log/,
       'the rail entry inherited the last profile\'s scope, so the list has lost rows');
+    dom.window.close();
+  });
+
+  // A DELETE CONFIRMATION DOES NOT SURVIVE A CHANGE OF SCOPE, and this is a
+  // destructive action rather than a cosmetic one.
+  //
+  // The pending delete is a POSITION in the list, and the scope decides what
+  // the list contains, so a confirmation opened against one list addresses a
+  // different routine under the next. The render only drops the index when it
+  // falls off the end, so whenever the next list is long enough the reader is
+  // shown a confirmation they never asked for, naming a routine they never
+  // pointed at, and confirming it deletes that one.
+  //
+  // Driven in the direction that RE-AIMS rather than the one that merely
+  // strands: the confirmation is opened on the first row of the whole-team
+  // list, which belongs to one agent, and the reader then arrives scoped to
+  // another agent whose own list is long enough to have a first row.
+  test('a delete confirmation cannot be re-aimed by arriving from somewhere else', () => {
+    const { w, doc, dom } = twoAgentShell();
+    w.sent = [];
+    w.ws = { send: (m) => w.sent.push(JSON.parse(m)) };
+
+    w.renderRoutines();
+    doc.querySelectorAll('[data-routines-action="delete"]')[0].click();
+    const confirmation = doc.querySelector('.confirm-card');
+    assert.ok(confirmation, 'sanity: pressing Delete did not open a confirmation');
+    assert.match(doc.getElementById('routines-content').textContent, /Compile the ops summary/,
+      'sanity: the confirmation is not the one the reader opened');
+
+    pressProfileRow(w, doc, 'ted');
+    assert.strictEqual(doc.querySelector('.confirm-card'), null,
+      'a confirmation the reader never opened is on the page, aimed at another agent\'s routine');
+
+    // And the control behind it cannot act either, which is the half that
+    // matters: a stale confirmation that is merely invisible would still
+    // delete when the next Enter reaches it.
+    w.routinesConfirmDelete();
+    assert.deepStrictEqual(w.sent, [],
+      'a routine was deleted that the reader never asked to delete');
+    dom.window.close();
+  });
+
+  // The scope is a filter, and a filter with nothing left to show must not be
+  // mistaken for a workspace with nothing in it. The empty state speaks for the
+  // whole team: it says nothing is scheduled and offers a picker spanning every
+  // agent. Nothing on this page names the scope, so under one that reads as a
+  // claim about the workspace, and the claim is false.
+  test('a scoped list that empties does not say the workspace is empty', () => {
+    const { w, doc, dom } = twoAgentShell();
+    pressProfileRow(w, doc, 'piper');
+    assert.match(doc.getElementById('routines-content').textContent, /Compile the ops summary/,
+      'sanity: the scoped list is not showing the agent it was opened for');
+
+    // The agent's last routine goes, and the roster comes back without it.
+    w.agents = w.agents.map(a => (a.id === 'piper' ? { ...a, routines: [] } : a));
+    w.renderRoutines();
+
+    const shown = doc.getElementById('routines-content').textContent;
+    assert.ok(!/No routines yet/.test(shown),
+      'the page says the workspace has nothing scheduled while another agent still does');
+    assert.match(shown, /Reconcile the delivery log/,
+      'the filter had nothing left to show and was drawn empty rather than dropped');
     dom.window.close();
   });
 

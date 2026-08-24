@@ -300,6 +300,16 @@ const MUTATIONS = [
   [VIEW_SCOPE, 'a route that names no agent clears the scope rather than keeping the last one',
     '  scopeAgentId = agentId || null;',
     '  if (agentId) scopeAgentId = agentId;'],
+  // A DESTRUCTIVE ACTION ADDRESSED BY POSITION, IN A LIST THE SCOPE REMAPS.
+  // Removing this line leaves a confirmation the reader never opened on the
+  // page, aimed at whichever routine now sits at that index, and confirming it
+  // deletes that one.
+  [VIEW_SCOPE, 'arriving on the list clears a confirmation opened under another scope',
+    '  pendingDelete = null;\n  pendingProblem = null;\n  scopeAgentId = agentId || null;',
+    '  scopeAgentId = agentId || null;'],
+  [VIEW_SCOPE, 'a filter with nothing left to show is dropped rather than drawn empty',
+    '  if (scopeAgentId && list.length === 0) {\n    scopeAgentId = null;\n    list = allRoutines();\n  }\n',
+    ''],
 
   // ===== WHAT THE TEAM PANEL NO LONGER CARRIES =====
   //
@@ -575,8 +585,8 @@ const MUTATIONS = [
     '<button class="nav-item" data-nav="routines" onclick="switchNav(\'routines\')" data-tooltip="Routines"'
     + ' style="display:none">'],
   [VIEW_RAIL, 'the routines render leaves the rail alone',
-    '  const list = allRoutines();\n',
-    '  const list = allRoutines();\n'
+    '  let list = allRoutines();\n',
+    '  let list = allRoutines();\n'
     + '  document.querySelector(\'.nav-item[data-nav="routines"]\').style.display = list.length ? \'\' : \'none\';\n'],
   [SKILLS_VIEW_RAIL, 'the skills render leaves the rail alone',
     '  renderSkillsSidebar(skills);\n',
