@@ -94,6 +94,12 @@ const VIEW_SCOPE = { src: path.join(ROOT, 'public', 'views', 'routines.js'), sui
 // presses the panel. A scope pressed and no list redrawn is a defect on the
 // list, so the list's own manifest is where it has to be noticed.
 const PANEL_PRESS = { src: path.join(ROOT, 'public', 'views', 'routines-panel.js'), suite: 'test/unit/routines-view-doors.test.js' };
+// The pending confirmation, watched by the file that drives a scope change
+// against an open one. Watched from the list's own suite these are green: that
+// suite has one agent and no panel, so the list it addresses never changes
+// under the confirmation, which is the entire condition the defect needs.
+const VIEW_CONFIRM = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/routines-view-doors.test.js' };
+const APP_WORKSPACE = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routines-view-doors.test.js' };
 const APP_DISPATCH = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routines-view-doors.test.js' };
 // The Skills pane, which the permanent rail makes reachable and which had no
 // empty state at all until this pass. Its copy and its two guards are watched
@@ -224,8 +230,8 @@ const MUTATIONS = [
     '  pendingProblem = routinesModel().actionProblem(reply);',
     '  pendingProblem = reply && reply.message ? reply.message : null;'],
   [VIEW_REPLY, 'the next action the reader takes clears the last refusal',
-    '  const entry = allRoutines()[index];\n  pendingProblem = null;',
-    '  const entry = allRoutines()[index];'],
+    '  const entry = allRoutines()[index];\n  pendingProblem = null;\n  if (!entry',
+    '  const entry = allRoutines()[index];\n  if (!entry'],
   [MODEL, 'a refusal says nothing was changed',
     "  const ACTION_PROBLEM = 'That routine could not be changed. Nothing has been altered.';",
     "  const ACTION_PROBLEM = 'That routine could not be changed.';"],
@@ -261,8 +267,8 @@ const MUTATIONS = [
     '      out.push({ routine, agent, occurrence });',
     '      out.push({ routine, agent, occurrence: 0 });'],
   [VIEW, 'a delete says which routine of its name it means',
-    '  const entry = allRoutines()[pendingDelete];',
-    '  const entry = allRoutines()[0];'],
+    "      type: 'delete_routine', agentId: target.agentId, name: target.name, occurrence: target.occurrence,",
+    "      type: 'delete_routine', agentId: target.agentId, name: target.name, occurrence: 0,"],
   [VIEW, 'a pause says which routine of its name it means',
     "    occurrence: entry.occurrence, paused,",
     "    occurrence: 0, paused,"],
@@ -289,6 +295,35 @@ const MUTATIONS = [
   [STYLES, 'a failure is not dressed as a success',
     '.run-status.failed { font-weight: 600; color: var(--danger); }',
     '.run-status.failed { font-weight: 600; color: var(--success); }'],
+
+  // ===== A CONFIRMATION CANNOT CHANGE SUBJECT UNDER THE READER =====
+  // The scope filter made the list this addresses into one that changes
+  // without the routines changing, so a pending delete held as a POSITION was
+  // re-resolved against a different set the moment a scope row was pressed.
+  // These put the position back.
+  [VIEW_CONFIRM, 'the confirmation draws the namesake it was raised on',
+    '    && entry.occurrence === pendingDelete.occurrence);',
+    '    && true);'],
+  [VIEW_CONFIRM, 'a pending delete is an identity, not a position in a filtered list',
+    '  const pending = pendingEntry(list);\n  if (!pending) pendingDelete = null;\n  if (pending) content.innerHTML = confirmHtml(pending, list.indexOf(pending));',
+    '  const pending = pendingDelete ? list[0] : null;\n  if (pending) content.innerHTML = confirmHtml(pending, 0);'],
+  [VIEW_CONFIRM, 'a confirmation the reader has navigated away from does not come back',
+    '  if (!pending) pendingDelete = null;\n',
+    ''],
+
+  // ===== ONE LIST OF PANELS, NOT TWO =====
+  // The workspace switch carried its own copy of the router's hide list, and
+  // the copy went stale the moment this panel was lifted out of the team one.
+  // The mutation writes the second list back.
+  [APP_WORKSPACE, 'the workspace switch hides panels through the router rather than its own list',
+    '  routinesPanelReset();\n  setNavState(\'conversations\');',
+    "  document.querySelectorAll('.nav-item[data-nav]').forEach(n=>n.classList.remove('active'));\n"
+    + "  document.querySelector('[data-nav=\"conversations\"]')?.classList.add('active');\n"
+    + "  ['team','conversations','skills','files','settings'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));\n"
+    + "  document.getElementById('sidebar-conversations').classList.remove('hidden');"],
+  [APP_WORKSPACE, 'the workspace switch forgets the scope the last workspace was left on',
+    '  routinesPanelReset();\n  setNavState',
+    '  setNavState'],
 
   // ===== THE ROUTINES PANEL IS A PANEL OF ITS OWN =====
   // The decision this card reversed, and the mutations put it BACK. The panel
@@ -449,11 +484,11 @@ const MUTATIONS = [
     "    actions += r.paused\n      ? iconButton('resume', 'Resume', ICONS.play, `routinesSetPaused(${index}, false)`, false)\n      : iconButton('pause', 'Pause', ICONS.pause, `routinesSetPaused(${index}, true)`, false);",
     "    actions += iconButton('pause', 'Pause', ICONS.pause, `routinesSetPaused(${index}, true)`, false);"],
   [VIEW, 'delete asks before it acts',
-    'function routinesAskDelete(index) {\n  pendingProblem = null;\n  pendingDelete = index;',
-    'function routinesAskDelete(index) {\n  pendingProblem = null;\n  pendingDelete = null;'],
+    '  pendingDelete = entry\n    ? { agentId: entry.agent.id, name: entry.routine.name, occurrence: entry.occurrence }\n    : null;',
+    '  pendingDelete = null;'],
   [VIEW, 'a delete names the routine that was confirmed',
-    "      type: 'delete_routine', agentId: entry.agent.id, name: entry.routine.name, occurrence: entry.occurrence,",
-    "      type: 'delete_routine', agentId: entry.agent.id, name: 'anything', occurrence: entry.occurrence,"],
+    "      type: 'delete_routine', agentId: target.agentId, name: target.name, occurrence: target.occurrence,",
+    "      type: 'delete_routine', agentId: target.agentId, name: 'anything', occurrence: target.occurrence,"],
   [VIEW, 'the empty state offers something to press',
     "      + `<button class=\"settings-btn-primary\" type=\"button\" data-routines-action=\"${action.marker}\"`",
     "      + '<button class=\"settings-btn-primary\" type=\"button\" data-routines-action=\"nothing\"'"],
@@ -630,7 +665,7 @@ function run() {
   const targets = [MODEL, VIEW, VIEW_E2E, VIEW_REPLY, VIEW_RAIL, STYLES, SCHEDULER, END_TO_END,
     DISCOVERY, HANDLER, ROUTINES, APP, APP_SKILLS, APP_OPENER, INDEX, INDEX_RAIL, SKILLS_MODEL, SKILLS_VIEW,
     SKILLS_VIEW_RAIL, PANEL, SCOPE_MODEL, INDEX_PANEL, APP_PANEL, STYLES_PANEL, VIEW_SCOPE,
-    PANEL_PRESS, APP_DISPATCH];
+    PANEL_PRESS, APP_DISPATCH, VIEW_CONFIRM, APP_WORKSPACE];
   const originals = new Map();
   for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];

@@ -435,6 +435,107 @@ describe('the ways this list gets drawn, pressed', () => {
     dom.window.close();
   });
 
+  // THE DEFECT A SCOPE FILTER INTRODUCES INTO A LIST ADDRESSED BY POSITION, and
+  // it is the namesake defect arriving by a different road. pendingDelete was
+  // an index into allRoutines(), and allRoutines() is now filtered, so pressing
+  // a scope while a confirmation is open re-resolves that index against a
+  // different set of routines. The confirmation goes on naming the routine the
+  // reader pressed Delete on and the server is told to remove whatever now sits
+  // at that position.
+  //
+  // A confirmation that names one thing and acts on another is worse than no
+  // confirmation, because the dialogue is specific and wrong.
+  test('a pending delete cannot be retargeted by a scope change', () => {
+    const { doc, w, dom } = shell({ routines: [
+      Object.assign({}, ROUTINE, { name: 'Compile the ops summary' }),
+      Object.assign({}, ROUTINE, { name: 'Sweep the inbox' }),
+      Object.assign({}, ROUTINE, { name: 'Chase the stragglers' }),
+    ] });
+    w.agents.push({
+      id: 'mira', displayName: 'Mira', colour: '#A07AE8', icon: 'M', status: 'onTeam',
+      routines: [
+        Object.assign({}, ROUTINE, { name: 'Post the weekly note' }),
+        Object.assign({}, ROUTINE, { name: 'Archive last month' }),
+      ],
+    });
+    w.renderRoutinesPanel();
+    w.renderRoutines();
+
+    // Position 1 on All is Piper's second routine.
+    doc.querySelectorAll('[data-routines-action="delete"]')[1].click();
+    assert.ok(doc.querySelector('.confirm-card'), 'sanity: the confirmation is open');
+    assert.match(doc.querySelector('.routines-confirm-subject').textContent, /Sweep the inbox/,
+      'sanity: the confirmation names the routine that was pressed');
+
+    // Position 1 among Mira's two is a different routine entirely.
+    doc.querySelector('[data-scope="mira"]').click();
+
+    const subject = doc.querySelector('.routines-confirm-subject');
+    if (subject) {
+      assert.match(subject.textContent, /Sweep the inbox/,
+        'the confirmation changed subject when the scope changed, so Delete would remove '
+        + 'a routine the reader never pressed Delete on');
+    }
+
+    // Whatever the panel decided to show, confirming must still send the
+    // routine the reader pressed, or nothing at all.
+    doc.querySelector('[data-scope="all"]').click();
+    const confirm = doc.querySelector('[data-routines-action="confirm-delete"]');
+    if (confirm) {
+      w.sent = [];
+      w.ws = { send: (m) => w.sent.push(JSON.parse(m)) };
+      confirm.click();
+      assert.strictEqual(w.sent.length, 1, 'the confirmation sent nothing');
+      assert.strictEqual(w.sent[0].name, 'Sweep the inbox',
+        'the confirmation removed a routine other than the one it named');
+      assert.strictEqual(w.sent[0].agentId, 'piper');
+    }
+    dom.window.close();
+  });
+
+  // A confirmation is raised on the list the reader is looking at, so leaving
+  // that list abandons it. It must not be waiting when they come back: a
+  // destructive question the reader has navigated away from and then had
+  // re-presented is one they will answer without re-reading.
+  test('a confirmation the reader navigated away from does not come back', () => {
+    const { doc, w, dom } = shell();
+    w.agents.push({
+      id: 'mira', displayName: 'Mira', colour: '#A07AE8', icon: 'M', status: 'onTeam',
+      routines: [Object.assign({}, ROUTINE, { name: 'Post the weekly note' })],
+    });
+    w.renderRoutinesPanel();
+    w.renderRoutines();
+    doc.querySelector('[data-routines-action="delete"]').click();
+    assert.ok(doc.querySelector('.confirm-card'), 'sanity: the confirmation is open');
+
+    doc.querySelector('[data-scope="mira"]').click();
+    assert.strictEqual(doc.querySelector('.confirm-card'), null,
+      'sanity: leaving the list the confirmation was raised on closed it');
+
+    doc.querySelector('[data-scope="all"]').click();
+    assert.strictEqual(doc.querySelector('.confirm-card'), null,
+      'a destructive confirmation the reader walked away from was re-presented to them');
+    dom.window.close();
+  });
+
+  // The subject the confirmation DRAWS, which the send path does not cover: a
+  // resolution that matched on agent and name alone would draw the first
+  // namesake while the send carried the second, so the reader would read a
+  // question about one routine and remove another that looks identical.
+  test('the confirmation draws the namesake it was raised on', () => {
+    const { doc, w, dom } = shell({ routines: [
+      Object.assign({}, ROUTINE, { name: 'Weekly digest', schedule: 'every day at 07:00' }),
+      Object.assign({}, ROUTINE, { name: 'Weekly digest', schedule: 'every day at 18:00' }),
+    ] });
+    w.renderRoutines();
+    doc.querySelectorAll('[data-routines-action="delete"]')[1].click();
+    const subject = doc.querySelector('.routines-confirm-subject');
+    assert.ok(subject, 'sanity: the confirmation drew its subject');
+    assert.match(subject.textContent, /6:00pm|18:00/,
+      'the confirmation drew the first routine of that name rather than the one pressed');
+    dom.window.close();
+  });
+
   test('a saved routine leaves the editor for this view', () => {
     // The editor decides where to go by asking whether the shell can reach a
     // section: a rail entry AND a sidebar panel for it. Both have to be true
@@ -475,6 +576,57 @@ describe('the ways this list gets drawn, pressed', () => {
     assert.strictEqual(w.navigatedTo, w.RundockRoutineEditorModel.SAVE_DESTINATION,
       'a written routine landed somewhere other than the list of routines');
     assert.strictEqual(w.navigatedTo, 'routines');
+    dom.window.close();
+  });
+});
+
+describe('the workspace switch puts the sidebar back', () => {
+  // THE SECOND HARD-CODED LIST OF PANELS, driven rather than described. The
+  // router's list was extended when this panel was lifted out of the team one.
+  // The workspace-switch reset carried its own copy of that list, one name
+  // short, so switching workspace while on this view left the routines panel
+  // on screen stacked above the conversations panel the reset reveals.
+  //
+  // Two lists of the same thing is one list that is wrong, so the reset is
+  // routed through the router and this drives the real code to prove it.
+  test('switching workspace leaves exactly one sidebar on screen', () => {
+    const { doc, w, dom } = shell();
+    const setNav = appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState');
+    w.eval(`function setNavState(nav) {${setNav}\n}`);
+    const reset = appPiece(/function resetSidebarForWorkspace\(\) \{([\s\S]*?)\n\}/,
+      'the sidebar reset a workspace switch runs');
+
+    // The reader is on the routines view when the switch happens.
+    w.setNavState('routines');
+    assert.ok(!doc.getElementById('sidebar-routines').classList.contains('hidden'),
+      'sanity: the routines panel is on screen before the switch');
+
+    w.eval(`(function () {${reset}\n})()`);
+
+    const visible = [...doc.querySelectorAll('.sidebar > div[id^="sidebar-"]')]
+      .filter(el => !el.classList.contains('hidden')).map(el => el.id);
+    assert.deepStrictEqual(visible, ['sidebar-conversations'],
+      'a workspace switch left more than one sidebar panel on screen, stacked in one column');
+  });
+
+  // The scope is an agent id, and agent ids belong to the workspace that owned
+  // them. Carried into the next one it names an agent that may not be there.
+  test('switching workspace forgets the scope the last one was left on', () => {
+    const { doc, w, dom } = shell();
+    w.agents.push({
+      id: 'mira', displayName: 'Mira', colour: '#A07AE8', icon: 'M', status: 'onTeam',
+      routines: [Object.assign({}, ROUTINE, { name: 'Post the weekly note' })],
+    });
+    w.eval(`function setNavState(nav) {${appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState')}\n}`);
+    w.renderRoutinesPanel();
+    doc.querySelector('[data-scope="mira"]').click();
+    assert.strictEqual(w.routinesScopeAgentId(), 'mira', 'sanity: scoped before the switch');
+
+    const reset = appPiece(/function resetSidebarForWorkspace\(\) \{([\s\S]*?)\n\}/,
+      'the sidebar reset a workspace switch runs');
+    w.eval(`(function () {${reset}\n})()`);
+    assert.strictEqual(w.routinesScopeAgentId(), null,
+      'an agent id from the previous workspace was carried into the next one');
     dom.window.close();
   });
 });

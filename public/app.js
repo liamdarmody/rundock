@@ -1301,6 +1301,32 @@ async function openFolder() {
   }
 }
 
+/**
+ * Put the sidebar back to a known state for a workspace that is not the one
+ * that was open.
+ *
+ * IT ROUTES THROUGH THE ROUTER rather than repeating what the router does.
+ * This used to carry its own copy of the list of panels to hide, and the copy
+ * went stale the moment the routines panel was lifted out of the team one: the
+ * router learned about the sixth panel and this did not, so switching
+ * workspace while on that view left it on screen stacked above the panel this
+ * reveals. Two lists of the same thing is one list that is wrong, and the fix
+ * is one list rather than two that agree.
+ *
+ * Routing here also keeps the New conversation footer in step, which the copy
+ * did not touch at all. A switch made from Files left it hidden until the
+ * conversations reply landed and something downstream called the router. That
+ * was a flicker rather than a defect, and it is one less thing depending on a
+ * reply arriving.
+ */
+function resetSidebarForWorkspace() {
+  // The scope is an agent id, and agent ids belong to the workspace that
+  // declared them. Carried across, it names an agent the next workspace may
+  // not have, and it filters that workspace's routines by it.
+  routinesPanelReset();
+  setNavState('conversations');
+}
+
 function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupComplete) {
   const isSameWorkspace = (currentWorkspacePath === dir);
   currentWorkspacePath = dir;
@@ -1360,10 +1386,7 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   if (cs) { cs.textContent = ''; cs.classList.remove('working'); }
   // Activate conversations sidebar; handlePersistedConversations will
   // open a pinned conversation or newConversation() once data arrives.
-  document.querySelectorAll('.nav-item[data-nav]').forEach(n=>n.classList.remove('active'));
-  document.querySelector('[data-nav="conversations"]')?.classList.add('active');
-  ['team','conversations','skills','files','settings'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
-  document.getElementById('sidebar-conversations').classList.remove('hidden');
+  resetSidebarForWorkspace();
   // Hide the workspace picker immediately, but do not show any view yet.
   // handlePersistedConversations will pick the right destination (chat for
   // an existing pinned/processing conversation, convo-empty for a populated
