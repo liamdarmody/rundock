@@ -29,6 +29,7 @@
 <script src="/markdown-render.js"></script>
 <script src="/file-tree-diff.js"></script>
 <script src="/routine-editor-model.js"></script>
+<script src="/run-detail-model.js"></script>
 <script src="/skills-model.js"></script>
 <script src="/routines-model.js"></script>
 <script src="/guide-copy.js"></script>
@@ -54,6 +55,7 @@
 <link rel="stylesheet" href="/styles/views/workspace.css">
 <link rel="stylesheet" href="/styles/views/conversations.css">
 <link rel="stylesheet" href="/styles/views/routine-editor.css">
+<link rel="stylesheet" href="/styles/views/run-detail.css">
 <link rel="stylesheet" href="/styles/views/routines.css">
 </head>
 <body>
@@ -273,6 +275,10 @@
     <div id="view-routine-editor" class="hidden view-panel view-scroll">
       <div class="routine-editor" id="routine-editor-content"></div>
     </div>
+    <!-- Run detail: what one run did, read from its own record. -->
+    <div id="view-run-detail" class="hidden view-panel view-scroll">
+      <div class="run-detail" id="run-detail-content"></div>
+    </div>
     <!-- Settings -->
     <div id="view-settings" class="hidden view-panel view-scroll">
       <div class="settings-content" id="settings-content"></div>
@@ -312,6 +318,7 @@
 <script src="/views/palette.js"></script>
 <script src="/views/find.js"></script>
 <script src="/views/routine-editor.js"></script>
+<script src="/views/run-detail.js"></script>
 <script src="/views/routines.js"></script>
 <script src="/app.js"></script>
 </body>

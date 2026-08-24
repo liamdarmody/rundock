@@ -45,6 +45,10 @@ const EDITOR_MODEL_SRC = read('public', 'routine-editor-model.js');
 const SKILLS_MODEL_SRC = read('public', 'skills-model.js');
 const EDITOR_VIEW_SRC = read('public', 'views', 'routine-editor.js');
 const PROFILE_VIEW_SRC = read('public', 'views', 'profile.js');
+// The run detail screen, which is opened from a row on this list and returns
+// here. Loaded so the return journey is pressed rather than described.
+const RUN_DETAIL_MODEL_SRC = read('public', 'run-detail-model.js');
+const RUN_DETAIL_VIEW_SRC = read('public', 'views', 'run-detail.js');
 
 // ===== THE ENUMERATION =====
 //
@@ -140,6 +144,14 @@ const ROUTES = [
   {
     what: 'the section the rail entry reveals in the sidebar',
     pressedBy: 'every section the rail carries reveals a sidebar the reader can see',
+  },
+  // The run detail screen is opened FROM a row on this list and its back
+  // control returns here, so it is a route in exactly the sense this file
+  // means: a way the shell arrives at the routines section. Enumerated when it
+  // arrived, because the exclusion below went red the moment it did.
+  {
+    what: 'the run detail screen leaving for the list it was opened from',
+    pressedBy: 'the run detail back control returns to this view',
   },
   {
     what: "a routine row in the Routines box on an agent's profile",
@@ -261,11 +273,14 @@ describe('every way this list gets drawn is enumerated', () => {
       const src = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
       for (const m of src.matchAll(/(?:switchNav|showView|setNavState)\((['"])([\w-]+)\1\)/g)) {
         if (m[2] !== 'routines') continue;
-        // The editor, which leaves for this list after a save, and this view
-        // itself, which names its own section on the one destination function
-        // every route runs through. Anything else navigating here is a route
-        // with no row.
-        assert.ok(/routine-editor\.js$|views\/routines\.js$/.test(rel),
+        // Three files may, and each is listed in ROUTES above with the test
+        // that presses it: the editor, which leaves for this list after a
+        // save; this view itself, which names its own section on the one
+        // destination function every route runs through; and the run detail
+        // screen, whose back control returns here. Widened deliberately rather
+        // than loosened, so a fourth file navigating here still fails until
+        // somebody names it.
+        assert.ok(/routine-editor\.js$|views\/routines\.js$|views\/run-detail\.js$/.test(rel),
           `${rel} navigates to the routines section and is not a listed route`);
       }
     }
@@ -535,6 +550,31 @@ describe('the ways this list gets drawn, pressed', () => {
       'the page says the workspace has nothing scheduled while another agent still does');
     assert.match(shown, /Reconcile the delivery log/,
       'the filter had nothing left to show and was drawn empty rather than dropped');
+    dom.window.close();
+  });
+
+  // THE RETURN JOURNEY, pressed on the control a reader touches rather than by
+  // calling what it calls. The run detail screen is opened from a row here and
+  // its only way back is this control; a rename of the section it asks for
+  // strands the reader on a screen with no exit and throws nothing.
+  test('the run detail back control returns to this view', () => {
+    const { w, doc, dom } = shell();
+    w.eval(RUN_DETAIL_MODEL_SRC);
+    w.eval(RUN_DETAIL_VIEW_SRC);
+    // The panel the screen draws into, cut out of the real page.
+    const panel = /<div id="view-run-detail"[\s\S]*?<\/div>\s*<\/div>/.exec(INDEX_SRC);
+    assert.ok(panel, 'index.html no longer carries the run detail view panel');
+    doc.body.insertAdjacentHTML('beforeend', panel[0]);
+    w.showView = () => {};
+    w.setNavState = () => {};
+    w.navigatedTo = null;
+    w.switchNav = (nav) => { w.navigatedTo = nav; };
+    w.openRunDetail('piper', 'Compile the ops summary');
+    const back = doc.querySelector('[data-run-detail="back"]');
+    assert.ok(back, 'the run detail screen carries no way back');
+    back.click();
+    assert.strictEqual(w.navigatedTo, 'routines',
+      'the run detail screen leaves for somewhere other than the list it was opened from');
     dom.window.close();
   });
 

@@ -17,7 +17,7 @@ const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
 const { _internal: srv } = require('../../server.js');
 const config = require('../../lib/config.js');
 
-// The full routing surface of the dispatch table, frozen: 34 message types
+// The full routing surface of the dispatch table, frozen: 35 message types
 // plus save_agent's two legacy aliases. The four root shims (chat, delegate,
 // end_delegation, flush_buffer) must NEVER appear here: chat is the
 // kill-window chat shim, delegate/end_delegation are delegation glue, and
@@ -26,7 +26,7 @@ const EXPECTED_TYPES = [
   'permission_response', 'cancel',
   'get_workspaces', 'client_render_time', 'list_workspaces', 'set_workspace',
   'pick_folder', 'create_workspace', 'set_workspace_mode',
-  'get_agents', 'get_runtime_status', 'get_files', 'get_skills',
+  'get_agents', 'get_runtime_status', 'get_files', 'get_skills', 'get_run',
   'get_conversations', 'set_last_active_conversation', 'save_conversation',
   'get_lists', 'create_list', 'delete_list', 'delete_conversation',
   'read_file', 'add_to_team',
