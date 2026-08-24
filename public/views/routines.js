@@ -47,6 +47,15 @@ let pendingDelete = null;
 // the surface the question was asked on.
 let pendingProblem = null;
 
+// Which agent the list is scoped to, or null for the whole team.
+//
+// IT BELONGS TO THE WAY IN RATHER THAN TO THE VIEW. A row in an agent's
+// profile asks for that agent's routines; the rail asks for everybody's. Both
+// arrive through the one destination function below, which is what makes the
+// scope impossible to leave behind: a route that does not name an agent clears
+// it, because it passes null rather than because somebody remembered to.
+let scopeAgentId = null;
+
 // The clock, taken from the global so a test can supply one. Undeclared
 // identifiers are safe under typeof, so this works when the module is
 // required in node with no global at all.
@@ -85,6 +94,7 @@ function allRoutines() {
   const out = [];
   const roster = typeof agents !== 'undefined' && agents ? agents : [];
   for (const agent of roster) {
+    if (scopeAgentId && agent.id !== scopeAgentId) continue;
     if (!agent.routines) continue;
     const seen = {};
     for (const routine of agent.routines) {
@@ -286,13 +296,59 @@ function listHtml(list) {
  * for, which is the empty state below.
  */
 function renderRoutines() {
-  const list = allRoutines();
+  let list = allRoutines();
+  // A FILTER WITH NOTHING LEFT TO SHOW IS DROPPED RATHER THAN DRAWN EMPTY.
+  // The empty state speaks for the whole team: it says nothing is scheduled and
+  // offers a picker spanning every agent's skills. Under a scope that is a lie,
+  // because the emptiness is the filter's doing and other agents still have
+  // routines, and nothing on this page names the scope, so a reader has no way
+  // to tell. Deleting an agent's last routine from a scoped list is the way in.
+  // The scope goes and the whole list is shown, which is true.
+  if (scopeAgentId && list.length === 0) {
+    scopeAgentId = null;
+    list = allRoutines();
+  }
   const content = document.getElementById('routines-content');
   if (!content) return;
   if (pendingDelete !== null && !list[pendingDelete]) pendingDelete = null;
   if (pendingDelete !== null) content.innerHTML = confirmHtml(list[pendingDelete], pendingDelete);
   else if (list.length === 0) content.innerHTML = emptyHtml();
   else content.innerHTML = listHtml(list);
+}
+
+/**
+ * Land the reader on this list, scoped to one agent or to the whole team.
+ *
+ * THE ONE DESTINATION, USED BY BOTH ROUTES. The rail's own arm calls this with
+ * no agent and a routine row on an agent's profile calls it with that agent,
+ * so there is one place that decides what arriving here means and one place
+ * that can get the rail wrong. A second copy of these three calls is exactly
+ * how `openRoutineEditor` ended up lighting Team on a routines surface.
+ *
+ * It sets the nav state itself, for the same reason `showProfile` does: every
+ * function that lands the user on a section says which section, or the rail
+ * lies about where the user is on every route whose author did not remember.
+ *
+ * @param {string|null} agentId
+ */
+function showRoutinesForAgent(agentId) {
+  // ARRIVING CLEARS THE PENDING CONFIRMATION, AND THAT IS NOT TIDINESS.
+  // `pendingDelete` is a POSITION in the list, and the scope decides what the
+  // list contains, so a confirmation opened under one scope addresses a
+  // different routine under the next. The guard in the render only drops the
+  // index when it falls off the end, so whenever the new list is long enough
+  // the reader is shown a confirmation they never asked for, naming one
+  // routine, and confirming it deletes that one. A destructive action must not
+  // be re-aimed by navigating.
+  //
+  // The refusal goes with it, for the reason it is held at all: it answers a
+  // control pressed on a list the reader has now left.
+  pendingDelete = null;
+  pendingProblem = null;
+  scopeAgentId = agentId || null;
+  if (typeof setNavState === 'function') setNavState('routines');
+  if (typeof showView === 'function') showView('routines');
+  renderRoutines();
 }
 
 /**
@@ -352,7 +408,8 @@ function routinesSetPaused(index, paused) {
 }
 
 return {
-  renderRoutines, routinesAskDelete, routinesCancelDelete, routinesConfirmDelete, routinesSetPaused,
+  renderRoutines, showRoutinesForAgent,
+  routinesAskDelete, routinesCancelDelete, routinesConfirmDelete, routinesSetPaused,
   routinesActionFailed, routinesActionCleared,
 };
 }));

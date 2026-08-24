@@ -214,6 +214,7 @@ const MANIFEST = {
     "routinesCancelDelete",
     "routinesConfirmDelete",
     "routinesSetPaused",
+    "showRoutinesForAgent",
   ],
   "settings.js": [
     "changeWorkspace",
@@ -239,7 +240,6 @@ const MANIFEST = {
     "renderAgentList",
     "renderConvoEmptyAgents",
     "renderOrgChart",
-    "renderRoutinesSidebar",
   ],};
 
 function viewModules() {
