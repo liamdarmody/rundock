@@ -311,9 +311,9 @@ Then mechanically, over the whole suite:
 node scripts/red-first.js --base origin/main --tests "npm test"
 ```
 
-**PROVEN: the tests fail without the change and pass with it.** 2,442 tests pass
+**PROVEN: the tests fail without the change and pass with it.** 2,529 tests pass
 with it; reverting every non-test file the change touches and keeping the tests
-turns 19 red. The four the reproduce command above checks out are the client
+turns 20 red. The six the reproduce command above checks out are the client
 files; the rest are documentation, the changelog and `package.json`.
 The full record, including every name, is written to `.precommit-gate.json`
 against the tree the gate passed on.
