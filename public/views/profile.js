@@ -12,8 +12,9 @@
 // showView. The generated onclick strings (startConversation, addToTeam,
 // openConversation, selectSkill) resolve on window at click time. Load
 // order (views before app.js) is safe because nothing here touches shared
-// state until the app boots. Function bodies are byte-identical to the
-// app.js originals at column 0.
+// state until the app boots. The Routines box reaches RundockRoutinesModel
+// for a schedule's words and showRoutinesForAgent for a row's destination,
+// both off the global at call time, in the same way.
 (/** @param {any} root @param {() => object} factory */ function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else {
@@ -73,42 +74,68 @@ function showProfile(agentId) {
     }
     h+=`</div></div>`;
   }
-  // Routines + Configuration card. Always rendered: the Runtime row appears
-  // for every agent, so the card always has content.
+  // Routines box. ALWAYS RENDERED, in both of its states. A box that vanished
+  // once you had used it would take the concept with it, and an agent's own
+  // schedules are what a reader came to this page to see.
+  //
+  // A ROW IS A NAME AND A SCHEDULE, AND THAT DELETES A DEFECT RATHER THAN
+  // FIXING ONE. This surface used to interpolate the run record's status word
+  // straight into the markup and print things like "Last run: 4h ago
+  // (interrupted)". The three-tone ruling decides what an outcome is called
+  // and what tone it gets, it took three rounds to settle, and it never
+  // reached here, so the one place a person met a routine while looking at an
+  // agent was the one place the vocabulary was raw. What happened last time is
+  // not restated here in better words: it is not on this page. It belongs to
+  // the routines view, where routines-model.js already owns both, and a row
+  // here goes there.
   const hasRoutines = a.routines && a.routines.length;
   const hasConnectors = a.capabilities?.connectors;
   {
-    h+=`<div class="profile-card">`;
+    // The routines model, reached the way every other module reaches a
+    // sibling: off the global at call time, with no dependency added to this
+    // view's wrapper for one string.
+    const routinesModel = typeof RundockRoutinesModel !== 'undefined' ? RundockRoutinesModel : null;
+    h+=`<div class="profile-card"><div class="profile-card-section"><div class="profile-section-label">Routines</div>`;
     if(hasRoutines) {
-      h+=`<div class="profile-card-section"><div class="profile-section-label">Routines</div>`;
       for(const r of a.routines) {
-        const stateText = r.state ? (r.state.status === 'running' ? '<span style="color:var(--working)">Running now</span>' : `Last run: ${formatTimeAgo(r.state.lastRun)} (${r.state.status})`) : '<span style="color:var(--text-2)">Not yet run</span>';
-        h+=`<div class="profile-card-item" style="display:flex;flex-direction:column;gap:3px">
+        // The schedule in the words the routines view uses, so the two places
+        // an agent's schedule is written cannot read differently. A schedule
+        // the editor never offered has no plain words, and the stored string
+        // is shown rather than nothing.
+        const when = (routinesModel && routinesModel.scheduleWords(r.schedule)) || r.schedule;
+        h+=`<div class="profile-card-item" style="display:flex;flex-direction:column;gap:3px;cursor:pointer" onclick="showRoutinesForAgent('${esc(a.id)}')">
           <span style="font-weight:600">${esc(r.name)}</span>
-          <span style="font-size:var(--caption);color:var(--text-2)">${esc(r.schedule)}</span>
-          <span style="font-size:var(--caption)">${stateText}</span>
+          <span style="font-size:var(--caption);color:var(--text-2)">${esc(when)}</span>
         </div>`;
       }
-      h+=`</div>`;
-    }
-    // Scheduling often starts from the agent: you are already looking at it
-    // and think of the schedule second. The editor opens scoped to this
-    // agent, so the picker offers only the skills it has.
-    h+=`<div class="profile-card-section"><div class="profile-section-label">Add a routine</div>
-      <div class="profile-card-text" style="padding-bottom:10px">Give one of ${esc(a.displayName)}'s skills a schedule.</div>
+    } else {
+      // FEATURE DISCOVERY, AND ONLY THAT. The offer exists to teach that
+      // routines are a thing, in the one place where an agent with no schedule
+      // is being looked at. Once this agent has one it goes, and the next is
+      // added from the routines view's own header control, which inherits the
+      // scope it is pressed in.
+      h+=`<div class="profile-card-text" style="padding-bottom:10px">Give one of ${esc(a.displayName)}'s skills a schedule and it runs without being asked.</div>
       <button class="settings-btn-primary" type="button" data-profile-action="add-routine"
-        data-agent-id="${esc(a.id)}" onclick="addRoutineForAgent('${esc(a.id)}')">Add routine</button>
-    </div>`;
-    if(hasConnectors) {
-      h+=`<div class="profile-card-section"><div class="profile-section-label">Connectors</div>${a.capabilities.connectors.split(',').map(cn=>`<div class="profile-card-item" style="display:flex;align-items:center;justify-content:space-between">${cn.trim()}<span style="color:var(--success);font-size:var(--caption)">Connected</span></div>`).join('')}</div>`;
+        data-agent-id="${esc(a.id)}" onclick="addRoutineForAgent('${esc(a.id)}')">Add routine</button>`;
     }
+    h+=`</div></div>`;
+  }
+  // Configuration box. Model and runtime by the direction; connectors sits
+  // with them because it is configuration by the same reading, and moves only
+  // if the owner says otherwise.
+  {
+    const row = (label, value) => `<div class="profile-card-item" style="display:flex;align-items:center;justify-content:space-between">${label}${value}</div>`;
     const modelLabels = {opus:'Opus (most capable)',sonnet:'Sonnet (fast, efficient)',haiku:'Haiku (lightweight)'};
-    if(a.model) h+=`<div class="profile-card-section"><div class="profile-section-label">Model</div><div class="profile-card-item">${modelLabels[a.model]||a.model}</div></div>`;
+    h+=`<div class="profile-card"><div class="profile-card-section"><div class="profile-section-label">Configuration</div>`;
+    if(hasConnectors) {
+      h+=a.capabilities.connectors.split(',').map(cn=>row(esc(cn.trim()), '<span style="color:var(--success);font-size:var(--caption)">Connected</span>')).join('');
+    }
+    if(a.model) h+=row('Model', `<span style="color:var(--text-2)">${modelLabels[a.model]||a.model}</span>`);
     // Runtime is stated for every agent, not just Codex ones, so it reads as
     // a fact about the agent rather than a special mark.
-    h+=`<div class="profile-card-section"><div class="profile-section-label">Runtime</div><div class="profile-card-item">${a.runtime === 'codex' ? 'Codex' : 'Claude Code'}</div></div>`;
-    if(a.runtime === 'codex') h+=`<div class="profile-card-section"><div class="profile-section-label">Permissions</div><div class="profile-card-text">${esc(a.displayName)} runs on Codex and uses Codex's built-in sandbox. Claude agents use Rundock's permission prompts.</div></div>`;
-    h+=`</div>`;
+    h+=row('Runtime', `<span style="color:var(--text-2)">${a.runtime === 'codex' ? 'Codex' : 'Claude Code'}</span>`);
+    if(a.runtime === 'codex') h+=`<div class="profile-card-text" style="padding-top:8px">${esc(a.displayName)} runs on Codex and uses Codex's built-in sandbox. Claude agents use Rundock's permission prompts.</div>`;
+    h+=`</div></div>`;
   }
   // Instructions card (collapsible)
   if(a.instructions) h+=`<div class="profile-card" style="cursor:pointer" onclick="document.getElementById('agent-instructions').classList.toggle('hidden')">

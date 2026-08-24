@@ -47,6 +47,15 @@ let pendingDelete = null;
 // the surface the question was asked on.
 let pendingProblem = null;
 
+// Which agent the list is scoped to, or null for the whole team.
+//
+// IT BELONGS TO THE WAY IN RATHER THAN TO THE VIEW. A row in an agent's
+// profile asks for that agent's routines; the rail asks for everybody's. Both
+// arrive through the one destination function below, which is what makes the
+// scope impossible to leave behind: a route that does not name an agent clears
+// it, because it passes null rather than because somebody remembered to.
+let scopeAgentId = null;
+
 // The clock, taken from the global so a test can supply one. Undeclared
 // identifiers are safe under typeof, so this works when the module is
 // required in node with no global at all.
@@ -85,6 +94,7 @@ function allRoutines() {
   const out = [];
   const roster = typeof agents !== 'undefined' && agents ? agents : [];
   for (const agent of roster) {
+    if (scopeAgentId && agent.id !== scopeAgentId) continue;
     if (!agent.routines) continue;
     const seen = {};
     for (const routine of agent.routines) {
@@ -296,6 +306,28 @@ function renderRoutines() {
 }
 
 /**
+ * Land the reader on this list, scoped to one agent or to the whole team.
+ *
+ * THE ONE DESTINATION, USED BY BOTH ROUTES. The rail's own arm calls this with
+ * no agent and a routine row on an agent's profile calls it with that agent,
+ * so there is one place that decides what arriving here means and one place
+ * that can get the rail wrong. A second copy of these three calls is exactly
+ * how `openRoutineEditor` ended up lighting Team on a routines surface.
+ *
+ * It sets the nav state itself, for the same reason `showProfile` does: every
+ * function that lands the user on a section says which section, or the rail
+ * lies about where the user is on every route whose author did not remember.
+ *
+ * @param {string|null} agentId
+ */
+function showRoutinesForAgent(agentId) {
+  scopeAgentId = agentId || null;
+  if (typeof setNavState === 'function') setNavState('routines');
+  if (typeof showView === 'function') showView('routines');
+  renderRoutines();
+}
+
+/**
  * The server refused the last pause or delete.
  *
  * Rendered where the control was pressed. The words are the server's whenever
@@ -352,7 +384,8 @@ function routinesSetPaused(index, paused) {
 }
 
 return {
-  renderRoutines, routinesAskDelete, routinesCancelDelete, routinesConfirmDelete, routinesSetPaused,
+  renderRoutines, showRoutinesForAgent,
+  routinesAskDelete, routinesCancelDelete, routinesConfirmDelete, routinesSetPaused,
   routinesActionFailed, routinesActionCleared,
 };
 }));

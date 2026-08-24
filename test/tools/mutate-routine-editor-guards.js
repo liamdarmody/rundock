@@ -228,8 +228,8 @@ const MUTATIONS = [
   // directly, which says nothing about whether anything calls it.
   [PROFILE, 'an agent profile offers a way to schedule its skills',
     '      <button class="settings-btn-primary" type="button" data-profile-action="add-routine"\n'
-    + '        data-agent-id="${esc(a.id)}" onclick="addRoutineForAgent(\'${esc(a.id)}\')">Add routine</button>\n',
-    ''],
+    + '        data-agent-id="${esc(a.id)}" onclick="addRoutineForAgent(\'${esc(a.id)}\')">Add routine</button>`;',
+    '`;'],
   [PROFILE, 'the way in carries the agent whose profile it is on',
     'onclick="addRoutineForAgent(\'${esc(a.id)}\')"',
     'onclick="addRoutineForAgent(\'\')"'],

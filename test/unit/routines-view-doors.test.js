@@ -44,6 +44,7 @@ const EDITOR_MODEL_SRC = read('public', 'routine-editor-model.js');
 // off it, in the order index.html loads them.
 const SKILLS_MODEL_SRC = read('public', 'skills-model.js');
 const EDITOR_VIEW_SRC = read('public', 'views', 'routine-editor.js');
+const PROFILE_VIEW_SRC = read('public', 'views', 'profile.js');
 
 // ===== THE ENUMERATION =====
 //
@@ -58,10 +59,15 @@ const RENDERERS = [
     surface: 'the roster arriving from the server',
     pressedBy: 'the roster arriving from the server draws the list',
   },
+  // THE RAIL NO LONGER DRAWS THIS LIST ITSELF and neither does the profile.
+  // Both arrive through one destination function, which is where the drawing
+  // moved to. Two routes into one section with two copies of the same three
+  // calls is how `openRoutineEditor` ended up lighting Team on a routines
+  // surface, so the rail's arm passes no agent and a profile row passes one.
   {
-    file: 'app.js',
-    line: "else if(nav==='routines')",
-    surface: 'the Routines entry on the nav rail',
+    file: 'views/routines.js',
+    line: 'function showRoutinesForAgent(agentId)',
+    surface: 'every arrival at this list, from the rail with no agent and from a profile row with one',
     pressedBy: 'the rail entry shows the view and draws the list',
   },
   {
@@ -134,6 +140,31 @@ const ROUTES = [
   {
     what: 'the section the rail entry reveals in the sidebar',
     pressedBy: 'every section the rail carries reveals a sidebar the reader can see',
+  },
+  {
+    what: "a routine row in the Routines box on an agent's profile",
+    pressedBy: 'a routine row on a profile opens this list scoped to that agent',
+  },
+];
+
+// Every call the client makes into this view TO LAND A READER ON IT. Separate
+// from REPLIES because the two fail differently: a reply that arrives on the
+// wrong screen is a message handled in the wrong place, and a route that
+// arrives with the wrong scope is a list that has silently lost rows. Both are
+// checked against the source by the same rule, so one added later fails by
+// name until somebody lists it with the test that presses its surface.
+const ENTRIES = [
+  {
+    call: 'showRoutinesForAgent',
+    from: 'public/app.js',
+    surface: "the rail's own arm, which passes no agent and so asks for the whole team",
+    pressedBy: 'the rail entry shows the view and draws the list',
+  },
+  {
+    call: 'showRoutinesForAgent',
+    from: 'public/views/profile.js',
+    surface: "a routine row in the Routines box on an agent's profile",
+    pressedBy: 'a routine row on a profile opens this list scoped to that agent',
   },
 ];
 
@@ -209,7 +240,7 @@ describe('every way this list gets drawn is enumerated', () => {
 
   test('every renderer names a test, and every named test exists', () => {
     const suite = fs.readFileSync(__filename, 'utf-8');
-    for (const entry of [...RENDERERS, ...ROUTES, ...REPLIES]) {
+    for (const entry of [...RENDERERS, ...ROUTES, ...REPLIES, ...ENTRIES]) {
       assert.ok(entry.pressedBy, `${entry.file || entry.what || entry.call} needs a test`);
       assert.ok(suite.includes(`test('${entry.pressedBy}'`),
         `this file names "${entry.pressedBy}" but no test here has that name`);
@@ -230,7 +261,11 @@ describe('every way this list gets drawn is enumerated', () => {
       const src = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
       for (const m of src.matchAll(/(?:switchNav|showView|setNavState)\((['"])([\w-]+)\1\)/g)) {
         if (m[2] !== 'routines') continue;
-        assert.ok(/routine-editor\.js$/.test(rel),
+        // The editor, which leaves for this list after a save, and this view
+        // itself, which names its own section on the one destination function
+        // every route runs through. Anything else navigating here is a route
+        // with no row.
+        assert.ok(/routine-editor\.js$|views\/routines\.js$/.test(rel),
           `${rel} navigates to the routines section and is not a listed route`);
       }
     }
@@ -362,19 +397,67 @@ describe('the ways this list gets drawn, pressed', () => {
     const body = appPiece(/else if\(nav==='routines'\)\s*\{([\s\S]*?)\}/, "switchNav's routines arm");
     w.shown = null;
     w.showView = (v) => { w.shown = v; };
-    w.drawn = 0;
-    const realRender = w.renderRoutines;
-    w.renderRoutines = () => { w.drawn++; realRender(); };
+    w.navState = null;
+    w.setNavState = (v) => { w.navState = v; };
     w.closeFindBar = () => {};
-    w.setNavState = () => {};
     w.switchNav = (nav) => {
       assert.strictEqual(nav, 'routines', 'the rail entry asks for another section');
       w.eval(`(function () {${body}\n})()`);
     };
     entry.click();
     assert.strictEqual(w.shown, 'routines', 'the rail entry does not show this view');
-    assert.strictEqual(w.drawn, 1, 'the rail entry shows the view without drawing anything into it');
-    assert.strictEqual(doc.querySelectorAll('.routine-row').length, 1);
+    assert.strictEqual(w.navState, 'routines', 'the rail says one section and the pane shows another');
+    assert.strictEqual(doc.querySelectorAll('.routine-row').length, 1,
+      'the rail entry shows the view without drawing anything into it');
+    dom.window.close();
+  });
+
+  // THE OTHER ROUTE, and the one that carries a scope. Pressed as markup on a
+  // rendered profile, because what a row does is the claim: calling the
+  // destination function would say nothing about whether any row calls it.
+  //
+  // The scope is checked in BOTH directions in one walk. A list that shows the
+  // agent's routines proves nothing on a workspace with one agent, and a scope
+  // that never clears is a list that has silently lost rows the next time
+  // somebody arrives from the rail.
+  test('a routine row on a profile opens this list scoped to that agent', () => {
+    const { w, doc, dom } = shell();
+    const profilePanel = /<div id="view-profile"[\s\S]*?<\/div>\s*<\/div>/.exec(INDEX_SRC);
+    assert.ok(profilePanel, 'index.html no longer carries a profile panel');
+    doc.body.insertAdjacentHTML('beforeend', profilePanel[0]);
+    w.eval(PROFILE_VIEW_SRC);
+    w.agents = [
+      w.agents[0],
+      { id: 'ted', displayName: 'Ted', colour: '#6BC67E', icon: 'T', status: 'onTeam',
+        routines: [{ ...ROUTINE, name: 'Reconcile the delivery log' }] },
+    ];
+    w.conversations = [];
+    w.skills = [];
+    w.formatTimeAgo = () => 'a while ago';
+    w.getGuide = () => ({ id: 'doc' });
+    w.showView = () => {};
+    w.setNavState = () => {};
+    w.switchNav = () => {};
+    w.startConversation = () => {};
+    w.addToTeam = () => {};
+    w.openConversation = () => {};
+    w.selectSkill = () => {};
+    w.addRoutineForAgent = () => {};
+
+    w.showProfile('piper');
+    const row = doc.querySelector('#profile-content .profile-card-item[onclick^="showRoutinesForAgent"]');
+    assert.ok(row, 'the profile carries no routine row that opens this list');
+    row.click();
+    let listed = doc.getElementById('routines-content').textContent;
+    assert.match(listed, /Compile the ops summary/, 'the list does not carry the agent whose row was pressed');
+    assert.ok(!listed.includes('Reconcile the delivery log'),
+      'the list carries another agent, so the row opened it unscoped');
+
+    // And the rail, which asks for everybody, gets everybody.
+    w.eval(`(function () {${appPiece(/else if\(nav==='routines'\)\s*\{([\s\S]*?)\}/, "switchNav's routines arm")}\n})()`);
+    listed = doc.getElementById('routines-content').textContent;
+    assert.match(listed, /Reconcile the delivery log/,
+      'the rail entry inherited the last profile\'s scope, so the list has lost rows');
     dom.window.close();
   });
 
@@ -449,9 +532,20 @@ describe('every reply that reaches this view is enumerated', () => {
         if (new RegExp(`(?<![.\\w$])${call}\\(`).test(src)) found.push(call);
       }
     }
-    assert.deepStrictEqual([...new Set(found)].sort(), [...new Set(REPLIES.map(r => r.call))].sort(),
+    assert.deepStrictEqual([...new Set(found)].sort(),
+      [...new Set([...REPLIES, ...ENTRIES].map(r => r.call))].sort(),
       'the client calls into this view from somewhere this file does not list, or a listed '
       + 'call no longer exists. Add the row and the test that drives it, or remove the row.');
+  });
+
+  // And an entry is named with the file it is called from, so moving the call
+  // fails here rather than passing on the strength of the name alone.
+  test('every entry is called from the file this file says it is called from', () => {
+    for (const entry of ENTRIES) {
+      const src = read(...entry.from.split('/'));
+      assert.ok(new RegExp(`(?<![.\\w$])${entry.call}\\(`).test(src),
+        `${entry.from} no longer calls ${entry.call}`);
+    }
   });
 
   test('every reply is on the case this file says it is on', () => {

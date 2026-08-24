@@ -212,9 +212,16 @@ function pressUnscopedDoor(doc, w) {
 // profile. It is also the ONLY door into the editor's zero-skills state, since
 // the routines view answers a workspace with no skills with an offer to build
 // one rather than with an offer to schedule one.
+// THE AGENT'S ROUTINES ARE CLEARED FIRST, and that is the door's condition
+// rather than a convenience. The offer is feature discovery: it teaches that
+// routines exist, in the one place where an agent with no schedule is being
+// looked at, and it goes once that agent has one. So the state this door
+// exists in is the state it is pressed in.
 function pressScopedDoor(doc, dom, agentId) {
-  dom.window.showProfile = dom.window.RundockProfileView.showProfile;
-  dom.window.showProfile(agentId);
+  const w = dom.window;
+  w.agents = w.agents.map(a => (a.id === agentId ? { ...a, routines: [] } : a));
+  w.showProfile = w.RundockProfileView.showProfile;
+  w.showProfile(agentId);
   return press(doc, '[data-profile-action="add-routine"]');
 }
 
@@ -361,9 +368,8 @@ describe('the whole journey, by pressing only', () => {
   // The breadcrumb, pressed, from the door that renders one.
   test('the breadcrumb returns to the profile the editor was opened from', () => {
     const { doc, w, dom } = shell();
-    dom.window.showProfile = (id) => { w.profileShown = id; };
-    w.RundockProfileView.showProfile('piper');
-    press(doc, '[data-profile-action="add-routine"]');
+    pressScopedDoor(doc, dom, 'piper');
+    w.showProfile = (id) => { w.profileShown = id; };
     w.profileShown = null;
     press(doc, '[data-routine-editor="back"]');
     assert.strictEqual(w.profileShown, 'piper');

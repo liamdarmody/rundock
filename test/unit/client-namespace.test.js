@@ -214,6 +214,7 @@ const MANIFEST = {
     "routinesCancelDelete",
     "routinesConfirmDelete",
     "routinesSetPaused",
+    "showRoutinesForAgent",
   ],
   "settings.js": [
     "changeWorkspace",

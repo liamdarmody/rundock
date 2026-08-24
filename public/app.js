@@ -1019,7 +1019,7 @@ function switchNav(nav) {
   else if(nav==='skills') { showView('skills'); renderSkillsIfEmpty(); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } }
   else if(nav==='conversations') { if(activeConversation) { showView('chat'); if(unread.clearConvo(activeConversation.id)) { updateUnreadBadge(); renderConvoList(); } } else { const target = pickDefaultConversation(); if(target) { openConversation(target.id); } else { newConversation(); } } }
   else if(nav==='team') { showView('home'); renderOrgChart(); }
-  else if(nav==='routines') { showView('routines'); renderRoutines(); }
+  else if(nav==='routines') { showRoutinesForAgent(null); }
 }
 function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings','routine-editor','routines'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }
 function goHome() { discardIfEmpty(); activeConversation=null; switchNav('conversations'); }
