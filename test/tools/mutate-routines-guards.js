@@ -350,9 +350,12 @@ const MUTATIONS = [
   // Removing this line leaves a confirmation the reader never opened on the
   // page, aimed at whichever routine now sits at that index, and confirming it
   // deletes that one.
+  // Anchored on the line that follows the clear rather than on the nav call that
+  // used to: the section is a property of the view now, so showRoutinesForAgent
+  // names none. The guard being broken is the clear itself, unchanged.
   [VIEW_SCOPE, 'arriving on the list clears a confirmation opened under another scope',
-    '  pendingDelete = null;\n  pendingProblem = null;\n  if (typeof setNavState',
-    '  if (typeof setNavState'],
+    '  pendingDelete = null;\n  pendingProblem = null;\n  if (typeof showView',
+    '  if (typeof showView'],
 
   // ===== WHAT THE TEAM PANEL NO LONGER CARRIES =====
   //
