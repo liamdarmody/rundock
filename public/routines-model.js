@@ -77,7 +77,42 @@
   const LEAD = {
     title: 'Routines',
     lead: 'Every scheduled skill across your team, and when it runs next.',
+    // SCOPED TO ONE AGENT, THE SENTENCE SAYS SO. A filtered list under an
+    // unfiltered sentence reads as a list that has lost rows, which is the one
+    // reading a header must never invite.
+    //
+    // THE NAME IS A SLOT AND NEVER A CONCATENATION, the same rule the editor's
+    // own leads follow: the whole sentence is in this object, so a reviewer
+    // reads the shipped copy here rather than assembling it out of a template
+    // and a variable somewhere else.
+    scopedLead: "Every scheduled skill {agent} runs, and when it runs next.",
   };
+
+  /**
+   * The header this view heads itself with: a title and the sentence under it.
+   *
+   * THE SUBTITLE IS THE LEAD SENTENCE, MOVED. It used to be a paragraph below
+   * the heading; the component this view now shares with the skills view
+   * carries it inside the header block instead, which is why it arrives from
+   * here rather than being drawn separately.
+   *
+   * @param {{agentName?: string|null}} [input] the agent the list is scoped
+   *   to, when it is scoped to one.
+   */
+  function header(input) {
+    const agentName = (input && input.agentName) || null;
+    return {
+      title: LEAD.title,
+      // THE NAME IS INSERTED, NEVER INTERPRETED. A string replacement reads
+      // dollar sequences in what it is given as instructions: $& is the match,
+      // $` and $' the text either side, $$ a literal dollar. An agent can be
+      // named anything, so a display name carrying $& would put the slot's own
+      // text back into the sentence instead of the name. A function
+      // replacement is handed the match and returns a value, so nothing in
+      // the name is read as a pattern.
+      subtitle: agentName ? LEAD.scopedLead.replace('{agent}', () => agentName) : LEAD.lead,
+    };
+  }
 
   /**
    * What the list says when the server refused a pause or a delete.
@@ -291,11 +326,36 @@
     return `Every ${freq.label} at ${time.label}`;
   }
 
-  function routineSentence(input) {
+  /**
+   * The same sentence, as the two pieces it is made of.
+   *
+   * WHY THE PARTS RATHER THAN A SPLIT AT THE VIEW. The skill name is the one
+   * reachable thing on a row, so the view has to draw it inside its own
+   * element. Recovering it from the assembled string means matching
+   * user-written text inside escaped markup, which is exactly the class of
+   * thing the namesake counter above exists to avoid: a routine may be called
+   * "run: something", and a name carrying a bracket or an ampersand does not
+   * come back out of escaped markup as it went in.
+   *
+   * SO THE MODEL RETURNS THE PIECES AND THE VIEW COMPOSES THEM, which keeps
+   * every word of this sentence asserted here rather than in a DOM test. The
+   * assembled sentence is built FROM the parts rather than beside them, so the
+   * two cannot say different things.
+   *
+   * `lead` carries its own trailing space. A caller that concatenates gets the
+   * sentence back exactly; a caller that puts the name in its own element gets
+   * the space on the outside of it, where a link's underline does not reach.
+   */
+  function sentenceParts(input) {
     const words = scheduleWords(input && input.schedule);
     const name = (input && input.name) || null;
     if (!words || !name) return null;
-    return `${words}, run: ${name}`;
+    return { lead: `${words}, run: `, name: name };
+  }
+
+  function routineSentence(input) {
+    const parts = sentenceParts(input);
+    return parts ? `${parts.lead}${parts.name}` : null;
   }
 
   /**
@@ -311,6 +371,37 @@
    * routine, so while a run is going there is no completed outcome to report,
    * and the row falls back to the single line revision 6 drew.
    */
+  /**
+   * Whether the most recent COMPLETED run failed.
+   *
+   * SEPARATED FROM `outcomeOf` BECAUSE TWO SURFACES ASK TWO DIFFERENT
+   * QUESTIONS, and reading them as one question is what made this wrong.
+   *
+   * A ROW asks what happened most recently, which is the later of a run and a
+   * slot that went by unserved, so a miss after a failure is what the row
+   * says: it is the newer fact and it is the one that explains why nothing
+   * has run since.
+   *
+   * THE RAIL asks whether the last completed run failed, full stop. A failure
+   * followed by a night with the machine shut is still a failure nobody has
+   * seen, and letting the miss mask it would hide the only alarming state in
+   * the product behind the most ordinary event there is. So the dot is
+   * decided here and the row's wording is decided by `outcomeOf`, which leans
+   * on this for its own failure branch so the two cannot disagree about what
+   * a failure IS while disagreeing about what masks it.
+   *
+   * A run still in flight has no completed outcome to report, and a routine
+   * that has never run has none either.
+   */
+  function lastCompletedRunFailed(input) {
+    const statusWord = (input && input.lastRunStatus) || null;
+    if (statusWord === 'running') return false;
+    if (!asDate(input && input.lastStart)) return false;
+    // A run the process died inside did not succeed. It borrows the failure
+    // tone rather than adding a fifth state nothing in the frame draws.
+    return statusWord === 'failed' || statusWord === 'interrupted';
+  }
+
   function outcomeOf(input) {
     const started = asDate(input && input.lastStart);
     const missedSlot = asDate(input && input.missedSlot);
@@ -318,9 +409,7 @@
     if (statusWord === 'running') return null;
     if (missedSlot && (!started || missedSlot > started)) return 'missed';
     if (!started) return null;
-    // A run the process died inside did not succeed. It borrows the failure
-    // tone rather than adding a fifth state nothing in the frame draws.
-    if (statusWord === 'failed' || statusWord === 'interrupted') return 'failed';
+    if (lastCompletedRunFailed(input)) return 'failed';
     const lastSlot = asDate(input && input.lastSlot);
     // How late the run STARTED, with nothing about how long it then took.
     if (lastSlot && started - lastSlot >= CATCH_UP_AFTER_MS) return 'caught-up';
@@ -357,6 +446,34 @@
   }
 
   /**
+   * Whether anything on the team is in the one state the rail is allowed to
+   * alarm about.
+   *
+   * THIS IS THE THREE-TONE RULING REACHING THE CHROME. A catch-up is a
+   * success, a run in flight has no outcome yet, a slot that went by unserved
+   * is history, and a paused routine is not going to run. Only a real failure
+   * is a failure, and a dot that rose on anything else would teach its reader
+   * to ignore the one signal that matters.
+   *
+   * PAUSED IS EXCLUDED BEFORE THE QUESTION IS ASKED, and it has to be rather
+   * than merely happening to be. A paused routine has no next run by
+   * definition, so it can never succeed again, so a dot raised by one could
+   * never be cleared by the rule that clears dots. It would sit on the rail
+   * until the routine was resumed or deleted, which is a permanent alarm about
+   * something the user has already decided to stop.
+   *
+   * A LATER MISSED SLOT DOES NOT MASK A FAILURE HERE, which is where this
+   * parts company with what a row says. See `lastCompletedRunFailed`.
+   *
+   * @param {Array<{lastStart?: any, lastRunStatus?: string|null, lastSlot?: any,
+   *   missedSlot?: any, paused?: boolean}>} [list]
+   */
+  function anyFailure(list) {
+    const routines = Array.isArray(list) ? list : [];
+    return routines.some(routine => !(routine && routine.paused) && lastCompletedRunFailed(routine));
+  }
+
+  /**
    * When it runs next, or that it is paused.
    *
    * THE INSTANT IS NOT DECIDED HERE. It arrives already computed, by one path
@@ -372,11 +489,72 @@
     return { text: `Next run: ${words}`, className: 'next-run' };
   }
 
+  /**
+   * The list in the order a reader needs it: soonest next run first.
+   *
+   * WHY THIS IS NOT THE ORDER THE ROSTER HANDS OVER. The roster is file order,
+   * which is the order routines happen to have been written in, and that is
+   * arbitrary to everyone except whoever wrote the file. Invisible at nine
+   * routines and the thing that makes this view unusable at thirty, and no
+   * agent filter fixes it: whichever agent is selected, the rows underneath
+   * are still in an order nobody chose.
+   *
+   * THREE BANDS, AND THE THIRD IS THE ONE WITH A RULE ATTACHED. A routine with
+   * a next run sorts by it. A routine with none, because its schedule is one
+   * the editor never offered and therefore has no computable slot, cannot be
+   * placed on the timeline at all, so it sits after everything that can be.
+   * Paused routines go last as a group: a paused routine has no next run by
+   * definition, and mixing it into the band above would put "nothing is
+   * scheduled" and "this will not run" in one undifferentiated tail.
+   *
+   * STABLE WITHIN EACH BAND, which is the whole of the paused rule and half of
+   * the other two. Array sort has been required to be stable since ES2019, so
+   * two routines due at the same instant, and every paused routine, keep the
+   * order the roster gave them. The alternative is a list that reshuffles
+   * itself on every redraw for no reason a reader could see.
+   *
+   * NOTHING HERE READS A CLOCK. Sorting by instant needs no `now`: which of
+   * two runs comes first does not depend on when the question is asked.
+   *
+   * @param {any[]} list
+   * @param {(item: any) => {nextRun?: any, paused?: boolean}} [read] where the
+   *   two facts sit on an item. Defaults to the item itself, so this module's
+   *   own tests can drive it with the two facts and nothing else, and the view
+   *   can hand over its own entry shape without this knowing anything about it.
+   */
+  function orderByNextRun(list, read) {
+    const facts = typeof read === 'function' ? read : (item => item);
+    const band = (item) => {
+      const f = facts(item) || {};
+      if (f.paused) return 2;
+      return asDate(f.nextRun) ? 0 : 1;
+    };
+    // ONLY THE FIRST BAND IS SORTED BY TIME, and the guard is the rule rather
+    // than a shortcut. A paused routine can still carry the instant it WOULD
+    // have run at, so comparing instants across the paused band puts a paused
+    // routine that kept its next run behind one that has none, which is an
+    // order derived from a fact the reader was told does not apply. Paused is
+    // a band, not a time; so is having no next run at all.
+    const at = (item) => asDate((facts(item) || {}).nextRun).getTime();
+    // A COPY, NOT THE CALLER'S ARRAY. Array sort reorders in place, and a
+    // caller that also holds the roster order for something else would find it
+    // silently rewritten. The view counts namesakes in roster order before
+    // this runs, and that count is what a delete is addressed by.
+    return list.slice().sort((a, b) => {
+      const gap = band(a) - band(b);
+      if (gap !== 0) return gap;
+      return band(a) === 0 ? at(a) - at(b) : 0;
+    });
+  }
+
   /** Everything one row shows, as data. */
   function row(input) {
     const option = editor.runOnOption(input && input.runOn);
     return {
       sentence: routineSentence(input),
+      // The same sentence in pieces, so the view can make the skill name
+      // reachable without matching text back out of its own escaped markup.
+      parts: sentenceParts(input),
       meta: (input && input.agentName) || null,
       runsOn: option ? `Runs on ${option.sentence}` : null,
       status: runStatus(input),
@@ -409,9 +587,9 @@
 
   return {
     OUTCOMES, LEAD, EMPTY, ACTION_PROBLEM, CATCH_UP_AFTER_MS,
-    actionProblem, emptyState,
+    actionProblem, emptyState, header,
     dayWords, clockWords, zoneWords, timeWords,
-    scheduleWords, routineSentence,
-    outcomeOf, runStatus, nextRunLabel, row, deleteConfirmation,
+    scheduleWords, routineSentence, sentenceParts,
+    outcomeOf, lastCompletedRunFailed, anyFailure, runStatus, nextRunLabel, orderByNextRun, row, deleteConfirmation,
   };
 }));

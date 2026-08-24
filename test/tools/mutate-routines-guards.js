@@ -121,6 +121,10 @@ const INDEX_RAIL = { src: path.join(ROOT, 'public', 'index.html'), suite: 'test/
 const VIEW_RAIL = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/routines-view.test.js' };
 const SKILLS_VIEW_RAIL = { src: path.join(ROOT, 'public', 'views', 'skills.js'), suite: 'test/unit/routines-view.test.js' };
 const SKILLS_VIEW = { src: path.join(ROOT, 'public', 'views', 'skills.js'), suite: 'test/unit/skills-empty.test.js' };
+// The chrome's own stylesheet, where the failure dot's colour actually lives.
+// The three-tone ruling is about what a reader SEES, and a dot proven against
+// a token name in a module is the mistake this project already made once.
+const SIDEBAR_CSS = { src: path.join(ROOT, 'public', 'styles', 'components', 'sidebar.css'), suite: 'test/unit/routines-view.test.js' };
 // The dispatch call that settles which routines empty state is shown, watched
 // by the enumeration of everything that draws this list.
 const APP_SKILLS = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routines-view-doors.test.js' };
@@ -383,8 +387,8 @@ const MUTATIONS = [
 
   // ===== WHO DRAWS THIS LIST, AND HOW A READER ARRIVES AT IT =====
   [APP, 'the arriving roster redraws the list',
-    'renderRoutinesPanel(); renderRoutines(); renderConvoList();',
-    'renderRoutinesPanel(); renderConvoList();'],
+    'renderRoutinesPanel(); renderRoutines(); updateRoutineFailureBadge();',
+    'renderRoutinesPanel(); updateRoutineFailureBadge();'],
   [APP, 'the rail entry draws something into the view it shows',
     "  else if(nav==='routines') { showRoutinesForAgent(null); }",
     "  else if(nav==='routines') { }"],
@@ -548,8 +552,8 @@ const MUTATIONS = [
     'renderOrgChart(); renderRoutinesPanel(); renderRoutines();',
     'renderOrgChart(); renderRoutines();'],
   [VIEW_SCOPE, 'the list is the scope the panel is on',
-    '  return scope ? out.filter(entry => entry.agent.id === scope) : out;',
-    '  return out;'],
+    '  const scoped = scope ? out.filter(entry => entry.agent.id === scope) : out;',
+    '  const scoped = out;'],
 
   // ===== A SCOPE ROW IS NOT A ROSTER ROW =====
   // The complaint the panel answers is that the two sidebars looked the same,
@@ -582,8 +586,8 @@ const MUTATIONS = [
     '    if (missedSlot && (!started || missedSlot > started)) return \'missed\';',
     '    if (missedSlot) return \'missed\';'],
   [MODEL, 'a run the process died inside is a failure',
-    "    if (statusWord === 'failed' || statusWord === 'interrupted') return 'failed';",
-    "    if (statusWord === 'failed') return 'failed';"],
+    "    return statusWord === 'failed' || statusWord === 'interrupted';",
+    "    return statusWord === 'failed';"],
 
   // ===== THE WORDS =====
   [MODEL, 'a missed row names the cause rather than the routine',
@@ -766,9 +770,15 @@ const MUTATIONS = [
     '  renderSkillsSidebar(skills);\n',
     '  document.querySelector(\'.nav-item[data-nav="skills"]\').style.display = skills.length ? \'\' : \'none\';\n'
     + '  renderSkillsSidebar(skills);\n'],
+  // The sentence is composed rather than escaped as one blob now, so escaping
+  // is watched on both of the roads it takes: the plain sentence and the
+  // pieces the link is built from.
   [VIEW, 'a routine name reaches the page as text, not as markup',
-    '`<div class="rr-sentence">${esc(sentence)}</div>',
-    '`<div class="rr-sentence">${sentence}</div>'],
+    '  if (!routineSkill(row.parts.name)) return esc(row.sentence);',
+    '  if (!routineSkill(row.parts.name)) return row.sentence;'],
+  [VIEW, 'a routine name reaches the link as text, not as markup',
+    '${esc(row.parts.name)}</button>',
+    '${row.parts.name}</button>'],
 
   // ===== THE TWO CONTROLS =====
   // The byte check in the delete handler is a backstop against a WRITER that
@@ -790,6 +800,119 @@ const MUTATIONS = [
   [ROUTINES, 'a removal takes the block it was asked for and no other',
     '  })[occurrence];\n  if (!target) return content;\n\n  const from',
     '  })[0];\n  if (!target) return content;\n\n  const from'],
+  // ===== THE ORDER THE LIST IS READ IN =====
+  // Roster order is file order. It is invisible at nine routines and is what
+  // makes the view unusable at thirty, and reverting to it is a one-line
+  // simplification that reads as tidying.
+  [VIEW, 'the list is ordered rather than rendered in the order the roster arrived',
+    '  return routinesModel().orderByNextRun(scoped, entry => entry.routine);',
+    '  return scoped;'],
+  [MODEL, 'paused routines are a band of their own rather than sorted with the rest',
+    '      if (f.paused) return 2;',
+    ''],
+  [MODEL, 'the paused band keeps roster order rather than sorting by an instant it was told does not apply',
+    '      return band(a) === 0 ? at(a) - at(b) : 0;',
+    '      return at(a) - at(b);'],
+  [MODEL, 'the caller keeps the roster order the namesake count was taken over',
+    '    return list.slice().sort((a, b) => {',
+    '    return list.sort((a, b) => {'],
+  // ===== THE SKILL NAME AS A DESTINATION =====
+  // The row outlives the skill it names, because the two live in different
+  // files. Linking unconditionally offers a page for something that is gone.
+  [VIEW, 'the name is a link only where the skill it names still exists',
+    '  if (!routineSkill(row.parts.name)) return esc(row.sentence);',
+    ''],
+  // The sentence is composed from the model's pieces, each escaped alone. Going
+  // back to matching the name inside the assembled string is the tidy-looking
+  // change that puts user-written text through markup twice.
+  [VIEW, 'the pieces are escaped separately rather than the assembled sentence being cut up',
+    '  return esc(row.parts.lead)',
+    '  return esc(row.sentence).replace(esc(row.parts.name), '],
+  [VIEW, 'the jump sets the rail as well as the pane',
+    "  if (typeof switchNav === 'function') switchNav('skills');",
+    ''],
+  [VIEW, 'the skill is resolved again at press time rather than assumed to still be there',
+    '  if (!skill) return;',
+    ''],
+  [MODEL, 'the sentence is built from the pieces rather than beside them',
+    '    return parts ? `${parts.lead}${parts.name}` : null;',
+    "    return parts ? `${parts.lead}, run: ${parts.name}` : null;"],
+  [MODEL, 'the lead carries the space that separates it from the name',
+    '    return { lead: `${words}, run: `, name: name };',
+    '    return { lead: `${words}, run:`, name: name };'],
+  // ===== THE HEADER =====
+  // The component, not the size. A view that LISTS things heading itself the
+  // way the view that CONFIGURES things does is what this replaced, and going
+  // back is a one-line change that reads as removing an indirection.
+  [VIEW, 'the header is the component the skills view uses rather than the settings heading',
+    '  let h = \'<div class="profile-header">\'',
+    '  let h = `<div class="settings-section-title">${esc(routinesModel().LEAD.title)}</div>`;\n  const unused = \'<div class="profile-header">\''],
+  [VIEW, 'the glyph is the clock rather than nothing',
+    '    + `<div class="profile-avatar skill-avatar">${CLOCK_SVG}</div>`',
+    '    + \'<div class="profile-avatar skill-avatar"></div>\''],
+  [VIEW, 'the lead sentence is under the title rather than dropped with the paragraph it left',
+    '    + (subtitle ? `<div class="routines-subtitle">${esc(subtitle)}</div>` : \'\')',
+    "    + ''"],
+  [VIEW, 'the empty pane takes its own state line rather than the sentence about a full list',
+    '  let h = headerHtml(state.lead)',
+    '  let h = listHeaderHtml()'],
+  [MODEL, 'the scoped subtitle names the agent rather than repeating the unscoped sentence',
+    "      subtitle: agentName ? LEAD.scopedLead.replace('{agent}', () => agentName) : LEAD.lead,",
+    '      subtitle: LEAD.lead,'],
+  [STYLES, 'the subtitle takes the body size rather than restating the title',
+    '.routines-subtitle { font-size: var(--body); color: var(--text-2); }',
+    '.routines-subtitle { font-size: var(--title); color: var(--text-2); }'],
+  // ===== THE FAILURE DOT =====
+  // The three-tone ruling reaching the chrome. A dot that rises on a missed
+  // slot teaches its reader to ignore the dot, which is what the ruling was
+  // settled to prevent, so the rule and each half of the wiring are watched.
+  [APP_OPENER, 'the dot is raised on a failure rather than on anything that ran',
+    '  if (RundockRoutinesModel.anyFailure(facts)) {',
+    '  if (facts.length) {'],
+  // The removal branch, named with enough of its own function around it to be
+  // unique: the two badges above this one end in the same three lines, and a
+  // guard that matched all three would break whichever came first and report
+  // on whatever that turned red.
+  [APP_OPENER, 'the dot is taken away again once nothing is failing',
+    "      badge.className = 'nav-badge-failed';\n      navBtn.appendChild(badge);\n    }\n  } else {\n    if (badge) badge.remove();\n  }",
+    "      badge.className = 'nav-badge-failed';\n      navBtn.appendChild(badge);\n    }\n  } else {\n  }"],
+  [APP_OPENER, 'every agent on the roster is looked at, not only the first',
+    '  for (const agent of agents || []) {',
+    '  for (const agent of (agents || []).slice(0, 1)) {'],
+  [APP_OPENER, 'the roster broadcast is what updates the rail',
+    ' updateRoutineFailureBadge();',
+    ''],
+  [APP_OPENER, 'the outcome is read from the run state the row reads',
+    '        lastRunStatus: routine.state ? routine.state.status : null,',
+    '        lastRunStatus: null,'],
+  [MODEL, 'only a real failure counts as a failure',
+    '    return routines.some(routine => !(routine && routine.paused) && lastCompletedRunFailed(routine));',
+    '    return routines.length > 0;'],
+  [SIDEBAR_CSS, 'the dot takes the danger token rather than the amber one beside it',
+    '.nav-badge-failed { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--danger); border-radius: var(--radius-circle); pointer-events: none; }',
+    '.nav-badge-failed { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--attention); border-radius: var(--radius-circle); pointer-events: none; }'],
+  // ===== THE PAUSE CLAUSE AND THE FAILURE QUESTION =====
+  [MODEL, 'a paused routine is excluded before the failure question is asked',
+    '    return routines.some(routine => !(routine && routine.paused) && lastCompletedRunFailed(routine));',
+    '    return routines.some(routine => lastCompletedRunFailed(routine));'],
+  [APP_OPENER, 'the rail is told whether a routine is paused',
+    '        paused: !!routine.paused,',
+    ''],
+  // The rail asks about the last completed run and the row asks what happened
+  // most recently. Collapsing the rail back onto the row's answer lets an
+  // ordinary missed slot hide the only alarming state in the product.
+  [MODEL, 'a later missed slot does not mask a failed run on the rail',
+    '    return routines.some(routine => !(routine && routine.paused) && lastCompletedRunFailed(routine));',
+    "    return routines.some(routine => !(routine && routine.paused) && outcomeOf(routine) === 'failed');"],
+  [MODEL, 'the agent name is inserted rather than read as a replacement pattern',
+    "      subtitle: agentName ? LEAD.scopedLead.replace('{agent}', () => agentName) : LEAD.lead,",
+    "      subtitle: agentName ? LEAD.scopedLead.replace('{agent}', agentName) : LEAD.lead,"],
+  // The header reads the one scope the view holds, rather than a notion of its
+  // own. Two notions of scope in one file is how a filtered list ends up under
+  // an unfiltered sentence.
+  [VIEW, 'the header reads the scope the panel actually holds',
+    '  if (!scope) return null;',
+    '  if (true) return null;'],
 ];
 
 // The reporter is named explicitly rather than left to the default, which
@@ -828,7 +951,7 @@ function run() {
     SKILLS_VIEW_RAIL, PANEL, SCOPE_MODEL, INDEX_PANEL, APP_PANEL, STYLES_PANEL, VIEW_SCOPE,
     PANEL_PRESS, APP_DISPATCH, VIEW_CONFIRM, APP_WORKSPACE, EDITOR_NAV,
     TEAM_PANEL, INDEX_SWEEP, PROFILE_BOXES, PROFILE_ROUTE,
-    GUIDE_COPY_MOD, TEAM_COPY, PROFILE_COPY, TEAM_DOOR];
+    GUIDE_COPY_MOD, TEAM_COPY, PROFILE_COPY, TEAM_DOOR, SIDEBAR_CSS];
   const originals = new Map();
   for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];

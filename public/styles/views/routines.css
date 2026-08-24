@@ -16,8 +16,10 @@
    overnight teaches its user to stop trusting amber. */
 
 .routines-content { max-width: 640px; padding: 32px; }
-.routines-lead { margin-bottom: 18px; }
-.routines-empty-lead { margin-bottom: 24px; }
+/* The lead sentence, now the header's subtitle rather than a paragraph below
+   it. The same role the Skills pane's state line plays in the same block, and
+   the same size: this card moved a component and moved no type size. */
+.routines-subtitle { font-size: var(--body); color: var(--text-2); }
 
 /* The list */
 .routine-table { display: flex; flex-direction: column; gap: 10px; }
@@ -25,6 +27,17 @@
 .routine-row.paused { opacity: 0.72; }
 .rr-body { flex: 1; min-width: 0; }
 .rr-sentence { font-size: var(--body); font-weight: 600; color: var(--text-1); margin-bottom: 3px; }
+
+/* The skill name inside the sentence, which is the one reachable thing on a
+   row. A button rather than an anchor: there is no URL behind it, and an
+   anchor with no href is a link a keyboard cannot reach.
+
+   IT INHERITS THE SENTENCE RATHER THAN RESTATING IT. Size and weight come
+   from the line it sits in, so the sentence reads as one sentence and the
+   name is told apart by colour and by the underline that arrives on hover.
+   A second declaration of the size here is how the two drift apart. */
+.rr-skill-link { font: inherit; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: none; }
+.rr-skill-link:hover { color: var(--accent-hover); text-decoration: underline; }
 
 /* The meta lines WRAP. Both of a row's facts have to survive together at any
    width, and the row with the longest status text is exactly the one a

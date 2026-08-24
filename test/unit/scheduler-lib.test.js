@@ -471,6 +471,53 @@ test('a failure reported as both an error and a close records one outcome', asyn
   });
 });
 
+// THE MECHANISM THE ROUTINES RAIL DEPENDS ON, asserted rather than assumed.
+//
+// The failure dot on the Routines rail entry is raised and cleared by the
+// client's handling of an `agents` message, and its own tests drive that
+// message into a document. That proves the client's half. Whether such a
+// message ARRIVES when a run finishes is a fact about this file, and without
+// it the dot would appear only on the next unrelated roster: a pause, a
+// delete, a reconnect. So the run is driven to an outcome through the real
+// executeRoutine and what reaches a connected client is read off the socket.
+test('a run reaching an outcome sends the roster to connected clients', async () => {
+  await withTempWorkspaceAsync(async () => {
+    const child = new EventEmitter();
+    const sent = [];
+    await withFakeSpawn(() => child, async (sched) => {
+      sched.wireSchedulerDeps({
+        getWssClients: () => [{ readyState: 1, send: (msg) => sent.push(JSON.parse(msg)) }],
+      });
+      sched.executeRoutine(AGENT, ROUTINE, KEY);
+      assert.deepStrictEqual(sent.map(m => m.type), ['agents'],
+        'a run starting tells connected clients');
+
+      child.emit('close', 1);
+      assert.deepStrictEqual(sent.map(m => m.type), ['agents', 'agents'],
+        'a run FINISHING tells connected clients, which is what raises the failure dot');
+      assert.ok(Array.isArray(sent[1].agents),
+        'the message carries the roster the rail reads its routines out of');
+    });
+  });
+});
+
+// The same path for a run that succeeded, which is what CLEARS the dot.
+test('a run that succeeds also sends the roster, which is what clears the dot', async () => {
+  await withTempWorkspaceAsync(async () => {
+    const child = new EventEmitter();
+    const sent = [];
+    await withFakeSpawn(() => child, async (sched) => {
+      sched.wireSchedulerDeps({
+        getWssClients: () => [{ readyState: 1, send: (msg) => sent.push(JSON.parse(msg)) }],
+      });
+      sched.executeRoutine(AGENT, ROUTINE, KEY);
+      child.emit('close', 0);
+      assert.strictEqual(sent.length, 2, 'the start and the outcome');
+      assert.strictEqual(sent[1].type, 'agents');
+    });
+  });
+});
+
 // The contract the two tests below rest on, asserted against the client that
 // owns it. Without this they rest on nothing: the fields are read by the
 // scheduler and supplied by the tests, so the tests agree with themselves.
