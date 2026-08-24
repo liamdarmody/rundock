@@ -311,12 +311,16 @@ Then mechanically, over the whole suite:
 node scripts/red-first.js --base origin/main --tests "npm test"
 ```
 
-**PROVEN: the tests fail without the change and pass with it.** 2,529 tests pass
-with it; reverting every non-test file the change touches and keeping the tests
-turns 20 red. The six the reproduce command above checks out are the client
-files; the rest are documentation, the changelog and `package.json`.
-The full record, including every name, is written to `.precommit-gate.json`
-against the tree the gate passed on.
+**PROVEN: the tests fail without the change and pass with it.** Reverting every
+non-test file the change touches and keeping the tests turns 20 red. The six the
+reproduce command above checks out are the client files; the rest are
+documentation, the changelog and `package.json`.
+
+The exact pass count is not quoted here, deliberately: it moves as the trunk
+moves, and an evidence file carrying a figure a reader cannot reproduce is worse
+than one that does not. `.precommit-gate.json` records the counts, the names and
+the tree hash they were measured on, and it is written by the run rather than by
+the author.
 
 Six of those names are not evidence of anything and are called out rather than
 left to inflate the number. They belong to the routines view, and they go red
