@@ -239,7 +239,6 @@ const MANIFEST = {
     "renderAgentList",
     "renderConvoEmptyAgents",
     "renderOrgChart",
-    "renderRoutinesSidebar",
   ],};
 
 function viewModules() {

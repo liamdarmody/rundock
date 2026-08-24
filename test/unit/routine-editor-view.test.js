@@ -42,11 +42,11 @@ function skillFixture() {
 // time zone is handed in.
 function mount(opts = {}) {
   const dom = new JSDOM('<!doctype html><html><body>'
-    // The shell as it stands today: a rail button and a sidebar panel for each
-    // section the router can reach. The routines surface has neither yet, which
-    // is the condition the save destination has to resolve against.
-    + '<button class="nav-item" data-nav="team"></button><div id="sidebar-team"></div>'
-    + '<button class="nav-item" data-nav="skills"></button><div id="sidebar-skills"></div>'
+    // A rail button and a view panel for each section the router can reach.
+    // The routines surface has neither here, which is the condition the save
+    // destination has to resolve against.
+    + '<button class="nav-item" data-nav="team"></button><div id="view-team"></div>'
+    + '<button class="nav-item" data-nav="skills"></button><div id="view-skills"></div>'
     + '<div id="view-routine-editor" class="hidden"><div id="routine-editor-content"></div></div>'
     + '</body></html>',
     // The modules are evaluated inside the window, the way index.html loads
@@ -479,11 +479,11 @@ describe('routine editor view: saving', () => {
     assert.strictEqual(w.navigatedTo, w.routinesListNav(), 'the reply is what leaves');
     assert.ok(w.navigatedTo, 'a destination was chosen');
     // Both halves, because the router needs both: the rail button it marks
-    // active and the sidebar panel it reveals by the same name.
+    // active and the view panel it shows by the same name.
     assert.ok(doc.querySelector(`[data-nav="${w.navigatedTo}"]`),
       `the router has no rail entry for "${w.navigatedTo}", so it cannot go there`);
-    assert.ok(doc.getElementById(`sidebar-${w.navigatedTo}`),
-      `the router has no sidebar panel for "${w.navigatedTo}", so it would hide every one`);
+    assert.ok(doc.getElementById(`view-${w.navigatedTo}`),
+      `the router has no view panel for "${w.navigatedTo}", so it would show nothing`);
     dom.window.close();
   });
 
@@ -497,20 +497,20 @@ describe('routine editor view: saving', () => {
     const button = doc.createElement('button');
     button.setAttribute('data-nav', 'routines');
     const panel = doc.createElement('div');
-    panel.id = 'sidebar-routines';
+    panel.id = 'view-routines';
     doc.body.append(button, panel);
     assert.strictEqual(w.routinesListNav(), w.RundockRoutineEditorModel.SAVE_DESTINATION);
     dom.window.close();
   });
 
-  // Half a destination is not one. A rail button with no panel would make the
-  // router hide every sidebar and reveal nothing.
+  // Half a destination is not one. A rail button with no view panel would
+  // leave the router showing nothing at all.
   test('a destination the shell only half has is not used', () => {
     const { w, doc, dom } = atReady();
     const button = doc.createElement('button');
     button.setAttribute('data-nav', 'routines');
     doc.body.append(button);
-    assert.strictEqual(w.routinesListNav(), 'team', 'a rail entry with no panel is not a destination');
+    assert.strictEqual(w.routinesListNav(), 'team', 'a rail entry with no view panel is not a destination');
     dom.window.close();
   });
 

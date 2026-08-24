@@ -4,7 +4,7 @@
 // markers.js (node-requireable, window-attached); additionally republishes
 // each view function on the root object, because classic-script function
 // declarations were window properties and the callers rely on that: the WS
-// dispatch (renderAgentList, renderOrgChart, renderRoutinesSidebar), routing
+// dispatch (renderAgentList, renderOrgChart), routing
 // (renderOrgChart on the team nav), message handling (getWorkingAgentIds),
 // and the generated onclick handlers (showProfile, addToTeam, orgZoom,
 // startConversation, startSetupConversation).
@@ -17,7 +17,7 @@
 // wiring). ORG_PRESETS moved here as view-local state: no external
 // touchpoints. d3 is the CDN-loaded d3-hierarchy global, resolved on window
 // at call time. Helpers reached the same way: getTeamAgents,
-// getPlatformAgents, formatTimeAgo, formatScheduleShort, esc, getGuide.
+// getPlatformAgents, formatTimeAgo, esc, getGuide.
 // Load order (views before app.js) is safe because nothing here touches
 // shared state until the app boots. Function bodies are byte-identical to
 // the app.js originals at column 0.
@@ -144,41 +144,6 @@ function renderConvoEmptyAgents() {
       ? `<div class="sidebar-empty-text" style="text-align:center;max-width:280px;margin:0 auto 8px">Doc can explore this workspace and set up your agent team.</div><button class="empty-cta" style="margin-top:4px" onclick="startSetupConversation()">Set up your team</button>`
       : '';
   }
-}
-
-function renderRoutinesSidebar() {
-  const container = document.getElementById('sidebar-routines');
-  if (!container) return;
-  const allRoutines = [];
-  for (const a of agents) {
-    if (a.routines) {
-      for (const r of a.routines) {
-        allRoutines.push({ ...r, agentName: a.displayName, agentColour: a.colour, agentIcon: a.icon });
-      }
-    }
-  }
-  if (allRoutines.length === 0) { container.innerHTML = ''; return; }
-
-  // The agent-agnostic way in: no agent chosen yet, so the picker spans every
-  // agent's skills and each row names which agent runs it.
-  let h = '<div class="sidebar-section-divider" style="margin:12px 16px 0;padding-top:16px">'
-    + '<span class="sidebar-label">Routines</span>'
-    + '<button class="re-link" type="button" style="float:right"'
-    + ' data-sidebar-action="add-routine" onclick="addRoutine()">Add</button>'
-    + '</div>';
-  h += '<div style="padding:8px 8px 16px">';
-  for (const r of allRoutines) {
-    const statusText = r.state?.status === 'running'
-      ? '<span style="color:var(--working)">Running...</span>'
-      : `<span style="color:var(--text-2)">${formatScheduleShort(r.schedule)}</span>`;
-    h += `<div class="routine-item">
-      <div class="avatar xxs" style="background:${r.agentColour}">${r.agentIcon}</div>
-      <span class="routine-name">${esc(r.name)}</span>
-      ${statusText}
-    </div>`;
-  }
-  h += '</div>';
-  container.innerHTML = h;
 }
 
 function addToTeam(agentId) {
@@ -442,5 +407,5 @@ function orgZoom(dir) {
   renderOrgChart();
 }
 
-return { getWorkingAgentIds, renderAgentList, renderConvoEmptyAgents, renderRoutinesSidebar, addToTeam, orgCardHtml, renderOrgChart, orgZoom };
+return { getWorkingAgentIds, renderAgentList, renderConvoEmptyAgents, addToTeam, orgCardHtml, renderOrgChart, orgZoom };
 }));

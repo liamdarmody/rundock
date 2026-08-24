@@ -366,15 +366,25 @@
    * remembered.
    *
    * A destination is usable only if the shell has BOTH halves of it: a rail
-   * button carrying the name, and the sidebar panel the router reveals by that
+   * button carrying the name, and the view panel the router shows by that
    * name. Checking the pair is what makes this a resolution rather than a
-   * guess, and it is why this returns the section that lists routines today
-   * and the routines surface itself the day that one is built, with nothing
-   * here edited.
+   * guess.
+   *
+   * THE SECOND HALF USED TO BE `sidebar-${nav}` AND THAT WAS AN ACCIDENT
+   * PASSING AS A CHECK. The routines section has no sidebar panel of its own:
+   * it reveals the team one, through the router's own map. It resolved anyway
+   * because an empty element under that exact name happened to exist, nested
+   * inside the team panel, holding the listing the team sidebar used to carry.
+   * Revealing that element by name succeeded and left the reader looking at a
+   * hidden parent, which the routines doors file already records as a trap.
+   * With the listing gone the element goes with it, and this asks for the
+   * thing the router actually shows: the view panel. A rename of either half
+   * still lands a save on the team chart, so the check is unchanged in what it
+   * catches and no longer depends on a sentinel nobody meant to leave.
    */
   function navigable(nav) {
     if (typeof document === 'undefined') return false;
-    return !!(document.querySelector(`[data-nav="${nav}"]`) && document.getElementById(`sidebar-${nav}`));
+    return !!(document.querySelector(`[data-nav="${nav}"]`) && document.getElementById(`view-${nav}`));
   }
 
   function routinesListNav() {

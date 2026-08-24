@@ -51,16 +51,13 @@ const DOORS = [
     scoped: true,
     pressedBy: 'the profile door opens the editor scoped to that agent',
   },
-  {
-    call: 'addRoutine',
-    file: 'views/team.js',
-    surface: 'the Add control in the sidebar Routines section',
-    scoped: false,
-    pressedBy: 'the sidebar door opens the editor across the whole team',
-  },
   // The door this file named as missing while the routines view did not exist.
   // It arrived with that view, this row arrived with it, and the enumeration
   // above went red in between, which is the whole point of the check.
+  //
+  // AND IT IS NOW THE ONLY UNSCOPED ONE. The team sidebar's Routines section
+  // carried a second, and went with the listing it sat under. A door removed
+  // is a row removed, on the same rule that a door added is a row added.
   {
     call: 'addRoutine',
     file: 'views/routines.js',
@@ -150,8 +147,7 @@ describe('every door into the editor is enumerated', () => {
 
 function shell() {
   const dom = new JSDOM('<!doctype html><html><body>'
-    + '<button class="nav-item" data-nav="team"></button><div id="sidebar-team">'
-    + '<div id="sidebar-routines"></div></div>'
+    + '<button class="nav-item" data-nav="team"></button><div id="sidebar-team"></div>'
     + '<div id="profile-content"></div>'
     + '<div id="view-routine-editor"><div id="routine-editor-content"></div></div>'
     + '<div id="view-routines"><div id="routines-content"></div></div>'
@@ -183,7 +179,6 @@ function shell() {
   w.skillsLoaded = true;
   w.esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   w.formatTimeAgo = () => 'a while ago';
-  w.formatScheduleShort = (s) => s;
   w.getGuide = () => ({ id: 'doc' });
   w.sent = [];
   w.ws = { send: (m) => w.sent.push(JSON.parse(m)) };
@@ -201,6 +196,26 @@ function shell() {
   w.renderAgentList = () => {};
   w.Intl = { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'Europe/London' }) }) };
   return { w, doc: w.document, dom };
+}
+
+// The unscoped door, opened the way a reader opens it: on a workspace with
+// nothing scheduled, from the routines view's own empty state. There is one
+// unscoped door now, so every walk that used to start at the sidebar starts
+// here, and none of them starts by calling the entry function.
+function pressUnscopedDoor(doc, w) {
+  w.agents = w.agents.map(a => ({ ...a, routines: [] }));
+  w.renderRoutines();
+  return press(doc, '[data-routines-action="add"]');
+}
+
+// The scoped door, opened the way a reader opens it: from the agent's own
+// profile. It is also the ONLY door into the editor's zero-skills state, since
+// the routines view answers a workspace with no skills with an offer to build
+// one rather than with an offer to schedule one.
+function pressScopedDoor(doc, dom, agentId) {
+  dom.window.showProfile = dom.window.RundockProfileView.showProfile;
+  dom.window.showProfile(agentId);
+  return press(doc, '[data-profile-action="add-routine"]');
 }
 
 // Press what is on the page. Never call the handler behind it: that is the
@@ -227,9 +242,7 @@ function editorText(doc) {
 describe('the doors, pressed', () => {
   test('the profile door opens the editor scoped to that agent', () => {
     const { doc, dom } = shell();
-    dom.window.showProfile = dom.window.RundockProfileView.showProfile;
-    dom.window.showProfile('piper');
-    press(doc, '[data-profile-action="add-routine"]');
+    pressScopedDoor(doc, dom, 'piper');
     assert.match(editorText(doc), /Pick a skill Piper already has/);
     assert.deepStrictEqual(
       [...doc.querySelectorAll('[data-skill-key]')].map(r => r.getAttribute('data-skill-key')),
@@ -239,49 +252,34 @@ describe('the doors, pressed', () => {
     dom.window.close();
   });
 
-  test('the sidebar door opens the editor across the whole team', () => {
-    const { doc, w, dom } = shell();
-    w.renderRoutinesSidebar();
-    press(doc, '[data-sidebar-action="add-routine"]');
-    assert.match(editorText(doc), /Pick a skill any of your agents already has/);
-    assert.deepStrictEqual(
-      [...doc.querySelectorAll('[data-skill-key]')].map(r => r.getAttribute('data-skill-key')),
-      ['ops-summary:piper', 'reading-digest:doc'],
-      'the unscoped door offers every agent\'s skills',
-    );
-    assert.match(editorText(doc), /Piper/);
-    assert.match(editorText(doc), /Doc/);
-    dom.window.close();
-  });
-
-  // The third door, and the one the sidebar cannot be: with no routines yet
-  // the sidebar section is not on the page at all (pinned below), so a
-  // workspace that has never scheduled anything reaches the editor through
-  // this control and no other.
+  // The unscoped door, and now the only one. A workspace that has never
+  // scheduled anything reaches the editor through this control or through an
+  // agent's own profile, and through nothing else.
   test('the empty state door opens the editor across the whole team', () => {
     const { doc, w, dom } = shell();
-    w.agents = w.agents.map(a => ({ ...a, routines: [] }));
-    w.renderRoutines();
-    press(doc, '[data-routines-action="add"]');
+    pressUnscopedDoor(doc, w);
     assert.match(editorText(doc), /Pick a skill any of your agents already has/);
     assert.deepStrictEqual(
       [...doc.querySelectorAll('[data-skill-key]')].map(r => r.getAttribute('data-skill-key')),
       ['ops-summary:piper', 'reading-digest:doc'],
       'the empty state door offers every agent\'s skills',
     );
+    assert.match(editorText(doc), /Piper/);
+    assert.match(editorText(doc), /Doc/);
     dom.window.close();
   });
 
-  // The sidebar section renders nothing until a routine exists, so the
-  // unscoped door appears with the first one. Worth pinning: it is why the
-  // routines view's own empty state is a door in its own right rather than a
-  // duplicate of this one.
-  test('the sidebar door appears with the first routine and not before', () => {
+  // The team sidebar's Routines section is gone, and with it the Add control
+  // that hung off its divider. Pinned here rather than assumed, because the
+  // walks below no longer touch that panel at all and would not notice it
+  // coming back.
+  test('the team sidebar offers no way into the editor', () => {
     const { doc, w, dom } = shell();
-    w.agents = w.agents.map(a => ({ ...a, routines: [] }));
-    w.renderRoutinesSidebar();
+    w.renderAgentList = w.RundockTeamView.renderAgentList;
     assert.strictEqual(doc.querySelector('[data-sidebar-action="add-routine"]'), null,
-      'no routines yet, so this section is not on the page at all');
+      'the team sidebar carries a way into the editor again and is not a listed door');
+    assert.ok(!/data-sidebar-action/.test(TEAM_SRC),
+      'views/team.js renders a sidebar action again and is not a listed door');
     dom.window.close();
   });
 });
@@ -291,10 +289,7 @@ describe('the whole journey, by pressing only', () => {
   // control loses its handler, or its handler is renamed, this walk stops.
   test('a routine can be made from the profile door without calling anything', () => {
     const { doc, w, dom } = shell();
-    dom.window.showProfile = dom.window.RundockProfileView.showProfile;
-    dom.window.showProfile('piper');
-
-    press(doc, '[data-profile-action="add-routine"]');
+    pressScopedDoor(doc, dom, 'piper');
     press(doc, '[data-skill-key="ops-summary:piper"]');
     press(doc, '.re-actions .settings-btn-primary');
 
@@ -320,10 +315,9 @@ describe('the whole journey, by pressing only', () => {
     dom.window.close();
   });
 
-  test('the same journey from the sidebar door reaches another agent\'s skill', () => {
+  test('the same journey from the unscoped door reaches another agent\'s skill', () => {
     const { doc, w, dom } = shell();
-    w.renderRoutinesSidebar();
-    press(doc, '[data-sidebar-action="add-routine"]');
+    pressUnscopedDoor(doc, w);
     press(doc, '[data-skill-key="reading-digest:doc"]');
     press(doc, '.re-actions .settings-btn-primary');
     choose(doc, w, 'frequency', 'day');
@@ -339,8 +333,7 @@ describe('the whole journey, by pressing only', () => {
   // The Edit link on the confirmation step is a control like any other.
   test('the confirmation step can be edited by pressing its own link', () => {
     const { doc, w, dom } = shell();
-    w.renderRoutinesSidebar();
-    press(doc, '[data-sidebar-action="add-routine"]');
+    pressUnscopedDoor(doc, w);
     press(doc, '[data-skill-key="ops-summary:piper"]');
     press(doc, '.re-actions .settings-btn-primary');
     choose(doc, w, 'frequency', 'friday');
@@ -359,8 +352,7 @@ describe('the whole journey, by pressing only', () => {
     w.skills = [];
     let talkedTo = null;
     w.startConversation = (id) => { talkedTo = id; };
-    w.renderRoutinesSidebar();
-    press(doc, '[data-sidebar-action="add-routine"]');
+    pressScopedDoor(doc, dom, 'piper');
     press(doc, '[data-routine-editor="create-skill"]');
     assert.strictEqual(talkedTo, 'doc', 'the offer reaches the agent that builds skills');
     dom.window.close();
@@ -389,8 +381,7 @@ describe('every control the editor renders resolves to something', () => {
     const { doc, w, dom } = shell();
     const states = [];
 
-    w.renderRoutinesSidebar();
-    press(doc, '[data-sidebar-action="add-routine"]');
+    pressUnscopedDoor(doc, w);
     states.push(doc.getElementById('routine-editor-content').innerHTML);
     press(doc, '[data-skill-key="ops-summary:piper"]');
     press(doc, '.re-actions .settings-btn-primary');
@@ -400,8 +391,7 @@ describe('every control the editor renders resolves to something', () => {
 
     const { doc: emptyDoc, w: emptyW, dom: emptyDom } = shell();
     emptyW.skills = [];
-    emptyW.renderRoutinesSidebar();
-    press(emptyDoc, '[data-sidebar-action="add-routine"]');
+    pressScopedDoor(emptyDoc, emptyDom, 'piper');
     states.push(emptyDoc.getElementById('routine-editor-content').innerHTML);
 
     const handlers = new Set();
@@ -421,7 +411,7 @@ describe('every control the editor renders resolves to something', () => {
   // that kept going untested.
   test('both doors name handlers the editor actually publishes', () => {
     const { w, dom } = shell();
-    for (const [src, label] of [[PROFILE_SRC, 'views/profile.js'], [TEAM_SRC, 'views/team.js']]) {
+    for (const [src, label] of [[PROFILE_SRC, 'views/profile.js'], [ROUTINES_SRC, 'views/routines.js']]) {
       for (const call of ENTRY_CALLS) {
         if (!new RegExp(`(?<![.\\w$])${call}\\(`).test(src)) continue;
         assert.strictEqual(typeof w[call], 'function',

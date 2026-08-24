@@ -265,11 +265,11 @@ function shellMarkup() {
   assert.ok(panel, 'index.html no longer carries the routines view panel');
   // THE SIDEBAR IS CUT OUT OF THE PAGE TOO, and that is a correction rather
   // than tidiness. It used to be written here, which made the destination
-  // check below unfalsifiable: the editor resolves where a save goes by
-  // asking whether the shell has BOTH a rail entry called routines and a panel
-  // called sidebar-routines, and a test that supplies that panel itself
-  // answers its own question. Rename the panel in index.html and the editor
-  // silently starts landing saves on the team chart, with this file green.
+  // check below unfalsifiable: the editor resolves where a save goes by asking
+  // whether the shell has BOTH a rail entry called routines and the view panel
+  // the router shows by that name, and a test that supplies either of them
+  // itself answers its own question. Rename either in index.html and the
+  // editor silently starts landing saves on the team chart, this file green.
   const sidebar = /<aside class="sidebar"[\s\S]*?<\/aside>/.exec(INDEX_SRC);
   assert.ok(sidebar, 'index.html no longer carries a sidebar');
   return '<!doctype html><html><body>' + rail[0] + sidebar[0]
@@ -315,7 +315,7 @@ describe('the ways this list gets drawn, pressed', () => {
     w.drawn = 0;
     const realRender = w.renderRoutines;
     w.renderRoutines = () => { w.drawn++; realRender(); };
-    for (const name of ['renderAgentList', 'renderOrgChart', 'renderRoutinesSidebar', 'renderConvoList']) {
+    for (const name of ['renderAgentList', 'renderOrgChart', 'renderConvoList']) {
       w[name] = () => {};
     }
     w.d = { type: 'agents', agents: w.agents };
@@ -409,8 +409,8 @@ describe('the ways this list gets drawn, pressed', () => {
     // to the team panel in silence.
     assert.ok(doc.querySelector('[data-nav="routines"]'),
       'index.html carries no routines rail entry, so the editor cannot reach this view');
-    assert.ok(doc.getElementById('sidebar-routines'),
-      'index.html carries no routines sidebar panel, so the editor cannot reach this view');
+    assert.ok(doc.getElementById('view-routines'),
+      'index.html carries no routines view panel, so the editor cannot reach this view');
 
     w.skills = [{ id: 'sk', name: 'Compile the ops summary', slug: 'ops', assignedAgents: [{ id: 'piper', name: 'Piper' }] }];
     w.skillsLoaded = true;
@@ -539,12 +539,14 @@ describe('every reply that reaches this view is enumerated', () => {
 describe('the shell can actually show what it navigates to', () => {
   // THE BUG THIS CATCHES, and it is a silent one rather than a throw. The
   // routines section has no sidebar panel of its own; its panel is the team
-  // one, which already carries a Routines section inside it. There IS an
-  // element called sidebar-routines, NESTED in the team panel, so revealing it
-  // by name succeeds, throws nothing, and leaves the reader looking at an
-  // empty sidebar because the parent stayed hidden. So the assertion is not
-  // that an element was found: it is that what was revealed can actually be
-  // seen.
+  // one, resolved through the router's own map. There used to be an empty
+  // element under the routines name NESTED in the team panel, left there by
+  // the listing the team sidebar carried, so revealing it by name succeeded,
+  // threw nothing, and left the reader looking at an empty sidebar because the
+  // parent stayed hidden. The listing and the element are both gone; the
+  // assertion that caught it stays, because the map can name a nested panel
+  // again. It is not that an element was found: it is that what was revealed
+  // can actually be seen.
   test('every section the rail carries reveals a sidebar the reader can see', () => {
     const { doc, w, dom } = shell();
     // Both cut out of app.js and run, so the mapping under test is the one

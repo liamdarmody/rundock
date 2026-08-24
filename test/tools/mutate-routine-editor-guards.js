@@ -58,9 +58,6 @@ const APP = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routin
 const HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/unit/routine-write.test.js' };
 // The agent profile, which renders the only way into the scoped editor.
 const PROFILE = { src: path.join(ROOT, 'public', 'views', 'profile.js'), suite: 'test/unit/routine-editor-view.test.js' };
-// The team sidebar, which renders the way into the unscoped editor. Watched by
-// the doors suite, which enumerates every way in and presses each one.
-const SIDEBAR = { src: path.join(ROOT, 'public', 'views', 'team.js'), suite: 'test/unit/routine-editor-doors.test.js' };
 // The data model's write path, where a routine becomes bytes in a file.
 const ROUTINES = { src: path.join(ROOT, 'lib', 'agents', 'routines.js'), suite: 'test/unit/routine-write.test.js' };
 // The same file, watched by the suite that owns the timezone a schedule was
@@ -176,8 +173,8 @@ const MUTATIONS = [
   [VIEW, 'a save in flight is not sent twice',
     '    if (!state || state.saving) return;',
     '    if (!state) return;'],
-  [VIEW, 'the destination is checked for a sidebar panel, not just a rail entry',
-    '    return !!(document.querySelector(`[data-nav="${nav}"]`) && document.getElementById(`sidebar-${nav}`));',
+  [VIEW, 'the destination is checked for a view panel, not just a rail entry',
+    '    return !!(document.querySelector(`[data-nav="${nav}"]`) && document.getElementById(`view-${nav}`));',
     '    return !!document.querySelector(`[data-nav="${nav}"]`);'],
   [VIEW, 'an unreachable destination falls back to one the shell has',
     "    return navigable(destination) ? destination : 'team';",
@@ -236,11 +233,6 @@ const MUTATIONS = [
   [PROFILE, 'the way in carries the agent whose profile it is on',
     'onclick="addRoutineForAgent(\'${esc(a.id)}\')"',
     'onclick="addRoutineForAgent(\'\')"'],
-
-  // The other door, and the one four rounds of review reached last.
-  [SIDEBAR, 'the sidebar offers a way in that belongs to no agent',
-    "    + ' data-sidebar-action=\"add-routine\" onclick=\"addRoutine()\">Add</button>'\n",
-    "    + '>Add</button>'\n"],
 
   // Writing a second routines key produces invalid YAML in somebody's file.
   // Two guards stand between it and them, and each is broken on its own here.
@@ -333,7 +325,7 @@ function run() {
   // Both files are read up front and both are restored in the same finally, so
   // a throw part way through cannot leave either one mutated.
   const originals = new Map();
-  for (const target of [MODEL, VIEW, APP, HANDLER, PROFILE, SIDEBAR, ROUTINES, ROUTINES_TZ]) originals.set(target, fs.readFileSync(target.src, 'utf8'));
+  for (const target of [MODEL, VIEW, APP, HANDLER, PROFILE, ROUTINES, ROUTINES_TZ]) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];
   try {
     for (const [target, label, guard, without] of MUTATIONS) {

@@ -96,6 +96,12 @@ const APP_SKILLS = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit
 // The two openers, watched by the file that presses them rather than by the
 // file that calls what they draw.
 const APP_OPENER = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routines-view.test.js' };
+// The team panel, watched by the file that presses it. The rule this card
+// leaves behind is "the panel carries the roster and nothing else", which is a
+// rule about absence, so these mutations PUT SOMETHING BACK rather than take a
+// guard away: an absence nobody can break is an absence nobody is checking.
+const TEAM_PANEL = { src: path.join(ROOT, 'public', 'views', 'team.js'), suite: 'test/unit/team-sidebar.test.js' };
+const INDEX_SWEEP = { src: path.join(ROOT, 'public', 'index.html'), suite: 'test/unit/team-sidebar.test.js' };
 // The handlers behind the row's two controls, and the data model they write
 // through.
 const HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/unit/routine-actions.test.js' };
@@ -216,10 +222,33 @@ const MUTATIONS = [
     "    const message = input && typeof input.message === 'string' ? input.message.trim() : '';\n    return message || ACTION_PROBLEM;",
     '    return ACTION_PROBLEM;'],
 
+  // ===== WHAT THE TEAM PANEL NO LONGER CARRIES =====
+  //
+  // The listing is gone and the rule left behind is an absence. Each of these
+  // writes the absent thing back, in the shape it had, and requires the panel's
+  // own file to notice.
+  [TEAM_PANEL, 'the team panel carries the roster and nothing beside it',
+    "  document.getElementById('agent-list').innerHTML = h;",
+    "  document.getElementById('agent-list').innerHTML = h;\n"
+    + "  document.getElementById('sidebar-team').insertAdjacentHTML('beforeend',"
+    + " '<div class=\"routine-item\">Compile the ops summary, 7:00 AM</div>');"],
+  [TEAM_PANEL, 'an agent row says how the agent is, never how many routines it has',
+    "  if (onTeam.length) {\n    for (const a of onTeam) {\n"
+    + "      const isWorking = workingIds.has(a.id);\n"
+    + "      const last = agentLastActivity[a.id];\n"
+    + "      const statusText = isWorking ? 'working' : (last ? formatTimeAgo(last.time) : 'idle');",
+    "  if (onTeam.length) {\n    for (const a of onTeam) {\n"
+    + "      const isWorking = workingIds.has(a.id);\n"
+    + "      const last = agentLastActivity[a.id];\n"
+    + "      const statusText = `${(a.routines || []).length} routines`;"],
+  [INDEX_SWEEP, 'the element the listing rendered into went with the listing',
+    '      <div class="agent-status-list" id="agent-list"></div>\n',
+    '      <div class="agent-status-list" id="agent-list"></div>\n      <div id="sidebar-routines"></div>\n'],
+
   // ===== WHO DRAWS THIS LIST, AND HOW A READER ARRIVES AT IT =====
   [APP, 'the arriving roster redraws the list',
-    'renderRoutinesSidebar(); renderRoutines(); renderConvoList();',
-    'renderRoutinesSidebar(); renderConvoList();'],
+    'renderOrgChart(); renderRoutines(); renderConvoList();',
+    'renderOrgChart(); renderConvoList();'],
   [APP, 'the rail entry draws something into the view it shows',
     "  else if(nav==='routines') { showView('routines'); renderRoutines(); }",
     "  else if(nav==='routines') { showView('routines'); }"],
@@ -533,7 +562,7 @@ function redTests(suite) {
 function run() {
   const targets = [MODEL, VIEW, VIEW_E2E, VIEW_REPLY, VIEW_RAIL, STYLES, SCHEDULER, END_TO_END,
     DISCOVERY, HANDLER, ROUTINES, APP, APP_SKILLS, APP_OPENER, INDEX, INDEX_RAIL, SKILLS_MODEL, SKILLS_VIEW,
-    SKILLS_VIEW_RAIL];
+    SKILLS_VIEW_RAIL, TEAM_PANEL, INDEX_SWEEP];
   const originals = new Map();
   for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];
