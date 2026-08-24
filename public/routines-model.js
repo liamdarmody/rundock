@@ -372,6 +372,64 @@
     return { text: `Next run: ${words}`, className: 'next-run' };
   }
 
+  /**
+   * The list in the order a reader needs it: soonest next run first.
+   *
+   * WHY THIS IS NOT THE ORDER THE ROSTER HANDS OVER. The roster is file order,
+   * which is the order routines happen to have been written in, and that is
+   * arbitrary to everyone except whoever wrote the file. Invisible at nine
+   * routines and the thing that makes this view unusable at thirty, and no
+   * agent filter fixes it: whichever agent is selected, the rows underneath
+   * are still in an order nobody chose.
+   *
+   * THREE BANDS, AND THE THIRD IS THE ONE WITH A RULE ATTACHED. A routine with
+   * a next run sorts by it. A routine with none, because its schedule is one
+   * the editor never offered and therefore has no computable slot, cannot be
+   * placed on the timeline at all, so it sits after everything that can be.
+   * Paused routines go last as a group: a paused routine has no next run by
+   * definition, and mixing it into the band above would put "nothing is
+   * scheduled" and "this will not run" in one undifferentiated tail.
+   *
+   * STABLE WITHIN EACH BAND, which is the whole of the paused rule and half of
+   * the other two. Array sort has been required to be stable since ES2019, so
+   * two routines due at the same instant, and every paused routine, keep the
+   * order the roster gave them. The alternative is a list that reshuffles
+   * itself on every redraw for no reason a reader could see.
+   *
+   * NOTHING HERE READS A CLOCK. Sorting by instant needs no `now`: which of
+   * two runs comes first does not depend on when the question is asked.
+   *
+   * @param {any[]} list
+   * @param {(item: any) => {nextRun?: any, paused?: boolean}} [read] where the
+   *   two facts sit on an item. Defaults to the item itself, so this module's
+   *   own tests can drive it with the two facts and nothing else, and the view
+   *   can hand over its own entry shape without this knowing anything about it.
+   */
+  function orderByNextRun(list, read) {
+    const facts = typeof read === 'function' ? read : (item => item);
+    const band = (item) => {
+      const f = facts(item) || {};
+      if (f.paused) return 2;
+      return asDate(f.nextRun) ? 0 : 1;
+    };
+    // ONLY THE FIRST BAND IS SORTED BY TIME, and the guard is the rule rather
+    // than a shortcut. A paused routine can still carry the instant it WOULD
+    // have run at, so comparing instants across the paused band puts a paused
+    // routine that kept its next run behind one that has none, which is an
+    // order derived from a fact the reader was told does not apply. Paused is
+    // a band, not a time; so is having no next run at all.
+    const at = (item) => asDate((facts(item) || {}).nextRun).getTime();
+    // A COPY, NOT THE CALLER'S ARRAY. Array sort reorders in place, and a
+    // caller that also holds the roster order for something else would find it
+    // silently rewritten. The view counts namesakes in roster order before
+    // this runs, and that count is what a delete is addressed by.
+    return list.slice().sort((a, b) => {
+      const gap = band(a) - band(b);
+      if (gap !== 0) return gap;
+      return band(a) === 0 ? at(a) - at(b) : 0;
+    });
+  }
+
   /** Everything one row shows, as data. */
   function row(input) {
     const option = editor.runOnOption(input && input.runOn);
@@ -412,6 +470,6 @@
     actionProblem, emptyState,
     dayWords, clockWords, zoneWords, timeWords,
     scheduleWords, routineSentence,
-    outcomeOf, runStatus, nextRunLabel, row, deleteConfirmation,
+    outcomeOf, runStatus, nextRunLabel, orderByNextRun, row, deleteConfirmation,
   };
 }));

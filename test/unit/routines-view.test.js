@@ -151,6 +151,19 @@ function press(doc, selector) {
 const rows = (doc) => [...doc.querySelectorAll('.routine-row')];
 const text = (el) => el.textContent.replace(/\s+/g, ' ').trim();
 
+// The row for a named routine, rather than the row in a given position.
+//
+// WHY THE POSITION IS NO LONGER THE HANDLE. The list is ordered by next run,
+// so a test that reaches for the third row is asserting about whichever
+// routine that ordering happens to put third, and a fixture edit silently
+// moves what it is checking. The name is what a criterion about the missed row
+// actually means.
+function rowNamed(doc, name) {
+  const found = rows(doc).filter(r => text(r.querySelector('.rr-sentence')).includes(name));
+  assert.strictEqual(found.length, 1, `expected exactly one row for "${name}"`);
+  return found[0];
+}
+
 // EVERY PROOF ON THIS CARD THAT CALLS A RENDER RATHER THAN PRESSING THE THING
 // THAT DRAWS IT, with the reason it may.
 //
@@ -473,18 +486,22 @@ describe('the four rows', () => {
     const { doc, w, dom } = shell();
     w.renderRoutines();
     const statuses = rows(doc).map(r => r.querySelector('.run-status'));
+    // In next-run order, which puts the missed row first: it is the only one
+    // of the four due again today.
     assert.deepStrictEqual(statuses.map(s => s.className),
-      ['run-status ok', 'run-status ok-quiet', 'run-status neutral', 'run-status failed']);
+      ['run-status neutral', 'run-status ok', 'run-status ok-quiet', 'run-status failed']);
     assert.deepStrictEqual(statuses.map(s => text(s)), [
+      'Missed: Rundock was closed at 7:00am yesterday, London time',
       'Ran today, 7:00am, London time',
       'Caught up: ran today, 9:14am, London time, due 7:00am',
-      'Missed: Rundock was closed at 7:00am yesterday, London time',
       'Failed: today, 7:00am, London time',
     ]);
     // The ruling: a late run is a success and keeps the success class, and the
     // one state where nothing ran is the only one told apart by colour.
-    assert.match(statuses[1].className, /ok-quiet/, 'a late run must not be dressed as a warning');
-    assert.match(statuses[2].className, /neutral/, 'a passed slot is history, not an error');
+    assert.match(rowNamed(doc, 'Caught up').querySelector('.run-status').className, /ok-quiet/,
+      'a late run must not be dressed as a warning');
+    assert.match(rowNamed(doc, 'Missed').querySelector('.run-status').className, /neutral/,
+      'a passed slot is history, not an error');
     dom.window.close();
   });
 
@@ -492,7 +509,7 @@ describe('the four rows', () => {
   test('the missed row names the cause and not the routine', () => {
     const { doc, w, dom } = shell();
     w.renderRoutines();
-    const missed = text(rows(doc)[2].querySelector('.run-status'));
+    const missed = text(rowNamed(doc, 'Missed').querySelector('.run-status'));
     assert.match(missed, /Rundock was closed/);
     assert.ok(!/routine/i.test(missed));
     dom.window.close();
@@ -506,9 +523,9 @@ describe('the four rows', () => {
     const next = rows(doc).map(r => r.querySelector('.next-run'));
     assert.ok(next.every(Boolean), 'a row dropped the next-run fact to make room for status');
     assert.deepStrictEqual(next.map(text), [
-      'Next run: tomorrow, 7:00am, London time',
-      'Next run: tomorrow, 7:00am, London time',
       'Next run: today, 7:00am, London time',
+      'Next run: tomorrow, 7:00am, London time',
+      'Next run: tomorrow, 7:00am, London time',
       'Next run: tomorrow, 7:00am, London time',
     ]);
     // The longest status is the missed one, and it is on the row that still
@@ -525,7 +542,7 @@ describe('the four rows', () => {
   test('the missed row pairs with a next run today, never tomorrow', () => {
     const { doc, w, dom } = shell();
     w.renderRoutines();
-    const line = text(rows(doc)[2].querySelector('.rr-run-line'));
+    const line = text(rowNamed(doc, 'Missed').querySelector('.rr-run-line'));
     assert.match(line, /Next run: today/);
     assert.ok(!/tomorrow/.test(line));
     dom.window.close();
@@ -563,7 +580,7 @@ describe('the four rows', () => {
   test('the row names the agent and where the routine runs', () => {
     const { doc, w, dom } = shell();
     w.renderRoutines();
-    const meta = text(rows(doc)[0].querySelector('.rr-meta:not(.rr-run-line)'));
+    const meta = text(rowNamed(doc, 'Ran on time').querySelector('.rr-meta:not(.rr-run-line)'));
     assert.match(meta, /Piper/);
     assert.match(meta, /Runs on this computer/);
     dom.window.close();
@@ -824,7 +841,7 @@ describe('delete says what stops', () => {
     assert.ok(confirm, 'delete asked nothing');
     const body = text(confirm);
     assert.match(body, /Delete this routine\?/);
-    assert.match(body, /This stops Piper running Ran on time, every day at 7:00am\./);
+    assert.match(body, /This stops Piper running Missed, every day at 7:00am\./);
     assert.match(body, /The file it last updated stays exactly as it is\./);
     assert.match(body, /This can't be undone\./);
     assert.ok(!/are you sure/i.test(body));
@@ -847,8 +864,11 @@ describe('delete says what stops', () => {
     w.renderRoutines();
     press(doc, '.routine-row [data-routines-action="delete"]');
     press(doc, '[data-routines-action="confirm-delete"]');
+    // The first row on the page is the one due soonest, which is the missed
+    // one, and the delete is addressed to it rather than to the first block in
+    // the file.
     assert.deepStrictEqual(w.sent,
-      [{ type: 'delete_routine', agentId: 'piper', name: 'Ran on time', occurrence: 0 }]);
+      [{ type: 'delete_routine', agentId: 'piper', name: 'Missed', occurrence: 0 }]);
     dom.window.close();
   });
 });
@@ -902,7 +922,7 @@ describe('pause stops what it says it stops', () => {
     w.renderRoutines();
     press(doc, '.routine-row [data-routines-action="pause"]');
     assert.deepStrictEqual(w.sent,
-      [{ type: 'set_routine_paused', agentId: 'piper', name: 'Ran on time', occurrence: 0, paused: true }]);
+      [{ type: 'set_routine_paused', agentId: 'piper', name: 'Missed', occurrence: 0, paused: true }]);
     dom.window.close();
   });
 
@@ -948,5 +968,87 @@ describe('every control this view renders resolves to something', () => {
     dom.window.close();
     emptyDom.window.close();
     pausedDom.window.close();
+  });
+});
+
+describe('the list is ordered by next run', () => {
+  // ROSTER ORDER IS WHAT THIS FAILS AGAINST, so the fixture is built to
+  // disagree with it on every position: written latest first, due soonest
+  // last, with the paused one in the middle of the file. A view that renders
+  // the roster as it arrives puts these on the page in exactly the order
+  // below, and the assertion is the reverse of it.
+  const OUT_OF_ORDER = [
+    routine('Due last', { nextRun: iso(new Date(2026, 7, 23, 7, 0)) }),
+    routine('Paused, written second', { paused: true, nextRun: iso(TOMORROWS_SLOT) }),
+    routine('Due second', { nextRun: iso(TOMORROWS_SLOT) }),
+    routine('Paused, written fourth', { paused: true }),
+    routine('Due first', { nextRun: iso(new Date(2026, 7, 20, 18, 0)) }),
+  ];
+
+  const sentences = (doc) => rows(doc).map(r => text(r.querySelector('.rr-sentence')));
+
+  test('the rows are drawn soonest first, not in the order the roster held them', () => {
+    const { doc, w, dom } = shell(OUT_OF_ORDER);
+    w.renderRoutines();
+    assert.deepStrictEqual(sentences(doc).map(s => s.split('run: ')[1]), [
+      'Due first', 'Due second', 'Due last', 'Paused, written second', 'Paused, written fourth',
+    ], 'the page is in roster order, which is file order and is arbitrary to a reader');
+    dom.window.close();
+  });
+
+  test('the paused routines are together at the end, in the order the file holds them', () => {
+    const { doc, w, dom } = shell(OUT_OF_ORDER);
+    w.renderRoutines();
+    const paused = rows(doc).map(r => /\bpaused\b/.test(r.className));
+    assert.deepStrictEqual(paused, [false, false, false, true, true],
+      'a paused routine is not scheduled, so it belongs after everything that is');
+    dom.window.close();
+  });
+
+  // AC-A3. The ordering moves rows and touches nothing on one. Asserted by
+  // rendering the same routine in both orders and comparing the markup of its
+  // row, so a change to any word, tone, control or handler inside it fails
+  // here even though this card is about the list.
+  test('no row says anything different for having been ordered', () => {
+    const one = routine('Alone', {
+      state: { status: 'completed', duration: 3 }, lastStart: iso(new Date(2026, 7, 20, 7, 0, 12)),
+      lastSlot: iso(TODAYS_SLOT), nextRun: iso(TOMORROWS_SLOT),
+    });
+    const first = shell([one, routine('Later', { nextRun: iso(new Date(2026, 7, 23, 7, 0)) })]);
+    first.w.renderRoutines();
+    const alone = rowNamed(first.doc, 'Alone').outerHTML;
+    first.dom.window.close();
+
+    // The same routine, now second in the file and still first on the page.
+    const second = shell([routine('Later', { nextRun: iso(new Date(2026, 7, 23, 7, 0)) }), one]);
+    second.w.renderRoutines();
+    assert.strictEqual(rowNamed(second.doc, 'Alone').outerHTML, alone,
+      'ordering the list changed what a row says');
+    assert.strictEqual(sentences(second.doc)[0].split('run: ')[1], 'Alone',
+      'sanity: the row under test did move');
+    second.dom.window.close();
+  });
+
+  // The handle a pause or a delete travels under is a position in the FILE,
+  // and the rows are now in a different order from the file, so the two can
+  // come apart in a way that was impossible before this card.
+  test('a control on a reordered row still addresses the routine under it', () => {
+    const { doc, w, dom } = shell(OUT_OF_ORDER);
+    w.renderRoutines();
+    rows(doc)[0].querySelector('[data-routines-action="pause"]').click();
+    assert.deepStrictEqual(w.sent, [{
+      type: 'set_routine_paused', agentId: 'piper', name: 'Due first', occurrence: 0, paused: true,
+    }], 'the top row is the soonest, and pausing it must not pause the first block in the file');
+    dom.window.close();
+  });
+
+  test('the row a delete confirmation names is the row the delete was pressed on', () => {
+    const { doc, w, dom } = shell(OUT_OF_ORDER);
+    w.renderRoutines();
+    rows(doc)[0].querySelector('[data-routines-action="delete"]').click();
+    assert.match(text(doc.querySelector('.confirm-card')), /Due first/);
+    press(doc, '[data-routines-action="confirm-delete"]');
+    assert.strictEqual(w.sent[0].name, 'Due first');
+    dom.window.close();
   });
 });

@@ -80,6 +80,17 @@ function routinesModel() {
  *
  * The count runs in roster order, which is file order, so the nth namesake
  * here is the nth block in the file.
+ *
+ * AND THE COUNT IS TAKEN BEFORE THE LIST IS ORDERED, which is why the two
+ * steps are in this order rather than folded together. The list a reader sees
+ * is sorted by next run; the occurrence a delete is addressed by is a position
+ * in the FILE. Counting after the sort would send the server the row's
+ * position on screen wearing the name of its position in the file, and the
+ * confirmation would name one routine while the server removed another.
+ *
+ * THE ORDER ITSELF IS THE MODEL'S DECISION, not this file's, for the same
+ * reason every word on a row is: a rule written inline in a flatten is
+ * reachable only by a browser.
  */
 function allRoutines() {
   const out = [];
@@ -93,7 +104,7 @@ function allRoutines() {
       out.push({ routine, agent, occurrence });
     }
   }
-  return out;
+  return routinesModel().orderByNextRun(out, entry => entry.routine);
 }
 
 const ICONS = {

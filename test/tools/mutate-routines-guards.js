@@ -498,6 +498,22 @@ const MUTATIONS = [
   [ROUTINES, 'a removal takes the block it was asked for and no other',
     '  })[occurrence];\n  if (!target) return content;\n\n  const from',
     '  })[0];\n  if (!target) return content;\n\n  const from'],
+  // ===== THE ORDER THE LIST IS READ IN =====
+  // Roster order is file order. It is invisible at nine routines and is what
+  // makes the view unusable at thirty, and reverting to it is a one-line
+  // simplification that reads as tidying.
+  [VIEW, 'the list is ordered rather than rendered in the order the roster arrived',
+    '  return routinesModel().orderByNextRun(out, entry => entry.routine);',
+    '  return out;'],
+  [MODEL, 'paused routines are a band of their own rather than sorted with the rest',
+    '      if (f.paused) return 2;',
+    ''],
+  [MODEL, 'the paused band keeps roster order rather than sorting by an instant it was told does not apply',
+    '      return band(a) === 0 ? at(a) - at(b) : 0;',
+    '      return at(a) - at(b);'],
+  [MODEL, 'the caller keeps the roster order the namesake count was taken over',
+    '    return list.slice().sort((a, b) => {',
+    '    return list.sort((a, b) => {'],
 ];
 
 // The reporter is named explicitly rather than left to the default, which

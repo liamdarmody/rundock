@@ -522,3 +522,108 @@ describe('the copy this card ships', () => {
     }
   });
 });
+
+describe('the order the list is read in', () => {
+  // WHAT MAKES THESE CAPABLE OF FAILING. Every fixture below is written so
+  // that roster order and next-run order DISAGREE, and each asserts the whole
+  // sequence rather than a property of it. A list handed back untouched comes
+  // out in the order it went in, so reverting to roster order turns every one
+  // of these red by name.
+  const item = (name, facts) => ({ name, nextRun: null, paused: false, ...facts });
+
+  const SOON = new Date(2026, 7, 20, 18, 0);
+  const LATER = new Date(2026, 7, 21, 7, 0);
+  const LATEST = new Date(2026, 7, 22, 7, 0);
+
+  test('the soonest next run is first, whatever order the roster held', () => {
+    const roster = [
+      item('third', { nextRun: LATEST }),
+      item('first', { nextRun: SOON }),
+      item('second', { nextRun: LATER }),
+    ];
+    assert.deepStrictEqual(m.orderByNextRun(roster).map(r => r.name),
+      ['first', 'second', 'third'],
+      'the list came back in the order the roster held it, which is file order');
+  });
+
+  test('paused routines are last, grouped, and in roster order among themselves', () => {
+    const roster = [
+      item('paused first in the file', { paused: true }),
+      item('runs later', { nextRun: LATEST }),
+      item('paused second in the file', { paused: true }),
+      item('runs soon', { nextRun: SOON }),
+    ];
+    assert.deepStrictEqual(m.orderByNextRun(roster).map(r => r.name), [
+      'runs soon', 'runs later', 'paused first in the file', 'paused second in the file',
+    ], 'a paused routine has no next run, so it belongs after everything that has one');
+  });
+
+  // A paused routine can still carry the instant it WOULD have run at, and it
+  // must not be sorted by it: paused is a band, not a time.
+  test('a paused routine carrying a next run is still last', () => {
+    const roster = [
+      item('paused but due first', { paused: true, nextRun: SOON }),
+      item('actually runs', { nextRun: LATEST }),
+    ];
+    assert.deepStrictEqual(m.orderByNextRun(roster).map(r => r.name),
+      ['actually runs', 'paused but due first']);
+  });
+
+  // A schedule the editor never offered has no computable slot, so the routine
+  // is real, is listed, and cannot be placed on the timeline.
+  test('a routine with no next run sits after the scheduled ones and before the paused', () => {
+    const roster = [
+      item('paused', { paused: true }),
+      item('no next run'),
+      item('scheduled', { nextRun: LATER }),
+    ];
+    assert.deepStrictEqual(m.orderByNextRun(roster).map(r => r.name),
+      ['scheduled', 'no next run', 'paused']);
+  });
+
+  test('two routines due at the same instant keep the order the roster gave them', () => {
+    const roster = [item('written first', { nextRun: LATER }), item('written second', { nextRun: LATER })];
+    assert.deepStrictEqual(m.orderByNextRun(roster).map(r => r.name),
+      ['written first', 'written second']);
+  });
+
+  // The caller's array is what the namesake count was taken over, so it must
+  // come back as it went in.
+  test('the roster handed in is not reordered underneath the caller', () => {
+    const roster = [item('later', { nextRun: LATEST }), item('sooner', { nextRun: SOON })];
+    m.orderByNextRun(roster);
+    assert.deepStrictEqual(roster.map(r => r.name), ['later', 'sooner'],
+      'the caller\'s list was sorted in place, so the namesake count it holds now names other rows');
+  });
+
+  // The two facts are read through the caller's own accessor, so the model
+  // never has to know the shape of an entry the view assembles.
+  test('the two facts are found wherever the caller says they are', () => {
+    const roster = [
+      { routine: { nextRun: LATEST, paused: false }, tag: 'later' },
+      { routine: { nextRun: SOON, paused: false }, tag: 'sooner' },
+    ];
+    assert.deepStrictEqual(m.orderByNextRun(roster, e => e.routine).map(e => e.tag),
+      ['sooner', 'later']);
+  });
+
+  // Both instants arrive from the server as strings, which is the only shape
+  // this ever sees in the product.
+  test('the instants sort as instants rather than as strings', () => {
+    const roster = [
+      item('nine in the evening', { nextRun: new Date(2026, 7, 20, 21, 0).toISOString() }),
+      item('nine in the morning', { nextRun: new Date(2026, 7, 20, 9, 0).toISOString() }),
+    ];
+    assert.deepStrictEqual(m.orderByNextRun(roster).map(r => r.name),
+      ['nine in the morning', 'nine in the evening']);
+  });
+
+  test('no row is added, dropped or altered by being ordered', () => {
+    const roster = [item('a', { nextRun: LATEST }), item('b', { paused: true }), item('c', { nextRun: SOON })];
+    const ordered = m.orderByNextRun(roster);
+    assert.strictEqual(ordered.length, roster.length);
+    for (const original of roster) {
+      assert.ok(ordered.includes(original), 'ordering replaced a row with a copy of it');
+    }
+  });
+});
