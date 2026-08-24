@@ -47,6 +47,15 @@ let pendingDelete = null;
 // the surface the question was asked on.
 let pendingProblem = null;
 
+// Which agent the list is scoped to, or null for the whole team.
+//
+// IT BELONGS TO THE WAY IN RATHER THAN TO THE VIEW. A row in an agent's
+// profile asks for that agent's routines; the rail asks for everybody's. Both
+// arrive through the one destination function below, which is what makes the
+// scope impossible to leave behind: a route that does not name an agent clears
+// it, because it passes null rather than because somebody remembered to.
+let scopeAgentId = null;
+
 // The clock, taken from the global so a test can supply one. Undeclared
 // identifiers are safe under typeof, so this works when the module is
 // required in node with no global at all.
@@ -96,6 +105,7 @@ function allRoutines() {
   const out = [];
   const roster = typeof agents !== 'undefined' && agents ? agents : [];
   for (const agent of roster) {
+    if (scopeAgentId && agent.id !== scopeAgentId) continue;
     if (!agent.routines) continue;
     const seen = {};
     for (const routine of agent.routines) {
@@ -215,6 +225,18 @@ function rowHtml(entry, index, withActions) {
     body += '<div class="rr-meta rr-run-line">'
       + `<span class="run-status ${row.status.tone}">${esc(row.status.text)}</span>`
       + (nextRun ? `${sep}${nextRun}` : '')
+      // THE WAY INTO THE RUN'S OWN RECORD, and it sits here rather than on the
+      // row as a whole because this is the line that carries the last-run
+      // fact: the reader who wants to know more is already looking at it.
+      //
+      // Only where there is a last run to open. A routine that has never run
+      // has no record, and an entry point onto nothing is worse than none.
+      // Withheld on the delete confirmation for the same reason the pause and
+      // delete controls are: that surface is a question, not a list.
+      + (withActions
+        ? `${sep}<button class="btn-link rr-view-run" type="button" data-routines-action="view-run"`
+          + ` onclick="routinesViewLastRun(${index})">View last run</button>`
+        : '')
       + '</div>';
   }
 
@@ -246,18 +268,26 @@ const CLOCK_SVG = '<svg viewBox="0 0 24 24" width="26" height="26" fill="current
   + ' 0 1-.5-.9V7a1 1 0 0 1 2 0z"/></svg>';
 
 /**
- * The agent this list is scoped to, or nothing.
+ * The agent this list is scoped to, said as a reader would say it, or nothing.
  *
- * THE SCOPE HAS NO PRODUCER YET. The list that sets it is the sidebar panel,
- * which is separately carded, so this reads null on every path today and the
- * header takes its unscoped sentence. It is read through the global rather
- * than invented as a parameter so that the panel, when it lands, sets one
- * thing and this follows, rather than the two agreeing by hand.
+ * ONE SCOPE, READ WHERE IT IS WRITTEN. This used to read a global of its own,
+ * because the thing that sets a scope had not landed yet; it has, and it is
+ * `scopeAgentId` above, set by the one destination function every way into
+ * this view goes through. Two notions of scope in one file is how a filtered
+ * list ends up under an unfiltered sentence, which is the exact reading the
+ * subtitle exists to prevent.
+ *
+ * The NAME is resolved from the roster rather than stored beside the id, so a
+ * rename reaches the sentence on the next broadcast without anything here
+ * holding a stale copy of it. An id that matches no agent says nothing, which
+ * leaves the unscoped sentence: better a true general sentence than a
+ * specific one with a hole in it.
  */
 function routinesScopeName() {
-  return typeof routinesScopeAgent !== 'undefined' && routinesScopeAgent
-    ? (routinesScopeAgent.displayName || routinesScopeAgent.name || null)
-    : null;
+  if (!scopeAgentId) return null;
+  const roster = typeof agents !== 'undefined' && agents ? agents : [];
+  const agent = roster.filter(a => a && a.id === scopeAgentId)[0];
+  return agent ? (agent.displayName || agent.name || null) : null;
 }
 
 /**
@@ -387,13 +417,59 @@ function listHtml(list) {
  * for, which is the empty state below.
  */
 function renderRoutines() {
-  const list = allRoutines();
+  let list = allRoutines();
+  // A FILTER WITH NOTHING LEFT TO SHOW IS DROPPED RATHER THAN DRAWN EMPTY.
+  // The empty state speaks for the whole team: it says nothing is scheduled and
+  // offers a picker spanning every agent's skills. Under a scope that is a lie,
+  // because the emptiness is the filter's doing and other agents still have
+  // routines, and nothing on this page names the scope, so a reader has no way
+  // to tell. Deleting an agent's last routine from a scoped list is the way in.
+  // The scope goes and the whole list is shown, which is true.
+  if (scopeAgentId && list.length === 0) {
+    scopeAgentId = null;
+    list = allRoutines();
+  }
   const content = document.getElementById('routines-content');
   if (!content) return;
   if (pendingDelete !== null && !list[pendingDelete]) pendingDelete = null;
   if (pendingDelete !== null) content.innerHTML = confirmHtml(list[pendingDelete], pendingDelete);
   else if (list.length === 0) content.innerHTML = emptyHtml();
   else content.innerHTML = listHtml(list);
+}
+
+/**
+ * Land the reader on this list, scoped to one agent or to the whole team.
+ *
+ * THE ONE DESTINATION, USED BY BOTH ROUTES. The rail's own arm calls this with
+ * no agent and a routine row on an agent's profile calls it with that agent,
+ * so there is one place that decides what arriving here means and one place
+ * that can get the rail wrong. A second copy of these three calls is exactly
+ * how `openRoutineEditor` ended up lighting Team on a routines surface.
+ *
+ * It sets the nav state itself, for the same reason `showProfile` does: every
+ * function that lands the user on a section says which section, or the rail
+ * lies about where the user is on every route whose author did not remember.
+ *
+ * @param {string|null} agentId
+ */
+function showRoutinesForAgent(agentId) {
+  // ARRIVING CLEARS THE PENDING CONFIRMATION, AND THAT IS NOT TIDINESS.
+  // `pendingDelete` is a POSITION in the list, and the scope decides what the
+  // list contains, so a confirmation opened under one scope addresses a
+  // different routine under the next. The guard in the render only drops the
+  // index when it falls off the end, so whenever the new list is long enough
+  // the reader is shown a confirmation they never asked for, naming one
+  // routine, and confirming it deletes that one. A destructive action must not
+  // be re-aimed by navigating.
+  //
+  // The refusal goes with it, for the reason it is held at all: it answers a
+  // control pressed on a list the reader has now left.
+  pendingDelete = null;
+  pendingProblem = null;
+  scopeAgentId = agentId || null;
+  if (typeof setNavState === 'function') setNavState('routines');
+  if (typeof showView === 'function') showView('routines');
+  renderRoutines();
 }
 
 /**
@@ -470,6 +546,22 @@ function routinesConfirmDelete() {
   renderRoutines();
 }
 
+/**
+ * Open the run detail screen for this routine's most recent run.
+ *
+ * BY ROUTINE RATHER THAN BY RUN ID, because a row does not have one. The row's
+ * last-run fact comes from the routine state, and the run records are a
+ * separate store by design: the two meet only where each is told the same
+ * thing separately. So the question the reader is asking, "what did this
+ * routine do last time", is the question that travels, and the server resolves
+ * which record answers it.
+ */
+function routinesViewLastRun(index) {
+  const entry = allRoutines()[index];
+  if (!entry) return;
+  if (typeof openRunDetail === 'function') openRunDetail(entry.agent.id, entry.routine.name);
+}
+
 function routinesSetPaused(index, paused) {
   const entry = allRoutines()[index];
   pendingProblem = null;
@@ -481,8 +573,9 @@ function routinesSetPaused(index, paused) {
 }
 
 return {
-  renderRoutines, routinesAskDelete, routinesCancelDelete, routinesConfirmDelete, routinesSetPaused,
+  renderRoutines, showRoutinesForAgent,
+  routinesAskDelete, routinesCancelDelete, routinesConfirmDelete, routinesSetPaused,
   routinesOpenSkill,
-  routinesActionFailed, routinesActionCleared,
+  routinesActionFailed, routinesActionCleared, routinesViewLastRun,
 };
 }));

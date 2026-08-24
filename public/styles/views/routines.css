@@ -79,3 +79,8 @@
    Not the danger colour: nothing broke and nothing was changed, so this is
    the interface answering a question rather than reporting a fault. */
 .routines-problem { font-size: var(--caption); color: var(--attention); line-height: 1.6; margin: -8px 0 16px; }
+
+/* The way into a run's own record, on the line that carries the last-run
+   fact. Quiet: it is an offer to read more, not the thing the row is for. */
+.rr-view-run { font-size: var(--caption); font-weight: 500; color: var(--text-2); background: none; border: 0; padding: 0; font-family: inherit; cursor: pointer; transition: color var(--duration-base) ease; }
+.rr-view-run:hover { color: var(--accent); }

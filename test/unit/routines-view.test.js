@@ -252,8 +252,14 @@ describe('what this card proves by pressing, and what it proves by calling', () 
     // that accepted either would accept the one that rebuilds it.
     assert.match(appPiece(/^\s*else if\(nav==='skills'\) \{(.*)\}\s*$/m, "switchNav's skills arm"),
       /(?<![.\w$])renderSkillsIfEmpty\(/, 'the Skills opener reveals a panel without drawing into it');
+    // The Routines arm is pinned to the ONE DESTINATION FUNCTION rather than
+    // to renderRoutines, and pinned to the argument as well. That function
+    // reveals the panel, sets the rail and draws, and its argument is the
+    // scope: the rail asks for the whole team, so it must pass no agent. An
+    // arm that passed one would open the rail entry on a filtered list.
     assert.match(appPiece(/else if\(nav==='routines'\)\s*\{([\s\S]*?)\}/, "switchNav's routines arm"),
-      /(?<![.\w$])renderRoutines\(/, 'the Routines opener reveals a panel without drawing into it');
+      /(?<![.\w$])showRoutinesForAgent\(null\)/,
+      'the Routines opener reveals a panel without drawing into it, or opens it scoped');
   });
 });
 
@@ -1314,6 +1320,41 @@ describe('the header is the skills view\'s header', () => {
     dom.window.close();
   });
 
+  // AC-C3 AT THE SURFACE, WHICH IT COULD NOT BE UNTIL A SCOPE EXISTED. The
+  // header used to read a scope global of its own, because nothing set one;
+  // the destination function every way into this view goes through now does.
+  // Driven through that function rather than by setting the state here, so
+  // the two halves are shown to agree rather than assumed to.
+  test('scoped to an agent, the subtitle on the page names that agent', () => {
+    const { doc, w, dom } = styled();
+    assert.strictEqual(text(routinesHeader(doc).querySelector('.routines-subtitle')),
+      'Every scheduled skill across your team, and when it runs next.',
+      'sanity: unscoped, the page carries the locked sentence');
+
+    w.setNavState = () => {};
+    w.showRoutinesForAgent('piper');
+    assert.strictEqual(text(routinesHeader(doc).querySelector('.routines-subtitle')),
+      'Every scheduled skill Piper runs, and when it runs next.',
+      'the list is filtered to one agent and the sentence above it still says the whole team');
+
+    // And leaving the scope puts the general sentence back, so a filtered
+    // sentence cannot outlive the filter.
+    w.showRoutinesForAgent(null);
+    assert.strictEqual(text(routinesHeader(doc).querySelector('.routines-subtitle')),
+      'Every scheduled skill across your team, and when it runs next.');
+    dom.window.close();
+  });
+
+  test('a scope naming an agent the roster does not have keeps the general sentence', () => {
+    const { doc, w, dom } = styled();
+    w.setNavState = () => {};
+    w.showRoutinesForAgent('nobody');
+    assert.strictEqual(text(routinesHeader(doc).querySelector('.routines-subtitle')),
+      'Every scheduled skill across your team, and when it runs next.',
+      'a true general sentence beats a specific one with a hole in it');
+    dom.window.close();
+  });
+
   test('the sentence is in the header rather than in a paragraph below it', () => {
     const { doc, dom } = styled();
     const pane = doc.getElementById('routines-content');
@@ -1643,8 +1684,7 @@ describe('the rail says when a routine has failed', () => {
   test('the roster arriving from the server raises and clears the dot', () => {
     const { w, doc, dom } = railShell([]);
     const body = appPiece(/case 'agents':([\s\S]*?)\bbreak;/, 'the roster case of the client dispatch');
-    for (const name of ['renderAgentList', 'renderOrgChart', 'renderRoutinesSidebar',
-      'renderConvoList', 'renderRoutines']) {
+    for (const name of ['renderAgentList', 'renderOrgChart', 'renderConvoList', 'renderRoutines']) {
       w[name] = () => {};
     }
     w.d = { type: 'agents', agents: [{ id: 'piper', displayName: 'Piper', status: 'onTeam', routines: [failed('Nightly report')] }] };
