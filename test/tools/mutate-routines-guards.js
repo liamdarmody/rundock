@@ -78,6 +78,37 @@ const APP = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routin
 // replies and drives the dispatch cases that carry them.
 const VIEW_REPLY = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/routines-view-doors.test.js' };
 const INDEX = { src: path.join(ROOT, 'public', 'index.html'), suite: 'test/unit/routines-view-doors.test.js' };
+// The routines sidebar panel: where it sits in the page, what it draws, and
+// the scope it hands to the list and to the plus. Watched by the file that
+// presses the panel against the real markup, because every rule here is a rule
+// about a surface and a rule about a surface asserted anywhere else can be
+// deleted with the surface broken and the suite green.
+const PANEL = { src: path.join(ROOT, 'public', 'views', 'routines-panel.js'), suite: 'test/unit/routines-panel.test.js' };
+const SCOPE_MODEL = { src: path.join(ROOT, 'public', 'routines-scope-model.js'), suite: 'test/unit/routines-panel.test.js' };
+// THE RENAME IS WATCHED WHERE A SAVE IS DRIVEN, not where an element is
+// looked up. routines-panel.test.js goes red on this rename too, but it goes
+// red on a getElementById check, and an element existing is a proxy for a save
+// landing. AC-10 is about a reader who writes a routine and is put somewhere
+// else with nothing thrown, so the suite that presses that walk is the one
+// that has to notice.
+const INDEX_PANEL = { src: path.join(ROOT, 'public', 'index.html'), suite: 'test/unit/routines-view-doors.test.js' };
+// The editor's half of the same trap: the resolution, and the silent answer it
+// gives when the shell cannot reach the section.
+const EDITOR_NAV = { src: path.join(ROOT, 'public', 'views', 'routine-editor.js'), suite: 'test/unit/routines-view-doors.test.js' };
+const APP_PANEL = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routines-panel.test.js' };
+const STYLES_PANEL = { src: path.join(ROOT, 'public', 'styles', 'components', 'sidebar.css'), suite: 'test/unit/routines-panel.test.js' };
+// The panel's two effects on the surface BESIDE it, watched by the file that
+// enumerates everything that draws this list rather than by the file that
+// presses the panel. A scope pressed and no list redrawn is a defect on the
+// list, so the list's own manifest is where it has to be noticed.
+const PANEL_PRESS = { src: path.join(ROOT, 'public', 'views', 'routines-panel.js'), suite: 'test/unit/routines-view-doors.test.js' };
+// The pending confirmation, watched by the file that drives a scope change
+// against an open one. Watched from the list's own suite these are green: that
+// suite has one agent and no panel, so the list it addresses never changes
+// under the confirmation, which is the entire condition the defect needs.
+const VIEW_CONFIRM = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/routines-view-doors.test.js' };
+const APP_WORKSPACE = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routines-view-doors.test.js' };
+const APP_DISPATCH = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routines-view-doors.test.js' };
 // The Skills pane, which the permanent rail makes reachable and which had no
 // empty state at all until this pass. Its copy and its two guards are watched
 // by the file that presses the pane.
@@ -235,8 +266,8 @@ const MUTATIONS = [
     '  pendingProblem = routinesModel().actionProblem(reply);',
     '  pendingProblem = reply && reply.message ? reply.message : null;'],
   [VIEW_REPLY, 'the next action the reader takes clears the last refusal',
-    '  const entry = allRoutines()[index];\n  pendingProblem = null;',
-    '  const entry = allRoutines()[index];'],
+    '  const entry = allRoutines()[index];\n  pendingProblem = null;\n  if (!entry',
+    '  const entry = allRoutines()[index];\n  if (!entry'],
   [MODEL, 'a refusal says nothing was changed',
     "  const ACTION_PROBLEM = 'That routine could not be changed. Nothing has been altered.';",
     "  const ACTION_PROBLEM = 'That routine could not be changed.';"],
@@ -304,21 +335,24 @@ const MUTATIONS = [
     'onclick="showRoutinesForAgent(\'${esc(a.id)}\')"',
     'onclick="showRoutinesForAgent(null)"'],
   [VIEW_SCOPE, 'the list is filtered to the agent it was opened for',
-    '    if (scopeAgentId && agent.id !== scopeAgentId) continue;\n',
-    ''],
+    '  if (typeof setRoutinesScope === \'function\') setRoutinesScope(agentId);',
+    '  if (typeof setRoutinesScope === \'function\') setRoutinesScope(null);'],
   [VIEW_SCOPE, 'a route that names no agent clears the scope rather than keeping the last one',
-    '  scopeAgentId = agentId || null;',
-    '  if (agentId) scopeAgentId = agentId;'],
+    '  if (typeof setRoutinesScope === \'function\') setRoutinesScope(agentId);\n  else renderRoutines();',
+    '  if (agentId && typeof setRoutinesScope === \'function\') setRoutinesScope(agentId);\n  else renderRoutines();'],
+  // Arriving redraws the ROWS as well as the list. The panel carries the
+  // counts and the selection, so a route that drew only the pane would land a
+  // reader on a list scoped to an agent the panel shows as unselected.
+  [VIEW_SCOPE, 'arriving draws the panel as well as the list',
+    '  if (typeof setRoutinesScope === \'function\') setRoutinesScope(agentId);\n  else renderRoutines();',
+    '  renderRoutines();'],
   // A DESTRUCTIVE ACTION ADDRESSED BY POSITION, IN A LIST THE SCOPE REMAPS.
   // Removing this line leaves a confirmation the reader never opened on the
   // page, aimed at whichever routine now sits at that index, and confirming it
   // deletes that one.
   [VIEW_SCOPE, 'arriving on the list clears a confirmation opened under another scope',
-    '  pendingDelete = null;\n  pendingProblem = null;\n  scopeAgentId = agentId || null;',
-    '  scopeAgentId = agentId || null;'],
-  [VIEW_SCOPE, 'a filter with nothing left to show is dropped rather than drawn empty',
-    '  if (scopeAgentId && list.length === 0) {\n    scopeAgentId = null;\n    list = allRoutines();\n  }\n',
-    ''],
+    '  pendingDelete = null;\n  pendingProblem = null;\n  if (typeof setNavState',
+    '  if (typeof setNavState'],
 
   // ===== WHAT THE TEAM PANEL NO LONGER CARRIES =====
   //
@@ -349,14 +383,17 @@ const MUTATIONS = [
 
   // ===== WHO DRAWS THIS LIST, AND HOW A READER ARRIVES AT IT =====
   [APP, 'the arriving roster redraws the list',
-    'renderOrgChart(); renderRoutines(); renderConvoList();',
-    'renderOrgChart(); renderConvoList();'],
+    'renderRoutinesPanel(); renderRoutines(); renderConvoList();',
+    'renderRoutinesPanel(); renderConvoList();'],
   [APP, 'the rail entry draws something into the view it shows',
     "  else if(nav==='routines') { showRoutinesForAgent(null); }",
     "  else if(nav==='routines') { }"],
   [APP, 'the routines section reveals a sidebar the reader can see',
-    "const SIDEBAR_FOR = { routines: 'team' };",
-    'const SIDEBAR_FOR = {};'],
+    'document.getElementById(`sidebar-${nav}`).classList.remove(\'hidden\');',
+    "document.getElementById(`sidebar-${nav === 'routines' ? 'team' : nav}`).classList.remove('hidden');"],
+  [APP, 'the routines panel is one the router hides before revealing another',
+    "['team','conversations','skills','files','settings','routines']",
+    "['team','conversations','skills','files','settings']"],
   [APP, 'the routines panel is one showView knows how to reveal',
     "'settings','routine-editor','routines','run-detail']",
     "'settings','routine-editor','run-detail']"],
@@ -372,8 +409,8 @@ const MUTATIONS = [
     '      out.push({ routine, agent, occurrence });',
     '      out.push({ routine, agent, occurrence: 0 });'],
   [VIEW, 'a delete says which routine of its name it means',
-    '  const entry = allRoutines()[pendingDelete];',
-    '  const entry = allRoutines()[0];'],
+    "      type: 'delete_routine', agentId: target.agentId, name: target.name, occurrence: target.occurrence,",
+    "      type: 'delete_routine', agentId: target.agentId, name: target.name, occurrence: 0,"],
   [VIEW, 'a pause says which routine of its name it means',
     "    occurrence: entry.occurrence, paused,",
     "    occurrence: 0, paused,"],
@@ -400,6 +437,130 @@ const MUTATIONS = [
   [STYLES, 'a failure is not dressed as a success',
     '.run-status.failed { font-weight: 600; color: var(--danger); }',
     '.run-status.failed { font-weight: 600; color: var(--success); }'],
+
+  // ===== THE SAVE DESTINATION, AND THE SILENCE AROUND IT =====
+  // The trap the criteria name. Each of these is a way for a written routine
+  // to land on the team chart with nothing thrown and nothing logged.
+  [EDITOR_NAV, 'a save resolves its destination rather than assuming one',
+    "    return navigable(destination) ? destination : 'team';",
+    "    return 'team';"],
+  // THE THIRD HALF OF THE CHECK IS NOT MUTATED HERE, and the reason is the
+  // reason this card dropped a probe of its own. Removing a check cannot fail
+  // against a shell that HAS the thing checked: this suite's page carries the
+  // sidebar panel, so a permissive check still resolves and still lands. What
+  // discriminates it is removing the ELEMENT, which INDEX_PANEL below does,
+  // and taking the halves away one at a time, which the editor's own harness
+  // does against a shell built for exactly that.
+
+  // ===== ONE MOUNT, ONE RENDERER =====
+  // The legacy team-sidebar listing draws into this panel's element. It is no
+  // longer called, and the mutation calls it again, AFTER the panel, which is
+  // the order that was one edit away the whole time.
+  [APP_DISPATCH, 'nothing draws over the scope panel after it is drawn',
+    'renderOrgChart(); renderRoutinesPanel(); renderRoutines();',
+    'renderOrgChart(); renderRoutinesPanel(); renderRoutinesSidebar(); renderRoutines();'],
+
+  // ===== A CONFIRMATION CANNOT CHANGE SUBJECT UNDER THE READER =====
+  // The scope filter made the list this addresses into one that changes
+  // without the routines changing, so a pending delete held as a POSITION was
+  // re-resolved against a different set the moment a scope row was pressed.
+  // These put the position back.
+  [VIEW_CONFIRM, 'the confirmation draws the namesake it was raised on',
+    '    && entry.occurrence === pendingDelete.occurrence);',
+    '    && true);'],
+  [VIEW_CONFIRM, 'a pending delete is an identity, not a position in a filtered list',
+    '  const pending = pendingEntry(list);\n  if (!pending) pendingDelete = null;\n  if (pending) content.innerHTML = confirmHtml(pending, list.indexOf(pending));',
+    '  const pending = pendingDelete ? list[0] : null;\n  if (pending) content.innerHTML = confirmHtml(pending, 0);'],
+  [VIEW_CONFIRM, 'a confirmation the reader has navigated away from does not come back',
+    '  if (!pending) pendingDelete = null;\n',
+    ''],
+
+  // ===== ONE LIST OF PANELS, NOT TWO =====
+  // The workspace switch carried its own copy of the router's hide list, and
+  // the copy went stale the moment this panel was lifted out of the team one.
+  // The mutation writes the second list back.
+  [APP_WORKSPACE, 'the workspace switch hides panels through the router rather than its own list',
+    '  routinesPanelReset();\n  setNavState(\'conversations\');',
+    "  document.querySelectorAll('.nav-item[data-nav]').forEach(n=>n.classList.remove('active'));\n"
+    + "  document.querySelector('[data-nav=\"conversations\"]')?.classList.add('active');\n"
+    + "  ['team','conversations','skills','files','settings'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));\n"
+    + "  document.getElementById('sidebar-conversations').classList.remove('hidden');"],
+  [APP_WORKSPACE, 'the workspace switch forgets the scope the last workspace was left on',
+    '  routinesPanelReset();\n  setNavState',
+    '  setNavState'],
+
+  // ===== THE ROUTINES PANEL IS A PANEL OF ITS OWN =====
+  // The decision this card reversed, and the mutations put it BACK. The panel
+  // was a child of the team one, revealed through an alias, so the two
+  // sidebars were one element rather than two that resembled each other. A
+  // rule whose content is "this is no longer nested" is otherwise unmutatable,
+  // and an unmutatable rule is one the next person undoes with nothing red.
+  [INDEX_PANEL, 'the routines panel is a sidebar in its own right',
+    '    </div>\n    <!-- The routines panel is a sidebar in its own right',
+    '    <div id="sidebar-routines" class="hidden"></div>\n    </div>\n    <!-- The routines panel is a sidebar in its own right'],
+  [INDEX_PANEL, 'the panel the router reveals is the one the editor resolves to',
+    '<div id="sidebar-routines" class="hidden"></div>',
+    '<div id="sidebar-routines-panel" class="hidden"></div>'],
+
+  // ===== WHAT THE SCOPE LIST HOLDS =====
+  [SCOPE_MODEL, 'All routines is pinned in every state, including an empty one',
+    '    const all = { id: ALL, name: COPY.all, count: total, active: scope === null };',
+    '    const all = null;'],
+  [SCOPE_MODEL, 'only agents that own a routine are scopes',
+    '      if (!agent || !agent.routines || !agent.routines.length) continue;',
+    '      if (!agent) continue;'],
+  [SCOPE_MODEL, 'a paused routine is counted',
+    '        count: agent.routines.length,',
+    '        count: agent.routines.filter(r => !r.paused).length,'],
+  [SCOPE_MODEL, 'the order is the roster order, never the count order',
+    '    return out;\n  }\n\n  /**\n   * The scope the panel should be on',
+    '    return out.sort((a, b) => b.count - a.count);\n  }\n\n  /**\n   * The scope the panel should be on'],
+  [SCOPE_MODEL, 'a filter with one option is not drawn',
+    '    if (list.length >= MIN_OWNERS) {',
+    '    if (list.length >= 1) {'],
+  [SCOPE_MODEL, 'a panel that draws no list says why',
+      "      quiet: list.length === 1 ? soleOwnerLine(list[0].name) : COPY.none,",
+      '      quiet: null,'],
+  [SCOPE_MODEL, 'the panel does not repeat the pane\'s own lead sentence',
+    "    none: 'Agents with routines are listed here.',",
+    "    none: 'No routines yet. Agents with routines are listed here.',"],
+  [SCOPE_MODEL, 'a scope whose agent stops owning routines falls back to All',
+    '    return list.filter(o => o.id === scope).length ? scope : null;',
+    '    return scope;'],
+  [SCOPE_MODEL, 'a scope goes when the list that offered it is withdrawn',
+    '    if (list.length < MIN_OWNERS) return null;\n',
+    ''],
+
+  // ===== THE SCOPE, AND WHO IT REACHES =====
+  [PANEL, 'the plus inherits the scope the panel is on',
+    '  addRoutineForAgent(routinesScopeAgentId());',
+    '  addRoutineForAgent(null);'],
+  [PANEL_PRESS, 'pressing a scope redraws the list beside the panel',
+    '  renderRoutinesPanel();\n  renderRoutines();',
+    '  renderRoutinesPanel();'],
+  [PANEL, 'the scope is resolved on every read rather than kept',
+    '  scope = m.resolveScope({ agents: roster(), scope });\n  return scope;',
+    '  return scope;'],
+  [APP_PANEL, 'the rail forgets the scope, so a visit always opens on All',
+    "  else if(nav==='routines') { showRoutinesForAgent(null); }",
+    "  else if(nav==='routines') { showRoutinesForAgent(routinesScopeAgentId()); }"],
+  [APP_DISPATCH, 'the arriving roster redraws the panel as well as the list',
+    'renderOrgChart(); renderRoutinesPanel(); renderRoutines();',
+    'renderOrgChart(); renderRoutines();'],
+  [VIEW_SCOPE, 'the list is the scope the panel is on',
+    '  return scope ? out.filter(entry => entry.agent.id === scope) : out;',
+    '  return out;'],
+
+  // ===== A SCOPE ROW IS NOT A ROSTER ROW =====
+  // The complaint the panel answers is that the two sidebars looked the same,
+  // and the answer has to be visible rather than structural. These break what
+  // a browser actually resolves.
+  [STYLES_PANEL, 'selected takes the selected fill, not the hover fill',
+    '.scope-item.active { background: var(--accent-glow); }',
+    '.scope-item.active { background: var(--elevated); }'],
+  [STYLES_PANEL, 'hover takes the hover fill',
+    '.scope-item:hover { background: var(--elevated); }',
+    '.scope-item:hover { background: var(--accent-glow); }'],
 
   // ===== THE VALUE THAT IS CONSTRAINED, NOT COPY =====
   // The second one this file exists for: the literal two design frames wrote.
@@ -484,11 +645,11 @@ const MUTATIONS = [
     "    actions += r.paused\n      ? iconButton('resume', 'Resume', ICONS.play, `routinesSetPaused(${index}, false)`, false)\n      : iconButton('pause', 'Pause', ICONS.pause, `routinesSetPaused(${index}, true)`, false);",
     "    actions += iconButton('pause', 'Pause', ICONS.pause, `routinesSetPaused(${index}, true)`, false);"],
   [VIEW, 'delete asks before it acts',
-    'function routinesAskDelete(index) {\n  pendingProblem = null;\n  pendingDelete = index;',
-    'function routinesAskDelete(index) {\n  pendingProblem = null;\n  pendingDelete = null;'],
+    '  pendingDelete = entry\n    ? { agentId: entry.agent.id, name: entry.routine.name, occurrence: entry.occurrence }\n    : null;',
+    '  pendingDelete = null;'],
   [VIEW, 'a delete names the routine that was confirmed',
-    "      type: 'delete_routine', agentId: entry.agent.id, name: entry.routine.name, occurrence: entry.occurrence,",
-    "      type: 'delete_routine', agentId: entry.agent.id, name: 'anything', occurrence: entry.occurrence,"],
+    "      type: 'delete_routine', agentId: target.agentId, name: target.name, occurrence: target.occurrence,",
+    "      type: 'delete_routine', agentId: target.agentId, name: 'anything', occurrence: target.occurrence,"],
   [VIEW, 'the empty state offers something to press',
     "      + `<button class=\"settings-btn-primary\" type=\"button\" data-routines-action=\"${action.marker}\"`",
     "      + '<button class=\"settings-btn-primary\" type=\"button\" data-routines-action=\"nothing\"'"],
@@ -598,8 +759,8 @@ const MUTATIONS = [
     '<button class="nav-item" data-nav="routines" onclick="switchNav(\'routines\')" data-tooltip="Routines"'
     + ' style="display:none">'],
   [VIEW_RAIL, 'the routines render leaves the rail alone',
-    '  let list = allRoutines();\n',
-    '  let list = allRoutines();\n'
+    '  const list = allRoutines();\n',
+    '  const list = allRoutines();\n'
     + '  document.querySelector(\'.nav-item[data-nav="routines"]\').style.display = list.length ? \'\' : \'none\';\n'],
   [SKILLS_VIEW_RAIL, 'the skills render leaves the rail alone',
     '  renderSkillsSidebar(skills);\n',
@@ -664,7 +825,9 @@ function redTests(suite) {
 function run() {
   const targets = [MODEL, VIEW, VIEW_E2E, VIEW_REPLY, VIEW_RAIL, STYLES, SCHEDULER, END_TO_END,
     DISCOVERY, HANDLER, ROUTINES, APP, APP_SKILLS, APP_OPENER, INDEX, INDEX_RAIL, SKILLS_MODEL, SKILLS_VIEW,
-    SKILLS_VIEW_RAIL, TEAM_PANEL, INDEX_SWEEP, PROFILE_BOXES, PROFILE_ROUTE, VIEW_SCOPE,
+    SKILLS_VIEW_RAIL, PANEL, SCOPE_MODEL, INDEX_PANEL, APP_PANEL, STYLES_PANEL, VIEW_SCOPE,
+    PANEL_PRESS, APP_DISPATCH, VIEW_CONFIRM, APP_WORKSPACE, EDITOR_NAV,
+    TEAM_PANEL, INDEX_SWEEP, PROFILE_BOXES, PROFILE_ROUTE,
     GUIDE_COPY_MOD, TEAM_COPY, PROFILE_COPY, TEAM_DOOR];
   const originals = new Map();
   for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));

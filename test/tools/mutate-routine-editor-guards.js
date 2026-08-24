@@ -173,9 +173,16 @@ const MUTATIONS = [
   [VIEW, 'a save in flight is not sent twice',
     '    if (!state || state.saving) return;',
     '    if (!state) return;'],
+  // THE CHECK ASKS FOR THREE THINGS AND EACH IS MUTATED AWAY IN TURN. The rail
+  // lights the entry, setNavState reveals the sidebar by name and showView
+  // reveals the view by name, so a shell missing any one of them cannot show
+  // this section and the save has to notice.
   [VIEW, 'the destination is checked for a view panel, not just a rail entry',
-    '    return !!(document.querySelector(`[data-nav="${nav}"]`) && document.getElementById(`view-${nav}`));',
-    '    return !!document.querySelector(`[data-nav="${nav}"]`);'],
+    '      && document.getElementById(`view-${nav}`));',
+    '      );'],
+  [VIEW, 'the destination is checked for a sidebar panel, not just a view',
+    '      && document.getElementById(`sidebar-${nav}`)\n',
+    ''],
   [VIEW, 'an unreachable destination falls back to one the shell has',
     "    return navigable(destination) ? destination : 'team';",
     '    return destination;'],

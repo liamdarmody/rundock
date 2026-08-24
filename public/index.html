@@ -32,6 +32,7 @@
 <script src="/run-detail-model.js"></script>
 <script src="/skills-model.js"></script>
 <script src="/routines-model.js"></script>
+<script src="/routines-scope-model.js"></script>
 <script src="/guide-copy.js"></script>
 <!-- Tokens first: everything below resolves var(--x) against this file. -->
 <link rel="stylesheet" href="/styles/tokens.css">
@@ -127,6 +128,18 @@
       <div class="sidebar-header" id="sidebar-team-header"><span class="sidebar-label">Your Team</span></div>
       <div class="agent-status-list" id="agent-list"></div>
     </div>
+    <!-- The routines panel is a sidebar in its own right, and it was not. It
+         was a child of the team panel above, revealed by mapping the routines
+         rail entry onto that panel, which made the two sidebars one element
+         rather than two that resembled each other. So this panel could say
+         nothing about the list beside it and listed every routine a second
+         time in less detail than the pane already showed.
+
+         Its contents are SCOPES, not agents: only agents that own a routine,
+         with All routines pinned first and never removed. Drawn by
+         views/routines-panel.js, which owns the scope the list is filtered by
+         and the scope the header plus inherits. -->
+    <div id="sidebar-routines" class="hidden"></div>
     <div id="sidebar-conversations">
       <div class="sidebar-header"><span class="sidebar-label">Conversations</span></div>
       <div class="sidebar-pills" id="sidebar-pills">
@@ -320,6 +333,7 @@
 <script src="/views/routine-editor.js"></script>
 <script src="/views/run-detail.js"></script>
 <script src="/views/routines.js"></script>
+<script src="/views/routines-panel.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

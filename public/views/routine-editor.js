@@ -357,34 +357,40 @@
    * inside the router that line could only be reached by loading the whole
    * shell, so it had no test and could be deleted with the suite green.
    *
-   * THE ROUTINES SURFACE NOW HAS A PERMANENT RAIL ENTRY, so this resolves to
-   * it rather than to the team panel, and it did before that entry became
-   * permanent because the entry was in the markup either way. That is exactly
-   * why the resolution stays: it reads the shell rather than a belief about
-   * the shell, so the day the panel is lifted out of the team one it is the
-   * rename that has to keep the names, not this function that has to be
-   * remembered.
+   * THE ROUTINES SURFACE HAS A PERMANENT RAIL ENTRY AND A SIDEBAR PANEL OF ITS
+   * OWN, so this resolves to it. That panel used to be a child of the team
+   * one, revealed by an alias in the router, which is the arrangement the
+   * fallback below was written against. The day it was lifted out and given
+   * its own place in the rail, this function was already correct and nothing
+   * here needed editing, which is the whole argument for resolving against the
+   * shell rather than against a belief about it.
    *
    * A destination is usable only if the shell has BOTH halves of it: a rail
    * button carrying the name, and the view panel the router shows by that
    * name. Checking the pair is what makes this a resolution rather than a
    * guess.
    *
-   * THE SECOND HALF USED TO BE `sidebar-${nav}` AND THAT WAS AN ACCIDENT
-   * PASSING AS A CHECK. The routines section has no sidebar panel of its own:
-   * it reveals the team one, through the router's own map. It resolved anyway
-   * because an empty element under that exact name happened to exist, nested
-   * inside the team panel, holding the listing the team sidebar used to carry.
-   * Revealing that element by name succeeded and left the reader looking at a
-   * hidden parent, which the routines doors file already records as a trap.
-   * With the listing gone the element goes with it, and this asks for the
-   * thing the router actually shows: the view panel. A rename of either half
-   * still lands a save on the team chart, so the check is unchanged in what it
-   * catches and no longer depends on a sentinel nobody meant to leave.
+   * IT ASKS FOR ALL THREE, and each is here because a parent of this file
+   * needed it. The routines section had no sidebar of its own and resolved
+   * against `sidebar-routines` anyway, because an empty element of that name
+   * sat nested inside the team panel holding the old listing: revealing it by
+   * name succeeded and left the reader staring at a hidden parent. That
+   * sentinel is gone and the section now has a real panel of its own, so both
+   * halves the router touches are real and both are asked for. `setNavState`
+   * reveals the sidebar by name and `showView` reveals the view by name, so a
+   * shell missing either cannot show this section, and asking for only one of
+   * them is how the old accident passed as a check.
+   *
+   * THE FALLBACK IS SILENT, which is why the trio is asserted against the real
+   * markup in the doors suite rather than against a shell a test writes for
+   * itself: renaming any of them sends a real save to the team chart with
+   * nothing thrown and nothing logged.
    */
   function navigable(nav) {
     if (typeof document === 'undefined') return false;
-    return !!(document.querySelector(`[data-nav="${nav}"]`) && document.getElementById(`view-${nav}`));
+    return !!(document.querySelector(`[data-nav="${nav}"]`)
+      && document.getElementById(`sidebar-${nav}`)
+      && document.getElementById(`view-${nav}`));
   }
 
   function routinesListNav() {

@@ -32,10 +32,25 @@
   }
 }(typeof self !== 'undefined' ? self : this, function () {
 
-// Which routine the reader has asked to delete, as its position in the list
-// below. Held here rather than on the element because a routine's name is
+// Which routine the reader has asked to delete, BY IDENTITY: the agent that
+// declares it, its name, and which of that agent's routines of that name it
+// is. Held here rather than on the element because a routine's name is
 // user-written text and an identifier built out of it has to be escaped into
 // an attribute, unescaped out of one, and matched again on the server.
+//
+// IT WAS A POSITION, AND A POSITION IS NOT AN IDENTITY once the list this
+// indexes into can change under an open confirmation. It can: the panel
+// filters it by scope, so pressing a scope row while a confirmation is open
+// re-resolved that index against a different set of routines. The
+// confirmation went on naming the routine the reader pressed Delete on while
+// the server was told to remove whatever had moved into that position. A
+// confirmation that names one thing and acts on another is worse than no
+// confirmation, because the dialogue is specific and wrong.
+//
+// This is the same triple the delete message carries and the same one the
+// namesake ruling settled on, so the thing being confirmed, the thing being
+// drawn and the thing being sent are one value rather than three that agree
+// while nothing moves.
 let pendingDelete = null;
 
 // What the server said when it refused the last pause or delete, or null.
@@ -47,14 +62,13 @@ let pendingDelete = null;
 // the surface the question was asked on.
 let pendingProblem = null;
 
-// Which agent the list is scoped to, or null for the whole team.
-//
-// IT BELONGS TO THE WAY IN RATHER THAN TO THE VIEW. A row in an agent's
-// profile asks for that agent's routines; the rail asks for everybody's. Both
-// arrive through the one destination function below, which is what makes the
-// scope impossible to leave behind: a route that does not name an agent clears
-// it, because it passes null rather than because somebody remembered to.
-let scopeAgentId = null;
+// THE SCOPE IS NOT HELD HERE. It belongs to the panel that draws the scope
+// rows, because that panel decides which agents are offered at all and drops a
+// selection the moment it stops drawing the row carrying it. Two branches each
+// grew a scope of their own and a merge that kept both would filter this list
+// twice against two values that agree only while nothing moves. There is one,
+// it is read through routinesScopeAgentId(), and the way in sets it through
+// setRoutinesScope().
 
 // The clock, taken from the global so a test can supply one. Undeclared
 // identifiers are safe under typeof, so this works when the module is
@@ -89,12 +103,22 @@ function routinesModel() {
  *
  * The count runs in roster order, which is file order, so the nth namesake
  * here is the nth block in the file.
+ *
+ * AND THE COUNT IS TAKEN BEFORE THE SCOPE IS APPLIED, which is why the two
+ * steps are in this order rather than folded together. The occurrence a delete
+ * is addressed by is a position in the FILE, not a position in whatever subset
+ * the panel is showing. Counting after the filter would send the server the
+ * row's position on screen wearing the name of its position in the file, and
+ * the confirmation would name one routine while the server removed another.
+ *
+ * WHICH SCOPE IS THE PANEL'S DECISION and it is read rather than kept, so
+ * there is one scope on the screen rather than two that agree until one of the
+ * two surfaces is redrawn on its own.
  */
 function allRoutines() {
   const out = [];
   const roster = typeof agents !== 'undefined' && agents ? agents : [];
   for (const agent of roster) {
-    if (scopeAgentId && agent.id !== scopeAgentId) continue;
     if (!agent.routines) continue;
     const seen = {};
     for (const routine of agent.routines) {
@@ -103,7 +127,8 @@ function allRoutines() {
       out.push({ routine, agent, occurrence });
     }
   }
-  return out;
+  const scope = typeof routinesScopeAgentId === 'function' ? routinesScopeAgentId() : null;
+  return scope ? out.filter(entry => entry.agent.id === scope) : out;
 }
 
 const ICONS = {
@@ -308,22 +333,24 @@ function listHtml(list) {
  * for, which is the empty state below.
  */
 function renderRoutines() {
-  let list = allRoutines();
-  // A FILTER WITH NOTHING LEFT TO SHOW IS DROPPED RATHER THAN DRAWN EMPTY.
-  // The empty state speaks for the whole team: it says nothing is scheduled and
-  // offers a picker spanning every agent's skills. Under a scope that is a lie,
-  // because the emptiness is the filter's doing and other agents still have
-  // routines, and nothing on this page names the scope, so a reader has no way
-  // to tell. Deleting an agent's last routine from a scoped list is the way in.
-  // The scope goes and the whole list is shown, which is true.
-  if (scopeAgentId && list.length === 0) {
-    scopeAgentId = null;
-    list = allRoutines();
-  }
+  // A FILTER WITH NOTHING LEFT TO SHOW IS DROPPED RATHER THAN DRAWN EMPTY,
+  // and that rule is not repeated here because it cannot be reached from here.
+  // The scope only survives resolveScope while its agent still owns a routine,
+  // so a surviving scope always has something to show and an empty list always
+  // means the team has nothing scheduled, which is what the empty state says.
+  // Written again here it would be a second rule with a different trigger
+  // doing one job, which is how two rules end up disagreeing.
+  const list = allRoutines();
   const content = document.getElementById('routines-content');
   if (!content) return;
-  if (pendingDelete !== null && !list[pendingDelete]) pendingDelete = null;
-  if (pendingDelete !== null) content.innerHTML = confirmHtml(list[pendingDelete], pendingDelete);
+  // RESOLVED AGAINST THE LIST AS IT NOW STANDS, every draw. A routine that is
+  // no longer here has no confirmation, whether it went because the server
+  // removed it or because the panel stopped showing it, and either way the
+  // reader is returned to the list rather than shown a question about
+  // something they can no longer see.
+  const pending = pendingEntry(list);
+  if (!pending) pendingDelete = null;
+  if (pending) content.innerHTML = confirmHtml(pending, list.indexOf(pending));
   else if (list.length === 0) content.innerHTML = emptyHtml();
   else content.innerHTML = listHtml(list);
 }
@@ -344,23 +371,26 @@ function renderRoutines() {
  * @param {string|null} agentId
  */
 function showRoutinesForAgent(agentId) {
-  // ARRIVING CLEARS THE PENDING CONFIRMATION, AND THAT IS NOT TIDINESS.
-  // `pendingDelete` is a POSITION in the list, and the scope decides what the
-  // list contains, so a confirmation opened under one scope addresses a
-  // different routine under the next. The guard in the render only drops the
-  // index when it falls off the end, so whenever the new list is long enough
-  // the reader is shown a confirmation they never asked for, naming one
-  // routine, and confirming it deletes that one. A destructive action must not
-  // be re-aimed by navigating.
+  // ARRIVING CLEARS THE PENDING CONFIRMATION, AND THAT IS NOT TIDINESS. A
+  // confirmation belongs to the list it was raised on, and this is a reader
+  // leaving that list. It is no longer true that a stale one could be re-aimed
+  // by navigating: `pendingDelete` carries the routine's identity rather than
+  // its position, so it can only ever resolve to the routine it was raised on
+  // or to nothing. What is still true is that a destructive question the
+  // reader has walked away from must not be waiting when they arrive, because
+  // a question re-presented is one answered without being re-read.
   //
   // The refusal goes with it, for the reason it is held at all: it answers a
   // control pressed on a list the reader has now left.
   pendingDelete = null;
   pendingProblem = null;
-  scopeAgentId = agentId || null;
   if (typeof setNavState === 'function') setNavState('routines');
   if (typeof showView === 'function') showView('routines');
-  renderRoutines();
+  // ONE SCOPE, SET WHERE IT LIVES. setRoutinesScope stores it and redraws both
+  // the rows and the list, so the panel and the pane cannot disagree about
+  // what is being shown. A shell without the panel still gets its list.
+  if (typeof setRoutinesScope === 'function') setRoutinesScope(agentId);
+  else renderRoutines();
 }
 
 /**
@@ -385,9 +415,28 @@ function routinesActionCleared() {
   pendingProblem = null;
 }
 
+/**
+ * The entry a pending confirmation is about, or nothing.
+ *
+ * routinesAskDelete turns the position the reader pressed into an identity, at
+ * the moment they press it. This matches on that identity and nothing else, so
+ * no later reorder or filter of this list can change the subject of a question
+ * that has already been asked.
+ */
+function pendingEntry(list) {
+  if (!pendingDelete) return null;
+  const found = list.filter(entry => entry.agent.id === pendingDelete.agentId
+    && entry.routine.name === pendingDelete.name
+    && entry.occurrence === pendingDelete.occurrence);
+  return found.length ? found[0] : null;
+}
+
 function routinesAskDelete(index) {
+  const entry = allRoutines()[index];
   pendingProblem = null;
-  pendingDelete = index;
+  pendingDelete = entry
+    ? { agentId: entry.agent.id, name: entry.routine.name, occurrence: entry.occurrence }
+    : null;
   renderRoutines();
 }
 
@@ -398,12 +447,15 @@ function routinesCancelDelete() {
 }
 
 function routinesConfirmDelete() {
-  const entry = allRoutines()[pendingDelete];
+  // SENT FROM THE IDENTITY THAT WAS CONFIRMED, not from a fresh lookup by
+  // position. The reader answered a question about one routine, so that is
+  // the routine that goes.
+  const target = pendingDelete;
   pendingProblem = null;
   pendingDelete = null;
-  if (entry && typeof ws !== 'undefined' && ws) {
+  if (target && typeof ws !== 'undefined' && ws) {
     ws.send(JSON.stringify({
-      type: 'delete_routine', agentId: entry.agent.id, name: entry.routine.name, occurrence: entry.occurrence,
+      type: 'delete_routine', agentId: target.agentId, name: target.name, occurrence: target.occurrence,
     }));
   }
   renderRoutines();

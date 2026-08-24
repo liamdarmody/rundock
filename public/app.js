@@ -229,7 +229,11 @@ function handle(d) {
       if (currentView === 'settings') renderSettingsSection('workspace');
       break;
     case 'needs_workspace': showView('workspace'); break;
-    case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutines(); renderConvoList(); break;
+    // THE PANEL IS REDRAWN HERE AS WELL AS THE LIST. The roster is what
+    // arrives when a routine is added or deleted, so the scope rows and their
+    // counts are stale from that moment until something redraws them, and the
+    // scope itself may now name an agent that owns nothing.
+    case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesPanel(); renderRoutines(); renderConvoList(); break;
     // renderRoutines as well as renderSkills: the routines empty state asks
     // whether the workspace has a skill, so the reply that answers that
     // question is the reply that has to redraw it. Without this the list sits
@@ -969,13 +973,16 @@ function initSidebarResize() {
 // keeping: a routine belongs to an agent, and the panel that lists your agents
 // is the one that answers "whose?". Its own Routines section already lives
 // inside that panel.
-const SIDEBAR_FOR = { routines: 'team' };
-
+// A section reveals the panel of its own name, and there is no map that says
+// otherwise. There used to be one, holding a single entry that pointed the
+// routines section at the team panel, which is how the two sidebars came to be
+// one element. An alias map with nothing in it is a redirection waiting to be
+// reintroduced without anybody noticing, so it is gone rather than emptied.
 function setNavState(nav) {
   document.querySelectorAll('.nav-item[data-nav]').forEach(n=>n.classList.remove('active'));
   document.querySelector(`[data-nav="${nav}"]`)?.classList.add('active');
-  ['team','conversations','skills','files','settings'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
-  document.getElementById(`sidebar-${SIDEBAR_FOR[nav] || nav}`).classList.remove('hidden');
+  ['team','conversations','skills','files','settings','routines'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
+  document.getElementById(`sidebar-${nav}`).classList.remove('hidden');
   // The New conversation footer lives at sidebar level (so the update strip
   // can sit above it without ever moving it), which makes its visibility
   // this function's job rather than the panel's.
@@ -1020,6 +1027,11 @@ function switchNav(nav) {
   else if(nav==='skills') { showView('skills'); renderSkillsIfEmpty(); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } }
   else if(nav==='conversations') { if(activeConversation) { showView('chat'); if(unread.clearConvo(activeConversation.id)) { updateUnreadBadge(); renderConvoList(); } } else { const target = pickDefaultConversation(); if(target) { openConversation(target.id); } else { newConversation(); } } }
   else if(nav==='team') { showView('home'); renderOrgChart(); }
+  // ONE DESTINATION, AND ARRIVING FROM THE RAIL ARRIVES ON ALL. A filter that
+  // survives a visit is a filter that hides a failed overnight run from the
+  // person who opened this view to look for one, so the rail passes no agent.
+  // A routine row on an agent's profile passes one, which is the deep link
+  // that announces itself.
   else if(nav==='routines') { showRoutinesForAgent(null); }
 }
 function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings','routine-editor','routines','run-detail'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }
@@ -1277,6 +1289,32 @@ async function openFolder() {
   }
 }
 
+/**
+ * Put the sidebar back to a known state for a workspace that is not the one
+ * that was open.
+ *
+ * IT ROUTES THROUGH THE ROUTER rather than repeating what the router does.
+ * This used to carry its own copy of the list of panels to hide, and the copy
+ * went stale the moment the routines panel was lifted out of the team one: the
+ * router learned about the sixth panel and this did not, so switching
+ * workspace while on that view left it on screen stacked above the panel this
+ * reveals. Two lists of the same thing is one list that is wrong, and the fix
+ * is one list rather than two that agree.
+ *
+ * Routing here also keeps the New conversation footer in step, which the copy
+ * did not touch at all. A switch made from Files left it hidden until the
+ * conversations reply landed and something downstream called the router. That
+ * was a flicker rather than a defect, and it is one less thing depending on a
+ * reply arriving.
+ */
+function resetSidebarForWorkspace() {
+  // The scope is an agent id, and agent ids belong to the workspace that
+  // declared them. Carried across, it names an agent the next workspace may
+  // not have, and it filters that workspace's routines by it.
+  routinesPanelReset();
+  setNavState('conversations');
+}
+
 function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupComplete) {
   const isSameWorkspace = (currentWorkspacePath === dir);
   currentWorkspacePath = dir;
@@ -1336,10 +1374,7 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   if (cs) { cs.textContent = ''; cs.classList.remove('working'); }
   // Activate conversations sidebar; handlePersistedConversations will
   // open a pinned conversation or newConversation() once data arrives.
-  document.querySelectorAll('.nav-item[data-nav]').forEach(n=>n.classList.remove('active'));
-  document.querySelector('[data-nav="conversations"]')?.classList.add('active');
-  ['team','conversations','skills','files','settings'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
-  document.getElementById('sidebar-conversations').classList.remove('hidden');
+  resetSidebarForWorkspace();
   // Hide the workspace picker immediately, but do not show any view yet.
   // handlePersistedConversations will pick the right destination (chat for
   // an existing pinned/processing conversation, convo-empty for a populated
