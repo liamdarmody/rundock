@@ -44,6 +44,9 @@ const EDITOR_MODEL_SRC = read('public', 'routine-editor-model.js');
 // off it, in the order index.html loads them.
 const SKILLS_MODEL_SRC = read('public', 'skills-model.js');
 const EDITOR_VIEW_SRC = read('public', 'views', 'routine-editor.js');
+const SCOPE_MODEL_SRC = read('public', 'routines-scope-model.js');
+const PANEL_SRC = read('public', 'views', 'routines-panel.js');
+const TEAM_SRC = read('public', 'views', 'team.js');
 const PROFILE_VIEW_SRC = read('public', 'views', 'profile.js');
 // The run detail screen, which is opened from a row on this list and returns
 // here. Loaded so the return journey is pressed rather than described.
@@ -103,6 +106,16 @@ const RENDERERS = [
     line: 'function routinesActionFailed(reply)',
     surface: 'a refused pause or delete coming back from the server',
     pressedBy: 'a refused action is answered on this list and nowhere else',
+  },
+  // The scope changing is a redraw of this list, not only of the panel. The
+  // panel is the only surface that can change which routines are listed
+  // without changing which routines exist, so a scope pressed and no list
+  // redrawn leaves the reader looking at somebody else's routines.
+  {
+    file: 'views/routines-panel.js',
+    line: 'function setRoutinesScope(agentId)',
+    surface: 'a scope row in the routines panel',
+    pressedBy: 'pressing a scope redraws the list into that agent alone',
   },
 ];
 
@@ -338,7 +351,9 @@ function shell({ routines = [ROUTINE] } = {}) {
   w.eval(EDITOR_MODEL_SRC);
   w.eval(SKILLS_MODEL_SRC);
   w.eval(MODEL_SRC);
+  w.eval(SCOPE_MODEL_SRC);
   w.eval(VIEW_SRC);
+  w.eval(PANEL_SRC);
   w.agents = [{ id: 'piper', displayName: 'Piper', colour: '#E87A5A', icon: 'P', status: 'onTeam', routines }];
   w.esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   w.ws = { send: () => {} };
@@ -412,6 +427,12 @@ describe('the ways this list gets drawn, pressed', () => {
     w.eval(`(function () {${body}\n})()`);
     assert.strictEqual(w.drawn, 1, 'a roster arrived and the routines list was not redrawn');
     assert.strictEqual(w.document.querySelectorAll('.routine-row').length, 1);
+    // AND THE PANEL BESIDE IT, which is the half a roster broadcast is the
+    // only chance to correct. The roster is what arrives when a routine is
+    // added or deleted, so the counts and the scope rows are stale from that
+    // moment until something redraws them.
+    assert.ok(w.document.querySelector('#sidebar-routines [data-scope="all"]'),
+      'a roster arrived and the routines panel was not redrawn');
     dom.window.close();
   });
 
@@ -457,7 +478,6 @@ describe('the ways this list gets drawn, pressed', () => {
     // out of app.js here, in one eval so the functions close over the tables the
     // way they do in the file, and the rail is then read off the page.
     w.eval([
-      /const SIDEBAR_FOR = \{[^}]*\};/.exec(APP_SRC)[0],
       /const NAV_FOR_VIEW = \{[\s\S]*?\n\};/.exec(APP_SRC)[0],
       `function setNavState(nav) {${appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState')}\n}`,
       `function showView(v) {${appPiece(/^function showView\(v\) \{(.*)\}\s*$/m, 'showView')}}`,
@@ -602,6 +622,231 @@ describe('the ways this list gets drawn, pressed', () => {
     dom.window.close();
   });
 
+  // The one surface that changes WHICH routines are listed without changing
+  // which exist. Pressed as markup, because the failure it is written against
+  // is a panel that repaints itself and leaves the list alone.
+  test('pressing a scope redraws the list into that agent alone', () => {
+    const { doc, w, dom } = shell();
+    w.agents.push({
+      id: 'doc', displayName: 'Doc', colour: '#6BC67E', icon: 'D', status: 'onTeam',
+      routines: [Object.assign({}, ROUTINE, { name: 'Refresh the reading digest' })],
+    });
+    w.renderRoutinesPanel();
+    w.renderRoutines();
+    assert.strictEqual(doc.querySelectorAll('.routine-row').length, 2, 'sanity: both routines listed');
+
+    doc.querySelector('[data-scope="doc"]').click();
+    const rows = [...doc.querySelectorAll('.routine-row')];
+    assert.strictEqual(rows.length, 1, 'pressing a scope did not redraw the list');
+    assert.match(rows[0].textContent, /Refresh the reading digest/);
+
+    doc.querySelector('[data-scope="all"]').click();
+    assert.strictEqual(doc.querySelectorAll('.routine-row').length, 2,
+      'pressing All did not restore every routine');
+    dom.window.close();
+  });
+
+  // THE DEFECT A SCOPE FILTER INTRODUCES INTO A LIST ADDRESSED BY POSITION, and
+  // it is the namesake defect arriving by a different road. pendingDelete was
+  // an index into allRoutines(), and allRoutines() is now filtered, so pressing
+  // a scope while a confirmation is open re-resolves that index against a
+  // different set of routines. The confirmation goes on naming the routine the
+  // reader pressed Delete on and the server is told to remove whatever now sits
+  // at that position.
+  //
+  // A confirmation that names one thing and acts on another is worse than no
+  // confirmation, because the dialogue is specific and wrong.
+  test('a pending delete cannot be retargeted by a scope change', () => {
+    const { doc, w, dom } = shell({ routines: [
+      Object.assign({}, ROUTINE, { name: 'Compile the ops summary' }),
+      Object.assign({}, ROUTINE, { name: 'Sweep the inbox' }),
+      Object.assign({}, ROUTINE, { name: 'Chase the stragglers' }),
+    ] });
+    w.agents.push({
+      id: 'mira', displayName: 'Mira', colour: '#A07AE8', icon: 'M', status: 'onTeam',
+      routines: [
+        Object.assign({}, ROUTINE, { name: 'Post the weekly note' }),
+        Object.assign({}, ROUTINE, { name: 'Archive last month' }),
+      ],
+    });
+    w.renderRoutinesPanel();
+    w.renderRoutines();
+
+    // Position 1 on All is Piper's second routine.
+    doc.querySelectorAll('[data-routines-action="delete"]')[1].click();
+    assert.ok(doc.querySelector('.confirm-card'), 'sanity: the confirmation is open');
+    assert.match(doc.querySelector('.routines-confirm-subject').textContent, /Sweep the inbox/,
+      'sanity: the confirmation names the routine that was pressed');
+
+    // Position 1 among Mira's two is a different routine entirely.
+    doc.querySelector('[data-scope="mira"]').click();
+
+    const subject = doc.querySelector('.routines-confirm-subject');
+    if (subject) {
+      assert.match(subject.textContent, /Sweep the inbox/,
+        'the confirmation changed subject when the scope changed, so Delete would remove '
+        + 'a routine the reader never pressed Delete on');
+    }
+
+    // Whatever the panel decided to show, confirming must still send the
+    // routine the reader pressed, or nothing at all.
+    doc.querySelector('[data-scope="all"]').click();
+    const confirm = doc.querySelector('[data-routines-action="confirm-delete"]');
+    if (confirm) {
+      w.sent = [];
+      w.ws = { send: (m) => w.sent.push(JSON.parse(m)) };
+      confirm.click();
+      assert.strictEqual(w.sent.length, 1, 'the confirmation sent nothing');
+      assert.strictEqual(w.sent[0].name, 'Sweep the inbox',
+        'the confirmation removed a routine other than the one it named');
+      assert.strictEqual(w.sent[0].agentId, 'piper');
+    }
+    dom.window.close();
+  });
+
+  // A confirmation is raised on the list the reader is looking at, so leaving
+  // that list abandons it. It must not be waiting when they come back: a
+  // destructive question the reader has navigated away from and then had
+  // re-presented is one they will answer without re-reading.
+  // THE CASE IDENTITY ALONE DOES NOT COVER, and it is why arriving clears the
+  // confirmation rather than trusting the resolution to drop it. Identity drops
+  // a confirmation whose routine has left the list, which covers every scope
+  // change. It does NOT cover arriving at a list the routine is still in: press
+  // Delete on All, walk away, come back through the rail, and the question is
+  // still sitting there waiting to be answered by someone who has stopped
+  // reading it. Arriving is the reader leaving and returning, so the question
+  // goes with the visit.
+  test('arriving from the rail clears a confirmation even when the scope is unchanged', () => {
+    const { doc, w, dom } = shell();
+    w.showView = () => {};
+    w.setNavState = () => {};
+    w.renderRoutinesPanel();
+    w.renderRoutines();
+    doc.querySelector('[data-routines-action="delete"]').click();
+    assert.ok(doc.querySelector('.confirm-card'), 'sanity: the confirmation is open on All');
+
+    // The rail's own arm, cut out of app.js, which arrives with no agent. The
+    // scope is All before and after, so nothing about the list changes and the
+    // routine the confirmation names is still in it.
+    w.eval(`(function () {${appPiece(/else if\(nav==='routines'\)\s*\{([\s\S]*?)\}/, "switchNav's routines arm")}\n})()`);
+
+    assert.strictEqual(doc.querySelector('.confirm-card'), null,
+      'a destructive confirmation survived a visit and is waiting for a reader who has stopped reading it');
+    w.sent = [];
+    w.ws = { send: (m) => w.sent.push(JSON.parse(m)) };
+    w.routinesConfirmDelete();
+    assert.deepStrictEqual(w.sent, [],
+      'the control behind the cleared confirmation can still delete');
+    dom.window.close();
+  });
+
+  test('a confirmation the reader navigated away from does not come back', () => {
+    const { doc, w, dom } = shell();
+    w.agents.push({
+      id: 'mira', displayName: 'Mira', colour: '#A07AE8', icon: 'M', status: 'onTeam',
+      routines: [Object.assign({}, ROUTINE, { name: 'Post the weekly note' })],
+    });
+    w.renderRoutinesPanel();
+    w.renderRoutines();
+    doc.querySelector('[data-routines-action="delete"]').click();
+    assert.ok(doc.querySelector('.confirm-card'), 'sanity: the confirmation is open');
+
+    doc.querySelector('[data-scope="mira"]').click();
+    assert.strictEqual(doc.querySelector('.confirm-card'), null,
+      'sanity: leaving the list the confirmation was raised on closed it');
+
+    doc.querySelector('[data-scope="all"]').click();
+    assert.strictEqual(doc.querySelector('.confirm-card'), null,
+      'a destructive confirmation the reader walked away from was re-presented to them');
+    dom.window.close();
+  });
+
+  // The subject the confirmation DRAWS, which the send path does not cover: a
+  // resolution that matched on agent and name alone would draw the first
+  // namesake while the send carried the second, so the reader would read a
+  // question about one routine and remove another that looks identical.
+  test('the confirmation draws the namesake it was raised on', () => {
+    const { doc, w, dom } = shell({ routines: [
+      Object.assign({}, ROUTINE, { name: 'Weekly digest', schedule: 'every day at 07:00' }),
+      Object.assign({}, ROUTINE, { name: 'Weekly digest', schedule: 'every day at 18:00' }),
+    ] });
+    w.renderRoutines();
+    doc.querySelectorAll('[data-routines-action="delete"]')[1].click();
+    const subject = doc.querySelector('.routines-confirm-subject');
+    assert.ok(subject, 'sanity: the confirmation drew its subject');
+    assert.match(subject.textContent, /6:00pm|18:00/,
+      'the confirmation drew the first routine of that name rather than the one pressed');
+    dom.window.close();
+  });
+
+  // AC-10, DRIVEN ALL THE WAY TO THE SCREEN.
+  //
+  // The test below asserts the NAME of the destination, which discriminates a
+  // rename but stops one step short of the criterion. The criterion is about a
+  // reader who saves a routine and is left looking at the wrong place, and the
+  // fallback that does it is silent: routinesListNav checks the shell has both
+  // a rail entry called routines and a panel called sidebar-routines, and
+  // quietly answers 'team' when either is missing. Nothing throws and nothing
+  // is logged.
+  //
+  // So nothing here is stubbed that decides where the reader ends up. The
+  // router and the section switch are cut out of app.js and run, the save
+  // travels, the server's confirmation is what makes the editor leave, and
+  // what is asserted is the sidebar the reader is actually looking at.
+  test('a saved routine leaves the reader looking at the routines panel', () => {
+    const { doc, w, dom } = shell();
+    w.eval(EDITOR_VIEW_SRC);
+    w.skills = [{ id: 'sk', name: 'Compile the ops summary', slug: 'ops', assignedAgents: [{ id: 'piper', name: 'Piper' }] }];
+    w.skillsLoaded = true;
+    w.sent = [];
+    w.ws = { send: (msg) => w.sent.push(JSON.parse(msg)) };
+
+    // The pieces that carry a reader to a section, all real, and the table that
+    // resolves one from the other. In ONE eval: showView reads NAV_FOR_VIEW,
+    // and a lexical declaration loaded in an eval of its own is gone before the
+    // function that closes over it runs.
+    w.closeFindBar = () => {};
+    w.eval([
+      /const NAV_FOR_VIEW = \{[\s\S]*?\n\};/.exec(APP_SRC)[0],
+      `function setNavState(nav) {${appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState')}\n}`,
+      `function showView(v) {${appPiece(/^function showView\(v\) \{(.*)\}\s*$/m, 'showView')}}`,
+      `function switchNav(nav) {${appPiece(/function switchNav\(nav\) \{([\s\S]*?)\n\}/, 'switchNav')}\n}`,
+    ].join('\n'));
+
+    // Start somewhere else, so arriving is something the save has to do.
+    w.setNavState('team');
+    assert.ok(!doc.getElementById('sidebar-team').classList.contains('hidden'), 'sanity: on the team panel');
+
+    w.addRoutine();
+    const option = w.RundockRoutineEditorModel.skillChoices({ skills: w.skills }).options[0];
+    w.routineEditorPick(option.key);
+    w.saveRoutine();
+    assert.strictEqual(w.sent.length, 1, 'sanity: the editor asked for the routine to be written');
+    // WHICH SCREEN, not which panel. The panel was the proxy for this until the
+    // rail and the sidebar became properties of the view: the editor is one of
+    // the routines surfaces, so its panel is up the whole time the editor is,
+    // and a hidden panel no longer means the editor has not left. The view on
+    // screen is the thing this sentence is actually about.
+    assert.ok(doc.getElementById('view-routines').classList.contains('hidden'),
+      'the editor left on send rather than waiting for the reply');
+
+    // The server confirms. This is the moment the editor leaves.
+    w.routineEditorSaved();
+
+    const panel = doc.getElementById('sidebar-routines');
+    for (let el = panel; el; el = el.parentElement) {
+      assert.ok(!el.classList.contains('hidden'),
+        `a saved routine left the reader with the routines panel out of sight inside #${el.id || el.tagName}`);
+    }
+    assert.ok(doc.getElementById('sidebar-team').classList.contains('hidden'),
+      'a saved routine landed the reader on the team panel, which is exactly the silent fallback');
+    const view = doc.getElementById('view-routines');
+    assert.ok(!view.classList.contains('hidden'), 'the routines view is not the one on screen');
+    assert.ok(panel.querySelector('[data-scope]'),
+      'the reader arrived at the panel and it is not holding the scope list');
+    dom.window.close();
+  });
+
   test('a saved routine leaves the editor for this view', () => {
     // The editor decides where to go by asking whether the shell can reach a
     // section: a rail entry AND a sidebar panel for it. Both have to be true
@@ -642,6 +887,136 @@ describe('the ways this list gets drawn, pressed', () => {
     assert.strictEqual(w.navigatedTo, w.RundockRoutineEditorModel.SAVE_DESTINATION,
       'a written routine landed somewhere other than the list of routines');
     assert.strictEqual(w.navigatedTo, 'routines');
+    dom.window.close();
+  });
+});
+
+describe('one mount, one renderer', () => {
+  // THE PANEL AND THE LEGACY TEAM-SIDEBAR LISTING SHARE AN ELEMENT, and they
+  // cannot stop sharing it here. team.js looks the mount up by the literal id
+  // `sidebar-routines`; the router reveals a section's panel by that same
+  // name, and the editor resolves where a save lands by checking a rail entry
+  // and a panel of that name exist. So the id is load-bearing in three places
+  // and a distinct one for the scope panel is not available from this branch.
+  //
+  // WHAT IS AVAILABLE IS THAT THE OTHER WRITER STOPS RUNNING. Correctness was
+  // resting on call order: the legacy renderer drew its rows into this element
+  // and the panel drew over them, on one line, in one order. Any caller that
+  // ran the two the other way round put the roster-style rows back on screen,
+  // which is the arrangement this whole card reverses.
+  // ONE WRITER FOR THIS MOUNT, asserted against the client rather than against
+  // a call that used to be in the dispatch. The listing that shared this
+  // element is gone, so the ordering hazard is gone with it, and what is left
+  // is the property that mattered: exactly one module renders into this panel.
+  // A second one added later re-creates a race that was only ever survivable
+  // by luck of call order.
+  test('exactly one module renders into the routines panel', () => {
+    const writers = clientFiles().filter((rel) => (
+      fs.readFileSync(path.join(ROOT, rel), 'utf-8').includes("getElementById('sidebar-routines')")
+    ));
+    assert.deepStrictEqual(writers, ['public/views/routines-panel.js'],
+      'something other than the panel addresses the routines panel mount, so two renderers '
+      + 'can write to one element and the winner is decided by call order');
+  });
+
+  // The outcome, with the real team module loaded alongside, because that is
+  // the shell the dispatch actually runs in. The roster-style markup is named
+  // explicitly rather than assumed absent: it is what used to be written into
+  // this element, and asserting its absence is what would notice it returning.
+  test('after a real roster arrives the panel holds the scope list and no legacy rows', () => {
+    const { doc, w, dom } = shell();
+    w.eval(TEAM_SRC);
+    w.getGuide = () => null;
+    for (const name of ['renderOrgChart', 'renderConvoEmptyAgents', 'renderConvoList', 'renderAgentList']) {
+      w[name] = () => {};
+    }
+    const body = appPiece(/case 'agents':([\s\S]*?)\bbreak;/, 'the roster case of the client dispatch');
+    w.d = { type: 'agents', agents: w.agents };
+    w.eval(`(function () {${body}\n})()`);
+
+    const panel = doc.getElementById('sidebar-routines');
+    assert.ok(panel.querySelector('[data-scope]'), 'the panel is not holding the scope list');
+    assert.strictEqual(panel.querySelector('.routine-item'), null,
+      'the legacy roster-style rows were drawn into the scope panel');
+    assert.strictEqual(panel.querySelector('[data-sidebar-action]'), null,
+      'the legacy Add control was drawn into the scope panel');
+    dom.window.close();
+  });
+
+  // The workspace AC-2 protects. The legacy renderer empties its mount when
+  // there are no routines, so on exactly this workspace a clobber does not
+  // draw the wrong thing, it draws nothing, and the panel disappears.
+  test('with no routines the panel is neither emptied nor hidden', () => {
+    const { doc, w, dom } = shell({ routines: [] });
+    w.eval(TEAM_SRC);
+    w.getGuide = () => null;
+    for (const name of ['renderOrgChart', 'renderConvoEmptyAgents', 'renderConvoList', 'renderAgentList']) {
+      w[name] = () => {};
+    }
+    // Revealed first, by the real router, because the panel is correctly
+    // hidden until a reader goes there. What this asserts is that the roster
+    // arriving does not take it away again.
+    w.eval(`function setNavState(nav) {${appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState')}\n}`);
+    w.setNavState('routines');
+    const body = appPiece(/case 'agents':([\s\S]*?)\bbreak;/, 'the roster case of the client dispatch');
+    w.d = { type: 'agents', agents: w.agents };
+    w.eval(`(function () {${body}\n})()`);
+
+    const panel = doc.getElementById('sidebar-routines');
+    assert.ok(panel.querySelector('[data-scope="all"]'),
+      'the panel went blank on the workspace that has nothing in it');
+    assert.ok(!panel.classList.contains('hidden'), 'the roster arriving hid the panel');
+    dom.window.close();
+  });
+});
+
+describe('the workspace switch puts the sidebar back', () => {
+  // THE SECOND HARD-CODED LIST OF PANELS, driven rather than described. The
+  // router's list was extended when this panel was lifted out of the team one.
+  // The workspace-switch reset carried its own copy of that list, one name
+  // short, so switching workspace while on this view left the routines panel
+  // on screen stacked above the conversations panel the reset reveals.
+  //
+  // Two lists of the same thing is one list that is wrong, so the reset is
+  // routed through the router and this drives the real code to prove it.
+  test('switching workspace leaves exactly one sidebar on screen', () => {
+    const { doc, w, dom } = shell();
+    const setNav = appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState');
+    w.eval(`function setNavState(nav) {${setNav}\n}`);
+    const reset = appPiece(/function resetSidebarForWorkspace\(\) \{([\s\S]*?)\n\}/,
+      'the sidebar reset a workspace switch runs');
+
+    // The reader is on the routines view when the switch happens.
+    w.setNavState('routines');
+    assert.ok(!doc.getElementById('sidebar-routines').classList.contains('hidden'),
+      'sanity: the routines panel is on screen before the switch');
+
+    w.eval(`(function () {${reset}\n})()`);
+
+    const visible = [...doc.querySelectorAll('.sidebar > div[id^="sidebar-"]')]
+      .filter(el => !el.classList.contains('hidden')).map(el => el.id);
+    assert.deepStrictEqual(visible, ['sidebar-conversations'],
+      'a workspace switch left more than one sidebar panel on screen, stacked in one column');
+  });
+
+  // The scope is an agent id, and agent ids belong to the workspace that owned
+  // them. Carried into the next one it names an agent that may not be there.
+  test('switching workspace forgets the scope the last one was left on', () => {
+    const { doc, w, dom } = shell();
+    w.agents.push({
+      id: 'mira', displayName: 'Mira', colour: '#A07AE8', icon: 'M', status: 'onTeam',
+      routines: [Object.assign({}, ROUTINE, { name: 'Post the weekly note' })],
+    });
+    w.eval(`function setNavState(nav) {${appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState')}\n}`);
+    w.renderRoutinesPanel();
+    doc.querySelector('[data-scope="mira"]').click();
+    assert.strictEqual(w.routinesScopeAgentId(), 'mira', 'sanity: scoped before the switch');
+
+    const reset = appPiece(/function resetSidebarForWorkspace\(\) \{([\s\S]*?)\n\}/,
+      'the sidebar reset a workspace switch runs');
+    w.eval(`(function () {${reset}\n})()`);
+    assert.strictEqual(w.routinesScopeAgentId(), null,
+      'an agent id from the previous workspace was carried into the next one');
     dom.window.close();
   });
 });
@@ -771,22 +1146,32 @@ describe('the shell can actually show what it navigates to', () => {
   // can actually be seen.
   test('every section the rail carries reveals a sidebar the reader can see', () => {
     const { doc, w, dom } = shell();
-    // Both cut out of app.js and run, so the mapping under test is the one
-    // the page ships rather than one restated here. `const` at the top of an
-    // eval binds inside it, so the declaration is taken as a `var` to put it
-    // where the function body will look for it.
-    w.eval(appPiece(/(const SIDEBAR_FOR = \{[^}]*\};)/, 'the sidebar map').replace('const ', 'var '));
+    // setNavState is cut out of app.js and run, so the mapping under test is
+    // the one the page ships rather than one restated here.
     const body = appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState');
     w.eval(`function setNavState(nav) {${body}\n}`);
     for (const entry of doc.querySelectorAll('.nav-item[data-nav]')) {
       const nav = entry.getAttribute('data-nav');
       w.setNavState(nav);
       assert.strictEqual(entry.classList.contains('active'), true, `${nav} did not become the active entry`);
-      const panel = doc.getElementById(`sidebar-${w.SIDEBAR_FOR[nav] || nav}`);
-      assert.ok(panel, `${nav} reveals no sidebar panel`);
+      // BY ITS OWN NAME, and that is the half that changed. A section used to
+      // be able to reveal another section's panel through an alias map, which
+      // is how the routines panel came to be a child of the team one: revealed
+      // by name, nested out of sight, and green.
+      const panel = doc.getElementById(`sidebar-${nav}`);
+      assert.ok(panel, `${nav} reveals no sidebar panel of its own`);
       for (let el = panel; el; el = el.parentElement) {
         assert.ok(!el.classList.contains('hidden'),
           `${nav} reveals a panel that stays out of sight inside #${el.id || el.tagName}`);
+      }
+      // AND EVERY OTHER PANEL IS PUT AWAY. Revealing is only half of what the
+      // router does, and the half that is easy to leave out: a panel the
+      // router never hides is a panel that stacks under the next one, which is
+      // what a panel newly lifted out of another panel is one edit away from.
+      for (const other of doc.querySelectorAll('.sidebar > div[id^="sidebar-"]')) {
+        if (other.id === `sidebar-${nav}`) continue;
+        assert.ok(other.classList.contains('hidden'),
+          `${nav} left #${other.id} on screen beside the panel it revealed`);
       }
     }
     dom.window.close();

@@ -268,8 +268,8 @@ const PANEL_DECIDERS = [
     pressedBy: 'every view the shell can show lands the rail on the section its own table names',
   },
   {
-    what: 'the workspace switch, which sets the chrome before it knows the view',
-    caller: 'app.js: function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupComplete)',
+    what: 'the workspace reset, which settles the chrome before it knows the view',
+    caller: 'app.js: function resetSidebarForWorkspace()',
     // The one exception, and it is an exception to the rule rather than a hole
     // in it: this is the single moment the chrome is decided and the pane is
     // deliberately not, so there is no view to resolve a section from.
@@ -494,19 +494,12 @@ function appPiece(pattern, label) {
 }
 
 const NAV_FOR_VIEW_SRC = /const NAV_FOR_VIEW = \{[\s\S]*?\n\};/.exec(APP_SRC);
-const SIDEBAR_FOR_SRC = /const SIDEBAR_FOR = \{[^}]*\};/.exec(APP_SRC);
 
 function navForView() {
   assert.ok(NAV_FOR_VIEW_SRC, 'app.js no longer carries a NAV_FOR_VIEW table, so nothing resolves '
     + 'a view to the section the rail should show');
   // eslint-disable-next-line no-new-func
   return new Function(`${NAV_FOR_VIEW_SRC[0]}\nreturn NAV_FOR_VIEW;`)();
-}
-
-function sidebarFor() {
-  assert.ok(SIDEBAR_FOR_SRC, 'app.js no longer carries a SIDEBAR_FOR table');
-  // eslint-disable-next-line no-new-func
-  return new Function(`${SIDEBAR_FOR_SRC[0]}\nreturn SIDEBAR_FOR;`)();
 }
 
 // The views showView knows how to reveal, read off its own hide list rather
@@ -688,16 +681,21 @@ describe('every destination in this client is enumerated', () => {
     }
   });
 
+  // A section reveals the panel of its own name, with no map in between. There
+  // used to be one, with a single entry, and it went when routines got a panel
+  // of its own. The check below reads the panel by the section's name, which is
+  // only right while that stays true; test/unit/team-sidebar.test.js sweeps the
+  // whole client, suite and instruments for the alias returning, so this file
+  // leans on that rather than carrying a second copy of the same question.
   test('every section a view names is a section the rail actually carries', () => {
     const table = navForView();
     const rail = railSections();
     const panels = panelsOnPage();
-    const sidebars = sidebarFor();
     for (const [view, section] of Object.entries(table)) {
       if (section === null) continue;
       assert.ok(rail.includes(section),
         `${view} lands on "${section}" and the rail carries no entry by that name`);
-      assert.ok(panels.includes(sidebars[section] || section),
+      assert.ok(panels.includes(section),
         `${view} lands on "${section}" and the sidebar carries no panel for it`);
     }
   });
@@ -839,7 +837,6 @@ function shell() {
   // be gone by the time the functions ran. Loaded together, the functions close
   // over them, which is also how they sit in app.js.
   w.eval([
-    SIDEBAR_FOR_SRC[0],
     NAV_FOR_VIEW_SRC[0],
     `function setNavState(nav) {${appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState')}\n}`,
     `function showView(v) {${appPiece(/^function showView\(v\) \{(.*)\}\s*$/m, 'showView')}}`,
@@ -865,7 +862,6 @@ describe('the chrome, pressed', () => {
   // so pressing every view presses every destination that shows one.
   test('every view the shell can show lands the rail on the section its own table names', () => {
     const table = navForView();
-    const sidebars = sidebarFor();
     for (const view of viewsShowViewKnows()) {
       const section = table[view];
       if (section === null) continue;
@@ -873,7 +869,7 @@ describe('the chrome, pressed', () => {
       w.showView(view);
       assert.deepStrictEqual(litSections(doc), [section],
         `showing ${view} lit ${litSections(doc).join(', ') || 'nothing'} rather than ${section}`);
-      assert.deepStrictEqual(visiblePanels(doc), [sidebars[section] || section],
+      assert.deepStrictEqual(visiblePanels(doc), [section],
         `showing ${view} left ${visiblePanels(doc).length} sidebar panels visible`);
       assert.ok(!doc.getElementById(`view-${view}`).classList.contains('hidden'),
         `showing ${view} lit the rail and did not reveal the pane`);
@@ -965,9 +961,9 @@ describe('the chrome, pressed', () => {
   // footer, so switching workspace from any section but Conversations left the
   // reader on Conversations with no New conversation button.
   test('switching workspace resets the chrome through the one place that owns it', () => {
-    const line = /Activate conversations sidebar[\s\S]*?\n(\s*setNavState\('conversations'\);)/
+    const line = /function resetSidebarForWorkspace\(\)[\s\S]*?\n(\s*setNavState\('conversations'\);)/
       .exec(APP_SRC);
-    assert.ok(line, 'the workspace switch no longer resets the chrome through setNavState');
+    assert.ok(line, 'the workspace reset no longer settles the chrome through setNavState');
     const { w, doc, dom } = shell();
     w.setNavState('skills');
     assert.ok(doc.getElementById('convo-footer').classList.contains('hidden'),

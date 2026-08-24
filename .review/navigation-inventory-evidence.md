@@ -413,9 +413,10 @@ Out of scope and untouched:
 
 ## What the merge found, which is the instrument working
 
-Two changes landed on the trunk while this was open: the agent surfaces and the
-run detail screen. Both added destinations, and the enumeration refused the
-merge until they were listed. What it caught:
+Three changes landed on the trunk while this was open: the agent surfaces, the
+run detail screen, and the routines sidebar. All three touched navigation, and
+the enumeration refused each merge until what they added was listed. What it
+caught:
 
 - **two new call sites.** `showRoutinesForAgent` in `views/routines.js`, which
   the rail's own arm now calls instead of showing a view directly, and
@@ -436,6 +437,23 @@ the section resolved by `showView`, a stubbed `showView` sets no rail. Rather
 than copy the resolution into the test, it now runs the shipped `showView` and
 `setNavState` cut out of `app.js` and reads the rail off the page, which is a
 stronger version of the claim its own name makes.
+
+The routines sidebar landed last and moved two things this file reads. It gave
+routines a panel of its own, which removed the alias map that had pointed the
+routines section at the team panel, so a section now reveals the panel of its
+own name with nothing in between. And it moved the workspace reset into a
+function of its own, which is where the second caller of `setNavState` now lives.
+Both are manifest edits rather than code edits: the trunk had arrived at the
+same shape from the other side.
+
+One test from that branch used the routines panel's visibility as a proxy for
+which screen was on, and chrome parity makes that proxy wrong: the panel is up
+throughout the routines surfaces, the editor included, so a hidden panel no
+longer means the editor has not left. It now asks which view is on screen, which
+is what its own sentence was about. Another named the removed alias in an
+assertion of its own; the trunk sweeps the whole client, suite and instruments
+for that name returning, so this file leans on that sweep rather than carrying a
+second copy of the same question.
 
 **The property the resolution was held to:** every enumeration contains at least
 what either side listed, and every surviving row still names a test that exists

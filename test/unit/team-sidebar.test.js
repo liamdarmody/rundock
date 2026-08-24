@@ -53,14 +53,26 @@ const SWEPT = [
       + 'so the whole surface has one vocabulary rather than two.',
   },
   {
-    name: 'sidebar-routines',
-    was: 'the empty element the listing rendered into, nested inside the team panel',
+    name: 'SIDEBAR_FOR',
+    was: 'the router\'s alias map, which pointed the routines section at the team panel',
+    why: 'the card that was carded separately landed: the routines section has a sidebar '
+      + 'panel of its own, so the map held nothing. An alias map with nothing in it is a '
+      + 'redirection waiting to be reintroduced without anybody noticing.',
   },
 ];
 
 // Touched by the listing and still here, each with the reason. An unlisted
 // survivor reads as something nobody looked at.
 const KEPT = [
+  {
+    name: 'sidebar-routines',
+    where: 'public/index.html',
+    why: 'the name is back and it is a different thing. It was an empty sentinel nested '
+      + 'inside the team panel, which is why revealing it by name succeeded and showed a '
+      + 'reader nothing. It is now the routines section\'s own top-level panel, holding the '
+      + 'agent scope list, and the router and the editor\'s save destination both resolve to '
+      + 'it by that name.',
+  },
   {
     name: 'addRoutine',
     where: 'public/views/routines.js',
@@ -73,12 +85,6 @@ const KEPT = [
     why: 'the listing borrowed this class for its Add control, which is the pattern the card '
       + 'objected to. It belongs to the routine editor, which still uses it on the '
       + 'confirmation step\'s Edit link.',
-  },
-  {
-    name: 'SIDEBAR_FOR',
-    where: 'public/app.js',
-    why: 'the routines section still has no sidebar panel of its own and still reveals the '
-      + 'team one. The scope list that will give it one is carded separately.',
   },
 ];
 
@@ -197,6 +203,9 @@ function shell() {
   w.renderOrgChart = () => {};
   w.renderConvoList = () => {};
   w.renderRoutines = () => {};
+  // The routines panel draws into its own sidebar, which this suite is not
+  // about. Stubbed beside the list for the same reason the list is.
+  w.renderRoutinesPanel = () => {};
   // Every swept global, stubbed BY THE NAME THE SWEEP LISTS rather than
   // written out here, and only where nothing already answers to it.
   //
