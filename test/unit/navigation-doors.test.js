@@ -129,10 +129,24 @@ const DESTINATIONS = [
     pressedBy: 'every view the shell can show lands the rail on the section its own table names',
   },
   {
-    site: "app.js: else if(nav==='routines') -> showView('routines')",
+    site: "views/routines.js: function showRoutinesForAgent(agentId) -> showView('routines')",
     view: 'routines',
     section: 'routines',
-    surface: 'the Routines entry on the nav rail',
+    surface: 'the Routines entry on the nav rail, and an agent page asking for that agent\'s routines',
+    // The rail's own arm stopped showing a view directly and calls this
+    // instead, so the row moved with the call rather than being deleted: the
+    // destination is the same one, reached through a function that also carries
+    // the scope.
+    pressedBy: 'every view the shell can show lands the rail on the section its own table names',
+  },
+  {
+    site: "views/run-detail.js: function openRunDetail(agentId, routine) -> showView('run-detail')",
+    view: 'run-detail',
+    section: 'routines',
+    surface: "a routine's last run, opened from its row on the routines list",
+    // A run belongs to a routine, so its screen is one of the routines
+    // surfaces and the rail says Routines throughout, which is the same rule
+    // that puts the routine editor there.
     pressedBy: 'every view the shell can show lands the rail on the section its own table names',
   },
   {

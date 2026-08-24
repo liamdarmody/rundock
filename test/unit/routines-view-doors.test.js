@@ -44,6 +44,11 @@ const EDITOR_MODEL_SRC = read('public', 'routine-editor-model.js');
 // off it, in the order index.html loads them.
 const SKILLS_MODEL_SRC = read('public', 'skills-model.js');
 const EDITOR_VIEW_SRC = read('public', 'views', 'routine-editor.js');
+const PROFILE_VIEW_SRC = read('public', 'views', 'profile.js');
+// The run detail screen, which is opened from a row on this list and returns
+// here. Loaded so the return journey is pressed rather than described.
+const RUN_DETAIL_MODEL_SRC = read('public', 'run-detail-model.js');
+const RUN_DETAIL_VIEW_SRC = read('public', 'views', 'run-detail.js');
 
 // ===== THE ENUMERATION =====
 //
@@ -58,10 +63,15 @@ const RENDERERS = [
     surface: 'the roster arriving from the server',
     pressedBy: 'the roster arriving from the server draws the list',
   },
+  // THE RAIL NO LONGER DRAWS THIS LIST ITSELF and neither does the profile.
+  // Both arrive through one destination function, which is where the drawing
+  // moved to. Two routes into one section with two copies of the same three
+  // calls is how `openRoutineEditor` ended up lighting Team on a routines
+  // surface, so the rail's arm passes no agent and a profile row passes one.
   {
-    file: 'app.js',
-    line: "else if(nav==='routines')",
-    surface: 'the Routines entry on the nav rail',
+    file: 'views/routines.js',
+    line: 'function showRoutinesForAgent(agentId)',
+    surface: 'every arrival at this list, from the rail with no agent and from a profile row with one',
     pressedBy: 'the rail entry shows the view and draws the list',
   },
   {
@@ -134,6 +144,39 @@ const ROUTES = [
   {
     what: 'the section the rail entry reveals in the sidebar',
     pressedBy: 'every section the rail carries reveals a sidebar the reader can see',
+  },
+  // The run detail screen is opened FROM a row on this list and its back
+  // control returns here, so it is a route in exactly the sense this file
+  // means: a way the shell arrives at the routines section. Enumerated when it
+  // arrived, because the exclusion below went red the moment it did.
+  {
+    what: 'the run detail screen leaving for the list it was opened from',
+    pressedBy: 'the run detail back control returns to this view',
+  },
+  {
+    what: "a routine row in the Routines box on an agent's profile",
+    pressedBy: 'a routine row on a profile opens this list scoped to that agent',
+  },
+];
+
+// Every call the client makes into this view TO LAND A READER ON IT. Separate
+// from REPLIES because the two fail differently: a reply that arrives on the
+// wrong screen is a message handled in the wrong place, and a route that
+// arrives with the wrong scope is a list that has silently lost rows. Both are
+// checked against the source by the same rule, so one added later fails by
+// name until somebody lists it with the test that presses its surface.
+const ENTRIES = [
+  {
+    call: 'showRoutinesForAgent',
+    from: 'public/app.js',
+    surface: "the rail's own arm, which passes no agent and so asks for the whole team",
+    pressedBy: 'the rail entry shows the view and draws the list',
+  },
+  {
+    call: 'showRoutinesForAgent',
+    from: 'public/views/profile.js',
+    surface: "a routine row in the Routines box on an agent's profile",
+    pressedBy: 'a routine row on a profile opens this list scoped to that agent',
   },
 ];
 
@@ -209,7 +252,7 @@ describe('every way this list gets drawn is enumerated', () => {
 
   test('every renderer names a test, and every named test exists', () => {
     const suite = fs.readFileSync(__filename, 'utf-8');
-    for (const entry of [...RENDERERS, ...ROUTES, ...REPLIES]) {
+    for (const entry of [...RENDERERS, ...ROUTES, ...REPLIES, ...ENTRIES]) {
       assert.ok(entry.pressedBy, `${entry.file || entry.what || entry.call} needs a test`);
       assert.ok(suite.includes(`test('${entry.pressedBy}'`),
         `this file names "${entry.pressedBy}" but no test here has that name`);
@@ -230,7 +273,14 @@ describe('every way this list gets drawn is enumerated', () => {
       const src = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
       for (const m of src.matchAll(/(?:switchNav|showView|setNavState)\((['"])([\w-]+)\1\)/g)) {
         if (m[2] !== 'routines') continue;
-        assert.ok(/routine-editor\.js$/.test(rel),
+        // Three files may, and each is listed in ROUTES above with the test
+        // that presses it: the editor, which leaves for this list after a
+        // save; this view itself, which names its own section on the one
+        // destination function every route runs through; and the run detail
+        // screen, whose back control returns here. Widened deliberately rather
+        // than loosened, so a fourth file navigating here still fails until
+        // somebody names it.
+        assert.ok(/routine-editor\.js$|views\/routines\.js$|views\/run-detail\.js$/.test(rel),
           `${rel} navigates to the routines section and is not a listed route`);
       }
     }
@@ -265,11 +315,11 @@ function shellMarkup() {
   assert.ok(panel, 'index.html no longer carries the routines view panel');
   // THE SIDEBAR IS CUT OUT OF THE PAGE TOO, and that is a correction rather
   // than tidiness. It used to be written here, which made the destination
-  // check below unfalsifiable: the editor resolves where a save goes by
-  // asking whether the shell has BOTH a rail entry called routines and a panel
-  // called sidebar-routines, and a test that supplies that panel itself
-  // answers its own question. Rename the panel in index.html and the editor
-  // silently starts landing saves on the team chart, with this file green.
+  // check below unfalsifiable: the editor resolves where a save goes by asking
+  // whether the shell has BOTH a rail entry called routines and the view panel
+  // the router shows by that name, and a test that supplies either of them
+  // itself answers its own question. Rename either in index.html and the
+  // editor silently starts landing saves on the team chart, this file green.
   const sidebar = /<aside class="sidebar"[\s\S]*?<\/aside>/.exec(INDEX_SRC);
   assert.ok(sidebar, 'index.html no longer carries a sidebar');
   return '<!doctype html><html><body>' + rail[0] + sidebar[0]
@@ -308,6 +358,46 @@ function appPiece(pattern, label) {
   return m[1];
 }
 
+// A shell with two agents and a real profile panel, cut out of index.html. The
+// second agent is what makes a scope observable at all: on a workspace with one
+// agent, a scoped list and an unscoped one are the same list.
+function twoAgentShell() {
+  const { w, doc, dom } = shell();
+  const profilePanel = /<div id="view-profile"[\s\S]*?<\/div>\s*<\/div>/.exec(INDEX_SRC);
+  assert.ok(profilePanel, 'index.html no longer carries a profile panel');
+  doc.body.insertAdjacentHTML('beforeend', profilePanel[0]);
+  w.eval(PROFILE_VIEW_SRC);
+  w.agents = [
+    w.agents[0],
+    { id: 'ted', displayName: 'Ted', colour: '#6BC67E', icon: 'T', status: 'onTeam',
+      routines: [{ ...ROUTINE, name: 'Reconcile the delivery log' }] },
+  ];
+  w.conversations = [];
+  w.skills = [];
+  w.formatTimeAgo = () => 'a while ago';
+  w.getGuide = () => ({ id: 'doc' });
+  w.showView = () => {};
+  w.setNavState = () => {};
+  w.switchNav = () => {};
+  w.startConversation = () => {};
+  w.addToTeam = () => {};
+  w.openConversation = () => {};
+  w.selectSkill = () => {};
+  w.addRoutineForAgent = () => {};
+  return { w, doc, dom };
+}
+
+// Arrive by the route a reader takes: render that agent's profile and press a
+// routine row on it. Never by calling the destination function, which would say
+// nothing about whether any row reaches it.
+function pressProfileRow(w, doc, agentId) {
+  w.showProfile(agentId);
+  const row = doc.querySelector('#profile-content .profile-card-item[onclick^="showRoutinesForAgent"]');
+  assert.ok(row, `the profile for ${agentId} carries no routine row that opens this list`);
+  row.click();
+  return row;
+}
+
 describe('the ways this list gets drawn, pressed', () => {
   test('the roster arriving from the server draws the list', () => {
     const { w, dom } = shell();
@@ -315,7 +405,7 @@ describe('the ways this list gets drawn, pressed', () => {
     w.drawn = 0;
     const realRender = w.renderRoutines;
     w.renderRoutines = () => { w.drawn++; realRender(); };
-    for (const name of ['renderAgentList', 'renderOrgChart', 'renderRoutinesSidebar', 'renderConvoList']) {
+    for (const name of ['renderAgentList', 'renderOrgChart', 'renderConvoList']) {
       w[name] = () => {};
     }
     w.d = { type: 'agents', agents: w.agents };
@@ -360,21 +450,142 @@ describe('the ways this list gets drawn, pressed', () => {
     const entry = doc.querySelector('.nav-item[data-nav="routines"]');
     assert.ok(entry, 'index.html no longer carries a Routines rail entry');
     const body = appPiece(/else if\(nav==='routines'\)\s*\{([\s\S]*?)\}/, "switchNav's routines arm");
-    w.shown = null;
-    w.showView = (v) => { w.shown = v; };
-    w.drawn = 0;
-    const realRender = w.renderRoutines;
-    w.renderRoutines = () => { w.drawn++; realRender(); };
+    // THE SHIPPED ROUTER, not a stub of it. The rail no longer follows a second
+    // call each destination makes for itself: showView resolves the section
+    // from NAV_FOR_VIEW and sets it, so a stubbed showView sets no rail and a
+    // stubbed setNavState answers a question nothing asks any more. Both are cut
+    // out of app.js here, in one eval so the functions close over the tables the
+    // way they do in the file, and the rail is then read off the page.
+    w.eval([
+      /const SIDEBAR_FOR = \{[^}]*\};/.exec(APP_SRC)[0],
+      /const NAV_FOR_VIEW = \{[\s\S]*?\n\};/.exec(APP_SRC)[0],
+      `function setNavState(nav) {${appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState')}\n}`,
+      `function showView(v) {${appPiece(/^function showView\(v\) \{(.*)\}\s*$/m, 'showView')}}`,
+    ].join('\n'));
     w.closeFindBar = () => {};
-    w.setNavState = () => {};
     w.switchNav = (nav) => {
       assert.strictEqual(nav, 'routines', 'the rail entry asks for another section');
       w.eval(`(function () {${body}\n})()`);
     };
     entry.click();
-    assert.strictEqual(w.shown, 'routines', 'the rail entry does not show this view');
-    assert.strictEqual(w.drawn, 1, 'the rail entry shows the view without drawing anything into it');
-    assert.strictEqual(doc.querySelectorAll('.routine-row').length, 1);
+    assert.ok(!doc.getElementById('view-routines').classList.contains('hidden'),
+      'the rail entry does not show this view');
+    assert.deepStrictEqual(
+      [...doc.querySelectorAll('.nav-item[data-nav].active')].map(e => e.dataset.nav), ['routines'],
+      'the rail says one section and the pane shows another');
+    assert.strictEqual(doc.querySelectorAll('.routine-row').length, 1,
+      'the rail entry shows the view without drawing anything into it');
+    dom.window.close();
+  });
+
+  // THE OTHER ROUTE, and the one that carries a scope. Pressed as markup on a
+  // rendered profile, because what a row does is the claim: calling the
+  // destination function would say nothing about whether any row calls it.
+  //
+  // The scope is checked in BOTH directions in one walk. A list that shows the
+  // agent's routines proves nothing on a workspace with one agent, and a scope
+  // that never clears is a list that has silently lost rows the next time
+  // somebody arrives from the rail.
+  test('a routine row on a profile opens this list scoped to that agent', () => {
+    const { w, doc, dom } = twoAgentShell();
+    pressProfileRow(w, doc, 'piper');
+    let listed = doc.getElementById('routines-content').textContent;
+    assert.match(listed, /Compile the ops summary/, 'the list does not carry the agent whose row was pressed');
+    assert.ok(!listed.includes('Reconcile the delivery log'),
+      'the list carries another agent, so the row opened it unscoped');
+
+    // And the rail, which asks for everybody, gets everybody.
+    w.eval(`(function () {${appPiece(/else if\(nav==='routines'\)\s*\{([\s\S]*?)\}/, "switchNav's routines arm")}\n})()`);
+    listed = doc.getElementById('routines-content').textContent;
+    assert.match(listed, /Reconcile the delivery log/,
+      'the rail entry inherited the last profile\'s scope, so the list has lost rows');
+    dom.window.close();
+  });
+
+  // A DELETE CONFIRMATION DOES NOT SURVIVE A CHANGE OF SCOPE, and this is a
+  // destructive action rather than a cosmetic one.
+  //
+  // The pending delete is a POSITION in the list, and the scope decides what
+  // the list contains, so a confirmation opened against one list addresses a
+  // different routine under the next. The render only drops the index when it
+  // falls off the end, so whenever the next list is long enough the reader is
+  // shown a confirmation they never asked for, naming a routine they never
+  // pointed at, and confirming it deletes that one.
+  //
+  // Driven in the direction that RE-AIMS rather than the one that merely
+  // strands: the confirmation is opened on the first row of the whole-team
+  // list, which belongs to one agent, and the reader then arrives scoped to
+  // another agent whose own list is long enough to have a first row.
+  test('a delete confirmation cannot be re-aimed by arriving from somewhere else', () => {
+    const { w, doc, dom } = twoAgentShell();
+    w.sent = [];
+    w.ws = { send: (m) => w.sent.push(JSON.parse(m)) };
+
+    w.renderRoutines();
+    doc.querySelectorAll('[data-routines-action="delete"]')[0].click();
+    const confirmation = doc.querySelector('.confirm-card');
+    assert.ok(confirmation, 'sanity: pressing Delete did not open a confirmation');
+    assert.match(doc.getElementById('routines-content').textContent, /Compile the ops summary/,
+      'sanity: the confirmation is not the one the reader opened');
+
+    pressProfileRow(w, doc, 'ted');
+    assert.strictEqual(doc.querySelector('.confirm-card'), null,
+      'a confirmation the reader never opened is on the page, aimed at another agent\'s routine');
+
+    // And the control behind it cannot act either, which is the half that
+    // matters: a stale confirmation that is merely invisible would still
+    // delete when the next Enter reaches it.
+    w.routinesConfirmDelete();
+    assert.deepStrictEqual(w.sent, [],
+      'a routine was deleted that the reader never asked to delete');
+    dom.window.close();
+  });
+
+  // The scope is a filter, and a filter with nothing left to show must not be
+  // mistaken for a workspace with nothing in it. The empty state speaks for the
+  // whole team: it says nothing is scheduled and offers a picker spanning every
+  // agent. Nothing on this page names the scope, so under one that reads as a
+  // claim about the workspace, and the claim is false.
+  test('a scoped list that empties does not say the workspace is empty', () => {
+    const { w, doc, dom } = twoAgentShell();
+    pressProfileRow(w, doc, 'piper');
+    assert.match(doc.getElementById('routines-content').textContent, /Compile the ops summary/,
+      'sanity: the scoped list is not showing the agent it was opened for');
+
+    // The agent's last routine goes, and the roster comes back without it.
+    w.agents = w.agents.map(a => (a.id === 'piper' ? { ...a, routines: [] } : a));
+    w.renderRoutines();
+
+    const shown = doc.getElementById('routines-content').textContent;
+    assert.ok(!/No routines yet/.test(shown),
+      'the page says the workspace has nothing scheduled while another agent still does');
+    assert.match(shown, /Reconcile the delivery log/,
+      'the filter had nothing left to show and was drawn empty rather than dropped');
+    dom.window.close();
+  });
+
+  // THE RETURN JOURNEY, pressed on the control a reader touches rather than by
+  // calling what it calls. The run detail screen is opened from a row here and
+  // its only way back is this control; a rename of the section it asks for
+  // strands the reader on a screen with no exit and throws nothing.
+  test('the run detail back control returns to this view', () => {
+    const { w, doc, dom } = shell();
+    w.eval(RUN_DETAIL_MODEL_SRC);
+    w.eval(RUN_DETAIL_VIEW_SRC);
+    // The panel the screen draws into, cut out of the real page.
+    const panel = /<div id="view-run-detail"[\s\S]*?<\/div>\s*<\/div>/.exec(INDEX_SRC);
+    assert.ok(panel, 'index.html no longer carries the run detail view panel');
+    doc.body.insertAdjacentHTML('beforeend', panel[0]);
+    w.showView = () => {};
+    w.setNavState = () => {};
+    w.navigatedTo = null;
+    w.switchNav = (nav) => { w.navigatedTo = nav; };
+    w.openRunDetail('piper', 'Compile the ops summary');
+    const back = doc.querySelector('[data-run-detail="back"]');
+    assert.ok(back, 'the run detail screen carries no way back');
+    back.click();
+    assert.strictEqual(w.navigatedTo, 'routines',
+      'the run detail screen leaves for somewhere other than the list it was opened from');
     dom.window.close();
   });
 
@@ -409,8 +620,8 @@ describe('the ways this list gets drawn, pressed', () => {
     // to the team panel in silence.
     assert.ok(doc.querySelector('[data-nav="routines"]'),
       'index.html carries no routines rail entry, so the editor cannot reach this view');
-    assert.ok(doc.getElementById('sidebar-routines'),
-      'index.html carries no routines sidebar panel, so the editor cannot reach this view');
+    assert.ok(doc.getElementById('view-routines'),
+      'index.html carries no routines view panel, so the editor cannot reach this view');
 
     w.skills = [{ id: 'sk', name: 'Compile the ops summary', slug: 'ops', assignedAgents: [{ id: 'piper', name: 'Piper' }] }];
     w.skillsLoaded = true;
@@ -449,9 +660,20 @@ describe('every reply that reaches this view is enumerated', () => {
         if (new RegExp(`(?<![.\\w$])${call}\\(`).test(src)) found.push(call);
       }
     }
-    assert.deepStrictEqual([...new Set(found)].sort(), [...new Set(REPLIES.map(r => r.call))].sort(),
+    assert.deepStrictEqual([...new Set(found)].sort(),
+      [...new Set([...REPLIES, ...ENTRIES].map(r => r.call))].sort(),
       'the client calls into this view from somewhere this file does not list, or a listed '
       + 'call no longer exists. Add the row and the test that drives it, or remove the row.');
+  });
+
+  // And an entry is named with the file it is called from, so moving the call
+  // fails here rather than passing on the strength of the name alone.
+  test('every entry is called from the file this file says it is called from', () => {
+    for (const entry of ENTRIES) {
+      const src = read(...entry.from.split('/'));
+      assert.ok(new RegExp(`(?<![.\\w$])${entry.call}\\(`).test(src),
+        `${entry.from} no longer calls ${entry.call}`);
+    }
   });
 
   test('every reply is on the case this file says it is on', () => {
@@ -539,12 +761,14 @@ describe('every reply that reaches this view is enumerated', () => {
 describe('the shell can actually show what it navigates to', () => {
   // THE BUG THIS CATCHES, and it is a silent one rather than a throw. The
   // routines section has no sidebar panel of its own; its panel is the team
-  // one, which already carries a Routines section inside it. There IS an
-  // element called sidebar-routines, NESTED in the team panel, so revealing it
-  // by name succeeds, throws nothing, and leaves the reader looking at an
-  // empty sidebar because the parent stayed hidden. So the assertion is not
-  // that an element was found: it is that what was revealed can actually be
-  // seen.
+  // one, resolved through the router's own map. There used to be an empty
+  // element under the routines name NESTED in the team panel, left there by
+  // the listing the team sidebar carried, so revealing it by name succeeded,
+  // threw nothing, and left the reader looking at an empty sidebar because the
+  // parent stayed hidden. The listing and the element are both gone; the
+  // assertion that caught it stays, because the map can name a nested panel
+  // again. It is not that an element was found: it is that what was revealed
+  // can actually be seen.
   test('every section the rail carries reveals a sidebar the reader can see', () => {
     const { doc, w, dom } = shell();
     // Both cut out of app.js and run, so the mapping under test is the one

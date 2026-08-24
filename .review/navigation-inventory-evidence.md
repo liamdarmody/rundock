@@ -107,7 +107,9 @@ is neither counted nor missed.
 **What it disagrees with.** The two lists differing in either direction is a
 failure, not a warning. The message names which side is short.
 
-Twenty call sites, six more than the fourteen reported:
+Twenty-one call sites. Twenty when this was written, six more than the
+fourteen reported; the twenty-first arrived with the run detail screen and the
+enumeration is what found it.
 
 | Call site | Rail section | Surface |
 |---|---|---|
@@ -287,11 +289,20 @@ existed. Fifteen of the twenty-two were red, and the seven that were green are
 the drift guards and the manifest's self-checks, which describe what is already
 true and exist to fail later. Reproduce with:
 
+**Run this in a scratch worktree, never in a tree you have work in.** It
+rewrites tracked files and puts them back, so it destroys uncommitted changes,
+and it destroyed some while this was being written. `scripts/red-first.js`
+refuses a dirty tree for this reason; a command copied out of a document has no
+such refusal, so it gets its own worktree instead.
+
 ```
+git worktree add /tmp/nav-redfirst HEAD
+cd /tmp/nav-redfirst && npm ci --ignore-scripts
 git checkout origin/main -- public/app.js public/views/conversations.js \
-  public/views/profile.js public/views/routine-editor.js
+  public/views/profile.js public/views/routine-editor.js \
+  public/views/routines.js public/views/run-detail.js
 node --test test/unit/navigation-doors.test.js
-git checkout HEAD -- public/
+cd - && git worktree remove --force /tmp/nav-redfirst
 ```
 
 Then mechanically, over the whole suite:
@@ -325,7 +336,7 @@ is the correct response to a flake and means a run may need repeating.
 
 ## Mutation results
 
-Eighteen mutations, each a form the defect actually took, including three that
+Nineteen mutations, each a form the defect actually took, including four that
 put back the exact code that shipped before this change and five that test the
 reach of the scans rather than the rules. Every one turns a named test red.
 
@@ -344,6 +355,7 @@ node test/tools/mutate-nav-guards.js --markdown
 | the panel list names no panel the page has stopped carrying | 7 | `the panels setNavState hides are the panels the page carries`<br>`every view the shell can show lands the rail on the section its own table names`<br>`the routine editor is a routines surface and the rail says so`<br>`the route that says there is no workspace takes the chrome down with it`<br>`the workspace picker takes no nav state, because it has no rail to take one on`<br>`exactly one sidebar panel is visible after any section is set`<br>`switching workspace resets the chrome through the one place that owns it` |
 | the routine editor does not name a section of its own | 1 | `nothing but showView asks for a section` |
 | selecting a skill does not name a section of its own | 1 | `nothing but showView asks for a section` |
+| the run detail screen does not name a section of its own | 1 | `nothing but showView asks for a section` |
 | opening a skill's file does not name a section of its own | 1 | `nothing but showView asks for a section` |
 | a destination nobody listed fails the enumeration by name | 1 | `no call that lands the reader somewhere exists that this file does not name` |
 | every rail entry has an arm that shows a view | 2 | `no call that lands the reader somewhere exists that this file does not name`<br>`every entry on the rail has an arm that shows a view` |
@@ -354,7 +366,10 @@ node test/tools/mutate-nav-guards.js --markdown
 | every route to the picker takes the chrome down through one place | 1 | `the route that says there is no workspace takes the chrome down with it` |
 | nothing takes the chrome down beside the one place that owns it | 1 | `one place decides whether there is any chrome at all` |
 
-The three that put shipped code back are the ones the enumeration is judged on.
+The four that put shipped code back are the ones the enumeration is judged on.
+The fourth is the run detail screen, which arrived from another branch already
+setting its own section, because merging is exactly where this defect class
+returns.
 Written as a table check alone, none of them would turn anything red, and the
 change would have bought a comment.
 
@@ -391,6 +406,38 @@ Out of scope and untouched:
 - **The sidebar panel structure**, which is separate work already in flight. The
   panel work here is the two lists that decided which panel is visible, not the
   panels themselves.
+
+## What the merge found, which is the instrument working
+
+Two changes landed on the trunk while this was open: the agent surfaces and the
+run detail screen. Both added destinations, and the enumeration refused the
+merge until they were listed. What it caught:
+
+- **two new call sites.** `showRoutinesForAgent` in `views/routines.js`, which
+  the rail's own arm now calls instead of showing a view directly, and
+  `openRunDetail` in `views/run-detail.js`. The rail arm's row moved to the
+  function that took the call over rather than being deleted.
+- **a new view with no section.** `run-detail` was added to the list `showView`
+  hides and would have taken no rail state at all. It maps to Routines, by the
+  same rule that puts the routine editor there: a run belongs to a routine.
+- **both new destinations setting their own section.** Each called
+  `setNavState('routines')` before `showView`, which is the arrangement this
+  change removes and the arrangement every route that got the rail wrong was
+  using. Both happened to name the right section, so nothing was visibly broken;
+  the second opinion is gone rather than left to be right by luck.
+
+One test from the trunk asserted the old mechanism through a stub: it stubbed
+`showView` and `setNavState` separately, then checked the stubbed nav value. With
+the section resolved by `showView`, a stubbed `showView` sets no rail. Rather
+than copy the resolution into the test, it now runs the shipped `showView` and
+`setNavState` cut out of `app.js` and reads the rail off the page, which is a
+stronger version of the claim its own name makes.
+
+**The property the resolution was held to:** every enumeration contains at least
+what either side listed, and every surviving row still names a test that exists
+and presses a surface a reader touches. The destination list cannot silently
+shrink, because it is compared against the source in both directions: a row
+removed without its call site going too fails as loudly as a call nobody listed.
 
 ## Two routes created alongside this
 

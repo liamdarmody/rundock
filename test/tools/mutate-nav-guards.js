@@ -46,6 +46,10 @@ const INDEX = { src: path.join(ROOT, 'public', 'index.html'), suite: SUITE };
 const ROUTINE_EDITOR = { src: path.join(ROOT, 'public', 'views', 'routine-editor.js'), suite: SUITE };
 const SKILLS = { src: path.join(ROOT, 'public', 'views', 'skills.js'), suite: SUITE };
 const FILES = { src: path.join(ROOT, 'public', 'views', 'files.js'), suite: SUITE };
+// The run detail screen, which arrived from another branch already setting its
+// own section. Merging is exactly where this defect class comes back, so the
+// code that branch shipped is what this mutation restores.
+const RUN_DETAIL = { src: path.join(ROOT, 'public', 'views', 'run-detail.js'), suite: SUITE };
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -103,6 +107,10 @@ const MUTATIONS = [
   [SKILLS, 'selecting a skill does not name a section of its own',
     "  currentSkillId = id;\n  showView('skills');",
     "  currentSkillId = id;\n  setNavState('team');\n  showView('skills');"],
+  [RUN_DETAIL, 'the run detail screen does not name a section of its own',
+    "  if (typeof showView === 'function') showView('run-detail');",
+    "  if (typeof setNavState === 'function') setNavState('routines');\n"
+    + "  if (typeof showView === 'function') showView('run-detail');"],
   [FILES, "opening a skill's file does not name a section of its own",
     "  ws.send(JSON.stringify({ type: 'read_file', path: filePath }));\n  showView('editor');",
     "  ws.send(JSON.stringify({ type: 'read_file', path: filePath }));\n"
@@ -191,7 +199,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [APP, INDEX, ROUTINE_EDITOR, SKILLS, FILES];
+  const targets = [APP, INDEX, ROUTINE_EDITOR, SKILLS, FILES, RUN_DETAIL];
   const originals = new Map();
   for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];
