@@ -1,15 +1,93 @@
 'use strict';
 // Temp-workspace fixture builder for the test suite.
-// Creates disposable workspace directories under os.tmpdir() and registers
-// them for cleanup. Never touches the repo or the user's real workspaces.
+// Creates disposable workspace directories and removes them again. Never
+// touches the repo or the user's real workspaces.
+//
+// WHY REMOVAL IS NOT LEFT TO THE CALLER ANY MORE
+//
+// It used to be. `cleanup()` was exported and each test file could wire it
+// with `after(cleanup)`. Of the 79 files that build fixtures, 20 did and 59
+// did not, including every file in the integration suite, which builds the
+// most. Opt-in tidying means the DEFAULT is a leak, so each new test file
+// leaked by default and looked exactly like the ones that did not. One suite
+// run left 160 directories and 103 MB behind, and nothing ever removed any of
+// them, so every run of anything added to the pile permanently. A day of that
+// filled the disk twice and made two mutation runs report out-of-space
+// failures as unguarded guards.
+//
+// So the process that creates the fixtures removes them, and no test file has
+// to remember anything. Every fixture is nested inside ONE root per process,
+// named with that process's pid, and the root goes when the process does.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { PREFIX, sweepStale } = require('./temp-root.js');
 
 const created = [];
 
-function makeTempDir(prefix = 'rundock-test-') {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+// Leftovers from runs that never got the chance to tidy up. A process killed
+// outright runs no handler, so somebody else has to finish the job, and the
+// next run is the only party that ever looks. Runs at load, before any fixture
+// is made, and skips any root whose owning process is still alive.
+sweepStale(os.tmpdir());
+
+let processRoot = null;
+let removersInstalled = false;
+
+// Remove the whole root in one call. Cheap enough to run from a signal
+// handler, which is the point: no walking a list that a crash may have left
+// half written.
+function removeProcessRoot() {
+  const dir = processRoot;
+  if (!dir) return;
+  processRoot = null;
+  created.length = 0;
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+}
+
+function installRemovers() {
+  if (removersInstalled) return;
+  removersInstalled = true;
+
+  // Covers ordinary completion, an uncaught throw, and an explicit
+  // process.exit. Must stay synchronous: nothing asynchronous scheduled here
+  // ever runs.
+  process.on('exit', removeProcessRoot);
+
+  // A `finally` is not enough and neither is 'exit' alone, because Node's
+  // DEFAULT handling of these signals terminates without unwinding anything.
+  // Installing a listener is what disables that default. The signal is then
+  // re-raised with the default disposition restored, so the exit status still
+  // reads "killed by <signal>" rather than a plain zero from a swallowed one,
+  // which is what a test runner and a CI job go on.
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+    const onSignal = () => {
+      removeProcessRoot();
+      // Stand down, then re-raise ONLY if nobody else was listening. Clearing
+      // every listener would be simpler and would silently disarm a handler
+      // some other module installed for its own tidying, which is the same
+      // class of bug as the one being fixed here.
+      process.off(signal, onSignal);
+      if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);
+    };
+    process.on(signal, onSignal);
+  }
+}
+
+// The one directory this process owns. Created lazily, so a test file that
+// builds no fixtures leaves nothing at all and installs no handlers.
+function rootDir() {
+  if (processRoot) return processRoot;
+  processRoot = fs.mkdtempSync(path.join(os.tmpdir(), `${PREFIX}p${process.pid}-`));
+  installRemovers();
+  return processRoot;
+}
+
+// The prefix is now a label inside this process's root rather than a name in
+// the shared temp root, so callers that pass their own keep their readable
+// directory names and cost nothing.
+function makeTempDir(prefix = 'ws-') {
+  const dir = fs.mkdtempSync(path.join(rootDir(), prefix));
   created.push(dir);
   return dir;
 }
@@ -123,6 +201,10 @@ function standardTeam() {
   };
 }
 
+// Kept, and still exported, for the 20 files that already wire `after(cleanup)`
+// and for any test that wants its fixtures gone mid-run rather than at the end.
+// It is no longer what stops the leak: removing it from a file now changes when
+// that file's directories go, not whether.
 function cleanup() {
   for (const dir of created.splice(0)) {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) { /* best effort */ }
