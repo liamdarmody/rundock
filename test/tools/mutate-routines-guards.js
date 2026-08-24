@@ -354,9 +354,12 @@ const MUTATIONS = [
   // Removing this line leaves a confirmation the reader never opened on the
   // page, aimed at whichever routine now sits at that index, and confirming it
   // deletes that one.
+  // Anchored on the line that follows the clear rather than on the nav call that
+  // used to: the section is a property of the view now, so showRoutinesForAgent
+  // names none. The guard being broken is the clear itself, unchanged.
   [VIEW_SCOPE, 'arriving on the list clears a confirmation opened under another scope',
-    '  pendingDelete = null;\n  pendingProblem = null;\n  if (typeof setNavState',
-    '  if (typeof setNavState'],
+    '  pendingDelete = null;\n  pendingProblem = null;\n  if (typeof showView',
+    '  if (typeof showView'],
 
   // ===== WHAT THE TEAM PANEL NO LONGER CARRIES =====
   //
@@ -828,9 +831,17 @@ const MUTATIONS = [
   [VIEW, 'the pieces are escaped separately rather than the assembled sentence being cut up',
     '  return esc(row.parts.lead)',
     '  return esc(row.sentence).replace(esc(row.parts.name), '],
-  [VIEW, 'the jump sets the rail as well as the pane',
-    "  if (typeof switchNav === 'function') switchNav('skills');",
-    ''],
+  // THE PROPERTY MOVED, so the mutation follows it. This used to take the
+  // switchNav call out of the jump and leave Routines lit over Skills. The
+  // section is a property of the view now: showView resolves it from
+  // NAV_FOR_VIEW and sets it, so removing the call from the jump breaks
+  // nothing, and a mutation that cannot break the property proves nothing
+  // about it. Breaking the resolution itself is what this route's own test has
+  // to notice, and it is aimed at that route's suite rather than the router's,
+  // because the claim is that THIS jump lands the reader correctly.
+  [APP_OPENER, 'the jump sets the rail as well as the pane',
+    ' const nav=NAV_FOR_VIEW[v]; if(nav) setNavState(nav); }',
+    ' }'],
   [VIEW, 'the skill is resolved again at press time rather than assumed to still be there',
     '  if (!skill) return;',
     ''],

@@ -248,7 +248,9 @@
    */
   function openRoutineEditor(input) {
     state = freshState(input);
-    if (typeof setNavState === 'function') setNavState('team');
+    // The rail follows the view, resolved by showView from NAV_FOR_VIEW in
+    // app.js. This used to name a section here, and the section it named was
+    // Team, so the editor lit the team entry on a screen about routines.
     if (typeof showView === 'function') showView('routine-editor');
     renderRoutineEditor();
   }

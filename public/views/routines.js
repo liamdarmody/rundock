@@ -471,9 +471,10 @@ function renderRoutines() {
  * that can get the rail wrong. A second copy of these three calls is exactly
  * how `openRoutineEditor` ended up lighting Team on a routines surface.
  *
- * It sets the nav state itself, for the same reason `showProfile` does: every
- * function that lands the user on a section says which section, or the rail
- * lies about where the user is on every route whose author did not remember.
+ * It names no section. The section is a property of the view now: `showView`
+ * resolves it from NAV_FOR_VIEW in app.js, so a destination cannot forget it
+ * because it no longer does it. This used to set the rail itself, which is the
+ * arrangement every route that got the rail wrong was using.
  *
  * @param {string|null} agentId
  */
@@ -491,7 +492,6 @@ function showRoutinesForAgent(agentId) {
   // control pressed on a list the reader has now left.
   pendingDelete = null;
   pendingProblem = null;
-  if (typeof setNavState === 'function') setNavState('routines');
   if (typeof showView === 'function') showView('routines');
   // ONE SCOPE, SET WHERE IT LIVES. setRoutinesScope stores it and redraws both
   // the rows and the list, so the panel and the pane cannot disagree about

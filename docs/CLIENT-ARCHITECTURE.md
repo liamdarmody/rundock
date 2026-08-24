@@ -164,6 +164,42 @@ They are documented here rather than deleted because a documentation change is
 the wrong place to alter behaviour. Either remove them or apply the pattern
 consistently, in a change of its own.
 
+## How a destination sets the chrome
+
+**Show a view. Do not touch the rail.**
+
+Every destination in this client lands the reader on a view, and the nav rail
+and sidebar have to agree with the pane that view shows. That agreement used to
+be a second thing each destination did for itself: `showView` revealed a pane
+and `setNavState` lit an icon. Several destinations only did the first, and no
+test could see the difference, so opening the routine editor lit Team, selecting
+a skill lit nothing, and opening a skill's own file left Skills lit over the
+editor.
+
+The section is now a property of the view, not of the caller. `NAV_FOR_VIEW` in
+`app.js` maps every view to the rail section its pane belongs to, and `showView`
+resolves it and sets it. `setNavState` has two callers and only two: `showView`,
+and the workspace switch, which resets the chrome before it knows which view
+comes next and records why where it does it. Adding a destination means calling
+`showView`. Adding a view means adding a row to
+`NAV_FOR_VIEW`, where `null` says the view is shown with no rail at all, which
+the workspace picker is and nothing else is.
+
+There is also exactly one list of the sidebar panels, inside `setNavState`.
+There were two: the workspace-switch reset carried a hand-written copy, they
+were extended separately, and the workspace being switched to ended up showing
+two panels stacked in one column. A copy of a function also misses whatever the
+original grows later, which is how that one never learned to bring the New
+conversation footer back.
+
+`test/unit/navigation-doors.test.js` enforces both. It enumerates every
+`showView` call site in `public/` from the source and fails until each is listed
+with the section it lands on, holds the listed section against `NAV_FOR_VIEW`
+rather than against its author, checks the panel list against the panels
+`index.html` actually carries, and fails if anything outside `setNavState` lights
+a rail entry or hides a panel. What it cannot check, and says so in its own
+`NOT_CAUGHT` list, is whether the section a view is mapped to is the right one.
+
 ## Why the test settings are the way they are
 
 These look like things to tune. They are load-bearing, and each one is the
@@ -207,5 +243,6 @@ vacuously the day someone renames it.
 | A view's behaviour | the header comment at the top of its module in `public/views/` |
 | What a module may and may not export | `test/unit/client-namespace.test.js` |
 | What `app.js` may still render | `test/unit/app-retentions.test.js` |
+| Which rail section a view belongs to | `NAV_FOR_VIEW` in `public/app.js`, enumerated by `test/unit/navigation-doors.test.js` |
 | Chat thread markup | `public/chat-markup.js`, which is the only file allowed to write it |
 | Markdown rendering, and what a document may put in the page | `public/markdown-render.js`, whose header carries the decision |

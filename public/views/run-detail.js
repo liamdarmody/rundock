@@ -175,7 +175,8 @@ function renderRunDetail() {
 function openRunDetail(agentId, routine) {
   asked = { agentId, routine };
   record = undefined;
-  if (typeof setNavState === 'function') setNavState('routines');
+  // No section named here: showView resolves it from NAV_FOR_VIEW, which maps
+  // run-detail to Routines because a run belongs to a routine.
   if (typeof showView === 'function') showView('run-detail');
   renderRunDetail();
   if (typeof ws !== 'undefined' && ws) ws.send(JSON.stringify({ type: 'get_run', agentId, routine }));

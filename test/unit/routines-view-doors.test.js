@@ -478,18 +478,28 @@ describe('the ways this list gets drawn, pressed', () => {
     const entry = doc.querySelector('.nav-item[data-nav="routines"]');
     assert.ok(entry, 'index.html no longer carries a Routines rail entry');
     const body = appPiece(/else if\(nav==='routines'\)\s*\{([\s\S]*?)\}/, "switchNav's routines arm");
-    w.shown = null;
-    w.showView = (v) => { w.shown = v; };
-    w.navState = null;
-    w.setNavState = (v) => { w.navState = v; };
+    // THE SHIPPED ROUTER, not a stub of it. The rail no longer follows a second
+    // call each destination makes for itself: showView resolves the section
+    // from NAV_FOR_VIEW and sets it, so a stubbed showView sets no rail and a
+    // stubbed setNavState answers a question nothing asks any more. Both are cut
+    // out of app.js here, in one eval so the functions close over the tables the
+    // way they do in the file, and the rail is then read off the page.
+    w.eval([
+      /const NAV_FOR_VIEW = \{[\s\S]*?\n\};/.exec(APP_SRC)[0],
+      `function setNavState(nav) {${appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState')}\n}`,
+      `function showView(v) {${appPiece(/^function showView\(v\) \{(.*)\}\s*$/m, 'showView')}}`,
+    ].join('\n'));
     w.closeFindBar = () => {};
     w.switchNav = (nav) => {
       assert.strictEqual(nav, 'routines', 'the rail entry asks for another section');
       w.eval(`(function () {${body}\n})()`);
     };
     entry.click();
-    assert.strictEqual(w.shown, 'routines', 'the rail entry does not show this view');
-    assert.strictEqual(w.navState, 'routines', 'the rail says one section and the pane shows another');
+    assert.ok(!doc.getElementById('view-routines').classList.contains('hidden'),
+      'the rail entry does not show this view');
+    assert.deepStrictEqual(
+      [...doc.querySelectorAll('.nav-item[data-nav].active')].map(e => e.dataset.nav), ['routines'],
+      'the rail says one section and the pane shows another');
     assert.strictEqual(doc.querySelectorAll('.routine-row').length, 1,
       'the rail entry shows the view without drawing anything into it');
     dom.window.close();
@@ -798,11 +808,17 @@ describe('the ways this list gets drawn, pressed', () => {
     w.sent = [];
     w.ws = { send: (msg) => w.sent.push(JSON.parse(msg)) };
 
-    // The three pieces that carry a reader to a section, all real.
-    w.eval(`function setNavState(nav) {${appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState')}\n}`);
-    w.eval(`function showView(v) {${appPiece(/^function showView\(v\) \{(.*)\}\s*$/m, 'showView')}}`);
+    // The pieces that carry a reader to a section, all real, and the table that
+    // resolves one from the other. In ONE eval: showView reads NAV_FOR_VIEW,
+    // and a lexical declaration loaded in an eval of its own is gone before the
+    // function that closes over it runs.
     w.closeFindBar = () => {};
-    w.eval(`function switchNav(nav) {${appPiece(/function switchNav\(nav\) \{([\s\S]*?)\n\}/, 'switchNav')}\n}`);
+    w.eval([
+      /const NAV_FOR_VIEW = \{[\s\S]*?\n\};/.exec(APP_SRC)[0],
+      `function setNavState(nav) {${appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState')}\n}`,
+      `function showView(v) {${appPiece(/^function showView\(v\) \{(.*)\}\s*$/m, 'showView')}}`,
+      `function switchNav(nav) {${appPiece(/function switchNav\(nav\) \{([\s\S]*?)\n\}/, 'switchNav')}\n}`,
+    ].join('\n'));
 
     // Start somewhere else, so arriving is something the save has to do.
     w.setNavState('team');
@@ -813,7 +829,12 @@ describe('the ways this list gets drawn, pressed', () => {
     w.routineEditorPick(option.key);
     w.saveRoutine();
     assert.strictEqual(w.sent.length, 1, 'sanity: the editor asked for the routine to be written');
-    assert.ok(doc.getElementById('sidebar-routines').classList.contains('hidden'),
+    // WHICH SCREEN, not which panel. The panel was the proxy for this until the
+    // rail and the sidebar became properties of the view: the editor is one of
+    // the routines surfaces, so its panel is up the whole time the editor is,
+    // and a hidden panel no longer means the editor has not left. The view on
+    // screen is the thing this sentence is actually about.
+    assert.ok(doc.getElementById('view-routines').classList.contains('hidden'),
       'the editor left on send rather than waiting for the reply');
 
     // The server confirms. This is the moment the editor leaves.

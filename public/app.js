@@ -276,7 +276,10 @@ function handle(d) {
       // Re-render settings if currently viewing workspace settings
       if (currentView === 'settings') renderSettingsSection('workspace');
       break;
-    case 'needs_workspace': showView('workspace'); break;
+    // Takes the chrome down as well as showing the screen. This arrives when
+    // the server has no workspace, which can happen after it had one, so the
+    // rail cannot be assumed to be down already.
+    case 'needs_workspace': setWorkspaceChrome(false); showView('workspace'); break;
     // THE PANEL IS REDRAWN HERE AS WELL AS THE LIST. The roster is what
     // arrives when a routine is added or deleted, so the scope rows and their
     // counts are stale from that moment until something redraws them, and the
@@ -1013,13 +1016,52 @@ function initSidebarResize() {
 
 // ===== 10. VIEWS & NAVIGATION =====
 
-// Sync the nav rail's active icon and the visible sidebar panel to a section.
-// This is deliberately separate from switchNav: destination functions
-// (openConversation, showProfile) call it so they stay consistent no matter
-// where navigation started (nav rail click, search palette, profile links,
-// workspace routing). Before this existed, callers had to remember to pair
-// switchNav with their navigation and several forgot, leaving the rail
-// highlighting one section while the main pane showed another.
+// ===== THE RULE, FOR WHOEVER ADDS THE NEXT DESTINATION =====
+//
+// Show a view. Do not touch the rail.
+//
+// The rail is the only thing telling a reader which of the top-level surfaces
+// they are on, and keeping it true used to be a second thing every destination
+// had to remember: showView revealed a pane and setNavState lit an icon.
+// Several destinations forgot the second, and forgetting it was invisible to
+// every test, so opening the routine editor lit Team, selecting a skill lit
+// nothing, and opening a skill's own file left Skills lit over the editor. The
+// comment that used to sit here recorded that callers forgot before setNavState
+// existed. They kept forgetting after it existed, because a rule you have to
+// remember is not a rule.
+//
+// So the section is a property of the VIEW rather than of the caller. showView
+// resolves it from the table below and sets it, and a new destination cannot
+// get this wrong because it no longer does it at all. setNavState has two
+// callers and only two: showView, and the workspace switch, which is the one
+// moment the chrome is decided before the view is.
+//
+// ADDING A VIEW: give it a row here. `null` means the view is shown with no
+// rail state, which is a decision rather than an omission: the workspace picker
+// hides the rail and the sidebar outright, so there is no section to be on.
+// Every other view names the section its pane belongs to.
+// test/unit/navigation-doors.test.js enumerates every call site of showView in
+// the client against this table, and fails if a view is added to one and not
+// the other.
+//
+// WHICH section is the right one is the single judgement no check can make. The
+// locked mock's chrome-parity rule decides it: a surface's entry stays active
+// across that surface's own screens, which is why the routine editor lights
+// Routines and an agent's page lights Team.
+const NAV_FOR_VIEW = {
+  workspace: null,
+  home: 'team',
+  profile: 'team',
+  chat: 'conversations',
+  'convo-empty': 'conversations',
+  editor: 'files',
+  skills: 'skills',
+  settings: 'settings',
+  'routine-editor': 'routines',
+  routines: 'routines',
+  'run-detail': 'routines',
+};
+
 // Sections whose sidebar belongs to another one. Routines sits beside the
 // team and the locked mock draws it with the team panel for a reason worth
 // keeping: a routine belongs to an agent, and the panel that lists your agents
@@ -1030,6 +1072,19 @@ function initSidebarResize() {
 // routines section at the team panel, which is how the two sidebars came to be
 // one element. An alias map with nothing in it is a redirection waiting to be
 // reintroduced without anybody noticing, so it is gone rather than emptied.
+//
+// CALLED BY showView, and that is the whole mechanism: a destination shows a
+// view and the section comes with it. Called from a destination directly, this
+// is half a navigation, and the halves are what came apart. The one other
+// caller is the workspace reset, which settles the chrome before it knows which
+// view comes next, and says so where it does it.
+//
+// The panel list below is the only list of sidebar panels in the client. There
+// were two: the workspace reset carried a hand-written copy of this function,
+// and when a panel was added to one and not the other, switching workspace left
+// two panels stacked in the same column. A copy also drops whatever the
+// original grows later, which is how that one lost the footer line below and
+// left a reader on Conversations with no way to start one.
 function setNavState(nav) {
   document.querySelectorAll('.nav-item[data-nav]').forEach(n=>n.classList.remove('active'));
   document.querySelector(`[data-nav="${nav}"]`)?.classList.add('active');
@@ -1046,7 +1101,9 @@ function switchNav(nav) {
   // and search state don't survive into a context where they no longer make
   // sense or reference DOM that's about to be replaced.
   closeFindBar();
-  setNavState(nav);
+  // No setNavState here. Every arm below shows a view, and the view is what
+  // carries the section now, so setting it here as well would be a second
+  // opinion able to disagree with the first.
   if(nav==='settings') { showView('settings'); showSettingsSection('workspace'); }
   else if(nav==='files') {
     editorReturnView = 'editor';
@@ -1086,8 +1143,35 @@ function switchNav(nav) {
   // that announces itself.
   else if(nav==='routines') { showRoutinesForAgent(null); }
 }
-function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings','routine-editor','routines','run-detail'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }
+function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings','routine-editor','routines','run-detail'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');} const nav=NAV_FOR_VIEW[v]; if(nav) setNavState(nav); }
 function goHome() { discardIfEmpty(); activeConversation=null; switchNav('conversations'); }
+
+// Whether there is any chrome at all.
+//
+// A SECTION AND A SCREEN WITH NO SECTIONS ARE DIFFERENT QUESTIONS, and this is
+// the second one. setNavState answers which section you are on; this answers
+// whether the rail and the sidebar are on screen to answer it. The workspace
+// picker is the only screen where they are not, because a rail entry names a
+// section of a workspace and that screen is what you see when there is none.
+//
+// ONE OWNER, for the reason the panel list has one. The hide and the show were
+// written into the two functions that happened to need them, so a third route
+// to the picker went through neither: the server clears its workspace when the
+// directory stops existing or a switch fails, and the reply that carries that
+// news reached the picker with the rail still up and the previous entry still
+// lit, over a screen that means you have no workspace to have a section of.
+function setWorkspaceChrome(present) {
+  const value = present ? '' : 'none';
+  document.querySelector('.nav-rail').style.display = value;
+  document.querySelector('.sidebar').style.display = value;
+  // The top bar itself stays either way: it carries the window's only drag
+  // region once the OS title bar is removed. Only search hides, since there is
+  // nothing to search yet. Help deliberately remains, because the picker is
+  // the screen where a new user is most likely to want it.
+  const tbs = document.getElementById('tb-search');
+  if (tbs) tbs.style.display = value;
+  document.querySelector('.app')?.classList.toggle('no-workspace', !present);
+}
 
 // Theme. One function applies it everywhere it shows (body class, toggle
 // icon, code highlighting, Windows caption colours); which theme applies is
@@ -1240,16 +1324,7 @@ function handleWorkspaces(d) {
 }
 
 function showWorkspacePicker(recent, discovered) {
-  // Hide nav and sidebar when picking workspace
-  document.querySelector('.nav-rail').style.display = 'none';
-  document.querySelector('.sidebar').style.display = 'none';
-  // The top bar itself stays: it carries the window's only drag region once
-  // the OS title bar is removed. Only search hides, since there is nothing to
-  // search yet. Help deliberately remains, because this is the screen where a
-  // new user is most likely to want it.
-  const tbs = document.getElementById('tb-search');
-  if (tbs) tbs.style.display = 'none';
-  document.querySelector('.app')?.classList.add('no-workspace');
+  setWorkspaceChrome(false);
   showView('workspace');
   // Reset create form
   const createBtn = document.getElementById('create-workspace-btn');
@@ -1379,12 +1454,7 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   if (scaffoldError) {
     console.warn('[Workspace] Scaffold error:', scaffoldError);
   }
-  // Show nav and sidebar
-  document.querySelector('.nav-rail').style.display = '';
-  document.querySelector('.sidebar').style.display = '';
-  const tbsOn = document.getElementById('tb-search');
-  if (tbsOn) tbsOn.style.display = '';
-  document.querySelector('.app')?.classList.remove('no-workspace');
+  setWorkspaceChrome(true);
   // Load workspace data
   ws.send(JSON.stringify({ type: 'get_agents' }));
   ws.send(JSON.stringify({ type: 'get_files' }));
@@ -1426,6 +1496,12 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   if (cs) { cs.textContent = ''; cs.classList.remove('working'); }
   // Activate conversations sidebar; handlePersistedConversations will
   // open a pinned conversation or newConversation() once data arrives.
+  //
+  // ASKED FOR RATHER THAN REPEATED. The chrome half of this was once four
+  // lines here, a hand-written copy of setNavState, which is why it carried a
+  // second list of the sidebar panels and never learned about the New
+  // conversation footer: a reader who switched workspace from any other
+  // section landed on Conversations with no way to start one.
   resetSidebarForWorkspace();
   // Hide the workspace picker immediately, but do not show any view yet.
   // handlePersistedConversations will pick the right destination (chat for

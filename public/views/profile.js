@@ -31,9 +31,9 @@ function showProfile(agentId) {
   // leaving the rail on its previous section with no matching pane.
   if(!a) { switchNav('team'); return; }
   // Agent profiles belong to the Team section (the profile's back link goes
-  // there); sync the rail and sidebar for callers arriving from elsewhere,
-  // e.g. the search palette or a skill page's agent chips.
-  setNavState('team');
+  // there), and showView resolves that from the view, so callers arriving from
+  // elsewhere (the search palette, a skill page's agent chips) get the rail and
+  // the sidebar without asking for them.
   const existing=conversations.filter(c=>c.agentId===agentId||(c.sessionIds||[]).some(s=>s.agentId===agentId));
   let h=`<a class="profile-back" onclick="switchNav('team')">&#8592; Back</a>
     <div class="profile-header">
