@@ -26,6 +26,7 @@ const path = require('node:path');
 
 const config = require('../../lib/config.js');
 const runs = require('../../lib/protocol/handlers/runs.js');
+const scheduler = require('../../lib/scheduler.js');
 const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
 const { makeTempDir } = require('../helpers/workspace.js');
 
@@ -46,6 +47,21 @@ const KNOWN = {
 const CHANGED_NOTHING = { ...KNOWN, id: 'run-empty', files: [], filesStatus: 'known', filesReason: null };
 
 const UNKNOWN = { ...KNOWN, id: 'run-unknown', files: null, filesStatus: 'unknown', filesReason: 'no-transcript' };
+
+/**
+ * Drive the handler against an enumeration THIS TEST states, in a stated order.
+ *
+ * WHY THE ORDER IS STUBBED RATHER THAN WRITTEN TO DISK. Directory enumeration
+ * is a function of the FILENAMES, so writing the same two files in a different
+ * order enumerates identically both times. A test that varied only the write
+ * order would therefore pass against a resolver that returned whichever record
+ * came first, which is the whole property it claims to check.
+ */
+function withReader(records, body) {
+  const real = scheduler.readRunRecords;
+  scheduler.readRunRecords = () => records;
+  try { return body(); } finally { scheduler.readRunRecords = real; }
+}
 
 /** A workspace holding exactly these records. Restores the config afterwards. */
 function withRecords(records, body) {
@@ -71,20 +87,45 @@ describe('a run record reaches the client', () => {
     });
   });
 
-  test('the newest run of a routine comes back, whatever order the disk lists them in', () => {
+  test('the newest run of a routine comes back, in whichever order the reader hands them over', () => {
     const older = { ...KNOWN, id: 'run-older', startedAt: '2026-08-20T00:00:00.000Z' };
     const newer = { ...KNOWN, id: 'run-newer', startedAt: '2026-08-24T00:00:00.000Z' };
-    // Written oldest last, because a directory listing has an order that
-    // belongs to the filesystem and the reader promises none.
-    withRecords([newer, older], () => {
+    // BOTH ORDERS ARE ACTUALLY DIFFERENT, which is the point. An earlier
+    // version of this test wrote the two files in two orders and asserted the
+    // same thing twice: the names were identical in both arrangements, so both
+    // enumerated the same way and neither arrangement ever put the older
+    // record first. It could not have failed.
+    for (const order of [[older, newer], [newer, older]]) {
+      withReader(order, () => {
+        const ws = socket();
+        runs.handleGetRun({}, ws, { type: 'get_run', agentId: 'default', routine: 'Hello World' });
+        assert.strictEqual(ws.sent[0].run.id, 'run-newer',
+          `the first record the reader handed over was taken rather than the newest, `
+          + `with the reader ordered ${order.map(r => r.id).join(' then ')}`);
+      });
+    }
+  });
+
+  test('a record the reader would refuse never reaches the resolver', () => {
+    // THE REASON THE RESOLVER MAY DEREFERENCE A RECORD WITHOUT GUARDING, driven
+    // as real files rather than asserted in prose. readRunRecords admits a
+    // parsed file only when it is an object carrying a string id. Each file
+    // below would, if it got through, be dereferenced by the filter and throw
+    // before anything was sent, and a handler that throws before replying
+    // leaves the screen waiting forever.
+    withRecords([KNOWN], (dir) => {
+      const runsDir = path.join(dir, '.rundock', 'runs');
+      fs.writeFileSync(path.join(runsDir, 'a-null.json'), 'null');
+      fs.writeFileSync(path.join(runsDir, 'b-half-written.json'), '{"id": "trunc"');
+      // A later start than the real record, so a resolver that saw it would
+      // return it and the id below would be undefined.
+      fs.writeFileSync(path.join(runsDir, 'c-no-id.json'), JSON.stringify(
+        { agent: 'default', routine: 'Hello World', startedAt: '2027-01-01T00:00:00.000Z' }));
       const ws = socket();
       runs.handleGetRun({}, ws, { type: 'get_run', agentId: 'default', routine: 'Hello World' });
-      assert.strictEqual(ws.sent[0].run.id, 'run-newer');
-    });
-    withRecords([older, newer], () => {
-      const ws = socket();
-      runs.handleGetRun({}, ws, { type: 'get_run', agentId: 'default', routine: 'Hello World' });
-      assert.strictEqual(ws.sent[0].run.id, 'run-newer');
+      assert.strictEqual(ws.sent.length, 1,
+        'the handler threw before replying, so the screen would wait forever');
+      assert.strictEqual(ws.sent[0].run.id, 'run-known');
     });
   });
 

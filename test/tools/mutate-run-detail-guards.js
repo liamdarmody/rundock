@@ -69,6 +69,11 @@ const STYLES = { src: path.join(ROOT, 'public', 'styles', 'views', 'run-detail.c
 // The transport, where a record could be rebuilt on the way past and lose the
 // distinction before the screen ever sees it.
 const HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'runs.js'), suite: 'test/unit/run-detail-transport.test.js' };
+// The reader's admission check, which is the whole reason the resolver may
+// dereference a record without guarding. Watched from the transport's suite
+// because that is where the claim is made and where a record the reader let
+// through would throw before anything was sent.
+const READER = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/run-detail-transport.test.js' };
 // The way in and the way back, watched by the file that presses them rather
 // than by the file that calls what they call.
 const ROUTINES_VIEW = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/run-detail-doors.test.js' };
@@ -101,6 +106,18 @@ const MUTATIONS = [
   [VIEW, 'a record that has not arrived is not a run that changed nothing',
     '  if (record === undefined) {',
     '  if (false) {'],
+  // ORDERING IS WHAT THIS HANDLER ADDS, so it is what has to be guarded. The
+  // reader promises no order and says so; taking the first record it hands
+  // over returns whichever run the filesystem happened to list first.
+  [HANDLER, 'the newest record is the one resolved to, not the first the reader hands over',
+    '    if (best === null || when > bestAt) { best = record; bestAt = when; }',
+    '    if (best === null) { best = record; bestAt = when; }'],
+  // The stated reason the resolver carries no null guard. Removing the
+  // admission check lets a parsed null reach the filter, which throws before
+  // the reply is sent.
+  [READER, 'the reader admits only records a caller can dereference',
+    "      if (record && typeof record.id === 'string') records.push(record);",
+    '      records.push(record);'],
   [HANDLER, 'the record crosses the wire whole rather than rebuilt from named fields',
     '    run,\n  }));',
     '    run: run ? { ...run, files: run.files || [] } : null,\n  }));'],
@@ -196,7 +213,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [MODEL, MODEL_VIEW, VIEW, VIEW_DOORS, STYLES, HANDLER, ROUTINES_VIEW, APP];
+  const targets = [MODEL, MODEL_VIEW, VIEW, VIEW_DOORS, STYLES, HANDLER, READER, ROUTINES_VIEW, APP];
   const originals = new Map();
   for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];
