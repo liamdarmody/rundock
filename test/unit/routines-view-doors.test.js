@@ -40,7 +40,9 @@ const INDEX_SRC = read('public', 'index.html');
 const VIEW_SRC = read('public', 'views', 'routines.js');
 const MODEL_SRC = read('public', 'routines-model.js');
 const EDITOR_MODEL_SRC = read('public', 'routine-editor-model.js');
-const RAIL_SRC = read('public', 'rail-presence.js');
+// Loaded before the routines model, which reads the shared no-guide next step
+// off it, in the order index.html loads them.
+const SKILLS_MODEL_SRC = read('public', 'skills-model.js');
 const EDITOR_VIEW_SRC = read('public', 'views', 'routine-editor.js');
 
 // ===== THE ENUMERATION =====
@@ -61,6 +63,12 @@ const RENDERERS = [
     line: "else if(nav==='routines')",
     surface: 'the Routines entry on the nav rail',
     pressedBy: 'the rail entry shows the view and draws the list',
+  },
+  {
+    file: 'app.js',
+    line: "case 'skills':",
+    surface: 'the skill list arriving from the server, which settles which empty state this shows',
+    pressedBy: 'the skill list arriving redraws the list that asks about skills',
   },
   {
     file: 'views/routines.js',
@@ -255,10 +263,16 @@ function shellMarkup() {
   assert.ok(rail, 'index.html no longer carries a nav rail');
   const panel = /<div id="view-routines"[\s\S]*?<\/div>\s*<\/div>/.exec(INDEX_SRC);
   assert.ok(panel, 'index.html no longer carries the routines view panel');
-  return '<!doctype html><html><body>' + rail[0]
-    + '<div id="sidebar-team"><div id="sidebar-routines"></div></div>'
-    + '<div id="sidebar-conversations"></div><div id="sidebar-skills"></div>'
-    + '<div id="sidebar-files"></div><div id="sidebar-settings"></div>'
+  // THE SIDEBAR IS CUT OUT OF THE PAGE TOO, and that is a correction rather
+  // than tidiness. It used to be written here, which made the destination
+  // check below unfalsifiable: the editor resolves where a save goes by
+  // asking whether the shell has BOTH a rail entry called routines and a panel
+  // called sidebar-routines, and a test that supplies that panel itself
+  // answers its own question. Rename the panel in index.html and the editor
+  // silently starts landing saves on the team chart, with this file green.
+  const sidebar = /<aside class="sidebar"[\s\S]*?<\/aside>/.exec(INDEX_SRC);
+  assert.ok(sidebar, 'index.html no longer carries a sidebar');
+  return '<!doctype html><html><body>' + rail[0] + sidebar[0]
     + '<div id="view-home"></div>' + panel[0] + '</body></html>';
 }
 
@@ -272,8 +286,8 @@ function shell({ routines = [ROUTINE] } = {}) {
   const dom = new JSDOM(shellMarkup(), { runScripts: 'dangerously' });
   const w = dom.window;
   w.eval(EDITOR_MODEL_SRC);
+  w.eval(SKILLS_MODEL_SRC);
   w.eval(MODEL_SRC);
-  w.eval(RAIL_SRC);
   w.eval(VIEW_SRC);
   w.agents = [{ id: 'piper', displayName: 'Piper', colour: '#E87A5A', icon: 'P', status: 'onTeam', routines }];
   w.esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -308,6 +322,34 @@ describe('the ways this list gets drawn, pressed', () => {
     w.eval(`(function () {${body}\n})()`);
     assert.strictEqual(w.drawn, 1, 'a roster arrived and the routines list was not redrawn');
     assert.strictEqual(w.document.querySelectorAll('.routine-row').length, 1);
+    dom.window.close();
+  });
+
+  // THE REPLY THAT SETTLES WHICH EMPTY STATE THIS SHOWS. The list asks whether
+  // the workspace has a skill, so the message that answers that question has
+  // to redraw it. Without this call the pane sits on its waiting line until
+  // the next roster broadcast, which on a workspace with no routines is the
+  // rest of the session.
+  test('the skill list arriving redraws the list that asks about skills', () => {
+    const { w, doc, dom } = shell({ routines: [] });
+    w.skills = [];
+    w.skillsLoaded = false;
+    w.getGuide = () => ({ id: 'doc' });
+    w.renderRoutines();
+    assert.match(doc.getElementById('routines-content').textContent, /Looking for skills/,
+      'sanity: the list is waiting on the reply before it arrives');
+
+    const body = appPiece(/case 'skills':([\s\S]*?)\bbreak;/, 'the skills case of the client dispatch');
+    w.renderSkills = () => {};
+    w.selectSkill = () => {};
+    w.routineEditorSkillsArrived = () => {};
+    w.palettePendingSkill = null;
+    w.d = { type: 'skills', skills: [] };
+    w.eval(`(function () {${body}\n})()`);
+
+    assert.match(doc.getElementById('routines-content').textContent,
+      /Routines schedule skills your agents already have/,
+      'the reply arrived and the list was left on its waiting line');
     dom.window.close();
   });
 
@@ -353,11 +395,42 @@ describe('the ways this list gets drawn, pressed', () => {
     // The editor decides where to go by asking whether the shell can reach a
     // section: a rail entry AND a sidebar panel for it. Both have to be true
     // of the real page, or a save silently lands somewhere else.
-    const { w, dom } = shell();
+    //
+    // AND THE SAVE IS DRIVEN, not just the resolution read. Asserting what
+    // routinesListNav returns says where the editor WOULD go. The failure this
+    // is written against is a rename of either half in index.html sending a
+    // real save to the team chart with nothing thrown, so the save has to
+    // actually travel: the editor is opened, a routine is picked and written,
+    // and the server's confirmation is what makes it leave.
+    const { doc, w, dom } = shell();
     w.eval(EDITOR_VIEW_SRC);
-    assert.strictEqual(w.routinesListNav(), 'routines',
-      'the editor cannot reach this view, so a saved routine goes somewhere else');
-    assert.strictEqual(w.RundockRoutineEditorModel.SAVE_DESTINATION, 'routines');
+    // Both halves of the destination, read off the real page rather than
+    // supplied here, so a rename of either fails this rather than falling back
+    // to the team panel in silence.
+    assert.ok(doc.querySelector('[data-nav="routines"]'),
+      'index.html carries no routines rail entry, so the editor cannot reach this view');
+    assert.ok(doc.getElementById('sidebar-routines'),
+      'index.html carries no routines sidebar panel, so the editor cannot reach this view');
+
+    w.skills = [{ id: 'sk', name: 'Compile the ops summary', slug: 'ops', assignedAgents: [{ id: 'piper', name: 'Piper' }] }];
+    w.skillsLoaded = true;
+    w.setNavState = () => {};
+    w.showView = () => {};
+    w.sent = [];
+    w.ws = { send: (msg) => w.sent.push(JSON.parse(msg)) };
+    w.navigatedTo = null;
+    w.switchNav = (nav) => { w.navigatedTo = nav; };
+    w.addRoutine();
+    const option = w.RundockRoutineEditorModel.skillChoices({ skills: w.skills }).options[0];
+    w.routineEditorPick(option.key);
+    w.saveRoutine();
+    assert.strictEqual(w.sent.length, 1, 'sanity: the editor asked for the routine to be written');
+    assert.strictEqual(w.navigatedTo, null, 'the editor left on send rather than on the reply');
+
+    w.routineEditorSaved();
+    assert.strictEqual(w.navigatedTo, w.RundockRoutineEditorModel.SAVE_DESTINATION,
+      'a written routine landed somewhere other than the list of routines');
+    assert.strictEqual(w.navigatedTo, 'routines');
     dom.window.close();
   });
 });

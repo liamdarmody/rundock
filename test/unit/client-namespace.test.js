@@ -226,6 +226,8 @@ const MANIFEST = {
   ],
   "skills.js": [
     "renderSkills",
+    "renderSkillsEmpty",
+    "renderSkillsIfEmpty",
     "renderSkillsSidebar",
     "selectSkill",
   ],
