@@ -44,6 +44,10 @@ const EDITOR_MODEL_SRC = read('public', 'routine-editor-model.js');
 // off it, in the order index.html loads them.
 const SKILLS_MODEL_SRC = read('public', 'skills-model.js');
 const EDITOR_VIEW_SRC = read('public', 'views', 'routine-editor.js');
+// The run detail screen, which is opened from a row on this list and returns
+// here. Loaded so the return journey is pressed rather than described.
+const RUN_DETAIL_MODEL_SRC = read('public', 'run-detail-model.js');
+const RUN_DETAIL_VIEW_SRC = read('public', 'views', 'run-detail.js');
 
 // ===== THE ENUMERATION =====
 //
@@ -134,6 +138,14 @@ const ROUTES = [
   {
     what: 'the section the rail entry reveals in the sidebar',
     pressedBy: 'every section the rail carries reveals a sidebar the reader can see',
+  },
+  // The run detail screen is opened FROM a row on this list and its back
+  // control returns here, so it is a route in exactly the sense this file
+  // means: a way the shell arrives at the routines section. Enumerated when it
+  // arrived, because the exclusion below went red the moment it did.
+  {
+    what: 'the run detail screen leaving for the list it was opened from',
+    pressedBy: 'the run detail back control returns to this view',
   },
 ];
 
@@ -230,7 +242,10 @@ describe('every way this list gets drawn is enumerated', () => {
       const src = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
       for (const m of src.matchAll(/(?:switchNav|showView|setNavState)\((['"])([\w-]+)\1\)/g)) {
         if (m[2] !== 'routines') continue;
-        assert.ok(/routine-editor\.js$/.test(rel),
+        // Two files may, and both are listed in ROUTES above with the test
+        // that presses them. Widened deliberately rather than loosened: a
+        // third file navigating here still fails until somebody names it.
+        assert.ok(/routine-editor\.js$/.test(rel) || /run-detail\.js$/.test(rel),
           `${rel} navigates to the routines section and is not a listed route`);
       }
     }
@@ -375,6 +390,31 @@ describe('the ways this list gets drawn, pressed', () => {
     assert.strictEqual(w.shown, 'routines', 'the rail entry does not show this view');
     assert.strictEqual(w.drawn, 1, 'the rail entry shows the view without drawing anything into it');
     assert.strictEqual(doc.querySelectorAll('.routine-row').length, 1);
+    dom.window.close();
+  });
+
+  // THE RETURN JOURNEY, pressed on the control a reader touches rather than by
+  // calling what it calls. The run detail screen is opened from a row here and
+  // its only way back is this control; a rename of the section it asks for
+  // strands the reader on a screen with no exit and throws nothing.
+  test('the run detail back control returns to this view', () => {
+    const { w, doc, dom } = shell();
+    w.eval(RUN_DETAIL_MODEL_SRC);
+    w.eval(RUN_DETAIL_VIEW_SRC);
+    // The panel the screen draws into, cut out of the real page.
+    const panel = /<div id="view-run-detail"[\s\S]*?<\/div>\s*<\/div>/.exec(INDEX_SRC);
+    assert.ok(panel, 'index.html no longer carries the run detail view panel');
+    doc.body.insertAdjacentHTML('beforeend', panel[0]);
+    w.showView = () => {};
+    w.setNavState = () => {};
+    w.navigatedTo = null;
+    w.switchNav = (nav) => { w.navigatedTo = nav; };
+    w.openRunDetail('piper', 'Compile the ops summary');
+    const back = doc.querySelector('[data-run-detail="back"]');
+    assert.ok(back, 'the run detail screen carries no way back');
+    back.click();
+    assert.strictEqual(w.navigatedTo, 'routines',
+      'the run detail screen leaves for somewhere other than the list it was opened from');
     dom.window.close();
   });
 

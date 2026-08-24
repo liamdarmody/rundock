@@ -136,6 +136,10 @@ const OVERALL_FILES = [
   'lib/protocol/handlers/conversations.js', 'lib/protocol/handlers/history.js',
   'lib/protocol/handlers/team.js', 'lib/protocol/handlers/files.js',
   'lib/protocol/handlers/process-control.js',
+  // The run detail screen: the read side of the run records, and the one
+  // module that decides whether an unknown file list stays unknown.
+  'lib/protocol/handlers/runs.js',
+  'public/run-detail-model.js',
 ];
 
 // ---------------------------------------------------------------------------

@@ -214,6 +214,13 @@ const MANIFEST = {
     "routinesCancelDelete",
     "routinesConfirmDelete",
     "routinesSetPaused",
+    "routinesViewLastRun",
+  ],
+  "run-detail.js": [
+    "openRunDetail",
+    "renderRunDetail",
+    "runArrived",
+    "runDetailBack",
   ],
   "settings.js": [
     "changeWorkspace",

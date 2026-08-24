@@ -1,0 +1,82 @@
+/* Run detail: one run's record, on the screen.
+
+   Every colour, radius and duration is a token, so both themes come from
+   tokens.css and neither is written twice here. Class names are prefixed `rd-`
+   rather than borrowing the routines list's `rr-` vocabulary, so the two
+   surfaces can be styled apart before they are styled together.
+
+   THE TONES ARE THREE, AND THEY LIVE HERE. What a reader sees is resolved from
+   these rules, not from any table in a module: a colour table in JavaScript
+   that nothing renders can agree with its tests forever while this file says
+   something else. So the ruling is asserted against what the page resolves, in
+   "the three tones resolve to three different colours in the stylesheet" in
+   test/unit/run-detail-view.test.js. */
+
+.run-detail { max-width: 620px; padding: 32px; }
+
+.rd-title { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.rd-name { margin-bottom: 0; }
+.rd-context { margin-bottom: 18px; }
+
+.rd-card { display: flex; flex-direction: column; gap: 6px; }
+
+/* The three lines inside the card, declared rather than borrowed. The mock
+   names them status-message, status-guidance and plan-label, and none of those
+   three exists in any shipped stylesheet, so markup carrying them renders as
+   unstyled paragraphs. */
+.rd-headline { font-size: var(--body); color: var(--text-1); line-height: 1.5; margin: 0; }
+.rd-guidance { font-size: var(--caption); color: var(--text-2); line-height: 1.5; margin: 0; }
+.rd-took { font-size: var(--caption); color: var(--text-3); margin: 6px 0 0; }
+
+/* The way back. It takes .profile-back's type and colour and resets the button
+   chrome underneath, because a control that acts is a button and .profile-back
+   was written for the two anchors that predate the question. */
+.rd-back { background: none; border: 0; padding: 0; font-family: inherit; }
+
+/* The chip: a dot and a label. The dot takes the tone's colour and the label
+   takes the tone's weight, so no pair is told apart by colour alone. */
+.rd-chip { display: inline-flex; align-items: center; gap: 8px; font-size: var(--caption); }
+.rd-chip .rd-dot { width: 8px; height: 8px; border-radius: var(--radius-circle); background: currentColor; }
+
+/* A run that got to the end and did what it was asked to. */
+.rd-chip.ok { color: var(--success); font-weight: 600; }
+/* A run that started and did not get through. Full weight, danger, because
+   something is wrong and a user has a decision to make. */
+.rd-chip.bad { color: var(--danger); font-weight: 600; }
+/* A run still going. Its own colour, because "not settled yet" is not an
+   outcome and must not borrow one. */
+.rd-chip.live { color: var(--working); font-weight: 500; }
+/* A run whose ending never ran, and every other case where nobody witnessed
+   the outcome. NOT the danger colour: the record says the ending never
+   happened, which is an absence of evidence rather than evidence of a
+   problem, and painting it red makes a claim nobody witnessed. Amber is spent
+   elsewhere in this palette on "needs the user", so this takes the idle token
+   and is told apart from the two outcomes by colour and by weight both. */
+.rd-chip.unwitnessed { color: var(--idle); font-weight: 500; }
+
+.rd-files-label { font-size: var(--caption); font-weight: 600; color: var(--text-2); margin: 18px 0 8px; }
+
+.rd-files { display: flex; flex-direction: column; gap: 6px; }
+
+.rd-file { display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); }
+.rd-file-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.rd-file-name { font-size: var(--body); color: var(--text-1); }
+/* The whole path, quietly, because a name alone cannot say which of two files
+   of that name in two folders this was. */
+.rd-file-path { font-size: var(--caption); color: var(--text-3); word-break: break-all; }
+.rd-ic { width: 16px; height: 16px; flex-shrink: 0; color: var(--text-2); }
+.rd-tag { font-size: var(--caption); color: var(--text-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 2px 8px; flex-shrink: 0; }
+
+.rd-cannot-open { margin-top: 10px; }
+
+/* A run that changed nothing. A plain sentence, in ordinary text colour: this
+   is a routine working normally and it should not read as a warning. */
+.rd-empty { font-size: var(--body); color: var(--text-2); margin: 0; }
+
+/* A run whose changes nobody can read. DELIBERATELY NOT THE SAME BLOCK as the
+   one above, and deliberately not silent: something is wrong with the
+   observation, and the difference between this and "changed nothing" is what a
+   user is deciding on when they choose whether to trust an unattended run. */
+.rd-unknown { padding: 14px 16px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); }
+.rd-unknown-lead { font-size: var(--body); color: var(--text-1); margin: 0 0 6px; }
+.rd-unknown-why { font-size: var(--caption); color: var(--text-2); line-height: 1.5; margin: 0; }

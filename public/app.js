@@ -253,6 +253,7 @@ function handle(d) {
     // whether the workspace has a skill, so the reply that answers that
     // question is the reply that has to redraw it. Without this the list sits
     // on its waiting line until the next roster broadcast.
+    case 'run': runArrived(d); break;
     case 'skills': skills=d.skills; skillsLoaded=true; renderSkills(); renderRoutines(); routineEditorSkillsArrived(d.skills); if(palettePendingSkill){const s=palettePendingSkill;palettePendingSkill=null;selectSkill(s);} break;
     case 'conversations':
       handlePersistedConversations(d.conversations, d.lastActiveConversationId);
@@ -1040,7 +1041,7 @@ function switchNav(nav) {
   else if(nav==='team') { showView('home'); renderOrgChart(); }
   else if(nav==='routines') { showView('routines'); renderRoutines(); }
 }
-function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings','routine-editor','routines'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }
+function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings','routine-editor','routines','run-detail'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }
 function goHome() { discardIfEmpty(); activeConversation=null; switchNav('conversations'); }
 
 // Theme. One function applies it everywhere it shows (body class, toggle

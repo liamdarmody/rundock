@@ -159,6 +159,18 @@ function rowHtml(entry, index, withActions) {
     body += '<div class="rr-meta rr-run-line">'
       + `<span class="run-status ${row.status.tone}">${esc(row.status.text)}</span>`
       + (nextRun ? `${sep}${nextRun}` : '')
+      // THE WAY INTO THE RUN'S OWN RECORD, and it sits here rather than on the
+      // row as a whole because this is the line that carries the last-run
+      // fact: the reader who wants to know more is already looking at it.
+      //
+      // Only where there is a last run to open. A routine that has never run
+      // has no record, and an entry point onto nothing is worse than none.
+      // Withheld on the delete confirmation for the same reason the pause and
+      // delete controls are: that surface is a question, not a list.
+      + (withActions
+        ? `${sep}<button class="btn-link rr-view-run" type="button" data-routines-action="view-run"`
+          + ` onclick="routinesViewLastRun(${index})">View last run</button>`
+        : '')
       + '</div>';
   }
 
@@ -341,6 +353,22 @@ function routinesConfirmDelete() {
   renderRoutines();
 }
 
+/**
+ * Open the run detail screen for this routine's most recent run.
+ *
+ * BY ROUTINE RATHER THAN BY RUN ID, because a row does not have one. The row's
+ * last-run fact comes from the routine state, and the run records are a
+ * separate store by design: the two meet only where each is told the same
+ * thing separately. So the question the reader is asking, "what did this
+ * routine do last time", is the question that travels, and the server resolves
+ * which record answers it.
+ */
+function routinesViewLastRun(index) {
+  const entry = allRoutines()[index];
+  if (!entry) return;
+  if (typeof openRunDetail === 'function') openRunDetail(entry.agent.id, entry.routine.name);
+}
+
 function routinesSetPaused(index, paused) {
   const entry = allRoutines()[index];
   pendingProblem = null;
@@ -353,6 +381,6 @@ function routinesSetPaused(index, paused) {
 
 return {
   renderRoutines, routinesAskDelete, routinesCancelDelete, routinesConfirmDelete, routinesSetPaused,
-  routinesActionFailed, routinesActionCleared,
+  routinesActionFailed, routinesActionCleared, routinesViewLastRun,
 };
 }));
