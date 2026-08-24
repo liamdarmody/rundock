@@ -291,11 +291,36 @@
     return `Every ${freq.label} at ${time.label}`;
   }
 
-  function routineSentence(input) {
+  /**
+   * The same sentence, as the two pieces it is made of.
+   *
+   * WHY THE PARTS RATHER THAN A SPLIT AT THE VIEW. The skill name is the one
+   * reachable thing on a row, so the view has to draw it inside its own
+   * element. Recovering it from the assembled string means matching
+   * user-written text inside escaped markup, which is exactly the class of
+   * thing the namesake counter above exists to avoid: a routine may be called
+   * "run: something", and a name carrying a bracket or an ampersand does not
+   * come back out of escaped markup as it went in.
+   *
+   * SO THE MODEL RETURNS THE PIECES AND THE VIEW COMPOSES THEM, which keeps
+   * every word of this sentence asserted here rather than in a DOM test. The
+   * assembled sentence is built FROM the parts rather than beside them, so the
+   * two cannot say different things.
+   *
+   * `lead` carries its own trailing space. A caller that concatenates gets the
+   * sentence back exactly; a caller that puts the name in its own element gets
+   * the space on the outside of it, where a link's underline does not reach.
+   */
+  function sentenceParts(input) {
     const words = scheduleWords(input && input.schedule);
     const name = (input && input.name) || null;
     if (!words || !name) return null;
-    return `${words}, run: ${name}`;
+    return { lead: `${words}, run: `, name: name };
+  }
+
+  function routineSentence(input) {
+    const parts = sentenceParts(input);
+    return parts ? `${parts.lead}${parts.name}` : null;
   }
 
   /**
@@ -435,6 +460,9 @@
     const option = editor.runOnOption(input && input.runOn);
     return {
       sentence: routineSentence(input),
+      // The same sentence in pieces, so the view can make the skill name
+      // reachable without matching text back out of its own escaped markup.
+      parts: sentenceParts(input),
       meta: (input && input.agentName) || null,
       runsOn: option ? `Runs on ${option.sentence}` : null,
       status: runStatus(input),
@@ -469,7 +497,7 @@
     OUTCOMES, LEAD, EMPTY, ACTION_PROBLEM, CATCH_UP_AFTER_MS,
     actionProblem, emptyState,
     dayWords, clockWords, zoneWords, timeWords,
-    scheduleWords, routineSentence,
+    scheduleWords, routineSentence, sentenceParts,
     outcomeOf, runStatus, nextRunLabel, orderByNextRun, row, deleteConfirmation,
   };
 }));

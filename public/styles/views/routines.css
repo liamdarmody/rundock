@@ -26,6 +26,17 @@
 .rr-body { flex: 1; min-width: 0; }
 .rr-sentence { font-size: var(--body); font-weight: 600; color: var(--text-1); margin-bottom: 3px; }
 
+/* The skill name inside the sentence, which is the one reachable thing on a
+   row. A button rather than an anchor: there is no URL behind it, and an
+   anchor with no href is a link a keyboard cannot reach.
+
+   IT INHERITS THE SENTENCE RATHER THAN RESTATING IT. Size and weight come
+   from the line it sits in, so the sentence reads as one sentence and the
+   name is told apart by colour and by the underline that arrives on hover.
+   A second declaration of the size here is how the two drift apart. */
+.rr-skill-link { font: inherit; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: none; }
+.rr-skill-link:hover { color: var(--accent-hover); text-decoration: underline; }
+
 /* The meta lines WRAP. Both of a row's facts have to survive together at any
    width, and the row with the longest status text is exactly the one a
    no-wrap line would drop the next-run time from. */

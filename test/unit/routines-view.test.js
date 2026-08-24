@@ -1052,3 +1052,143 @@ describe('the list is ordered by next run', () => {
     dom.window.close();
   });
 });
+
+describe('the skill named on a row is reachable', () => {
+  // The routine and the skill share a name, which is how the product connects
+  // them: the editor writes the routine under the name of the skill it picked.
+  const SKILL = { id: 'sk-ops', name: 'Compile the ops summary', assignedAgents: [{ id: 'piper', name: 'Piper' }] };
+  const ONE = [routine('Compile the ops summary', { nextRun: iso(TOMORROWS_SLOT) })];
+
+  const link = (doc) => doc.querySelector('.rr-sentence .rr-skill-link');
+
+  // AC-B1, driven through the surface a reader touches: the name on the row is
+  // pressed, and the assertion is what the skills pane then holds. selectSkill
+  // is the shipped one, so "opens that skill's page" means the page.
+  test('pressing the skill name opens that skill', () => {
+    const { doc, w, dom } = shell(ONE, { skills: [SKILL] });
+    w.renderRoutines();
+    assert.ok(link(doc), 'the row draws no link at all');
+    link(doc).click();
+    assert.strictEqual(w.currentSkillId, 'sk-ops');
+    assert.match(text(doc.getElementById('skill-detail-content')), /Compile the ops summary/,
+      'the press left the skills pane on whatever it held before');
+    dom.window.close();
+  });
+
+  // AC-B2.
+  test('only the skill name is the link, and the schedule is not', () => {
+    const { doc, w, dom } = shell(ONE, { skills: [SKILL] });
+    w.renderRoutines();
+    assert.strictEqual(text(link(doc)), 'Compile the ops summary',
+      'the link covers more or less than the skill name');
+    assert.strictEqual(doc.querySelectorAll('.rr-sentence .rr-skill-link').length, 1);
+    // The schedule is on the line and outside the link, so the sentence still
+    // reads as one sentence.
+    const sentence = doc.querySelector('.rr-sentence');
+    assert.strictEqual(text(sentence), 'Every day at 7:00am, run: Compile the ops summary');
+    const outside = sentence.textContent.replace(link(doc).textContent, '');
+    assert.match(outside, /Every day at 7:00am, run:/,
+      'the schedule went inside the link');
+    dom.window.close();
+  });
+
+  // AC-B3, driven rather than described. A routine outlives the skill it
+  // names, because the two live in different files.
+  test('a routine naming a skill that no longer exists is plain text', () => {
+    const { doc, w, dom } = shell(ONE, { skills: [] });
+    w.renderRoutines();
+    assert.strictEqual(link(doc), null, 'a deleted skill was still offered as a destination');
+    assert.strictEqual(text(doc.querySelector('.rr-sentence')),
+      'Every day at 7:00am, run: Compile the ops summary',
+      'the sentence lost words along with the link');
+    dom.window.close();
+  });
+
+  test('a row whose skill is gone throws nothing when the sentence is pressed', () => {
+    const { doc, w, dom } = shell(ONE, { skills: [] });
+    w.renderRoutines();
+    doc.querySelector('.rr-sentence').click();
+    // And the handler itself, reached directly, is the same answer: a skill
+    // deleted between the render and the press must not open a page for it.
+    w.routinesOpenSkill(0);
+    assert.strictEqual(w.currentSkillId, null);
+    dom.window.close();
+  });
+
+  test('a skill list that has not arrived yet leaves the sentence plain', () => {
+    const { doc, w, dom } = shell(ONE, { skills: [], skillsLoaded: false });
+    w.renderRoutines();
+    assert.strictEqual(link(doc), null);
+    dom.window.close();
+  });
+
+  // The name reaches the page as text on both roads, and the link is one more
+  // place it could stop doing so.
+  test('a routine name reaches the link as text, not as markup', () => {
+    const nasty = '<img src=x onerror=alert(1)>';
+    const { doc, w, dom } = shell([routine(nasty, { nextRun: iso(TOMORROWS_SLOT) })],
+      { skills: [{ id: 'sk-nasty', name: nasty, assignedAgents: [] }] });
+    w.renderRoutines();
+    assert.strictEqual(doc.querySelector('#routines-content img'), null);
+    assert.strictEqual(text(link(doc)), nasty);
+    dom.window.close();
+  });
+
+  // The row in the delete confirmation is there to say which routine is about
+  // to go. It offers nothing, and a link is an offer.
+  test('the row in the delete confirmation offers no link', () => {
+    const { doc, w, dom } = shell(ONE, { skills: [SKILL] });
+    w.renderRoutines();
+    press(doc, '[data-routines-action="delete"]');
+    assert.ok(doc.querySelector('.confirm-card'), 'sanity: the confirmation is on screen');
+    assert.strictEqual(link(doc), null);
+    assert.match(text(doc.querySelector('.routines-confirm-subject')), /Compile the ops summary/);
+    dom.window.close();
+  });
+
+  // AC-B5, and it is the criterion this card was warned about. selectSkill
+  // shows the skills view without touching the nav state, so a jump that only
+  // called it would leave Routines lit while the reader looks at Skills.
+  //
+  // THE REAL ROUTER IS RUN, not a stub of it: switchNav and setNavState are cut
+  // out of app.js and evaluated against the rail as index.html ships it. A test
+  // that asserted this view called a function named switchNav would pass
+  // against a shell where switchNav did nothing to the rail.
+  test('the rail shows Skills as active after the jump', () => {
+    const { doc, w, dom } = shell(ONE, { skills: [SKILL] });
+    w.eval(appPiece(/(const SIDEBAR_FOR = \{[^}]*\};)/, 'the sidebar map').replace('const ', 'var '));
+    w.eval(`function setNavState(nav) {${appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState')}\n}`);
+    w.eval(`function switchNav(nav) {${appPiece(/function switchNav\(nav\) \{([\s\S]*?)\n\}/, 'switchNav')}\n}`);
+    w.closeFindBar = () => {};
+    w.renderSkillsIfEmpty = () => {};
+    w.renderRoutines();
+
+    const railEntry = (nav) => doc.querySelector(`.nav-item[data-nav="${nav}"]`);
+    railEntry('routines').classList.add('active');
+    assert.strictEqual(railEntry('skills').classList.contains('active'), false,
+      'sanity: the reader is on Routines before the jump');
+
+    link(doc).click();
+
+    assert.strictEqual(railEntry('skills').classList.contains('active'), true,
+      'the jump landed on Skills with another entry lit');
+    assert.strictEqual(railEntry('routines').classList.contains('active'), false,
+      'the entry the reader left is still lit');
+    dom.window.close();
+  });
+
+  // The rail is set on THIS route and on no other. The other routes with the
+  // same defect belong to the navigation inventory, which exists so somebody
+  // enumerates rather than patches, and a card that quietly fixed them would
+  // remove the reason for it.
+  test('the route this card creates is the only one it fixes', () => {
+    // selectSkill is the shared function four other routes go through: the
+    // skills sidebar, the palette, the agent profile's skill card and the
+    // dispatch's pending-skill reply. Setting the nav state inside it would
+    // fix all four, which is the inventory card's job and not this one's.
+    assert.ok(!/setNavState\(/.test(SKILLS_SRC),
+      'views/skills.js now sets the nav state, which fixes four routes this card was told to leave');
+    assert.ok(!/switchNav\((['"])skills\1\)/.test(SKILLS_SRC),
+      'views/skills.js now routes to its own section, which is the same fix by another name');
+  });
+});

@@ -213,6 +213,7 @@ const MANIFEST = {
     "routinesAskDelete",
     "routinesCancelDelete",
     "routinesConfirmDelete",
+    "routinesOpenSkill",
     "routinesSetPaused",
   ],
   "settings.js": [

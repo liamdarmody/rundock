@@ -474,9 +474,15 @@ const MUTATIONS = [
     '  renderSkillsSidebar(skills);\n',
     '  document.querySelector(\'.nav-item[data-nav="skills"]\').style.display = skills.length ? \'\' : \'none\';\n'
     + '  renderSkillsSidebar(skills);\n'],
+  // The sentence is composed rather than escaped as one blob now, so escaping
+  // is watched on both of the roads it takes: the plain sentence and the
+  // pieces the link is built from.
   [VIEW, 'a routine name reaches the page as text, not as markup',
-    '`<div class="rr-sentence">${esc(sentence)}</div>',
-    '`<div class="rr-sentence">${sentence}</div>'],
+    '  if (!routineSkill(row.parts.name)) return esc(row.sentence);',
+    '  if (!routineSkill(row.parts.name)) return row.sentence;'],
+  [VIEW, 'a routine name reaches the link as text, not as markup',
+    '${esc(row.parts.name)}</button>',
+    '${row.parts.name}</button>'],
 
   // ===== THE TWO CONTROLS =====
   // The byte check in the delete handler is a backstop against a WRITER that
@@ -514,6 +520,30 @@ const MUTATIONS = [
   [MODEL, 'the caller keeps the roster order the namesake count was taken over',
     '    return list.slice().sort((a, b) => {',
     '    return list.sort((a, b) => {'],
+  // ===== THE SKILL NAME AS A DESTINATION =====
+  // The row outlives the skill it names, because the two live in different
+  // files. Linking unconditionally offers a page for something that is gone.
+  [VIEW, 'the name is a link only where the skill it names still exists',
+    '  if (!routineSkill(row.parts.name)) return esc(row.sentence);',
+    ''],
+  // The sentence is composed from the model's pieces, each escaped alone. Going
+  // back to matching the name inside the assembled string is the tidy-looking
+  // change that puts user-written text through markup twice.
+  [VIEW, 'the pieces are escaped separately rather than the assembled sentence being cut up',
+    '  return esc(row.parts.lead)',
+    '  return esc(row.sentence).replace(esc(row.parts.name), '],
+  [VIEW, 'the jump sets the rail as well as the pane',
+    "  if (typeof switchNav === 'function') switchNav('skills');",
+    ''],
+  [VIEW, 'the skill is resolved again at press time rather than assumed to still be there',
+    '  if (!skill) return;',
+    ''],
+  [MODEL, 'the sentence is built from the pieces rather than beside them',
+    '    return parts ? `${parts.lead}${parts.name}` : null;',
+    "    return parts ? `${parts.lead}, run: ${parts.name}` : null;"],
+  [MODEL, 'the lead carries the space that separates it from the name',
+    '    return { lead: `${words}, run: `, name: name };',
+    '    return { lead: `${words}, run:`, name: name };'],
 ];
 
 // The reporter is named explicitly rather than left to the default, which

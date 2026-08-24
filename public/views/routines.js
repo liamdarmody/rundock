@@ -122,6 +122,51 @@ function iconButton(action, label, paths, onclick, danger) {
 }
 
 /**
+ * The skill a routine names, or nothing.
+ *
+ * A ROUTINE CAN NAME A SKILL THAT NO LONGER EXISTS. The routine is written
+ * into an agent's file and the skill is declared somewhere else entirely, so
+ * deleting the skill leaves the routine naming it. That is not a broken row:
+ * the routine is still real and still scheduled, so it keeps its sentence and
+ * loses only the link.
+ *
+ * The list is read through the same global the empty state reads, and an
+ * unarrived list resolves nothing rather than guessing, so the sentence is
+ * plain for the beat before the reply lands and reachable after it.
+ */
+function routineSkill(name) {
+  const list = typeof skills !== 'undefined' && skills ? skills : [];
+  return list.filter(s => s && s.name === name)[0] || null;
+}
+
+/**
+ * The row's sentence, with the skill name reachable where the skill exists.
+ *
+ * THE NAME IS PUT IN ITS OWN ELEMENT RATHER THAN FOUND AGAIN IN THE MARKUP.
+ * The model hands over the sentence in pieces, each escaped on its own, so a
+ * routine called `<img onerror=...>` or one whose name happens to read like
+ * the rest of the sentence cannot reach the page as anything but text.
+ *
+ * ONLY THE NAME IS THE LINK. The schedule is a fact about the routine and
+ * leads nowhere, and underlining the whole sentence would say the row itself
+ * is a destination, which it is not.
+ *
+ * THE HANDLER TRAVELS BY POSITION, like every other control on this row and
+ * for the same reason: a skill id is user-adjacent text and an identifier
+ * built out of it has to be escaped into an attribute and unescaped out again.
+ */
+function sentenceHtml(row, fallbackName, index, withActions) {
+  if (!row.parts) return esc(row.sentence || fallbackName);
+  // The delete confirmation draws a row to say which routine is about to go.
+  // It offers nothing, and a link is an offer.
+  if (!withActions) return esc(row.sentence);
+  if (!routineSkill(row.parts.name)) return esc(row.sentence);
+  return esc(row.parts.lead)
+    + `<button class="rr-skill-link" type="button" data-routines-action="open-skill"`
+    + ` onclick="routinesOpenSkill(${index})">${esc(row.parts.name)}</button>`;
+}
+
+/**
  * One row, in whichever of the two shapes its history earns.
  *
  * `withActions` is false in the delete confirmation, where the row is there to
@@ -150,7 +195,7 @@ function rowHtml(entry, index, withActions) {
   // A schedule the editor never offered has no plain words. The routine is
   // still real and still listed, so it reads as its own name rather than as a
   // sentence the product cannot actually assemble.
-  const sentence = row.sentence || r.name;
+  const sentence = sentenceHtml(row, r.name, index, withActions);
   const sep = '<span class="sep">&middot;</span>';
   const nextRun = row.nextRun
     ? `<span class="${row.nextRun.className}">${esc(row.nextRun.text)}</span>`
@@ -162,7 +207,7 @@ function rowHtml(entry, index, withActions) {
   // on the meta line and the row is one line tall.
   if (!row.status && nextRun) meta += `${sep}${nextRun}`;
 
-  let body = `<div class="rr-sentence">${esc(sentence)}</div><div class="rr-meta">${meta}</div>`;
+  let body = `<div class="rr-sentence">${sentence}</div><div class="rr-meta">${meta}</div>`;
   // Revision 7's second line. Both facts, together, because they answer the
   // one question a reader has after a miss or a failure: did it recover, and
   // when does it try again.
@@ -328,6 +373,34 @@ function routinesActionCleared() {
   pendingProblem = null;
 }
 
+/**
+ * Open the skill a row names.
+ *
+ * THE RAIL IS SET HERE, ON THIS ROUTE, AND ON NO OTHER. `selectSkill` shows
+ * the skills view without touching the nav state, so every route into Skills
+ * that is not the rail leaves the previous icon lit, and a reader who jumps
+ * from here would be looking at Skills with Routines still highlighted. This
+ * route is the one this control creates, so it is the one fixed here.
+ *
+ * The other routes with the same defect are left exactly as they are. They
+ * belong to the navigation inventory, which exists so that somebody
+ * enumerates every destination and settles the rule once, rather than patching
+ * the ones that happen to have been noticed. Five have been noticed; patching
+ * them here would leave the same defect on every route nobody has listed yet,
+ * and would remove the reason for the enumeration.
+ *
+ * Resolved again at press time rather than captured when the row was drawn: a
+ * skill can be deleted between a render and a click, and a stale id would open
+ * a page for something that is gone.
+ */
+function routinesOpenSkill(index) {
+  const entry = allRoutines()[index];
+  const skill = entry && routineSkill(entry.routine.name);
+  if (!skill) return;
+  if (typeof switchNav === 'function') switchNav('skills');
+  if (typeof selectSkill === 'function') selectSkill(skill.id);
+}
+
 function routinesAskDelete(index) {
   pendingProblem = null;
   pendingDelete = index;
@@ -364,6 +437,7 @@ function routinesSetPaused(index, paused) {
 
 return {
   renderRoutines, routinesAskDelete, routinesCancelDelete, routinesConfirmDelete, routinesSetPaused,
+  routinesOpenSkill,
   routinesActionFailed, routinesActionCleared,
 };
 }));

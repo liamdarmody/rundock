@@ -627,3 +627,51 @@ describe('the order the list is read in', () => {
     }
   });
 });
+
+describe('the sentence in the pieces the view composes it from', () => {
+  const INPUT = { schedule: 'every day at 07:00', name: 'Compile the ops summary' };
+
+  // AC-B4. Every word of this sentence is asserted here, on the model, and not
+  // on the markup a view happens to produce from it.
+  test('the pieces carry the schedule and the skill name, and nothing else', () => {
+    assert.deepStrictEqual(m.sentenceParts(INPUT),
+      { lead: 'Every day at 7:00am, run: ', name: 'Compile the ops summary' });
+  });
+
+  // The two cannot say different things, because one is built from the other.
+  test('the pieces concatenate to exactly the sentence', () => {
+    const parts = m.sentenceParts(INPUT);
+    assert.strictEqual(parts.lead + parts.name, m.routineSentence(INPUT));
+    assert.strictEqual(m.routineSentence(INPUT), 'Every day at 7:00am, run: Compile the ops summary');
+  });
+
+  // The lead owns the space, so a caller that puts the name in its own element
+  // does not have to invent one and cannot leave the two words joined.
+  test('the space before the name belongs to the lead', () => {
+    assert.match(m.sentenceParts(INPUT).lead, / $/);
+    assert.ok(!/^\s/.test(m.sentenceParts(INPUT).name));
+  });
+
+  // A schedule the editor never offered assembles into nothing rather than
+  // into a sentence that reads as though the product understood it, and the
+  // pieces answer the same way the whole sentence does.
+  test('a schedule with no plain words yields no pieces', () => {
+    assert.strictEqual(m.sentenceParts({ schedule: 'every fortnight at 07:00', name: 'A skill' }), null);
+    assert.strictEqual(m.routineSentence({ schedule: 'every fortnight at 07:00', name: 'A skill' }), null);
+  });
+
+  test('a routine with no name yields no pieces', () => {
+    assert.strictEqual(m.sentenceParts({ schedule: 'every day at 07:00' }), null);
+  });
+
+  test('the row carries the pieces beside the sentence', () => {
+    const row = m.row({ ...INPUT, runOn: 'local', agentName: 'Piper' });
+    assert.strictEqual(row.parts.lead + row.parts.name, row.sentence);
+  });
+
+  test('a row that cannot assemble a sentence carries no pieces either', () => {
+    const row = m.row({ schedule: 'every fortnight at 07:00', name: 'A skill', runOn: 'local' });
+    assert.strictEqual(row.sentence, null);
+    assert.strictEqual(row.parts, null);
+  });
+});
