@@ -27,7 +27,38 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 
+const fs = require('node:fs');
+const path = require('node:path');
+
 const model = require('../../public/run-detail-model.js');
+
+const ROOT = path.join(__dirname, '..', '..');
+const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf-8');
+
+/**
+ * Every reason code the WRITERS can actually emit, read out of their source.
+ *
+ * WHY THIS IS DERIVED RATHER THAN TYPED. The list below used to be nine
+ * strings typed by hand from a comment naming three writers, with nothing
+ * comparing the two. A writer that gained a tenth code would have degraded
+ * silently: the screen would show the catch-all, and the one thing a user has
+ * to act on, WHICH observation failed, would be lost with nothing going red.
+ *
+ * Three shapes, because the writers use three. `unknown('x')` is the
+ * transcript reader's helper, `reason: 'x'` is how both files return one
+ * inline, and `filesReason: 'x'` is what the scheduler stamps onto a record it
+ * opens. A fourth shape would be missed, which is why the count is asserted
+ * against a floor below: a scan that silently matches nothing is the failure
+ * this file is otherwise built to catch.
+ */
+function reasonsTheWritersEmit() {
+  const found = new Set();
+  for (const src of [read('lib', 'runtime', 'session-transcript.js'), read('lib', 'scheduler.js')]) {
+    for (const m of src.matchAll(/unknown\('([\w-]+)'\)/g)) found.add(m[1]);
+    for (const m of src.matchAll(/\b(?:files)?[Rr]eason(?:: | = )[^,;\n]*?'([\w-]+)'/g)) found.add(m[1]);
+  }
+  return found;
+}
 
 // Every status a record can carry, which is the whole of this store's
 // vocabulary, taken from lib/scheduler.js's own statement of it. `interrupted`
@@ -38,6 +69,10 @@ const STATUSES = ['running', 'succeeded', 'failed', 'interrupted'];
 // Every reason a file list can be unknown. Six come from the transcript
 // reader, one ('running') from the scheduler itself, and the last two only
 // from the progress read. All nine reach this screen through the record.
+//
+// TYPED HERE AND CHECKED AGAINST THE WRITERS, in "every reason the writers can
+// emit has words on this screen" below, so this list cannot drift away from
+// what the product actually produces.
 const REASONS = ['running', 'no-session', 'no-transcript', 'unreadable',
   'unrecognised', 'unresolved', 'delegated', 'no-record', 'no-activity'];
 
@@ -156,6 +191,29 @@ describe('unknown and empty are two different answers', () => {
       assert.ok(!said.has(words), `${reason} says the same thing as ${said.get(words)}`);
       said.set(words, reason);
     }
+  });
+
+  test('every reason the writers can emit has words on this screen', () => {
+    const emitted = reasonsTheWritersEmit();
+    // A SCAN THAT MATCHES NOTHING WOULD PASS EVERY ASSERTION BELOW. The floor
+    // is what makes this check able to fail if the writers move to a shape
+    // these patterns do not read.
+    assert.ok(emitted.size >= 9,
+      `only ${emitted.size} reason codes were found in the writers, so this check is reading `
+      + 'less of them than it did when it was written. Fix the patterns rather than the floor.');
+    for (const code of emitted) {
+      assert.ok(Object.prototype.hasOwnProperty.call(model.FILES_UNKNOWN_WORDS, code),
+        `a writer emits "${code}" and this screen has no words for it, so a user meeting it is `
+        + 'told only that the reason is unrecognised, which loses the one fact they can act on');
+    }
+    // And the other way, so a code that stops being emitted does not sit here
+    // forever as words nobody can reach.
+    for (const code of Object.keys(model.FILES_UNKNOWN_WORDS)) {
+      assert.ok(emitted.has(code),
+        `this screen carries words for "${code}" and no writer emits it any more`);
+    }
+    // The hand-written list the rest of this file drives is the same set.
+    assert.deepStrictEqual([...emitted].sort(), [...REASONS].sort());
   });
 
   test('a reason this version has never seen still reads as plain words', () => {

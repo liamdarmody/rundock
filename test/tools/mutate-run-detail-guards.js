@@ -74,6 +74,18 @@ const HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'runs.js')
 // because that is where the claim is made and where a record the reader let
 // through would throw before anything was sent.
 const READER = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/run-detail-transport.test.js' };
+// The writer that decides what a record calls its agent, watched by the file
+// that drives a real run through the real scheduler and then asks the handler
+// for it with the id the ROSTER carries. Watched from a unit suite, this could
+// be changed with everything green: every unit fixture builds both sides of
+// the join itself, so the two identifiers are the same string and a join on
+// either looks identical.
+const WRITER = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/integration/run-detail-join.test.js' };
+// The row's half of the same join, watched by the file that presses the row.
+const ROW_JOIN = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/run-detail-doors.test.js' };
+// The words for every reason a file list can be unknown, watched by the file
+// that reads the writers' own source and compares the two sets.
+const REASONS = { src: path.join(ROOT, 'public', 'run-detail-model.js'), suite: 'test/unit/run-detail-model.test.js' };
 // The way in and the way back, watched by the file that presses them rather
 // than by the file that calls what they call.
 const ROUTINES_VIEW = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/run-detail-doors.test.js' };
@@ -118,6 +130,23 @@ const MUTATIONS = [
   [READER, 'the reader admits only records a caller can dereference',
     "      if (record && typeof record.id === 'string') records.push(record);",
     '      records.push(record);'],
+  // ===== THE JOIN BETWEEN TWO WRITERS =====
+  // A record names its agent with the id the ROSTER hands out, not with the
+  // name in the agent's frontmatter and not with its filename. Those differ on
+  // every orchestrator, including the owner's own workspace, where the file is
+  // team-lead.md and the roster id is 'default'.
+  [WRITER, 'a record names its agent with the id the roster hands out',
+    '    agent: agent.id,',
+    '    agent: agent.name,'],
+  [ROW_JOIN, 'the row asks with the id the roster gave it',
+    'openRunDetail(entry.agent.id, entry.routine.name)',
+    'openRunDetail(entry.agent.name, entry.routine.name)'],
+  // The words for a reason are compared against what the writers emit, so a
+  // code that gains no words fails here instead of degrading to the catch-all
+  // on screen, where the one fact a user can act on is lost.
+  [REASONS, 'the reasons on this screen are checked against the reasons the writers emit',
+    "    'no-activity': 'Nothing this run did has been recorded yet, so what it has changed cannot '\n      + 'be read.',",
+    ''],
   [HANDLER, 'the record crosses the wire whole rather than rebuilt from named fields',
     '    run,\n  }));',
     '    run: run ? { ...run, files: run.files || [] } : null,\n  }));'],
@@ -213,7 +242,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [MODEL, MODEL_VIEW, VIEW, VIEW_DOORS, STYLES, HANDLER, READER, ROUTINES_VIEW, APP];
+  const targets = [MODEL, MODEL_VIEW, VIEW, VIEW_DOORS, STYLES, HANDLER, READER, WRITER, REASONS, ROUTINES_VIEW, ROW_JOIN, APP];
   const originals = new Map();
   for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];
