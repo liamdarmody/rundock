@@ -188,25 +188,6 @@ function formatTimeAgo(input) {
   return `${Math.floor(diff/86400)}d ago`;
 }
 
-function formatScheduleShort(schedule) {
-  if (!schedule) return '';
-  const s = schedule.toLowerCase();
-  const dailyMatch = s.match(/every day at (\d{2}):(\d{2})/);
-  if (dailyMatch) {
-    const h = parseInt(dailyMatch[1]);
-    const m = dailyMatch[2];
-    return `${h === 0 ? 12 : (h > 12 ? h - 12 : h)}:${m} ${h >= 12 ? 'PM' : 'AM'}`;
-  }
-  const weeklyMatch = s.match(/every (\w+) at (\d{2}):(\d{2})/);
-  if (weeklyMatch) {
-    const day = weeklyMatch[1].charAt(0).toUpperCase() + weeklyMatch[1].slice(1, 3);
-    const h = parseInt(weeklyMatch[2]);
-    const m = weeklyMatch[3];
-    return `${day} ${h === 0 ? 12 : (h > 12 ? h - 12 : h)}:${m} ${h >= 12 ? 'PM' : 'AM'}`;
-  }
-  return schedule;
-}
-
 function getTeamAgents() { return agents.filter(a => a.status === 'onTeam' && a.type !== 'platform'); }
 function getPlatformAgents() { return agents.filter(a => a.status === 'onTeam' && a.type === 'platform'); }
 function getGuide() { return agents.find(a => a.type === 'platform'); }
@@ -248,7 +229,7 @@ function handle(d) {
       if (currentView === 'settings') renderSettingsSection('workspace');
       break;
     case 'needs_workspace': showView('workspace'); break;
-    case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesSidebar(); renderRoutines(); renderConvoList(); break;
+    case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutines(); renderConvoList(); break;
     // renderRoutines as well as renderSkills: the routines empty state asks
     // whether the workspace has a skill, so the reply that answers that
     // question is the reply that has to redraw it. Without this the list sits
@@ -845,7 +826,7 @@ function addSystemMsgToConvo(text, convoId, isError = true) {
 // ===== 5. AGENT LIST & SIDEBAR =====
 // Moved to public/views/team.js (Foundations view module):
 // getWorkingAgentIds, renderAgentList, renderConvoEmptyAgents,
-// renderRoutinesSidebar, addToTeam. All resolve via the module's window
+// addToTeam. All resolve via the module's window
 // republication.
 
 // ===== 6. ORG CHART =====
@@ -1039,7 +1020,7 @@ function switchNav(nav) {
   else if(nav==='skills') { showView('skills'); renderSkillsIfEmpty(); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } }
   else if(nav==='conversations') { if(activeConversation) { showView('chat'); if(unread.clearConvo(activeConversation.id)) { updateUnreadBadge(); renderConvoList(); } } else { const target = pickDefaultConversation(); if(target) { openConversation(target.id); } else { newConversation(); } } }
   else if(nav==='team') { showView('home'); renderOrgChart(); }
-  else if(nav==='routines') { showView('routines'); renderRoutines(); }
+  else if(nav==='routines') { showRoutinesForAgent(null); }
 }
 function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings','routine-editor','routines','run-detail'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }
 function goHome() { discardIfEmpty(); activeConversation=null; switchNav('conversations'); }

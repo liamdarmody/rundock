@@ -96,6 +96,34 @@ const APP_SKILLS = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit
 // The two openers, watched by the file that presses them rather than by the
 // file that calls what they draw.
 const APP_OPENER = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routines-view.test.js' };
+// The team panel, watched by the file that presses it. The rule this card
+// leaves behind is "the panel carries the roster and nothing else", which is a
+// rule about absence, so these mutations PUT SOMETHING BACK rather than take a
+// guard away: an absence nobody can break is an absence nobody is checking.
+const TEAM_PANEL = { src: path.join(ROOT, 'public', 'views', 'team.js'), suite: 'test/unit/team-sidebar.test.js' };
+const INDEX_SWEEP = { src: path.join(ROOT, 'public', 'index.html'), suite: 'test/unit/team-sidebar.test.js' };
+// The sentences that name the guide, and the two views that show them. They
+// sit beside the skills empty-state guards above rather than in an instrument
+// of their own, because they are the same class of rule and fail the same way:
+// copy that names an agent through a slot, on surfaces whose default workspace
+// happens to make a hard-coded name correct, which is precisely the fault a
+// green suite cannot see.
+const GUIDE_COPY_MOD = { src: path.join(ROOT, 'public', 'guide-copy.js'), suite: 'test/unit/guide-name.test.js' };
+const TEAM_COPY = { src: path.join(ROOT, 'public', 'views', 'team.js'), suite: 'test/unit/guide-name.test.js' };
+const PROFILE_COPY = { src: path.join(ROOT, 'public', 'views', 'profile.js'), suite: 'test/unit/guide-name.test.js' };
+// The agent profile's three boxes. Two targets on one file, because a guard is
+// only proved by the suite that presses it: what the box SAYS is pressed by the
+// profile's own file, and where a row GOES is pressed by the routes
+// enumeration. Pointing either at the other's suite would be a mutation that
+// cannot turn red wearing the shape of one that can.
+const PROFILE_BOXES = { src: path.join(ROOT, 'public', 'views', 'profile.js'), suite: 'test/unit/profile-boxes.test.js' };
+const PROFILE_ROUTE = { src: path.join(ROOT, 'public', 'views', 'profile.js'), suite: 'test/unit/routines-view-doors.test.js' };
+// The team sidebar as a DOOR rather than as a panel, watched by the file that
+// enumerates every way into the editor.
+const TEAM_DOOR = { src: path.join(ROOT, 'public', 'views', 'team.js'), suite: 'test/unit/routine-editor-doors.test.js' };
+// The scope, on both sides of it: the filter that applies one and the arm that
+// clears it. Both are watched by the file that presses the two routes.
+const VIEW_SCOPE = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/routines-view-doors.test.js' };
 // The handlers behind the row's two controls, and the data model they write
 // through.
 const HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/unit/routine-actions.test.js' };
@@ -216,13 +244,116 @@ const MUTATIONS = [
     "    const message = input && typeof input.message === 'string' ? input.message.trim() : '';\n    return message || ACTION_PROBLEM;",
     '    return ACTION_PROBLEM;'],
 
+  // ===== THE SENTENCES THAT NAME THE GUIDE =====
+  //
+  // Each of the four view mutations writes the DEFAULT NAME back in, which is
+  // the defect in its exact form: it type-checks, it reads correctly, and on
+  // the shipped workspace it is even true. Only a workspace whose guide is
+  // called something else can tell, which is why the suite these point at
+  // builds one.
+  [GUIDE_COPY_MOD, 'the slot is substituted rather than left in the sentence',
+    "    return line ? line.replace('{agent}', name) : null;",
+    '    return line || null;'],
+  [GUIDE_COPY_MOD, 'a workspace with no guide gets the line that names none',
+    '    if (!name) return GUIDE_COPY[`${key}NoGuide`] || null;',
+    '    if (!name) return GUIDE_COPY[key] || null;'],
+  [GUIDE_COPY_MOD, 'no sentence carries a pronoun for the agent it names',
+    "    fresh: 'Fresh workspace. {agent} can help you set up your agent team from scratch.',",
+    "    fresh: 'Fresh workspace. {agent} can set up your agent team, and he starts from scratch.',"],
+  [TEAM_COPY, 'the sidebar names the guide the workspace actually has',
+    "guideLine('sidebar', guide.displayName)", "guideLine('sidebar', 'Doc')"],
+  [TEAM_COPY, 'the conversations pane names the guide the workspace actually has',
+    "guideLine('conversations', guide.displayName)", "guideLine('conversations', 'Doc')"],
+  [TEAM_COPY, 'the fresh-workspace state names the guide the workspace actually has',
+    "guideLine('fresh', guide && guide.displayName)", "guideLine('fresh', 'Doc')"],
+  [PROFILE_COPY, 'the Setup button names the guide it opens a conversation with',
+    "guideCopy.guideLine('setup', getGuide()?.displayName)", "guideCopy.guideLine('setup', 'Doc')"],
+
+  // ===== THE AGENT PROFILE'S ROUTINES BOX =====
+  //
+  // THE FIRST OF THESE IS THE DEFECT IN ITS EXACT FORM. It is the line that
+  // shipped, it reads as a helpful detail, and it routes around the three-tone
+  // ruling entirely. It is written back here so that the ruling's absence from
+  // this surface cannot return quietly.
+  [PROFILE_BOXES, 'no run outcome reaches the agent profile',
+    "          <span style=\"font-size:var(--caption);color:var(--text-2)\">${esc(when)}</span>",
+    "          <span style=\"font-size:var(--caption);color:var(--text-2)\">${esc(when)}</span>\n"
+    + "          <span style=\"font-size:var(--caption)\">${r.state ? `Last run: ${formatTimeAgo(r.state.lastRun)} (${r.state.status})` : ''}</span>"],
+  [PROFILE_BOXES, 'a schedule reads in the words the routines view uses',
+    '        const when = (routinesModel && routinesModel.scheduleWords(r.schedule)) || r.schedule;',
+    '        const when = r.schedule;'],
+  // The other direction. The model has plain words only for the schedules the
+  // editor offers, so a routine written by hand has none, and without the
+  // fallback its row shows an empty line where its schedule should be.
+  [PROFILE_BOXES, 'a schedule the model cannot translate falls back to the stored string',
+    '        const when = (routinesModel && routinesModel.scheduleWords(r.schedule)) || r.schedule;',
+    '        const when = routinesModel && routinesModel.scheduleWords(r.schedule);'],
+  [PROFILE_BOXES, 'the Routines box is there whether or not the agent has any',
+    '    h+=`<div class="profile-card"><div class="profile-card-section"><div class="profile-section-label">Routines</div>`;\n    if(hasRoutines) {',
+    '    if (!hasRoutines) { h+=\'\'; } else {\n    h+=`<div class="profile-card"><div class="profile-card-section"><div class="profile-section-label">Routines</div>`;\n    if(hasRoutines) {'],
+  [PROFILE_BOXES, 'Add routine goes once the agent has a routine',
+    '    if(hasRoutines) {\n      for(const r of a.routines) {',
+    '    if(false) {\n      for(const r of a.routines) {'],
+  [PROFILE_BOXES, 'no pause or delete is offered on the profile',
+    '          <span style="font-weight:600">${esc(r.name)}</span>',
+    '          <span style="font-weight:600">${esc(r.name)}</span>\n'
+    + '          <button type="button" data-routines-action="pause">Pause</button>'],
+
+  // Where a row goes, watched by the file that presses the route.
+  [PROFILE_ROUTE, 'a routine row carries the agent whose profile it is on',
+    'onclick="showRoutinesForAgent(\'${esc(a.id)}\')"',
+    'onclick="showRoutinesForAgent(null)"'],
+  [VIEW_SCOPE, 'the list is filtered to the agent it was opened for',
+    '    if (scopeAgentId && agent.id !== scopeAgentId) continue;\n',
+    ''],
+  [VIEW_SCOPE, 'a route that names no agent clears the scope rather than keeping the last one',
+    '  scopeAgentId = agentId || null;',
+    '  if (agentId) scopeAgentId = agentId;'],
+  // A DESTRUCTIVE ACTION ADDRESSED BY POSITION, IN A LIST THE SCOPE REMAPS.
+  // Removing this line leaves a confirmation the reader never opened on the
+  // page, aimed at whichever routine now sits at that index, and confirming it
+  // deletes that one.
+  [VIEW_SCOPE, 'arriving on the list clears a confirmation opened under another scope',
+    '  pendingDelete = null;\n  pendingProblem = null;\n  scopeAgentId = agentId || null;',
+    '  scopeAgentId = agentId || null;'],
+  [VIEW_SCOPE, 'a filter with nothing left to show is dropped rather than drawn empty',
+    '  if (scopeAgentId && list.length === 0) {\n    scopeAgentId = null;\n    list = allRoutines();\n  }\n',
+    ''],
+
+  // ===== WHAT THE TEAM PANEL NO LONGER CARRIES =====
+  //
+  // The listing is gone and the rule left behind is an absence. Each of these
+  // writes the absent thing back, in the shape it had, and requires the panel's
+  // own file to notice.
+  [TEAM_PANEL, 'the team panel carries the roster and nothing beside it',
+    "  document.getElementById('agent-list').innerHTML = h;",
+    "  document.getElementById('agent-list').innerHTML = h;\n"
+    + "  document.getElementById('sidebar-team').insertAdjacentHTML('beforeend',"
+    + " '<div class=\"routine-item\">Compile the ops summary, 7:00 AM</div>');"],
+  [TEAM_PANEL, 'an agent row says how the agent is, never how many routines it has',
+    "  if (onTeam.length) {\n    for (const a of onTeam) {\n"
+    + "      const isWorking = workingIds.has(a.id);\n"
+    + "      const last = agentLastActivity[a.id];\n"
+    + "      const statusText = isWorking ? 'working' : (last ? formatTimeAgo(last.time) : 'idle');",
+    "  if (onTeam.length) {\n    for (const a of onTeam) {\n"
+    + "      const isWorking = workingIds.has(a.id);\n"
+    + "      const last = agentLastActivity[a.id];\n"
+    + "      const statusText = `${(a.routines || []).length} routines`;"],
+  [TEAM_DOOR, 'the team sidebar renders no way into the editor',
+    "  document.getElementById('agent-list').innerHTML = h;",
+    "  h += '<button data-sidebar-action=\"add-routine\" onclick=\"addRoutine()\">Add</button>';\n"
+    + "  document.getElementById('agent-list').innerHTML = h;"],
+  [INDEX_SWEEP, 'the element the listing rendered into went with the listing',
+    '      <div class="agent-status-list" id="agent-list"></div>\n',
+    '      <div class="agent-status-list" id="agent-list"></div>\n      <div id="sidebar-routines"></div>\n'],
+
   // ===== WHO DRAWS THIS LIST, AND HOW A READER ARRIVES AT IT =====
   [APP, 'the arriving roster redraws the list',
-    'renderRoutinesSidebar(); renderRoutines(); renderConvoList();',
-    'renderRoutinesSidebar(); renderConvoList();'],
+    'renderOrgChart(); renderRoutines(); renderConvoList();',
+    'renderOrgChart(); renderConvoList();'],
   [APP, 'the rail entry draws something into the view it shows',
-    "  else if(nav==='routines') { showView('routines'); renderRoutines(); }",
-    "  else if(nav==='routines') { showView('routines'); }"],
+    "  else if(nav==='routines') { showRoutinesForAgent(null); }",
+    "  else if(nav==='routines') { }"],
   [APP, 'the routines section reveals a sidebar the reader can see',
     "const SIDEBAR_FOR = { routines: 'team' };",
     'const SIDEBAR_FOR = {};'],
@@ -423,8 +554,8 @@ const MUTATIONS = [
     '  if (detail && detail.firstElementChild) return false;\n',
     ''],
   [APP_OPENER, 'pressing the Routines entry draws into the pane it reveals',
-    "  else if(nav==='routines') { showView('routines'); renderRoutines(); }",
-    "  else if(nav==='routines') { showView('routines'); }"],
+    "  else if(nav==='routines') { showRoutinesForAgent(null); }",
+    "  else if(nav==='routines') { }"],
 
   // ===== THE SKILLS PANE =====
   // It had none of this until now: renderSkills returned before rendering, so
@@ -467,8 +598,8 @@ const MUTATIONS = [
     '<button class="nav-item" data-nav="routines" onclick="switchNav(\'routines\')" data-tooltip="Routines"'
     + ' style="display:none">'],
   [VIEW_RAIL, 'the routines render leaves the rail alone',
-    '  const list = allRoutines();\n',
-    '  const list = allRoutines();\n'
+    '  let list = allRoutines();\n',
+    '  let list = allRoutines();\n'
     + '  document.querySelector(\'.nav-item[data-nav="routines"]\').style.display = list.length ? \'\' : \'none\';\n'],
   [SKILLS_VIEW_RAIL, 'the skills render leaves the rail alone',
     '  renderSkillsSidebar(skills);\n',
@@ -533,7 +664,8 @@ function redTests(suite) {
 function run() {
   const targets = [MODEL, VIEW, VIEW_E2E, VIEW_REPLY, VIEW_RAIL, STYLES, SCHEDULER, END_TO_END,
     DISCOVERY, HANDLER, ROUTINES, APP, APP_SKILLS, APP_OPENER, INDEX, INDEX_RAIL, SKILLS_MODEL, SKILLS_VIEW,
-    SKILLS_VIEW_RAIL];
+    SKILLS_VIEW_RAIL, TEAM_PANEL, INDEX_SWEEP, PROFILE_BOXES, PROFILE_ROUTE, VIEW_SCOPE,
+    GUIDE_COPY_MOD, TEAM_COPY, PROFILE_COPY, TEAM_DOOR];
   const originals = new Map();
   for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];

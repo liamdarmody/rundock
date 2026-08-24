@@ -215,6 +215,7 @@ const MANIFEST = {
     "routinesConfirmDelete",
     "routinesSetPaused",
     "routinesViewLastRun",
+    "showRoutinesForAgent",
   ],
   "run-detail.js": [
     "openRunDetail",
@@ -246,7 +247,6 @@ const MANIFEST = {
     "renderAgentList",
     "renderConvoEmptyAgents",
     "renderOrgChart",
-    "renderRoutinesSidebar",
   ],};
 
 function viewModules() {
