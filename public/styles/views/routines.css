@@ -16,8 +16,10 @@
    overnight teaches its user to stop trusting amber. */
 
 .routines-content { max-width: 640px; padding: 32px; }
-.routines-lead { margin-bottom: 18px; }
-.routines-empty-lead { margin-bottom: 24px; }
+/* The lead sentence, now the header's subtitle rather than a paragraph below
+   it. The same role the Skills pane's state line plays in the same block, and
+   the same size: this card moved a component and moved no type size. */
+.routines-subtitle { font-size: var(--body); color: var(--text-2); }
 
 /* The list */
 .routine-table { display: flex; flex-direction: column; gap: 10px; }

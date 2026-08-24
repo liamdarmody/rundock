@@ -1192,3 +1192,173 @@ describe('the skill named on a row is reachable', () => {
       'views/skills.js now routes to its own section, which is the same fix by another name');
   });
 });
+
+describe('the header is the skills view\'s header', () => {
+  // The stylesheets that decide what a heading LOOKS like, loaded into the
+  // document so the size question is answered by what the page resolves rather
+  // than by reading a rule out of a file.
+  const PROFILE_CSS = read('public', 'styles', 'views', 'profile.css');
+  const SETTINGS_CSS = read('public', 'styles', 'views', 'settings.css');
+  const SKILLS_CSS = read('public', 'styles', 'views', 'skills.css');
+
+  // A document carrying the real page and the real stylesheets, with both
+  // views drawn into it, so the two headers can be compared as the browser
+  // resolves them rather than as two strings.
+  function styled(routines = FOUR_ROWS, opts = {}) {
+    const dom = new JSDOM('<!doctype html><html><head><style>'
+      + TOKENS_CSS + PROFILE_CSS + SETTINGS_CSS + SKILLS_CSS + ROUTINES_CSS
+      + '</style></head><body>' + pageParts()
+      // The heading this card replaces, in the same document, so "no type size
+      // changed" is a comparison rather than a claim.
+      + '<div class="settings-section-title" id="the-old-heading">Routines</div>'
+      + '</body></html>', { runScripts: 'dangerously' });
+    const w = dom.window;
+    w.eval(EDITOR_MODEL_SRC);
+    w.eval(SKILLS_MODEL_SRC);
+    w.eval(MODEL_SRC);
+    w.eval(VIEW_SRC);
+    w.eval(SKILLS_SRC);
+    w.agents = [{ id: 'piper', displayName: 'Piper', colour: '#E87A5A', icon: 'P', status: 'onTeam', routines }];
+    w.skills = opts.skills === undefined
+      ? [{ id: 'sk', name: 'Compile the ops summary', assignedAgents: [{ id: 'piper', name: 'Piper' }] }]
+      : opts.skills;
+    w.skillsLoaded = true;
+    w.currentSkillId = null;
+    w.currentView = 'skills';
+    w.getGuide = () => null;
+    w.esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    w.ws = { send: () => {} };
+    w.showView = () => {};
+    w.routinesNow = () => NOW;
+    w.Intl = { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'Europe/London' }) }) };
+    w.renderRoutines();
+    return { w, doc: w.document, dom };
+  }
+
+  const routinesHeader = (doc) => doc.querySelector('#routines-content .profile-header');
+  const skillsHeader = (doc) => doc.querySelector('#skill-detail-content .profile-header');
+
+  // AC-C1. The same component, and it is asserted as the same ELEMENTS rather
+  // than as a class name that happens to appear in both files.
+  test('the routines header is built from the same blocks the skills header is', () => {
+    const { doc, w, dom } = styled();
+    w.selectSkill('sk');
+    const shape = (header) => {
+      assert.ok(header, 'a header is missing');
+      return [...header.children].map(el => el.className || el.tagName.toLowerCase());
+    };
+    assert.deepStrictEqual(shape(routinesHeader(doc)), shape(skillsHeader(doc)));
+    assert.ok(routinesHeader(doc).querySelector('.profile-avatar.skill-avatar'),
+      'the glyph is not in the box the skills view puts its glyph in');
+    assert.ok(routinesHeader(doc).querySelector('.profile-name'));
+    dom.window.close();
+  });
+
+  // AC-C1, the other half: a clock rather than a bolt, and the clock is the
+  // one the rail already draws for this section rather than a second drawing
+  // of one.
+  test('the glyph is the clock the rail draws, and not the skills bolt', () => {
+    const { doc, w, dom } = styled();
+    w.selectSkill('sk');
+    const path = (header) => header.querySelector('.profile-avatar svg path').getAttribute('d');
+    const routinesGlyph = path(routinesHeader(doc));
+    assert.notStrictEqual(routinesGlyph, path(skillsHeader(doc)),
+      'the routines header still draws the skills bolt');
+
+    const railEntry = doc.querySelector('.nav-item[data-nav="routines"]');
+    const railClock = railEntry.querySelector('.icon-filled path').getAttribute('d');
+    assert.strictEqual(routinesGlyph.replace(/\s+/g, ' '), railClock.replace(/\s+/g, ' '),
+      'the header draws a second clock rather than the one the rail already draws');
+    dom.window.close();
+  });
+
+  // AC-C2, and it is the criterion the obvious change gets wrong. The heading
+  // this replaced is already var(--title) at weight 700, exactly as
+  // .profile-name is, so the size is correct today and must not move. Read off
+  // the page with the shipped stylesheets in it, so a rule added later that
+  // overrides either one changes this answer.
+  test('the heading resolves to the size and weight the old one did', () => {
+    const { doc, dom } = styled();
+    const style = (el) => {
+      const s = dom.window.getComputedStyle(el);
+      return { size: s.fontSize, weight: s.fontWeight };
+    };
+    const before = style(doc.getElementById('the-old-heading'));
+    const after = style(routinesHeader(doc).querySelector('.profile-name'));
+    assert.deepStrictEqual(after, before,
+      'this card moved a type size, and it was asked to move a component');
+    assert.strictEqual(before.size, 'var(--title)', 'sanity: the heading resolves from the token');
+    dom.window.close();
+  });
+
+  test('the two views resolve their headings to the same size and weight', () => {
+    const { doc, w, dom } = styled();
+    w.selectSkill('sk');
+    const style = (el) => {
+      const s = dom.window.getComputedStyle(el);
+      return { size: s.fontSize, weight: s.fontWeight };
+    };
+    assert.deepStrictEqual(style(routinesHeader(doc).querySelector('.profile-name')),
+      style(skillsHeader(doc).querySelector('.profile-name')));
+    dom.window.close();
+  });
+
+  // AC-C3 at the surface. Nothing sets the scope yet, so the page takes the
+  // unscoped sentence, and it is the locked one.
+  test('the subtitle under the title is the locked sentence', () => {
+    const { doc, dom } = styled();
+    const subtitle = routinesHeader(doc).querySelector('.routines-subtitle');
+    assert.ok(subtitle, 'the lead sentence did not move into the header');
+    assert.strictEqual(text(subtitle),
+      'Every scheduled skill across your team, and when it runs next.');
+    dom.window.close();
+  });
+
+  test('the sentence is in the header rather than in a paragraph below it', () => {
+    const { doc, dom } = styled();
+    const pane = doc.getElementById('routines-content');
+    assert.strictEqual(pane.querySelector('.settings-section-title'), null,
+      'the settings heading is still on a view that lists things');
+    assert.ok(routinesHeader(doc).contains(pane.querySelector('.routines-subtitle')));
+    dom.window.close();
+  });
+
+  // The empty pane heads itself the same way, with its own state line as the
+  // subtitle: an empty list is not every scheduled skill across the team.
+  test('the empty pane carries the same header, with its state line under it', () => {
+    const { doc, dom } = styled([], { skills: [] });
+    const header = routinesHeader(doc);
+    assert.ok(header, 'the empty pane lost the header');
+    assert.ok(header.querySelector('.profile-avatar.skill-avatar svg'));
+    assert.strictEqual(text(header.querySelector('.profile-name')), 'Routines');
+    assert.strictEqual(text(header.querySelector('.routines-subtitle')), 'No routines yet.');
+    dom.window.close();
+  });
+
+  // AC-C2 on the other half of the header, and the half a size is easiest to
+  // move on. The subtitle is a subtitle: it takes the body size the skills
+  // pane gives its own, and not the title size above it. Read off both
+  // rendered elements in one document, so moving either one fails this.
+  test('the subtitle resolves to the size the skills pane gives its own', () => {
+    const { doc, w, dom } = styled([], { skills: [] });
+    w.renderSkillsEmpty(false);
+    const size = (el) => {
+      assert.ok(el, 'an element this compares is not on the page');
+      return dom.window.getComputedStyle(el).fontSize;
+    };
+    const subtitle = size(routinesHeader(doc).querySelector('.routines-subtitle'));
+    assert.strictEqual(subtitle, size(doc.querySelector('#skill-detail-content .skills-empty-state')),
+      'the two panes give their subtitles different sizes, so they are not one component');
+    assert.notStrictEqual(subtitle, size(routinesHeader(doc).querySelector('.profile-name')),
+      'the subtitle is set at the title size, which is a type size this card was not asked to move');
+    dom.window.close();
+  });
+
+  test('the refusal still lands on the page whichever state the list is in', () => {
+    const { doc, w, dom } = styled();
+    w.routinesActionFailed({ message: 'Routine could not be paused.' });
+    assert.strictEqual(text(doc.querySelector('[data-routines-problem]')),
+      'Routine could not be paused.');
+    dom.window.close();
+  });
+});

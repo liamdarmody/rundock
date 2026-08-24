@@ -236,15 +236,61 @@ function rowHtml(entry, index, withActions) {
     + `<div class="rr-body">${body}</div>${actions}</div>`;
 }
 
-function headerHtml() {
+// The glyph this surface is known by: the clock the rail already draws for
+// Routines, so the entry and the page it opens are recognisably the same
+// place. Written here in the same box the Skills pane uses for its bolt, which
+// is what makes the two views one component rather than two that resemble each
+// other.
+const CLOCK_SVG = '<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" stroke="none">'
+  + '<path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 5v4.4l3.3 2a1 1 0 1 1-1 1.7l-3.8-2.3a1 1 0'
+  + ' 0 1-.5-.9V7a1 1 0 0 1 2 0z"/></svg>';
+
+/**
+ * The agent this list is scoped to, or nothing.
+ *
+ * THE SCOPE HAS NO PRODUCER YET. The list that sets it is the sidebar panel,
+ * which is separately carded, so this reads null on every path today and the
+ * header takes its unscoped sentence. It is read through the global rather
+ * than invented as a parameter so that the panel, when it lands, sets one
+ * thing and this follows, rather than the two agreeing by hand.
+ */
+function routinesScopeName() {
+  return typeof routinesScopeAgent !== 'undefined' && routinesScopeAgent
+    ? (routinesScopeAgent.displayName || routinesScopeAgent.name || null)
+    : null;
+}
+
+/**
+ * The header, which is the skills view's header with a clock in it.
+ *
+ * THE COMPONENT IS THE POINT OF THIS, and the type size is not. The heading
+ * this replaced was `.settings-section-title`, borrowed from Settings, and it
+ * is already `var(--title)` at weight 700, exactly as `.profile-name` is. So
+ * nothing here changes a size. What changes is that a view which LISTS things
+ * now heads itself the way every other view that lists things does, instead of
+ * the way the view that CONFIGURES things does.
+ *
+ * `subtitle` is passed in rather than resolved here because the empty pane's
+ * subtitle is its own state line, exactly as the Skills pane's is.
+ */
+function headerHtml(subtitle) {
   const model = routinesModel();
-  let h = `<div class="settings-section-title">${esc(model.LEAD.title)}</div>`;
+  let h = '<div class="profile-header">'
+    + `<div class="profile-avatar skill-avatar">${CLOCK_SVG}</div>`
+    + `<div><div class="profile-name">${esc(model.LEAD.title)}</div>`
+    + (subtitle ? `<div class="routines-subtitle">${esc(subtitle)}</div>` : '')
+    + '</div></div>';
   // On the header rather than in one of the three branches below, so the
   // refusal is on the page whichever state the list is in when it arrives.
   if (pendingProblem) {
     h += `<p class="routines-problem" role="alert" data-routines-problem>${esc(pendingProblem)}</p>`;
   }
   return h;
+}
+
+/** The header a list of routines carries, scoped or not. */
+function listHeaderHtml() {
+  return headerHtml(routinesModel().header({ agentName: routinesScopeName() }).subtitle);
 }
 
 // The one thing each variant offers, and where pressing it goes. Held as a
@@ -286,8 +332,9 @@ function emptyHtml() {
   });
   const action = state.actionKind ? EMPTY_ACTIONS[state.actionKind] : null;
 
-  let h = headerHtml()
-    + `<p class="settings-lead routines-empty-lead">${esc(state.lead)}</p>`
+  // The state line is the subtitle here, as it is on the Skills pane: an empty
+  // list is not "every scheduled skill across your team".
+  let h = headerHtml(state.lead)
     + '<div class="settings-card flow routines-empty-card">'
     + `<p class="settings-lead">${esc(state.body)}</p>`;
   if (action && state.action) {
@@ -310,7 +357,7 @@ function confirmHtml(entry, index) {
     name: entry.routine.name,
     schedule: entry.routine.schedule,
   });
-  return headerHtml()
+  return listHeaderHtml()
     + `<div class="routine-table routines-confirm-subject">${rowHtml(entry, index, false)}</div>`
     + '<div class="confirm-card">'
     + `<h4>${esc(confirm.title)}</h4><p>${esc(confirm.body)}</p>`
@@ -325,9 +372,7 @@ function confirmHtml(entry, index) {
 }
 
 function listHtml(list) {
-  const model = routinesModel();
-  return headerHtml()
-    + `<p class="settings-lead routines-lead">${esc(model.LEAD.lead)}</p>`
+  return listHeaderHtml()
     + `<div class="routine-table">${list.map((e, i) => rowHtml(e, i, true)).join('')}</div>`;
 }
 

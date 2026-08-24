@@ -77,7 +77,35 @@
   const LEAD = {
     title: 'Routines',
     lead: 'Every scheduled skill across your team, and when it runs next.',
+    // SCOPED TO ONE AGENT, THE SENTENCE SAYS SO. A filtered list under an
+    // unfiltered sentence reads as a list that has lost rows, which is the one
+    // reading a header must never invite.
+    //
+    // THE NAME IS A SLOT AND NEVER A CONCATENATION, the same rule the editor's
+    // own leads follow: the whole sentence is in this object, so a reviewer
+    // reads the shipped copy here rather than assembling it out of a template
+    // and a variable somewhere else.
+    scopedLead: "Every scheduled skill {agent} runs, and when it runs next.",
   };
+
+  /**
+   * The header this view heads itself with: a title and the sentence under it.
+   *
+   * THE SUBTITLE IS THE LEAD SENTENCE, MOVED. It used to be a paragraph below
+   * the heading; the component this view now shares with the skills view
+   * carries it inside the header block instead, which is why it arrives from
+   * here rather than being drawn separately.
+   *
+   * @param {{agentName?: string|null}} [input] the agent the list is scoped
+   *   to, when it is scoped to one.
+   */
+  function header(input) {
+    const agentName = (input && input.agentName) || null;
+    return {
+      title: LEAD.title,
+      subtitle: agentName ? LEAD.scopedLead.replace('{agent}', agentName) : LEAD.lead,
+    };
+  }
 
   /**
    * What the list says when the server refused a pause or a delete.
@@ -495,7 +523,7 @@
 
   return {
     OUTCOMES, LEAD, EMPTY, ACTION_PROBLEM, CATCH_UP_AFTER_MS,
-    actionProblem, emptyState,
+    actionProblem, emptyState, header,
     dayWords, clockWords, zoneWords, timeWords,
     scheduleWords, routineSentence, sentenceParts,
     outcomeOf, runStatus, nextRunLabel, orderByNextRun, row, deleteConfirmation,

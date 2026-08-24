@@ -675,3 +675,40 @@ describe('the sentence in the pieces the view composes it from', () => {
     assert.strictEqual(row.parts, null);
   });
 });
+
+describe('the header this view heads itself with', () => {
+  test('the title is the name of the surface', () => {
+    assert.strictEqual(m.header().title, 'Routines');
+    assert.strictEqual(m.header().title, m.LEAD.title);
+  });
+
+  // AC-C3, unscoped: the locked sentence, word for word.
+  test('unscoped, the subtitle is the locked sentence', () => {
+    assert.strictEqual(m.header().subtitle,
+      'Every scheduled skill across your team, and when it runs next.');
+    assert.strictEqual(m.header({}).subtitle, m.LEAD.lead);
+    assert.strictEqual(m.header({ agentName: null }).subtitle, m.LEAD.lead);
+  });
+
+  // AC-C3, scoped: a filtered list under an unfiltered sentence reads as a
+  // list that has lost rows.
+  test('scoped to an agent, the subtitle names that agent', () => {
+    assert.strictEqual(m.header({ agentName: 'Piper' }).subtitle,
+      'Every scheduled skill Piper runs, and when it runs next.');
+    assert.strictEqual(m.header({ agentName: 'Wren' }).subtitle,
+      'Every scheduled skill Wren runs, and when it runs next.');
+  });
+
+  // The name is substituted into the shipped sentence rather than concatenated
+  // onto a fragment of one, so the whole of what ships is in the model.
+  test('the scoped sentence is one string with a slot in it', () => {
+    assert.match(m.LEAD.scopedLead, /\{agent\}/);
+    assert.ok(!m.header({ agentName: 'Piper' }).subtitle.includes('{agent}'),
+      'the slot reached the page');
+  });
+
+  test('an agent whose name is a token does not rewrite the sentence twice', () => {
+    assert.strictEqual(m.header({ agentName: '{agent}' }).subtitle,
+      'Every scheduled skill {agent} runs, and when it runs next.');
+  });
+});

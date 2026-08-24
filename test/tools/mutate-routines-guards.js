@@ -544,6 +544,28 @@ const MUTATIONS = [
   [MODEL, 'the lead carries the space that separates it from the name',
     '    return { lead: `${words}, run: `, name: name };',
     '    return { lead: `${words}, run:`, name: name };'],
+  // ===== THE HEADER =====
+  // The component, not the size. A view that LISTS things heading itself the
+  // way the view that CONFIGURES things does is what this replaced, and going
+  // back is a one-line change that reads as removing an indirection.
+  [VIEW, 'the header is the component the skills view uses rather than the settings heading',
+    '  let h = \'<div class="profile-header">\'',
+    '  let h = `<div class="settings-section-title">${esc(routinesModel().LEAD.title)}</div>`;\n  const unused = \'<div class="profile-header">\''],
+  [VIEW, 'the glyph is the clock rather than nothing',
+    '    + `<div class="profile-avatar skill-avatar">${CLOCK_SVG}</div>`',
+    '    + \'<div class="profile-avatar skill-avatar"></div>\''],
+  [VIEW, 'the lead sentence is under the title rather than dropped with the paragraph it left',
+    '    + (subtitle ? `<div class="routines-subtitle">${esc(subtitle)}</div>` : \'\')',
+    "    + ''"],
+  [VIEW, 'the empty pane takes its own state line rather than the sentence about a full list',
+    '  let h = headerHtml(state.lead)',
+    '  let h = listHeaderHtml()'],
+  [MODEL, 'the scoped subtitle names the agent rather than repeating the unscoped sentence',
+    '      subtitle: agentName ? LEAD.scopedLead.replace(\'{agent}\', agentName) : LEAD.lead,',
+    '      subtitle: LEAD.lead,'],
+  [STYLES, 'the subtitle takes the body size rather than restating the title',
+    '.routines-subtitle { font-size: var(--body); color: var(--text-2); }',
+    '.routines-subtitle { font-size: var(--title); color: var(--text-2); }'],
 ];
 
 // The reporter is named explicitly rather than left to the default, which
