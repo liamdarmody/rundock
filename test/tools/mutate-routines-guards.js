@@ -85,7 +85,16 @@ const INDEX = { src: path.join(ROOT, 'public', 'index.html'), suite: 'test/unit/
 // deleted with the surface broken and the suite green.
 const PANEL = { src: path.join(ROOT, 'public', 'views', 'routines-panel.js'), suite: 'test/unit/routines-panel.test.js' };
 const SCOPE_MODEL = { src: path.join(ROOT, 'public', 'routines-scope-model.js'), suite: 'test/unit/routines-panel.test.js' };
-const INDEX_PANEL = { src: path.join(ROOT, 'public', 'index.html'), suite: 'test/unit/routines-panel.test.js' };
+// THE RENAME IS WATCHED WHERE A SAVE IS DRIVEN, not where an element is
+// looked up. routines-panel.test.js goes red on this rename too, but it goes
+// red on a getElementById check, and an element existing is a proxy for a save
+// landing. AC-10 is about a reader who writes a routine and is put somewhere
+// else with nothing thrown, so the suite that presses that walk is the one
+// that has to notice.
+const INDEX_PANEL = { src: path.join(ROOT, 'public', 'index.html'), suite: 'test/unit/routines-view-doors.test.js' };
+// The editor's half of the same trap: the resolution, and the silent answer it
+// gives when the shell cannot reach the section.
+const EDITOR_NAV = { src: path.join(ROOT, 'public', 'views', 'routine-editor.js'), suite: 'test/unit/routines-view-doors.test.js' };
 const APP_PANEL = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routines-panel.test.js' };
 const STYLES_PANEL = { src: path.join(ROOT, 'public', 'styles', 'components', 'sidebar.css'), suite: 'test/unit/routines-panel.test.js' };
 const VIEW_SCOPE = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/routines-view-doors.test.js' };
@@ -296,6 +305,24 @@ const MUTATIONS = [
     '.run-status.failed { font-weight: 600; color: var(--danger); }',
     '.run-status.failed { font-weight: 600; color: var(--success); }'],
 
+  // ===== THE SAVE DESTINATION, AND THE SILENCE AROUND IT =====
+  // The trap the criteria name. Each of these is a way for a written routine
+  // to land on the team chart with nothing thrown and nothing logged.
+  [EDITOR_NAV, 'a save resolves its destination rather than assuming one',
+    "    return navigable(destination) ? destination : 'team';",
+    "    return 'team';"],
+  [EDITOR_NAV, 'a destination needs BOTH the rail entry and the panel',
+    '    return !!(document.querySelector(`[data-nav="${nav}"]`) && document.getElementById(`sidebar-${nav}`));',
+    '    return false;'],
+
+  // ===== ONE MOUNT, ONE RENDERER =====
+  // The legacy team-sidebar listing draws into this panel's element. It is no
+  // longer called, and the mutation calls it again, AFTER the panel, which is
+  // the order that was one edit away the whole time.
+  [APP_DISPATCH, 'nothing draws over the scope panel after it is drawn',
+    'renderOrgChart(); renderRoutinesPanel(); renderRoutines();',
+    'renderOrgChart(); renderRoutinesPanel(); renderRoutinesSidebar(); renderRoutines();'],
+
   // ===== A CONFIRMATION CANNOT CHANGE SUBJECT UNDER THE READER =====
   // The scope filter made the list this addresses into one that changes
   // without the routines changing, so a pending delete held as a POSITION was
@@ -384,8 +411,8 @@ const MUTATIONS = [
     "showView('routines'); renderRoutinesPanel(); renderRoutines(); }",
     "showView('routines'); renderRoutines(); }"],
   [APP_DISPATCH, 'the arriving roster redraws the panel as well as the list',
-    'renderRoutinesSidebar(); renderRoutinesPanel(); renderRoutines();',
-    'renderRoutinesSidebar(); renderRoutines();'],
+    'renderOrgChart(); renderRoutinesPanel(); renderRoutines();',
+    'renderOrgChart(); renderRoutines();'],
   [VIEW_SCOPE, 'the list is the scope the panel is on',
     '  return scope ? out.filter(entry => entry.agent.id === scope) : out;',
     '  return out;'],
@@ -665,7 +692,7 @@ function run() {
   const targets = [MODEL, VIEW, VIEW_E2E, VIEW_REPLY, VIEW_RAIL, STYLES, SCHEDULER, END_TO_END,
     DISCOVERY, HANDLER, ROUTINES, APP, APP_SKILLS, APP_OPENER, INDEX, INDEX_RAIL, SKILLS_MODEL, SKILLS_VIEW,
     SKILLS_VIEW_RAIL, PANEL, SCOPE_MODEL, INDEX_PANEL, APP_PANEL, STYLES_PANEL, VIEW_SCOPE,
-    PANEL_PRESS, APP_DISPATCH, VIEW_CONFIRM, APP_WORKSPACE];
+    PANEL_PRESS, APP_DISPATCH, VIEW_CONFIRM, APP_WORKSPACE, EDITOR_NAV];
   const originals = new Map();
   for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];

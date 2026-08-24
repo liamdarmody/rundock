@@ -46,6 +46,7 @@ const SKILLS_MODEL_SRC = read('public', 'skills-model.js');
 const EDITOR_VIEW_SRC = read('public', 'views', 'routine-editor.js');
 const SCOPE_MODEL_SRC = read('public', 'routines-scope-model.js');
 const PANEL_SRC = read('public', 'views', 'routines-panel.js');
+const TEAM_SRC = read('public', 'views', 'team.js');
 
 // ===== THE ENUMERATION =====
 //
@@ -536,6 +537,63 @@ describe('the ways this list gets drawn, pressed', () => {
     dom.window.close();
   });
 
+  // AC-10, DRIVEN ALL THE WAY TO THE SCREEN.
+  //
+  // The test below asserts the NAME of the destination, which discriminates a
+  // rename but stops one step short of the criterion. The criterion is about a
+  // reader who saves a routine and is left looking at the wrong place, and the
+  // fallback that does it is silent: routinesListNav checks the shell has both
+  // a rail entry called routines and a panel called sidebar-routines, and
+  // quietly answers 'team' when either is missing. Nothing throws and nothing
+  // is logged.
+  //
+  // So nothing here is stubbed that decides where the reader ends up. The
+  // router and the section switch are cut out of app.js and run, the save
+  // travels, the server's confirmation is what makes the editor leave, and
+  // what is asserted is the sidebar the reader is actually looking at.
+  test('a saved routine leaves the reader looking at the routines panel', () => {
+    const { doc, w, dom } = shell();
+    w.eval(EDITOR_VIEW_SRC);
+    w.skills = [{ id: 'sk', name: 'Compile the ops summary', slug: 'ops', assignedAgents: [{ id: 'piper', name: 'Piper' }] }];
+    w.skillsLoaded = true;
+    w.sent = [];
+    w.ws = { send: (msg) => w.sent.push(JSON.parse(msg)) };
+
+    // The three pieces that carry a reader to a section, all real.
+    w.eval(`function setNavState(nav) {${appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState')}\n}`);
+    w.eval(`function showView(v) {${appPiece(/^function showView\(v\) \{(.*)\}\s*$/m, 'showView')}}`);
+    w.closeFindBar = () => {};
+    w.eval(`function switchNav(nav) {${appPiece(/function switchNav\(nav\) \{([\s\S]*?)\n\}/, 'switchNav')}\n}`);
+
+    // Start somewhere else, so arriving is something the save has to do.
+    w.setNavState('team');
+    assert.ok(!doc.getElementById('sidebar-team').classList.contains('hidden'), 'sanity: on the team panel');
+
+    w.addRoutine();
+    const option = w.RundockRoutineEditorModel.skillChoices({ skills: w.skills }).options[0];
+    w.routineEditorPick(option.key);
+    w.saveRoutine();
+    assert.strictEqual(w.sent.length, 1, 'sanity: the editor asked for the routine to be written');
+    assert.ok(doc.getElementById('sidebar-routines').classList.contains('hidden'),
+      'the editor left on send rather than waiting for the reply');
+
+    // The server confirms. This is the moment the editor leaves.
+    w.routineEditorSaved();
+
+    const panel = doc.getElementById('sidebar-routines');
+    for (let el = panel; el; el = el.parentElement) {
+      assert.ok(!el.classList.contains('hidden'),
+        `a saved routine left the reader with the routines panel out of sight inside #${el.id || el.tagName}`);
+    }
+    assert.ok(doc.getElementById('sidebar-team').classList.contains('hidden'),
+      'a saved routine landed the reader on the team panel, which is exactly the silent fallback');
+    const view = doc.getElementById('view-routines');
+    assert.ok(!view.classList.contains('hidden'), 'the routines view is not the one on screen');
+    assert.ok(panel.querySelector('[data-scope]'),
+      'the reader arrived at the panel and it is not holding the scope list');
+    dom.window.close();
+  });
+
   test('a saved routine leaves the editor for this view', () => {
     // The editor decides where to go by asking whether the shell can reach a
     // section: a rail entry AND a sidebar panel for it. Both have to be true
@@ -576,6 +634,78 @@ describe('the ways this list gets drawn, pressed', () => {
     assert.strictEqual(w.navigatedTo, w.RundockRoutineEditorModel.SAVE_DESTINATION,
       'a written routine landed somewhere other than the list of routines');
     assert.strictEqual(w.navigatedTo, 'routines');
+    dom.window.close();
+  });
+});
+
+describe('one mount, one renderer', () => {
+  // THE PANEL AND THE LEGACY TEAM-SIDEBAR LISTING SHARE AN ELEMENT, and they
+  // cannot stop sharing it here. team.js looks the mount up by the literal id
+  // `sidebar-routines`; the router reveals a section's panel by that same
+  // name, and the editor resolves where a save lands by checking a rail entry
+  // and a panel of that name exist. So the id is load-bearing in three places
+  // and a distinct one for the scope panel is not available from this branch.
+  //
+  // WHAT IS AVAILABLE IS THAT THE OTHER WRITER STOPS RUNNING. Correctness was
+  // resting on call order: the legacy renderer drew its rows into this element
+  // and the panel drew over them, on one line, in one order. Any caller that
+  // ran the two the other way round put the roster-style rows back on screen,
+  // which is the arrangement this whole card reverses.
+  test('the roster dispatch has one writer for this panel', () => {
+    const body = appPiece(/case 'agents':([\s\S]*?)\bbreak;/, 'the roster case of the client dispatch');
+    assert.ok(!/(?<![.\w$])renderRoutinesSidebar\(/.test(body),
+      'the roster dispatch still draws the legacy team-sidebar listing into this panel, so the '
+      + 'scope list survives only by being drawn second on that line');
+  });
+
+  // The outcome, with the REAL legacy renderer loaded rather than stubbed out.
+  // Stubbing it is what let the ordering dependency sit unnoticed: a no-op
+  // cannot clobber anything, so the test could not tell the two orders apart.
+  test('after a real roster arrives the panel holds the scope list and no legacy rows', () => {
+    const { doc, w, dom } = shell();
+    w.eval(TEAM_SRC);
+    w.formatScheduleShort = (x) => String(x);
+    w.getGuide = () => null;
+    for (const name of ['renderOrgChart', 'renderConvoEmptyAgents', 'renderConvoList', 'renderAgentList']) {
+      w[name] = () => {};
+    }
+    const body = appPiece(/case 'agents':([\s\S]*?)\bbreak;/, 'the roster case of the client dispatch');
+    w.d = { type: 'agents', agents: w.agents };
+    w.eval(`(function () {${body}\n})()`);
+
+    const panel = doc.getElementById('sidebar-routines');
+    assert.ok(panel.querySelector('[data-scope]'), 'the panel is not holding the scope list');
+    assert.strictEqual(panel.querySelector('.routine-item'), null,
+      'the legacy roster-style rows were drawn into the scope panel');
+    assert.strictEqual(panel.querySelector('[data-sidebar-action]'), null,
+      'the legacy Add control was drawn into the scope panel');
+    dom.window.close();
+  });
+
+  // The workspace AC-2 protects. The legacy renderer empties its mount when
+  // there are no routines, so on exactly this workspace a clobber does not
+  // draw the wrong thing, it draws nothing, and the panel disappears.
+  test('with no routines the panel is neither emptied nor hidden', () => {
+    const { doc, w, dom } = shell({ routines: [] });
+    w.eval(TEAM_SRC);
+    w.formatScheduleShort = (x) => String(x);
+    w.getGuide = () => null;
+    for (const name of ['renderOrgChart', 'renderConvoEmptyAgents', 'renderConvoList', 'renderAgentList']) {
+      w[name] = () => {};
+    }
+    // Revealed first, by the real router, because the panel is correctly
+    // hidden until a reader goes there. What this asserts is that the roster
+    // arriving does not take it away again.
+    w.eval(`function setNavState(nav) {${appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState')}\n}`);
+    w.setNavState('routines');
+    const body = appPiece(/case 'agents':([\s\S]*?)\bbreak;/, 'the roster case of the client dispatch');
+    w.d = { type: 'agents', agents: w.agents };
+    w.eval(`(function () {${body}\n})()`);
+
+    const panel = doc.getElementById('sidebar-routines');
+    assert.ok(panel.querySelector('[data-scope="all"]'),
+      'the panel went blank on the workspace that has nothing in it');
+    assert.ok(!panel.classList.contains('hidden'), 'the roster arriving hid the panel');
     dom.window.close();
   });
 });

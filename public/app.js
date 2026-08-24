@@ -248,7 +248,20 @@ function handle(d) {
       if (currentView === 'settings') renderSettingsSection('workspace');
       break;
     case 'needs_workspace': showView('workspace'); break;
-    case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesSidebar(); renderRoutinesPanel(); renderRoutines(); renderConvoList(); break;
+    // renderRoutinesSidebar is NOT called here any more, and its absence is
+    // the point. It draws the old team-sidebar routine listing into
+    // #sidebar-routines, which is now the scope panel's element, so the two
+    // renderers were writing to one mount and the panel survived only by
+    // being second on this line. On a workspace with no routines the legacy
+    // one empties that mount, so the order was not a preference, it was the
+    // difference between the panel being there and being gone on exactly the
+    // workspace its pinned row exists to protect.
+    //
+    // The mount cannot be split from this branch: team.js addresses it by the
+    // literal id, and the router and the editor's save destination both key
+    // off the section name, so all three need that one element. Retiring the
+    // function itself belongs to the card that removes the team listing.
+    case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesPanel(); renderRoutines(); renderConvoList(); break;
     // renderRoutines as well as renderSkills: the routines empty state asks
     // whether the workspace has a skill, so the reply that answers that
     // question is the reply that has to redraw it. Without this the list sits
