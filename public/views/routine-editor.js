@@ -357,20 +357,21 @@
    * inside the router that line could only be reached by loading the whole
    * shell, so it had no test and could be deleted with the suite green.
    *
-   * THE ROUTINES SURFACE NOW HAS A PERMANENT RAIL ENTRY, so this resolves to
-   * it rather than to the team panel, and it did before that entry became
-   * permanent because the entry was in the markup either way. That is exactly
-   * why the resolution stays: it reads the shell rather than a belief about
-   * the shell, so the day the panel is lifted out of the team one it is the
-   * rename that has to keep the names, not this function that has to be
-   * remembered.
+   * THE ROUTINES SURFACE HAS A PERMANENT RAIL ENTRY AND A SIDEBAR PANEL OF ITS
+   * OWN, so this resolves to it. That panel used to be a child of the team
+   * one, revealed by an alias in the router, which is the arrangement the
+   * fallback below was written against. The day it was lifted out and given
+   * its own place in the rail, this function was already correct and nothing
+   * here needed editing, which is the whole argument for resolving against the
+   * shell rather than against a belief about it.
    *
    * A destination is usable only if the shell has BOTH halves of it: a rail
    * button carrying the name, and the sidebar panel the router reveals by that
    * name. Checking the pair is what makes this a resolution rather than a
-   * guess, and it is why this returns the section that lists routines today
-   * and the routines surface itself the day that one is built, with nothing
-   * here edited.
+   * guess. THE FALLBACK IS SILENT, and that is why the pair is asserted
+   * against the real markup in the doors suite rather than against a shell a
+   * test writes for itself: renaming either half sends a real save to the team
+   * chart with nothing thrown and nothing logged.
    */
   function navigable(nav) {
     if (typeof document === 'undefined') return false;

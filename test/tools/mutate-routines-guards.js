@@ -78,6 +78,23 @@ const APP = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routin
 // replies and drives the dispatch cases that carry them.
 const VIEW_REPLY = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/routines-view-doors.test.js' };
 const INDEX = { src: path.join(ROOT, 'public', 'index.html'), suite: 'test/unit/routines-view-doors.test.js' };
+// The routines sidebar panel: where it sits in the page, what it draws, and
+// the scope it hands to the list and to the plus. Watched by the file that
+// presses the panel against the real markup, because every rule here is a rule
+// about a surface and a rule about a surface asserted anywhere else can be
+// deleted with the surface broken and the suite green.
+const PANEL = { src: path.join(ROOT, 'public', 'views', 'routines-panel.js'), suite: 'test/unit/routines-panel.test.js' };
+const SCOPE_MODEL = { src: path.join(ROOT, 'public', 'routines-scope-model.js'), suite: 'test/unit/routines-panel.test.js' };
+const INDEX_PANEL = { src: path.join(ROOT, 'public', 'index.html'), suite: 'test/unit/routines-panel.test.js' };
+const APP_PANEL = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routines-panel.test.js' };
+const STYLES_PANEL = { src: path.join(ROOT, 'public', 'styles', 'components', 'sidebar.css'), suite: 'test/unit/routines-panel.test.js' };
+const VIEW_SCOPE = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/routines-view-doors.test.js' };
+// The panel's two effects on the surface BESIDE it, watched by the file that
+// enumerates everything that draws this list rather than by the file that
+// presses the panel. A scope pressed and no list redrawn is a defect on the
+// list, so the list's own manifest is where it has to be noticed.
+const PANEL_PRESS = { src: path.join(ROOT, 'public', 'views', 'routines-panel.js'), suite: 'test/unit/routines-view-doors.test.js' };
+const APP_DISPATCH = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routines-view-doors.test.js' };
 // The Skills pane, which the permanent rail makes reachable and which had no
 // empty state at all until this pass. Its copy and its two guards are watched
 // by the file that presses the pane.
@@ -218,14 +235,17 @@ const MUTATIONS = [
 
   // ===== WHO DRAWS THIS LIST, AND HOW A READER ARRIVES AT IT =====
   [APP, 'the arriving roster redraws the list',
-    'renderRoutinesSidebar(); renderRoutines(); renderConvoList();',
-    'renderRoutinesSidebar(); renderConvoList();'],
+    'renderRoutinesPanel(); renderRoutines(); renderConvoList();',
+    'renderRoutinesPanel(); renderConvoList();'],
   [APP, 'the rail entry draws something into the view it shows',
-    "  else if(nav==='routines') { showView('routines'); renderRoutines(); }",
-    "  else if(nav==='routines') { showView('routines'); }"],
+    "showView('routines'); renderRoutinesPanel(); renderRoutines(); }",
+    "showView('routines'); renderRoutinesPanel(); }"],
   [APP, 'the routines section reveals a sidebar the reader can see',
-    "const SIDEBAR_FOR = { routines: 'team' };",
-    'const SIDEBAR_FOR = {};'],
+    'document.getElementById(`sidebar-${nav}`).classList.remove(\'hidden\');',
+    "document.getElementById(`sidebar-${nav === 'routines' ? 'team' : nav}`).classList.remove('hidden');"],
+  [APP, 'the routines panel is one the router hides before revealing another',
+    "['team','conversations','skills','files','settings','routines']",
+    "['team','conversations','skills','files','settings']"],
   [APP, 'the routines panel is one showView knows how to reveal',
     "'settings','routine-editor','routines']",
     "'settings','routine-editor']"],
@@ -269,6 +289,82 @@ const MUTATIONS = [
   [STYLES, 'a failure is not dressed as a success',
     '.run-status.failed { font-weight: 600; color: var(--danger); }',
     '.run-status.failed { font-weight: 600; color: var(--success); }'],
+
+  // ===== THE ROUTINES PANEL IS A PANEL OF ITS OWN =====
+  // The decision this card reversed, and the mutations put it BACK. The panel
+  // was a child of the team one, revealed through an alias, so the two
+  // sidebars were one element rather than two that resembled each other. A
+  // rule whose content is "this is no longer nested" is otherwise unmutatable,
+  // and an unmutatable rule is one the next person undoes with nothing red.
+  [INDEX_PANEL, 'the routines panel is a sidebar in its own right',
+    '    </div>\n    <!-- The routines panel is a sidebar in its own right',
+    '    <div id="sidebar-routines" class="hidden"></div>\n    </div>\n    <!-- The routines panel is a sidebar in its own right'],
+  [INDEX_PANEL, 'the panel the router reveals is the one the editor resolves to',
+    '<div id="sidebar-routines" class="hidden"></div>',
+    '<div id="sidebar-routines-panel" class="hidden"></div>'],
+
+  // ===== WHAT THE SCOPE LIST HOLDS =====
+  [SCOPE_MODEL, 'All routines is pinned in every state, including an empty one',
+    '    const all = { id: ALL, name: COPY.all, count: total, active: scope === null };',
+    '    const all = null;'],
+  [SCOPE_MODEL, 'only agents that own a routine are scopes',
+    '      if (!agent || !agent.routines || !agent.routines.length) continue;',
+    '      if (!agent) continue;'],
+  [SCOPE_MODEL, 'a paused routine is counted',
+    '        count: agent.routines.length,',
+    '        count: agent.routines.filter(r => !r.paused).length,'],
+  [SCOPE_MODEL, 'the order is the roster order, never the count order',
+    '    return out;\n  }\n\n  /**\n   * The scope the panel should be on',
+    '    return out.sort((a, b) => b.count - a.count);\n  }\n\n  /**\n   * The scope the panel should be on'],
+  [SCOPE_MODEL, 'a filter with one option is not drawn',
+    '    if (list.length >= MIN_OWNERS) {',
+    '    if (list.length >= 1) {'],
+  [SCOPE_MODEL, 'a panel that draws no list says why',
+      "      quiet: list.length === 1 ? soleOwnerLine(list[0].name) : COPY.none,",
+      '      quiet: null,'],
+  [SCOPE_MODEL, 'the panel does not repeat the pane\'s own lead sentence',
+    "    none: 'Agents with routines are listed here.',",
+    "    none: 'No routines yet. Agents with routines are listed here.',"],
+  [SCOPE_MODEL, 'a scope whose agent stops owning routines falls back to All',
+    '    return list.filter(o => o.id === scope).length ? scope : null;',
+    '    return scope;'],
+  [SCOPE_MODEL, 'a scope goes when the list that offered it is withdrawn',
+    '    if (list.length < MIN_OWNERS) return null;\n',
+    ''],
+
+  // ===== THE SCOPE, AND WHO IT REACHES =====
+  [PANEL, 'the plus inherits the scope the panel is on',
+    '  addRoutineForAgent(routinesScopeAgentId());',
+    '  addRoutineForAgent(null);'],
+  [PANEL_PRESS, 'pressing a scope redraws the list beside the panel',
+    '  renderRoutinesPanel();\n  renderRoutines();',
+    '  renderRoutinesPanel();'],
+  [PANEL, 'the scope is resolved on every read rather than kept',
+    '  scope = m.resolveScope({ agents: roster(), scope });\n  return scope;',
+    '  return scope;'],
+  [APP_PANEL, 'the rail forgets the scope, so a visit always opens on All',
+    "  else if(nav==='routines') { routinesPanelReset();",
+    "  else if(nav==='routines') { "],
+  [APP_PANEL, 'the rail draws the panel it has just revealed',
+    "showView('routines'); renderRoutinesPanel(); renderRoutines(); }",
+    "showView('routines'); renderRoutines(); }"],
+  [APP_DISPATCH, 'the arriving roster redraws the panel as well as the list',
+    'renderRoutinesSidebar(); renderRoutinesPanel(); renderRoutines();',
+    'renderRoutinesSidebar(); renderRoutines();'],
+  [VIEW_SCOPE, 'the list is the scope the panel is on',
+    '  return scope ? out.filter(entry => entry.agent.id === scope) : out;',
+    '  return out;'],
+
+  // ===== A SCOPE ROW IS NOT A ROSTER ROW =====
+  // The complaint the panel answers is that the two sidebars looked the same,
+  // and the answer has to be visible rather than structural. These break what
+  // a browser actually resolves.
+  [STYLES_PANEL, 'selected takes the selected fill, not the hover fill',
+    '.scope-item.active { background: var(--accent-glow); }',
+    '.scope-item.active { background: var(--elevated); }'],
+  [STYLES_PANEL, 'hover takes the hover fill',
+    '.scope-item:hover { background: var(--elevated); }',
+    '.scope-item:hover { background: var(--accent-glow); }'],
 
   // ===== THE VALUE THAT IS CONSTRAINED, NOT COPY =====
   // The second one this file exists for: the literal two design frames wrote.
@@ -423,8 +519,8 @@ const MUTATIONS = [
     '  if (detail && detail.firstElementChild) return false;\n',
     ''],
   [APP_OPENER, 'pressing the Routines entry draws into the pane it reveals',
-    "  else if(nav==='routines') { showView('routines'); renderRoutines(); }",
-    "  else if(nav==='routines') { showView('routines'); }"],
+    "routinesPanelReset(); showView('routines'); renderRoutinesPanel(); renderRoutines(); }",
+    "routinesPanelReset(); showView('routines'); renderRoutinesPanel(); }"],
 
   // ===== THE SKILLS PANE =====
   // It had none of this until now: renderSkills returned before rendering, so
@@ -533,7 +629,8 @@ function redTests(suite) {
 function run() {
   const targets = [MODEL, VIEW, VIEW_E2E, VIEW_REPLY, VIEW_RAIL, STYLES, SCHEDULER, END_TO_END,
     DISCOVERY, HANDLER, ROUTINES, APP, APP_SKILLS, APP_OPENER, INDEX, INDEX_RAIL, SKILLS_MODEL, SKILLS_VIEW,
-    SKILLS_VIEW_RAIL];
+    SKILLS_VIEW_RAIL, PANEL, SCOPE_MODEL, INDEX_PANEL, APP_PANEL, STYLES_PANEL, VIEW_SCOPE,
+    PANEL_PRESS, APP_DISPATCH];
   const originals = new Map();
   for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];

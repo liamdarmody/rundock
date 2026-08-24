@@ -44,6 +44,8 @@ const EDITOR_MODEL_SRC = read('public', 'routine-editor-model.js');
 // off it, in the order index.html loads them.
 const SKILLS_MODEL_SRC = read('public', 'skills-model.js');
 const EDITOR_VIEW_SRC = read('public', 'views', 'routine-editor.js');
+const SCOPE_MODEL_SRC = read('public', 'routines-scope-model.js');
+const PANEL_SRC = read('public', 'views', 'routines-panel.js');
 
 // ===== THE ENUMERATION =====
 //
@@ -93,6 +95,16 @@ const RENDERERS = [
     line: 'function routinesActionFailed(reply)',
     surface: 'a refused pause or delete coming back from the server',
     pressedBy: 'a refused action is answered on this list and nowhere else',
+  },
+  // The scope changing is a redraw of this list, not only of the panel. The
+  // panel is the only surface that can change which routines are listed
+  // without changing which routines exist, so a scope pressed and no list
+  // redrawn leaves the reader looking at somebody else's routines.
+  {
+    file: 'views/routines-panel.js',
+    line: 'function setRoutinesScope(agentId)',
+    surface: 'a scope row in the routines panel',
+    pressedBy: 'pressing a scope redraws the list into that agent alone',
   },
 ];
 
@@ -288,7 +300,9 @@ function shell({ routines = [ROUTINE] } = {}) {
   w.eval(EDITOR_MODEL_SRC);
   w.eval(SKILLS_MODEL_SRC);
   w.eval(MODEL_SRC);
+  w.eval(SCOPE_MODEL_SRC);
   w.eval(VIEW_SRC);
+  w.eval(PANEL_SRC);
   w.agents = [{ id: 'piper', displayName: 'Piper', colour: '#E87A5A', icon: 'P', status: 'onTeam', routines }];
   w.esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   w.ws = { send: () => {} };
@@ -322,6 +336,12 @@ describe('the ways this list gets drawn, pressed', () => {
     w.eval(`(function () {${body}\n})()`);
     assert.strictEqual(w.drawn, 1, 'a roster arrived and the routines list was not redrawn');
     assert.strictEqual(w.document.querySelectorAll('.routine-row').length, 1);
+    // AND THE PANEL BESIDE IT, which is the half a roster broadcast is the
+    // only chance to correct. The roster is what arrives when a routine is
+    // added or deleted, so the counts and the scope rows are stale from that
+    // moment until something redraws them.
+    assert.ok(w.document.querySelector('#sidebar-routines [data-scope="all"]'),
+      'a roster arrived and the routines panel was not redrawn');
     dom.window.close();
   });
 
@@ -388,6 +408,30 @@ describe('the ways this list gets drawn, pressed', () => {
     doc.querySelector('[data-routines-action="delete"]').click();
     doc.querySelector('[data-routines-action="confirm-delete"]').click();
     assert.strictEqual(doc.querySelector('.confirm-card'), null, 'Confirm did not redraw');
+    dom.window.close();
+  });
+
+  // The one surface that changes WHICH routines are listed without changing
+  // which exist. Pressed as markup, because the failure it is written against
+  // is a panel that repaints itself and leaves the list alone.
+  test('pressing a scope redraws the list into that agent alone', () => {
+    const { doc, w, dom } = shell();
+    w.agents.push({
+      id: 'doc', displayName: 'Doc', colour: '#6BC67E', icon: 'D', status: 'onTeam',
+      routines: [Object.assign({}, ROUTINE, { name: 'Refresh the reading digest' })],
+    });
+    w.renderRoutinesPanel();
+    w.renderRoutines();
+    assert.strictEqual(doc.querySelectorAll('.routine-row').length, 2, 'sanity: both routines listed');
+
+    doc.querySelector('[data-scope="doc"]').click();
+    const rows = [...doc.querySelectorAll('.routine-row')];
+    assert.strictEqual(rows.length, 1, 'pressing a scope did not redraw the list');
+    assert.match(rows[0].textContent, /Refresh the reading digest/);
+
+    doc.querySelector('[data-scope="all"]').click();
+    assert.strictEqual(doc.querySelectorAll('.routine-row').length, 2,
+      'pressing All did not restore every routine');
     dom.window.close();
   });
 
@@ -547,22 +591,32 @@ describe('the shell can actually show what it navigates to', () => {
   // seen.
   test('every section the rail carries reveals a sidebar the reader can see', () => {
     const { doc, w, dom } = shell();
-    // Both cut out of app.js and run, so the mapping under test is the one
-    // the page ships rather than one restated here. `const` at the top of an
-    // eval binds inside it, so the declaration is taken as a `var` to put it
-    // where the function body will look for it.
-    w.eval(appPiece(/(const SIDEBAR_FOR = \{[^}]*\};)/, 'the sidebar map').replace('const ', 'var '));
+    // setNavState is cut out of app.js and run, so the mapping under test is
+    // the one the page ships rather than one restated here.
     const body = appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState');
     w.eval(`function setNavState(nav) {${body}\n}`);
     for (const entry of doc.querySelectorAll('.nav-item[data-nav]')) {
       const nav = entry.getAttribute('data-nav');
       w.setNavState(nav);
       assert.strictEqual(entry.classList.contains('active'), true, `${nav} did not become the active entry`);
-      const panel = doc.getElementById(`sidebar-${w.SIDEBAR_FOR[nav] || nav}`);
-      assert.ok(panel, `${nav} reveals no sidebar panel`);
+      // BY ITS OWN NAME, and that is the half that changed. A section used to
+      // be able to reveal another section's panel through an alias map, which
+      // is how the routines panel came to be a child of the team one: revealed
+      // by name, nested out of sight, and green.
+      const panel = doc.getElementById(`sidebar-${nav}`);
+      assert.ok(panel, `${nav} reveals no sidebar panel of its own`);
       for (let el = panel; el; el = el.parentElement) {
         assert.ok(!el.classList.contains('hidden'),
           `${nav} reveals a panel that stays out of sight inside #${el.id || el.tagName}`);
+      }
+      // AND EVERY OTHER PANEL IS PUT AWAY. Revealing is only half of what the
+      // router does, and the half that is easy to leave out: a panel the
+      // router never hides is a panel that stacks under the next one, which is
+      // what a panel newly lifted out of another panel is one edit away from.
+      for (const other of doc.querySelectorAll('.sidebar > div[id^="sidebar-"]')) {
+        if (other.id === `sidebar-${nav}`) continue;
+        assert.ok(other.classList.contains('hidden'),
+          `${nav} left #${other.id} on screen beside the panel it revealed`);
       }
     }
     dom.window.close();

@@ -80,6 +80,17 @@ function routinesModel() {
  *
  * The count runs in roster order, which is file order, so the nth namesake
  * here is the nth block in the file.
+ *
+ * AND THE COUNT IS TAKEN BEFORE THE SCOPE IS APPLIED, which is why the two
+ * steps are in this order rather than folded together. The occurrence a delete
+ * is addressed by is a position in the FILE, not a position in whatever subset
+ * the panel is showing. Counting after the filter would send the server the
+ * row's position on screen wearing the name of its position in the file, and
+ * the confirmation would name one routine while the server removed another.
+ *
+ * WHICH SCOPE IS THE PANEL'S DECISION and it is read rather than kept, so
+ * there is one scope on the screen rather than two that agree until one of the
+ * two surfaces is redrawn on its own.
  */
 function allRoutines() {
   const out = [];
@@ -93,7 +104,8 @@ function allRoutines() {
       out.push({ routine, agent, occurrence });
     }
   }
-  return out;
+  const scope = typeof routinesScopeAgentId === 'function' ? routinesScopeAgentId() : null;
+  return scope ? out.filter(entry => entry.agent.id === scope) : out;
 }
 
 const ICONS = {

@@ -248,7 +248,7 @@ function handle(d) {
       if (currentView === 'settings') renderSettingsSection('workspace');
       break;
     case 'needs_workspace': showView('workspace'); break;
-    case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesSidebar(); renderRoutines(); renderConvoList(); break;
+    case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesSidebar(); renderRoutinesPanel(); renderRoutines(); renderConvoList(); break;
     // renderRoutines as well as renderSkills: the routines empty state asks
     // whether the workspace has a skill, so the reply that answers that
     // question is the reply that has to redraw it. Without this the list sits
@@ -987,13 +987,16 @@ function initSidebarResize() {
 // keeping: a routine belongs to an agent, and the panel that lists your agents
 // is the one that answers "whose?". Its own Routines section already lives
 // inside that panel.
-const SIDEBAR_FOR = { routines: 'team' };
-
+// A section reveals the panel of its own name, and there is no map that says
+// otherwise. There used to be one, holding a single entry that pointed the
+// routines section at the team panel, which is how the two sidebars came to be
+// one element. An alias map with nothing in it is a redirection waiting to be
+// reintroduced without anybody noticing, so it is gone rather than emptied.
 function setNavState(nav) {
   document.querySelectorAll('.nav-item[data-nav]').forEach(n=>n.classList.remove('active'));
   document.querySelector(`[data-nav="${nav}"]`)?.classList.add('active');
-  ['team','conversations','skills','files','settings'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
-  document.getElementById(`sidebar-${SIDEBAR_FOR[nav] || nav}`).classList.remove('hidden');
+  ['team','conversations','skills','files','settings','routines'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
+  document.getElementById(`sidebar-${nav}`).classList.remove('hidden');
   // The New conversation footer lives at sidebar level (so the update strip
   // can sit above it without ever moving it), which makes its visibility
   // this function's job rather than the panel's.
@@ -1038,7 +1041,10 @@ function switchNav(nav) {
   else if(nav==='skills') { showView('skills'); renderSkillsIfEmpty(); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } }
   else if(nav==='conversations') { if(activeConversation) { showView('chat'); if(unread.clearConvo(activeConversation.id)) { updateUnreadBadge(); renderConvoList(); } } else { const target = pickDefaultConversation(); if(target) { openConversation(target.id); } else { newConversation(); } } }
   else if(nav==='team') { showView('home'); renderOrgChart(); }
-  else if(nav==='routines') { showView('routines'); renderRoutines(); }
+  // ARRIVING HERE ALWAYS ARRIVES ON ALL. A filter that survives a visit is a
+  // filter that hides a failed overnight run from the person who opened this
+  // view to look for one, so the rail forgets the scope before it draws.
+  else if(nav==='routines') { routinesPanelReset(); showView('routines'); renderRoutinesPanel(); renderRoutines(); }
 }
 function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings','routine-editor','routines'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }
 function goHome() { discardIfEmpty(); activeConversation=null; switchNav('conversations'); }

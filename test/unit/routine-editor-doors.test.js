@@ -36,7 +36,10 @@ const PROFILE_SRC = read('public', 'views', 'profile.js');
 const TEAM_SRC = read('public', 'views', 'team.js');
 const ROUTINES_MODEL_SRC = read('public', 'routines-model.js');
 const ROUTINES_SRC = read('public', 'views', 'routines.js');
+const SCOPE_MODEL_SRC = read('public', 'routines-scope-model.js');
+const PANEL_SRC = read('public', 'views', 'routines-panel.js');
 const APP_SRC = read('public', 'app.js');
+const INDEX_SRC = read('public', 'index.html');
 
 // ===== THE ENUMERATION =====
 //
@@ -67,6 +70,17 @@ const DOORS = [
     surface: 'the Add control in the routines view empty state',
     scoped: false,
     pressedBy: 'the empty state door opens the editor across the whole team',
+  },
+  // The fourth door, and the only one whose scope is decided by something the
+  // reader did on another surface. It arrived with the routines panel, and it
+  // is the door that matters most now that the profile stops offering Add
+  // routine once an agent has one.
+  {
+    call: 'addRoutineForAgent',
+    file: 'views/routines-panel.js',
+    surface: 'the plus in the routines panel header, which inherits the scope',
+    scoped: true,
+    pressedBy: 'the panel door opens the editor on whatever the panel is scoped to',
   },
 ];
 
@@ -148,14 +162,28 @@ describe('every door into the editor is enumerated', () => {
 
 // ===== PRESSING THEM =====
 
-function shell() {
-  const dom = new JSDOM('<!doctype html><html><body>'
-    + '<button class="nav-item" data-nav="team"></button><div id="sidebar-team">'
-    + '<div id="sidebar-routines"></div></div>'
+// THE SHELL IS CUT OUT OF index.html, and that is a correction rather than
+// tidiness. It used to be written here, and what it wrote was the arrangement
+// this pass has just reversed: a routines panel NESTED inside the team panel.
+// Every door below opens onto the shell, and the editor decides where a save
+// leaves to by asking that shell what it has, so a hand-written copy of the
+// page is a proof that agrees with itself after the page has moved on. That is
+// the exact defect an earlier card found on this suite: a test supplying the
+// very panel whose existence it was checking.
+function shellMarkup() {
+  const rail = /<nav class="nav-rail"[\s\S]*?<\/nav>/.exec(INDEX_SRC);
+  assert.ok(rail, 'index.html no longer carries a nav rail');
+  const sidebar = /<aside class="sidebar"[\s\S]*?<\/aside>/.exec(INDEX_SRC);
+  assert.ok(sidebar, 'index.html no longer carries a sidebar');
+  return '<!doctype html><html><body>' + rail[0] + sidebar[0]
     + '<div id="profile-content"></div>'
     + '<div id="view-routine-editor"><div id="routine-editor-content"></div></div>'
     + '<div id="view-routines"><div id="routines-content"></div></div>'
-    + '</body></html>', { runScripts: 'dangerously' });
+    + '</body></html>';
+}
+
+function shell() {
+  const dom = new JSDOM(shellMarkup(), { runScripts: 'dangerously' });
   const w = dom.window;
   w.eval(MODEL_SRC);
   w.eval(VIEW_SRC);
@@ -163,7 +191,9 @@ function shell() {
   w.eval(TEAM_SRC);
   w.eval(SKILLS_MODEL_SRC);
   w.eval(ROUTINES_MODEL_SRC);
+  w.eval(SCOPE_MODEL_SRC);
   w.eval(ROUTINES_SRC);
+  w.eval(PANEL_SRC);
 
   w.agents = [
     {
@@ -235,6 +265,31 @@ describe('the doors, pressed', () => {
       [...doc.querySelectorAll('[data-skill-key]')].map(r => r.getAttribute('data-skill-key')),
       ['ops-summary:piper'],
       'the scoped door offers that agent\'s skills and no others',
+    );
+    dom.window.close();
+  });
+
+  // THE DOOR WHOSE SCOPE COMES FROM SOMEWHERE ELSE, pressed from both sides of
+  // that scope. A plus that opened the agent-agnostic picker while the panel
+  // beside it read "Piper" would be the only Add routine control left on a
+  // workspace where every agent already has one, pointing at the wrong agent.
+  test('the panel door opens the editor on whatever the panel is scoped to', () => {
+    const { doc, w, dom } = shell();
+    w.agents[1].routines = [{ name: 'Doc\'s routine', schedule: 'every day at 09:00' }];
+    w.renderRoutinesPanel();
+
+    press(doc, '#routines-add-btn');
+    assert.match(editorText(doc), /Pick a skill any of your agents already has/,
+      'the plus on All scoped the editor to an agent nobody had chosen');
+
+    press(doc, '[data-scope="piper"]');
+    press(doc, '#routines-add-btn');
+    assert.match(editorText(doc), /Pick a skill Piper already has/,
+      'the plus did not inherit the scope the panel is on');
+    assert.deepStrictEqual(
+      [...doc.querySelectorAll('[data-skill-key]')].map(r => r.getAttribute('data-skill-key')),
+      ['ops-summary:piper'],
+      'the scoped plus offers that agent\'s skills and no others',
     );
     dom.window.close();
   });

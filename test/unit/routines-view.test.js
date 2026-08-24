@@ -28,6 +28,8 @@ const INDEX_SRC = read('public', 'index.html');
 const APP_SRC = read('public', 'app.js');
 const SKILLS_SRC = read('public', 'views', 'skills.js');
 const SKILLS_MODEL_SRC = read('public', 'skills-model.js');
+const SCOPE_MODEL_SRC = read('public', 'routines-scope-model.js');
+const PANEL_SRC = read('public', 'views', 'routines-panel.js');
 
 // Thursday 20 August 2026, twenty past nine. One routine, one agent, one
 // execution target, only the outcome changing: the locked frame's own setup.
@@ -107,7 +109,9 @@ function shell(routines = FOUR_ROWS, opts = {}) {
   w.eval(EDITOR_MODEL_SRC);
   w.eval(SKILLS_MODEL_SRC);
   w.eval(MODEL_SRC);
+  w.eval(SCOPE_MODEL_SRC);
   w.eval(VIEW_SRC);
+  w.eval(PANEL_SRC);
   w.eval(SKILLS_SRC);
 
   w.agents = [{
