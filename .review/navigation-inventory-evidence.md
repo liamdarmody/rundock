@@ -413,10 +413,10 @@ Out of scope and untouched:
 
 ## What the merge found, which is the instrument working
 
-Three changes landed on the trunk while this was open: the agent surfaces, the
-run detail screen, and the routines sidebar. All three touched navigation, and
-the enumeration refused each merge until what they added was listed. What it
-caught:
+Four changes landed on the trunk while this was open: the agent surfaces, the
+run detail screen, the routines sidebar, and the routines list's own polish,
+which carries the skill link. All four touched navigation, and the enumeration
+refused each merge until what they added was listed. What it caught:
 
 - **two new call sites.** `showRoutinesForAgent` in `views/routines.js`, which
   the rail's own arm now calls instead of showing a view directly, and
@@ -454,6 +454,17 @@ is what its own sentence was about. Another named the removed alias in an
 assertion of its own; the trunk sweeps the whole client, suite and instruments
 for that name returning, so this file leans on that sweep rather than carrying a
 second copy of the same question.
+
+The skill link merged clean and changed no row, which is the outcome to expect:
+it reaches Skills through `selectSkill`, a destination this list already names,
+so it inherits the section rather than carrying one. Its own test had to stop
+stubbing the router, though, and one mutation from that branch stopped proving
+anything. It removed the `switchNav` call from the jump and expected the rail to
+be left behind; with the section resolved by the view, removing that call breaks
+nothing. A mutation that cannot break the property it names proves nothing about
+it, so it now breaks the resolution itself, aimed at that route's own suite,
+because the claim is that this jump lands the reader correctly rather than that
+the router works in general.
 
 **The property the resolution was held to:** every enumeration contains at least
 what either side listed, and every surviving row still names a test that exists

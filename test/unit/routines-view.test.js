@@ -1162,18 +1162,26 @@ describe('the skill named on a row is reachable', () => {
     dom.window.close();
   });
 
-  // AC-B5, and it is the criterion this card was warned about. selectSkill
-  // shows the skills view without touching the nav state, so a jump that only
-  // called it would leave Routines lit while the reader looks at Skills.
+  // The jump has to land the reader on Skills with Skills lit. It used to have
+  // to say so itself: selectSkill showed the skills view and touched no nav
+  // state, so a jump that only called it left Routines lit over Skills. The
+  // section is a property of the view now, so showing the view is what lights
+  // the entry, and this route gets that without asking for it.
   //
-  // THE REAL ROUTER IS RUN, not a stub of it: switchNav and setNavState are cut
-  // out of app.js and evaluated against the rail as index.html ships it. A test
-  // that asserted this view called a function named switchNav would pass
-  // against a shell where switchNav did nothing to the rail.
+  // THE REAL ROUTER IS RUN, not a stub of it: the three pieces are cut out of
+  // app.js and evaluated against the rail as index.html ships it, in ONE eval,
+  // because showView reads a table declared beside it and a lexical declaration
+  // loaded in an eval of its own is gone before the function runs. A test that
+  // asserted this view called a function named switchNav would pass against a
+  // shell where switchNav did nothing to the rail.
   test('the rail shows Skills as active after the jump', () => {
     const { doc, w, dom } = shell(ONE, { skills: [SKILL] });
-    w.eval(`function setNavState(nav) {${appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState')}\n}`);
-    w.eval(`function switchNav(nav) {${appPiece(/function switchNav\(nav\) \{([\s\S]*?)\n\}/, 'switchNav')}\n}`);
+    w.eval([
+      /const NAV_FOR_VIEW = \{[\s\S]*?\n\};/.exec(APP_SRC)[0],
+      `function setNavState(nav) {${appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState')}\n}`,
+      `function showView(v) {${appPiece(/^function showView\(v\) \{(.*)\}\s*$/m, 'showView')}}`,
+      `function switchNav(nav) {${appPiece(/function switchNav\(nav\) \{([\s\S]*?)\n\}/, 'switchNav')}\n}`,
+    ].join('\n'));
     w.closeFindBar = () => {};
     w.renderSkillsIfEmpty = () => {};
     w.renderRoutines();

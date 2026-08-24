@@ -831,9 +831,17 @@ const MUTATIONS = [
   [VIEW, 'the pieces are escaped separately rather than the assembled sentence being cut up',
     '  return esc(row.parts.lead)',
     '  return esc(row.sentence).replace(esc(row.parts.name), '],
-  [VIEW, 'the jump sets the rail as well as the pane',
-    "  if (typeof switchNav === 'function') switchNav('skills');",
-    ''],
+  // THE PROPERTY MOVED, so the mutation follows it. This used to take the
+  // switchNav call out of the jump and leave Routines lit over Skills. The
+  // section is a property of the view now: showView resolves it from
+  // NAV_FOR_VIEW and sets it, so removing the call from the jump breaks
+  // nothing, and a mutation that cannot break the property proves nothing
+  // about it. Breaking the resolution itself is what this route's own test has
+  // to notice, and it is aimed at that route's suite rather than the router's,
+  // because the claim is that THIS jump lands the reader correctly.
+  [APP_OPENER, 'the jump sets the rail as well as the pane',
+    ' const nav=NAV_FOR_VIEW[v]; if(nav) setNavState(nav); }',
+    ' }'],
   [VIEW, 'the skill is resolved again at press time rather than assumed to still be there',
     '  if (!skill) return;',
     ''],
