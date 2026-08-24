@@ -232,8 +232,13 @@ describe('what this card proves by pressing, and what it proves by calling', () 
     }
     // And each arm draws something, rather than only revealing a panel. A
     // reveal with no draw is the defect the pressing proofs above exist for.
+    //
+    // The Skills arm is pinned to renderSkillsIfEmpty by name rather than to
+    // "something that draws", because the two calls it could make differ only
+    // in what they do to a pane somebody is already looking at, and a check
+    // that accepted either would accept the one that rebuilds it.
     assert.match(appPiece(/^\s*else if\(nav==='skills'\) \{(.*)\}\s*$/m, "switchNav's skills arm"),
-      /(?<![.\w$])renderSkills\(/, 'the Skills opener reveals a panel without drawing into it');
+      /(?<![.\w$])renderSkillsIfEmpty\(/, 'the Skills opener reveals a panel without drawing into it');
     assert.match(appPiece(/else if\(nav==='routines'\)\s*\{([\s\S]*?)\}/, "switchNav's routines arm"),
       /(?<![.\w$])renderRoutines\(/, 'the Routines opener reveals a panel without drawing into it');
   });
@@ -332,7 +337,9 @@ describe('the rail is a map of places, always the same size', () => {
     w.eval(`function showView(v) {${appPiece(/^function showView\(v\) \{(.*)\}\s*$/m, 'showView')}}`);
     w.closeFindBar = () => {};
     w.setNavState = () => {};
-    w.selectSkill = () => { w.selected = true; };
+    // selectSkill is NOT stubbed: views/skills.js publishes the real one, and a
+    // stub here would hide what pressing the entry does to a detail pane that
+    // is already drawn, which is half of what these tests are about.
     let asked = null;
     w.switchNav = (asked_nav) => { asked = asked_nav; w.eval(`(function () {${arm}\n})()`); };
     const entry = doc.querySelector(`.nav-item[data-nav="${nav}"]`);
@@ -375,6 +382,55 @@ describe('the rail is a map of places, always the same size', () => {
       'the build offer was made before the skill list had arrived');
     assert.deepStrictEqual(w.sent, [{ type: 'get_skills' }],
       'the press did not ask for the list it is waiting on');
+    dom.window.close();
+  });
+
+  // THE OTHER HALF OF THE OPENER'S RULE, and it is the half that has an
+  // existing caller to protect. Drawing when nothing is drawn is what the
+  // permanent entry needs. REDRAWING WHAT IS ALREADY THERE is a different
+  // thing one line away, and it costs the reader their scroll position and any
+  // card they had opened, on a press that used to be free.
+  const SKILL_WITH_INSTRUCTIONS = {
+    id: 'ops', name: 'Compile the ops summary', assignedAgents: [],
+    description: 'Writes the daily summary.', instructions: 'Read the board. Write the summary.',
+  };
+
+  test('pressing Skills with a skill already open leaves that pane alone', () => {
+    const { doc, w, dom } = shell([], { skills: [SKILL_WITH_INSTRUCTIONS], guide: true });
+    // The pane as a reader leaves it: a skill opened from the sidebar, and its
+    // Instructions card expanded by their own click. Both are done the way a
+    // reader does them rather than by writing markup here.
+    w.renderSkills();
+    const row = doc.querySelector('.skill-sidebar-item[data-skill="ops"]');
+    assert.ok(row, 'sanity: the sidebar lists the skill');
+    row.click();
+    const card = doc.getElementById('skill-instructions-ops');
+    assert.ok(card, 'sanity: the detail pane draws the collapsible instructions card');
+    assert.ok(card.classList.contains('hidden'), 'sanity: that card starts collapsed');
+    card.parentElement.parentElement.click();
+    assert.ok(!card.classList.contains('hidden'), 'sanity: a click opens it');
+    const drawn = doc.getElementById('skill-detail-content').firstElementChild;
+
+    pressEntry(w, doc, 'skills');
+
+    assert.strictEqual(doc.getElementById('skill-detail-content').firstElementChild, drawn,
+      'pressing the entry rebuilt a pane that already had something in it');
+    const after = doc.getElementById('skill-instructions-ops');
+    assert.ok(after && !after.classList.contains('hidden'),
+      'pressing the entry collapsed a card the reader had opened');
+    dom.window.close();
+  });
+
+  // And the same press when the pane is empty still draws, which is the case
+  // the permanent entry exists for. Both halves in one file, because the two
+  // are one line apart and a change that satisfies either alone is wrong.
+  test('pressing Skills with nothing drawn still draws', () => {
+    const { doc, w, dom } = shell([], { skills: [SKILL_WITH_INSTRUCTIONS], guide: true });
+    assert.strictEqual(doc.getElementById('skill-detail-content').firstElementChild, null,
+      'sanity: nothing has drawn the pane yet');
+    pressEntry(w, doc, 'skills');
+    assert.match(paneText(doc, 'skills'), /Compile the ops summary/,
+      'pressing the entry left the pane as it found it, which was empty');
     dom.window.close();
   });
 

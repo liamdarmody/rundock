@@ -1026,15 +1026,16 @@ function switchNav(nav) {
       showView('editor');
     }
   }
-  // THE OPENER DRAWS, ALWAYS, rather than only on the paths somebody
-  // remembered. Arriving here used to draw nothing at all when the list had
-  // arrived and was empty, which was invisible only because the Skills entry
-  // was withdrawn on exactly that workspace. A permanent entry opens onto
-  // whatever is here, so what is here cannot depend on how you arrived.
-  // renderSkills also picks the first skill when none is selected, which is
-  // why that branch is gone from here rather than restated: one rule, one
-  // place.
-  else if(nav==='skills') { showView('skills'); renderSkills(); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } }
+  // THE OPENER DRAWS WHEN NOTHING IS DRAWN, and not otherwise. Arriving here
+  // used to draw nothing at all when the list had arrived and was empty, which
+  // was invisible only because the Skills entry was withdrawn on exactly that
+  // workspace: a permanent entry opens onto whatever is here, so what is here
+  // cannot depend on how you arrived. Drawing unconditionally fixes that and
+  // costs the reader a pane they had scrolled or opened a card on, so the
+  // decision is the view's and it is made by asking the page. renderSkills
+  // also picks the first skill when none is selected, which is why that branch
+  // is gone from here rather than restated: one rule, one place.
+  else if(nav==='skills') { showView('skills'); renderSkillsIfEmpty(); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } }
   else if(nav==='conversations') { if(activeConversation) { showView('chat'); if(unread.clearConvo(activeConversation.id)) { updateUnreadBadge(); renderConvoList(); } } else { const target = pickDefaultConversation(); if(target) { openConversation(target.id); } else { newConversation(); } } }
   else if(nav==='team') { showView('home'); renderOrgChart(); }
   else if(nav==='routines') { showView('routines'); renderRoutines(); }

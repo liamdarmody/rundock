@@ -136,7 +136,12 @@
    * workspace that does have skills is told to build one for a beat on every
    * open.
    *
-   * @param {{skills?: any[], loading?: boolean, hasGuide?: boolean}} [input]
+   * THE GUIDE ARRIVES AS A NAME, NOT AS A FLAG, and the type here is the
+   * whole contract: a caller handed a boolean gets the no-guide variant with
+   * nothing thrown, so documentation naming an input this never reads is a
+   * silently wrong answer rather than an error.
+   *
+   * @param {{skills?: any[], loading?: boolean, guideName?: string|null}} [input]
    */
   function emptyState(input) {
     if (input && input.loading) {

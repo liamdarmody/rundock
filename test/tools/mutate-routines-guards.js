@@ -403,8 +403,23 @@ const MUTATIONS = [
   // the first press of Skills in a session opening onto a blank pane while
   // every test that called renderSkills stayed green.
   [APP_OPENER, 'pressing the Skills entry draws into the pane it reveals',
-    "  else if(nav==='skills') { showView('skills'); renderSkills(); if(!skillsLoaded)",
+    "  else if(nav==='skills') { showView('skills'); renderSkillsIfEmpty(); if(!skillsLoaded)",
     "  else if(nav==='skills') { showView('skills'); if(!skillsLoaded)"],
+  // THE OTHER DIRECTION, and it is the one a single mutation would miss. These
+  // two calls are one word apart and only one of them is what the card wanted:
+  // drawing unconditionally also fixes the blank pane, and takes a pane the
+  // reader had scrolled or opened a card on with it.
+  [APP_OPENER, 'pressing the Skills entry leaves a pane that is already drawn',
+    "  else if(nav==='skills') { showView('skills'); renderSkillsIfEmpty(); if(!skillsLoaded)",
+    "  else if(nav==='skills') { showView('skills'); renderSkills(); if(!skillsLoaded)"],
+  // Watched by the file that PRESSES the entry, not the one that calls the
+  // render: the pane this guard protects is one only a press can find already
+  // drawn. Aimed at the copy suite first, this mutation turned nothing red,
+  // which is the harness reporting a proof pointed at the wrong place rather
+  // than a guard nothing holds.
+  [SKILLS_VIEW_RAIL, 'the opener asks the page whether anything is drawn',
+    '  if (detail && detail.firstElementChild) return false;\n',
+    ''],
   [APP_OPENER, 'pressing the Routines entry draws into the pane it reveals',
     "  else if(nav==='routines') { showView('routines'); renderRoutines(); }",
     "  else if(nav==='routines') { showView('routines'); }"],

@@ -65,6 +65,29 @@ function renderSkills() {
   }
 }
 
+/**
+ * Draw the pane if nothing has drawn it yet, and otherwise leave it alone.
+ *
+ * WHAT THE OPENER OWES THE READER, AND WHAT IT MUST NOT TAKE. A permanent rail
+ * entry can be pressed onto a section nothing has drawn, so the opener has to
+ * draw. It must not REDRAW: a detail pane that is already on screen belongs to
+ * the reader, who may have scrolled it or opened the instructions card on it,
+ * and rebuilding it on a press that used to cost nothing takes both away.
+ *
+ * Those two are one line apart, which is why the question is asked of the PAGE
+ * rather than of the state. Whether a pane holds anything is a fact about the
+ * pane; deriving it from skills, currentSkillId and currentView would be three
+ * facts that have to agree, and they are exactly the three that did not.
+ *
+ * @returns {boolean} whether this drew
+ */
+function renderSkillsIfEmpty() {
+  const detail = document.getElementById('skill-detail-content');
+  if (detail && detail.firstElementChild) return false;
+  renderSkills();
+  return true;
+}
+
 // The glyph the Skills surface is known by. The same bolt selectSkill draws,
 // in the same box, so an empty pane and a full one are recognisably the same
 // place.
@@ -198,5 +221,5 @@ function selectSkill(id) {
   detail.scrollTop = 0;
 }
 
-return { renderSkills, renderSkillsEmpty, renderSkillsSidebar, selectSkill };
+return { renderSkills, renderSkillsEmpty, renderSkillsIfEmpty, renderSkillsSidebar, selectSkill };
 }));

@@ -208,7 +208,7 @@ describe('the pane waits for the reply before it offers anything', () => {
   // exactly like a workspace with nothing in it, so the offer to build a first
   // skill reaches people whose agents already have several.
   test('skills that have not arrived are not the same as no skills', () => {
-    const waiting = m.emptyState({ loading: true, hasGuide: true });
+    const waiting = m.emptyState({ loading: true, guideName: GUIDE.displayName });
     assert.strictEqual(waiting.action, null, 'an offer was made before anything was known');
     assert.strictEqual(waiting.lead, null, 'the pane claimed there were none before it knew');
     assert.strictEqual(waiting.body, editor.STEP_LEADS.loading,
