@@ -210,6 +210,12 @@ describe('no raw status word reaches the page', () => {
     assert.match(pageText(cut.doc), /never reached its ending/i);
     assert.ok(!/went wrong|did not get through/i.test(pageText(cut.doc)),
       'the interrupted page uses the words written for a run that failed');
+    // The heading over the file list is part of those words, and an
+    // interrupted run can carry a known list, so it gets one.
+    assert.ok(!/before it stopped/i.test(pageText(cut.doc)),
+      'the interrupted page heads its file list with the words written for a run that failed, '
+      + 'which contradicts the guidance above it saying the run may have got everything done');
+    assert.match(pageText(cut.doc), /What was recorded before Rundock closed/);
     // Told apart at a glance as well as in the sentence: the two carry
     // different tones, so the read does not rest on the reader finishing the
     // paragraph.

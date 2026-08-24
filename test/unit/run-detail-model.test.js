@@ -216,6 +216,37 @@ describe('unknown and empty are two different answers', () => {
     assert.deepStrictEqual([...emitted].sort(), [...REASONS].sort());
   });
 
+  test('a value borrowed from a prototype never stands in for words', () => {
+    // A record is a document on disk, so none of these keys is this file's to
+    // choose. A plain object answers every one of them with an inherited
+    // member, and an inherited member is truthy, so the fallback beside each
+    // lookup would be skipped and a function would reach the page.
+    for (const key of ['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__', 'isPrototypeOf']) {
+      const reason = model.describeRun(
+        livingRecord({ files: null, filesStatus: 'unknown', filesReason: key }), { now: NOW });
+      assert.strictEqual(reason.files.reason, model.FILES_UNKNOWN_FALLBACK,
+        `a reason of "${key}" resolved to an inherited member instead of the catch-all`);
+
+      const change = model.describeRun(livingRecord({
+        files: [{ path: '/w/a.md', tool: 'Write', change: key, at: null, source: 'transcript' }],
+        filesStatus: 'known', filesReason: null,
+      }), { now: NOW });
+      assert.strictEqual(change.files.entries[0].changeLabel, model.CHANGE_FALLBACK,
+        `a change of "${key}" resolved to an inherited member instead of the catch-all`);
+
+      const state = model.describeRun(livingRecord({ status: key }), { now: NOW });
+      assert.strictEqual(state.state.headline, model.UNRECOGNISED_STATE.headline,
+        `a status of "${key}" resolved to an inherited member instead of the catch-all`);
+
+      // Nothing anywhere in the view model is anything but a string, which is
+      // the property that actually matters: a function reaching the page gets
+      // stringified into its own source.
+      for (const said of words(state).concat(words(reason), words(change))) {
+        assert.strictEqual(typeof said, 'string', `"${key}" put a ${typeof said} on the screen`);
+      }
+    }
+  });
+
   test('a reason this version has never seen still reads as plain words', () => {
     for (const odd of ['a-reason-invented-later', null, undefined, '', 42]) {
       const view = model.describeRun(livingRecord({ files: null, filesStatus: 'unknown', filesReason: odd }), { now: NOW });
@@ -293,6 +324,19 @@ describe('no raw status word reaches the reader', () => {
     // And it must not read as a failure, which is the specific wrong reading.
     assert.ok(!/went wrong|failed|error/i.test(cut.state.headline + ' ' + cut.state.chip),
       'the interrupted copy reads as a failure, which is a claim nobody witnessed');
+    // THE HEADING OVER ITS FILE LIST IS PART OF THOSE WORDS. An interrupted
+    // run can carry a known list, so it gets a heading, and the failure
+    // heading says the run stopped partway. Nothing stopped: the process died
+    // before anything recorded where it had got to, and saying otherwise
+    // contradicts the guidance two lines above it on the same screen.
+    assert.notStrictEqual(cut.files.label, failed.files.label,
+      'a run whose ending never ran heads its file list with the words written for a run '
+      + 'that failed');
+    assert.ok(!/stopped/i.test(cut.files.label),
+      `the interrupted heading is "${cut.files.label}", which says the run stopped partway `
+      + 'when nobody knows where it got to');
+    assert.match(cut.files.label, /recorded/i,
+      'the interrupted heading does not say that what is listed is only what got recorded');
   });
 
   test('a failed run carries the reason it gave, in plain words around it', () => {
@@ -335,11 +379,12 @@ describe('what the run did', () => {
     assert.strictEqual(view.files.entries[0].path, '/w/Hello World/hello-world-2026-08-24.md');
   });
 
-  test('the files label says whether the run got to the end', () => {
-    const ok = model.describeRun(livingRecord(), { now: NOW });
-    const bad = model.describeRun(livingRecord({ status: 'failed', error: 'x' }), { now: NOW });
-    assert.notStrictEqual(ok.files.label, bad.files.label,
-      'a run that stopped partway labels its file list exactly as a run that finished');
+  test('the files label says how the run ended, and the three endings do not share one', () => {
+    const labels = ['succeeded', 'failed', 'interrupted'].map(status =>
+      model.describeRun(livingRecord({ status, error: 'x' }), { now: NOW }).files.label);
+    assert.strictEqual(new Set(labels).size, 3,
+      `two endings share a file-list heading (${labels.join(' | ')}), so a reader cannot tell `
+      + 'a settled list from a partial one from one nobody can vouch for');
   });
 
   test('a run still going does not report a duration it does not have', () => {

@@ -52,6 +52,24 @@
   else root.RundockRunDetailModel = factory();
 }(typeof self !== 'undefined' ? self : this, function () {
 
+  /**
+   * A lookup table with NO PROTOTYPE.
+   *
+   * WHY NOT A PLAIN OBJECT LITERAL. Every table below is keyed by a string
+   * that arrives from a record on disk, which is a document this app does not
+   * control: a status the scheduler wrote, a reason code the observation
+   * produced, a change word read out of a transcript. A plain object answers
+   * `constructor`, `toString`, `valueOf`, `hasOwnProperty` and `__proto__`
+   * with an INHERITED member, and an inherited member is truthy, so the
+   * `|| fallback` beside each of these lookups would be skipped and a
+   * function would reach the page where words should be.
+   *
+   * This is the same shape as the six ways document-controlled text was found
+   * reaching the page in the render hardening: text the app did not write,
+   * used as something other than text. Here it is used as a key.
+   */
+  function table(entries) { return Object.assign(Object.create(null), entries); }
+
   // ===== THE FOUR STATES, IN WORDS =====
   //
   // `chip` is the label beside the dot, `headline` the sentence under it, and
@@ -65,20 +83,23 @@
   // through what it was asked to, the other is a run whose ending never
   // happened, and a reader who reads the second as the first will revert work
   // that may have completed perfectly.
-  const RUN_STATES = {
+  const RUN_STATES = table({
     running: {
+      filesLabel: 'complete',
       tone: 'live',
       chip: 'Still going',
       headline: 'This run is still going.',
       guidance: 'Nothing about it is settled yet, including what it has changed.',
     },
     succeeded: {
+      filesLabel: 'complete',
       tone: 'ok',
       chip: 'Finished',
       headline: 'This run got to the end and did what it was asked to.',
       guidance: null,
     },
     failed: {
+      filesLabel: 'partial',
       tone: 'bad',
       chip: 'Stopped early',
       headline: 'This run started and did not get through what it was asked to.',
@@ -88,13 +109,14 @@
     // outcome and the headline names the ending rather than the work. What is
     // being reported is an absence of evidence, not evidence of a problem.
     interrupted: {
+      filesLabel: 'unwitnessed',
       tone: 'unwitnessed',
       chip: 'No ending recorded',
       headline: 'Rundock closed while this run was under way, so the run never reached its ending.',
       guidance: 'Nothing recorded how it turned out. It may have got everything done a moment '
         + 'before Rundock closed, and it may not.',
     },
-  };
+  });
 
   // A status this version has never been shown. Reached by a record written by
   // a newer Rundock, or by a record somebody hand-edited. Described rather
@@ -131,7 +153,7 @@
   // own, and the last two come from the progress read. A code is a machine
   // identifier and no reader should ever meet one, so each has a sentence and
   // the lookup has a floor.
-  const FILES_UNKNOWN_WORDS = {
+  const FILES_UNKNOWN_WORDS = table({
     running: 'This run is still going, so what it has changed is not settled yet.',
     'no-session': 'This run opened no session of its own, so there is nothing that records '
       + 'which files it touched.',
@@ -148,7 +170,7 @@
     'no-record': 'There is no record of this run, so nothing can say what it changed.',
     'no-activity': 'Nothing this run did has been recorded yet, so what it has changed cannot '
       + 'be read.',
-  };
+  });
 
   const FILES_UNKNOWN_FALLBACK = 'Rundock cannot tell what this run changed, and the reason '
     + 'its record gives is one this version does not recognise.';
@@ -156,15 +178,23 @@
   // 'created' and 'edited' are the only two the reader writes, and telling
   // them apart is the difference between a file that did not exist before this
   // run and one that did.
-  const CHANGE_LABELS = { created: 'Created', edited: 'Edited' };
+  const CHANGE_LABELS = table({ created: 'Created', edited: 'Edited' });
   const CHANGE_FALLBACK = 'Changed';
 
   const FILES_LABELS = {
-    // A run that stopped partway labels its list differently, because the list
-    // is then a partial one and a reader deciding whether to revert needs to
-    // know that before they read a line of it.
+    // A run that reached its ending. The list is settled.
     complete: 'Files changed',
+    // A run that ran and did not get through. It stopped, and the list is what
+    // it had done by the time it did, which a reader deciding whether to
+    // revert needs to know before they read a line of it.
     partial: 'Files changed before it stopped',
+    // A run whose ending never ran, and DELIBERATELY NOT THE FAILURE HEADING.
+    // Nothing here stopped partway: the process died before anything recorded
+    // where it had got to, which is a different fact and asks for a different
+    // response. Borrowing "before it stopped" would also contradict the
+    // guidance two lines above it on the same screen, which tells the reader
+    // the run may have got everything done a moment before Rundock closed.
+    unwitnessed: 'What was recorded before Rundock closed',
   };
 
   const NO_FILES_CHANGED = 'This run changed no files.';
@@ -176,12 +206,15 @@
    * THE ONE ROAD FROM A RECORD TO A LIST, deliberately, so there is exactly
    * one place a default could be written and exactly one place to guard.
    *
+   * `label` is the heading the list takes, chosen by the caller from the
+   * state, because how a run ended decides how its list has to be read.
+   *
    * Returns `{ known: true, entries, label }` or `{ known: false, reason }`.
    * The unknown shape carries NO `entries` key: a caller that reaches for one
    * gets `undefined` and fails loudly, rather than getting `[]` and rendering
    * a confident, wrong answer about a routine nobody could observe.
    */
-  function changedFiles(record, stopped) {
+  function changedFiles(record, label) {
     // KNOWN IS CLAIMED, NEVER INFERRED. Anything that is not the record's own
     // claim of 'known' is unknown, including a record with no filesStatus at
     // all, which is what a record from before the observation work looks like.
@@ -201,7 +234,7 @@
     }
     return {
       known: true,
-      label: stopped ? FILES_LABELS.partial : FILES_LABELS.complete,
+      label,
       empty: record.files.length === 0 ? NO_FILES_CHANGED : null,
       entries: record.files.map(entry => ({
         path: entry && typeof entry.path === 'string' ? entry.path : '',
@@ -262,9 +295,10 @@
     const state = !found
       ? NO_RECORD_STATE
       : (Object.prototype.hasOwnProperty.call(RUN_STATES, record.status) ? RUN_STATES[record.status] : UNRECOGNISED_STATE);
-    // A run that did not get to the end has a partial list, which its label
-    // has to say. Asked of the state rather than of the status word.
-    const stopped = state === RUN_STATES.failed || state === RUN_STATES.interrupted;
+    // WHICH HEADING THE FILE LIST TAKES, carried by the state rather than
+    // derived from a boolean. A boolean could only say "did it reach the end",
+    // which lumps a run that stopped partway together with one whose ending
+    // never ran, and those are the two this screen most has to keep apart.
     return {
       found,
       id: found ? record.id : null,
@@ -279,7 +313,7 @@
         guidance: guidanceFor(state, found ? record : null),
       },
       duration: found ? durationWords(record.durationMs) : null,
-      files: changedFiles(found ? record : null, stopped),
+      files: changedFiles(found ? record : null, FILES_LABELS[state.filesLabel] || FILES_LABELS.complete),
     };
   }
 
@@ -298,7 +332,7 @@
 
   return {
     RUN_STATES, UNRECOGNISED_STATE, NO_RECORD_STATE, FILES_UNKNOWN_WORDS, FILES_UNKNOWN_FALLBACK,
-    CHANGE_LABELS, FILES_LABELS, NO_FILES_CHANGED, UNKNOWN_FILES_LEAD, NO_REASON_GIVEN,
+    CHANGE_LABELS, CHANGE_FALLBACK, FILES_LABELS, NO_FILES_CHANGED, UNKNOWN_FILES_LEAD, NO_REASON_GIVEN,
     changedFiles, unknownWords, durationWords, describeRun, baseName,
   };
 }));

@@ -159,8 +159,8 @@ const MUTATIONS = [
   // Nobody witnessed the outcome, and this is the reading that costs a user
   // work they did not need to revert.
   [MODEL, 'a run whose ending never ran carries its own words',
-    "    interrupted: {\n      tone: 'unwitnessed',",
-    "    interrupted: {\n      tone: 'bad',"],
+    "    interrupted: {\n      filesLabel: 'unwitnessed',\n      tone: 'unwitnessed',",
+    "    interrupted: {\n      filesLabel: 'unwitnessed',\n      tone: 'bad',"],
   [MODEL, 'a run that ran and one that ran and got through do not share a headline',
     "      headline: 'This run got to the end and did what it was asked to.',",
     "      headline: 'This run ran.',"],
@@ -179,12 +179,28 @@ const MUTATIONS = [
     '`<div class="settings-row"><span class="rd-chip" data-run-detail="chip">`'],
 
   // ===== WHAT THE RUN CHANGED =====
+  // AC-8 REACHES THE FILE LIST'S HEADING TOO. An interrupted run can carry a
+  // known list, and the failure heading says the run stopped partway, which
+  // nothing did: the process died before anything recorded where it got to.
+  [MODEL, 'a run whose ending never ran heads its list with its own words',
+    "    interrupted: {\n      filesLabel: 'unwitnessed',",
+    "    interrupted: {\n      filesLabel: 'partial',"],
+  [MODEL_VIEW, 'the heading for a run whose ending never ran reaches the page',
+    "      filesLabel: 'unwitnessed',",
+    "      filesLabel: 'partial',"],
+  // A lookup keyed by a value read out of a record on disk. A plain object
+  // answers constructor, toString and __proto__ with an inherited member,
+  // which is truthy, so the fallback beside each lookup is skipped and a
+  // function reaches the page where words should be.
+  [MODEL, 'a lookup keyed by a value from a record admits no inherited member',
+    '  function table(entries) { return Object.assign(Object.create(null), entries); }',
+    '  function table(entries) { return Object.assign({}, entries); }'],
   [MODEL, 'a file created is told apart from a file edited',
     "        changeLabel: CHANGE_LABELS[entry && entry.change] || CHANGE_FALLBACK,",
     '        changeLabel: CHANGE_FALLBACK,'],
   [MODEL, 'a list from a run that stopped partway says so',
-    '      label: stopped ? FILES_LABELS.partial : FILES_LABELS.complete,',
-    '      label: FILES_LABELS.complete,'],
+    '      files: changedFiles(found ? record : null, FILES_LABELS[state.filesLabel] || FILES_LABELS.complete),',
+    '      files: changedFiles(found ? record : null, FILES_LABELS.complete),'],
   [VIEW, 'the screen says plainly that it cannot open a changed file',
     '    + `<p class="settings-caption rd-cannot-open">${escText(CANNOT_OPEN)}</p>`;',
     ';'],
