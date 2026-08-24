@@ -104,16 +104,23 @@ function routinesModel() {
  * The count runs in roster order, which is file order, so the nth namesake
  * here is the nth block in the file.
  *
- * AND THE COUNT IS TAKEN BEFORE THE SCOPE IS APPLIED, which is why the two
- * steps are in this order rather than folded together. The occurrence a delete
- * is addressed by is a position in the FILE, not a position in whatever subset
- * the panel is showing. Counting after the filter would send the server the
- * row's position on screen wearing the name of its position in the file, and
- * the confirmation would name one routine while the server removed another.
+ * AND THE COUNT IS TAKEN BEFORE EITHER THE SCOPE OR THE ORDER IS APPLIED,
+ * which is why the three steps are in this order rather than folded together.
+ * The occurrence a delete is addressed by is a position in the FILE, not a
+ * position in whatever subset the panel is showing and not a position in the
+ * order a reader sees. Counting after the filter or the sort would send the
+ * server the row's position on screen wearing the name of its position in the
+ * file, and the confirmation would name one routine while the server removed
+ * another.
  *
  * WHICH SCOPE IS THE PANEL'S DECISION and it is read rather than kept, so
  * there is one scope on the screen rather than two that agree until one of the
  * two surfaces is redrawn on its own.
+ *
+ * THE ORDER ITSELF IS THE MODEL'S DECISION, not this file's, for the same
+ * reason every word on a row is: a rule written inline in a flatten is
+ * reachable only by a browser. It runs last, over whatever the scope left,
+ * because a filtered list still has to read soonest first.
  */
 function allRoutines() {
   const out = [];
@@ -128,7 +135,8 @@ function allRoutines() {
     }
   }
   const scope = typeof routinesScopeAgentId === 'function' ? routinesScopeAgentId() : null;
-  return scope ? out.filter(entry => entry.agent.id === scope) : out;
+  const scoped = scope ? out.filter(entry => entry.agent.id === scope) : out;
+  return routinesModel().orderByNextRun(scoped, entry => entry.routine);
 }
 
 const ICONS = {
@@ -143,6 +151,51 @@ function iconButton(action, label, paths, onclick, danger) {
     + ` aria-label="${label}" data-routines-action="${action}" onclick="${onclick}">`
     + '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"'
     + ` stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${paths}</svg></button>`;
+}
+
+/**
+ * The skill a routine names, or nothing.
+ *
+ * A ROUTINE CAN NAME A SKILL THAT NO LONGER EXISTS. The routine is written
+ * into an agent's file and the skill is declared somewhere else entirely, so
+ * deleting the skill leaves the routine naming it. That is not a broken row:
+ * the routine is still real and still scheduled, so it keeps its sentence and
+ * loses only the link.
+ *
+ * The list is read through the same global the empty state reads, and an
+ * unarrived list resolves nothing rather than guessing, so the sentence is
+ * plain for the beat before the reply lands and reachable after it.
+ */
+function routineSkill(name) {
+  const list = typeof skills !== 'undefined' && skills ? skills : [];
+  return list.filter(s => s && s.name === name)[0] || null;
+}
+
+/**
+ * The row's sentence, with the skill name reachable where the skill exists.
+ *
+ * THE NAME IS PUT IN ITS OWN ELEMENT RATHER THAN FOUND AGAIN IN THE MARKUP.
+ * The model hands over the sentence in pieces, each escaped on its own, so a
+ * routine called `<img onerror=...>` or one whose name happens to read like
+ * the rest of the sentence cannot reach the page as anything but text.
+ *
+ * ONLY THE NAME IS THE LINK. The schedule is a fact about the routine and
+ * leads nowhere, and underlining the whole sentence would say the row itself
+ * is a destination, which it is not.
+ *
+ * THE HANDLER TRAVELS BY POSITION, like every other control on this row and
+ * for the same reason: a skill id is user-adjacent text and an identifier
+ * built out of it has to be escaped into an attribute and unescaped out again.
+ */
+function sentenceHtml(row, fallbackName, index, withActions) {
+  if (!row.parts) return esc(row.sentence || fallbackName);
+  // The delete confirmation draws a row to say which routine is about to go.
+  // It offers nothing, and a link is an offer.
+  if (!withActions) return esc(row.sentence);
+  if (!routineSkill(row.parts.name)) return esc(row.sentence);
+  return esc(row.parts.lead)
+    + `<button class="rr-skill-link" type="button" data-routines-action="open-skill"`
+    + ` onclick="routinesOpenSkill(${index})">${esc(row.parts.name)}</button>`;
 }
 
 /**
@@ -174,7 +227,7 @@ function rowHtml(entry, index, withActions) {
   // A schedule the editor never offered has no plain words. The routine is
   // still real and still listed, so it reads as its own name rather than as a
   // sentence the product cannot actually assemble.
-  const sentence = row.sentence || r.name;
+  const sentence = sentenceHtml(row, r.name, index, withActions);
   const sep = '<span class="sep">&middot;</span>';
   const nextRun = row.nextRun
     ? `<span class="${row.nextRun.className}">${esc(row.nextRun.text)}</span>`
@@ -186,7 +239,7 @@ function rowHtml(entry, index, withActions) {
   // on the meta line and the row is one line tall.
   if (!row.status && nextRun) meta += `${sep}${nextRun}`;
 
-  let body = `<div class="rr-sentence">${esc(sentence)}</div><div class="rr-meta">${meta}</div>`;
+  let body = `<div class="rr-sentence">${sentence}</div><div class="rr-meta">${meta}</div>`;
   // Revision 7's second line. Both facts, together, because they answer the
   // one question a reader has after a miss or a failure: did it recover, and
   // when does it try again.
@@ -227,15 +280,70 @@ function rowHtml(entry, index, withActions) {
     + `<div class="rr-body">${body}</div>${actions}</div>`;
 }
 
-function headerHtml() {
+// The glyph this surface is known by: the clock the rail already draws for
+// Routines, so the entry and the page it opens are recognisably the same
+// place. Written here in the same box the Skills pane uses for its bolt, which
+// is what makes the two views one component rather than two that resemble each
+// other.
+const CLOCK_SVG = '<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" stroke="none">'
+  + '<path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 5v4.4l3.3 2a1 1 0 1 1-1 1.7l-3.8-2.3a1 1 0'
+  + ' 0 1-.5-.9V7a1 1 0 0 1 2 0z"/></svg>';
+
+/**
+ * The agent this list is scoped to, said as a reader would say it, or nothing.
+ *
+ * ONE SCOPE, READ THROUGH THE ONE ACCESSOR. This asks `routinesScopeAgentId()`
+ * because the list above asks it: a subtitle resolved from a second notion of
+ * scope would agree with the rows only until one of the two surfaces was
+ * redrawn on its own, and a filtered list under an unfiltered sentence reads
+ * as a list that has lost rows. That is the exact reading the subtitle exists
+ * to prevent, so it must not be the thing the subtitle causes.
+ *
+ * The NAME is resolved from the roster rather than stored beside the id, so a
+ * rename reaches the sentence on the next broadcast without anything here
+ * holding a stale copy of it. An id that matches no agent says nothing, which
+ * leaves the unscoped sentence: better a true general sentence than a
+ * specific one with a hole in it.
+ */
+function routinesScopeName() {
+  const scope = typeof routinesScopeAgentId === 'function' ? routinesScopeAgentId() : null;
+  if (!scope) return null;
+  const roster = typeof agents !== 'undefined' && agents ? agents : [];
+  const agent = roster.filter(a => a && a.id === scope)[0];
+  return agent ? (agent.displayName || agent.name || null) : null;
+}
+
+/**
+ * The header, which is the skills view's header with a clock in it.
+ *
+ * THE COMPONENT IS THE POINT OF THIS, and the type size is not. The heading
+ * this replaced was `.settings-section-title`, borrowed from Settings, and it
+ * is already `var(--title)` at weight 700, exactly as `.profile-name` is. So
+ * nothing here changes a size. What changes is that a view which LISTS things
+ * now heads itself the way every other view that lists things does, instead of
+ * the way the view that CONFIGURES things does.
+ *
+ * `subtitle` is passed in rather than resolved here because the empty pane's
+ * subtitle is its own state line, exactly as the Skills pane's is.
+ */
+function headerHtml(subtitle) {
   const model = routinesModel();
-  let h = `<div class="settings-section-title">${esc(model.LEAD.title)}</div>`;
+  let h = '<div class="profile-header">'
+    + `<div class="profile-avatar skill-avatar">${CLOCK_SVG}</div>`
+    + `<div><div class="profile-name">${esc(model.LEAD.title)}</div>`
+    + (subtitle ? `<div class="routines-subtitle">${esc(subtitle)}</div>` : '')
+    + '</div></div>';
   // On the header rather than in one of the three branches below, so the
   // refusal is on the page whichever state the list is in when it arrives.
   if (pendingProblem) {
     h += `<p class="routines-problem" role="alert" data-routines-problem>${esc(pendingProblem)}</p>`;
   }
   return h;
+}
+
+/** The header a list of routines carries, scoped or not. */
+function listHeaderHtml() {
+  return headerHtml(routinesModel().header({ agentName: routinesScopeName() }).subtitle);
 }
 
 // The one thing each variant offers, and where pressing it goes. Held as a
@@ -277,8 +385,9 @@ function emptyHtml() {
   });
   const action = state.actionKind ? EMPTY_ACTIONS[state.actionKind] : null;
 
-  let h = headerHtml()
-    + `<p class="settings-lead routines-empty-lead">${esc(state.lead)}</p>`
+  // The state line is the subtitle here, as it is on the Skills pane: an empty
+  // list is not "every scheduled skill across your team".
+  let h = headerHtml(state.lead)
     + '<div class="settings-card flow routines-empty-card">'
     + `<p class="settings-lead">${esc(state.body)}</p>`;
   if (action && state.action) {
@@ -301,7 +410,7 @@ function confirmHtml(entry, index) {
     name: entry.routine.name,
     schedule: entry.routine.schedule,
   });
-  return headerHtml()
+  return listHeaderHtml()
     + `<div class="routine-table routines-confirm-subject">${rowHtml(entry, index, false)}</div>`
     + '<div class="confirm-card">'
     + `<h4>${esc(confirm.title)}</h4><p>${esc(confirm.body)}</p>`
@@ -316,9 +425,7 @@ function confirmHtml(entry, index) {
 }
 
 function listHtml(list) {
-  const model = routinesModel();
-  return headerHtml()
-    + `<p class="settings-lead routines-lead">${esc(model.LEAD.lead)}</p>`
+  return listHeaderHtml()
     + `<div class="routine-table">${list.map((e, i) => rowHtml(e, i, true)).join('')}</div>`;
 }
 
@@ -416,6 +523,34 @@ function routinesActionCleared() {
 }
 
 /**
+ * Open the skill a row names.
+ *
+ * THE RAIL IS SET HERE, ON THIS ROUTE, AND ON NO OTHER. `selectSkill` shows
+ * the skills view without touching the nav state, so every route into Skills
+ * that is not the rail leaves the previous icon lit, and a reader who jumps
+ * from here would be looking at Skills with Routines still highlighted. This
+ * route is the one this control creates, so it is the one fixed here.
+ *
+ * The other routes with the same defect are left exactly as they are. They
+ * belong to the navigation inventory, which exists so that somebody
+ * enumerates every destination and settles the rule once, rather than patching
+ * the ones that happen to have been noticed. Five have been noticed; patching
+ * them here would leave the same defect on every route nobody has listed yet,
+ * and would remove the reason for the enumeration.
+ *
+ * Resolved again at press time rather than captured when the row was drawn: a
+ * skill can be deleted between a render and a click, and a stale id would open
+ * a page for something that is gone.
+ */
+function routinesOpenSkill(index) {
+  const entry = allRoutines()[index];
+  const skill = entry && routineSkill(entry.routine.name);
+  if (!skill) return;
+  if (typeof switchNav === 'function') switchNav('skills');
+  if (typeof selectSkill === 'function') selectSkill(skill.id);
+}
+
+/**
  * The entry a pending confirmation is about, or nothing.
  *
  * routinesAskDelete turns the position the reader pressed into an identity, at
@@ -490,6 +625,7 @@ function routinesSetPaused(index, paused) {
 return {
   renderRoutines, showRoutinesForAgent,
   routinesAskDelete, routinesCancelDelete, routinesConfirmDelete, routinesSetPaused,
+  routinesOpenSkill,
   routinesActionFailed, routinesActionCleared, routinesViewLastRun,
 };
 }));

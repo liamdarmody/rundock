@@ -139,25 +139,37 @@ function render(agents) {
 
 const text = (el) => el.textContent.replace(/\s+/g, ' ').trim();
 
+// The row for a named routine, rather than the row in a given position. The
+// list is ordered by next run, so a position names whichever routine that
+// ordering puts there, which is not what a claim about the missed row means.
+function rowNamed(doc, name) {
+  const found = [...doc.querySelectorAll('.routine-row')]
+    .filter(r => text(r.querySelector('.rr-sentence')).includes(name));
+  assert.strictEqual(found.length, 1, `expected exactly one row for "${name}"`);
+  return found[0];
+}
+
 describe('the roster carries what the row renders', () => {
   test('the four rows the locked frame draws come out of a real workspace', () => {
     roster((agents) => {
       const { doc, dom } = render(agents);
       const rows = [...doc.querySelectorAll('.routine-row')];
       assert.strictEqual(rows.length, 4);
+      // In next-run order, which puts the missed row first: out of a real
+      // workspace, it is the only one of the four due again today.
       assert.deepStrictEqual(rows.map(r => text(r.querySelector('.run-status'))), [
+        'Missed: Rundock was closed at 7:00am yesterday, London time',
         'Ran today, 7:00am, London time',
         'Caught up: ran today, 9:14am, London time, due 7:00am',
-        'Missed: Rundock was closed at 7:00am yesterday, London time',
         'Failed: today, 7:00am, London time',
       ]);
       assert.deepStrictEqual(rows.map(r => r.querySelector('.run-status').className), [
-        'run-status ok', 'run-status ok-quiet', 'run-status neutral', 'run-status failed',
+        'run-status neutral', 'run-status ok', 'run-status ok-quiet', 'run-status failed',
       ]);
       assert.deepStrictEqual(rows.map(r => text(r.querySelector('.next-run'))), [
-        'Next run: tomorrow, 7:00am, London time',
-        'Next run: tomorrow, 7:00am, London time',
         'Next run: today, 7:00am, London time',
+        'Next run: tomorrow, 7:00am, London time',
+        'Next run: tomorrow, 7:00am, London time',
         'Next run: tomorrow, 7:00am, London time',
       ]);
       dom.window.close();
@@ -170,7 +182,7 @@ describe('the roster carries what the row renders', () => {
   test('a run that took eleven minutes still reads as punctual, end to end', () => {
     roster((agents) => {
       const { doc, dom } = render(agents);
-      const first = doc.querySelectorAll('.routine-row')[0];
+      const first = rowNamed(doc, 'Ran on time');
       assert.strictEqual(text(first.querySelector('.run-status')), 'Ran today, 7:00am, London time',
         'the row is reading a completion time, so a long run reads as a late one');
       dom.window.close();
@@ -180,7 +192,7 @@ describe('the roster carries what the row renders', () => {
   test('a run that started late reads as caught up, end to end', () => {
     roster((agents) => {
       const { doc, dom } = render(agents);
-      const second = doc.querySelectorAll('.routine-row')[1];
+      const second = rowNamed(doc, 'Caught up');
       assert.match(text(second.querySelector('.run-status')), /^Caught up: ran today, 9:14am/);
       dom.window.close();
     });
@@ -189,7 +201,7 @@ describe('the roster carries what the row renders', () => {
   test('a slot that passed while the machine was closed reads as missed, end to end', () => {
     roster((agents) => {
       const { doc, dom } = render(agents);
-      const third = doc.querySelectorAll('.routine-row')[2];
+      const third = rowNamed(doc, 'Missed');
       assert.match(text(third.querySelector('.run-status')), /^Missed: Rundock was closed/);
       dom.window.close();
     });

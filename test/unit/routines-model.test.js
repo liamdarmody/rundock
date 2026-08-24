@@ -522,3 +522,320 @@ describe('the copy this card ships', () => {
     }
   });
 });
+
+describe('the order the list is read in', () => {
+  // WHAT MAKES THESE CAPABLE OF FAILING. Every fixture below is written so
+  // that roster order and next-run order DISAGREE, and each asserts the whole
+  // sequence rather than a property of it. A list handed back untouched comes
+  // out in the order it went in, so reverting to roster order turns every one
+  // of these red by name.
+  const item = (name, facts) => ({ name, nextRun: null, paused: false, ...facts });
+
+  const SOON = new Date(2026, 7, 20, 18, 0);
+  const LATER = new Date(2026, 7, 21, 7, 0);
+  const LATEST = new Date(2026, 7, 22, 7, 0);
+
+  test('the soonest next run is first, whatever order the roster held', () => {
+    const roster = [
+      item('third', { nextRun: LATEST }),
+      item('first', { nextRun: SOON }),
+      item('second', { nextRun: LATER }),
+    ];
+    assert.deepStrictEqual(m.orderByNextRun(roster).map(r => r.name),
+      ['first', 'second', 'third'],
+      'the list came back in the order the roster held it, which is file order');
+  });
+
+  test('paused routines are last, grouped, and in roster order among themselves', () => {
+    const roster = [
+      item('paused first in the file', { paused: true }),
+      item('runs later', { nextRun: LATEST }),
+      item('paused second in the file', { paused: true }),
+      item('runs soon', { nextRun: SOON }),
+    ];
+    assert.deepStrictEqual(m.orderByNextRun(roster).map(r => r.name), [
+      'runs soon', 'runs later', 'paused first in the file', 'paused second in the file',
+    ], 'a paused routine has no next run, so it belongs after everything that has one');
+  });
+
+  // A paused routine can still carry the instant it WOULD have run at, and it
+  // must not be sorted by it: paused is a band, not a time.
+  test('a paused routine carrying a next run is still last', () => {
+    const roster = [
+      item('paused but due first', { paused: true, nextRun: SOON }),
+      item('actually runs', { nextRun: LATEST }),
+    ];
+    assert.deepStrictEqual(m.orderByNextRun(roster).map(r => r.name),
+      ['actually runs', 'paused but due first']);
+  });
+
+  // A schedule the editor never offered has no computable slot, so the routine
+  // is real, is listed, and cannot be placed on the timeline.
+  test('a routine with no next run sits after the scheduled ones and before the paused', () => {
+    const roster = [
+      item('paused', { paused: true }),
+      item('no next run'),
+      item('scheduled', { nextRun: LATER }),
+    ];
+    assert.deepStrictEqual(m.orderByNextRun(roster).map(r => r.name),
+      ['scheduled', 'no next run', 'paused']);
+  });
+
+  test('two routines due at the same instant keep the order the roster gave them', () => {
+    const roster = [item('written first', { nextRun: LATER }), item('written second', { nextRun: LATER })];
+    assert.deepStrictEqual(m.orderByNextRun(roster).map(r => r.name),
+      ['written first', 'written second']);
+  });
+
+  // The caller's array is what the namesake count was taken over, so it must
+  // come back as it went in.
+  test('the roster handed in is not reordered underneath the caller', () => {
+    const roster = [item('later', { nextRun: LATEST }), item('sooner', { nextRun: SOON })];
+    m.orderByNextRun(roster);
+    assert.deepStrictEqual(roster.map(r => r.name), ['later', 'sooner'],
+      'the caller\'s list was sorted in place, so the namesake count it holds now names other rows');
+  });
+
+  // The two facts are read through the caller's own accessor, so the model
+  // never has to know the shape of an entry the view assembles.
+  test('the two facts are found wherever the caller says they are', () => {
+    const roster = [
+      { routine: { nextRun: LATEST, paused: false }, tag: 'later' },
+      { routine: { nextRun: SOON, paused: false }, tag: 'sooner' },
+    ];
+    assert.deepStrictEqual(m.orderByNextRun(roster, e => e.routine).map(e => e.tag),
+      ['sooner', 'later']);
+  });
+
+  // Both instants arrive from the server as strings, which is the only shape
+  // this ever sees in the product.
+  test('the instants sort as instants rather than as strings', () => {
+    const roster = [
+      item('nine in the evening', { nextRun: new Date(2026, 7, 20, 21, 0).toISOString() }),
+      item('nine in the morning', { nextRun: new Date(2026, 7, 20, 9, 0).toISOString() }),
+    ];
+    assert.deepStrictEqual(m.orderByNextRun(roster).map(r => r.name),
+      ['nine in the morning', 'nine in the evening']);
+  });
+
+  test('no row is added, dropped or altered by being ordered', () => {
+    const roster = [item('a', { nextRun: LATEST }), item('b', { paused: true }), item('c', { nextRun: SOON })];
+    const ordered = m.orderByNextRun(roster);
+    assert.strictEqual(ordered.length, roster.length);
+    for (const original of roster) {
+      assert.ok(ordered.includes(original), 'ordering replaced a row with a copy of it');
+    }
+  });
+});
+
+describe('the sentence in the pieces the view composes it from', () => {
+  const INPUT = { schedule: 'every day at 07:00', name: 'Compile the ops summary' };
+
+  // AC-B4. Every word of this sentence is asserted here, on the model, and not
+  // on the markup a view happens to produce from it.
+  test('the pieces carry the schedule and the skill name, and nothing else', () => {
+    assert.deepStrictEqual(m.sentenceParts(INPUT),
+      { lead: 'Every day at 7:00am, run: ', name: 'Compile the ops summary' });
+  });
+
+  // The two cannot say different things, because one is built from the other.
+  test('the pieces concatenate to exactly the sentence', () => {
+    const parts = m.sentenceParts(INPUT);
+    assert.strictEqual(parts.lead + parts.name, m.routineSentence(INPUT));
+    assert.strictEqual(m.routineSentence(INPUT), 'Every day at 7:00am, run: Compile the ops summary');
+  });
+
+  // The lead owns the space, so a caller that puts the name in its own element
+  // does not have to invent one and cannot leave the two words joined.
+  test('the space before the name belongs to the lead', () => {
+    assert.match(m.sentenceParts(INPUT).lead, / $/);
+    assert.ok(!/^\s/.test(m.sentenceParts(INPUT).name));
+  });
+
+  // A schedule the editor never offered assembles into nothing rather than
+  // into a sentence that reads as though the product understood it, and the
+  // pieces answer the same way the whole sentence does.
+  test('a schedule with no plain words yields no pieces', () => {
+    assert.strictEqual(m.sentenceParts({ schedule: 'every fortnight at 07:00', name: 'A skill' }), null);
+    assert.strictEqual(m.routineSentence({ schedule: 'every fortnight at 07:00', name: 'A skill' }), null);
+  });
+
+  test('a routine with no name yields no pieces', () => {
+    assert.strictEqual(m.sentenceParts({ schedule: 'every day at 07:00' }), null);
+  });
+
+  test('the row carries the pieces beside the sentence', () => {
+    const row = m.row({ ...INPUT, runOn: 'local', agentName: 'Piper' });
+    assert.strictEqual(row.parts.lead + row.parts.name, row.sentence);
+  });
+
+  test('a row that cannot assemble a sentence carries no pieces either', () => {
+    const row = m.row({ schedule: 'every fortnight at 07:00', name: 'A skill', runOn: 'local' });
+    assert.strictEqual(row.sentence, null);
+    assert.strictEqual(row.parts, null);
+  });
+});
+
+describe('the header this view heads itself with', () => {
+  test('the title is the name of the surface', () => {
+    assert.strictEqual(m.header().title, 'Routines');
+    assert.strictEqual(m.header().title, m.LEAD.title);
+  });
+
+  // AC-C3, unscoped: the locked sentence, word for word.
+  test('unscoped, the subtitle is the locked sentence', () => {
+    assert.strictEqual(m.header().subtitle,
+      'Every scheduled skill across your team, and when it runs next.');
+    assert.strictEqual(m.header({}).subtitle, m.LEAD.lead);
+    assert.strictEqual(m.header({ agentName: null }).subtitle, m.LEAD.lead);
+  });
+
+  // AC-C3, scoped: a filtered list under an unfiltered sentence reads as a
+  // list that has lost rows.
+  test('scoped to an agent, the subtitle names that agent', () => {
+    assert.strictEqual(m.header({ agentName: 'Piper' }).subtitle,
+      'Every scheduled skill Piper runs, and when it runs next.');
+    assert.strictEqual(m.header({ agentName: 'Wren' }).subtitle,
+      'Every scheduled skill Wren runs, and when it runs next.');
+  });
+
+  // The name is substituted into the shipped sentence rather than concatenated
+  // onto a fragment of one, so the whole of what ships is in the model.
+  test('the scoped sentence is one string with a slot in it', () => {
+    assert.match(m.LEAD.scopedLead, /\{agent\}/);
+    assert.ok(!m.header({ agentName: 'Piper' }).subtitle.includes('{agent}'),
+      'the slot reached the page');
+  });
+
+  // A DISPLAY NAME IS USER TEXT AND MUST NOT BE READ AS A PATTERN. A string
+  // replacement interprets dollar sequences in what it is handed: $& is the
+  // match, $` and $' the text either side, $$ a literal dollar. An agent can
+  // be named anything.
+  test('a name carrying a replacement pattern is inserted, not interpreted', () => {
+    for (const name of ['A $& B', "$`", "$'", 'A $$ B', '$1', 'Ops $&$& team']) {
+      assert.strictEqual(m.header({ agentName: name }).subtitle,
+        `Every scheduled skill ${name} runs, and when it runs next.`,
+        `the name ${name} was read as a replacement pattern rather than inserted`);
+    }
+  });
+
+  test('an agent whose name is a token does not rewrite the sentence twice', () => {
+    assert.strictEqual(m.header({ agentName: '{agent}' }).subtitle,
+      'Every scheduled skill {agent} runs, and when it runs next.');
+  });
+});
+
+describe('the one state the chrome is allowed to alarm about', () => {
+  // AC-D2 AT THE MODEL. The rail asks this the same question a row asks, so
+  // the ruling cannot say one thing on a row and another on the chrome. Each
+  // non-failure state is asserted on its own: the four asserted together would
+  // be one failure that could be any of them.
+  const withFacts = (facts) => [{ ...facts }];
+
+  test('a failed most recent completed run is a failure', () => {
+    assert.strictEqual(m.anyFailure(withFacts(FAILED)), true);
+  });
+
+  test('a run the process died inside is a failure', () => {
+    assert.strictEqual(m.anyFailure(withFacts({ ...FAILED, lastRunStatus: 'interrupted' })), true);
+  });
+
+  test('a missed slot is not a failure', () => {
+    assert.strictEqual(m.anyFailure(withFacts(MISSED)), false,
+      'the machine being off is not the routine failing');
+  });
+
+  test('a catch-up is not a failure', () => {
+    assert.strictEqual(m.anyFailure(withFacts(CAUGHT_UP)), false, 'a late run is a success');
+  });
+
+  test('a run in flight is not a failure', () => {
+    assert.strictEqual(m.anyFailure(withFacts({ ...FAILED, lastRunStatus: 'running' })), false,
+      'a run that has not finished has no outcome to report');
+  });
+
+  test('a routine that has never run is not a failure', () => {
+    assert.strictEqual(m.anyFailure(withFacts({ lastStart: null, lastRunStatus: null })), false);
+  });
+
+  test('a run that went fine is not a failure', () => {
+    assert.strictEqual(m.anyFailure(withFacts(RAN_ON_TIME)), false);
+  });
+
+  // AC-D5 at the model.
+  test('one failure among several is a failure', () => {
+    assert.strictEqual(m.anyFailure([RAN_ON_TIME, MISSED, FAILED, CAUGHT_UP]), true);
+  });
+
+  test('another routine succeeding does not clear one that failed', () => {
+    assert.strictEqual(m.anyFailure([FAILED, RAN_ON_TIME]), true);
+  });
+
+  test('a routine that failed and then succeeded is not failing', () => {
+    assert.strictEqual(m.anyFailure([RAN_ON_TIME]), false,
+      'the question is about the most recent completed run, not about history');
+  });
+
+  // THE PAUSE CLAUSE OF AC-D2, WITH A FIXTURE THAT WOULD RAISE THE DOT IF
+  // PAUSE WERE IGNORED. A paused routine with no run history proves nothing
+  // about pause: it is indistinguishable from one that has never run, and the
+  // never-run branch already answers it. The pause has to be the only thing
+  // between the routine and a dot.
+  test('a paused routine whose last run failed is not a failure', () => {
+    assert.strictEqual(m.anyFailure(withFacts({ ...FAILED, paused: true })), false,
+      'a paused routine can never succeed again, so a dot it raised could never be cleared');
+  });
+
+  test('a paused routine whose last run was interrupted is not a failure', () => {
+    assert.strictEqual(
+      m.anyFailure(withFacts({ ...FAILED, lastRunStatus: 'interrupted', paused: true })), false);
+  });
+
+  test('the same routine unpaused is a failure, so the pause is what decides it', () => {
+    assert.strictEqual(m.anyFailure(withFacts({ ...FAILED, paused: false })), true,
+      'sanity: without the pause this fixture raises the dot');
+  });
+
+  test('a paused routine does not hide a failure on another routine', () => {
+    assert.strictEqual(m.anyFailure([{ ...FAILED, paused: true }, { ...FAILED }]), true);
+  });
+
+  // AC-D1, READ LITERALLY, AND THE READING IS RECORDED HERE RATHER THAN LEFT
+  // TO FALL OUT OF THE ROW'S RULE. A row says what happened most recently,
+  // which is the later of a run and a slot that went by unserved. The rail
+  // asks whether the last completed run failed. A failure followed by a night
+  // with the machine shut is still a failure nobody has seen, and letting the
+  // miss mask it would hide the only alarming state in the product behind the
+  // most ordinary event there is.
+  test('a missed slot after a failed run does not mask the failure on the rail', () => {
+    const failedThenMissed = {
+      ...FAILED,
+      missedSlot: new Date(2026, 7, 20, 7, 0),
+      lastStart: new Date(2026, 7, 19, 7, 0),
+      lastSlot: new Date(2026, 7, 19, 7, 0),
+    };
+    assert.strictEqual(m.outcomeOf(failedThenMissed), 'missed',
+      'sanity: the ROW says missed, because that is the newer fact');
+    assert.strictEqual(m.anyFailure([failedThenMissed]), true,
+      'the rail asks about the last completed run, and it failed');
+  });
+
+  // The two questions share what a failure IS, so they cannot drift apart on
+  // that while deliberately differing on what masks one.
+  test('the row and the rail agree on which statuses are failures', () => {
+    for (const status of ['failed', 'interrupted']) {
+      const facts = { ...FAILED, lastRunStatus: status };
+      assert.strictEqual(m.outcomeOf(facts), 'failed', status);
+      assert.strictEqual(m.lastCompletedRunFailed(facts), true, status);
+    }
+    for (const status of ['completed', 'running', null]) {
+      assert.strictEqual(m.lastCompletedRunFailed({ ...FAILED, lastRunStatus: status }), false, String(status));
+    }
+  });
+
+  test('nothing at all is not a failure', () => {
+    assert.strictEqual(m.anyFailure([]), false);
+    assert.strictEqual(m.anyFailure(), false);
+    assert.strictEqual(m.anyFailure(null), false);
+  });
+});

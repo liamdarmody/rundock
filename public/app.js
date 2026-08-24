@@ -171,6 +171,54 @@ function updateUnreadBadge() {
   }
 }
 
+// THE ONE ALARMING STATE IN THE PRODUCT, ON THE CHROME.
+//
+// The three-tone ruling makes a real failure the only genuinely alarming state
+// a routine can be in, and it could not be seen without opening the view that
+// governs it: somebody whose overnight run failed had no way to know until
+// they went and looked.
+//
+// THE TOKEN IS --danger AND NOT THE CLASS BESIDE IT. `.nav-badge` already
+// exists for unread conversations and is --attention, and amber is deliberately
+// spent on "needs the user, not an error". A failed routine is an error, so it
+// takes its own class and the danger token rather than borrowing amber, which
+// reads as an alert whatever a legend says it means.
+//
+// WHICH ROUTINES COUNT IS THE MODEL'S ANSWER, not this function's. It asks the
+// same question a row asks, so the rule the rows were settled on cannot say one
+// thing on a row and another on the rail.
+function updateRoutineFailureBadge() {
+  const navBtn = document.querySelector('[data-nav="routines"]');
+  if (!navBtn) return;
+  let badge = navBtn.querySelector('.nav-badge-failed');
+  const facts = [];
+  for (const agent of agents || []) {
+    for (const routine of agent.routines || []) {
+      facts.push({
+        // The same fields a row reads, taken the same way, so the rail and the
+        // row cannot disagree about what happened last.
+        lastStart: routine.lastStart,
+        lastRunStatus: routine.state ? routine.state.status : null,
+        lastSlot: routine.lastSlot,
+        missedSlot: routine.missedSlot,
+        // AND WHETHER IT IS PAUSED, which the row does not need and the rail
+        // does. A paused routine can never succeed again, so a dot raised by
+        // one could never be cleared by the rule that clears dots.
+        paused: !!routine.paused,
+      });
+    }
+  }
+  if (RundockRoutinesModel.anyFailure(facts)) {
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.className = 'nav-badge-failed';
+      navBtn.appendChild(badge);
+    }
+  } else {
+    if (badge) badge.remove();
+  }
+}
+
 function esc(t){const d=document.createElement('div');d.textContent=t;return d.innerHTML;}
 function escAttr(t){return t.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function stripMd(t){return t.replace(/\*\*(.*?)\*\*/g,'$1').replace(/\*(.*?)\*/g,'$1').replace(/~~(.*?)~~/g,'$1').replace(/`([^`]+)`/g,'$1').replace(/^#+\s/gm,'').replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g,'$2').replace(/\[\[([^\]]+)\]\]/g,'$1').replace(/==(.*?)==/g,'$1');}
@@ -236,7 +284,11 @@ function handle(d) {
     // arrives when a routine is added or deleted, so the scope rows and their
     // counts are stale from that moment until something redraws them, and the
     // scope itself may now name an agent that owns nothing.
-    case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesPanel(); renderRoutines(); renderConvoList(); break;
+    //
+    // AND THE RAIL, for the same reason one step further out: the roster is
+    // also what arrives when a run finishes, which is the only thing that
+    // raises or clears the failure dot.
+    case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesPanel(); renderRoutines(); updateRoutineFailureBadge(); renderConvoList(); break;
     // renderRoutines as well as renderSkills: the routines empty state asks
     // whether the workspace has a skill, so the reply that answers that
     // question is the reply that has to redraw it. Without this the list sits

@@ -220,6 +220,7 @@ const MANIFEST = {
     "routinesAskDelete",
     "routinesCancelDelete",
     "routinesConfirmDelete",
+    "routinesOpenSkill",
     "routinesSetPaused",
     "routinesViewLastRun",
     "showRoutinesForAgent",
