@@ -204,12 +204,6 @@
 .add-btn:hover { color: var(--accent); background: var(--accent-glow); border-color: rgba(232,122,90,0.3); }
 
 
-/* Routine sidebar items */
-.routine-item { display: flex; align-items: center; gap: 8px; padding: 8px; font-size: var(--caption); border-radius: var(--radius-lg); transition: background var(--duration-base) ease; cursor: default; }
-.routine-item:hover { background: var(--elevated); }
-.routine-name { flex: 1; color: var(--text-1); font-weight: 500; font-size: var(--body); }
-.avatar.xxs { width: 20px; height: 20px; font-size: 9px; }
-
 /* Sidebar section dividers */
 .sidebar-section-divider { border-top: 1px solid var(--border); margin: 8px 8px 0; padding: 12px 0 6px; }
 .sidebar-empty-state { padding: 16px 12px; }

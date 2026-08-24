@@ -366,16 +366,31 @@
    * shell rather than against a belief about it.
    *
    * A destination is usable only if the shell has BOTH halves of it: a rail
-   * button carrying the name, and the sidebar panel the router reveals by that
+   * button carrying the name, and the view panel the router shows by that
    * name. Checking the pair is what makes this a resolution rather than a
-   * guess. THE FALLBACK IS SILENT, and that is why the pair is asserted
-   * against the real markup in the doors suite rather than against a shell a
-   * test writes for itself: renaming either half sends a real save to the team
-   * chart with nothing thrown and nothing logged.
+   * guess.
+   *
+   * IT ASKS FOR ALL THREE, and each is here because a parent of this file
+   * needed it. The routines section had no sidebar of its own and resolved
+   * against `sidebar-routines` anyway, because an empty element of that name
+   * sat nested inside the team panel holding the old listing: revealing it by
+   * name succeeded and left the reader staring at a hidden parent. That
+   * sentinel is gone and the section now has a real panel of its own, so both
+   * halves the router touches are real and both are asked for. `setNavState`
+   * reveals the sidebar by name and `showView` reveals the view by name, so a
+   * shell missing either cannot show this section, and asking for only one of
+   * them is how the old accident passed as a check.
+   *
+   * THE FALLBACK IS SILENT, which is why the trio is asserted against the real
+   * markup in the doors suite rather than against a shell a test writes for
+   * itself: renaming any of them sends a real save to the team chart with
+   * nothing thrown and nothing logged.
    */
   function navigable(nav) {
     if (typeof document === 'undefined') return false;
-    return !!(document.querySelector(`[data-nav="${nav}"]`) && document.getElementById(`sidebar-${nav}`));
+    return !!(document.querySelector(`[data-nav="${nav}"]`)
+      && document.getElementById(`sidebar-${nav}`)
+      && document.getElementById(`view-${nav}`));
   }
 
   function routinesListNav() {

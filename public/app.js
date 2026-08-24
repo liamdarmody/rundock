@@ -188,25 +188,6 @@ function formatTimeAgo(input) {
   return `${Math.floor(diff/86400)}d ago`;
 }
 
-function formatScheduleShort(schedule) {
-  if (!schedule) return '';
-  const s = schedule.toLowerCase();
-  const dailyMatch = s.match(/every day at (\d{2}):(\d{2})/);
-  if (dailyMatch) {
-    const h = parseInt(dailyMatch[1]);
-    const m = dailyMatch[2];
-    return `${h === 0 ? 12 : (h > 12 ? h - 12 : h)}:${m} ${h >= 12 ? 'PM' : 'AM'}`;
-  }
-  const weeklyMatch = s.match(/every (\w+) at (\d{2}):(\d{2})/);
-  if (weeklyMatch) {
-    const day = weeklyMatch[1].charAt(0).toUpperCase() + weeklyMatch[1].slice(1, 3);
-    const h = parseInt(weeklyMatch[2]);
-    const m = weeklyMatch[3];
-    return `${day} ${h === 0 ? 12 : (h > 12 ? h - 12 : h)}:${m} ${h >= 12 ? 'PM' : 'AM'}`;
-  }
-  return schedule;
-}
-
 function getTeamAgents() { return agents.filter(a => a.status === 'onTeam' && a.type !== 'platform'); }
 function getPlatformAgents() { return agents.filter(a => a.status === 'onTeam' && a.type === 'platform'); }
 function getGuide() { return agents.find(a => a.type === 'platform'); }
@@ -248,24 +229,16 @@ function handle(d) {
       if (currentView === 'settings') renderSettingsSection('workspace');
       break;
     case 'needs_workspace': showView('workspace'); break;
-    // renderRoutinesSidebar is NOT called here any more, and its absence is
-    // the point. It draws the old team-sidebar routine listing into
-    // #sidebar-routines, which is now the scope panel's element, so the two
-    // renderers were writing to one mount and the panel survived only by
-    // being second on this line. On a workspace with no routines the legacy
-    // one empties that mount, so the order was not a preference, it was the
-    // difference between the panel being there and being gone on exactly the
-    // workspace its pinned row exists to protect.
-    //
-    // The mount cannot be split from this branch: team.js addresses it by the
-    // literal id, and the router and the editor's save destination both key
-    // off the section name, so all three need that one element. Retiring the
-    // function itself belongs to the card that removes the team listing.
+    // THE PANEL IS REDRAWN HERE AS WELL AS THE LIST. The roster is what
+    // arrives when a routine is added or deleted, so the scope rows and their
+    // counts are stale from that moment until something redraws them, and the
+    // scope itself may now name an agent that owns nothing.
     case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesPanel(); renderRoutines(); renderConvoList(); break;
     // renderRoutines as well as renderSkills: the routines empty state asks
     // whether the workspace has a skill, so the reply that answers that
     // question is the reply that has to redraw it. Without this the list sits
     // on its waiting line until the next roster broadcast.
+    case 'run': runArrived(d); break;
     case 'skills': skills=d.skills; skillsLoaded=true; renderSkills(); renderRoutines(); routineEditorSkillsArrived(d.skills); if(palettePendingSkill){const s=palettePendingSkill;palettePendingSkill=null;selectSkill(s);} break;
     case 'conversations':
       handlePersistedConversations(d.conversations, d.lastActiveConversationId);
@@ -857,7 +830,7 @@ function addSystemMsgToConvo(text, convoId, isError = true) {
 // ===== 5. AGENT LIST & SIDEBAR =====
 // Moved to public/views/team.js (Foundations view module):
 // getWorkingAgentIds, renderAgentList, renderConvoEmptyAgents,
-// renderRoutinesSidebar, addToTeam. All resolve via the module's window
+// addToTeam. All resolve via the module's window
 // republication.
 
 // ===== 6. ORG CHART =====
@@ -1054,12 +1027,14 @@ function switchNav(nav) {
   else if(nav==='skills') { showView('skills'); renderSkillsIfEmpty(); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } }
   else if(nav==='conversations') { if(activeConversation) { showView('chat'); if(unread.clearConvo(activeConversation.id)) { updateUnreadBadge(); renderConvoList(); } } else { const target = pickDefaultConversation(); if(target) { openConversation(target.id); } else { newConversation(); } } }
   else if(nav==='team') { showView('home'); renderOrgChart(); }
-  // ARRIVING HERE ALWAYS ARRIVES ON ALL. A filter that survives a visit is a
-  // filter that hides a failed overnight run from the person who opened this
-  // view to look for one, so the rail forgets the scope before it draws.
-  else if(nav==='routines') { routinesPanelReset(); showView('routines'); renderRoutinesPanel(); renderRoutines(); }
+  // ONE DESTINATION, AND ARRIVING FROM THE RAIL ARRIVES ON ALL. A filter that
+  // survives a visit is a filter that hides a failed overnight run from the
+  // person who opened this view to look for one, so the rail passes no agent.
+  // A routine row on an agent's profile passes one, which is the deep link
+  // that announces itself.
+  else if(nav==='routines') { showRoutinesForAgent(null); }
 }
-function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings','routine-editor','routines'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }
+function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings','routine-editor','routines','run-detail'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }
 function goHome() { discardIfEmpty(); activeConversation=null; switchNav('conversations'); }
 
 // Theme. One function applies it everywhere it shows (body class, toggle

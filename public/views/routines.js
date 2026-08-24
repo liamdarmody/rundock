@@ -62,6 +62,14 @@ let pendingDelete = null;
 // the surface the question was asked on.
 let pendingProblem = null;
 
+// THE SCOPE IS NOT HELD HERE. It belongs to the panel that draws the scope
+// rows, because that panel decides which agents are offered at all and drops a
+// selection the moment it stops drawing the row carrying it. Two branches each
+// grew a scope of their own and a merge that kept both would filter this list
+// twice against two values that agree only while nothing moves. There is one,
+// it is read through routinesScopeAgentId(), and the way in sets it through
+// setRoutinesScope().
+
 // The clock, taken from the global so a test can supply one. Undeclared
 // identifiers are safe under typeof, so this works when the module is
 // required in node with no global at all.
@@ -186,6 +194,18 @@ function rowHtml(entry, index, withActions) {
     body += '<div class="rr-meta rr-run-line">'
       + `<span class="run-status ${row.status.tone}">${esc(row.status.text)}</span>`
       + (nextRun ? `${sep}${nextRun}` : '')
+      // THE WAY INTO THE RUN'S OWN RECORD, and it sits here rather than on the
+      // row as a whole because this is the line that carries the last-run
+      // fact: the reader who wants to know more is already looking at it.
+      //
+      // Only where there is a last run to open. A routine that has never run
+      // has no record, and an entry point onto nothing is worse than none.
+      // Withheld on the delete confirmation for the same reason the pause and
+      // delete controls are: that surface is a question, not a list.
+      + (withActions
+        ? `${sep}<button class="btn-link rr-view-run" type="button" data-routines-action="view-run"`
+          + ` onclick="routinesViewLastRun(${index})">View last run</button>`
+        : '')
       + '</div>';
   }
 
@@ -313,6 +333,13 @@ function listHtml(list) {
  * for, which is the empty state below.
  */
 function renderRoutines() {
+  // A FILTER WITH NOTHING LEFT TO SHOW IS DROPPED RATHER THAN DRAWN EMPTY,
+  // and that rule is not repeated here because it cannot be reached from here.
+  // The scope only survives resolveScope while its agent still owns a routine,
+  // so a surviving scope always has something to show and an empty list always
+  // means the team has nothing scheduled, which is what the empty state says.
+  // Written again here it would be a second rule with a different trigger
+  // doing one job, which is how two rules end up disagreeing.
   const list = allRoutines();
   const content = document.getElementById('routines-content');
   if (!content) return;
@@ -326,6 +353,44 @@ function renderRoutines() {
   if (pending) content.innerHTML = confirmHtml(pending, list.indexOf(pending));
   else if (list.length === 0) content.innerHTML = emptyHtml();
   else content.innerHTML = listHtml(list);
+}
+
+/**
+ * Land the reader on this list, scoped to one agent or to the whole team.
+ *
+ * THE ONE DESTINATION, USED BY BOTH ROUTES. The rail's own arm calls this with
+ * no agent and a routine row on an agent's profile calls it with that agent,
+ * so there is one place that decides what arriving here means and one place
+ * that can get the rail wrong. A second copy of these three calls is exactly
+ * how `openRoutineEditor` ended up lighting Team on a routines surface.
+ *
+ * It sets the nav state itself, for the same reason `showProfile` does: every
+ * function that lands the user on a section says which section, or the rail
+ * lies about where the user is on every route whose author did not remember.
+ *
+ * @param {string|null} agentId
+ */
+function showRoutinesForAgent(agentId) {
+  // ARRIVING CLEARS THE PENDING CONFIRMATION, AND THAT IS NOT TIDINESS. A
+  // confirmation belongs to the list it was raised on, and this is a reader
+  // leaving that list. It is no longer true that a stale one could be re-aimed
+  // by navigating: `pendingDelete` carries the routine's identity rather than
+  // its position, so it can only ever resolve to the routine it was raised on
+  // or to nothing. What is still true is that a destructive question the
+  // reader has walked away from must not be waiting when they arrive, because
+  // a question re-presented is one answered without being re-read.
+  //
+  // The refusal goes with it, for the reason it is held at all: it answers a
+  // control pressed on a list the reader has now left.
+  pendingDelete = null;
+  pendingProblem = null;
+  if (typeof setNavState === 'function') setNavState('routines');
+  if (typeof showView === 'function') showView('routines');
+  // ONE SCOPE, SET WHERE IT LIVES. setRoutinesScope stores it and redraws both
+  // the rows and the list, so the panel and the pane cannot disagree about
+  // what is being shown. A shell without the panel still gets its list.
+  if (typeof setRoutinesScope === 'function') setRoutinesScope(agentId);
+  else renderRoutines();
 }
 
 /**
@@ -396,6 +461,22 @@ function routinesConfirmDelete() {
   renderRoutines();
 }
 
+/**
+ * Open the run detail screen for this routine's most recent run.
+ *
+ * BY ROUTINE RATHER THAN BY RUN ID, because a row does not have one. The row's
+ * last-run fact comes from the routine state, and the run records are a
+ * separate store by design: the two meet only where each is told the same
+ * thing separately. So the question the reader is asking, "what did this
+ * routine do last time", is the question that travels, and the server resolves
+ * which record answers it.
+ */
+function routinesViewLastRun(index) {
+  const entry = allRoutines()[index];
+  if (!entry) return;
+  if (typeof openRunDetail === 'function') openRunDetail(entry.agent.id, entry.routine.name);
+}
+
 function routinesSetPaused(index, paused) {
   const entry = allRoutines()[index];
   pendingProblem = null;
@@ -407,7 +488,8 @@ function routinesSetPaused(index, paused) {
 }
 
 return {
-  renderRoutines, routinesAskDelete, routinesCancelDelete, routinesConfirmDelete, routinesSetPaused,
-  routinesActionFailed, routinesActionCleared,
+  renderRoutines, showRoutinesForAgent,
+  routinesAskDelete, routinesCancelDelete, routinesConfirmDelete, routinesSetPaused,
+  routinesActionFailed, routinesActionCleared, routinesViewLastRun,
 };
 }));

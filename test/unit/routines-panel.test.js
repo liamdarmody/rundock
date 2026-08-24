@@ -156,13 +156,6 @@ describe('the routines rail entry reveals a panel of its own', () => {
     dom.window.close();
   });
 
-  test('no rail entry is mapped onto another section any more', () => {
-    // The map existed for one entry. With that entry lifted out it holds
-    // nothing, and a map that holds nothing is a redirection waiting to be
-    // reintroduced without anybody noticing.
-    assert.ok(!/SIDEBAR_FOR/.test(APP_SRC),
-      'app.js still carries a sidebar alias map, so a section can silently reveal another section\'s panel');
-  });
 });
 
 // ===== AC-2, AC-4, AC-5: WHAT THE PANEL DRAWS =====

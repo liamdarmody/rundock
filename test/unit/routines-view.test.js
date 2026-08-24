@@ -243,8 +243,14 @@ describe('what this card proves by pressing, and what it proves by calling', () 
     // that accepted either would accept the one that rebuilds it.
     assert.match(appPiece(/^\s*else if\(nav==='skills'\) \{(.*)\}\s*$/m, "switchNav's skills arm"),
       /(?<![.\w$])renderSkillsIfEmpty\(/, 'the Skills opener reveals a panel without drawing into it');
+    // The Routines arm is pinned to the ONE DESTINATION FUNCTION rather than
+    // to renderRoutines, and pinned to the argument as well. That function
+    // reveals the panel, sets the rail and draws, and its argument is the
+    // scope: the rail asks for the whole team, so it must pass no agent. An
+    // arm that passed one would open the rail entry on a filtered list.
     assert.match(appPiece(/else if\(nav==='routines'\)\s*\{([\s\S]*?)\}/, "switchNav's routines arm"),
-      /(?<![.\w$])renderRoutines\(/, 'the Routines opener reveals a panel without drawing into it');
+      /(?<![.\w$])showRoutinesForAgent\(null\)/,
+      'the Routines opener reveals a panel without drawing into it, or opens it scoped');
   });
 });
 
