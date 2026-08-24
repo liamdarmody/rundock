@@ -103,7 +103,14 @@
     const agentName = (input && input.agentName) || null;
     return {
       title: LEAD.title,
-      subtitle: agentName ? LEAD.scopedLead.replace('{agent}', agentName) : LEAD.lead,
+      // THE NAME IS INSERTED, NEVER INTERPRETED. A string replacement reads
+      // dollar sequences in what it is given as instructions: $& is the match,
+      // $` and $' the text either side, $$ a literal dollar. An agent can be
+      // named anything, so a display name carrying $& would put the slot's own
+      // text back into the sentence instead of the name. A function
+      // replacement is handed the match and returns a value, so nothing in
+      // the name is read as a pattern.
+      subtitle: agentName ? LEAD.scopedLead.replace('{agent}', () => agentName) : LEAD.lead,
     };
   }
 
@@ -364,6 +371,37 @@
    * routine, so while a run is going there is no completed outcome to report,
    * and the row falls back to the single line revision 6 drew.
    */
+  /**
+   * Whether the most recent COMPLETED run failed.
+   *
+   * SEPARATED FROM `outcomeOf` BECAUSE TWO SURFACES ASK TWO DIFFERENT
+   * QUESTIONS, and reading them as one question is what made this wrong.
+   *
+   * A ROW asks what happened most recently, which is the later of a run and a
+   * slot that went by unserved, so a miss after a failure is what the row
+   * says: it is the newer fact and it is the one that explains why nothing
+   * has run since.
+   *
+   * THE RAIL asks whether the last completed run failed, full stop. A failure
+   * followed by a night with the machine shut is still a failure nobody has
+   * seen, and letting the miss mask it would hide the only alarming state in
+   * the product behind the most ordinary event there is. So the dot is
+   * decided here and the row's wording is decided by `outcomeOf`, which leans
+   * on this for its own failure branch so the two cannot disagree about what
+   * a failure IS while disagreeing about what masks it.
+   *
+   * A run still in flight has no completed outcome to report, and a routine
+   * that has never run has none either.
+   */
+  function lastCompletedRunFailed(input) {
+    const statusWord = (input && input.lastRunStatus) || null;
+    if (statusWord === 'running') return false;
+    if (!asDate(input && input.lastStart)) return false;
+    // A run the process died inside did not succeed. It borrows the failure
+    // tone rather than adding a fifth state nothing in the frame draws.
+    return statusWord === 'failed' || statusWord === 'interrupted';
+  }
+
   function outcomeOf(input) {
     const started = asDate(input && input.lastStart);
     const missedSlot = asDate(input && input.missedSlot);
@@ -371,9 +409,7 @@
     if (statusWord === 'running') return null;
     if (missedSlot && (!started || missedSlot > started)) return 'missed';
     if (!started) return null;
-    // A run the process died inside did not succeed. It borrows the failure
-    // tone rather than adding a fifth state nothing in the frame draws.
-    if (statusWord === 'failed' || statusWord === 'interrupted') return 'failed';
+    if (lastCompletedRunFailed(input)) return 'failed';
     const lastSlot = asDate(input && input.lastSlot);
     // How late the run STARTED, with nothing about how long it then took.
     if (lastSlot && started - lastSlot >= CATCH_UP_AFTER_MS) return 'caught-up';
@@ -413,25 +449,28 @@
    * Whether anything on the team is in the one state the rail is allowed to
    * alarm about.
    *
-   * THIS IS THE THREE-TONE RULING REACHING THE CHROME, and it reaches it by
-   * asking the same function a row asks rather than by restating the rule. A
-   * miss is history, a catch-up is a success, a run in flight has no outcome
-   * yet, and a paused routine has nothing to report. Only a real failure is a
-   * failure, and a dot that rose on a missed slot would teach its reader to
-   * ignore the one signal that matters, which is exactly what the ruling was
-   * settled to prevent.
+   * THIS IS THE THREE-TONE RULING REACHING THE CHROME. A catch-up is a
+   * success, a run in flight has no outcome yet, a slot that went by unserved
+   * is history, and a paused routine is not going to run. Only a real failure
+   * is a failure, and a dot that rose on anything else would teach its reader
+   * to ignore the one signal that matters.
    *
-   * IT ASKS ABOUT THE MOST RECENT COMPLETED RUN, which is what `outcomeOf`
-   * answers, so a routine that failed and then succeeded is not failing. The
-   * dot is therefore cleared by that routine's next success and by nothing
-   * else: not by another routine succeeding, and not by time passing.
+   * PAUSED IS EXCLUDED BEFORE THE QUESTION IS ASKED, and it has to be rather
+   * than merely happening to be. A paused routine has no next run by
+   * definition, so it can never succeed again, so a dot raised by one could
+   * never be cleared by the rule that clears dots. It would sit on the rail
+   * until the routine was resumed or deleted, which is a permanent alarm about
+   * something the user has already decided to stop.
+   *
+   * A LATER MISSED SLOT DOES NOT MASK A FAILURE HERE, which is where this
+   * parts company with what a row says. See `lastCompletedRunFailed`.
    *
    * @param {Array<{lastStart?: any, lastRunStatus?: string|null, lastSlot?: any,
-   *   missedSlot?: any}>} [list]
+   *   missedSlot?: any, paused?: boolean}>} [list]
    */
   function anyFailure(list) {
     const routines = Array.isArray(list) ? list : [];
-    return routines.some(routine => outcomeOf(routine) === 'failed');
+    return routines.some(routine => !(routine && routine.paused) && lastCompletedRunFailed(routine));
   }
 
   /**
@@ -551,6 +590,6 @@
     actionProblem, emptyState, header,
     dayWords, clockWords, zoneWords, timeWords,
     scheduleWords, routineSentence, sentenceParts,
-    outcomeOf, anyFailure, runStatus, nextRunLabel, orderByNextRun, row, deleteConfirmation,
+    outcomeOf, lastCompletedRunFailed, anyFailure, runStatus, nextRunLabel, orderByNextRun, row, deleteConfirmation,
   };
 }));

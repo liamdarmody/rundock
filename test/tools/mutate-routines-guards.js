@@ -294,8 +294,8 @@ const MUTATIONS = [
     '    if (missedSlot && (!started || missedSlot > started)) return \'missed\';',
     '    if (missedSlot) return \'missed\';'],
   [MODEL, 'a run the process died inside is a failure',
-    "    if (statusWord === 'failed' || statusWord === 'interrupted') return 'failed';",
-    "    if (statusWord === 'failed') return 'failed';"],
+    "    return statusWord === 'failed' || statusWord === 'interrupted';",
+    "    return statusWord === 'failed';"],
 
   // ===== THE WORDS =====
   [MODEL, 'a missed row names the cause rather than the routine',
@@ -565,7 +565,7 @@ const MUTATIONS = [
     '  let h = headerHtml(state.lead)',
     '  let h = listHeaderHtml()'],
   [MODEL, 'the scoped subtitle names the agent rather than repeating the unscoped sentence',
-    '      subtitle: agentName ? LEAD.scopedLead.replace(\'{agent}\', agentName) : LEAD.lead,',
+    "      subtitle: agentName ? LEAD.scopedLead.replace('{agent}', () => agentName) : LEAD.lead,",
     '      subtitle: LEAD.lead,'],
   [STYLES, 'the subtitle takes the body size rather than restating the title',
     '.routines-subtitle { font-size: var(--body); color: var(--text-2); }',
@@ -594,11 +594,27 @@ const MUTATIONS = [
     '        lastRunStatus: routine.state ? routine.state.status : null,',
     '        lastRunStatus: null,'],
   [MODEL, 'only a real failure counts as a failure',
-    "    return routines.some(routine => outcomeOf(routine) === 'failed');",
+    '    return routines.some(routine => !(routine && routine.paused) && lastCompletedRunFailed(routine));',
     '    return routines.length > 0;'],
   [SIDEBAR_CSS, 'the dot takes the danger token rather than the amber one beside it',
     '.nav-badge-failed { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--danger); border-radius: var(--radius-circle); pointer-events: none; }',
     '.nav-badge-failed { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--attention); border-radius: var(--radius-circle); pointer-events: none; }'],
+  // ===== THE PAUSE CLAUSE AND THE FAILURE QUESTION =====
+  [MODEL, 'a paused routine is excluded before the failure question is asked',
+    '    return routines.some(routine => !(routine && routine.paused) && lastCompletedRunFailed(routine));',
+    '    return routines.some(routine => lastCompletedRunFailed(routine));'],
+  [APP_OPENER, 'the rail is told whether a routine is paused',
+    '        paused: !!routine.paused,',
+    ''],
+  // The rail asks about the last completed run and the row asks what happened
+  // most recently. Collapsing the rail back onto the row's answer lets an
+  // ordinary missed slot hide the only alarming state in the product.
+  [MODEL, 'a later missed slot does not mask a failed run on the rail',
+    '    return routines.some(routine => !(routine && routine.paused) && lastCompletedRunFailed(routine));',
+    "    return routines.some(routine => !(routine && routine.paused) && outcomeOf(routine) === 'failed');"],
+  [MODEL, 'the agent name is inserted rather than read as a replacement pattern',
+    "      subtitle: agentName ? LEAD.scopedLead.replace('{agent}', () => agentName) : LEAD.lead,",
+    "      subtitle: agentName ? LEAD.scopedLead.replace('{agent}', agentName) : LEAD.lead,"],
 ];
 
 // The reporter is named explicitly rather than left to the default, which

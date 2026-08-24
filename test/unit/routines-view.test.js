@@ -1393,6 +1393,13 @@ describe('the rail says when a routine has failed', () => {
     lastSlot: iso(TODAYS_SLOT), nextRun: iso(TOMORROWS_SLOT),
   });
   const paused = (name) => routine(name, { paused: true, nextRun: iso(TOMORROWS_SLOT) });
+  // A paused routine whose last run FAILED. This is the fixture the pause
+  // clause needs: a paused routine with no run history is indistinguishable
+  // from one that has never run, so it passes whether or not pause is read.
+  const pausedAfterFailure = (name) => routine(name, {
+    state: { status: 'failed', duration: 0 }, lastStart: iso(TODAYS_SLOT),
+    lastSlot: iso(TODAYS_SLOT), paused: true, nextRun: iso(TOMORROWS_SLOT),
+  });
   const inFlight = (name) => routine(name, {
     state: { status: 'running' }, lastStart: iso(TODAYS_SLOT),
     lastSlot: iso(TODAYS_SLOT), nextRun: iso(TOMORROWS_SLOT),
@@ -1461,10 +1468,58 @@ describe('the rail says when a routine has failed', () => {
     dom.window.close();
   });
 
+  // THE PAUSE CLAUSE, DRIVEN SO THAT THE PAUSE IS THE ONLY THING BETWEEN THE
+  // ROUTINE AND A DOT. A paused routine with no run history proves nothing:
+  // the never-run branch answers it either way. This fixture raises the dot
+  // the moment the paused flag stops being read.
   test('a paused routine does not raise the dot', () => {
+    const { w, doc, dom } = railShell([pausedAfterFailure('Nightly report')]);
+    w.updateRoutineFailureBadge();
+    assert.strictEqual(dot(doc), null,
+      'a paused routine can never succeed again, so a dot it raised could never be cleared');
+    dom.window.close();
+  });
+
+  test('the same routine unpaused does raise it, so the pause is what decides', () => {
+    const { w, doc, dom } = railShell([failed('Nightly report')]);
+    w.updateRoutineFailureBadge();
+    assert.ok(dot(doc), 'sanity: without the pause this fixture raises the dot');
+    dom.window.close();
+  });
+
+  // The never-run case is kept, as its own case rather than as the one that
+  // discharges the pause clause.
+  test('a paused routine that has never run does not raise the dot either', () => {
     const { w, doc, dom } = railShell([paused('Nightly report')]);
     w.updateRoutineFailureBadge();
-    assert.strictEqual(dot(doc), null, 'a routine that is not running is not a routine that failed');
+    assert.strictEqual(dot(doc), null);
+    dom.window.close();
+  });
+
+  // AC-D3 has no way to fire for a paused routine, which is exactly why pause
+  // has to clear the dot rather than merely not raise it: a dot left up by a
+  // paused routine would sit there until it was resumed or deleted.
+  test('pausing a failed routine clears the dot in the same page', () => {
+    const { w, doc, dom } = railShell([failed('Nightly report')]);
+    w.updateRoutineFailureBadge();
+    assert.ok(dot(doc), 'sanity: the failure raised it');
+    w.agents[0].routines = [pausedAfterFailure('Nightly report')];
+    w.updateRoutineFailureBadge();
+    assert.strictEqual(dot(doc), null,
+      'the user paused the routine and the rail is still alarming about it');
+    dom.window.close();
+  });
+
+  // AC-D1 read literally, at the rail. A failure and then a night with the
+  // machine shut is still a failure nobody has seen.
+  test('a slot missed after a failure does not mask the failure on the rail', () => {
+    const { w, doc, dom } = railShell([routine('Nightly report', {
+      state: { status: 'failed', duration: 0 },
+      lastStart: iso(new Date(2026, 7, 19, 7, 0)), lastSlot: iso(new Date(2026, 7, 19, 7, 0)),
+      missedSlot: iso(YESTERDAYS_SLOT), nextRun: iso(TODAYS_SLOT),
+    })]);
+    w.updateRoutineFailureBadge();
+    assert.ok(dot(doc), 'a missed slot hid a failed run behind the most ordinary event there is');
     dom.window.close();
   });
 
@@ -1577,6 +1632,14 @@ describe('the rail says when a routine has failed', () => {
   // finished, so it is the message that has to update the rail. Cut out of
   // app.js and run, so deleting the call fails here rather than leaving the
   // suite green while the dot never appears in the product.
+  //
+  // THE SERVER HALF IS NOT ASSUMED. broadcastRoutineUpdate in lib/scheduler.js
+  // sends `{type: 'agents'}` to every connected client from recordOutcome,
+  // which is where both endings of a run land, and that is driven rather than
+  // described in "a run reaching an outcome sends the roster to connected
+  // clients" in test/unit/scheduler-lib.test.js. Without it, everything below
+  // would prove the dot updates on a roster and prove nothing about whether a
+  // roster ever arrives.
   test('the roster arriving from the server raises and clears the dot', () => {
     const { w, doc, dom } = railShell([]);
     const body = appPiece(/case 'agents':([\s\S]*?)\bbreak;/, 'the roster case of the client dispatch');

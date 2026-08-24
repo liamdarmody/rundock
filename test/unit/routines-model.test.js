@@ -707,6 +707,18 @@ describe('the header this view heads itself with', () => {
       'the slot reached the page');
   });
 
+  // A DISPLAY NAME IS USER TEXT AND MUST NOT BE READ AS A PATTERN. A string
+  // replacement interprets dollar sequences in what it is handed: $& is the
+  // match, $` and $' the text either side, $$ a literal dollar. An agent can
+  // be named anything.
+  test('a name carrying a replacement pattern is inserted, not interpreted', () => {
+    for (const name of ['A $& B', "$`", "$'", 'A $$ B', '$1', 'Ops $&$& team']) {
+      assert.strictEqual(m.header({ agentName: name }).subtitle,
+        `Every scheduled skill ${name} runs, and when it runs next.`,
+        `the name ${name} was read as a replacement pattern rather than inserted`);
+    }
+  });
+
   test('an agent whose name is a token does not rewrite the sentence twice', () => {
     assert.strictEqual(m.header({ agentName: '{agent}' }).subtitle,
       'Every scheduled skill {agent} runs, and when it runs next.');
@@ -762,6 +774,63 @@ describe('the one state the chrome is allowed to alarm about', () => {
   test('a routine that failed and then succeeded is not failing', () => {
     assert.strictEqual(m.anyFailure([RAN_ON_TIME]), false,
       'the question is about the most recent completed run, not about history');
+  });
+
+  // THE PAUSE CLAUSE OF AC-D2, WITH A FIXTURE THAT WOULD RAISE THE DOT IF
+  // PAUSE WERE IGNORED. A paused routine with no run history proves nothing
+  // about pause: it is indistinguishable from one that has never run, and the
+  // never-run branch already answers it. The pause has to be the only thing
+  // between the routine and a dot.
+  test('a paused routine whose last run failed is not a failure', () => {
+    assert.strictEqual(m.anyFailure(withFacts({ ...FAILED, paused: true })), false,
+      'a paused routine can never succeed again, so a dot it raised could never be cleared');
+  });
+
+  test('a paused routine whose last run was interrupted is not a failure', () => {
+    assert.strictEqual(
+      m.anyFailure(withFacts({ ...FAILED, lastRunStatus: 'interrupted', paused: true })), false);
+  });
+
+  test('the same routine unpaused is a failure, so the pause is what decides it', () => {
+    assert.strictEqual(m.anyFailure(withFacts({ ...FAILED, paused: false })), true,
+      'sanity: without the pause this fixture raises the dot');
+  });
+
+  test('a paused routine does not hide a failure on another routine', () => {
+    assert.strictEqual(m.anyFailure([{ ...FAILED, paused: true }, { ...FAILED }]), true);
+  });
+
+  // AC-D1, READ LITERALLY, AND THE READING IS RECORDED HERE RATHER THAN LEFT
+  // TO FALL OUT OF THE ROW'S RULE. A row says what happened most recently,
+  // which is the later of a run and a slot that went by unserved. The rail
+  // asks whether the last completed run failed. A failure followed by a night
+  // with the machine shut is still a failure nobody has seen, and letting the
+  // miss mask it would hide the only alarming state in the product behind the
+  // most ordinary event there is.
+  test('a missed slot after a failed run does not mask the failure on the rail', () => {
+    const failedThenMissed = {
+      ...FAILED,
+      missedSlot: new Date(2026, 7, 20, 7, 0),
+      lastStart: new Date(2026, 7, 19, 7, 0),
+      lastSlot: new Date(2026, 7, 19, 7, 0),
+    };
+    assert.strictEqual(m.outcomeOf(failedThenMissed), 'missed',
+      'sanity: the ROW says missed, because that is the newer fact');
+    assert.strictEqual(m.anyFailure([failedThenMissed]), true,
+      'the rail asks about the last completed run, and it failed');
+  });
+
+  // The two questions share what a failure IS, so they cannot drift apart on
+  // that while deliberately differing on what masks one.
+  test('the row and the rail agree on which statuses are failures', () => {
+    for (const status of ['failed', 'interrupted']) {
+      const facts = { ...FAILED, lastRunStatus: status };
+      assert.strictEqual(m.outcomeOf(facts), 'failed', status);
+      assert.strictEqual(m.lastCompletedRunFailed(facts), true, status);
+    }
+    for (const status of ['completed', 'running', null]) {
+      assert.strictEqual(m.lastCompletedRunFailed({ ...FAILED, lastRunStatus: status }), false, String(status));
+    }
   });
 
   test('nothing at all is not a failure', () => {

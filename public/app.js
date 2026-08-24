@@ -195,12 +195,16 @@ function updateRoutineFailureBadge() {
   for (const agent of agents || []) {
     for (const routine of agent.routines || []) {
       facts.push({
-        // The same four fields a row reads, taken the same way, so the rail
-        // and the row cannot disagree about what happened last.
+        // The same fields a row reads, taken the same way, so the rail and the
+        // row cannot disagree about what happened last.
         lastStart: routine.lastStart,
         lastRunStatus: routine.state ? routine.state.status : null,
         lastSlot: routine.lastSlot,
         missedSlot: routine.missedSlot,
+        // AND WHETHER IT IS PAUSED, which the row does not need and the rail
+        // does. A paused routine can never succeed again, so a dot raised by
+        // one could never be cleared by the rule that clears dots.
+        paused: !!routine.paused,
       });
     }
   }
