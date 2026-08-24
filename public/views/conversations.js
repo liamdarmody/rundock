@@ -173,8 +173,8 @@ function maybeShowCodexFirstRun(agent) {
 function startConversation(agentId) {
   // Same principle as openConversation: starting a conversation navigates
   // to the Conversations section regardless of origin (agent profile, org
-  // chart, empty states).
-  setNavState('conversations');
+  // chart, empty states). The chat view carries that section, so showView
+  // sets it and this does not have to know.
   const convo = createConversation(agentId);
   const agent = convo.agent;
 
@@ -751,8 +751,7 @@ function openConversation(id, withAnchor) {
   if(!c) { switchNav('conversations'); return; }
   // Opening a conversation IS a navigation to the Conversations section,
   // wherever it started (sidebar click, search palette, an agent profile's
-  // conversation list); the rail and sidebar must follow.
-  setNavState('conversations');
+  // conversation list); the rail and sidebar follow the chat view this ends in.
   // A stale search anchor must never fire on a later manual open (it would
   // scroll to and flash an old hit days later).
   if (!withAnchor) pendingMessageAnchor = null;

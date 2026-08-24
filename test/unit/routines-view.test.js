@@ -334,7 +334,13 @@ describe('the rail is a map of places, always the same size', () => {
     const arm = nav === 'routines'
       ? appPiece(/else if\(nav==='routines'\)\s*\{([\s\S]*?)\}/, "switchNav's routines arm")
       : appPiece(/^\s*else if\(nav==='skills'\) \{(.*)\}\s*$/m, "switchNav's skills arm");
-    w.eval(`function showView(v) {${appPiece(/^function showView\(v\) \{(.*)\}\s*$/m, 'showView')}}`);
+    // The shipped showView resolves the rail section from the view, so the
+    // table it reads travels with it, in the same eval: a lexical declaration
+    // loaded in an eval of its own is gone before the function runs. Cut out
+    // rather than written here for the same reason the body is: a copy keeps
+    // answering after the real one moves.
+    w.eval(`${/const NAV_FOR_VIEW = \{[\s\S]*?\n\};/.exec(APP_SRC)[0]}\n`
+      + `function showView(v) {${appPiece(/^function showView\(v\) \{(.*)\}\s*$/m, 'showView')}}`);
     w.closeFindBar = () => {};
     w.setNavState = () => {};
     // selectSkill is NOT stubbed: views/skills.js publishes the real one, and a

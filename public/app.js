@@ -975,13 +975,51 @@ function initSidebarResize() {
 
 // ===== 10. VIEWS & NAVIGATION =====
 
-// Sync the nav rail's active icon and the visible sidebar panel to a section.
-// This is deliberately separate from switchNav: destination functions
-// (openConversation, showProfile) call it so they stay consistent no matter
-// where navigation started (nav rail click, search palette, profile links,
-// workspace routing). Before this existed, callers had to remember to pair
-// switchNav with their navigation and several forgot, leaving the rail
-// highlighting one section while the main pane showed another.
+// ===== THE RULE, FOR WHOEVER ADDS THE NEXT DESTINATION =====
+//
+// Show a view. Do not touch the rail.
+//
+// The rail is the only thing telling a reader which of the top-level surfaces
+// they are on, and keeping it true used to be a second thing every destination
+// had to remember: showView revealed a pane and setNavState lit an icon.
+// Several destinations forgot the second, and forgetting it was invisible to
+// every test, so opening the routine editor lit Team, selecting a skill lit
+// nothing, and opening a skill's own file left Skills lit over the editor. The
+// comment that used to sit here recorded that callers forgot before setNavState
+// existed. They kept forgetting after it existed, because a rule you have to
+// remember is not a rule.
+//
+// So the section is a property of the VIEW rather than of the caller. showView
+// resolves it from the table below and sets it, and a new destination cannot
+// get this wrong because it no longer does it at all. setNavState has two
+// callers and only two: showView, and the workspace switch, which is the one
+// moment the chrome is decided before the view is.
+//
+// ADDING A VIEW: give it a row here. `null` means the view is shown with no
+// rail state, which is a decision rather than an omission: the workspace picker
+// hides the rail and the sidebar outright, so there is no section to be on.
+// Every other view names the section its pane belongs to.
+// test/unit/navigation-doors.test.js enumerates every call site of showView in
+// the client against this table, and fails if a view is added to one and not
+// the other.
+//
+// WHICH section is the right one is the single judgement no check can make. The
+// locked mock's chrome-parity rule decides it: a surface's entry stays active
+// across that surface's own screens, which is why the routine editor lights
+// Routines and an agent's page lights Team.
+const NAV_FOR_VIEW = {
+  workspace: null,
+  home: 'team',
+  profile: 'team',
+  chat: 'conversations',
+  'convo-empty': 'conversations',
+  editor: 'files',
+  skills: 'skills',
+  settings: 'settings',
+  'routine-editor': 'routines',
+  routines: 'routines',
+};
+
 // Sections whose sidebar belongs to another one. Routines sits beside the
 // team and the locked mock draws it with the team panel for a reason worth
 // keeping: a routine belongs to an agent, and the panel that lists your agents
@@ -989,6 +1027,20 @@ function initSidebarResize() {
 // inside that panel.
 const SIDEBAR_FOR = { routines: 'team' };
 
+// Sync the nav rail's active icon and the visible sidebar panel to a section.
+//
+// CALLED BY showView, and that is the whole mechanism: a destination shows a
+// view and the section comes with it. Called from a destination directly, this
+// is half a navigation, and the halves are what came apart. The one other
+// caller is the workspace switch, which resets the chrome before it knows
+// which view comes next, and says so where it does it.
+//
+// The panel list below is the only list of sidebar panels in the client. There
+// were two: the workspace-switch reset carried a hand-written copy of this
+// function, and when a panel was added to one and not the other, switching
+// workspace left two panels stacked in the same column. A copy also drops
+// whatever the original grows later, which is how that one lost the footer
+// line below and left a reader on Conversations with no way to start one.
 function setNavState(nav) {
   document.querySelectorAll('.nav-item[data-nav]').forEach(n=>n.classList.remove('active'));
   document.querySelector(`[data-nav="${nav}"]`)?.classList.add('active');
@@ -1005,7 +1057,9 @@ function switchNav(nav) {
   // and search state don't survive into a context where they no longer make
   // sense or reference DOM that's about to be replaced.
   closeFindBar();
-  setNavState(nav);
+  // No setNavState here. Every arm below shows a view, and the view is what
+  // carries the section now, so setting it here as well would be a second
+  // opinion able to disagree with the first.
   if(nav==='settings') { showView('settings'); showSettingsSection('workspace'); }
   else if(nav==='files') {
     editorReturnView = 'editor';
@@ -1040,7 +1094,7 @@ function switchNav(nav) {
   else if(nav==='team') { showView('home'); renderOrgChart(); }
   else if(nav==='routines') { showView('routines'); renderRoutines(); }
 }
-function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings','routine-editor','routines'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }
+function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings','routine-editor','routines'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');} const nav=NAV_FOR_VIEW[v]; if(nav) setNavState(nav); }
 function goHome() { discardIfEmpty(); activeConversation=null; switchNav('conversations'); }
 
 // Theme. One function applies it everywhere it shows (body class, toggle
@@ -1354,10 +1408,13 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   if (cs) { cs.textContent = ''; cs.classList.remove('working'); }
   // Activate conversations sidebar; handlePersistedConversations will
   // open a pinned conversation or newConversation() once data arrives.
-  document.querySelectorAll('.nav-item[data-nav]').forEach(n=>n.classList.remove('active'));
-  document.querySelector('[data-nav="conversations"]')?.classList.add('active');
-  ['team','conversations','skills','files','settings'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
-  document.getElementById('sidebar-conversations').classList.remove('hidden');
+  //
+  // ASKED FOR RATHER THAN REPEATED. These four lines were a hand-written copy
+  // of setNavState, which is why they carried a second list of the sidebar
+  // panels, and why they never learned about the New conversation footer: a
+  // reader who switched workspace from any other section landed on
+  // Conversations with no way to start one.
+  setNavState('conversations');
   // Hide the workspace picker immediately, but do not show any view yet.
   // handlePersistedConversations will pick the right destination (chat for
   // an existing pinned/processing conversation, convo-empty for a populated
