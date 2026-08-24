@@ -34,9 +34,10 @@
  * and so does every test of it.
  */
 (/** @param {any} root @param {(editor: any) => object} factory */ function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('./routine-editor-model.js'));
-  else root.RundockRoutinesModel = factory(root.RundockRoutineEditorModel);
-}(typeof self !== 'undefined' ? self : this, function (editor) {
+  if (typeof module === 'object' && module.exports) {
+    module.exports = factory(require('./routine-editor-model.js'), require('./skills-model.js'));
+  } else root.RundockRoutinesModel = factory(root.RundockRoutineEditorModel, root.RundockSkillsModel);
+}(typeof self !== 'undefined' ? self : this, function (editor, skills) {
 
   const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
@@ -103,6 +104,81 @@
     action: 'Add routine',
     aside: 'Looking at a skill you already trust? You can also schedule it right from its own page.',
   };
+
+  /**
+   * WHICH empty state, decided mechanically rather than by taste.
+   *
+   * THE CHAIN IS WHAT MAKES THIS DECIDABLE. A skill is declared on an agent
+   * and a routine schedules a skill, so the three surfaces are a chain: agents,
+   * then skills, then routines. An empty one points one step back up that
+   * chain, and the FIRST MISSING PREREQUISITE picks the variant.
+   *
+   * WHY THE LOCKED BODY CANNOT COVER BOTH. "Pick a tested skill and give it a
+   * schedule" presupposes a tested skill. Gating quietly guaranteed one: you
+   * could not reach this view without having had a routine, and you could not
+   * have had a routine without a skill. A permanent rail entry removes the
+   * guarantee and exposes a state the locked copy was never written for. Where
+   * any skill exists the locked copy is untouched, aside included.
+   *
+   * BOTH REPLACEMENT LINES ALREADY SHIP, in the routine editor's own
+   * zero-skills state, which is the same reader in the same state one screen
+   * away. Writing a second sentence for a fact the product already has a
+   * sentence for is the drift this reconciliation exists to remove, so these
+   * are the editor's strings rather than copies of them.
+   *
+   * THE CONDITION IS THE PICKER'S OWN QUESTION, `skillChoices`, and not a new
+   * one, so the two surfaces cannot disagree about whether a workspace has
+   * skills. A skill no agent is assigned cannot be scheduled and therefore
+   * does not count, which the picker already decides and this inherits.
+   *
+   * AND IT WAITS. "Skills have not arrived yet" and "there are no skills" are
+   * different states and only one of them is an offer. Without the wait, a
+   * workspace that does have skills is told to build one for a beat on every
+   * open.
+   *
+   * THE GUIDE ARRIVES AS A NAME, NOT AS A FLAG, and the type here is the
+   * whole contract: a caller handed a boolean gets the no-guide variant with
+   * nothing thrown, so documentation naming an input this never reads is a
+   * silently wrong answer rather than an error.
+   *
+   * @param {{skills?: any[], loading?: boolean, guideName?: string|null}} [input]
+   */
+  function emptyState(input) {
+    if (input && input.loading) {
+      return { lead: EMPTY.lead, body: editor.STEP_LEADS.loading, action: null, actionKind: null, aside: null };
+    }
+    const choice = editor.skillChoices({ skills: (input && input.skills) || [] });
+    if (choice.createSkill) {
+      // THE ACTION GOES WITH THE AGENT THAT FULFILS IT, AND THE NEXT STEP DOES
+      // NOT. Dropping the button on its own would leave a line instructing an
+      // action with nothing to press, so the agent-independent next step is
+      // APPENDED to the shipped line rather than replacing it. The shipped
+      // string stays whole: it already carries its own next step ("Build one
+      // and it will show up here"), and it is the same string the editor ships
+      // one screen away, so splitting it here would be this pass writing a
+      // second version of a sentence the product already has.
+      //
+      // The appended sentence is the Skills pane's own, not a second copy of
+      // it: both readers are missing the same fact, which is where a skill is
+      // declared.
+      const guideName = (input && input.guideName) || null;
+      return {
+        lead: EMPTY.lead,
+        body: guideName ? choice.emptyLead : `${choice.emptyLead} ${skills.EMPTY.nextStepNoGuide}`,
+        action: guideName ? choice.createSkillLabel : null,
+        actionKind: guideName ? 'build-skill' : null,
+        // No aside: the second way in it names is a skill's own page, and this
+        // workspace has no skill to have one.
+        aside: null,
+      };
+    }
+    return {
+      lead: EMPTY.lead, body: EMPTY.body,
+      // Add routine opens the picker, which belongs to no agent, so it is not
+      // the guide's to fulfil and does not go with them.
+      action: EMPTY.action, actionKind: 'add-routine', aside: EMPTY.aside,
+    };
+  }
 
   /**
    * How late a run has to be before it is a catch-up rather than the ordinary
@@ -333,7 +409,7 @@
 
   return {
     OUTCOMES, LEAD, EMPTY, ACTION_PROBLEM, CATCH_UP_AFTER_MS,
-    actionProblem,
+    actionProblem, emptyState,
     dayWords, clockWords, zoneWords, timeWords,
     scheduleWords, routineSentence,
     outcomeOf, runStatus, nextRunLabel, row, deleteConfirmation,

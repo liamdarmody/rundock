@@ -191,24 +191,60 @@ function headerHtml() {
   return h;
 }
 
+// The one thing each variant offers, and where pressing it goes. Held as a
+// table rather than as a branch in the template, so a variant added later has
+// to name its handler here rather than growing a third ternary inside markup.
+//
+// `add` opens the picker that spans every agent's skills and names which agent
+// runs each one. `build-skill` opens a conversation with the guide, which is
+// what the routine editor's own zero-skills offer already does.
+const EMPTY_ACTIONS = {
+  'add-routine': { marker: 'add', onclick: 'addRoutine()', arrow: true },
+  'build-skill': { marker: 'build-skill', onclick: 'routineEditorBuildSkill()', arrow: false },
+};
+
+// Whether the skill list has arrived. NOT the same as it being empty: an empty
+// list before the reply lands looks exactly like a workspace with nothing to
+// schedule, and only one of those two states is an offer. The routine editor
+// carries the same guard, and the two must not disagree.
+function skillsHaveArrived() {
+  return typeof skillsLoaded === 'undefined' || skillsLoaded;
+}
+
 function emptyHtml() {
   const model = routinesModel();
   const arrow = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"'
     + ' stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
     + '<line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>';
-  return headerHtml()
-    + `<p class="settings-lead routines-empty-lead">${esc(model.EMPTY.lead)}</p>`
+  // WHICH VARIANT IS THE MODEL'S DECISION, not this file's. All this does is
+  // hand it what the shell knows: the skills, whether they have arrived, and
+  // whether there is a guide to fulfil an offer that names one.
+  const guide = typeof getGuide === 'function' ? getGuide() : null;
+  const state = model.emptyState({
+    skills: typeof skills !== 'undefined' && skills ? skills : [],
+    loading: !skillsHaveArrived(),
+    // The name rather than a flag, for the same reason the Skills pane passes
+    // one: the offer belongs to a named agent, and a workspace with none takes
+    // the next step that names no agent at all.
+    guideName: guide ? (guide.displayName || guide.name || null) : null,
+  });
+  const action = state.actionKind ? EMPTY_ACTIONS[state.actionKind] : null;
+
+  let h = headerHtml()
+    + `<p class="settings-lead routines-empty-lead">${esc(state.lead)}</p>`
     + '<div class="settings-card flow routines-empty-card">'
-    + `<p class="settings-lead">${esc(model.EMPTY.body)}</p>`
-    + '<div class="card-actions routines-empty-actions">'
-    // The one primary action the empty state has a job to offer, and it
-    // belongs to no agent: it opens the picker that spans every agent's
-    // skills and names which agent runs each one.
-    + '<button class="settings-btn-primary" type="button" data-routines-action="add"'
-    + ` onclick="addRoutine()">${esc(model.EMPTY.action)}${arrow}</button>`
-    + '</div></div>'
-    // The skill-page way in, named without competing for primary weight.
-    + `<p class="settings-caption routines-empty-aside">${esc(model.EMPTY.aside)}</p>`;
+    + `<p class="settings-lead">${esc(state.body)}</p>`;
+  if (action && state.action) {
+    h += '<div class="card-actions routines-empty-actions">'
+      + `<button class="settings-btn-primary" type="button" data-routines-action="${action.marker}"`
+      + ` onclick="${action.onclick}">${esc(state.action)}${action.arrow ? arrow : ''}</button>`
+      + '</div>';
+  }
+  h += '</div>';
+  // The skill-page way in, named without competing for primary weight. Only
+  // where that page exists to be named.
+  if (state.aside) h += `<p class="settings-caption routines-empty-aside">${esc(state.aside)}</p>`;
+  return h;
 }
 
 function confirmHtml(entry, index) {
@@ -240,17 +276,17 @@ function listHtml(list) {
 }
 
 /**
- * Draw the list, and decide whether the rail carries a Routines entry at all.
+ * Draw the list.
  *
- * The rail is gated on the first routine through the shared helper, which is
- * the same rule and the same code the Skills rail uses. The VIEW still renders
- * its empty state: a reader who deletes their last routine while looking at
- * this page is told what to do next rather than left with a blank pane, even
- * though the rail entry goes with it.
+ * IT DOES NOT DECIDE WHETHER THE RAIL CARRIES A ROUTINES ENTRY, and the
+ * absence is the rule rather than an oversight. The entry is permanent, like
+ * every other one. The rail names what the app can do: a map of places, always
+ * the same size, so a user learns it once. What a place holds is that place's
+ * own business, which is this function's, and an empty place says what it is
+ * for, which is the empty state below.
  */
 function renderRoutines() {
   const list = allRoutines();
-  railPresence('routines', list.length > 0);
   const content = document.getElementById('routines-content');
   if (!content) return;
   if (pendingDelete !== null && !list[pendingDelete]) pendingDelete = null;

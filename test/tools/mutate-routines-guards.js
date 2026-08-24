@@ -51,7 +51,6 @@ const ROOT = path.join(__dirname, '..', '..');
 
 const MODEL = { src: path.join(ROOT, 'public', 'routines-model.js'), suite: 'test/unit/routines-model.test.js' };
 const VIEW = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/routines-view.test.js' };
-const RAIL = { src: path.join(ROOT, 'public', 'rail-presence.js'), suite: 'test/unit/routines-view.test.js' };
 // THE STYLESHEET IS A MUTATION TARGET, and that is the point of it being one.
 // The three-tone ruling is about what a reader SEES, and what they see is
 // resolved from these rules, not from any table in a module. An earlier
@@ -79,6 +78,24 @@ const APP = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routin
 // replies and drives the dispatch cases that carry them.
 const VIEW_REPLY = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/routines-view-doors.test.js' };
 const INDEX = { src: path.join(ROOT, 'public', 'index.html'), suite: 'test/unit/routines-view-doors.test.js' };
+// The Skills pane, which the permanent rail makes reachable and which had no
+// empty state at all until this pass. Its copy and its two guards are watched
+// by the file that presses the pane.
+const SKILLS_MODEL = { src: path.join(ROOT, 'public', 'skills-model.js'), suite: 'test/unit/skills-empty.test.js' };
+// THE RAIL'S PERMANENCE IS AN ABSENCE, so its mutations put the withdrawal
+// BACK rather than take a guard away. A rule whose whole content is "nothing
+// does this" is otherwise unmutatable, and an unmutatable rule is one the next
+// person reinstates without anything going red.
+const INDEX_RAIL = { src: path.join(ROOT, 'public', 'index.html'), suite: 'test/unit/routines-view.test.js' };
+const VIEW_RAIL = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/routines-view.test.js' };
+const SKILLS_VIEW_RAIL = { src: path.join(ROOT, 'public', 'views', 'skills.js'), suite: 'test/unit/routines-view.test.js' };
+const SKILLS_VIEW = { src: path.join(ROOT, 'public', 'views', 'skills.js'), suite: 'test/unit/skills-empty.test.js' };
+// The dispatch call that settles which routines empty state is shown, watched
+// by the enumeration of everything that draws this list.
+const APP_SKILLS = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routines-view-doors.test.js' };
+// The two openers, watched by the file that presses them rather than by the
+// file that calls what they draw.
+const APP_OPENER = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routines-view.test.js' };
 // The handlers behind the row's two controls, and the data model they write
 // through.
 const HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/unit/routine-actions.test.js' };
@@ -213,8 +230,8 @@ const MUTATIONS = [
     "'settings','routine-editor','routines']",
     "'settings','routine-editor']"],
   [INDEX, 'the rail carries a way to this section',
-    '<button class="nav-item" data-nav="routines" onclick="switchNav(\'routines\')" data-tooltip="Routines" style="display:none">',
-    '<button class="nav-item" data-nav="not-routines" onclick="switchNav(\'not-routines\')" data-tooltip="Routines" style="display:none">'],
+    '<button class="nav-item" data-nav="routines" onclick="switchNav(\'routines\')" data-tooltip="Routines">',
+    '<button class="nav-item" data-nav="not-routines" onclick="switchNav(\'not-routines\')" data-tooltip="Routines">'],
   [INDEX, 'the page carries the element this list renders into',
     '<div class="routines-content" id="routines-content"></div>',
     '<div class="routines-content"></div>'],
@@ -332,9 +349,6 @@ const MUTATIONS = [
   [VIEW, 'the second line appears only once there is something to say',
     '  if (row.status) {',
     '  if (true) {'],
-  [VIEW, 'the rail entry is gated on the first routine',
-    "  railPresence('routines', list.length > 0);\n",
-    ''],
   [VIEW, 'a paused row offers resume rather than pause again',
     "    actions += r.paused\n      ? iconButton('resume', 'Resume', ICONS.play, `routinesSetPaused(${index}, false)`, false)\n      : iconButton('pause', 'Pause', ICONS.pause, `routinesSetPaused(${index}, true)`, false);",
     "    actions += iconButton('pause', 'Pause', ICONS.pause, `routinesSetPaused(${index}, true)`, false);"],
@@ -345,14 +359,124 @@ const MUTATIONS = [
     "      type: 'delete_routine', agentId: entry.agent.id, name: entry.routine.name, occurrence: entry.occurrence,",
     "      type: 'delete_routine', agentId: entry.agent.id, name: 'anything', occurrence: entry.occurrence,"],
   [VIEW, 'the empty state offers something to press',
-    '    + \'<button class="settings-btn-primary" type="button" data-routines-action="add"\'',
-    '    + \'<button class="settings-btn-primary" type="button" data-routines-action="nothing"\''],
+    "      + `<button class=\"settings-btn-primary\" type=\"button\" data-routines-action=\"${action.marker}\"`",
+    "      + '<button class=\"settings-btn-primary\" type=\"button\" data-routines-action=\"nothing\"'"],
+
+  // ===== WHICH EMPTY STATE, AND WHETHER IT WAITS =====
+  // The locked copy presupposes a tested skill, which gating quietly
+  // guaranteed and permanence removes. Every guard below is one half of that.
+  [MODEL, 'a workspace with no skills gets the variant written for it',
+    '    if (choice.createSkill) {',
+    '    if (false) {'],
+  [MODEL, 'the build-a-skill variant drops the aside',
+    '        // No aside: the second way in it names is a skill\'s own page, and this\n'
+    + '        // workspace has no skill to have one.\n        aside: null,',
+    '        aside: EMPTY.aside,'],
+  [MODEL, 'the offer waits for the skill list to arrive',
+    '    if (input && input.loading) {\n'
+    + '      return { lead: EMPTY.lead, body: editor.STEP_LEADS.loading, action: null, actionKind: null, aside: null };\n'
+    + '    }\n',
+    ''],
+  [MODEL, 'the build offer goes with the agent that fulfils it',
+    '        action: guideName ? choice.createSkillLabel : null,',
+    '        action: choice.createSkillLabel,'],
+  // The half review found missing: dropping the button used to drop the only
+  // thing telling the reader what to do, leaving a line that instructs an
+  // action with nothing to press.
+  [MODEL, 'the no-guide state gains a next step rather than only losing its button',
+    '        body: guideName ? choice.emptyLead : `${choice.emptyLead} ${skills.EMPTY.nextStepNoGuide}`,',
+    '        body: choice.emptyLead,'],
+  [MODEL, 'the shipped line is kept whole rather than replaced',
+    '        body: guideName ? choice.emptyLead : `${choice.emptyLead} ${skills.EMPTY.nextStepNoGuide}`,',
+    '        body: skills.EMPTY.nextStepNoGuide,'],
+  [VIEW, 'the list tells the model whether the skills have arrived',
+    '    loading: !skillsHaveArrived(),',
+    '    loading: false,'],
+  [VIEW, 'the list tells the model which guide the workspace has',
+    "    guideName: guide ? (guide.displayName || guide.name || null) : null,",
+    "    guideName: 'Doc',"],
+  [VIEW, 'the aside is drawn only where the model kept one',
+    '  if (state.aside) h += `<p class="settings-caption routines-empty-aside">${esc(state.aside)}</p>`;',
+    '  h += `<p class="settings-caption routines-empty-aside">${esc(model.EMPTY.aside)}</p>`;'],
+  [APP_SKILLS, 'the skill list arriving redraws the list that asks about skills',
+    "renderSkills(); renderRoutines(); routineEditorSkillsArrived(d.skills);",
+    'renderSkills(); routineEditorSkillsArrived(d.skills);'],
+  // THE OPENER, not the render behind it. This is the line whose absence left
+  // the first press of Skills in a session opening onto a blank pane while
+  // every test that called renderSkills stayed green.
+  [APP_OPENER, 'pressing the Skills entry draws into the pane it reveals',
+    "  else if(nav==='skills') { showView('skills'); renderSkillsIfEmpty(); if(!skillsLoaded)",
+    "  else if(nav==='skills') { showView('skills'); if(!skillsLoaded)"],
+  // THE OTHER DIRECTION, and it is the one a single mutation would miss. These
+  // two calls are one word apart and only one of them is what the card wanted:
+  // drawing unconditionally also fixes the blank pane, and takes a pane the
+  // reader had scrolled or opened a card on with it.
+  [APP_OPENER, 'pressing the Skills entry leaves a pane that is already drawn',
+    "  else if(nav==='skills') { showView('skills'); renderSkillsIfEmpty(); if(!skillsLoaded)",
+    "  else if(nav==='skills') { showView('skills'); renderSkills(); if(!skillsLoaded)"],
+  // Watched by the file that PRESSES the entry, not the one that calls the
+  // render: the pane this guard protects is one only a press can find already
+  // drawn. Aimed at the copy suite first, this mutation turned nothing red,
+  // which is the harness reporting a proof pointed at the wrong place rather
+  // than a guard nothing holds.
+  [SKILLS_VIEW_RAIL, 'the opener asks the page whether anything is drawn',
+    '  if (detail && detail.firstElementChild) return false;\n',
+    ''],
+  [APP_OPENER, 'pressing the Routines entry draws into the pane it reveals',
+    "  else if(nav==='routines') { showView('routines'); renderRoutines(); }",
+    "  else if(nav==='routines') { showView('routines'); }"],
+
+  // ===== THE SKILLS PANE =====
+  // It had none of this until now: renderSkills returned before rendering, so
+  // a workspace with no skills had no pane at all.
+  [SKILLS_VIEW, 'a workspace with no skills gets a pane rather than a blank one',
+    '  if (!skillsHaveArrived() || !skills.length) {\n    renderSkillsEmpty(!skillsHaveArrived());\n    return;\n  }\n',
+    '  if (!skills.length) return;\n'],
+  [SKILLS_VIEW, 'the pane waits for the reply rather than reading nothing as none',
+    '    renderSkillsEmpty(!skillsHaveArrived());',
+    '    renderSkillsEmpty(false);'],
+  [SKILLS_VIEW, 'the pane offers the build only where a guide can fulfil it',
+    '  if (state.action) {',
+    '  if (true) {'],
+  [SKILLS_VIEW, 'the pane names the guide the workspace has rather than a literal',
+    "    guideName: guide ? (guide.displayName || guide.name || null) : null,",
+    "    guideName: guide ? 'Doc' : null,"],
+  [SKILLS_MODEL, 'the pane claims nothing about skills that have not arrived',
+    '    if (input && input.loading) {\n'
+    + '      return { lead: null, body: editor.STEP_LEADS.loading, action: null, aside: null };\n    }\n',
+    ''],
+  [SKILLS_MODEL, 'the next step swaps with the guide rather than disappearing',
+    "    return name ? EMPTY.nextStep.replace('{agent}', name) : EMPTY.nextStepNoGuide;",
+    "    return name ? EMPTY.nextStep.replace('{agent}', name) : '';"],
+  [SKILLS_MODEL, 'the guide is named through a slot rather than as a literal',
+    "    return name ? EMPTY.nextStep.replace('{agent}', name) : EMPTY.nextStepNoGuide;",
+    '    return name ? EMPTY.nextStep : EMPTY.nextStepNoGuide;'],
+  [SKILLS_MODEL, 'the mechanism is on every state, ahead of whichever next step it has',
+    '      body: `${EMPTY.mechanism} ${nextStep(guideName)}`,',
+    '      body: nextStep(guideName),'],
+  [SKILLS_MODEL, 'the action goes with the agent that fulfils it',
+    '      action: guideName ? EMPTY.action : null,',
+    '      action: EMPTY.action,'],
+
+  // ===== THE RAIL IS A MAP OF PLACES =====
+  // Each of these is the gate coming back in one of the three shapes it could
+  // come back in: hidden in the markup, withdrawn by the routines render, or
+  // withdrawn by the skills render.
+  [INDEX_RAIL, 'no rail entry is withdrawn in the page it ships in',
+    '<button class="nav-item" data-nav="routines" onclick="switchNav(\'routines\')" data-tooltip="Routines">',
+    '<button class="nav-item" data-nav="routines" onclick="switchNav(\'routines\')" data-tooltip="Routines"'
+    + ' style="display:none">'],
+  [VIEW_RAIL, 'the routines render leaves the rail alone',
+    '  const list = allRoutines();\n',
+    '  const list = allRoutines();\n'
+    + '  document.querySelector(\'.nav-item[data-nav="routines"]\').style.display = list.length ? \'\' : \'none\';\n'],
+  [SKILLS_VIEW_RAIL, 'the skills render leaves the rail alone',
+    '  renderSkillsSidebar(skills);\n',
+    '  document.querySelector(\'.nav-item[data-nav="skills"]\').style.display = skills.length ? \'\' : \'none\';\n'
+    + '  renderSkillsSidebar(skills);\n'],
   [VIEW, 'a routine name reaches the page as text, not as markup',
     '`<div class="rr-sentence">${esc(sentence)}</div>',
     '`<div class="rr-sentence">${sentence}</div>'],
-  [RAIL, 'a withdrawn rail entry comes back',
-    "    entry.style.display = present ? '' : 'none';",
-    "    entry.style.display = 'none';"],
 
   // ===== THE TWO CONTROLS =====
   // The byte check in the delete handler is a backstop against a WRITER that
@@ -407,7 +531,9 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [MODEL, VIEW, VIEW_E2E, VIEW_REPLY, RAIL, STYLES, SCHEDULER, END_TO_END, DISCOVERY, HANDLER, ROUTINES, APP, INDEX];
+  const targets = [MODEL, VIEW, VIEW_E2E, VIEW_REPLY, VIEW_RAIL, STYLES, SCHEDULER, END_TO_END,
+    DISCOVERY, HANDLER, ROUTINES, APP, APP_SKILLS, APP_OPENER, INDEX, INDEX_RAIL, SKILLS_MODEL, SKILLS_VIEW,
+    SKILLS_VIEW_RAIL];
   const originals = new Map();
   for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];

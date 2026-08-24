@@ -660,6 +660,12 @@ describe('routine editor: the reply reaches the user', () => {
     w.renderSkillsCalled = 0;
     w.routineEditorSkillsArrived = (list) => { w.handed = list; };
     w.renderSkills = () => { w.renderSkillsCalled++; };
+    // The same reply also redraws the routines list, whose empty state asks
+    // whether the workspace has a skill. Stubbed rather than removed: this
+    // test is about what the editor is handed, and a missing global would fail
+    // it for a reason that has nothing to do with that.
+    w.renderRoutinesCalled = 0;
+    w.renderRoutines = () => { w.renderRoutinesCalled++; };
     w.selectSkill = () => {};
     w.palettePendingSkill = null;
     const list = skillFixture();
@@ -671,6 +677,8 @@ describe('routine editor: the reply reaches the user', () => {
       'the editor is handed the list that arrived, not a different one');
     assert.strictEqual(w.skillsLoaded, true, 'sanity: this is the case that marks the list loaded');
     assert.strictEqual(w.renderSkillsCalled, 1, 'sanity: the skills view still renders');
+    assert.strictEqual(w.renderRoutinesCalled, 1,
+      'the routines empty state asks whether this workspace has a skill and was not redrawn');
   });
 
   test('a written routine is confirmed and the editor is released', () => {

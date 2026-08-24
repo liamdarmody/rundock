@@ -249,7 +249,11 @@ function handle(d) {
       break;
     case 'needs_workspace': showView('workspace'); break;
     case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesSidebar(); renderRoutines(); renderConvoList(); break;
-    case 'skills': skills=d.skills; skillsLoaded=true; renderSkills(); routineEditorSkillsArrived(d.skills); if(palettePendingSkill){const s=palettePendingSkill;palettePendingSkill=null;selectSkill(s);} break;
+    // renderRoutines as well as renderSkills: the routines empty state asks
+    // whether the workspace has a skill, so the reply that answers that
+    // question is the reply that has to redraw it. Without this the list sits
+    // on its waiting line until the next roster broadcast.
+    case 'skills': skills=d.skills; skillsLoaded=true; renderSkills(); renderRoutines(); routineEditorSkillsArrived(d.skills); if(palettePendingSkill){const s=palettePendingSkill;palettePendingSkill=null;selectSkill(s);} break;
     case 'conversations':
       handlePersistedConversations(d.conversations, d.lastActiveConversationId);
       // Conversations are the last of the four payloads the client requests on
@@ -1022,7 +1026,16 @@ function switchNav(nav) {
       showView('editor');
     }
   }
-  else if(nav==='skills') { showView('skills'); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } else if(skills.length && !currentSkillId) { selectSkill(skills[0].id); } }
+  // THE OPENER DRAWS WHEN NOTHING IS DRAWN, and not otherwise. Arriving here
+  // used to draw nothing at all when the list had arrived and was empty, which
+  // was invisible only because the Skills entry was withdrawn on exactly that
+  // workspace: a permanent entry opens onto whatever is here, so what is here
+  // cannot depend on how you arrived. Drawing unconditionally fixes that and
+  // costs the reader a pane they had scrolled or opened a card on, so the
+  // decision is the view's and it is made by asking the page. renderSkills
+  // also picks the first skill when none is selected, which is why that branch
+  // is gone from here rather than restated: one rule, one place.
+  else if(nav==='skills') { showView('skills'); renderSkillsIfEmpty(); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } }
   else if(nav==='conversations') { if(activeConversation) { showView('chat'); if(unread.clearConvo(activeConversation.id)) { updateUnreadBadge(); renderConvoList(); } } else { const target = pickDefaultConversation(); if(target) { openConversation(target.id); } else { newConversation(); } } }
   else if(nav==='team') { showView('home'); renderOrgChart(); }
   else if(nav==='routines') { showView('routines'); renderRoutines(); }

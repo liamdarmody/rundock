@@ -350,13 +350,20 @@
   /**
    * The section to leave to, resolved against what the shell actually has.
    *
-   * WHY THIS IS A FUNCTION AND NOT A LINE IN THE ROUTER. The routines surface
-   * has no rail entry yet, and handing the router a section it does not know
-   * is not a no-op: it hides every sidebar, reveals one that is nested inside
-   * another, and matches no branch, so the editor stays on screen and the save
-   * appears to have done nothing. Written inside the router that line could
-   * only be reached by loading the whole shell, so it had no test and could be
-   * deleted with the suite green.
+   * WHY THIS IS A FUNCTION AND NOT A LINE IN THE ROUTER. Handing the router a
+   * section the shell does not have is not a no-op: it hides every sidebar,
+   * reveals one that is nested inside another, and matches no branch, so the
+   * editor stays on screen and the save appears to have done nothing. Written
+   * inside the router that line could only be reached by loading the whole
+   * shell, so it had no test and could be deleted with the suite green.
+   *
+   * THE ROUTINES SURFACE NOW HAS A PERMANENT RAIL ENTRY, so this resolves to
+   * it rather than to the team panel, and it did before that entry became
+   * permanent because the entry was in the markup either way. That is exactly
+   * why the resolution stays: it reads the shell rather than a belief about
+   * the shell, so the day the panel is lifted out of the team one it is the
+   * rename that has to keep the names, not this function that has to be
+   * remembered.
    *
    * A destination is usable only if the shell has BOTH halves of it: a rail
    * button carrying the name, and the sidebar panel the router reveals by that
