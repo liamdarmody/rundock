@@ -523,12 +523,37 @@ describe('routine editor view: saving', () => {
     assert.strictEqual(w.routinesListNav(), 'team', 'no routines rail entry yet');
     assert.match(INDEX_SRC, /data-nav="routines"/, 'index.html carries no routines rail entry');
     assert.match(INDEX_SRC, /id="view-routines"/, 'index.html carries no routines view panel');
+    assert.match(INDEX_SRC, /id="sidebar-routines"/, 'index.html carries no routines sidebar panel');
 
+    // ALL THREE, and EVERY MISSING-ONE STATE. The router touches all three: the
+    // rail lights the entry, setNavState reveals the sidebar by name and
+    // showView reveals the view by name. Adding them in one order only would
+    // let a check that stopped asking for the last one still pass, because the
+    // pair before it already answered no. So each is taken away in turn.
     const button = doc.createElement('button');
     button.setAttribute('data-nav', 'routines');
+    const view = doc.createElement('div');
+    view.id = 'view-routines';
     const panel = doc.createElement('div');
-    panel.id = 'view-routines';
-    doc.body.append(button, panel);
+    panel.id = 'sidebar-routines';
+
+    doc.body.append(button);
+    assert.strictEqual(w.routinesListNav(), 'team', 'a rail entry alone is not a destination');
+
+    doc.body.append(view, panel);
+    assert.strictEqual(w.routinesListNav(), w.RundockRoutineEditorModel.SAVE_DESTINATION,
+      'the shell has all three and the save still will not go there');
+
+    view.remove();
+    assert.strictEqual(w.routinesListNav(), 'team',
+      'a section with no view panel is a destination showView cannot reveal');
+
+    doc.body.append(view);
+    panel.remove();
+    assert.strictEqual(w.routinesListNav(), 'team',
+      'a section with no sidebar panel is a destination setNavState cannot reveal');
+
+    doc.body.append(panel);
     assert.strictEqual(w.routinesListNav(), w.RundockRoutineEditorModel.SAVE_DESTINATION);
     dom.window.close();
   });

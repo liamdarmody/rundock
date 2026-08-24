@@ -28,6 +28,8 @@ const INDEX_SRC = read('public', 'index.html');
 const APP_SRC = read('public', 'app.js');
 const SKILLS_SRC = read('public', 'views', 'skills.js');
 const SKILLS_MODEL_SRC = read('public', 'skills-model.js');
+const SCOPE_MODEL_SRC = read('public', 'routines-scope-model.js');
+const PANEL_SRC = read('public', 'views', 'routines-panel.js');
 
 // Thursday 20 August 2026, twenty past nine. One routine, one agent, one
 // execution target, only the outcome changing: the locked frame's own setup.
@@ -107,7 +109,9 @@ function shell(routines = FOUR_ROWS, opts = {}) {
   w.eval(EDITOR_MODEL_SRC);
   w.eval(SKILLS_MODEL_SRC);
   w.eval(MODEL_SRC);
+  w.eval(SCOPE_MODEL_SRC);
   w.eval(VIEW_SRC);
+  w.eval(PANEL_SRC);
   w.eval(SKILLS_SRC);
 
   w.agents = [{
@@ -1162,7 +1166,6 @@ describe('the skill named on a row is reachable', () => {
   // against a shell where switchNav did nothing to the rail.
   test('the rail shows Skills as active after the jump', () => {
     const { doc, w, dom } = shell(ONE, { skills: [SKILL] });
-    w.eval(appPiece(/(const SIDEBAR_FOR = \{[^}]*\};)/, 'the sidebar map').replace('const ', 'var '));
     w.eval(`function setNavState(nav) {${appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState')}\n}`);
     w.eval(`function switchNav(nav) {${appPiece(/function switchNav\(nav\) \{([\s\S]*?)\n\}/, 'switchNav')}\n}`);
     w.closeFindBar = () => {};
@@ -1206,6 +1209,8 @@ describe('the header is the skills view\'s header', () => {
   const PROFILE_CSS = read('public', 'styles', 'views', 'profile.css');
   const SETTINGS_CSS = read('public', 'styles', 'views', 'settings.css');
   const SKILLS_CSS = read('public', 'styles', 'views', 'skills.css');
+  const SCOPE_MODEL_SRC = read('public', 'routines-scope-model.js');
+  const PANEL_SRC = read('public', 'views', 'routines-panel.js');
 
   // A document carrying the real page and the real stylesheets, with both
   // views drawn into it, so the two headers can be compared as the browser
@@ -1224,6 +1229,12 @@ describe('the header is the skills view\'s header', () => {
     w.eval(MODEL_SRC);
     w.eval(VIEW_SRC);
     w.eval(SKILLS_SRC);
+    // The scope lives in the panel beside this list, so the panel and the
+    // model it reads are loaded here rather than stubbed: the subtitle's whole
+    // job is to agree with the rows, and a stubbed scope would let it agree
+    // with a value the product never produces.
+    w.eval(SCOPE_MODEL_SRC);
+    w.eval(PANEL_SRC);
     w.agents = [{ id: 'piper', displayName: 'Piper', colour: '#E87A5A', icon: 'P', status: 'onTeam', routines }];
     w.skills = opts.skills === undefined
       ? [{ id: 'sk', name: 'Compile the ops summary', assignedAgents: [{ id: 'piper', name: 'Piper' }] }]
@@ -1327,6 +1338,16 @@ describe('the header is the skills view\'s header', () => {
   // the two halves are shown to agree rather than assumed to.
   test('scoped to an agent, the subtitle on the page names that agent', () => {
     const { doc, w, dom } = styled();
+    // A SECOND OWNER, BECAUSE A SCOPE IS NOT OFFERED BELOW TWO. A filter with
+    // one option cannot change what the pane shows, so the panel withdraws it
+    // and refuses the scope with it. Scoping a one-agent workspace is not a
+    // state the product has, so a test that scoped one would be asserting
+    // about a screen no reader can reach.
+    w.agents.push({
+      id: 'wren', displayName: 'Wren', colour: '#6BC67E', icon: 'W', status: 'onTeam',
+      routines: [routine('Wren nightly', { nextRun: iso(TOMORROWS_SLOT) })],
+    });
+    w.renderRoutines();
     assert.strictEqual(text(routinesHeader(doc).querySelector('.routines-subtitle')),
       'Every scheduled skill across your team, and when it runs next.',
       'sanity: unscoped, the page carries the locked sentence');
@@ -1347,6 +1368,10 @@ describe('the header is the skills view\'s header', () => {
 
   test('a scope naming an agent the roster does not have keeps the general sentence', () => {
     const { doc, w, dom } = styled();
+    w.agents.push({
+      id: 'wren', displayName: 'Wren', colour: '#6BC67E', icon: 'W', status: 'onTeam',
+      routines: [routine('Wren nightly', { nextRun: iso(TOMORROWS_SLOT) })],
+    });
     w.setNavState = () => {};
     w.showRoutinesForAgent('nobody');
     assert.strictEqual(text(routinesHeader(doc).querySelector('.routines-subtitle')),
@@ -1684,7 +1709,8 @@ describe('the rail says when a routine has failed', () => {
   test('the roster arriving from the server raises and clears the dot', () => {
     const { w, doc, dom } = railShell([]);
     const body = appPiece(/case 'agents':([\s\S]*?)\bbreak;/, 'the roster case of the client dispatch');
-    for (const name of ['renderAgentList', 'renderOrgChart', 'renderConvoList', 'renderRoutines']) {
+    for (const name of ['renderAgentList', 'renderOrgChart', 'renderConvoList', 'renderRoutines',
+      'renderRoutinesPanel']) {
       w[name] = () => {};
     }
     w.d = { type: 'agents', agents: [{ id: 'piper', displayName: 'Piper', status: 'onTeam', routines: [failed('Nightly report')] }] };

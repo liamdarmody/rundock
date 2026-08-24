@@ -206,6 +206,13 @@ const MANIFEST = {
     "routinesListNav",
     "saveRoutine",
   ],
+  "routines-panel.js": [
+    "renderRoutinesPanel",
+    "routinesPanelAdd",
+    "routinesPanelReset",
+    "routinesScopeAgentId",
+    "setRoutinesScope",
+  ],
   "routines.js": [
     "renderRoutines",
     "routinesActionCleared",

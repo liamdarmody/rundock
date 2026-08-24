@@ -41,6 +41,26 @@
 .agent-status-state { font-size: var(--caption); font-weight: 500; color: var(--idle); flex-shrink: 0; }
 .agent-status-state.working { color: var(--success); }
 
+/* The routines panel's scope list. DELIBERATELY NOT .agent-status-item: a
+   scope row carries a count where a roster row carries a status, and takes the
+   conversation list's selected fill rather than the roster's hover fill. Two
+   differences, both visible before you read the header, because the complaint
+   this panel answers is that the two sidebars looked the same. */
+.routines-scope-list { padding: 8px; display: flex; flex-direction: column; gap: 2px; }
+.scope-item { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: var(--radius-lg); cursor: pointer; color: var(--text-1); transition: background var(--duration-base) ease; }
+.scope-item:hover { background: var(--elevated); }
+.scope-item.active { background: var(--accent-glow); }
+.scope-item.active .scope-name { color: var(--accent); font-weight: 600; }
+.scope-item.active .scope-count { color: var(--accent); }
+.scope-name { flex: 1; font-size: var(--body); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.scope-count { font-size: var(--caption); font-weight: 600; color: var(--text-3); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+/* The rail's own clock on the row that means the whole surface. */
+.scope-all-icon { width: 24px; height: 24px; border-radius: var(--radius-circle); display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--text-2); background: var(--card); }
+.scope-all-icon svg { width: 13px; height: 13px; }
+.scope-divider { height: 1px; background: var(--border); margin: 6px 10px; }
+/* What a panel says instead of drawing a list it has decided not to draw. */
+.sidebar-quiet { padding: 0 16px 16px; font-size: var(--caption); color: var(--text-3); line-height: 1.6; }
+
 /* Conversation search */
 /* Per-view sidebar search fields removed in favour of the universal search
    palette (nav rail icon / Cmd+K): one engine, one search surface. */
