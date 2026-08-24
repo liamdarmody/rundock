@@ -315,7 +315,14 @@ describe('the ways this list gets drawn, pressed', () => {
     w.drawn = 0;
     const realRender = w.renderRoutines;
     w.renderRoutines = () => { w.drawn++; realRender(); };
-    for (const name of ['renderAgentList', 'renderOrgChart', 'renderRoutinesSidebar', 'renderConvoList']) {
+    // Everything else the roster case calls. updateRoutineFailureBadge is
+    // among them: it puts the failure dot on the rail rather than anything in
+    // this view, so what it does is driven where the rail is drawn, in
+    // "the roster arriving from the server raises and clears the dot" in
+    // test/unit/routines-view.test.js. Named here so this case can run at all,
+    // and named there so it is not merely named.
+    for (const name of ['renderAgentList', 'renderOrgChart', 'renderRoutinesSidebar',
+      'renderConvoList', 'updateRoutineFailureBadge']) {
       w[name] = () => {};
     }
     w.d = { type: 'agents', agents: w.agents };

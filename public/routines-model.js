@@ -410,6 +410,31 @@
   }
 
   /**
+   * Whether anything on the team is in the one state the rail is allowed to
+   * alarm about.
+   *
+   * THIS IS THE THREE-TONE RULING REACHING THE CHROME, and it reaches it by
+   * asking the same function a row asks rather than by restating the rule. A
+   * miss is history, a catch-up is a success, a run in flight has no outcome
+   * yet, and a paused routine has nothing to report. Only a real failure is a
+   * failure, and a dot that rose on a missed slot would teach its reader to
+   * ignore the one signal that matters, which is exactly what the ruling was
+   * settled to prevent.
+   *
+   * IT ASKS ABOUT THE MOST RECENT COMPLETED RUN, which is what `outcomeOf`
+   * answers, so a routine that failed and then succeeded is not failing. The
+   * dot is therefore cleared by that routine's next success and by nothing
+   * else: not by another routine succeeding, and not by time passing.
+   *
+   * @param {Array<{lastStart?: any, lastRunStatus?: string|null, lastSlot?: any,
+   *   missedSlot?: any}>} [list]
+   */
+  function anyFailure(list) {
+    const routines = Array.isArray(list) ? list : [];
+    return routines.some(routine => outcomeOf(routine) === 'failed');
+  }
+
+  /**
    * When it runs next, or that it is paused.
    *
    * THE INSTANT IS NOT DECIDED HERE. It arrives already computed, by one path
@@ -526,6 +551,6 @@
     actionProblem, emptyState, header,
     dayWords, clockWords, zoneWords, timeWords,
     scheduleWords, routineSentence, sentenceParts,
-    outcomeOf, runStatus, nextRunLabel, orderByNextRun, row, deleteConfirmation,
+    outcomeOf, anyFailure, runStatus, nextRunLabel, orderByNextRun, row, deleteConfirmation,
   };
 }));

@@ -90,6 +90,10 @@ const INDEX_RAIL = { src: path.join(ROOT, 'public', 'index.html'), suite: 'test/
 const VIEW_RAIL = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/routines-view.test.js' };
 const SKILLS_VIEW_RAIL = { src: path.join(ROOT, 'public', 'views', 'skills.js'), suite: 'test/unit/routines-view.test.js' };
 const SKILLS_VIEW = { src: path.join(ROOT, 'public', 'views', 'skills.js'), suite: 'test/unit/skills-empty.test.js' };
+// The chrome's own stylesheet, where the failure dot's colour actually lives.
+// The three-tone ruling is about what a reader SEES, and a dot proven against
+// a token name in a module is the mistake this project already made once.
+const SIDEBAR_CSS = { src: path.join(ROOT, 'public', 'styles', 'components', 'sidebar.css'), suite: 'test/unit/routines-view.test.js' };
 // The dispatch call that settles which routines empty state is shown, watched
 // by the enumeration of everything that draws this list.
 const APP_SKILLS = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routines-view-doors.test.js' };
@@ -218,8 +222,8 @@ const MUTATIONS = [
 
   // ===== WHO DRAWS THIS LIST, AND HOW A READER ARRIVES AT IT =====
   [APP, 'the arriving roster redraws the list',
-    'renderRoutinesSidebar(); renderRoutines(); renderConvoList();',
-    'renderRoutinesSidebar(); renderConvoList();'],
+    'renderRoutinesSidebar(); renderRoutines(); updateRoutineFailureBadge();',
+    'renderRoutinesSidebar(); updateRoutineFailureBadge();'],
   [APP, 'the rail entry draws something into the view it shows',
     "  else if(nav==='routines') { showView('routines'); renderRoutines(); }",
     "  else if(nav==='routines') { showView('routines'); }"],
@@ -566,6 +570,35 @@ const MUTATIONS = [
   [STYLES, 'the subtitle takes the body size rather than restating the title',
     '.routines-subtitle { font-size: var(--body); color: var(--text-2); }',
     '.routines-subtitle { font-size: var(--title); color: var(--text-2); }'],
+  // ===== THE FAILURE DOT =====
+  // The three-tone ruling reaching the chrome. A dot that rises on a missed
+  // slot teaches its reader to ignore the dot, which is what the ruling was
+  // settled to prevent, so the rule and each half of the wiring are watched.
+  [APP_OPENER, 'the dot is raised on a failure rather than on anything that ran',
+    '  if (RundockRoutinesModel.anyFailure(facts)) {',
+    '  if (facts.length) {'],
+  // The removal branch, named with enough of its own function around it to be
+  // unique: the two badges above this one end in the same three lines, and a
+  // guard that matched all three would break whichever came first and report
+  // on whatever that turned red.
+  [APP_OPENER, 'the dot is taken away again once nothing is failing',
+    "      badge.className = 'nav-badge-failed';\n      navBtn.appendChild(badge);\n    }\n  } else {\n    if (badge) badge.remove();\n  }",
+    "      badge.className = 'nav-badge-failed';\n      navBtn.appendChild(badge);\n    }\n  } else {\n  }"],
+  [APP_OPENER, 'every agent on the roster is looked at, not only the first',
+    '  for (const agent of agents || []) {',
+    '  for (const agent of (agents || []).slice(0, 1)) {'],
+  [APP_OPENER, 'the roster broadcast is what updates the rail',
+    ' updateRoutineFailureBadge();',
+    ''],
+  [APP_OPENER, 'the outcome is read from the run state the row reads',
+    '        lastRunStatus: routine.state ? routine.state.status : null,',
+    '        lastRunStatus: null,'],
+  [MODEL, 'only a real failure counts as a failure',
+    "    return routines.some(routine => outcomeOf(routine) === 'failed');",
+    '    return routines.length > 0;'],
+  [SIDEBAR_CSS, 'the dot takes the danger token rather than the amber one beside it',
+    '.nav-badge-failed { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--danger); border-radius: var(--radius-circle); pointer-events: none; }',
+    '.nav-badge-failed { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--attention); border-radius: var(--radius-circle); pointer-events: none; }'],
 ];
 
 // The reporter is named explicitly rather than left to the default, which
@@ -601,7 +634,7 @@ function redTests(suite) {
 function run() {
   const targets = [MODEL, VIEW, VIEW_E2E, VIEW_REPLY, VIEW_RAIL, STYLES, SCHEDULER, END_TO_END,
     DISCOVERY, HANDLER, ROUTINES, APP, APP_SKILLS, APP_OPENER, INDEX, INDEX_RAIL, SKILLS_MODEL, SKILLS_VIEW,
-    SKILLS_VIEW_RAIL];
+    SKILLS_VIEW_RAIL, SIDEBAR_CSS];
   const originals = new Map();
   for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];

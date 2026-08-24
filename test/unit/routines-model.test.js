@@ -712,3 +712,61 @@ describe('the header this view heads itself with', () => {
       'Every scheduled skill {agent} runs, and when it runs next.');
   });
 });
+
+describe('the one state the chrome is allowed to alarm about', () => {
+  // AC-D2 AT THE MODEL. The rail asks this the same question a row asks, so
+  // the ruling cannot say one thing on a row and another on the chrome. Each
+  // non-failure state is asserted on its own: the four asserted together would
+  // be one failure that could be any of them.
+  const withFacts = (facts) => [{ ...facts }];
+
+  test('a failed most recent completed run is a failure', () => {
+    assert.strictEqual(m.anyFailure(withFacts(FAILED)), true);
+  });
+
+  test('a run the process died inside is a failure', () => {
+    assert.strictEqual(m.anyFailure(withFacts({ ...FAILED, lastRunStatus: 'interrupted' })), true);
+  });
+
+  test('a missed slot is not a failure', () => {
+    assert.strictEqual(m.anyFailure(withFacts(MISSED)), false,
+      'the machine being off is not the routine failing');
+  });
+
+  test('a catch-up is not a failure', () => {
+    assert.strictEqual(m.anyFailure(withFacts(CAUGHT_UP)), false, 'a late run is a success');
+  });
+
+  test('a run in flight is not a failure', () => {
+    assert.strictEqual(m.anyFailure(withFacts({ ...FAILED, lastRunStatus: 'running' })), false,
+      'a run that has not finished has no outcome to report');
+  });
+
+  test('a routine that has never run is not a failure', () => {
+    assert.strictEqual(m.anyFailure(withFacts({ lastStart: null, lastRunStatus: null })), false);
+  });
+
+  test('a run that went fine is not a failure', () => {
+    assert.strictEqual(m.anyFailure(withFacts(RAN_ON_TIME)), false);
+  });
+
+  // AC-D5 at the model.
+  test('one failure among several is a failure', () => {
+    assert.strictEqual(m.anyFailure([RAN_ON_TIME, MISSED, FAILED, CAUGHT_UP]), true);
+  });
+
+  test('another routine succeeding does not clear one that failed', () => {
+    assert.strictEqual(m.anyFailure([FAILED, RAN_ON_TIME]), true);
+  });
+
+  test('a routine that failed and then succeeded is not failing', () => {
+    assert.strictEqual(m.anyFailure([RAN_ON_TIME]), false,
+      'the question is about the most recent completed run, not about history');
+  });
+
+  test('nothing at all is not a failure', () => {
+    assert.strictEqual(m.anyFailure([]), false);
+    assert.strictEqual(m.anyFailure(), false);
+    assert.strictEqual(m.anyFailure(null), false);
+  });
+});
