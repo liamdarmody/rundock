@@ -280,14 +280,22 @@ describe('the doors, pressed', () => {
   // that hung off its divider. Pinned here rather than assumed, because the
   // walks below no longer touch that panel at all and would not notice it
   // coming back.
+  //
+  // ASSERTED AGAINST THE SOURCE AND NOT AGAINST THIS FILE'S DOM. An earlier
+  // version of this test looked for the control in a document nothing had
+  // rendered the roster into, which is an assertion that cannot fail for the
+  // reason it states: it would have passed against a sidebar that had the
+  // control back. What the panel actually holds once it is drawn is proven in
+  // team-sidebar.test.js, which delivers a roster through the real dispatch
+  // into the real markup. What belongs HERE is the doors claim: that the view
+  // renders no way in and names no way in.
   test('the team sidebar offers no way into the editor', () => {
-    const { doc, w, dom } = shell();
-    w.renderAgentList = w.RundockTeamView.renderAgentList;
-    assert.strictEqual(doc.querySelector('[data-sidebar-action="add-routine"]'), null,
-      'the team sidebar carries a way into the editor again and is not a listed door');
     assert.ok(!/data-sidebar-action/.test(TEAM_SRC),
       'views/team.js renders a sidebar action again and is not a listed door');
-    dom.window.close();
+    for (const call of ENTRY_CALLS) {
+      assert.ok(!new RegExp(`(?<![.\\w$])${call}\\(`).test(TEAM_SRC),
+        `views/team.js reaches the editor through ${call} and is not a listed door`);
+    }
   });
 });
 

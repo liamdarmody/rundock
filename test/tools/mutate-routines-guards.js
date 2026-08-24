@@ -118,6 +118,9 @@ const PROFILE_COPY = { src: path.join(ROOT, 'public', 'views', 'profile.js'), su
 // cannot turn red wearing the shape of one that can.
 const PROFILE_BOXES = { src: path.join(ROOT, 'public', 'views', 'profile.js'), suite: 'test/unit/profile-boxes.test.js' };
 const PROFILE_ROUTE = { src: path.join(ROOT, 'public', 'views', 'profile.js'), suite: 'test/unit/routines-view-doors.test.js' };
+// The team sidebar as a DOOR rather than as a panel, watched by the file that
+// enumerates every way into the editor.
+const TEAM_DOOR = { src: path.join(ROOT, 'public', 'views', 'team.js'), suite: 'test/unit/routine-editor-doors.test.js' };
 // The scope, on both sides of it: the filter that applies one and the arm that
 // clears it. Both are watched by the file that presses the two routes.
 const VIEW_SCOPE = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/routines-view-doors.test.js' };
@@ -279,6 +282,12 @@ const MUTATIONS = [
   [PROFILE_BOXES, 'a schedule reads in the words the routines view uses',
     '        const when = (routinesModel && routinesModel.scheduleWords(r.schedule)) || r.schedule;',
     '        const when = r.schedule;'],
+  // The other direction. The model has plain words only for the schedules the
+  // editor offers, so a routine written by hand has none, and without the
+  // fallback its row shows an empty line where its schedule should be.
+  [PROFILE_BOXES, 'a schedule the model cannot translate falls back to the stored string',
+    '        const when = (routinesModel && routinesModel.scheduleWords(r.schedule)) || r.schedule;',
+    '        const when = routinesModel && routinesModel.scheduleWords(r.schedule);'],
   [PROFILE_BOXES, 'the Routines box is there whether or not the agent has any',
     '    h+=`<div class="profile-card"><div class="profile-card-section"><div class="profile-section-label">Routines</div>`;\n    if(hasRoutines) {',
     '    if (!hasRoutines) { h+=\'\'; } else {\n    h+=`<div class="profile-card"><div class="profile-card-section"><div class="profile-section-label">Routines</div>`;\n    if(hasRoutines) {'],
@@ -330,6 +339,10 @@ const MUTATIONS = [
     + "      const isWorking = workingIds.has(a.id);\n"
     + "      const last = agentLastActivity[a.id];\n"
     + "      const statusText = `${(a.routines || []).length} routines`;"],
+  [TEAM_DOOR, 'the team sidebar renders no way into the editor',
+    "  document.getElementById('agent-list').innerHTML = h;",
+    "  h += '<button data-sidebar-action=\"add-routine\" onclick=\"addRoutine()\">Add</button>';\n"
+    + "  document.getElementById('agent-list').innerHTML = h;"],
   [INDEX_SWEEP, 'the element the listing rendered into went with the listing',
     '      <div class="agent-status-list" id="agent-list"></div>\n',
     '      <div class="agent-status-list" id="agent-list"></div>\n      <div id="sidebar-routines"></div>\n'],
@@ -652,7 +665,7 @@ function run() {
   const targets = [MODEL, VIEW, VIEW_E2E, VIEW_REPLY, VIEW_RAIL, STYLES, SCHEDULER, END_TO_END,
     DISCOVERY, HANDLER, ROUTINES, APP, APP_SKILLS, APP_OPENER, INDEX, INDEX_RAIL, SKILLS_MODEL, SKILLS_VIEW,
     SKILLS_VIEW_RAIL, TEAM_PANEL, INDEX_SWEEP, PROFILE_BOXES, PROFILE_ROUTE, VIEW_SCOPE,
-    GUIDE_COPY_MOD, TEAM_COPY, PROFILE_COPY];
+    GUIDE_COPY_MOD, TEAM_COPY, PROFILE_COPY, TEAM_DOOR];
   const originals = new Map();
   for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];

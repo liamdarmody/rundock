@@ -21,6 +21,24 @@ const { JSDOM } = require('jsdom');
 const ROOT = path.join(__dirname, '..', '..');
 const MODEL_SRC = fs.readFileSync(path.join(ROOT, 'public', 'routine-editor-model.js'), 'utf-8');
 const VIEW_SRC = fs.readFileSync(path.join(ROOT, 'public', 'views', 'routine-editor.js'), 'utf-8');
+// The shipped page and the shipped router, read rather than restated, because
+// the claim below is about what the real shell can show.
+const INDEX_SRC = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf-8');
+const APP_SRC = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf-8');
+
+/**
+ * The panel the router shows for a section, off the router's own arm.
+ *
+ * A SECTION IS NOT ALWAYS SHOWN BY A PANEL NAMED AFTER IT, and Team is the
+ * case that matters here: its arm shows the home panel. A test that planted a
+ * panel called after the section would answer its own question, which is the
+ * pattern the routines doors file exists to record.
+ */
+function panelShownFor(nav) {
+  const arm = new RegExp(`nav==='${nav}'\\)\\s*\\{\\s*showView\\('([\\w-]+)'\\)`).exec(APP_SRC);
+  assert.ok(arm, `app.js has no arm that shows anything for the ${nav} section`);
+  return arm[1];
+}
 
 // The promise that belongs to the always-on option alone. Named here as well
 // as in the model's tests, because this file asserts it about the DOM and the
@@ -42,11 +60,14 @@ function skillFixture() {
 // time zone is handed in.
 function mount(opts = {}) {
   const dom = new JSDOM('<!doctype html><html><body>'
-    // A rail button and a view panel for each section the router can reach.
-    // The routines surface has neither here, which is the condition the save
-    // destination has to resolve against.
-    + '<button class="nav-item" data-nav="team"></button><div id="view-team"></div>'
-    + '<button class="nav-item" data-nav="skills"></button><div id="view-skills"></div>'
+    // A rail button for each section the router can reach, and NO VIEW PANEL
+    // FOR EITHER OF THEM. The routines surface has neither, which is the
+    // condition the save destination has to resolve against, and the fallback
+    // it lands on is checked against the shipped page rather than against a
+    // panel this file could plant: `panelShownFor` asks the router which panel
+    // a section shows and index.html whether that panel exists.
+    + '<button class="nav-item" data-nav="team"></button>'
+    + '<button class="nav-item" data-nav="skills"></button>'
     + '<div id="view-routine-editor" class="hidden"><div id="routine-editor-content"></div></div>'
     + '</body></html>',
     // The modules are evaluated inside the window, the way index.html loads
@@ -479,20 +500,29 @@ describe('routine editor view: saving', () => {
     assert.strictEqual(w.navigatedTo, w.routinesListNav(), 'the reply is what leaves');
     assert.ok(w.navigatedTo, 'a destination was chosen');
     // Both halves, because the router needs both: the rail button it marks
-    // active and the view panel it shows by the same name.
+    // active and a panel it can actually show. The panel is resolved through
+    // the router's own arm and looked for in the shipped page, so this says
+    // the destination is showable THERE rather than showable here.
     assert.ok(doc.querySelector(`[data-nav="${w.navigatedTo}"]`),
       `the router has no rail entry for "${w.navigatedTo}", so it cannot go there`);
-    assert.ok(doc.getElementById(`view-${w.navigatedTo}`),
-      `the router has no view panel for "${w.navigatedTo}", so it would show nothing`);
+    const panel = panelShownFor(w.navigatedTo);
+    assert.ok(new RegExp(`id="view-${panel}"`).test(INDEX_SRC),
+      `the router shows #view-${panel} for "${w.navigatedTo}" and index.html carries no such panel`);
     dom.window.close();
   });
 
-  // The resolution itself, both ways round. Today there is no routines rail
-  // entry and it lands on the section that lists routines; the day that entry
-  // exists it lands on the routines surface, with nothing here edited.
+  // The resolution itself, both ways round: with neither half of a destination
+  // it falls back, and with both halves it lands on the routines surface, with
+  // nothing here edited.
+  //
+  // THE HALVES PLANTED HERE ARE THE HALVES THE SHIPPED PAGE HAS, checked
+  // against it first, so this constructs a condition that is real rather than
+  // one only this file can satisfy.
   test('the destination is the routines surface once the shell can reach it', () => {
     const { w, doc, dom } = atReady();
     assert.strictEqual(w.routinesListNav(), 'team', 'no routines rail entry yet');
+    assert.match(INDEX_SRC, /data-nav="routines"/, 'index.html carries no routines rail entry');
+    assert.match(INDEX_SRC, /id="view-routines"/, 'index.html carries no routines view panel');
 
     const button = doc.createElement('button');
     button.setAttribute('data-nav', 'routines');

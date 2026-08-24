@@ -229,6 +229,25 @@ describe('the profile is three boxes', () => {
       'views/profile.js names a pause or delete handler');
     dom.window.close();
   });
+
+  // THE FALLBACK, DRIVEN RATHER THAN PROMISED IN A COMMENT. The model has
+  // plain words only for the schedules the editor offers, and returns nothing
+  // for anything else. A routine written by hand, or by a future editor this
+  // one has not caught up with, carries such a schedule, and the row shows the
+  // stored string rather than an empty line. Every other fixture here resolves
+  // to model words, so without this the branch is unreachable from any test.
+  test('a schedule the model has no words for is shown as it was stored', () => {
+    const stored = 'every fortnight at 07:00';
+    const { w, doc, dom } = shell({ routines: [{ name: 'Reconcile the ledger', schedule: stored, state: null }] });
+    assert.strictEqual(w.RundockRoutinesModel.scheduleWords(stored), null,
+      'sanity: the model does have words for this schedule, so the fallback is not what is being driven');
+    w.showProfile('piper');
+    const rows = [...routinesBox(doc).querySelectorAll('.profile-card-item')];
+    assert.strictEqual(rows.length, 1, 'the row did not render at all');
+    assert.strictEqual(rows[0].textContent.replace(/\s+/g, ' ').trim(), `Reconcile the ledger ${stored}`,
+      'a routine whose schedule the model cannot translate shows nothing, or shows something else');
+    dom.window.close();
+  });
 });
 
 describe('Add routine teaches that routines exist, and then stops', () => {
