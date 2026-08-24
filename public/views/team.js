@@ -17,7 +17,9 @@
 // wiring). ORG_PRESETS moved here as view-local state: no external
 // touchpoints. d3 is the CDN-loaded d3-hierarchy global, resolved on window
 // at call time. Helpers reached the same way: getTeamAgents,
-// getPlatformAgents, formatTimeAgo, esc, getGuide.
+// getPlatformAgents, formatTimeAgo, esc, getGuide. Every sentence that names
+// the guide comes from RundockGuideCopy, reached the same way, so no view
+// carries a guide's name and no copy check has to read four files.
 // Load order (views before app.js) is safe because nothing here touches
 // shared state until the app boots. Function bodies are byte-identical to
 // the app.js originals at column 0.
@@ -28,6 +30,13 @@
     Object.assign(root, root.RundockTeamView);
   }
 }(typeof self !== 'undefined' ? self : this, function () {
+
+// The guide copy, reached off the global at call time, the same way this file
+// reaches every other helper it does not own.
+function guideLine(key, guideName) {
+  const copy = typeof RundockGuideCopy !== 'undefined' ? RundockGuideCopy : null;
+  return (copy && copy.guideLine(key, guideName)) || '';
+}
 
 function getWorkingAgentIds() {
   const working = new Set();
@@ -62,7 +71,7 @@ function renderAgentList() {
   } else if (platform.length) {
     const guide = platform[0];
     h += `<div class="sidebar-empty-state">
-      <div class="sidebar-empty-text">No team agents yet. Doc can explore this workspace and create a team for you.</div>
+      <div class="sidebar-empty-text">${esc(guideLine('sidebar', guide.displayName))}</div>
       <button class="empty-cta" style="width:100%" onclick="startSetupConversation()">Set up your team</button>
     </div>`;
   }
@@ -141,7 +150,7 @@ function renderConvoEmptyAgents() {
     const guide = platformAgents[0];
     contentEl.className = '';
     contentEl.innerHTML = guide
-      ? `<div class="sidebar-empty-text" style="text-align:center;max-width:280px;margin:0 auto 8px">Doc can explore this workspace and set up your agent team.</div><button class="empty-cta" style="margin-top:4px" onclick="startSetupConversation()">Set up your team</button>`
+      ? `<div class="sidebar-empty-text" style="text-align:center;max-width:280px;margin:0 auto 8px">${esc(guideLine('conversations', guide.displayName))}</div><button class="empty-cta" style="margin-top:4px" onclick="startSetupConversation()">Set up your team</button>`
       : '';
   }
 }
@@ -364,7 +373,10 @@ function renderOrgChart() {
     } else {
       h += '<div class="org-empty-state">';
       h += '<div class="empty-title">Welcome to Rundock</div>';
-      h += '<div class="sidebar-empty-text" style="text-align:center;max-width:320px">Fresh workspace. Doc can help you set up your agent team from scratch.</div>';
+      // The one sentence of the four that draws whether or not a guide exists,
+      // so it is the one that needs a line for a workspace with none. It kept
+      // promising a guide either way, which is the defect in its loudest form.
+      h += `<div class="sidebar-empty-text" style="text-align:center;max-width:320px">${esc(guideLine('fresh', guide && guide.displayName))}</div>`;
       if (guide) {
         h += `<button class="empty-cta" style="margin-top:4px" onclick="startSetupConversation()">Set up your team</button>`;
       }

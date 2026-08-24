@@ -102,6 +102,15 @@ const APP_OPENER = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit
 // guard away: an absence nobody can break is an absence nobody is checking.
 const TEAM_PANEL = { src: path.join(ROOT, 'public', 'views', 'team.js'), suite: 'test/unit/team-sidebar.test.js' };
 const INDEX_SWEEP = { src: path.join(ROOT, 'public', 'index.html'), suite: 'test/unit/team-sidebar.test.js' };
+// The sentences that name the guide, and the two views that show them. They
+// sit beside the skills empty-state guards above rather than in an instrument
+// of their own, because they are the same class of rule and fail the same way:
+// copy that names an agent through a slot, on surfaces whose default workspace
+// happens to make a hard-coded name correct, which is precisely the fault a
+// green suite cannot see.
+const GUIDE_COPY_MOD = { src: path.join(ROOT, 'public', 'guide-copy.js'), suite: 'test/unit/guide-name.test.js' };
+const TEAM_COPY = { src: path.join(ROOT, 'public', 'views', 'team.js'), suite: 'test/unit/guide-name.test.js' };
+const PROFILE_COPY = { src: path.join(ROOT, 'public', 'views', 'profile.js'), suite: 'test/unit/guide-name.test.js' };
 // The agent profile's three boxes. Two targets on one file, because a guard is
 // only proved by the suite that presses it: what the box SAYS is pressed by the
 // profile's own file, and where a row GOES is pressed by the routes
@@ -231,6 +240,31 @@ const MUTATIONS = [
   [MODEL, 'the server\'s own words are the ones shown',
     "    const message = input && typeof input.message === 'string' ? input.message.trim() : '';\n    return message || ACTION_PROBLEM;",
     '    return ACTION_PROBLEM;'],
+
+  // ===== THE SENTENCES THAT NAME THE GUIDE =====
+  //
+  // Each of the four view mutations writes the DEFAULT NAME back in, which is
+  // the defect in its exact form: it type-checks, it reads correctly, and on
+  // the shipped workspace it is even true. Only a workspace whose guide is
+  // called something else can tell, which is why the suite these point at
+  // builds one.
+  [GUIDE_COPY_MOD, 'the slot is substituted rather than left in the sentence',
+    "    return line ? line.replace('{agent}', name) : null;",
+    '    return line || null;'],
+  [GUIDE_COPY_MOD, 'a workspace with no guide gets the line that names none',
+    '    if (!name) return GUIDE_COPY[`${key}NoGuide`] || null;',
+    '    if (!name) return GUIDE_COPY[key] || null;'],
+  [GUIDE_COPY_MOD, 'no sentence carries a pronoun for the agent it names',
+    "    fresh: 'Fresh workspace. {agent} can help you set up your agent team from scratch.',",
+    "    fresh: 'Fresh workspace. {agent} can set up your agent team, and he starts from scratch.',"],
+  [TEAM_COPY, 'the sidebar names the guide the workspace actually has',
+    "guideLine('sidebar', guide.displayName)", "guideLine('sidebar', 'Doc')"],
+  [TEAM_COPY, 'the conversations pane names the guide the workspace actually has',
+    "guideLine('conversations', guide.displayName)", "guideLine('conversations', 'Doc')"],
+  [TEAM_COPY, 'the fresh-workspace state names the guide the workspace actually has',
+    "guideLine('fresh', guide && guide.displayName)", "guideLine('fresh', 'Doc')"],
+  [PROFILE_COPY, 'the Setup button names the guide it opens a conversation with',
+    "guideCopy.guideLine('setup', getGuide()?.displayName)", "guideCopy.guideLine('setup', 'Doc')"],
 
   // ===== THE AGENT PROFILE'S ROUTINES BOX =====
   //
@@ -607,7 +641,8 @@ function redTests(suite) {
 function run() {
   const targets = [MODEL, VIEW, VIEW_E2E, VIEW_REPLY, VIEW_RAIL, STYLES, SCHEDULER, END_TO_END,
     DISCOVERY, HANDLER, ROUTINES, APP, APP_SKILLS, APP_OPENER, INDEX, INDEX_RAIL, SKILLS_MODEL, SKILLS_VIEW,
-    SKILLS_VIEW_RAIL, TEAM_PANEL, INDEX_SWEEP, PROFILE_BOXES, PROFILE_ROUTE, VIEW_SCOPE];
+    SKILLS_VIEW_RAIL, TEAM_PANEL, INDEX_SWEEP, PROFILE_BOXES, PROFILE_ROUTE, VIEW_SCOPE,
+    GUIDE_COPY_MOD, TEAM_COPY, PROFILE_COPY];
   const originals = new Map();
   for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];

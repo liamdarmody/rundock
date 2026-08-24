@@ -14,7 +14,8 @@
 // order (views before app.js) is safe because nothing here touches shared
 // state until the app boots. The Routines box reaches RundockRoutinesModel
 // for a schedule's words and showRoutinesForAgent for a row's destination,
-// both off the global at call time, in the same way.
+// and the Setup button reaches RundockGuideCopy for its label, all off the
+// global at call time, in the same way.
 (/** @param {any} root @param {() => object} factory */ function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else {
@@ -44,7 +45,12 @@ function showProfile(agentId) {
     </div>`;
   if(a.description) h+=`<p class="profile-desc" style="margin-bottom:24px">${esc(a.description)}</p>`;
   if(a.status === 'raw') {
-    h+=`<div class="profile-cta"><button class="profile-cta-btn" onclick="startConversation(getGuide()?.id || 'default')">Setup with Doc</button></div>`;
+    // The label names the guide the button opens, so the two cannot disagree:
+    // it used to name one agent and open a conversation with whichever agent
+    // the workspace's platform slot actually held.
+    const guideCopy = typeof RundockGuideCopy !== 'undefined' ? RundockGuideCopy : null;
+    const setupLabel = (guideCopy && guideCopy.guideLine('setup', getGuide()?.displayName)) || '';
+    h+=`<div class="profile-cta"><button class="profile-cta-btn" onclick="startConversation(getGuide()?.id || 'default')">${esc(setupLabel)}</button></div>`;
   } else if(a.status === 'available') {
     h+=`<div class="profile-cta"><button class="profile-cta-btn" onclick="addToTeam('${a.id}')">Add to team</button></div>`;
   } else {
