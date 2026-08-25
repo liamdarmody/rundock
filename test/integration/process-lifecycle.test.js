@@ -99,15 +99,40 @@ describe('idle agent processes', () => {
         turn: [{ text: 'Answered, nothing further.' }] },
     ]);
 
+    // Production marks an entry idle, with idleSince = now, the instant its
+    // turn completes, and the sweep runs on its own timer regardless of what
+    // this test is doing. Four turns run one after another, and under load
+    // that setup can itself take longer than REAP_MS: conversation 1 can sit
+    // idle through several sweeps while conversations 2 to 4 are still being
+    // set up, and get reaped before the fourth one even exists. The
+    // precondition below would then read three where four were expected, a
+    // failure in setup rather than in the behaviour this test checks.
+    //
+    // Pin each entry non-idle (the same field reapIdleAgents itself reads,
+    // `if (!entry.idle) continue`) the moment its turn completes, so nothing
+    // is eligible for reaping while the rest of setup is still running.
     const ids = [];
     for (let i = 0; i < CONVOS; i++) {
       const convoId = h.freshConvoId('reap');
       ids.push(convoId);
       await completeTurn(convoId, `reap-idle ${i}`);
+      const entry = h.internal.chatProcesses.get(convoId);
+      assert.ok(entry, `precondition: turn ${i} left a live process`);
+      entry.idle = false;
     }
 
     assert.strictEqual(liveEntries().length, CONVOS,
       'precondition: every completed conversation leaves a live process');
+
+    // Now release all four at the same instant, so none has a head start on
+    // the others and the idle window this test measures starts exactly here
+    // rather than somewhere back in setup.
+    const releasedAt = Date.now();
+    for (const id of ids) {
+      const entry = h.internal.chatProcesses.get(id);
+      entry.idle = true;
+      entry.idleSince = releasedAt;
+    }
 
     // Nothing is working, so the sweep must retire at least one of them.
     await h.waitUntil(() => liveEntries().length < CONVOS);

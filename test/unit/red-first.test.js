@@ -741,6 +741,22 @@ describe('a renamed source file', () => {
 });
 
 describe('AC-4 with an uncooperative child, which is where the claim was false', () => {
+  // Poll for a condition instead of guessing how long it takes to become
+  // true. Used below so the interrupt is sent once the trapping child has
+  // actually installed its signal handlers, not after a fixed delay that
+  // assumes it has.
+  function waitForCondition(check, { timeoutMs = 15000, intervalMs = 20 } = {}) {
+    return new Promise((resolve, reject) => {
+      const deadline = Date.now() + timeoutMs;
+      const tick = () => {
+        if (check()) return resolve();
+        if (Date.now() >= deadline) return reject(new Error('timed out waiting for condition'));
+        setTimeout(tick, intervalMs);
+      };
+      tick();
+    });
+  }
+
   test('a test command that traps SIGINT does not hold the tree hostage', async () => {
     // The case an independent reviewer named, twice, before it was fixed.
     // spawnSync blocks the event loop for the whole life of the child, so the
@@ -753,17 +769,28 @@ describe('AC-4 with an uncooperative child, which is where the claim was false',
       added: { 'lib2.js': 'module.exports.b = () => 2;\n' },
       testFile: "const assert = require('assert');\nmodule.exports = () => { assert.ok(true); };\n",
     });
-    const marker = path.join(os.tmpdir(), `red-first-trap-${process.pid}.txt`);
+    // Inside the repo the trapping child runs in (its cwd), not the system
+    // temp directory. The command sandbox this test also has to pass under
+    // allows writes to the workspace a command was given, not to an arbitrary
+    // path under the machine's temp root, and the repo is that workspace. A
+    // marker written straight into os.tmpdir() failed under that sandbox
+    // every time; a relative path resolved against the child's own cwd does
+    // not, because it lands inside the one directory the sandbox already
+    // grants.
+    const markerName = '.trap-marker';
+    const marker = path.join(dir, markerName);
     // Behaves like a real suite on the first run: the source is present, so it
     // passes at once. On the REVERTED run the source is gone, and this is where
     // it turns uncooperative: it ignores SIGINT and SIGTERM and keeps running.
     // Written this way because the command is the same on both runs, and a
     // child that hangs on the first one never reaches the revert step at all.
+    // The marker is written AFTER the handlers are registered, so its
+    // existence is proof the handlers are already in place, not a guess.
     const trapping = `${JSON.stringify(process.execPath)} -e `
       + JSON.stringify(
         "if (require('fs').existsSync('lib2.js')) process.exit(0);"
         + "process.on('SIGINT', () => {}); process.on('SIGTERM', () => {});"
-        + `require('fs').writeFileSync(${JSON.stringify(marker)}, String(process.pid));`
+        + `require('fs').writeFileSync(${JSON.stringify(markerName)}, String(process.pid));`
         + 'setTimeout(() => process.exit(1), 30000);');
 
     try {
@@ -785,7 +812,14 @@ describe('AC-4 with an uncooperative child, which is where the claim was false',
           out += b.toString();
           if (!signalled && out.includes('restoring the source')) {
             signalled = true;
-            setTimeout(() => kid.kill('SIGINT'), 300);
+            // Wait for the child to actually exist and have its handlers
+            // installed, rather than guess how long that takes. Under load,
+            // a fixed 300ms delay fired before the child had even started,
+            // so the assertion that failed was "did the child start" rather
+            // than the restore behaviour this test exists to check.
+            waitForCondition(() => fs.existsSync(marker))
+              .then(() => kid.kill('SIGINT'))
+              .catch(reject);
           }
         });
         kid.on('error', reject);
@@ -802,6 +836,10 @@ describe('AC-4 with an uncooperative child, which is where the claim was false',
             // merely outlived. Checked by pid liveness rather than by ps, which
             // the local sandbox blocks.
             const kidPid = Number(fs.readFileSync(marker, 'utf8'));
+            // Untracked, inside the repo: clear it before the clean-tree
+            // check below, or that check would fail on a file this test
+            // left behind rather than on anything red-first did.
+            fs.rmSync(marker, { force: true });
             const alive = () => { try { process.kill(kidPid, 0); return true; } catch (e) { return false; } };
             const deadline2 = Date.now() + 3000;
             while (alive() && Date.now() < deadline2) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
