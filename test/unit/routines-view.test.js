@@ -1874,6 +1874,42 @@ describe('a routine the upgrade held back', () => {
     dom.window.close();
   });
 
+  // THE DELETE CONFIRMATION DRAWS A ROW TOO, and it makes two decisions about
+  // it that nothing was pressing: it withholds every control, and it keeps the
+  // schedule fault. Both could have been inverted without a failure.
+  //
+  // The fault stays because somebody about to remove a routine is entitled to
+  // know it was never going to run: that is often the reason they are there.
+  // The offer goes because that surface is a question, not a list.
+  test('the delete confirmation keeps the schedule fault and offers no controls', () => {
+    const { doc, w, dom } = shell([
+      routine('Cron one', { schedule: '0 7 * * *', scheduleReadable: false, enabled: true }),
+    ]);
+    w.renderRoutines();
+    press(doc, '.routine-row [data-routines-action="delete"]');
+    assert.ok(doc.querySelector('.confirm-card'), 'no confirmation was drawn');
+    // The row the confirmation is ABOUT, which it draws beside the card.
+    const subject = doc.querySelector('.routines-confirm-subject');
+    assert.ok(subject, 'the confirmation names no routine');
+    assert.match(text(subject), /cannot read this schedule/i,
+      'the confirmation hides that the routine was never going to run');
+    assert.strictEqual(subject.querySelector('[data-routines-action="pause"]'), null,
+      'the confirmation offers a control on the row it is asking about');
+    dom.window.close();
+  });
+
+  test('the delete confirmation offers no way to turn a held-back routine on', () => {
+    const { doc, w, dom } = shell([
+      routine('Held one', { enabled: false, nextRun: iso(TOMORROWS_SLOT) }),
+    ]);
+    w.renderRoutines();
+    press(doc, '.routine-row [data-routines-action="delete"]');
+    assert.ok(doc.querySelector('.confirm-card'), 'no confirmation was drawn');
+    assert.strictEqual(doc.querySelector('[data-routines-action="enable"]'), null,
+      'the confirmation offers to turn on the routine it is asking about deleting');
+    dom.window.close();
+  });
+
   test('a routine that is running is offered nothing to turn on', () => {
     const { doc, w, dom } = shell();
     w.renderRoutines();

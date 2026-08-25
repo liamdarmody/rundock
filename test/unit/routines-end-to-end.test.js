@@ -327,6 +327,9 @@ describe('a schedule the scheduler cannot read', () => {
             // two halves of this change pass separately while contradicting
             // each other on one row.
             { name: 'Cron and held back', schedule: CRON, prompt: 'p' },
+            // Paused AND never turned on. Two reasons not to run, and the row
+            // may promise nothing on the strength of either.
+            { name: 'Paused and held back', schedule: SCHEDULE, prompt: 'p', paused: true },
           ],
         }),
       },
@@ -370,9 +373,10 @@ describe('a schedule the scheduler cannot read', () => {
     });
   });
 
-  // THE BLOCKING FINDING FROM REVIEW, driven the way it was asked for: a
-  // frontmatter block with a cron schedule and no `enabled` key, through real
-  // discovery, to the rendered row.
+  // A CRON SCHEDULE AND NO `enabled` KEY, which is every pre-existing cron
+  // routine after an upgrade: the reader fills an absent key in as false, and
+  // nothing ever rewrites a schedule. Both halves of the row have something to
+  // say about such a routine, and only one of them can be true.
   test('a cron routine the upgrade held back does not both refuse and promise to run', () => {
     cronWorkspace((doc) => {
       const row = rowNamed(doc, 'Cron and held back');
@@ -403,6 +407,16 @@ describe('a schedule the scheduler cannot read', () => {
     });
   });
 
+  test('a paused routine that was never turned on says Paused and offers nothing', () => {
+    cronWorkspace((doc) => {
+      const row = rowNamed(doc, 'Paused and held back');
+      assert.strictEqual(text(row.querySelector('.next-run')), 'Paused');
+      assert.strictEqual(row.querySelector('[data-routines-action="enable"]'), null,
+        'turning it on would leave it paused, so the offer promises a run it cannot make');
+      assert.ok(!/Rundock will start running it/.test(text(row)));
+    });
+  });
+
   // AC-8. The two rows, side by side, in the rendered output rather than in
   // the model alone.
   test('the unreadable row is distinguishable from one that is simply not due yet', () => {
@@ -421,9 +435,15 @@ describe('a schedule the scheduler cannot read', () => {
         'the unreadable row carries no mark of its own');
       assert.strictEqual(cron.querySelector('.next-run'), null);
 
-      // Told apart by their text, not only by a class, so the difference
-      // survives a stylesheet that renders both the same.
-      assert.notStrictEqual(text(cron), text(waiting));
+      // Told apart by their WORDS, not only by a class, so the difference
+      // survives a stylesheet that renders both the same. Compared by what
+      // each row must not say rather than by whole-text inequality: the two
+      // rows carry different routine names, so their full texts can never be
+      // equal and an inequality between them can never fail.
+      assert.ok(!/cannot read this schedule/i.test(text(waiting)),
+        'the waiting row claims its schedule cannot be read');
+      assert.ok(!/Next run/.test(text(cron)),
+        'the unreadable row promises a next run');
     });
   });
 });

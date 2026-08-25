@@ -854,7 +854,14 @@ describe('the one state the chrome is allowed to alarm about', () => {
 // running the routine itself, which is the sentence that stops a briefing going
 // out twice.
 describe('a routine nobody has turned on yet', () => {
-  const NOT_ENABLED = { enabled: false, nextRun: TOMORROWS_SLOT, paused: false };
+  // A ROUTINE HELD BACK AND NOTHING ELSE. It carries a schedule the scheduler
+  // can read, because the offer is only made when turning it on is the one
+  // thing in the way, and a fixture with no schedule at all is a routine that
+  // could never run whatever the switch said.
+  const NOT_ENABLED = {
+    enabled: false, paused: false, nextRun: TOMORROWS_SLOT,
+    schedule: 'every day at 07:00', scheduleReadable: true, runOn: 'local',
+  };
   const offer = (input) => m.enableOffer({ ...input, now: NOW, zone: ZONE });
 
   test('the offer states that Rundock will begin running it', () => {
@@ -895,7 +902,7 @@ describe('a routine nobody has turned on yet', () => {
   });
 
   test('the offer reaches the row', () => {
-    const row = m.row({ ...NOT_ENABLED, name: 'Compile the ops summary', schedule: 'every day at 07:00', now: NOW, zone: ZONE });
+    const row = m.row({ ...NOT_ENABLED, name: 'Compile the ops summary', now: NOW, zone: ZONE });
     assert.ok(row.offer, 'the row drops the offer');
     assert.strictEqual(row.offer.label, 'Turn on');
     assert.strictEqual(row.nextRun, null);
@@ -948,11 +955,10 @@ describe('a routine whose schedule the scheduler cannot read', () => {
     assert.strictEqual(problem({ schedule: '   ', scheduleReadable: false }), null);
   });
 
-  // THE GUARD PINNED RATHER THAN LEFT DEAD. The server already sends a null
-  // next run for a schedule it cannot parse, so this branch changes nothing on
-  // today's data and deleting it would leave every other test green. Driven
-  // here with an instant supplied alongside an unreadable schedule, which is
-  // the one input that tells the guard apart from its absence.
+  // NAMED HERE AS WELL AS SWEPT. The combination sweep also fails without this
+  // guard, because it builds a row carrying an unreadable schedule and a next
+  // run together. This states the property on its own so the failure names it
+  // rather than naming a combination the reader then has to decode.
   test('an instant supplied with an unreadable schedule is still not promised', () => {
     assert.strictEqual(m.nextRunLabel({
       schedule: '0 7 * * *', scheduleReadable: false,
@@ -984,23 +990,22 @@ describe('a routine whose schedule the scheduler cannot read', () => {
 // whether anything is being offered. Each was correct on its own. Put two of
 // them on one row and the row could contradict itself.
 //
-// The instance that got through: a routine that predates the scheduler AND
+// The pairing this is built around: a routine that predates the scheduler AND
 // carries a cron schedule, which is every pre-existing cron routine after an
-// upgrade, since the migration fills `enabled: false` and never touches a
-// schedule. That row said both "Rundock cannot read this schedule, so this
-// routine will not run" and "Turn it on and Rundock will start running it on
-// this schedule". The second sentence is false there: turning it on starts
-// nothing, because the schedule is still unreadable.
+// upgrade, since the reader fills an absent `enabled` in as false and nothing
+// ever rewrites a schedule. Such a row has grounds to say both "Rundock cannot
+// read this schedule, so this routine will not run" and "Turn it on and
+// Rundock will start running it on this schedule". The second is false there:
+// turning it on starts nothing, because the schedule is still unreadable.
 //
 // THE RULE THAT REPLACES THE SPECIAL CASE. The offer is made only when turning
 // it on is the ONLY thing standing between the routine and running. That is
 // the scheduler's own refusal order asked on this side, so the offer cannot
 // promise something the gate will refuse for a second reason.
 //
-// The enumeration is the fix rather than the instance, because the instance
-// was one of three: paused and an unsupported run target falsify the same
-// sentence, and no fixture in this suite had ever paired either of them with
-// an absent `enabled`.
+// The enumeration is the fix rather than the pairing, because that pairing is
+// one of several: paused, an unsupported run target and a routine with no
+// schedule at all each falsify the same sentence.
 describe('a row never says two things that cannot both be true', () => {
   // Every fact a row can carry that decides whether it runs, and what each one
   // means for the offer. `held` is the state this card creates.
@@ -1009,6 +1014,11 @@ describe('a row never says two things that cannot both be true', () => {
   const BLOCKED = [
     ['paused as well', { ...held, paused: true }],
     ['a schedule nothing can read', { ...held, schedule: '0 7 * * *', scheduleReadable: false }],
+    // A block with a name and a prompt and no schedule at all. The parser
+    // keeps any block that has a name, so this reaches the roster, and the
+    // scheduler reports it unreadable because there is nothing to read.
+    ['no schedule at all', { ...held, schedule: null, scheduleReadable: false }],
+    ['a schedule that is only spaces', { ...held, schedule: '   ', scheduleReadable: false }],
     ['a run target this release cannot run', { ...held, runOn: 'agent-computer' }],
   ];
 
@@ -1037,6 +1047,24 @@ describe('a row never says two things that cannot both be true', () => {
     // state rather than the missed line quietly breaking.
     const inService = m.runStatus({ ...missed, enabled: true });
     assert.ok(inService && inService.kind === 'missed');
+  });
+
+  // THE INPUT THE FIRST VERSION OF THIS RULE NEVER MET. A routine that ran and
+  // failed, was switched off, and then had a slot pass. The missed slot is the
+  // NEWER fact, so the withheld branch is the one taken, and returning null
+  // there hides the failure entirely rather than falling through to it. The
+  // rule is that the missed outcome is withheld, not that the row goes quiet.
+  test('a routine switched off after a failure still reports the failure', () => {
+    const status = m.runStatus({
+      enabled: false,
+      lastStart: new Date(2026, 7, 17, 7, 0), lastRunStatus: 'failed',
+      lastSlot: new Date(2026, 7, 17, 7, 0),
+      missedSlot: YESTERDAYS_SLOT,
+      now: NOW, zone: ZONE,
+    });
+    assert.ok(status, 'the row went silent about a run that really happened');
+    assert.strictEqual(status.kind, 'failed',
+      'the failure was hidden by the slot that passed after it');
   });
 
   test('a routine nobody turned on still reports a run that really happened', () => {
@@ -1081,6 +1109,10 @@ describe('a row never says two things that cannot both be true', () => {
     ['held back', { enabled: false }],
     ['paused', { paused: true }],
     ['an unreadable schedule', { schedule: '0 7 * * *', scheduleReadable: false }],
+    // THE STATE THE SWEEP DID NOT CONTAIN, which is how it claimed more than
+    // it covered. A routine with no schedule can never run, and the row says
+    // nothing about it, so nothing else in the matrix stood in for it.
+    ['no schedule at all', { schedule: null, scheduleReadable: false }],
     ['a run target this release cannot run', { runOn: 'agent-computer' }],
     ['a slot that went by', { missedSlot: YESTERDAYS_SLOT }],
     ['a next run', { nextRun: TOMORROWS_SLOT }],
@@ -1098,10 +1130,10 @@ describe('a row never says two things that cannot both be true', () => {
     // A RUN STATUS IS DELIBERATELY NEITHER. It reports the past, and the row
     // pairs it with the next run ON PURPOSE, because after a miss or a failure
     // the reader's question is whether it recovered and when it tries again.
-    // The first version of this sweep counted a missed line as denying a run
-    // and failed on that pairing, which would have been this test asking for
-    // the second line to be taken away. What a run status can get wrong is not
-    // the future but its own cause, which is the rule below.
+    // Counting a missed line as denying a future run would make this test
+    // demand the removal of the second line the row exists to draw. What a run
+    // status can get wrong is not the future but its own cause, which is the
+    // rule below.
     return { promising, denying };
   }
 

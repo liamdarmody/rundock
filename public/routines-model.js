@@ -475,9 +475,15 @@
     // ONLY THE MISSED OUTCOME IS WITHHELD. A run that happened, or failed, is
     // real history from when this routine was running, and hiding that would
     // be suppressing the truth rather than declining to invent it.
-    if (missedSlot && (!started || missedSlot > started)) {
-      return input && input.enabled === false ? null : 'missed';
-    }
+    // WITHHELD, NOT SHORT-CIRCUITED, and the difference is a run somebody
+    // needs to see. Returning null here hid the whole status rather than the
+    // missed outcome, so a routine that ran, failed, was switched off and then
+    // had a slot pass went silent about the failure: the missed slot is the
+    // newer fact, so this is the branch taken, and there is a real run
+    // underneath it. Skipping only the outcome lets the evaluation below
+    // report what actually happened.
+    const heldBack = input && input.enabled === false;
+    if (missedSlot && (!started || missedSlot > started) && !heldBack) return 'missed';
     if (!started) return null;
     if (lastCompletedRunFailed(input)) return 'failed';
     const lastSlot = asDate(input && input.lastSlot);
@@ -544,36 +550,60 @@
   }
 
   /**
-   * What ELSE would stop this routine running, named after the fact that
-   * decided, or null if nothing would.
+   * Whether anything OTHER than the switch would stop this routine running.
    *
-   * THIS IS THE SCHEDULER'S OWN REFUSAL ORDER, ASKED ON THIS SIDE. The server
-   * refuses a routine for paused, then enabled, then an unsupported run
-   * target, and a row that offers to turn one on is claiming every other gate
-   * would let it through. `enabled` is deliberately absent from this list:
-   * this answers what would stop it BESIDES the switch the offer is about.
+   * THIS MIRRORS `routineRefusal` IN lib/scheduler.js, which is the gate that
+   * actually decides: it refuses for paused, then enabled, then an unsupported
+   * run target, and getNextRun refuses a schedule it cannot parse. A row that
+   * offers to turn a routine on is claiming every one of those would let it
+   * through, so the two lists have to be found together. `enabled` is
+   * deliberately absent from this one: it answers what would stop the routine
+   * BESIDES the switch the offer is about.
    *
-   * NOT A SECOND COPY OF THE GATE. It never decides whether anything runs. It
-   * decides whether a sentence on a row is true, and it is written here rather
-   * than inline in the offer so the same question can be asked of any other
-   * line that promises a run.
+   * A BOOLEAN, because that is all the answer is used for. It named the
+   * deciding field for a while and nothing ever read the name.
+   *
+   * IT NEVER DECIDES WHETHER ANYTHING RUNS. It decides whether a sentence on a
+   * row is true. The gate is the server's and stays there.
    *
    * The run target is read through the editor's own list rather than a literal
    * here, so which targets work is stated in one place.
    *
    * @param {{paused?: boolean, runOn?: any, schedule?: any, scheduleReadable?: boolean}} [input]
    */
-  function whatElseStopsIt(input) {
-    if (!input) return null;
-    if (input.paused) return 'paused';
-    if (scheduleProblem(input)) return 'schedule';
+  function somethingElseStopsIt(input) {
+    if (!input) return false;
+    if (input.paused) return true;
+    // ASKED OF THE SCHEDULE ITSELF, NOT OF THE LINE THE ROW WOULD DRAW.
+    //
+    // This used to lean on scheduleProblem, which deliberately says nothing
+    // about a routine whose schedule is absent or blank, on the grounds that
+    // telling somebody to change a schedule they never wrote answers a
+    // question nobody asked. That is the right rule for what to SAY and the
+    // wrong one for what would RUN: a routine with no schedule can never run,
+    // so leaning on the wording let the offer promise a run there.
+    if (!canProduceARun(input)) return true;
     // A roster that did not name a run target says nothing, for the same
     // reason an absent scheduleReadable says nothing: silence is not a fault.
     if (input.runOn !== undefined && input.runOn !== null) {
       const option = editor.runOnOption(input.runOn);
-      if (!option || !option.selectable) return 'runOn';
+      if (!option || !option.selectable) return true;
     }
-    return null;
+    return false;
+  }
+
+  /**
+   * Whether this routine's schedule could ever produce a run.
+   *
+   * Two ways it cannot: there is no schedule, or the scheduler has said it
+   * cannot read the one there is. The first is answered here because a missing
+   * value needs no grammar to judge; the second is the server's answer, and an
+   * absent `scheduleReadable` is not taken as a fault.
+   */
+  function canProduceARun(input) {
+    const schedule = input && input.schedule;
+    if (typeof schedule !== 'string' || !schedule.trim()) return false;
+    return input.scheduleReadable !== false;
   }
 
   /**
@@ -632,7 +662,7 @@
     // the row already carries the thing that must be fixed first. When that is
     // fixed the offer appears, which is the order the work has to happen in
     // anyway.
-    if (whatElseStopsIt(input)) return null;
+    if (somethingElseStopsIt(input)) return null;
     return {
       text: `${NOT_ENABLED.lead} ${NOT_ENABLED.body} ${NOT_ENABLED.catchUp}`,
       label: NOT_ENABLED.label,
@@ -658,10 +688,12 @@
     // worse than silence: it is the exact reassurance the reader came for.
     // The offer takes this line's place on the row.
     if (input && input.enabled === false) return null;
-    // Nor does a routine whose schedule nothing here can read. Its next run is
-    // already null, so this changes no output today; it is written because the
-    // rule is the same one, and a later caller that supplied an instant anyway
-    // would otherwise put a time against a routine that will never fire.
+    // Nor does a routine whose schedule nothing here can read. The server does
+    // not supply an instant for one today, so on that path this changes
+    // nothing; it is here for the row that carries both, which is a state the
+    // combination sweep in test/unit/routines-model.test.js builds and which
+    // fails without this line. A time against a routine that will never fire
+    // is the same false promise the offer is withheld for.
     if (input && input.scheduleReadable === false) return null;
     const words = timeWords(input && input.nextRun, input && input.now, input && input.zone);
     if (!words) return null;
@@ -776,6 +808,6 @@
     actionProblem, emptyState, header,
     dayWords, clockWords, zoneWords, timeWords,
     scheduleWords, routineSentence, sentenceParts,
-    outcomeOf, lastCompletedRunFailed, anyFailure, runStatus, nextRunLabel, enableOffer, scheduleProblem, whatElseStopsIt, orderByNextRun, row, deleteConfirmation,
+    outcomeOf, lastCompletedRunFailed, anyFailure, runStatus, nextRunLabel, enableOffer, scheduleProblem, somethingElseStopsIt, orderByNextRun, row, deleteConfirmation,
   };
 }));

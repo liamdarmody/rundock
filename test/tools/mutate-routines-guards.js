@@ -273,9 +273,9 @@ const MUTATIONS = [
   [VIEW_REPLY, 'a refusal with nothing in it still says something',
     '  pendingProblem = routinesModel().actionProblem(reply);',
     '  pendingProblem = reply && reply.message ? reply.message : null;'],
-  // BACK TO ONE ROW, because the guard is back in one place. It briefly lived
-  // in two copies, one per control, and the harness had to watch both; the two
-  // controls now delegate to one send path and the guard is written once.
+  // ONE ROW, because the guard lives in one place: both controls delegate to
+  // one send path. A control added later that clears the refusal itself, rather
+  // than through that path, needs a row of its own.
   [VIEW_REPLY, 'a control the reader presses clears the last refusal',
     '  const entry = allRoutines()[index];\n  pendingProblem = null;\n  if (!entry',
     '  const entry = allRoutines()[index];\n  if (!entry'],
@@ -596,13 +596,19 @@ const MUTATIONS = [
     "    if (statusWord === 'running') return null;",
     ''],
   [MODEL, 'a miss later than the last run is what happened last',
-    '    if (missedSlot && (!started || missedSlot > started)) {',
-    '    if (missedSlot) {'],
-  // The other half of the same branch: a routine nobody turned on is not owed
-  // an explanation naming an event that did not happen.
+    "    if (missedSlot && (!started || missedSlot > started) && !heldBack) return 'missed';",
+    "    if (missedSlot && !heldBack) return 'missed';"],
+  // A routine nobody turned on is not owed an explanation naming an event that
+  // did not happen.
   [MODEL, 'a routine nobody turned on is not told Rundock was closed on it',
-    "      return input && input.enabled === false ? null : 'missed';",
-    "      return 'missed';"],
+    "    const heldBack = input && input.enabled === false;",
+    '    const heldBack = false;'],
+  // And the withholding skips the OUTCOME rather than the whole status: a run
+  // that really happened is still reported underneath a slot that passed after
+  // it.
+  [MODEL, 'withholding the missed outcome does not hide a run that happened',
+    "    if (missedSlot && (!started || missedSlot > started) && !heldBack) return 'missed';",
+    "    if (missedSlot && (!started || missedSlot > started)) return heldBack ? null : 'missed';"],
   [MODEL, 'a run the process died inside is a failure',
     "    return statusWord === 'failed' || statusWord === 'interrupted';",
     "    return statusWord === 'failed';"],

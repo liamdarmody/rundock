@@ -172,10 +172,9 @@ test('a routine that predates the scheduler runs once somebody turns it on', asy
     { match: { agent: 'filer', promptIncludes: 'inbox-file body' }, turn: [{ text: 'routine ran' }] },
   ]);
 
-  // PRESSED, NOT WRITTEN BY HAND. This used to rewrite the agent file with
-  // `enabled: true` itself, which proved the scheduler reads the field and
-  // nothing about the act a person actually performs. The handler is unit
-  // tested and the tick is driven here, but the one thing neither covers is
+  // PRESSED, NOT WRITTEN BY HAND. Rewriting the agent file here would prove
+  // the scheduler reads the field and nothing about the act a person performs.
+  // The handler is unit tested and the tick is driven here, but neither covers
   // the two agreeing: the message goes through the server, the file is
   // rewritten by the handler that owns that write, and the tick then reads
   // whatever it left behind.
@@ -203,10 +202,15 @@ test('a routine that predates the scheduler runs once somebody turns it on', asy
 // AC-4. THE CRITERION THIS FILE EXISTS FOR.
 //
 // The migration returns migrated content whether or not its write lands, by
-// deliberate design, so that a workspace nobody can write to still runs. That
-// is exactly the path a fix applied only to the migration cannot reach: the
-// value it fills in never touches disk, the reader answers instead, and a
-// reader still defaulting to true starts the routine anyway.
+// deliberate design, so that a workspace nobody can write to still runs. This
+// covers that path: the routine is refused on a workspace where nothing about
+// the decision could be recorded.
+//
+// WHAT IT DOES NOT PROVE, said here so nothing leans on it. Discovery parses
+// whatever the migration returns, landed or not, so this drive cannot tell a
+// fix made in the reader from one made in the migration. The reader's own
+// default is pinned by the direct normalizeRoutine assertions in
+// test/unit/routine-model.test.js.
 //
 // So this is driven against a file that genuinely cannot be written, and both
 // halves are asserted: the routine did not fire, AND the write really did fail,
