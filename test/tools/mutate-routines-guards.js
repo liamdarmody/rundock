@@ -234,8 +234,12 @@ const MUTATIONS = [
   // A file this module cannot address returns unchanged content, exactly as a
   // no-op edit does. Reading that as success announces a routine stopped that
   // is still scheduled to run.
-  [HANDLER, 'a pause asks whether the write happened, not whether the bytes moved',
-    '  if (!written || written.paused !== paused) {',
+  // The read-back guard moved into the one setter both controls call, so this
+  // watches it there. It covers pausing and turning on at once, which is the
+  // point of sharing it: one guard, one mutation, and no second copy free to
+  // admit something the first refuses.
+  [HANDLER, 'a routine flag change asks whether the write happened, not whether the bytes moved',
+    '  if (!written || written[field] !== value) {',
     '  if (next === before && false) {'],
   [HANDLER, 'a delete counts the blocks rather than looking one up by index',
     '  if (readRoutineBlocks(next, found.name).length !== readRoutineBlocks(before, found.name).length - 1) {',
@@ -269,18 +273,12 @@ const MUTATIONS = [
   [VIEW_REPLY, 'a refusal with nothing in it still says something',
     '  pendingProblem = routinesModel().actionProblem(reply);',
     '  pendingProblem = reply && reply.message ? reply.message : null;'],
-  // ONE MUTATION PER CONTROL THAT CLEARS IT, rather than one for the line.
-  // The guard used to live in a single handler, so its text identified it. It
-  // now lives in two, and a find that matched both would break whichever came
-  // first and prove nothing about either: the harness refuses that outright.
-  // So each is named by the function it guards, and adding a third control
-  // that clears the refusal means adding a third row here.
-  [VIEW_REPLY, 'pausing clears the last refusal',
-    'function routinesSetPaused(index, paused) {\n  const entry = allRoutines()[index];\n  pendingProblem = null;\n',
-    'function routinesSetPaused(index, paused) {\n  const entry = allRoutines()[index];\n'],
-  [VIEW_REPLY, 'turning a routine on clears the last refusal',
-    'function routinesSetEnabled(index, enabled) {\n  const entry = allRoutines()[index];\n  pendingProblem = null;\n',
-    'function routinesSetEnabled(index, enabled) {\n  const entry = allRoutines()[index];\n'],
+  // BACK TO ONE ROW, because the guard is back in one place. It briefly lived
+  // in two copies, one per control, and the harness had to watch both; the two
+  // controls now delegate to one send path and the guard is written once.
+  [VIEW_REPLY, 'a control the reader presses clears the last refusal',
+    '  const entry = allRoutines()[index];\n  pendingProblem = null;\n  if (!entry',
+    '  const entry = allRoutines()[index];\n  if (!entry'],
   [MODEL, 'a refusal says nothing was changed',
     "  const ACTION_PROBLEM = 'That routine could not be changed. Nothing has been altered.';",
     "  const ACTION_PROBLEM = 'That routine could not be changed.';"],
@@ -427,21 +425,21 @@ const MUTATIONS = [
   [VIEW, 'a delete says which routine of its name it means',
     "      type: 'delete_routine', agentId: target.agentId, name: target.name, occurrence: target.occurrence,",
     "      type: 'delete_routine', agentId: target.agentId, name: target.name, occurrence: 0,"],
-  [VIEW, 'a pause says which routine of its name it means',
-    "    occurrence: entry.occurrence, paused,",
-    "    occurrence: 0, paused,"],
-  [VIEW, 'turning one on says which routine of its name it means',
-    "    occurrence: entry.occurrence, enabled,",
-    "    occurrence: 0, enabled,"],
+  // One send path, so one mutation: dropping the occurrence makes EVERY
+  // control act on the first routine of its name, which both the pause and the
+  // turn-on namesake tests notice.
+  [VIEW, 'a routine flag change says which routine of its name it means',
+    "    occurrence: entry.occurrence, [field]: value,",
+    "    occurrence: 0, [field]: value,"],
   [HANDLER, 'which routine of a name is required rather than assumed to be the first',
     '  if (!Number.isInteger(occurrence) || occurrence < 0) {\n    fail(\'Which routine of that name is required.\');\n    return null;\n  }',
     '  if (false) { return null; }'],
   [HANDLER, 'the delete tells the writer which block',
     '  const next = removeRoutineBlock(before, found.name, found.occurrence);',
     '  const next = removeRoutineBlock(before, found.name);'],
-  [HANDLER, 'the pause tells the writer which block',
-    '  const next = updateRoutineBlock(before, found.name, { paused }, found.occurrence);',
-    '  const next = updateRoutineBlock(before, found.name, { paused });'],
+  [HANDLER, 'a routine flag change tells the writer which block',
+    '  const next = updateRoutineBlock(before, found.name, { [field]: value }, found.occurrence);',
+    '  const next = updateRoutineBlock(before, found.name, { [field]: value });'],
 
   // ===== THE THREE TONES, AS THE PAGE RESOLVES THEM =====
   [STYLES, 'a late run keeps the success colour, and no state is amber',

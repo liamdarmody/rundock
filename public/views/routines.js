@@ -248,11 +248,6 @@ function rowHtml(entry, index, withActions) {
   if (!row.status && nextRun) meta += `${sep}${nextRun}`;
 
   let body = `<div class="rr-sentence">${sentence}</div><div class="rr-meta">${meta}</div>`;
-  // THE ROW FOR A ROUTINE NOBODY HAS TURNED ON YET. It takes the next-run
-  // line's place rather than sitting beside it, because the model returns no
-  // next run for this state: a routine that will not run must not advertise
-  // when it will. Withheld on the delete confirmation, like every other
-  // control there: that surface is a question, not a list.
   // A ROUTINE THAT WILL NEVER FIRE SAYS SO, on its own line and in its own
   // tone, because it is the only state on this list that is a fault in the
   // routine rather than a fact about its history. It is drawn on the delete
@@ -263,6 +258,15 @@ function rowHtml(entry, index, withActions) {
       + `<span class="schedule-problem">${esc(row.scheduleProblem.text)}</span>`
       + '</div>';
   }
+  // THE ROW FOR A ROUTINE NOBODY HAS TURNED ON YET. It takes the next-run
+  // line's place rather than sitting beside it, because the model returns no
+  // next run for this state: a routine that will not run must not advertise
+  // when it will. Withheld on the delete confirmation, like every other
+  // control there: that surface is a question, not a list.
+  //
+  // The model withholds the offer entirely on a row where something else also
+  // stops the routine, so this never draws a control whose consequence the row
+  // cannot state truthfully.
   if (row.offer && withActions) {
     body += '<div class="rr-meta rr-offer-line">'
       + `<span class="rr-offer-text">${esc(row.offer.text)}</span>`
@@ -650,6 +654,26 @@ function routinesViewLastRun(index) {
 }
 
 /**
+ * Ask the server to set one boolean field on the routine under `index`.
+ *
+ * ONE SEND PATH FOR BOTH CONTROLS. The refusal-clearing guard and the
+ * occurrence-carrying message shape were written twice, once per control, and
+ * the mutation harness had to grow a second row purely to watch the copy. The
+ * occurrence is the load-bearing part: a name does not identify a routine, and
+ * a message that dropped it would act on the first namesake whatever the
+ * reader pointed at.
+ */
+function routinesSetFlag(index, type, field, value) {
+  const entry = allRoutines()[index];
+  pendingProblem = null;
+  if (!entry || typeof ws === 'undefined' || !ws) return;
+  ws.send(JSON.stringify({
+    type, agentId: entry.agent.id, name: entry.routine.name,
+    occurrence: entry.occurrence, [field]: value,
+  }));
+}
+
+/**
  * Turn a routine on, for the reader who has just met one the upgrade held back.
  *
  * A SEPARATE MESSAGE FROM PAUSE, and it has to be. Pause is a decision this
@@ -660,23 +684,11 @@ function routinesViewLastRun(index) {
  * the two a user actually did.
  */
 function routinesSetEnabled(index, enabled) {
-  const entry = allRoutines()[index];
-  pendingProblem = null;
-  if (!entry || typeof ws === 'undefined' || !ws) return;
-  ws.send(JSON.stringify({
-    type: 'set_routine_enabled', agentId: entry.agent.id, name: entry.routine.name,
-    occurrence: entry.occurrence, enabled,
-  }));
+  routinesSetFlag(index, 'set_routine_enabled', 'enabled', enabled);
 }
 
 function routinesSetPaused(index, paused) {
-  const entry = allRoutines()[index];
-  pendingProblem = null;
-  if (!entry || typeof ws === 'undefined' || !ws) return;
-  ws.send(JSON.stringify({
-    type: 'set_routine_paused', agentId: entry.agent.id, name: entry.routine.name,
-    occurrence: entry.occurrence, paused,
-  }));
+  routinesSetFlag(index, 'set_routine_paused', 'paused', paused);
 }
 
 return {
