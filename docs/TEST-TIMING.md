@@ -119,6 +119,22 @@ now excludes dotfolders, which costs no coverage because `getFileTree` filters
 sibling suite `test/integration/external-tree-changes.test.js` already counted
 this way for the same reason.
 
+Removing that noise then exposed a second defect underneath it, in the same
+file's precondition `first.dirReads > 0`. The cache is WARM from the moment
+`armFileTreeWatcher` arms it at boot, and the only reason the first request
+walked at all was that scaffolding wrote into the workspace afterwards and
+bumped the root mtime. That is boot ordering, not a property of the test, and
+the old counter had been papering over it: a `.claude/agents` read landing in
+the window made `dirReads` non-zero whatever the cache did. With the count
+honest, a tree-poll tick warming the cache before the first request drops it to
+zero and the precondition fails, which is what a full-suite run on this branch
+did. Two changes make it deterministic: the external-change poll is pushed out
+of reach for this file, since it is a competing writer to the cache under
+measurement and has its own suite elsewhere, and the test now creates a file to
+make the cache stale on purpose rather than inheriting staleness from the boot
+sequence. Verified with 24 parallel runs under saturated CPU, all green, and
+still red when the cache is disabled.
+
 **`test/integration/search-warmup.test.js`** waits on `search_index ready`
 with the harness default of 8000ms, after writing 6,000 markdown files and
 indexing them, three times over. Measured idle: 1.5 to 2.2 seconds per test.
@@ -321,12 +337,30 @@ landing after `clearInvocations()`, and the agents poller re-flagging the
 conversation between the save and the follow-up. Not fixed here because
 guessing at it would produce a change that cannot be shown to help.
 
-**`test/integration/process-lifecycle.test.js`**. Recorded in
+**`test/integration/process-lifecycle.test.js:109`**, the precondition *every
+completed conversation leaves a live process*. Recorded in
 `.review/navigation-inventory-evidence.md` as failing once in its own setup
-rather than in an assertion, and passing on re-run. Subprocess-lifecycle
-dependent throughout. Its `REAP_MS * 3` weakness is described above; the setup
-failure has no captured detail to work from, so it stays listed rather than
-guessed at.
+rather than in an assertion, and passing on re-run. It failed again during a
+full-suite run on this branch, which finally gives it a captured message and a
+mechanism.
+
+The mechanism is the test racing the reaper it is about to test. The file sets
+`RUNDOCK_IDLE_REAP_MS` to 300ms, then completes four turns in sequence and
+asserts all four processes are still live. A conversation becomes reapable
+300ms after it goes idle and the sweep runs about every second, so the moment
+the four turns take longer than that between them, the earliest conversation is
+already eligible and a sweep can take it before the count is read. On an idle
+machine the four turns finish well inside the window; under contention they do
+not.
+
+Not fixed here because the honest fix needs a seam that does not exist.
+`reapIdleAgents(now)` in `server.js` already accepts an injected clock, which
+is exactly what a deterministic version of this test would drive: set an idle
+window nothing can cross during setup, assert the four are live, then call the
+sweep directly with time advanced. It is not on `module.exports._internal`, so
+exposing it is a production change and a design decision rather than a test
+repair, and it belongs to whoever picks this up rather than being smuggled in
+here. Widening the precondition instead would delete the property it states.
 
 ## Adding a wait
 
