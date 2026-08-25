@@ -605,6 +605,11 @@ const MUTATIONS = [
   [SCHEDULER, 'the anchor moves even while nothing is being recorded',
     '  if (!inService) {\n    entry.due = current.toISOString();\n    return;\n  }',
     '  if (!inService) return;'],
+  // The offer says when the first run lands only where that is true: past
+  // means immediate, ahead means the day and time, none means say nothing.
+  [MODEL, 'the offer only claims an immediate first run when the time has gone',
+    '      timing = when <= now',
+    '      timing = true'],
   [MODEL, 'a miss later than the last run is what happened last',
     "    if (missedSlot && (!started || missedSlot > started) && !heldBack) return 'missed';",
     "    if (missedSlot && !heldBack) return 'missed';"],

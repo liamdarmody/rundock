@@ -163,7 +163,7 @@ ROW: Every day at 7:00am, run: Not due yet
 ROW: Every day at 7:00am, run: Held back
   next run        : (none)
   schedule fault  : (none)
-  offer           : "Not running. Turn it on and Rundock will start running it on this schedule. If today's time has already gone, it runs shortly after you turn it on."
+  offer           : "Not running. Turn it on and Rundock will start running it on this schedule. Its scheduled time has already gone, so it runs shortly after you turn it on."
   Turn on control : present
 
 ROW: Cron briefing
@@ -199,8 +199,12 @@ disagree.
 - **Not due yet** promises a run and denies nothing.
 - **Held back** is the only row offered a control, because it is the only one
   where turning it on is the whole of what stands in the way. It says when the
-  first run would land, because a slot already gone today is caught up within
-  the minute rather than waiting for tomorrow.
+  first run would land, and only where it can say so truthfully: this one's
+  time has gone, so it runs within the minute. A routine whose time is still
+  ahead is told the day and time instead, and one the run guard has already
+  suppressed for today is told nothing about timing rather than a guess. The
+  instant is the one the next-run line would have rendered, so the offer and
+  the row cannot disagree about when the routine is due.
 - **Cron briefing** and **Cron and held back** name the fault to fix first and
   offer nothing, because turning either on would start nothing.
 - **No schedule at all** offers nothing either. There is no schedule to run on,
@@ -240,6 +244,15 @@ A run status is deliberately neither kind of line: it reports the past, and the
 row pairs it with the next run on purpose. What it can get wrong is its own
 cause, which is the second rule: the missed line says Rundock was closed, and on
 a routine nobody ever turned on that is untrue.
+
+**That rule holds across the moment somebody acts on it.** Withholding the line
+while a routine is off is worthless if the records survive it: a routine held
+back for a week would accrue a week of missed slots and surface the lot the
+moment Turn on is pressed, which is the worst possible time for a false cause.
+So nothing is recorded against a routine that is not in service, and the anchor
+still advances, so turning one on does not enumerate a backlog either. A paused
+routine is deliberately untouched by that: it WAS in service and its owner
+suspended it, which is a decision this project already took and pins.
 
 Both rules are swept over every combination of seven row states rather than the
 pairs anyone thought to write down.

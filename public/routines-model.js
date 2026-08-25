@@ -92,14 +92,21 @@
   const NOT_ENABLED = {
     lead: 'Not running.',
     body: 'Turn it on and Rundock will start running it on this schedule.',
-    // AND WHEN THE FIRST RUN LANDS, because for this reader that is the whole
-    // question. A slot that has already gone today is still caught up, so a
-    // briefing scheduled for 05:00 and turned on at 09:00 runs within the
-    // minute rather than tomorrow morning. The person being offered this has
-    // a cron job that already ran that briefing today, so an offer that said
-    // only "on this schedule" would produce, on the very first press, the
-    // double run this whole change exists to prevent.
-    catchUp: 'If today\'s time has already gone, it runs shortly after you turn it on.',
+    // WHEN THE FIRST RUN LANDS, said only where it is true.
+    //
+    // This reader most needs to know that a slot already gone today is caught
+    // up within the minute: their own scheduler ran the same job this morning,
+    // and an offer naming only the schedule would hand them the double run
+    // this change exists to prevent, on the very first press.
+    //
+    // But that is not true on every row the offer appears on. A routine that
+    // already ran today and was then switched off is suppressed by the run
+    // guard until tomorrow, and a weekly routine turned on away from its
+    // weekday does not run shortly at all. So the sentence is chosen from the
+    // instant the server computed, which already accounts for both, rather
+    // than asserted about all of them.
+    catchUpGone: 'Its scheduled time has already gone, so it runs shortly after you turn it on.',
+    catchUpAhead: 'Turned on now, it runs {when}.',
     label: 'Turn on',
   };
 
@@ -663,8 +670,20 @@
     // fixed the offer appears, which is the order the work has to happen in
     // anyway.
     if (somethingElseStopsIt(input)) return null;
+    // The instant is the one the next-run line would have rendered, so the
+    // offer and the row cannot disagree about when this routine is due. It is
+    // absent exactly when the scheduler has nothing to say, which is when this
+    // says nothing too rather than inventing a time.
+    const when = asDate(input.nextRun);
+    const now = asDate(input.now);
+    let timing = '';
+    if (when && now) {
+      timing = when <= now
+        ? ` ${NOT_ENABLED.catchUpGone}`
+        : ` ${NOT_ENABLED.catchUpAhead.replace('{when}', () => timeWords(when, now, input.zone))}`;
+    }
     return {
-      text: `${NOT_ENABLED.lead} ${NOT_ENABLED.body} ${NOT_ENABLED.catchUp}`,
+      text: `${NOT_ENABLED.lead} ${NOT_ENABLED.body}${timing}`,
       label: NOT_ENABLED.label,
     };
   }

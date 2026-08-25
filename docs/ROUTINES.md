@@ -30,7 +30,7 @@ Each entry in the `routines:` array is a YAML object with five fields. The parse
 | `schedule` | string | Rundock-only | Yes | When the routine runs. Accepts only the human-readable forms documented below. A schedule in any other form never runs, and the routine's row in the Routines list says so and names the two forms that work. | `schedule: every day at 05:00` |
 | `prompt` | string | Rundock-only | Yes | The instruction sent to the agent when the routine fires. Treated as a single user message: the same text the user would type. | `prompt: Run the morning briefing` |
 | `description` | string | Rundock-only | No | One-line plain English explanation of the routine, surfaced on the agent profile. Optional: omitting it does not break the routine. | `description: Triage today's tasks, calendar, and content pipeline.` |
-| `enabled` | boolean | Rundock-only | No | Whether the scheduler may run this routine. Only `true` and `false` are read, in any case and with or without quotes. **Anything else, including an absent key and YAML spellings such as `yes` or `on`, means not enabled**, so the routine is listed and waits to be turned on. See [Upgrading a workspace that already has routines](#upgrading-a-workspace-that-already-has-routines). The editor writes it explicitly, so a routine created there is live at once. | `enabled: true` |
+| `enabled` | boolean | Rundock-only | No | Whether the scheduler may run this routine. `true`, `yes` and `on` all mean yes; `false`, `no` and `off` all mean no, in any case and with or without quotes. **An absent key, or a value that is not a boolean in any of those spellings, means not enabled**, so the routine is listed and waits to be turned on. See [Upgrading a workspace that already has routines](#upgrading-a-workspace-that-already-has-routines). The editor writes it explicitly, so a routine created there is live at once. | `enabled: true` |
 
 The whole `routines` block is Rundock-only. Claude Code does not parse it. Other tools that read agent frontmatter ignore it.
 
@@ -79,7 +79,8 @@ Absence is the only marker. Nothing looks at run history or at whether the works
 - A block that says `enabled: true` is live, and the upgrade leaves it alone.
 - A block that says `enabled: false` stays off, and the upgrade leaves that alone too.
 - A block that says nothing is held back, because nothing had ever offered it the field.
-- A block whose value is neither `true` nor `false` is held back too. `yes` and `on` are booleans in YAML and are not read as ones here, so a routine written that way waits to be turned on rather than being guessed at.
+- A block written `enabled: yes` or `enabled: on` is live, like one written `enabled: true`. Those are booleans in YAML and are read as ones, so a routine somebody deliberately switched on is not switched off by upgrading.
+- A block whose value is not a boolean in any of those spellings is held back, because nothing can tell what was meant and waiting is the safe answer.
 
 Routines made in the editor are unaffected. The editor writes `enabled` explicitly when it creates a routine, so a routine made today is live from the moment it is saved and needs no second act.
 

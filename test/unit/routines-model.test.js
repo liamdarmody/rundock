@@ -871,11 +871,6 @@ describe('a routine nobody has turned on yet', () => {
       'the offer does not say who begins running it');
     assert.match(o.text, /\brun/i,
       'the offer does not say that turning it on starts it running');
-    // AND WHEN. Same-day catch-up means a slot that has already gone today
-    // fires within the minute, so an offer that named only the schedule would
-    // hand this exact reader the double run the change exists to prevent.
-    assert.match(o.text, /already gone, it runs shortly after you turn it on/,
-      'the offer does not say the first run may be immediate');
     assert.strictEqual(o.label, 'Turn on');
   });
 
@@ -899,6 +894,43 @@ describe('a routine nobody has turned on yet', () => {
     // And the ordinary routine beside it still does, so this is the state
     // rather than a next-run line that stopped working.
     assert.ok(next({ enabled: true, nextRun: TOMORROWS_SLOT }));
+  });
+
+  // WHEN THE FIRST RUN LANDS IS SAID ONLY WHERE IT IS TRUE.
+  //
+  // Same-day catch-up means a slot already gone today fires within the minute,
+  // which is what this reader most needs to know: their own scheduler ran the
+  // same job this morning. But it is not true on every row the offer appears
+  // on. A routine that already ran today and was then switched off is
+  // suppressed until tomorrow by the run guard, and a weekly routine turned on
+  // away from its weekday does not run shortly at all.
+  //
+  // So the sentence is read off the instant the server computed, which already
+  // accounts for both: it is the same value the next-run line would render.
+  // Past means catch-up, future means then, and none means nothing is said.
+  const offerAt = (nextRun) => offer({ ...NOT_ENABLED, nextRun });
+
+  test('a slot already gone says the first run is immediate', () => {
+    assert.match(offerAt(new Date(2026, 7, 20, 7, 0)).text,
+      /has already gone, so it runs shortly after you turn it on/);
+  });
+
+  test('a run still to come names when, rather than promising it is immediate', () => {
+    const text = offerAt(new Date(2026, 7, 21, 7, 0)).text;
+    assert.match(text, /it runs tomorrow, 7:00am/,
+      'the offer does not say when the first run lands');
+    assert.ok(!/shortly after you turn it on/.test(text),
+      'a routine whose time has not come is told it runs straight away');
+  });
+
+  // A routine that already ran today and was switched off. The scheduler
+  // suppresses it until tomorrow, so it has no next run at all, and the offer
+  // says nothing about timing rather than guessing.
+  test('no next run at all means the offer promises no timing', () => {
+    const text = offerAt(null).text;
+    assert.ok(!/shortly after you turn it on/.test(text));
+    assert.ok(!/it runs /.test(text), `the offer invented a time: ${text}`);
+    assert.match(text, /Rundock will start running it on this schedule/);
   });
 
   test('the offer reaches the row', () => {
