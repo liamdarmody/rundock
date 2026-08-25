@@ -18,8 +18,9 @@
 .routines-content { max-width: 640px; padding: 32px; }
 /* The list header's subtitle: the scoped sentence above the populated list. */
 .routines-subtitle { font-size: var(--body); color: var(--text-2); }
-/* Which workspace this list belongs to, and what that means for the routines in
-   the others. A quieter line than the subtitle above it: it is a standing fact
+/* Which workspace the listed routines came from, and what that means for the
+   routines in the others, or where Rundock has gone if it is no longer serving
+   this one. A quieter line than the subtitle above it: it is a standing fact
    about the list rather than a description of what the list contains. */
 .routines-workspace { font-size: var(--caption); color: var(--text-2); margin-top: 2px; }
 
@@ -49,7 +50,7 @@
 /* The spacing every second line on a row shares. One rule rather than three
    identical ones: the lines differ in what they say and in their tone, not in
    where they sit. */
-.rr-run-line, .rr-problem-line, .rr-offer-line { margin-top: 2px; }
+.rr-run-line, .rr-problem-line, .rr-offer-line, .rr-note-line { margin-top: 2px; }
 
 .run-status { font-size: var(--caption); }
 .run-status.ok { font-weight: 600; color: var(--success); }
@@ -101,14 +102,16 @@
    schedule are told apart by their words rather than by colour alone. */
 .schedule-problem { font-size: var(--caption); font-weight: 600; color: var(--danger); }
 
-/* The row for a routine in a workspace this window does not have open.
+/* The row for a routine the scheduler has moved away from.
 
    IDLE GREY AND NOT THE DANGER COLOUR, which is the three-tone ruling applied
-   to a fifth thing a row can say. Nothing is wrong with the routine: it is
-   somewhere else, which is the same class of fact as a slot that passed while
+   to a fifth thing a row can say. Nothing is wrong with the routine: Rundock
+   is elsewhere, which is the same class of fact as a slot that passed while
    the machine was shut, and dressing it as an error would teach a reader with
-   several workspaces to ignore the colour that means something. */
-.workspace-problem { font-size: var(--caption); font-weight: 500; color: var(--idle); }
+   several workspaces to ignore the colour that means something. It is a NOTE
+   and not a problem, which is why it shares neither the name nor the tone of
+   the schedule fault above it. */
+.workspace-note { font-size: var(--caption); font-weight: 500; color: var(--idle); }
 
 /* The row for a routine nobody has turned on yet.
 

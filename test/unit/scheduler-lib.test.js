@@ -717,6 +717,10 @@ test('the workspace switch does not release a run that is still going', async ()
         },
         agents: { armAgentsDirWatcher: noop, invalidateAgentCache: noop },
         store: { clearSearchFailure: noop, ensureSearchEngine: noop },
+      broadcast: noop,
+        // The switch tells every connected client where the scheduler went, so
+        // a window that did not ask stops promising runs it will not get.
+        broadcast: noop,
       };
       // WHAT PROVES THE SWITCH'S RESETS RAN, planted before the switch and
       // read after it.
@@ -935,6 +939,8 @@ function openWorkspace(sched, dir, config) {
     },
     agents: { armAgentsDirWatcher: noop, invalidateAgentCache: noop },
     store: { clearSearchFailure: noop, ensureSearchEngine: noop },
+    // The switch announces where the scheduler went to every connected client.
+    broadcast: noop,
   };
   freshWorkspaceHandlers(sched).handleSetWorkspace(ctx, ws, { type: 'set_workspace', path: dir });
   assert.ok(sent.some(m => m.type === 'workspace_set'),
@@ -2368,6 +2374,7 @@ test('a workspace switch replaces the slot records the way it replaces the run s
       },
       agents: { armAgentsDirWatcher: noop, invalidateAgentCache: noop },
       store: { clearSearchFailure: noop, ensureSearchEngine: noop },
+      broadcast: noop,
     };
     const sent = [];
     freshWorkspaceHandlers(sched).handleSetWorkspace(ctx, { send: (raw) => sent.push(JSON.parse(raw)) },

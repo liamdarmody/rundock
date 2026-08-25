@@ -1802,6 +1802,10 @@ describe('the rail says when a routine has failed', () => {
       'renderRoutinesPanel']) {
       w[name] = () => {};
     }
+    // Also called by the roster case: the workspace the roster was read from.
+    // Nothing on the rail reads it, so it is stubbed here and driven where it
+    // matters, in test/unit/routines-end-to-end.test.js.
+    w.setServingWorkspace = () => {};
     w.d = { type: 'agents', agents: [{ id: 'piper', displayName: 'Piper', status: 'onTeam', routines: [failed('Nightly report')] }] };
     w.eval(`(function () {${body}\n})()`);
     assert.ok(dot(doc), 'a roster carrying a failure arrived and the rail says nothing');

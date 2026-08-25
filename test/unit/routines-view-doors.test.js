@@ -436,7 +436,13 @@ describe('the ways this list gets drawn, pressed', () => {
       'updateRoutineFailureBadge']) {
       w[name] = () => {};
     }
-    w.d = { type: 'agents', agents: w.agents };
+    // The roster case also records the workspace the roster was read from,
+    // which the routines list compares every row against. Stubbed here so the
+    // case can run at all; what it actually records is driven against the real
+    // shell's own writer in "the writer in the real shell is the global the
+    // rendered page reads" in test/unit/routines-end-to-end.test.js.
+    w.setServingWorkspace = () => {};
+    w.d = { type: 'agents', agents: w.agents, workspace: '/w/open' };
     w.eval(`(function () {${body}\n})()`);
     assert.strictEqual(w.drawn, 1, 'a roster arrived and the routines list was not redrawn');
     assert.strictEqual(w.document.querySelectorAll('.routine-row').length, 1);
@@ -947,8 +953,12 @@ describe('one mount, one renderer', () => {
       'updateRoutineFailureBadge']) {
       w[name] = () => {};
     }
+    // The workspace the roster was read from, recorded by the same case. This
+    // panel draws no row that reads it; it is driven where it is read, in
+    // test/unit/routines-end-to-end.test.js.
+    w.setServingWorkspace = () => {};
     const body = appPiece(/case 'agents':([\s\S]*?)\bbreak;/, 'the roster case of the client dispatch');
-    w.d = { type: 'agents', agents: w.agents };
+    w.d = { type: 'agents', agents: w.agents, workspace: '/w/open' };
     w.eval(`(function () {${body}\n})()`);
 
     const panel = doc.getElementById('sidebar-routines');
@@ -979,6 +989,8 @@ describe('one mount, one renderer', () => {
     // arriving does not take it away again.
     w.eval(`function setNavState(nav) {${appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState')}\n}`);
     w.setNavState('routines');
+    // The workspace the roster was read from, recorded by the same case.
+    w.setServingWorkspace = () => {};
     const body = appPiece(/case 'agents':([\s\S]*?)\bbreak;/, 'the roster case of the client dispatch');
     w.d = { type: 'agents', agents: w.agents };
     w.eval(`(function () {${body}\n})()`);

@@ -194,7 +194,12 @@
     // belongs to and what happens while they are in another one. Beside the
     // run-on caveat rather than folded into it: that one is about a workspace
     // open on several computers, this one is about several workspaces on one.
-    h += `<p class="re-caveat" data-routine-editor="workspace-caveat">${escText(m.WORKSPACE_CAVEAT)}</p>`;
+    //
+    // READ OFF THE STEP rather than off a bare constant, the same way the
+    // run-on caveat is read off its field: a sentence the model hands back as
+    // part of the step cannot be left out of a render of that step without the
+    // omission being visible here.
+    h += `<p class="re-caveat" data-routine-editor="workspace-caveat">${escText(m.scheduleStepFields().workspaceCaveat)}</p>`;
     h += `<div class="re-actions">
       <button class="settings-btn-primary" type="button" ${sentence ? '' : 'disabled'}
         onclick="routineEditorStep('ready')">Continue</button>

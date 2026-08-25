@@ -527,10 +527,23 @@ describe('ROUTINES.md: where a routine actually runs', () => {
     try { return fn(); } finally { scheduler.wireSchedulerDeps(previous); }
   }
 
-  // THE MECHANISM, DRIVEN. A run recorded to the shared file by another
-  // instance does not reach the value this instance's tick decides with, so
-  // this instance fires the routine it would have been suppressed by.
-  test("a run another instance recorded does not reach the guard this one decides with", () => {
+  // THE MECHANISM, NAMED FOR WHAT IT CHECKS AND NOTHING MORE.
+  //
+  // This asserts one link in the chain: that writing the shared file does not
+  // put anything into the object the tick decides with. It does NOT tick, so
+  // it cannot on its own prove that the tick path never reloads. The test that
+  // proves that is 'two instances on one workspace both fire the routine,
+  // sharing one state file' in test/unit/scheduler-lib.test.js, which ticks
+  // both instances and watches both spawn. An earlier version of this test
+  // claimed the tick-path conclusion while checking only the link below, so it
+  // would have passed unchanged against a scheduler that re-read the file on
+  // every pass.
+  //
+  // Kept beside the doc claims rather than folded into that file because it is
+  // the link the PAGE's wording rests on: the page says the guard is filled at
+  // start and on a workspace switch and not otherwise, and this is the "not
+  // otherwise".
+  test('writing the shared file puts nothing into the object the tick decides with', () => {
     const dir = useWorkspace({});
     atNow(() => {
       // This instance starts. Nothing has run, so its copy is empty.
@@ -544,14 +557,51 @@ describe('ROUTINES.md: where a routine actually runs', () => {
         JSON.stringify({ [KEY]: { lastRun: RAN_AT.toISOString(), status: 'completed', duration: 40 } }));
 
       assert.strictEqual(srv.routineState[KEY], undefined,
-        'the file changed under a running instance and nothing on the tick path read it');
+        'the file changed under a running instance and the loaded copy moved with it');
 
       const state = srv.routineState[KEY];
       assert.notStrictEqual(srv.getNextRun(SCHEDULE, state && state.lastRun), null,
-        'so this instance still has a run due, which is the second fire the page warns about');
+        'so this instance still has a run due');
       assert.strictEqual(srv.getNextRun(SCHEDULE, RAN_AT.toISOString()), null,
         'and the recorded run WOULD have suppressed it, so it is the not-reading and not the schedule that decides');
     });
+  });
+
+  // THE OTHER HALF OF THE PAGE'S WORDING, WHICH IS AN ABSENCE.
+  //
+  // The page says an instance fires whether or not the state file reached it.
+  // That rests on nothing outside loadRoutineState ever reading the file: a
+  // watcher on .rundock/ would reload it as a synced copy arrived and the
+  // sentence would stop being true without a line of the scheduler changing.
+  //
+  // ASSERTED AGAINST THE SOURCE BECAUSE THE CLAIM IS THAT NOTHING EXISTS, and
+  // a behavioural test can only ever show that one particular thing did not
+  // happen. Read at the time of writing: the file is named in exactly three
+  // places in lib/scheduler.js, one comment, one read inside loadRoutineState
+  // and one write inside saveRoutineState, and no watcher anywhere in the
+  // server names it.
+  test('nothing but the load ever reads the state file', () => {
+    const scheduler = fs.readFileSync(path.join(ROOT, 'lib', 'scheduler.js'), 'utf-8');
+    // Code lines only: a comment naming the file is prose, not a reader.
+    const touches = scheduler.split('\n')
+      .filter(line => line.includes('routine-state.json') && !line.trim().startsWith('//'));
+    assert.strictEqual(touches.length, 2,
+      `the state file is named in ${touches.length} code lines, not the read and the write:\n${touches.join('\n')}`);
+
+    // And each of the two sits in the one function it belongs to, so neither
+    // can be reached except by loading the state or saving it.
+    const between = (from, to) => scheduler.slice(scheduler.indexOf(from), scheduler.indexOf(to));
+    const load = between('function loadRoutineState()', 'function saveRoutineState()');
+    const save = between('function saveRoutineState()', '// ===== SLOTS THAT PASSED UNSERVED =====');
+    assert.match(load, /readFileSync[\s\S]{0,80}routine-state\.json|routine-state\.json[\s\S]{0,80}readFileSync/,
+      'the only read is inside the load, which runs at boot and on a workspace switch');
+    assert.match(save, /routine-state\.json/, 'and the only write is inside the save');
+    // And nothing watches the folder it lives in.
+    for (const file of ['lib/scheduler.js', 'server.js']) {
+      const src = fs.readFileSync(path.join(ROOT, file), 'utf-8');
+      assert.doesNotMatch(src, /fs\.watch\s*\(|fs\.watchFile\s*\(/,
+        `${file} watches files, so a synced state file could arrive and be reloaded`);
+    }
   });
 
   test('a workspace shared through git does not carry the guard file at all', () => {
@@ -592,6 +642,17 @@ describe('ROUTINES.md: where a routine actually runs', () => {
       'and it must name the remedy rather than only the hazard');
     assert.match(alwaysOn, /one machine|one server ticking/i,
       'which is that one machine runs the routines');
+  });
+
+  // The claim is scoped, and the scope is the half that makes it true. An
+  // instance started or switched after a synced file lands DOES read it. The
+  // page must not promise that no sequence can ever avoid the double run.
+  test('the always-on section scopes the claim to instances that are both already up', () => {
+    const alwaysOn = routinesDoc.slice(routinesDoc.indexOf('## Always-on routines'));
+    assert.match(alwaysOn, /already running|already up/i,
+      'the page must say which case the claim covers');
+    assert.match(alwaysOn, /does read that file|is held for that slot/i,
+      'and must not leave a reader thinking a restart ignores the file too');
   });
 
   test('the always-on section does not blame the sync tool for the double fire', () => {

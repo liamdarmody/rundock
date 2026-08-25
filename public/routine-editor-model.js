@@ -174,6 +174,32 @@
     return { label: RUN_ON_LABEL, options: runOnOptions(), caveat: RUN_ON_CAVEAT };
   }
 
+  /**
+   * The step that decides WHEN a routine runs, as one thing, including the
+   * sentence that says WHERE it will run.
+   *
+   * SAME RULE AS `runOnField`, one level out. A caveat kept as a loose export
+   * can be rendered on a help page and nowhere else with every test still
+   * green; a caveat carried by the thing it qualifies cannot be rendered
+   * without it. The run-on caveat qualifies a FIELD, so the field carries it.
+   * This one qualifies the whole step, because what it says is true of the
+   * routine being made rather than of any one control on the screen, so the
+   * step carries it.
+   *
+   * The frequencies and times come back on the same object for the same
+   * reason: a view that assembled the step out of three separate exports could
+   * drop this one and still draw a complete-looking step.
+   */
+  function scheduleStepFields() {
+    return {
+      lead: STEP_LEADS.schedule,
+      frequencies: FREQUENCIES,
+      times: times(),
+      runOn: runOnField(),
+      workspaceCaveat: WORKSPACE_CAVEAT,
+    };
+  }
+
   // ===== THE SKILL PICKER =====
 
   /**
@@ -366,7 +392,7 @@
 
   return {
     RUN_ON_SUPPORTED, RUN_ON_CAVEAT, WORKSPACE_CAVEAT, RUN_ON_LABEL, FREQUENCIES, STEP_LEADS, SAVE_DESTINATION,
-    runOnOptions, runOnOption, runOnField,
+    runOnOptions, runOnOption, runOnField, scheduleStepFields,
     skillChoices, stepLead,
     times, buildSchedule, previewSentence,
     timezoneWords, timezoneCaption, readyCaption,

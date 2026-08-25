@@ -1166,11 +1166,11 @@ describe('a row never says two things that cannot both be true', () => {
     ['a slot that went by', { missedSlot: YESTERDAYS_SLOT }],
     ['a next run', { nextRun: TOMORROWS_SLOT }],
     ['a run that failed', { lastStart: TODAYS_SLOT, lastRunStatus: 'failed', lastSlot: TODAYS_SLOT }],
-    // A ROUTINE READ OUT OF SOMEWHERE THIS WINDOW IS NOT. It is the newest way
-    // a row can deny a run, and it joins the matrix here rather than being
-    // paired by hand with the seven above it, which is the whole point of the
-    // matrix being read off this list.
-    ['a workspace this window does not have open', { workspace: '/w/other', openWorkspace: '/w/open' }],
+    // A ROUTINE THE SCHEDULER HAS MOVED AWAY FROM. It is the newest way a row
+    // can deny a run, and it joins the matrix here rather than being paired by
+    // hand with the seven above it, which is the whole point of the matrix
+    // being read off this list.
+    ['a scheduler that has moved to another workspace', { workspace: '/w/mine', servingWorkspace: '/w/elsewhere' }],
   ];
 
   // What the row says, split by what it claims about running.
@@ -1181,7 +1181,7 @@ describe('a row never says two things that cannot both be true', () => {
     if (row.nextRun && row.nextRun.text !== 'Paused') promising.push(`next run: ${row.nextRun.text}`);
     if (row.nextRun && row.nextRun.text === 'Paused') denying.push('next run: Paused');
     if (row.scheduleProblem) denying.push(`problem: ${row.scheduleProblem.text}`);
-    if (row.workspaceProblem) denying.push(`workspace: ${row.workspaceProblem.text}`);
+    if (row.workspaceNote) denying.push(`workspace: ${row.workspaceNote.text}`);
     // A RUN STATUS IS DELIBERATELY NEITHER. It reports the past, and the row
     // pairs it with the next run ON PURPOSE, because after a miss or a failure
     // the reader's question is whether it recovered and when it tries again.
@@ -1241,73 +1241,97 @@ describe('a row never says two things that cannot both be true', () => {
 // WHERE A ROUTINE ACTUALLY RUNS
 // ===========================================================================
 //
-// There is one scheduler and it serves one workspace: the open one. A routine
-// anywhere else is dormant, and every surface here used to draw it exactly as
-// it draws one that will fire in an hour.
+// There is one scheduler and it serves one workspace. A routine in any other
+// workspace is dormant, and every surface here used to draw it exactly as it
+// draws one that will fire in an hour.
 //
-// THE PAIR IS THE TEST. A single assertion that the other-workspace row says
-// something proves nothing about whether the two rows can be told apart, and
-// telling them apart is the whole requirement. So the two are built from ONE
-// input with one field changed, and read side by side.
-describe('a routine says which workspace it belongs to', () => {
-  const OPEN = '/Users/someone/Documents/Ledger';
-  const OTHER = '/Users/someone/Documents/Field Notes';
+// THE COMPARISON IS AGAINST WHAT THE SERVER IS SERVING, NEVER AGAINST WHAT A
+// WINDOW REMEMBERS OPENING, and getting that backwards is worse than the
+// silence it replaced. Several windows can look at one server. When one of
+// them switches the server, the roster the others are handed is the roster of
+// the workspace that IS being served: judged against the path those windows
+// remembered, every one of those rows would be called dormant at the exact
+// moment they were the only routines running, and the dormant ones would be
+// the routines the window still believed were live. Both halves inverted.
+//
+// So both values here come from the server. `workspace` is stamped on each
+// routine by the code that read it; `servingWorkspace` is that same root, sent
+// beside the roster and again on every switch.
+//
+// THE PAIR IS THE TEST. A single assertion that a dormant row says something
+// proves nothing about whether the two can be told apart, and telling them
+// apart is the whole requirement. So the two are built from ONE input with one
+// field changed, and read side by side.
+describe('a routine says whether anything is serving it', () => {
+  const MINE = '/Users/someone/Documents/Ledger';
+  const ELSEWHERE = '/Users/someone/Documents/Field Notes';
 
   // One routine, in service, due tomorrow, with nothing wrong with it. The
-  // only thing that varies below is which workspace it was read out of.
+  // only thing that varies below is where the scheduler is.
   const ROUTINE = {
     name: 'morning briefing', schedule: 'every day at 07:00', scheduleReadable: true,
     runOn: 'local', enabled: true, nextRun: TOMORROWS_SLOT, now: NOW, zone: ZONE,
-    openWorkspace: OPEN,
+    workspace: MINE,
   };
 
   test('the two rows are not the same row', () => {
-    const here = m.row(Object.assign({}, ROUTINE, { workspace: OPEN }));
-    const elsewhere = m.row(Object.assign({}, ROUTINE, { workspace: OTHER }));
+    const served = m.row(Object.assign({}, ROUTINE, { servingWorkspace: MINE }));
+    const moved = m.row(Object.assign({}, ROUTINE, { servingWorkspace: ELSEWHERE }));
 
-    assert.strictEqual(here.nextRun.text, 'Next run: tomorrow, 7:00am, London time',
-      'the routine in the open workspace says when it runs next');
-    assert.strictEqual(here.workspaceProblem, null,
+    assert.strictEqual(served.nextRun.text, 'Next run: tomorrow, 7:00am, London time',
+      'the routine the scheduler is serving says when it runs next');
+    assert.strictEqual(served.workspaceNote, null,
       'and says nothing about workspaces, because there is nothing to say');
 
-    assert.strictEqual(elsewhere.nextRun, null,
-      'the routine in the other workspace promises no run, because none is coming');
-    assert.strictEqual(elsewhere.workspaceProblem.text,
-      'Not running here. This routine is in Field Notes. Rundock runs the routines of the '
-      + 'workspace that is open, and that is not this one.',
-      'and says where it is instead');
+    assert.strictEqual(moved.nextRun, null,
+      'the routine nothing is serving promises no run, because none is coming');
+    assert.strictEqual(moved.workspaceNote.text,
+      'Not running. Rundock has moved to Field Notes and is running that workspace\'s routines instead.',
+      'and says where Rundock went instead');
   });
 
-  test('the sentence names the workspace the routine is actually in', () => {
-    const row = m.row(Object.assign({}, ROUTINE, { workspace: OTHER }));
-    assert.match(row.workspaceProblem.text, /Field Notes/,
-      'the folder is named, so the reader knows which of their workspaces this came from');
-    assert.doesNotMatch(row.workspaceProblem.text, /Documents/,
-      'by the name a person calls it, not by the path it sits at');
+  // The row cannot say why it stopped without naming where the scheduler is,
+  // and that workspace is the one the header does NOT name.
+  test('the note names where Rundock went, by the name a person calls it', () => {
+    const row = m.row(Object.assign({}, ROUTINE, { servingWorkspace: ELSEWHERE }));
+    assert.match(row.workspaceNote.text, /Field Notes/);
+    assert.doesNotMatch(row.workspaceNote.text, /Documents/,
+      'by the folder name, not by the path it sits at');
   });
 
-  // The offer says what pressing it does. In another workspace, pressing it
-  // does not start the routine, so there is nothing truthful for it to say.
-  test('a held-back routine in another workspace is not offered a switch that would not start it', () => {
+  // The inversion this design exists to prevent, asserted as itself rather
+  // than left to follow from the pair above. A window that remembers ws1 and
+  // is handed ws2's roster is looking at the routines that ARE running.
+  test('a roster from the workspace being served is live, whatever any window remembers', () => {
+    const handedOver = m.row(Object.assign({}, ROUTINE, {
+      workspace: ELSEWHERE, servingWorkspace: ELSEWHERE,
+    }));
+    assert.ok(handedOver.nextRun, 'these are the routines that will fire, so the row says when');
+    assert.strictEqual(handedOver.workspaceNote, null, 'and denies nothing');
+  });
+
+  // The offer says what pressing it does. With the scheduler elsewhere,
+  // pressing it starts nothing, so there is nothing truthful for it to say.
+  test('a held-back routine nothing is serving is not offered a switch that would not start it', () => {
     const held = Object.assign({}, ROUTINE, { enabled: false });
-    assert.ok(m.enableOffer(Object.assign({}, held, { workspace: OPEN })),
-      'in the open workspace the offer stands');
-    assert.strictEqual(m.enableOffer(Object.assign({}, held, { workspace: OTHER })), null,
-      'and in another workspace it is withheld rather than reworded');
+    assert.ok(m.enableOffer(Object.assign({}, held, { servingWorkspace: MINE })),
+      'in the served workspace the offer stands');
+    assert.strictEqual(m.enableOffer(Object.assign({}, held, { servingWorkspace: ELSEWHERE })), null,
+      'and with the scheduler elsewhere it is withheld rather than reworded');
   });
 
-  // A field that is new must not turn every row that predates it into an
-  // accusation, and a caller that did not say which workspace is open has not
-  // said the routine is somewhere else.
+  // Both fields are new. A roster that predates them must not turn into an
+  // accusation, and a caller that did not say what is being served has not
+  // said anything is dormant.
   test('silence is not a disagreement', () => {
     for (const missing of [
-      { name: 'no stamp on the routine', fields: { workspace: undefined, openWorkspace: OPEN } },
-      { name: 'no open workspace supplied', fields: { workspace: OTHER, openWorkspace: undefined } },
-      { name: 'neither', fields: {} },
-      { name: 'an empty stamp', fields: { workspace: '', openWorkspace: OPEN } },
+      { name: 'no stamp on the routine', fields: { workspace: undefined, servingWorkspace: ELSEWHERE } },
+      { name: 'no serving workspace supplied', fields: { servingWorkspace: undefined } },
+      { name: 'neither', fields: { workspace: undefined, servingWorkspace: undefined } },
+      { name: 'an empty stamp', fields: { workspace: '', servingWorkspace: ELSEWHERE } },
     ]) {
       const row = m.row(Object.assign({}, ROUTINE, missing.fields));
-      assert.strictEqual(row.workspaceProblem, null, `${missing.name}: no complaint`);
+      assert.strictEqual(row.workspaceNote, null, `${missing.name}: no complaint`);
       assert.ok(row.nextRun, `${missing.name}: and the next run is still drawn`);
     }
   });
@@ -1321,14 +1345,36 @@ describe('a routine says which workspace it belongs to', () => {
     assert.strictEqual(m.workspaceWords(null), null);
   });
 
-  // The header answers the question the rows cannot: what happened to the
-  // routines this list is NOT showing.
-  test('the list names its own workspace, and says what that means for the others', () => {
-    const head = m.header({ workspace: OPEN });
-    assert.strictEqual(head.workspace,
-      'These are the routines in Ledger. Rundock runs the routines of whichever workspace is '
+  // The header answers the question no row can: what these routines are, and
+  // what became of the ones this list is not showing.
+  test('the header names the workspace the listed routines came from, in both states', () => {
+    const served = m.header({ workspace: MINE, servingWorkspace: MINE });
+    assert.strictEqual(served.workspace,
+      'These are the routines in Ledger. Rundock runs the routines of whichever workspace it has '
       + 'open, so the routines in your other workspaces are not running.');
+
+    const moved = m.header({ workspace: MINE, servingWorkspace: ELSEWHERE });
+    assert.strictEqual(moved.workspace,
+      'These are the routines in Ledger. Rundock has moved to Field Notes and is running that '
+      + "workspace's routines, so none of these are running.");
+  });
+
+  // THE HEADER DESCRIBES ITS ROWS AND NOT THE WINDOW. Handed the roster of the
+  // workspace being served, it names that workspace and says its routines run,
+  // whatever the window it is drawn in was opened on.
+  test('the header names the roster it is heading, not a remembered path', () => {
+    const head = m.header({ workspace: ELSEWHERE, servingWorkspace: ELSEWHERE });
+    assert.match(head.workspace, /^These are the routines in Field Notes\./);
+    assert.doesNotMatch(head.workspace, /has moved to/,
+      'the listed routines are the ones running, so the header must not say otherwise');
+  });
+
+  test('with no workspace to name there is no line at all', () => {
     assert.strictEqual(m.header({}).workspace, null,
-      'with no path there is no line, because "the routines in your workspace" tells nobody anything');
+      '"the routines in your workspace" tells nobody anything');
+    assert.strictEqual(m.header({ workspace: MINE }).workspace,
+      'These are the routines in Ledger. Rundock runs the routines of whichever workspace it has '
+      + 'open, so the routines in your other workspaces are not running.',
+      'and an unstated serving workspace is not a claim that Rundock has moved');
   });
 });

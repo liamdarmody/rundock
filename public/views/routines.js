@@ -78,14 +78,42 @@ function routinesClock() {
 }
 
 /**
- * The workspace this window has open, taken from the global the shell keeps.
+ * The workspace the server's scheduler is serving, taken from the global the
+ * shell keeps.
+ *
+ * NOT `currentWorkspacePath`, and the difference is the whole of what this
+ * list gets right. That one is the workspace this WINDOW asked to open, and
+ * another window can move the server out from under it. This one is written
+ * only from values the server produced, which is the same string discovery
+ * stamps on every routine, so the comparison below is between two copies of
+ * one value.
  *
  * Read through typeof for the same reason the clock is: this file is required
  * in node with no global at all, and an undeclared identifier throws where a
  * typeof does not.
  */
-function routinesOpenWorkspace() {
-  return typeof currentWorkspacePath === 'string' ? currentWorkspacePath : null;
+function routinesServingWorkspace() {
+  return typeof servingWorkspacePath === 'string' ? servingWorkspacePath : null;
+}
+
+/**
+ * The workspace the routines being listed were read out of.
+ *
+ * ONE VALUE FOR THE WHOLE ROSTER, because a roster is only ever read from one
+ * workspace: discovery stamps every routine it reads with the root it read
+ * them from. Taken off the rows rather than from a global so it describes what
+ * is actually on screen, which is the fault the header carried before: it
+ * named the workspace the window remembered, directly above a list of rows
+ * that had come from somewhere else.
+ */
+function routinesRosterWorkspace() {
+  const roster = typeof agents !== 'undefined' && agents ? agents : [];
+  for (const agent of roster) {
+    for (const routine of (agent && agent.routines) || []) {
+      if (routine && typeof routine.workspace === 'string' && routine.workspace) return routine.workspace;
+    }
+  }
+  return null;
 }
 
 function routinesZone() {
@@ -240,11 +268,11 @@ function rowHtml(entry, index, withActions) {
     // roster. Passed through untouched: a client that decided this for itself
     // would be a second copy of a grammar that lives beside the tick.
     scheduleReadable: r.scheduleReadable,
-    // The workspace this routine was read out of, and the one this window has
-    // open. Two facts from two messages, compared by the model rather than
-    // assumed equal here.
+    // The workspace this routine was read out of, and the one the server is
+    // serving. Both are the server's own value, compared by the model rather
+    // than assumed equal here.
     workspace: r.workspace,
-    openWorkspace: routinesOpenWorkspace(),
+    servingWorkspace: routinesServingWorkspace(),
     now: routinesClock(),
     zone: routinesZone(),
   });
@@ -274,15 +302,15 @@ function rowHtml(entry, index, withActions) {
       + `<span class="schedule-problem">${esc(row.scheduleProblem.text)}</span>`
       + '</div>';
   }
-  // A ROUTINE THIS WINDOW IS NOT IN A POSITION TO RUN SAYS WHERE IT IS. Drawn
-  // like the schedule fault and toned unlike it: nothing about the routine is
-  // wrong, so it takes the quiet tone the missed row uses rather than the
+  // A ROUTINE NOTHING IS SERVING SAYS WHERE RUNDOCK WENT. Drawn on its own
+  // line and toned unlike the schedule fault above: nothing about the routine
+  // is wrong, so it takes the quiet tone the missed row uses rather than the
   // danger one. Drawn on the delete confirmation too, for the same reason the
   // schedule fault is: somebody about to remove a routine is entitled to know
-  // it was not running here.
-  if (row.workspaceProblem) {
-    body += '<div class="rr-meta rr-problem-line">'
-      + `<span class="workspace-problem">${esc(row.workspaceProblem.text)}</span>`
+  // it was not running.
+  if (row.workspaceNote) {
+    body += '<div class="rr-meta rr-note-line">'
+      + `<span class="workspace-note">${esc(row.workspaceNote.text)}</span>`
       + '</div>';
   }
   // THE ROW FOR A ROUTINE NOBODY HAS TURNED ON YET. It takes the next-run
@@ -420,7 +448,8 @@ function headerHtml(subtitle, workspace) {
 function listHeaderHtml() {
   const head = routinesModel().header({
     agentName: routinesScopeName(),
-    workspace: routinesOpenWorkspace(),
+    workspace: routinesRosterWorkspace(),
+    servingWorkspace: routinesServingWorkspace(),
   });
   return headerHtml(head.subtitle, head.workspace);
 }

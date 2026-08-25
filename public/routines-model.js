@@ -133,31 +133,32 @@
   };
 
   /**
-   * What a row says about a routine that is not in the workspace this window
-   * has open.
+   * What a row says about a routine the scheduler is not serving.
    *
    * THE FACT IT ENDS. There is one scheduler and it serves one workspace: the
-   * tick reads the roster of whichever workspace is open and runs each routine
-   * with that workspace as its working directory. A routine anywhere else is
-   * dormant, and until this line existed nothing said so anywhere.
+   * tick reads the roster of whichever workspace the server has open and runs
+   * each routine with that workspace as its working directory. Routines
+   * anywhere else are dormant, and until this line existed nothing said so.
    *
-   * WHY A ROW CAN CARRY A ROUTINE FROM SOMEWHERE ELSE AT ALL. The roster and
-   * the open workspace arrive as two separate messages, and every connected
-   * client is sent the roster whenever a routine's state changes. So a second
-   * window, opened on one workspace while another window switched the server
-   * to a different one, is handed rows it did not ask for. Rendering those
-   * with a next-run time tells that reader their routines are scheduled when
-   * the ones that are scheduled belong to somebody else's screen.
+   * WHY A LIST CAN BE SHOWING DORMANT ROUTINES AT ALL. Several windows can
+   * look at one server, which is the setup the always-on documentation
+   * recommends: a browser on the laptop and one on the phone. When one of them
+   * switches the server to another workspace, the others go on showing the
+   * workspace their reader chose, and every routine on those screens has
+   * stopped being served. They are not moved, because a reader's screen is not
+   * another window's to change; they are told.
    *
-   * IT NAMES THE WORKSPACE. "Somewhere else" leaves the reader to work out
-   * which of their folders this row came from, and the name is the one thing
-   * that makes the sentence actionable.
+   * IT NAMES WHERE RUNDOCK WENT, not where the routine is. Which workspace
+   * these routines belong to is one fact about the whole list and the header
+   * carries it; repeating it on every row would say it once per routine. What
+   * the row cannot get from the header is why it stopped, and the answer is a
+   * workspace the header does not name.
    */
-  const OTHER_WORKSPACE = {
-    lead: 'Not running here.',
+  const NOT_SERVED = {
+    lead: 'Not running.',
     // The name is a slot and never a concatenation, the same rule the leads
     // below follow: the whole sentence is in this object.
-    body: 'This routine is in {workspace}. Rundock runs the routines of the workspace that is open, and that is not this one.',
+    body: 'Rundock has moved to {workspace} and is running that workspace\'s routines instead.',
   };
 
   const LEAD = {
@@ -169,7 +170,17 @@
     // routines these are, and nothing at all tells them what became of the
     // other two. Both halves are here: the list names its workspace, and it
     // says plainly that the routines in the others are not running.
-    workspaceLine: 'These are the routines in {workspace}. Rundock runs the routines of whichever workspace is open, so the routines in your other workspaces are not running.',
+    //
+    // THE WORKSPACE NAMED IS THE ONE THE ROWS CAME FROM, never the one this
+    // window remembers opening. Those are two different facts and the whole
+    // point of the second line below is that they can disagree; a header that
+    // named the remembered one would sit directly above a list of somebody
+    // else's routines and describe it wrongly.
+    workspaceLine: 'These are the routines in {workspace}. Rundock runs the routines of whichever workspace it has open, so the routines in your other workspaces are not running.',
+    // AND WHEN THE SCHEDULER HAS MOVED ON. The rows below are real routines in
+    // a real workspace and none of them is going to fire, so the line that
+    // would otherwise reassure the reader is replaced rather than joined.
+    movedLine: 'These are the routines in {workspace}. Rundock has moved to {serving} and is running that workspace\'s routines, so none of these are running.',
     // SCOPED TO ONE AGENT, THE SENTENCE SAYS SO. A filtered list under an
     // unfiltered sentence reads as a list that has lost rows, which is the one
     // reading a header must never invite.
@@ -189,9 +200,10 @@
    * carries it inside the header block instead, which is why it arrives from
    * here rather than being drawn separately.
    *
-   * @param {{agentName?: string|null, workspace?: string|null}} [input] the
-   *   agent the list is scoped to, when it is scoped to one, and the path of
-   *   the workspace this window has open.
+   * @param {{agentName?: string|null, workspace?: string|null,
+   *   servingWorkspace?: string|null}} [input] the agent the list is scoped to
+   *   when it is scoped to one, the path the listed routines were read from,
+   *   and the path the server's scheduler is serving.
    */
   function header(input) {
     const agentName = (input && input.agentName) || null;
@@ -201,12 +213,25 @@
     // two. It is absent rather than vague when no path was supplied: a header
     // that says "these are the routines in your workspace" has told the reader
     // nothing they did not have.
+    //
+    // AND IT DESCRIBES THE ROWS, WHICHEVER OF THE TWO SENTENCES IT PICKS. Both
+    // name the workspace the rows came from; they differ on what is true of
+    // those rows, which is decided by the same comparison every row below
+    // makes, so the header and the list cannot disagree about whether anything
+    // here is running.
     const workspaceName = workspaceWords(input && input.workspace);
+    const servingName = workspaceWords(input && input.servingWorkspace);
+    let workspaceLine = null;
+    if (workspaceName && isServed(input)) {
+      workspaceLine = LEAD.workspaceLine.replace('{workspace}', () => workspaceName);
+    } else if (workspaceName && servingName) {
+      workspaceLine = LEAD.movedLine
+        .replace('{workspace}', () => workspaceName)
+        .replace('{serving}', () => servingName);
+    }
     return {
       title: LEAD.title,
-      workspace: workspaceName
-        ? LEAD.workspaceLine.replace('{workspace}', () => workspaceName)
-        : null,
+      workspace: workspaceLine,
       // THE NAME IS INSERTED, NEVER INTERPRETED. A string replacement reads
       // dollar sequences in what it is given as instructions: $& is the match,
       // $` and $' the text either side, $$ a literal dollar. An agent can be
@@ -605,13 +630,22 @@
   /**
    * Whether anything OTHER than the switch would stop this routine running.
    *
-   * THIS MIRRORS `routineRefusal` IN lib/scheduler.js, which is the gate that
-   * actually decides: it refuses for paused, then enabled, then an unsupported
-   * run target, and getNextRun refuses a schedule it cannot parse. A row that
-   * offers to turn a routine on is claiming every one of those would let it
-   * through, so the two lists have to be found together. `enabled` is
-   * deliberately absent from this one: it answers what would stop the routine
-   * BESIDES the switch the offer is about.
+   * IT ASKS TWO QUESTIONS AND A CONTRIBUTOR SYNCING IT MUST KEEP BOTH.
+   *
+   * The first is what the scheduler's own gate would refuse, and that half
+   * MIRRORS `routineRefusal` IN lib/scheduler.js: it refuses for paused, then
+   * enabled, then an unsupported run target, and getNextRun refuses a schedule
+   * it cannot parse. A row that offers to turn a routine on is claiming every
+   * one of those would let it through, so those two lists have to be found
+   * together. `enabled` is deliberately absent from this one: it answers what
+   * would stop the routine BESIDES the switch the offer is about.
+   *
+   * The second is whether any scheduler would look at this routine at all,
+   * which is the workspace check below. It has no counterpart in
+   * `routineRefusal` and never will: the gate only ever sees routines from the
+   * workspace the server is serving, so a routine somewhere else never reaches
+   * it to be refused. Read as a pure mirror, that branch looks like an
+   * unmatched extra and the next person to reconcile the two lists deletes it.
    *
    * A BOOLEAN, because that is all the answer is used for. It named the
    * deciding field for a while and nothing ever read the name.
@@ -636,12 +670,12 @@
     // wrong one for what would RUN: a routine with no schedule can never run,
     // so leaning on the wording let the offer promise a run there.
     if (!canProduceARun(input)) return true;
-    // A ROUTINE IN ANOTHER WORKSPACE IS NOT STARTED BY TURNING IT ON, and the
+    // A ROUTINE NOTHING IS SERVING IS NOT STARTED BY TURNING IT ON, and the
     // offer's whole value is that it says what pressing it does. There is one
-    // scheduler and it serves the open workspace, so the switch is not what is
-    // holding this routine back and moving it would promise a run that the
-    // press cannot deliver.
-    if (!inOpenWorkspace(input)) return true;
+    // scheduler and it is somewhere else, so the switch is not what is holding
+    // this routine back and moving it would promise a run that the press
+    // cannot deliver.
+    if (!isServed(input)) return true;
     // A roster that did not name a run target says nothing, for the same
     // reason an absent scheduleReadable says nothing: silence is not a fault.
     if (input.runOn !== undefined && input.runOn !== null) {
@@ -708,44 +742,59 @@
   }
 
   /**
-   * Whether this routine belongs to the workspace this window has open.
+   * Whether the scheduler is serving the workspace these routines came from.
    *
-   * TWO PATHS, COMPARED, NEVER ONE ASSUMED. The routine's own workspace is
-   * stamped on the roster by the side that read the file; the open one is what
-   * this window was told it opened. They are two facts from two messages and
-   * they can disagree.
+   * BOTH VALUES COME FROM THE SERVER, AND THAT IS THE WHOLE OF WHY THIS CAN BE
+   * A STRING COMPARISON. `workspace` is stamped on each routine by the code
+   * that read it, out of the server's own workspace root; `servingWorkspace`
+   * is that same root, sent by the server on the roster message and on every
+   * switch. Two copies of one string, so a trailing separator, a resolved
+   * symlink or a separator style cannot make a served routine look dormant.
+   *
+   * IT IS NOT THE PATH THE WINDOW REMEMBERS OPENING. That value is this
+   * window's own record of what its reader picked, and another window can move
+   * the server out from under it. Compared against that, a window handed the
+   * new workspace's roster would call every routine in it dormant at the exact
+   * moment those were the only routines running, which is the inverse of the
+   * truth on both sides.
    *
    * SILENCE IS NOT A DISAGREEMENT, the same rule `scheduleReadable` follows. A
    * routine that arrives carrying no workspace, or a caller that did not say
-   * which workspace is open, has not said the routine is somewhere else, and
-   * accusing every row on a roster that predates this field would be a
+   * which workspace is being served, has not said anything is dormant, and
+   * accusing every row on a roster that predates these fields would be a
    * complaint invented out of a missing key.
    *
-   * @param {{workspace?: any, openWorkspace?: any}} [input]
+   * @param {{workspace?: any, servingWorkspace?: any}} [input]
    */
-  function inOpenWorkspace(input) {
+  function isServed(input) {
     const mine = input && input.workspace;
-    const open = input && input.openWorkspace;
+    const serving = input && input.servingWorkspace;
     if (typeof mine !== 'string' || !mine) return true;
-    if (typeof open !== 'string' || !open) return true;
-    return mine === open;
+    if (typeof serving !== 'string' || !serving) return true;
+    return mine === serving;
   }
 
   /**
-   * Whether the row must say this routine is not in the open workspace, and
-   * which workspace it is in.
+   * Whether the row must say this routine is not being served, and where the
+   * scheduler went.
    *
-   * Withheld when the path has no readable name, because the sentence's whole
-   * value is naming the workspace and a sentence with an empty slot in it is
-   * worse than the silence this replaced.
+   * A NOTE AND NOT A PROBLEM, which is why it is neither named nor toned like
+   * `scheduleProblem`. That one is a fault in the routine that only the person
+   * who wrote the file can fix. This is a standing fact about where Rundock
+   * currently is, the routine is exactly as it should be, and the moment the
+   * server comes back to this workspace the line goes and the row runs.
    *
-   * @param {{workspace?: any, openWorkspace?: any}} [input]
+   * Withheld when the serving path has no readable name, because the whole
+   * value of the sentence is naming where Rundock went, and a sentence with an
+   * empty slot in it is worse than the silence this replaced.
+   *
+   * @param {{workspace?: any, servingWorkspace?: any}} [input]
    */
-  function workspaceProblem(input) {
-    if (inOpenWorkspace(input)) return null;
-    const name = workspaceWords(input.workspace);
-    if (!name) return null;
-    return { text: `${OTHER_WORKSPACE.lead} ${OTHER_WORKSPACE.body.replace('{workspace}', () => name)}` };
+  function workspaceNote(input) {
+    if (isServed(input)) return null;
+    const serving = workspaceWords(input.servingWorkspace);
+    if (!serving) return null;
+    return { text: `${NOT_SERVED.lead} ${NOT_SERVED.body.replace('{workspace}', () => serving)}` };
   }
 
   /**
@@ -821,13 +870,13 @@
     // fails without this line. A time against a routine that will never fire
     // is the same false promise the offer is withheld for.
     if (input && input.scheduleReadable === false) return null;
-    // NOR DOES A ROUTINE IN A WORKSPACE THIS WINDOW DOES NOT HAVE OPEN. The
-    // instant is real: it is computed from the schedule alone, so a routine
-    // read out of any workspace arrives carrying its next slot. Drawing it
-    // here would put "Next run: tomorrow, 7:00am" on a routine no scheduler is
-    // going to fire, which is the exact reassurance the reader came for and
-    // the one this row must not give. The line below takes its place.
-    if (!inOpenWorkspace(input)) return null;
+    // NOR DOES A ROUTINE THE SCHEDULER HAS MOVED AWAY FROM. The instant is
+    // real: it is computed from the schedule alone, so a routine read out of
+    // any workspace arrives carrying its next slot. Drawing it here would put
+    // "Next run: tomorrow, 7:00am" on a routine nothing is going to fire,
+    // which is the exact reassurance the reader came for and the one this row
+    // must not give. The note below takes its place.
+    if (!isServed(input)) return null;
     const words = timeWords(input && input.nextRun, input && input.now, input && input.zone);
     if (!words) return null;
     return { text: `Next run: ${words}`, className: 'next-run' };
@@ -910,10 +959,10 @@
       // The one thing on a row that is neither history nor a promise: a fault
       // in the routine itself, which only the person who wrote the file can fix.
       scheduleProblem: scheduleProblem(input),
-      // Where this routine actually is, said only when that is not where the
-      // reader is. Nothing about the routine is wrong, which is why it is its
-      // own field rather than a second kind of schedule fault.
-      workspaceProblem: workspaceProblem(input),
+      // Where Rundock has gone, said only when it has gone somewhere. Nothing
+      // about the routine is wrong, which is why this is a note of its own
+      // rather than a second kind of schedule fault.
+      workspaceNote: workspaceNote(input),
     };
   }
 
@@ -941,10 +990,10 @@
   }
 
   return {
-    OUTCOMES, LEAD, EMPTY, ACTION_PROBLEM, NOT_ENABLED, SCHEDULE_PROBLEM, OTHER_WORKSPACE, CATCH_UP_AFTER_MS,
+    OUTCOMES, LEAD, EMPTY, ACTION_PROBLEM, NOT_ENABLED, SCHEDULE_PROBLEM, NOT_SERVED, CATCH_UP_AFTER_MS,
     actionProblem, emptyState, header,
     dayWords, clockWords, zoneWords, timeWords, workspaceWords,
     scheduleWords, routineSentence, sentenceParts,
-    outcomeOf, lastCompletedRunFailed, anyFailure, runStatus, nextRunLabel, enableOffer, scheduleProblem, inOpenWorkspace, workspaceProblem, somethingElseStopsIt, orderByNextRun, row, deleteConfirmation,
+    outcomeOf, lastCompletedRunFailed, anyFailure, runStatus, nextRunLabel, enableOffer, scheduleProblem, isServed, workspaceNote, somethingElseStopsIt, orderByNextRun, row, deleteConfirmation,
   };
 }));
