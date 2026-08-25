@@ -1171,6 +1171,203 @@ test('closing a restart-orphaned record writes nothing to the value double-fire 
   });
 });
 
+// ===== REACHING A RUN THAT IS STILL GOING =====
+//
+// A routine that has gone wrong is exactly the one somebody wants to stop, and
+// until now the only remedy was quitting the application: the child was a
+// local of the function that spawned it, so nothing outside the run could
+// reach it, and the record had no state for a run somebody stopped.
+//
+// The identity is the RUN's own uuid rather than the routine key, because that
+// is what a record is filed under and the key is neither unique nor stable.
+
+test('a routine whose run is going can be reached from outside it and stopped', async () => {
+  await withTempWorkspaceAsync(async (dir) => {
+    await withTempHomeAsync(async () => {
+      const child = Object.assign(new EventEmitter(), { pid: 4242 });
+      const signalled = [];
+      await withFakeSpawn(() => child, async (sched) => {
+        assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true, 'the run started');
+
+        // IDENTIFIED BEFORE IT IS STOPPED, because a caller outside the run
+        // holds an id and nothing else, and an id that named nothing would
+        // make the stop below unreachable in the product however well it
+        // worked when a test handed it the answer.
+        const live = sched.runningRuns();
+        assert.strictEqual(live.length, 1, 'the run that is going can be listed from outside it');
+        assert.strictEqual(live[0].agent, AGENT.id, 'and says which agent it belongs to');
+        assert.strictEqual(live[0].routine, ROUTINE.name, 'and which routine');
+        assert.strictEqual(live[0].id, runRecords(dir)[0].id,
+          'under the id its record is filed by, which is the run own uuid rather than the routine key');
+
+        assert.strictEqual(sched.cancelRun(live[0].id), true, 'and it can be stopped');
+        assert.deepStrictEqual(signalled, [[child, 'SIGTERM']],
+          'through the handle the run held, and to the whole tree the run started rather than to one process');
+
+        // A signalled child closes with no exit code, which is not the same
+        // event as a child that ran and exited non-zero.
+        child.emit('close', null);
+        assert.ok(await until(() => sched.routineState[KEY].status !== 'running'), 'the run then ended');
+
+        const [record] = runRecords(dir);
+        assert.strictEqual(record.status, 'cancelled',
+          'and the record says somebody stopped it');
+        assert.notStrictEqual(record.status, 'failed',
+          'rather than that it failed, which is a different fact about a different run');
+        assert.strictEqual(record.error, null, 'with no reason, because nothing went wrong');
+        assert.ok(record.endedAt, 'and a real ending: this one was witnessed, unlike a run nobody saw stop');
+        assert.strictEqual(record.filesStatus, 'known',
+          'and what it changed before it was stopped is settled, because the ending ran');
+        assert.strictEqual(sched.routineState[KEY].status, 'cancelled',
+          'the routine state says the same word, so the two stores describe it in one vocabulary');
+        assert.deepStrictEqual(sched.runningRuns(), [],
+          'and a run that has ended is no longer reachable');
+      }, (target, signal) => { signalled.push([target, signal]); });
+    });
+  });
+});
+
+// A cancelled routine that never runs again is worse than one that could not
+// be cancelled, so the single-flight hold has to be released by a stop exactly
+// as it is by an ordinary ending.
+//
+// DRIVEN THROUGH THE TICK, with a real agent file and a real schedule, rather
+// than by asking executeRoutine whether it would start. The hold is what
+// executeRoutine reads, so asking it is close to asking the guard about
+// itself; what the routine is owed is a run at its next slot, and this waits
+// for one.
+test('a routine whose run was stopped fires again at its next slot', async (t) => {
+  await withTempWorkspaceAsync(async (dir) => {
+    await withTempHomeAsync(async () => {
+      writeRoutineAgent(dir, [{ name: 'late', schedule: 'every day at 23:00', prompt: 'p' }]);
+      const children = [];
+      let clock = new Date(2026, 7, 12, 23, 0, 0);
+      await withFakeSpawn(() => {
+        const c = Object.assign(new EventEmitter(), { pid: 1000 + children.length });
+        children.push(c);
+        return c;
+      }, async (sched) => {
+        sched.wireSchedulerDeps({ getWssClients: () => [], now: () => clock });
+        t.mock.timers.enable({ apis: ['setInterval'] });
+        try {
+          sched.startScheduler();
+          t.mock.timers.tick(60_000);
+          assert.strictEqual(children.length, 1, 'the slot fired the routine');
+
+          clock = new Date(2026, 7, 12, 23, 5, 0);
+          const [live] = sched.runningRuns();
+          assert.ok(live, 'the run is reachable');
+          assert.strictEqual(sched.cancelRun(live.id), true, 'and is stopped part way through');
+          children[0].emit('close', null);
+          assert.ok(await until(() => sched.routineState[LATE_KEY].status !== 'running'), 'the run ended');
+          assert.strictEqual(sched.routineState[LATE_KEY].status, 'cancelled', 'as a stop');
+
+          // RELEASED BUT NOT UNSUPPRESSED, and the two are different. A stop
+          // that also cleared the period's stamp would fire the routine again
+          // sixty seconds later, all night.
+          clock = new Date(2026, 7, 12, 23, 30, 0);
+          t.mock.timers.tick(60_000);
+          assert.strictEqual(children.length, 1,
+            'the rest of the period is still held, exactly as it is after any other ending');
+
+          clock = new Date(2026, 7, 13, 23, 0, 0);
+          t.mock.timers.tick(60_000);
+          assert.strictEqual(children.length, 2,
+            'and the next slot fired it, which is what a stop must not cost the routine');
+          children[1].emit('close', 0);
+          assert.ok(await until(() => sched.routineState[LATE_KEY].status !== 'running'), 'and that run ended too');
+        } finally {
+          sched.stopScheduler();
+          t.mock.timers.reset();
+        }
+      }, () => {});
+    });
+  });
+});
+
+// Stopping a run is a request from outside, so it arrives whenever it likes,
+// including after the run it names has already finished. Every one of those is
+// a no, said quietly.
+test('stopping a run that has already ended is harmless', async () => {
+  await withTempWorkspaceAsync(async (dir) => {
+    await withTempHomeAsync(async () => {
+      const child = Object.assign(new EventEmitter(), { pid: 4243 });
+      const signalled = [];
+      await withFakeSpawn(() => child, async (sched) => {
+        assert.strictEqual(sched.cancelRun('a-run-that-never-existed'), false,
+          'an id nothing answers to is refused rather than thrown at');
+
+        assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true, 'a run started');
+        const [live] = sched.runningRuns();
+        await endedAfter(sched, async () => { child.emit('close', 0); });
+
+        const [record] = runRecords(dir);
+        assert.strictEqual(record.status, 'succeeded', 'and reached its own ending first');
+
+        assert.strictEqual(sched.cancelRun(live.id), false,
+          'so stopping it now is refused: there is nothing left to stop');
+        assert.deepStrictEqual(signalled, [],
+          'and nothing was signalled, which matters because that id belonged to a real process');
+        assert.deepStrictEqual(runRecords(dir)[0], record,
+          'the settled record is untouched, still saying how the run really ended');
+        assert.strictEqual(sched.routineState[KEY].status, 'completed',
+          'and so is the routine state');
+      }, (target, signal) => { signalled.push([target, signal]); });
+    });
+  });
+});
+
+// THE OTHER RUNTIME, because a run is a run. A stop that reached only the
+// runtime whose child is a process would leave every routine on the other one
+// exactly as unreachable as both used to be, and nothing would say so.
+//
+// A codex run has no child of its own to signal: it is a turn on the shared
+// app-server, and the way to stop one is the client own interrupt, which ends
+// the turn through the same terminal event every other codex ending arrives
+// by.
+test('a codex routine is stopped through the turn it is running', async () => {
+  await withTempWorkspaceAsync(async (dir) => {
+    await withTempHomeAsync(async () => {
+      const CODEX_AGENT = realCodexAgent(dir);
+      const run = await realCodexRun();
+      const { thread } = run;
+      const sub = new EventEmitter();
+      const interrupted = [];
+      let filedUnder;
+      const server = {
+        startThread: async () => thread,
+        startTurn: (threadId) => { filedUnder = threadId; return sub; },
+        interruptTurn: async (threadId) => { interrupted.push(threadId); },
+      };
+      await withFakeCodex(server, async (sched) => {
+        assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true, 'the run started');
+        assert.ok(await until(() => sub.listenerCount('event') > 0), 'and reached the turn subscription');
+
+        const [live] = sched.runningRuns();
+        assert.ok(live, 'a codex run is reachable from outside it too');
+        assert.strictEqual(sched.cancelRun(live.id), true, 'and can be stopped');
+        assert.ok(await until(() => interrupted.length > 0), 'the turn was interrupted');
+        assert.deepStrictEqual(interrupted, [filedUnder],
+          'on the thread the client filed it under, rather than on an id this test invented');
+
+        // The turn then ends the way the client ends an interrupted one, and
+        // the ending is the client own terminal event rather than one written
+        // here.
+        sub.emit('event', run.done);
+        assert.ok(await until(() => sched.routineState[KEY].status !== 'running'), 'the turn ended');
+        assert.strictEqual(sched.routineState[KEY].status, 'cancelled',
+          'recorded as a stop rather than as a failure, whichever way the turn reported itself');
+        assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true,
+          'and the routine is released, exactly as an ordinary codex ending releases it');
+        await endedAfter(sched, async () => {
+          await until(() => sub.listenerCount('event') > 1);
+          sub.emit('event', run.done);
+        });
+      });
+    });
+  });
+});
+
 // ===== A LOAD THAT MEETS BOTH KINDS OF RUN =====
 //
 // `loadRoutineState` rewrites any persisted entry whose status is 'running' to
