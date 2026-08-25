@@ -1232,7 +1232,7 @@ test('a routine whose child ignores the first stop is released by the second, an
     await withTempHomeAsync(async () => {
       const claude = require(CLAUDE_KEY);
       const realSignaller = claude.killProcessTree;
-      writeRoutineAgent(dir, [{ name: 'late', schedule: 'every day at 23:00', prompt: 'p' }]);
+      writeRoutineAgent(dir, [{ name: 'late', schedule: 'every day at 23:00', prompt: 'p', enabled: true }]);
 
       const spawned = [];
       const trapping = [];
@@ -1770,7 +1770,7 @@ test('a routine whose run is going can be reached from outside it and stopped', 
 test('a routine whose run was stopped fires again at its next slot', async (t) => {
   await withTempWorkspaceAsync(async (dir) => {
     await withTempHomeAsync(async () => {
-      writeRoutineAgent(dir, [{ name: 'late', schedule: 'every day at 23:00', prompt: 'p' }]);
+      writeRoutineAgent(dir, [{ name: 'late', schedule: 'every day at 23:00', prompt: 'p', enabled: true }]);
       const children = [];
       let clock = new Date(2026, 7, 12, 23, 0, 0);
       await withFakeSpawn(() => {

@@ -181,10 +181,11 @@ describe('routine representation', () => {
     assert.strictEqual(typeof off.paused, 'boolean');
     // Quoted, because authors quote things.
     assert.strictEqual(routine({ enabled: '"false"' }).enabled, false);
-    // Absent, and unreadable, both fall back to the meaning files have today.
-    assert.strictEqual(routine({}).enabled, true);
+    // Absent, and unreadable, both fall back to not enabled. See the block
+    // below for why absence is the marker rather than a state of its own.
+    assert.strictEqual(routine({}).enabled, false);
     assert.strictEqual(routine({}).paused, false);
-    assert.strictEqual(routine({ enabled: 'maybe' }).enabled, true);
+    assert.strictEqual(routine({ enabled: 'maybe' }).enabled, false);
   });
 
   test('planApprovedAt and the plan hash are parsed', () => {
@@ -343,7 +344,7 @@ describe('migration of existing routines', () => {
 
     const written = fs.readFileSync(file, 'utf-8');
     assert.ok(written.includes('    runOn: local'), 'runOn not written');
-    assert.ok(written.includes('    enabled: true'), 'enabled not written');
+    assert.ok(written.includes('    enabled: false'), 'enabled not written as not enabled');
     assert.ok(written.includes('    paused: false'), 'paused not written');
 
     const routine = agents.find(a => a.id === AGENT).routines[0];
@@ -394,7 +395,7 @@ describe('migration of existing routines', () => {
     // comes back with it null.
     assert.strictEqual(routine.planHash, computePlanHash(routine));
     assert.strictEqual(routine.runOn, 'local');
-    assert.strictEqual(routine.enabled, true);
+    assert.strictEqual(routine.enabled, false);
     // Rewriting every line in the file to record four keys is not a trade a
     // migration gets to make, so the file keeps its line endings and waits.
     assert.strictEqual(fs.readFileSync(file, 'utf-8'), crlf);
@@ -515,7 +516,10 @@ describe('migration of existing routines', () => {
       // three are what the reader would invent even if migration did nothing.
       assert.strictEqual(routine.planHash, computePlanHash(routine));
       assert.strictEqual(routine.runOn, 'local');
-      assert.strictEqual(routine.enabled, true);
+      // The read-time answer, on the path where the migration's write never
+      // landed. This is the half of the rule a fix applied only to the
+      // migration would leave behind.
+      assert.strictEqual(routine.enabled, false);
       assert.strictEqual(routine.paused, false);
     } finally {
       console.error = realError;
@@ -641,5 +645,107 @@ describe('caller-supplied text is data, not pattern', () => {
     assert.throws(
       () => updateRoutineBlock(FIXTURE, 'morning-digest', { 'pro.*mpt': 'x' }),
       /not a routine field name/);
+  });
+});
+
+// ===== ROUTINES THAT PREDATE THE SCHEDULER =====
+//
+// A routine block with no `enabled` key was written by hand, before anything
+// in this product could run it, next to a cron job that was doing the work.
+// The editor has written the key from birth since the routine model shipped,
+// so key absence is already the marker: nothing has to guess from run records
+// or from an empty state directory.
+//
+// THE RULE IS UNIFORM, at read time and at migration alike, and the two halves
+// are asserted separately here because only one of them is reachable on the
+// path that matters. The migration returns migrated content whether or not the
+// write lands, so a workspace nobody can write to gets the reader's answer and
+// nothing else. A fix that changed only the value the migration fills in would
+// pass every assertion in this block except the last one.
+describe('a routine that predates the scheduler', () => {
+  after(cleanup);
+
+  const AGENT = 'content-lead';
+
+  function predatingWorkspace(routines) {
+    const dir = makeWorkspace({
+      agents: {
+        [AGENT]: agentFile({
+          name: AGENT, displayName: 'Penn', role: 'Content Lead',
+          type: 'specialist', order: 2, routines,
+        }),
+      },
+    });
+    srv.setWorkspace(dir);
+    srv.invalidateAgentCache();
+    return {
+      file: path.join(dir, '.claude', 'agents', `${AGENT}.md`),
+      read: () => {
+        srv.invalidateAgentCache();
+        return srv.discoverAgents().find(a => a.id === AGENT).routines;
+      },
+    };
+  }
+
+  test('an absent enabled reads as not enabled', () => {
+    assert.strictEqual(normalizeRoutine({ name: 'r' }).enabled, false);
+  });
+
+  // AC-3. Absent and false are the same to the scheduler and different to the
+  // user, so the value somebody typed survives in both directions. The cheap
+  // version of this card forces every unmigrated block to false and switches
+  // off a routine whose file already says it should run.
+  test('an enabled already in the file is preserved at the value it was written as', () => {
+    const w = predatingWorkspace([
+      { name: 'wanted', schedule: 'every day at 08:00', prompt: 'p', enabled: true },
+      { name: 'refused', schedule: 'every day at 09:00', prompt: 'p', enabled: false },
+      { name: 'silent', schedule: 'every day at 10:00', prompt: 'p' },
+    ]);
+    const before = fs.readFileSync(w.file, 'utf-8');
+    assert.ok(before.includes('    enabled: true'), 'the fixture does not carry an explicit true');
+    assert.ok(before.includes('    enabled: false'), 'the fixture does not carry an explicit false');
+
+    const byName = Object.fromEntries(w.read().map(r => [r.name, r]));
+    assert.strictEqual(byName.wanted.enabled, true);
+    assert.strictEqual(byName.refused.enabled, false);
+    assert.strictEqual(byName.silent.enabled, false);
+
+    // And on disk, after the migration has been through it: the block that
+    // said true still says true, and the one that said nothing now says so
+    // out loud rather than staying a silence somebody has to interpret.
+    const after = fs.readFileSync(w.file, 'utf-8');
+    const block = (name) => {
+      const lines = after.split('\n');
+      const start = lines.findIndex(l => l.trim() === `- name: ${name}`);
+      const rest = lines.slice(start + 1);
+      const end = rest.findIndex(l => /^\s*- name:/.test(l));
+      return (end === -1 ? rest : rest.slice(0, end)).join('\n');
+    };
+    assert.match(block('wanted'), /enabled: true/);
+    assert.match(block('refused'), /enabled: false/);
+    assert.match(block('silent'), /enabled: false/);
+  });
+
+  // AC-4, at the data model. The scheduler-level proof is in
+  // test/integration/scheduler-predating-routines.test.js, which drives a real
+  // tick against a workspace that cannot be written to.
+  test('a workspace that cannot be written to still reads its routines as not enabled', () => {
+    const w = predatingWorkspace([{ name: 'silent', schedule: 'every day at 08:00', prompt: 'p' }]);
+    const before = fs.readFileSync(w.file, 'utf-8');
+    fs.chmodSync(w.file, 0o444);
+    const errors = [];
+    const realError = console.error;
+    console.error = (...args) => errors.push(args.join(' '));
+    try {
+      assert.strictEqual(w.read()[0].enabled, false);
+    } finally {
+      console.error = realError;
+      fs.chmodSync(w.file, 0o644);
+    }
+    // The precondition, asserted rather than assumed: if the write HAD landed,
+    // this test would be reading a migrated file and proving nothing about the
+    // path it exists for.
+    assert.strictEqual(fs.readFileSync(w.file, 'utf-8'), before, 'the unwritable file changed');
+    assert.ok(errors.some(e => /migrate/.test(e)), `nothing was logged, saw: ${JSON.stringify(errors)}`);
   });
 });
