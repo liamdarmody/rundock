@@ -52,9 +52,17 @@ function statusesARunRecordCanCarry() {
   const src = read('lib', 'scheduler.js');
   const found = new Set();
   for (const call of src.matchAll(/recordRoutineRun\(key, \{[\s\S]*?\}\)/g)) {
-    for (const m of call[0].matchAll(/status:\s*(?:\w+\s*\?\s*)?'(\w+)'(?:\s*:\s*'(\w+)')?/g)) {
-      found.add(m[1]);
-      if (m[2]) found.add(m[2]);
+    // EVERY QUOTED WORD ON THE STATUS LINE, however many the writer chooses
+    // between. This used to match one word, or two either side of a single
+    // question mark, which was the shape the two writers happened to have. A
+    // writer that chose between three stopped matching at all and this walk
+    // went quietly blind to the outcome it records most often, while still
+    // reporting a list and still passing. A walk that names fewer statuses
+    // than the file writes is worse than no walk, because the test it feeds
+    // reads as covering all of them.
+    for (const line of call[0].split('\n')) {
+      if (!/\bstatus:/.test(line)) continue;
+      for (const m of line.matchAll(/'(\w+)'/g)) found.add(m[1]);
     }
   }
   // The startup sweep, which is the only writer that does not go through the
@@ -191,9 +199,18 @@ describe('the profile is three boxes', () => {
   // the word reaching any part of this profile is the fault.
   test('no status a run record can carry reaches the page', () => {
     const statuses = statusesARunRecordCanCarry();
+    // NAMED IN BOTH DIRECTIONS. The walk reads the statuses out of the source,
+    // and these read the statuses back at it, so neither a word dropped from
+    // the file nor a walk that stops seeing one can pass unnoticed. The two
+    // named here are the ones nothing else in the product renders, which makes
+    // them the likeliest to be leaked raw by a surface that never met them.
     assert.ok(statuses.includes('interrupted'),
-      'sanity: the status the restarted-run card introduced is not in the list this walk drives');
-    assert.ok(statuses.length >= 4,
+      'sanity: the status a run the process died inside carries is not in the list this walk drives');
+    assert.ok(statuses.includes('cancelled'),
+      'sanity: the status a run somebody stopped carries is not in the list this walk drives');
+    assert.ok(statuses.includes('completed'),
+      'sanity: the ordinary outcome is not in the list, so the walk has stopped reading the writer');
+    assert.ok(statuses.length >= 5,
       `sanity: only ${statuses.length} statuses were found, so this walk is reading the wrong thing`);
 
     for (const status of statuses) {
