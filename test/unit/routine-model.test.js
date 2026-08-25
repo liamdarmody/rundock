@@ -691,28 +691,35 @@ describe('a routine that predates the scheduler', () => {
     assert.strictEqual(normalizeRoutine({ name: 'r' }).enabled, false);
   });
 
-  // TRUE AND FALSE ARE THE ONLY WORDS THIS READS, and everything else falls
-  // back rather than being guessed at. YAML 1.1 would call `yes` and `on`
-  // booleans, and somebody may reasonably type one; this does not accept them,
-  // so such a routine is held back and its row offers to turn it on.
+  // EVERY SPELLING YAML CALLS A BOOLEAN IS READ AS ONE.
   //
-  // Pinned because the fallback moved. While an absent key meant enabled, an
-  // unreadable one did too, so no spelling could be held back by being
-  // misread. Now it can, and which spellings work is a promise rather than an
-  // accident. The direction is the safe one: an unrecognised value stops a
-  // routine rather than starting one nobody asked for, and the row says so.
-  for (const spelling of ['yes', 'on', '1']) {
-    test(`enabled: ${spelling} is not a word this reads, so the routine waits`, () => {
-      assert.strictEqual(normalizeRoutine({ name: 'r', enabled: spelling }).enabled, false);
+  // This matters because the fallback moved. While an absent key meant
+  // enabled, an unrecognised value meant enabled too, so no spelling could be
+  // held back by being misread. Now one can, and `yes` and `on` are booleans
+  // in YAML 1.1 that somebody may reasonably type. Reading them as anything
+  // other than true would take a routine its author deliberately switched on
+  // and switch it off on upgrade, which is the over-correction this whole
+  // rule exists to avoid.
+  //
+  // The same words are read for `paused`, where they were silently ignored
+  // before: `paused: yes` left a routine running.
+  for (const [spelling, expected] of [
+    ['true', true], ['yes', true], ['on', true], ['TRUE', true], ['Yes', true], ['"on"', true],
+    ['false', false], ['no', false], ['off', false], ['NO', false], ['"off"', false],
+  ]) {
+    test(`${spelling} reads as ${expected}`, () => {
+      assert.strictEqual(normalizeRoutine({ name: 'r', enabled: spelling }).enabled, expected);
+      assert.strictEqual(normalizeRoutine({ name: 'r', paused: spelling }).paused, expected);
     });
   }
 
-  test('true and false are read whatever their case or quoting', () => {
-    assert.strictEqual(normalizeRoutine({ name: 'r', enabled: 'true' }).enabled, true);
-    assert.strictEqual(normalizeRoutine({ name: 'r', enabled: 'TRUE' }).enabled, true);
-    assert.strictEqual(normalizeRoutine({ name: 'r', enabled: '"true"' }).enabled, true);
-    assert.strictEqual(normalizeRoutine({ name: 'r', enabled: 'false' }).enabled, false);
-  });
+  // Anything that is not a boolean in any spelling still falls back, and the
+  // fallback is the safe direction: a routine waits rather than starting.
+  for (const nonsense of ['maybe', '1', 'sometimes']) {
+    test(`enabled: ${nonsense} is not a boolean, so the routine waits`, () => {
+      assert.strictEqual(normalizeRoutine({ name: 'r', enabled: nonsense }).enabled, false);
+    });
+  }
 
   // AC-3. Absent and false are the same to the scheduler and different to the
   // user, so the value somebody typed survives in both directions. The cheap
