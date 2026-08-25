@@ -36,6 +36,13 @@ scripts/screenshots/.banned-tokens.json
 # Local pre-commit gate record: names the tree the checks passed on.
 .precommit-gate.json
 
+# Written while a mutation harness holds a source file broken, and removed when
+# it puts the file back. It survives only a run that was killed outright, which
+# is exactly when it is read: the next run stops and names the files that may
+# still hold a mutation. Ignored because a record of a run that went wrong must
+# never itself be the thing `git add -A` sweeps into a commit.
+.mutation-run.json
+
 # Per-workspace scratch and local state Rundock writes into a workspace it has
 # opened. A checkout is itself a plausible workspace, so this directory appears
 # here during ordinary use and during development, and nothing in it belongs to
