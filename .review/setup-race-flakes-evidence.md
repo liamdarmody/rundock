@@ -184,6 +184,22 @@ what independently contended load produces: occasional, not reproducible on dema
 and not concentrated on any one test. It is recorded here rather than quietly
 excluded because AC-3 asks for a tally, not a cherry-picked one.
 
+## Red first
+
+`node scripts/red-first.js --base origin/main --tests "npm test"` on the committed
+tree returns `NOT-DISCRIMINATING`, with `sourceFiles: 1`, `testFiles: 2`,
+`testsPassedWithChange: 2420`, `testsFailedWithoutChange: 0`.
+
+Same shape as `.review/fixture-cleanup-evidence.md`'s own red-first section, and the
+same reason: `isTest()` classifies anything under a `test/` path segment as a test, so
+the one file the tool reverted is this evidence document, not code. Deleting a
+markdown file does not break the suite, so the tests pass exactly the same reverted as
+they do with the change, and NOT-DISCRIMINATING is the true, if misleading-sounding,
+verdict for that experiment. It says nothing about the two test files, which is where
+the actual behaviour change and the AC-5 breaks above live. Recorded here rather than
+worked around, per the original instruction to report a verdict the tool cannot earn
+plainly rather than route past it.
+
 ## Command reference
 
 ```
