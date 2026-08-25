@@ -30,7 +30,15 @@
  *
  * USAGE
  *
- *   node scripts/red-first.js --base main --tests "npm test"
+ *   node scripts/red-first.js --tests "npm test"
+ *
+ * WITH NO --base, which is the invocation to use. The base is worked out from
+ * the refs that cannot have drifted behind this branch's fork point, because a
+ * branch name can: a git worktree does not move the local ref another worktree
+ * has checked out, and reverting against a stale one takes away work that had
+ * already merged and reports its tests as proof of this change. See
+ * resolveBase. Pass --base only to measure against something other than the
+ * trunk, and expect a refusal if it reaches past the fork point.
  *
  * Exit 0 only when discrimination is proven. Every other outcome is non-zero
  * and names itself, because "it failed" cannot distinguish a weak test from a
@@ -154,6 +162,104 @@ function existsAt(repo, ref, file) {
   } catch {
     return false;
   }
+}
+
+// The names a repository's trunk can go by, in the order it is asked about
+// them.
+const TRUNK_NAMES = ['main', 'master'];
+
+// The commit a ref names, or null where this repository has no such ref.
+function shaOf(repo, ref) {
+  try {
+    return execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`],
+      { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function remotesOf(repo) {
+  return git(repo, ['remote']).split('\n').map(s => s.trim()).filter(Boolean);
+}
+
+/**
+ * The ref naming the trunk on one remote, or null if that remote has none.
+ *
+ * `<remote>/HEAD` is the remote's own answer to which branch is its trunk, so
+ * it is asked first and the guessing below only runs where the repository has
+ * never been told.
+ */
+function remoteTrunk(repo, remote) {
+  let head = null;
+  try {
+    head = execFileSync('git', ['symbolic-ref', '--quiet', `refs/remotes/${remote}/HEAD`],
+      { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch (e) {
+    head = null;
+  }
+  if (head) return head.replace(/^refs\/remotes\//, '');
+  for (const name of TRUNK_NAMES) {
+    if (shaOf(repo, `${remote}/${name}`)) return `${remote}/${name}`;
+  }
+  return null;
+}
+
+/**
+ * Which ref this run reverts against, or a refusal saying why there is none.
+ *
+ * @returns {{ok: true, ref: string}|{ok: false, reason: string}}
+ *
+ * WHY THE DEFAULT IS NOT `main`. Branches here are built in git worktrees cut
+ * from the published trunk, and a worktree does not move the local branch ref
+ * that another worktree has checked out. The local `main` in one checkout
+ * therefore sits wherever its owner last left it, which can be behind the
+ * commit this branch was actually cut from. Reverting against it takes away
+ * work that had already merged, that work's tests go red, and the run reports
+ * PROVEN for a change that proved nothing. Measured, not imagined: a three-file
+ * change with no test of its own reported PROVEN on two tests belonging to
+ * somebody else's merge, and the verdict line, the exit code and the record
+ * were indistinguishable from a genuine pass.
+ *
+ * A remote-tracking ref cannot drift that way. Nothing local moves it, and it
+ * only ever changes when the repository is told what the remote holds.
+ *
+ * REFUSING RATHER THAN FALLING BACK. Where no ref can be shown not to have
+ * drifted, this refuses and names the flag rather than guessing. Naming the
+ * base costs one flag; a verdict measured against the wrong tree cannot be
+ * recovered by reading the output, which is the whole of the defect above.
+ *
+ * A repository with no remote at all is the exception, and it is not a
+ * loophole: there is nothing for its local trunk to drift against, and
+ * refusing there would take the tool away from every checkout without a remote,
+ * including the throwaway ones its own tests build.
+ */
+function resolveBase(repo, requested) {
+  if (requested) return { ok: true, ref: requested };
+
+  const remotes = remotesOf(repo);
+  const trunks = [];
+  for (const remote of remotes) {
+    const trunk = remoteTrunk(repo, remote);
+    if (trunk) trunks.push(trunk);
+  }
+  // origin first, because a repository that has one and something else is
+  // naming its own default by having it; otherwise the only trunk there is.
+  const chosen = trunks.find(t => t.startsWith('origin/'))
+    || (trunks.length === 1 ? trunks[0] : null);
+  if (chosen) return { ok: true, ref: chosen };
+
+  if (remotes.length) {
+    return { ok: false, reason: 'there is no single remote-tracking trunk to measure '
+      + `against (remotes: ${remotes.join(', ')}; trunks found: ${trunks.join(', ') || 'none'}). `
+      + 'Only a remote-tracking ref can be shown not to have drifted behind the point '
+      + 'this branch was cut from, so name the one you mean with --base <remote>/<branch>.' };
+  }
+
+  const local = TRUNK_NAMES.filter(n => shaOf(repo, `refs/heads/${n}`));
+  if (local.length === 1) return { ok: true, ref: local[0] };
+  return { ok: false, reason: 'this repository has no remote, and no single local '
+    + `${TRUNK_NAMES.join(' or ')} branch to fall back to (found: ${local.join(', ') || 'none'}). `
+    + 'Name the base with --base.' };
 }
 
 /**
@@ -416,15 +522,23 @@ function claimRun(repo, tests) {
 
 /**
  * @returns {{outcome: 'proven'|'not-discriminating'|'inconclusive'|'not-provable'|'refused',
- *            reason: string, passedWithChange: boolean|null,
+ *            reason: string, base: string|null, passedWithChange: boolean|null,
  *            failedWithoutChange: boolean|null, testsPassedWithChange: number|null,
  *            testsFailedWithoutChange: number|null, namesFailedWithoutChange: string[],
  *            source: string[], tests: string[], limitation: string}}
+ *
+ * `base` defaults to null rather than to a branch name, which means "work out
+ * which ref cannot have drifted". See resolveBase for why a literal default was
+ * the wrong one.
  */
-async function redFirst({ repo, base = 'main', tests, log = () => {}, runner = null,
+async function redFirst({ repo, base = null, tests, log = () => {}, runner = null,
   groupEnder = endGroup }) {
+  // The ref this run settled on, once it has. Held out here rather than passed
+  // to each result, so no exit can report an outcome without saying what it was
+  // measured against: that omission is how the incident stayed invisible.
+  let baseRef = null;
   const result = (outcome, reason, extra = {}) => ({
-    outcome, reason, passedWithChange: null, failedWithoutChange: null,
+    outcome, reason, base: baseRef, passedWithChange: null, failedWithoutChange: null,
     testsPassedWithChange: null, testsFailedWithoutChange: null, namesFailedWithoutChange: [],
     source: [], tests: [], limitation: LIMITATION, ...extra,
   });
@@ -661,7 +775,15 @@ async function redFirst({ repo, base = 'main', tests, log = () => {}, runner = n
         + 'rewrites tracked files; commit or stash first');
     }
 
-    const mergeBase = git(repo, ['merge-base', base, 'HEAD']);
+    const resolved = resolveBase(repo, base);
+    if (!resolved.ok) return result('refused', resolved.reason);
+    baseRef = resolved.ref;
+    // Printed, not merely returned. The incident this guards against was
+    // readable only from a file count inside the record, and a run whose base
+    // is not on screen cannot be checked by the person reading the verdict.
+    log(`measuring against ${baseRef}`);
+
+    const mergeBase = git(repo, ['merge-base', baseRef, 'HEAD']);
     // --no-renames, and it is not a detail. With rename detection on, a renamed
     // file is reported once, under its NEW path. restoreTo then asks whether
     // that path exists at the base, finds it does not, and deletes it. The
@@ -674,7 +796,7 @@ async function redFirst({ repo, base = 'main', tests, log = () => {}, runner = n
     const testFiles = changed.filter(isTest);
     sourceFiles = changed.filter(f => !isTest(f));
 
-    if (!changed.length) return result('not-provable', `nothing changed against ${base}`);
+    if (!changed.length) return result('not-provable', `nothing changed against ${baseRef}`);
     if (!testFiles.length) {
       return result('not-provable', 'the change adds no tests, so there is nothing '
         + 'to prove; that is its own finding', { source: sourceFiles, tests: [] });
@@ -761,6 +883,10 @@ function recordOutcome(repo, outcome) {
   record.redFirst = {
     outcome: outcome.outcome,
     reason: outcome.reason,
+    // What it was measured against. A verdict without its base cannot be
+    // checked at all: the record that carried the false PROVEN named counts and
+    // test names, and every one of them was true of a different branch's work.
+    base: outcome.base,
     // AC-6 names test counts. File counts are a different quantity and were
     // written here first, which is the proxy-for-the-property fault this whole
     // check exists to catch, committed inside the check itself.
@@ -786,7 +912,10 @@ async function main() {
   const repo = path.resolve(arg('repo', process.cwd()));
   const outcome = await redFirst({
     repo,
-    base: arg('base', 'main'),
+    // No literal default. Left off, the base is worked out from the refs that
+    // cannot have drifted behind this branch's fork point, which is what a
+    // worktree needs and what a branch name cannot promise.
+    base: arg('base', null),
     tests: arg('tests', 'npm test'),
     log: (m) => console.log(`[red-first] ${m}`),
   });
