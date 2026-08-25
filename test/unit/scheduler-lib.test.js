@@ -1216,8 +1216,14 @@ test('a routine whose run is going can be reached from outside it and stopped', 
           'rather than that it failed, which is a different fact about a different run');
         assert.strictEqual(record.error, null, 'with no reason, because nothing went wrong');
         assert.ok(record.endedAt, 'and a real ending: this one was witnessed, unlike a run nobody saw stop');
-        assert.strictEqual(record.filesStatus, 'known',
-          'and what it changed before it was stopped is settled, because the ending ran');
+        assert.strictEqual(typeof record.durationMs, 'number', 'of a known length, for the same reason');
+        // The ending really ran, which is what separates a stopped run from an
+        // abandoned one. There is no transcript in this fixture, so 'unknown'
+        // is the honest answer to what it changed; what matters is that the
+        // reason is the observation's rather than the untrue 'running' the
+        // opening wrote.
+        assert.strictEqual(record.filesReason, 'no-transcript',
+          'and the ending settled what it changed, rather than leaving the opening untrue "running"');
         assert.strictEqual(sched.routineState[KEY].status, 'cancelled',
           'the routine state says the same word, so the two stores describe it in one vocabulary');
         assert.deepStrictEqual(sched.runningRuns(), [],
