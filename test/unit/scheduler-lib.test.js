@@ -154,25 +154,40 @@ async function until(predicate, tries = 200) {
 //
 // `fakeKill` is the signal a stop sends, stood in for the same way and for a
 // sharper reason than the spawn. A stand-in child carries whatever process id
-// the test gave it, and the real signaller would send SIGTERM to that id on the
-// machine running the suite. Optional, because only the tests that stop a run
-// need it, and the real signaller is restored either way.
+// the test gave it, and the real signaller would send SIGTERM to that id on
+// the machine running the suite, where it belongs to something else entirely.
+//
+// THE REAL SIGNALLER IS NEVER LEFT IN PLACE, whether a test asked for a
+// stand-in or not. Leaving it for the tests that do not stop a run makes the
+// hazard depend on a caller remembering a trailing argument, and the caller
+// who forgets is by definition the one who just wrote a test that stops a run.
+// A test that omits it gets a stand-in that records instead, and reaching that
+// stand-in is reported as a failure of that test once the real one is back.
+// Deliberately checked after the restore rather than thrown from inside the
+// signaller: a stop swallows what its signaller throws, on purpose, so a throw
+// raised there would be logged and the test would pass.
 async function withFakeSpawn(fakeSpawn, fn, fakeKill) {
   const claude = require(CLAUDE_KEY);
   const realSpawn = claude.spawnClaude;
   const realKill = claude.killProcessTree;
   const prevClaudeDeps = claude.wireClaudeRuntimeDeps({ getActualPort: () => 0 });
+  const unclaimedStops = [];
   claude.spawnClaude = fakeSpawn;
-  if (fakeKill) claude.killProcessTree = fakeKill;
+  claude.killProcessTree = fakeKill || ((target, signal) => { unclaimedStops.push([target, signal]); });
+  let result;
   try {
     const sched = freshScheduler();
     sched.wireSchedulerDeps({ getWssClients: () => [] });
-    return await fn(sched);
+    result = await fn(sched);
   } finally {
     claude.spawnClaude = realSpawn;
     claude.killProcessTree = realKill;
     claude.wireClaudeRuntimeDeps(prevClaudeDeps);
   }
+  assert.deepStrictEqual(unclaimedStops, [],
+    'this test stopped a run without standing in for the signaller, so with the stand-in absent it '
+    + 'would have signalled that process id on the machine running the suite');
+  return result;
 }
 
 // A scheduler whose codex app-server is the test's to drive.

@@ -23,6 +23,7 @@ const path = require('node:path');
 const promptLib = require('../../lib/agents/prompt.js');
 const { _internal: srv } = require('../../server.js');
 const { makeWorkspace, standardTeam, cleanup } = require('../helpers/workspace.js');
+const { statusesTheSchedulerRecords } = require('../helpers/scheduler-statuses.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 after(cleanup);
@@ -343,21 +344,13 @@ describe('ROUTINES.md: the hook experiment reports the capture\'s own numbers', 
   // line on the page fails, and a line on the page for a word nothing writes
   // fails too.
   test('every status the scheduler can record is named on the page, and every one named is recorded', () => {
-    const src = fs.readFileSync(path.join(ROOT, 'lib', 'scheduler.js'), 'utf-8');
-    const written = new Set();
-    for (const call of src.matchAll(/recordRoutineRun\(key, \{[\s\S]*?\}\)/g)) {
-      for (const line of call[0].split('\n')) {
-        if (!/\bstatus:/.test(line)) continue;
-        for (const m of line.matchAll(/'(\w+)'/g)) written.add(m[1]);
-      }
-    }
-    for (const m of src.matchAll(/state\.status = '(\w+)'/g)) written.add(m[1]);
-    assert.ok(written.size >= 5, `sanity: only ${written.size} statuses were read out of the scheduler`);
+    const written = statusesTheSchedulerRecords();
+    assert.ok(written.length >= 5, `sanity: only ${written.length} statuses were read out of the scheduler`);
 
     const listed = routinesDoc.match(/The routine's `status` \(([^)]*)\)/);
     assert.ok(listed, 'ROUTINES.md must list the statuses a routine can carry');
     const named = new Set([...listed[1].matchAll(/`(\w+)`/g)].map(m => m[1]));
-    assert.deepStrictEqual([...named].sort(), [...written].sort(),
+    assert.deepStrictEqual([...named].sort(), written,
       'the statuses the scheduler records and the statuses the page names have to be the same set');
   });
 

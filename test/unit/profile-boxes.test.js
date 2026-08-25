@@ -21,6 +21,7 @@
 // screenshot somebody notices later.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
+const { statusesTheSchedulerRecords } = require('../helpers/scheduler-statuses.js');
 const fs = require('node:fs');
 const path = require('node:path');
 const { JSDOM } = require('jsdom');
@@ -48,28 +49,6 @@ const BOXES = ['Skills', 'Routines', 'Configuration'];
  * appearing anywhere else in that file is a gap this cannot see and the
  * sanity check below is what bounds it.
  */
-function statusesARunRecordCanCarry() {
-  const src = read('lib', 'scheduler.js');
-  const found = new Set();
-  for (const call of src.matchAll(/recordRoutineRun\(key, \{[\s\S]*?\}\)/g)) {
-    // EVERY QUOTED WORD ON THE STATUS LINE, however many the writer chooses
-    // between. This used to match one word, or two either side of a single
-    // question mark, which was the shape the two writers happened to have. A
-    // writer that chose between three stopped matching at all and this walk
-    // went quietly blind to the outcome it records most often, while still
-    // reporting a list and still passing. A walk that names fewer statuses
-    // than the file writes is worse than no walk, because the test it feeds
-    // reads as covering all of them.
-    for (const line of call[0].split('\n')) {
-      if (!/\bstatus:/.test(line)) continue;
-      for (const m of line.matchAll(/'(\w+)'/g)) found.add(m[1]);
-    }
-  }
-  // The startup sweep, which is the only writer that does not go through the
-  // recorder, and the one that produces the word the defect printed.
-  for (const m of src.matchAll(/state\.status = '(\w+)'/g)) found.add(m[1]);
-  return [...found].sort();
-}
 
 const ROUTINES = [
   { name: 'Compile the ops summary', schedule: 'every day at 07:00', state: null },
@@ -198,7 +177,7 @@ describe('the profile is three boxes', () => {
   // going. The assertion is on the WHOLE page rather than on the row, because
   // the word reaching any part of this profile is the fault.
   test('no status a run record can carry reaches the page', () => {
-    const statuses = statusesARunRecordCanCarry();
+    const statuses = statusesTheSchedulerRecords();
     // NAMED IN BOTH DIRECTIONS. The walk reads the statuses out of the source,
     // and these read the statuses back at it, so neither a word dropped from
     // the file nor a walk that stops seeing one can pass unnoticed. The two
