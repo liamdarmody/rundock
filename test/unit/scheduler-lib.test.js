@@ -1186,6 +1186,114 @@ test('closing a restart-orphaned record writes nothing to the value double-fire 
   });
 });
 
+// ===== THE STOP, AGAINST THE SIGNALLER THAT REALLY SENDS IT =====
+//
+// The other runtime's stop is pinned against the real client because a wrong
+// method name is swallowed, logged, and the run recorded as stopped while it
+// goes on running. This runtime has the same hazard and needs the same proof:
+// every other test here stands the signaller in, deliberately, so nothing else
+// in this file shows that the name the scheduler imports exists, that it takes
+// a child handle rather than only a process id, or that signalling through it
+// produces the close the ending depends on.
+//
+// So this one uses the real export against a real child. The child is a node
+// process of the suite's own making rather than anything resembling an agent:
+// what is under test is the signalling, not what is signalled.
+test('the signaller the scheduler imports is real, takes a child handle, and ends the run', async () => {
+  await withTempWorkspaceAsync(async (dir) => {
+    await withTempHomeAsync(async () => {
+      // THE EXPORT ITSELF, resolved unstubbed, under the name the scheduler
+      // destructures. A rename in the runtime module leaves this undefined,
+      // and leaves the scheduler's own binding undefined with it.
+      const claude = require(CLAUDE_KEY);
+      assert.strictEqual(typeof claude.killProcessTree, 'function',
+        'the name the scheduler imports as its signaller is not a function on the runtime module');
+      const realSignaller = claude.killProcessTree;
+
+      // A child that will not exit on its own, so the close below can only
+      // have come from the signal. Detached, which is what the signaller
+      // relies on to reach a whole process group.
+      const spawned = [];
+      const spawnRealChild = () => {
+        const proc = require('node:child_process').spawn(
+          process.execPath, ['-e', 'setInterval(() => {}, 100000)'],
+          { detached: true, stdio: 'ignore' },
+        );
+        spawned.push(proc);
+        return proc;
+      };
+
+      try {
+        // The real export is handed in deliberately, so the scheduler's own
+        // destructured binding is the real function rather than a stand-in.
+        await withFakeSpawn(spawnRealChild, async (sched) => {
+          assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true, 'the run started');
+          assert.strictEqual(spawned.length, 1, 'and really spawned a child');
+          assert.ok(spawned[0].pid, 'with a process id, which is what a signal needs');
+          assert.strictEqual(runRecords(dir)[0].status, 'running', 'its record is open');
+
+          const [live] = sched.runningRuns();
+          assert.ok(live, 'the run is reachable');
+          assert.strictEqual(sched.cancelRun(live.id), true, 'and is stopped');
+
+          // Nothing here emits a close. If the signal did not reach the child,
+          // this waits out its tries and fails, which is the whole point.
+          assert.ok(await until(() => sched.routineState[KEY].status !== 'running', 600),
+            'the child really ended, so the signal reached it through the handle it was given');
+          assert.strictEqual(sched.routineState[KEY].status, 'cancelled', 'recorded as a stop');
+          assert.strictEqual(runRecords(dir)[0].status, 'cancelled', 'in the record too');
+          assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true, 'and the routine was released');
+          await endedAfter(sched, async () => {
+            const next = sched.runningRuns()[0];
+            assert.ok(next, 'the second run is reachable');
+            sched.cancelRun(next.id);
+          });
+        }, realSignaller);
+      } finally {
+        for (const proc of spawned) { try { process.kill(-proc.pid, 'SIGKILL'); } catch (e) { /* already gone */ } }
+      }
+    });
+  });
+});
+
+// WHAT 'cancelled' CLAIMS, pinned rather than left to be inferred from the one
+// path where a stop plainly worked.
+//
+// The word means a stop was asked for before the run ended. It does not claim
+// the stop is what ended it, and nothing in the scheduler could support the
+// stronger reading: the signal is delivered by the operating system and the
+// ending is whatever the child reports. This drives the case furthest from the
+// stronger reading, where the signal never left at all and the child then
+// exited successfully of its own accord, so that the meaning cannot be
+// quietly narrowed later without this turning red.
+test('a run whose stop never left, and which then ends well, still reads as stopped', async () => {
+  await withTempWorkspaceAsync(async (dir) => {
+    await withTempHomeAsync(async () => {
+      const child = Object.assign(new EventEmitter(), { pid: 4245 });
+      let attempts = 0;
+      await withFakeSpawn(() => child, async (sched) => {
+        assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true, 'the run started');
+        const [live] = sched.runningRuns();
+
+        assert.strictEqual(sched.cancelRun(live.id), true, 'a stop was asked for');
+        assert.strictEqual(attempts, 1, 'and reached the signaller');
+
+        // The child exits ZERO, on its own, untouched: the signal never left,
+        // so nothing about this ending was caused by the stop.
+        child.emit('close', 0);
+        assert.ok(await until(() => sched.routineState[KEY].status !== 'running'), 'the run ended');
+
+        assert.strictEqual(runRecords(dir)[0].status, 'cancelled',
+          'and reads as stopped, because a stop was asked for before it ended');
+        assert.notStrictEqual(runRecords(dir)[0].status, 'succeeded',
+          'rather than as a run nobody had asked to stop, which is the reading this word does not carry');
+        assert.strictEqual(sched.routineState[KEY].status, 'cancelled',
+          'with both stores saying the same thing about it');
+      }, () => { attempts += 1; throw new Error('no such process'); });
+    });
+  });
+});
+
 // ===== THE STOP, AGAINST THE CLIENT THAT REALLY RECEIVES IT =====
 //
 // The codex stopper calls a method on whatever getCodexAppServer returned. A
