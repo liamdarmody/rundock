@@ -22,19 +22,19 @@ Routines are a Rundock concept. The `routines:` array is read by Rundock's sched
 
 ## Frontmatter reference
 
-Each entry in the `routines:` array is a YAML object with four fields. The parser is `parseRoutines` in `lib/agents/discovery.js`. It splits the array on `  - name:` markers, reads each indented `key: value` line within a block, and pushes the result if a `name` was found. Anything else in the block is silently dropped.
+Each entry in the `routines:` array is a YAML object with five fields. The parser is `parseRoutines` in `lib/agents/discovery.js`. It splits the array on `  - name:` markers, reads each indented `key: value` line within a block, and pushes the result if a `name` was found. Anything else in the block is silently dropped.
 
 | Field | Type | Scope | Required | Purpose | Example |
 |---|---|---|---|---|---|
 | `name` | string | Rundock-only | Yes | Display name for the routine. Shown in the Routines panel, on the agent profile, and in the scheduler logs. Required: a routine without a `name` is dropped during parse. | `name: Morning briefing` |
-| `schedule` | string | Rundock-only | Yes | When the routine runs. Accepts only the human-readable forms documented below. The scheduler ignores routines with an unrecognised schedule (silent fail). | `schedule: every day at 05:00` |
+| `schedule` | string | Rundock-only | Yes | When the routine runs. Accepts only the human-readable forms documented below. A schedule in any other form never runs, and the routine's row in the Routines list says so and names the two forms that work. | `schedule: every day at 05:00` |
 | `prompt` | string | Rundock-only | Yes | The instruction sent to the agent when the routine fires. Treated as a single user message: the same text the user would type. | `prompt: Run the morning briefing` |
 | `description` | string | Rundock-only | No | One-line plain English explanation of the routine, surfaced on the agent profile. Optional: omitting it does not break the routine. | `description: Triage today's tasks, calendar, and content pipeline.` |
 | `enabled` | boolean | Rundock-only | No | Whether the scheduler may run this routine. **Absent means not enabled**, so a routine written before Rundock could run one stays held back until somebody turns it on. See [Upgrading a workspace that already has routines](#upgrading-a-workspace-that-already-has-routines). The editor writes it explicitly, so a routine created there is live at once. | `enabled: true` |
 
 The whole `routines` block is Rundock-only. Claude Code does not parse it. Other tools that read agent frontmatter ignore it.
 
-A minimal valid routine has `name`, `schedule`, and `prompt`. The fourth field, `description`, is for the user reading the profile, not for the scheduler.
+A routine written by hand needs `name`, `schedule`, `prompt` and `enabled: true`. The first three make it a routine; the fourth is what makes Rundock run it, and without it the routine is listed as waiting to be turned on. `description` is for the user reading the profile, not for the scheduler.
 
 ## Schedule format
 
@@ -64,7 +64,7 @@ schedule: every weekday at 18:00   # "weekday" is not a recognised day
 schedule: every day @ 05:00        # only "at" is recognised
 ```
 
-Cron expressions are not supported. The parser does not raise an error on a cron schedule; the scheduler's next-run calculation simply returns null and the routine is skipped on every tick. If a routine has been declared but appears to never run, the schedule string is the first thing to check.
+Cron expressions are not supported. The parser does not raise an error on a cron schedule and the scheduler's next-run calculation returns null, so the routine is skipped on every tick. That much is unchanged; what is no longer silent is the reporting. The routine's row in the Routines list says Rundock cannot read the schedule and names both forms that work, and it shows no next run, so a routine that will never fire is distinguishable from one that is simply not due yet.
 
 The schedule is interpreted in the local timezone of the machine running Rundock. There is no timezone field on a routine.
 
@@ -225,7 +225,7 @@ Each row in the panel shows three things:
 
 While a routine is running, the schedule text is replaced with a `Running...` indicator in the workspace's working colour.
 
-The panel is display-only. Routine rows are not clickable. There is no per-routine enable or disable toggle and no delete control. To pause a routine without deleting it, the only mechanism today is to comment it out (or remove it) from the agent's frontmatter; Rundock will pick up the change on the next scheduler tick.
+The panel is display-only: rows there are not clickable. The controls live on the Routines list itself, which each row reaches. A routine that is not enabled carries a **Turn on** control on its row, and the offer says what pressing it does, including that a routine whose time has already gone today runs shortly after being turned on rather than waiting for tomorrow. The offer is withheld where turning it on would not actually start the routine, such as a routine that is also paused or whose schedule cannot be read, because there is nothing truthful a Turn on control can promise on a row that will not run once it is pressed.
 
 The agent profile page shows a richer Routines card for each agent that owns routines. Each entry on the profile shows the routine's `name`, the raw `schedule` string, and a status line: `Last run: <relative time> (<status>)` once a run has occurred, or `Not yet run` before the first run.
 
@@ -253,6 +253,7 @@ capabilities:
 routines:
   - name: Morning briefing
     schedule: every day at 05:00
+    enabled: true
     prompt: Run the morning briefing
     description: Triage today's tasks, calendar, and content pipeline at 5am.
 model: opus
@@ -275,6 +276,7 @@ A handful of patterns that work well in practice. Each one is a small recipe.
 routines:
   - name: Morning briefing
     schedule: every day at 05:00
+    enabled: true
     prompt: Run the morning briefing
     description: Triage today's tasks, calendar, and content pipeline at 5am.
 ```
@@ -285,6 +287,7 @@ routines:
 routines:
   - name: Granola EOD sync
     schedule: every day at 21:00
+    enabled: true
     prompt: Run the Granola end-of-day sync
     description: Pull today's meetings from Granola and write notes, tasks, and people updates.
 ```
@@ -295,6 +298,7 @@ routines:
 routines:
   - name: Weekly research digest
     schedule: every friday at 04:00
+    enabled: true
     prompt: Run the full weekly research pipeline and produce a digest
     description: Weekly content opportunities digest. Runs Friday before the working day starts.
 ```
@@ -305,6 +309,7 @@ routines:
 routines:
   - name: Weekly AI intelligence digest
     schedule: every saturday at 03:00
+    enabled: true
     prompt: Run the full AI research pipeline and produce the weekly signal digest
     description: Weekly AI intelligence digest covering frontier labs, open-source LLMs, and Rundock competitors.
 ```
@@ -315,9 +320,11 @@ routines:
 routines:
   - name: Morning sweep
     schedule: every day at 06:00
+    enabled: true
     prompt: Run the morning sweep
   - name: Afternoon sweep
     schedule: every day at 14:00
+    enabled: true
     prompt: Run the afternoon sweep
 ```
 
@@ -325,7 +332,7 @@ routines:
 
 A few specific things that go wrong silently.
 
-**Cron expressions silently never fire.** The scheduler does not understand cron. A routine with `schedule: 0 5 * * *` parses fine, registers fine, and never runs. There is no error, no warning, no log line. If a routine appears to do nothing, the schedule string is the first thing to check.
+**Cron expressions never fire.** The scheduler does not understand cron. A routine with `schedule: 0 5 * * *` parses fine, registers fine, and never runs. There is still no error and no log line, but it is no longer invisible: the routine's row in the Routines list reports the unreadable schedule and names the two forms that work. If a routine appears to do nothing, its row is the first place to look and the schedule string is the first thing to check.
 
 **Hours without a leading zero never fire.** The pattern is exact. `every day at 9:00` does not match `every day at (\d{2}):(\d{2})`. Always zero-pad.
 
