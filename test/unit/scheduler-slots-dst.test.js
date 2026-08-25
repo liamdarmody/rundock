@@ -45,7 +45,7 @@ function withNightlyWorkspace(fn) {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'nightly.md'), agentFile({
     name: 'nightly', type: 'specialist', order: 1,
-    routines: [{ name: 'late', schedule: 'every day at 23:00', prompt: 'p' }],
+    routines: [{ name: 'late', schedule: 'every day at 23:00', prompt: 'p', enabled: true }],
   }));
   invalidateAgentCache();
   try {

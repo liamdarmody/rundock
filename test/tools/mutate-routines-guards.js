@@ -595,6 +595,16 @@ const MUTATIONS = [
   [MODEL, 'a run still going names no outcome',
     "    if (statusWord === 'running') return null;",
     ''],
+  // A routine that was never in service is owed no record of what it did not
+  // do, and the withholding has to survive the moment somebody turns it on.
+  [SCHEDULER, 'a routine nobody turned on accrues no missed slots',
+    '  if (!inService) {\n    entry.due = current.toISOString();\n    return;\n  }',
+    '  if (false) { return; }'],
+  // And the anchor still moves while it waits, or turning it on enumerates
+  // every slot since as a backlog of misses.
+  [SCHEDULER, 'the anchor moves even while nothing is being recorded',
+    '  if (!inService) {\n    entry.due = current.toISOString();\n    return;\n  }',
+    '  if (!inService) return;'],
   [MODEL, 'a miss later than the last run is what happened last',
     "    if (missedSlot && (!started || missedSlot > started) && !heldBack) return 'missed';",
     "    if (missedSlot && !heldBack) return 'missed';"],

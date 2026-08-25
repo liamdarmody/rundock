@@ -71,9 +71,16 @@ function withWorkspace(fn, opts = {}) {
   config.setWorkspace(ws);
   const dir = path.join(ws, '.claude', 'agents');
   fs.mkdirSync(dir, { recursive: true });
+  // A key set to `undefined` in opts.routine is OMITTED from the block rather
+  // than written as the word undefined. That is what an absent frontmatter key
+  // is, and it is the only way to express the fixture this file needs most: a
+  // routine with no `enabled` line at all. Spreading over a default of
+  // `enabled: true` silently keeps the default.
+  const routine = { name: 'Compile the ops summary', schedule: SCHEDULE, prompt: 'p', enabled: true, ...(opts.routine || {}) };
+  for (const [k, v] of Object.entries(routine)) if (v === undefined) delete routine[k];
   fs.writeFileSync(path.join(dir, 'piper.md'), agentFile({
     name: 'piper', displayName: 'Piper', type: 'specialist', order: 1,
-    routines: [{ name: 'Compile the ops summary', schedule: SCHEDULE, prompt: 'p', enabled: true, ...(opts.routine || {}) }],
+    routines: [routine],
   }));
   invalidateAgentCache();
   try {
@@ -464,6 +471,106 @@ describe('the two stores stay apart', () => {
         // the row renders and what must never be fed back in above.
         assert.strictEqual(sched.routineSlots.routines[KEY].due, TODAYS_SLOT.toISOString());
       });
+    });
+  });
+});
+
+// ===== A ROUTINE NOBODY TURNED ON IS OWED NO MISSED SLOTS =====
+//
+// The row withholds the missed line while a routine is not enabled, because
+// "Rundock was closed at 7:00am yesterday" names a cause that did not apply: a
+// routine that was never in service did not miss anything.
+//
+// THAT WITHHOLDING IS WORTHLESS IF THE RECORDS SURVIVE. Slot observation runs
+// on every tick for every routine with a readable schedule, so a routine held
+// back for a week accumulates a week of missed slots, and the moment somebody
+// presses Turn on the row starts reporting them. The false cause returns at
+// exactly the moment the person acted, which is the worst time for it.
+//
+// So nothing is recorded while the routine is not enabled, and the anchor still
+// moves, which is why this is not a skipped call: freezing the anchor would
+// leave every slot since waiting, and the first tick after it is turned on
+// would enumerate the lot.
+//
+// PAUSED IS DELIBERATELY NOT COVERED. A paused routine WAS in service and its
+// owner suspended it; that it keeps accruing records is a decision this project
+// already took, and test/unit/scheduler-lib.test.js pins it.
+describe('a routine that was never turned on records no missed slots', () => {
+  const OBSERVED_TUESDAY_NIGHT = new Date(2026, 7, 18, 22, 0);
+  const TUESDAYS_SLOT = new Date(2026, 7, 18, 7, 0);
+
+  // Last seen on Tuesday evening, so WEDNESDAY's 7:00am slot went by with
+  // nobody watching. Deliberately not today's slot: a slot on the current date
+  // is never recorded as missed because it is still catchable today, so a
+  // fixture built around it would report an empty list whatever the gate did.
+  function seenTwoNightsAgo(sched) {
+    sched.routineSlots.observedAt = OBSERVED_TUESDAY_NIGHT.toISOString();
+    sched.routineSlots.routines[KEY] = {
+      due: TUESDAYS_SLOT.toISOString(), schedule: 'daily:7:0', missed: [],
+    };
+  }
+
+  function tick(sched) {
+    const realSetInterval = global.setInterval;
+    let fn = null;
+    global.setInterval = (f) => { fn = f; return { unref() {} }; };
+    try { sched.startScheduler(); } finally { global.setInterval = realSetInterval; }
+    fn();
+    sched.stopScheduler();
+  }
+
+  const missedOf = (sched) => sched.routineSlots.routines[KEY].missed.map(m => m.slot);
+
+  test('a routine with no enabled key accrues nothing while it waits', () => {
+    withFakeSpawn(() => {
+      withWorkspace((sched) => {
+        sched.wireSchedulerDeps({ now: () => NOW, getWssClients: () => [] });
+        seenTwoNightsAgo(sched);
+        tick(sched);
+        assert.deepStrictEqual(missedOf(sched), [],
+          'a routine that was never going to run was recorded as having missed a slot');
+        // And the anchor moved anyway, so turning it on later does not produce
+        // a burst of misses for the days it sat waiting.
+        assert.strictEqual(sched.routineSlots.routines[KEY].due, TODAYS_SLOT.toISOString(),
+          'the anchor froze, so the first tick after it is turned on reports a backlog');
+      }, { routine: { enabled: undefined } });
+    });
+  });
+
+  // THE TRANSITION, which is the whole point. Nothing accrued while it waited,
+  // so nothing surfaces when it is turned on.
+  test('turning one on surfaces no missed slot from the days it was waiting', () => {
+    withFakeSpawn(() => {
+      withWorkspace((sched, ws) => {
+        sched.wireSchedulerDeps({ now: () => NOW, getWssClients: () => [] });
+        seenTwoNightsAgo(sched);
+        tick(sched);
+
+        // Somebody presses Turn on, which writes the key into the file.
+        fs.writeFileSync(path.join(ws, '.claude', 'agents', 'piper.md'), agentFile({
+          name: 'piper', displayName: 'Piper', type: 'specialist', order: 1,
+          routines: [{ name: 'Compile the ops summary', schedule: SCHEDULE, prompt: 'p', enabled: true }],
+        }));
+        invalidateAgentCache();
+        tick(sched);
+
+        assert.deepStrictEqual(missedOf(sched), [],
+          'the days it spent waiting came back as slots Rundock was closed for');
+      }, { routine: { enabled: undefined } });
+    });
+  });
+
+  // The control. Without it "nothing was recorded" is satisfied by observation
+  // that stopped working altogether.
+  test('a routine in service still records the slot it missed', () => {
+    withFakeSpawn(() => {
+      withWorkspace((sched) => {
+        sched.wireSchedulerDeps({ now: () => NOW, getWssClients: () => [] });
+        seenTwoNightsAgo(sched);
+        tick(sched);
+        assert.deepStrictEqual(missedOf(sched), [YESTERDAYS_SLOT.toISOString()],
+          'the slot that went by while nobody was watching stopped being recorded');
+      }, { routine: { enabled: true } });
     });
   });
 });
