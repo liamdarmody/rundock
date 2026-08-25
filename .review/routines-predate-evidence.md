@@ -121,9 +121,17 @@ read is also the read that cannot record what it found.
 
 Three things in that block together are the criterion: the migrating write
 genuinely failed, the file is unchanged on disk, and the routine did not run
-anyway. A fix applied only to the migration's fill value would leave this run
-firing, because the value it writes never reaches the disk and the reader
-answers instead.
+anyway.
+
+**What this drive proves, stated exactly.** It proves the routine does not fire
+on a workspace that cannot be written to. It does not by itself distinguish a
+fix made in the reader from one made in the migration: discovery parses whatever
+`migrateAgentRoutines` returns whether or not the write lands, so a migration
+hard-coded to fill in `false` would produce the same refusal here. The reader's
+own default is pinned separately, by the direct `normalizeRoutine` assertions in
+`test/unit/routine-model.test.js` and `test/unit/doc-claims.test.js`. The two
+together are what make the rule uniform; this drive is the half that covers the
+unwritable path.
 
 Asserted in `test/integration/scheduler-predating-routines.test.js`, in "a
 routine in a workspace that cannot be written to does not fire either", which
@@ -141,9 +149,9 @@ the backup never appeared.
 
 ## The rendered rows, side by side
 
-Five routines in one workspace, through real discovery to the real view. None
-has ever run and none is failing, so the only thing separating these rows is
-what stops each one running. Printed as the page carries them.
+Six routines in one workspace, through real discovery to the real view. None has
+ever run and none is failing, so the only thing separating these rows is what
+stops each one running. Printed as the page carries them.
 
 ```
 ROW: Every day at 7:00am, run: Not due yet
@@ -170,6 +178,12 @@ ROW: Cron and held back
   offer           : (none)
   Turn on control : absent
 
+ROW: No schedule at all
+  next run        : (none)
+  schedule fault  : (none)
+  offer           : (none)
+  Turn on control : absent
+
 ROW: Every day at 7:00am, run: Paused and held back
   next run        : "Paused"
   schedule fault  : (none)
@@ -177,38 +191,29 @@ ROW: Every day at 7:00am, run: Paused and held back
   Turn on control : absent
 ```
 
-**Each row says exactly one thing about whether it will run.** That is the rule
-the rows are built to, and it is not free: a row is assembled from lines decided
-independently, so any two of them can disagree.
+**Each row says exactly one thing about whether it will run, and only one row is
+offered anything.** That is the rule the rows are built to, and it is not free:
+a row is assembled from lines decided independently, so any two of them can
+disagree.
 
 - **Not due yet** promises a run and denies nothing.
-- **Held back** denies one and offers to change that, and says when the first
-  run would land, because a slot that has already gone today is caught up
-  within the minute rather than waiting for tomorrow.
-- **Cron briefing** and **Cron and held back** both name the fault that has to
-  be fixed first and offer nothing, because turning either on would start
-  nothing while the schedule cannot be read.
+- **Held back** is the only row offered a control, because it is the only one
+  where turning it on is the whole of what stands in the way. It says when the
+  first run would land, because a slot already gone today is caught up within
+  the minute rather than waiting for tomorrow.
+- **Cron briefing** and **Cron and held back** name the fault to fix first and
+  offer nothing, because turning either on would start nothing.
+- **No schedule at all** offers nothing either. There is no schedule to run on,
+  so the offer would be false; the row stays quiet about a schedule nobody
+  wrote, which is the same decision the fault line makes.
 - **Paused and held back** says Paused and offers nothing, for the same reason.
 
-The three rows that offer nothing are the rule working. The offer is made only
-where turning it on is the ONLY thing between the routine and running, which is
-the scheduler's own refusal order asked on the row's side.
-
 Asserted in `test/unit/routines-end-to-end.test.js`, which drives frontmatter to
-rendered row, and swept exhaustively in `test/unit/routines-model.test.js`: every
-combination of seven row states is built and rendered, and any row carrying both
-a line that promises a run and one that denies it fails, as does any row
-explaining an absence by a cause that did not apply.
-
-## Reproducing these
-
-```
-npm install
-node --test test/integration/scheduler-predating-routines.test.js
-node --test test/unit/routines-end-to-end.test.js
-node --test test/unit/routine-model.test.js
-node --test test/unit/routines-model.test.js
-```
+rendered row for the first four and the paused one, and swept in
+`test/unit/routines-model.test.js`: every combination of eight row states is
+built and rendered, and any row carrying both a line that promises a run and one
+that denies it fails, as does any row explaining an absence by a cause that did
+not apply.
 
 ## The rule the rows are held to, and how far it was checked
 
@@ -223,8 +228,11 @@ Every pair of those was checked rather than the one that was found:
   routine that is not enabled
 - a next run and Paused are the same field and mutually exclusive by
   construction
-- the offer and any of Paused, an unreadable schedule, or a run target this
-  release cannot run: the offer is now withheld on all three
+- the offer and any of Paused, an unreadable schedule, no schedule at all, or a
+  run target this release cannot run: the offer is withheld on all four. The
+  question asked is whether the schedule could ever produce a run, not whether
+  the row chose to word a fault, because a routine with no schedule can never
+  run and the row deliberately says nothing about it
 - a run status and an unreadable schedule cannot co-occur, because a schedule
   that does not parse yields no run facts at all to report
 
