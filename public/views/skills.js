@@ -117,14 +117,18 @@ function renderSkillsEmpty(loading) {
     guideName: guide ? (guide.displayName || guide.name || null) : null,
   });
 
+  // THE STATE LINE IS IN THE BOX, WITH THE ACTION IT BELONGS BESIDE, THE SAME
+  // FIX THE ROUTINES PANE MADE TO THE SAME PATTERN. It used to be the
+  // header's subtitle, so the pane read as a sentence above a card rather
+  // than as one thing.
   let h = `<div class="profile-header">
       <div class="profile-avatar skill-avatar">${BOLT_SVG}</div>
       <div>
         <div class="profile-name">${esc(model.TITLE)}</div>
-        ${state.lead ? `<div class="skills-empty-state">${esc(state.lead)}</div>` : ''}
       </div>
     </div>
     <div class="settings-card flow skills-empty-card">
+      ${state.lead ? `<p class="skills-empty-state">${esc(state.lead)}</p>` : ''}
       <p class="settings-lead">${esc(state.body)}</p>`;
   if (state.action) {
     // Skills are built by talking to the agent that builds them; this screen

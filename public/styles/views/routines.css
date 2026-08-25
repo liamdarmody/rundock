@@ -16,9 +16,7 @@
    overnight teaches its user to stop trusting amber. */
 
 .routines-content { max-width: 640px; padding: 32px; }
-/* The lead sentence, now the header's subtitle rather than a paragraph below
-   it. The same role the Skills pane's state line plays in the same block, and
-   the same size: this card moved a component and moved no type size. */
+/* The list header's subtitle: the scoped sentence above the populated list. */
 .routines-subtitle { font-size: var(--body); color: var(--text-2); }
 
 /* The list */
@@ -70,8 +68,12 @@
 .confirm-card p { margin: 0 0 16px; font-size: var(--caption); color: var(--text-2); line-height: 1.65; }
 .confirm-actions { display: flex; gap: 8px; }
 
-/* The empty state: one job, so one primary action and nothing competing. */
+/* The empty state: one job, so one primary action and nothing competing. The
+   state line heads the box it sits in, the same treatment the confirmation
+   card above gives its own heading, so the pane reads as one thing: what is
+   true, what to do about it, and the control that does it. */
 .routines-empty-card { text-align: center; padding: 44px 24px; }
+.routines-empty-state { font-size: var(--body); font-weight: 700; color: var(--text-1); margin: 0 0 8px; }
 .routines-empty-actions { justify-content: center; }
 .routines-empty-aside { text-align: center; margin-top: 16px; }
 

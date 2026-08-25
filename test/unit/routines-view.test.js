@@ -1345,6 +1345,21 @@ describe('the header is the skills view\'s header', () => {
     dom.window.close();
   });
 
+  // AC-C2, on the populated header. The subtitle is a subtitle: it takes the
+  // body size, not the title size above it, so it cannot be mistaken for a
+  // second heading.
+  test('the subtitle resolves to the body size, not the title size', () => {
+    const { doc, dom } = styled();
+    const size = (el) => {
+      assert.ok(el, 'an element this compares is not on the page');
+      return dom.window.getComputedStyle(el).fontSize;
+    };
+    const subtitle = size(routinesHeader(doc).querySelector('.routines-subtitle'));
+    assert.notStrictEqual(subtitle, size(routinesHeader(doc).querySelector('.profile-name')),
+      'the subtitle is set at the title size, which is a type size this card was not asked to move');
+    dom.window.close();
+  });
+
   // AC-C3 AT THE SURFACE, WHICH IT COULD NOT BE UNTIL A SCOPE EXISTED. The
   // header used to read a scope global of its own, because nothing set one;
   // the destination function every way into this view goes through now does.
@@ -1403,34 +1418,94 @@ describe('the header is the skills view\'s header', () => {
     dom.window.close();
   });
 
-  // The empty pane heads itself the same way, with its own state line as the
-  // subtitle: an empty list is not every scheduled skill across the team.
-  test('the empty pane carries the same header, with its state line under it', () => {
+  // The empty pane carries the same header, but the header carries the title
+  // alone now: the state line moved into the box below it, so the header has
+  // nothing left to say about the state of the list.
+  test('the empty pane carries the same header, with the title alone', () => {
     const { doc, dom } = styled([], { skills: [] });
     const header = routinesHeader(doc);
     assert.ok(header, 'the empty pane lost the header');
     assert.ok(header.querySelector('.profile-avatar.skill-avatar svg'));
     assert.strictEqual(text(header.querySelector('.profile-name')), 'Routines');
-    assert.strictEqual(text(header.querySelector('.routines-subtitle')), 'No routines yet.');
+    assert.strictEqual(header.querySelector('.routines-subtitle'), null,
+      'the state line is still the header\'s subtitle, so the pane reads as a sentence above a '
+      + 'card rather than as a member of it');
     dom.window.close();
   });
 
-  // AC-C2 on the other half of the header, and the half a size is easiest to
-  // move on. The subtitle is a subtitle: it takes the body size the skills
-  // pane gives its own, and not the title size above it. Read off both
-  // rendered elements in one document, so moving either one fails this.
-  test('the subtitle resolves to the size the skills pane gives its own', () => {
+  // THE STATE LINE AND THE ACTION ARE ONE THING, PROVEN AGAINST WHAT THE PAGE
+  // RESOLVES. A box whose class name is right but which paints no padding is
+  // not a box a reader sees as one, so this reads the computed style rather
+  // than trusting the class name, and then proves containment with
+  // `contains`, which cannot be satisfied by two elements that merely sit
+  // near each other in the markup.
+  //
+  // PADDING, NOT BACKGROUND. jsdom cannot resolve a custom property inside a
+  // `background` shorthand, so `background: var(--card)` reads back as no
+  // colour at all whether or not the rule is even in the cascade: a proof
+  // built on it would pass and fail for reasons that have nothing to do with
+  // this card. Padding is a literal px value in the shipped rule, so it
+  // resolves the same way a browser resolves it.
+  test('the state line and the action are inside the box, not above it', () => {
+    const { doc, dom } = styled([]);
+    const box = doc.querySelector('#routines-content .routines-empty-card');
+    assert.ok(box, 'the empty state has no box');
+    const boxStyle = dom.window.getComputedStyle(box);
+    assert.notStrictEqual(boxStyle.paddingTop, '0px',
+      'sanity: the card resolves no padding, so this is not the box a reader sees');
+    assert.strictEqual(boxStyle.textAlign, 'center',
+      'sanity: the card resolves none of its own rule, so this is not the box a reader sees');
+
+    const stateLine = doc.querySelector('#routines-content .routines-empty-state');
+    assert.ok(stateLine, 'the state line is not on the page');
+    assert.strictEqual(text(stateLine), 'No routines yet.');
+    assert.ok(box.contains(stateLine), 'the state line sits outside the box');
+
+    const action = doc.querySelector('[data-routines-action="add"]');
+    assert.ok(action, 'the action is not on the page');
+    assert.ok(box.contains(action), 'the action sits outside the box the state line is in');
+    dom.window.close();
+  });
+
+  // The state line's own size, now that it lives in the box rather than the
+  // header: still the body size the skills pane gives its own state line, and
+  // still not the title size, so moving it did not also change what it looks
+  // like.
+  test('the state line resolves to the same size the skills pane gives its own', () => {
     const { doc, w, dom } = styled([], { skills: [] });
     w.renderSkillsEmpty(false);
     const size = (el) => {
       assert.ok(el, 'an element this compares is not on the page');
       return dom.window.getComputedStyle(el).fontSize;
     };
-    const subtitle = size(routinesHeader(doc).querySelector('.routines-subtitle'));
-    assert.strictEqual(subtitle, size(doc.querySelector('#skill-detail-content .skills-empty-state')),
-      'the two panes give their subtitles different sizes, so they are not one component');
-    assert.notStrictEqual(subtitle, size(routinesHeader(doc).querySelector('.profile-name')),
-      'the subtitle is set at the title size, which is a type size this card was not asked to move');
+    const routinesState = size(doc.querySelector('#routines-content .routines-empty-state'));
+    assert.strictEqual(routinesState, size(doc.querySelector('#skill-detail-content .skills-empty-state')),
+      'the two panes give their state lines different sizes, so they are not one pattern');
+    assert.notStrictEqual(routinesState, size(routinesHeader(doc).querySelector('.profile-name')),
+      'the state line is set at the title size, which is a type size this card was not asked to move');
+    dom.window.close();
+  });
+
+  // NO CALL TO ACTION IN THESE EMPTY STATES CARRIES AN ARROW. A control
+  // decorated differently from every other control of its kind reads as a
+  // different kind of control, and the SVG a browser actually draws is what is
+  // checked, not a source-level mention of one.
+  test('the add-routine action carries no arrow', () => {
+    const { doc, dom } = styled([]);
+    const action = doc.querySelector('[data-routines-action="add"]');
+    assert.ok(action, 'the action is not on the page');
+    assert.strictEqual(action.querySelectorAll('svg').length, 0,
+      'the add-routine action carries a glyph no other control of its kind has');
+    dom.window.close();
+  });
+
+  test('the build-a-skill action carries no arrow either', () => {
+    const { doc, w, dom } = styled([], { skills: [] });
+    w.getGuide = () => ({ id: 'archivist', displayName: 'Wren', type: 'platform' });
+    w.renderRoutines();
+    const action = doc.querySelector('[data-routines-action="build-skill"]');
+    assert.ok(action, 'the action is not on the page');
+    assert.strictEqual(action.querySelectorAll('svg').length, 0);
     dom.window.close();
   });
 

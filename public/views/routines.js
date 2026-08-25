@@ -323,8 +323,10 @@ function routinesScopeName() {
  * now heads itself the way every other view that lists things does, instead of
  * the way the view that CONFIGURES things does.
  *
- * `subtitle` is passed in rather than resolved here because the empty pane's
- * subtitle is its own state line, exactly as the Skills pane's is.
+ * `subtitle` is passed in rather than resolved here because the list header
+ * and the empty pane's header are the same call with a different argument:
+ * the list passes its scoped sentence, and the empty pane passes nothing,
+ * because its state line lives in the box below rather than in the header.
  */
 function headerHtml(subtitle) {
   const model = routinesModel();
@@ -353,9 +355,13 @@ function listHeaderHtml() {
 // `add` opens the picker that spans every agent's skills and names which agent
 // runs each one. `build-skill` opens a conversation with the guide, which is
 // what the routine editor's own zero-skills offer already does.
+//
+// NEITHER CARRIES AN ARROW. No other call to action in the app does, so a
+// control decorated differently from every other control of its kind would
+// read as a different kind of control.
 const EMPTY_ACTIONS = {
-  'add-routine': { marker: 'add', onclick: 'addRoutine()', arrow: true },
-  'build-skill': { marker: 'build-skill', onclick: 'routineEditorBuildSkill()', arrow: false },
+  'add-routine': { marker: 'add', onclick: 'addRoutine()' },
+  'build-skill': { marker: 'build-skill', onclick: 'routineEditorBuildSkill()' },
 };
 
 // Whether the skill list has arrived. NOT the same as it being empty: an empty
@@ -368,9 +374,6 @@ function skillsHaveArrived() {
 
 function emptyHtml() {
   const model = routinesModel();
-  const arrow = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"'
-    + ' stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
-    + '<line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>';
   // WHICH VARIANT IS THE MODEL'S DECISION, not this file's. All this does is
   // hand it what the shell knows: the skills, whether they have arrived, and
   // whether there is a guide to fulfil an offer that names one.
@@ -385,15 +388,19 @@ function emptyHtml() {
   });
   const action = state.actionKind ? EMPTY_ACTIONS[state.actionKind] : null;
 
-  // The state line is the subtitle here, as it is on the Skills pane: an empty
-  // list is not "every scheduled skill across your team".
-  let h = headerHtml(state.lead)
+  // THE STATE LINE IS IN THE BOX, WITH THE ACTION IT BELONGS BESIDE. It used
+  // to be the header's subtitle, so the pane read as a loose sentence sitting
+  // above a card rather than as one thing. The header carries the title only
+  // now; the box carries the whole message, what is true and what to do about
+  // it, in one place.
+  let h = headerHtml(null)
     + '<div class="settings-card flow routines-empty-card">'
+    + `<p class="routines-empty-state">${esc(state.lead)}</p>`
     + `<p class="settings-lead">${esc(state.body)}</p>`;
   if (action && state.action) {
     h += '<div class="card-actions routines-empty-actions">'
       + `<button class="settings-btn-primary" type="button" data-routines-action="${action.marker}"`
-      + ` onclick="${action.onclick}">${esc(state.action)}${action.arrow ? arrow : ''}</button>`
+      + ` onclick="${action.onclick}">${esc(state.action)}</button>`
       + '</div>';
   }
   h += '</div>';

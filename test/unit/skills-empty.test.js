@@ -261,6 +261,38 @@ describe('the pane a workspace with no skills opens onto', () => {
     dom.window.close();
   });
 
+  // THE ROUTINES CARD FOUND THIS PANE'S OWN STATE LINE OUTSIDE ITS BOX TOO,
+  // WRITTEN IN THE SAME PASS. Proven by real DOM containment rather than by a
+  // class name that happens to appear on both elements: two elements that
+  // merely sit near each other in the markup cannot satisfy `contains`.
+  test('the state line and the action live inside the same box', () => {
+    const { w, doc, dom } = shell({ skills: [] });
+    w.renderSkills();
+    const box = doc.querySelector('#skill-detail-content .skills-empty-card');
+    assert.ok(box, 'the empty state has no box');
+
+    const stateLine = doc.querySelector('#skill-detail-content .skills-empty-state');
+    assert.ok(stateLine, 'the state line is not on the page');
+    assert.strictEqual(stateLine.textContent.trim(), STATE_LINE);
+    assert.ok(box.contains(stateLine), 'the state line sits outside the box');
+
+    const buttons = doc.querySelectorAll('#skill-detail-content button');
+    assert.strictEqual(buttons.length, 1);
+    assert.ok(box.contains(buttons[0]), 'the action sits outside the box the state line is in');
+    dom.window.close();
+  });
+
+  // No other call to action in the app carries an arrow, and this pane's
+  // action must not diverge from that either.
+  test('the action carries no arrow', () => {
+    const { w, doc, dom } = shell({ skills: [] });
+    w.renderSkills();
+    const buttons = doc.querySelectorAll('#skill-detail-content button');
+    assert.strictEqual(buttons.length, 1);
+    assert.strictEqual(buttons[0].querySelectorAll('svg').length, 0);
+    dom.window.close();
+  });
+
   test('a skill arriving replaces the empty pane with that skill', () => {
     const { w, doc, dom } = shell({ skills: [] });
     w.renderSkills();

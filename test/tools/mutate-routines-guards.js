@@ -865,7 +865,7 @@ const MUTATIONS = [
     '    + (subtitle ? `<div class="routines-subtitle">${esc(subtitle)}</div>` : \'\')',
     "    + ''"],
   [VIEW, 'the empty pane takes its own state line rather than the sentence about a full list',
-    '  let h = headerHtml(state.lead)',
+    '  let h = headerHtml(null)',
     '  let h = listHeaderHtml()'],
   [MODEL, 'the scoped subtitle names the agent rather than repeating the unscoped sentence',
     "      subtitle: agentName ? LEAD.scopedLead.replace('{agent}', () => agentName) : LEAD.lead,",
