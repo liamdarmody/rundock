@@ -352,6 +352,36 @@ describe('routine editor: the caveat', () => {
     assert.match(model.RUN_ON_CAVEAT, /each of them/i);
   });
 
+  // THE OTHER DIRECTION OF THE SAME QUESTION. The caveat above is about one
+  // workspace open on several computers. This one is about several workspaces
+  // on one computer, which is the shape nothing in this product said anything
+  // about at all: there is one scheduler and it serves the open workspace, so
+  // a routine being made here runs in one of the reader's workspaces and not
+  // in the others.
+  test('the caveat about workspaces names the rule, its consequence and the catch-up', () => {
+    assert.match(model.WORKSPACE_CAVEAT, /workspace that is open/i,
+      'the rule, so the reader can predict the next case rather than only this one');
+    assert.match(model.WORKSPACE_CAVEAT, /do not run/i,
+      'what happens to this routine while another workspace is open');
+    // Without this the sentence reads as "you will lose runs", and for most
+    // readers that is not what happens.
+    assert.match(model.WORKSPACE_CAVEAT, /caught up/i,
+      'and that a slot gone by is served on coming back to it that day');
+  });
+
+  // The same rule as the run-on caveat below, one level out: this one
+  // qualifies the whole step rather than any single control, so the step
+  // carries it. A loose constant can be rendered on a help page and nowhere
+  // else with every test here still green.
+  test('the workspace caveat is part of the schedule step itself', () => {
+    const step = model.scheduleStepFields();
+    assert.strictEqual(step.workspaceCaveat, model.WORKSPACE_CAVEAT);
+    assert.strictEqual(step.lead, model.STEP_LEADS.schedule, 'the step carries its own lead');
+    assert.deepStrictEqual(step.runOn, model.runOnField(), 'and the field that sits inside it');
+    assert.ok(step.frequencies.length && step.times.length,
+      'and the choices, so a view cannot assemble the step out of separate exports and drop one');
+  });
+
   // AC-10. The caveat belongs to the field where the choice is made, so the
   // model hands it back as part of that field rather than as a loose export a
   // help page could be the only reader of.

@@ -717,6 +717,10 @@ test('the workspace switch does not release a run that is still going', async ()
         },
         agents: { armAgentsDirWatcher: noop, invalidateAgentCache: noop },
         store: { clearSearchFailure: noop, ensureSearchEngine: noop },
+      broadcast: noop,
+        // The switch tells every connected client where the scheduler went, so
+        // a window that did not ask stops promising runs it will not get.
+        broadcast: noop,
       };
       // WHAT PROVES THE SWITCH'S RESETS RAN, planted before the switch and
       // read after it.
@@ -935,6 +939,8 @@ function openWorkspace(sched, dir, config) {
     },
     agents: { armAgentsDirWatcher: noop, invalidateAgentCache: noop },
     store: { clearSearchFailure: noop, ensureSearchEngine: noop },
+    // The switch announces where the scheduler went to every connected client.
+    broadcast: noop,
   };
   freshWorkspaceHandlers(sched).handleSetWorkspace(ctx, ws, { type: 'set_workspace', path: dir });
   assert.ok(sent.some(m => m.type === 'workspace_set'),
@@ -2368,6 +2374,7 @@ test('a workspace switch replaces the slot records the way it replaces the run s
       },
       agents: { armAgentsDirWatcher: noop, invalidateAgentCache: noop },
       store: { clearSearchFailure: noop, ensureSearchEngine: noop },
+      broadcast: noop,
     };
     const sent = [];
     freshWorkspaceHandlers(sched).handleSetWorkspace(ctx, { send: (raw) => sent.push(JSON.parse(raw)) },
@@ -2828,4 +2835,90 @@ test('a schedule that stopped parsing loses its anchor too, not just a routine t
     assert.strictEqual(sched.routineSlots.routines[LATE_KEY].due, new Date(2026, 7, 19, 23, 0, 0).toISOString(),
       'and the anchor resynced once the schedule parsed again');
   });
+});
+
+// ===========================================================================
+// TWO INSTANCES OPEN ON ONE WORKSPACE
+// ===========================================================================
+//
+// The documented always-on setup keeps Rundock up on a server and up on the
+// laptop, with one workspace synced between them. The documentation says that
+// runs the routine twice. This is that claim, checked against the code that
+// decides it rather than against a description of it, because the description
+// has been wrong before.
+//
+// WHAT DECIDES IT, READ RATHER THAN SUMMARISED. The tick asks
+//
+//     const nextRun = getNextRun(routine.schedule, routineState[key]?.lastRun);
+//
+// and `routineState` is a module-owned object in memory. It is filled by
+// loadRoutineState, which runs when the process starts and whenever the
+// workspace changes, and at no other time: nothing on the tick path reads the
+// file. saveRoutineState writes
+// the whole object out on each run, so one instance's write never merges into
+// another's memory either.
+//
+// SO THE SYNC TOOL IS NOT THE VARIABLE, and this test is built to make that
+// unarguable: the two instances share ONE DIRECTORY. That is the strongest
+// sync anything could have, instantaneous and lossless, and both instances
+// still fire. A tool that copies the file more slowly, or not at all, cannot
+// do better than the same directory does.
+//
+// A SECOND MODULE INSTANCE IS A SECOND PROCESS, for the reason freshScheduler
+// is used elsewhere in this file: its own empty state, filled only by its own
+// load.
+test('two instances on one workspace both fire the routine, sharing one state file', async (t) => {
+  const claude = require(CLAUDE_KEY);
+  const realSpawn = claude.spawnClaude;
+  const realKill = claude.killProcessTree;
+  const prevClaudeDeps = claude.wireClaudeRuntimeDeps({ getActualPort: () => 0 });
+  const children = [];
+  claude.spawnClaude = () => { const child = new EventEmitter(); children.push(child); return child; };
+  claude.killProcessTree = () => {};
+  const temp = enterTempWorkspace();
+  const BRIEFING = 'nightly:briefing';
+  // Twenty past nine, with the routine due at seven. Past due on both ticks,
+  // so nothing here depends on which instance ticks first.
+  const NOW = new Date(2026, 7, 20, 9, 20);
+  const stateFile = path.join(temp.ws, '.rundock', 'routine-state.json');
+  try {
+    writeRoutineAgent(temp.ws, [{ name: 'briefing', schedule: 'every day at 07:00', prompt: 'p', enabled: true }]);
+    const laptop = freshScheduler();
+    const server = freshScheduler();
+    for (const instance of [laptop, server]) {
+      instance.wireSchedulerDeps({ getWssClients: () => [] });
+      // The boot path, which is the only thing that ever fills the object the
+      // suppression reads. Both start knowing nothing, because nothing has run.
+      instance.loadRoutineState();
+    }
+    assert.ok(!fs.existsSync(stateFile), 'sanity: no run has been recorded yet');
+
+    observeOnce(t, laptop, NOW);
+    assert.strictEqual(children.length, 1, 'the first instance fired the routine');
+    const onDisk = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
+    assert.strictEqual(typeof onDisk[BRIEFING].lastRun, 'string',
+      'and wrote the run to the file both instances share');
+
+    // THE WHOLE MECHANISM, IN ONE ASSERTION. The other instance is looking at
+    // the same directory, and the run it would be suppressed by is sitting in
+    // it. Its own copy is still empty, because nothing since its boot has read
+    // that file.
+    assert.strictEqual(server.routineState[BRIEFING], undefined,
+      'the second instance has not seen the first instance\'s run, and never will while it stays up');
+
+    observeOnce(t, server, NOW);
+    assert.strictEqual(children.length, 2,
+      'so it fired the same routine again, with the state file shared and current');
+
+    // Said the other way round, so a reader is not left inferring it from a
+    // spawn count: what the suppression was asked, on the instant it decided.
+    assert.ok(server.getNextRun('every day at 07:00', laptop.routineState[BRIEFING].lastRun) === null,
+      'the run the first instance recorded WOULD have suppressed the second, had it been asked with it');
+  } finally {
+    for (const child of children) child.emit('close', 0);
+    claude.spawnClaude = realSpawn;
+    claude.killProcessTree = realKill;
+    claude.wireClaudeRuntimeDeps(prevClaudeDeps);
+    temp.leave();
+  }
 });

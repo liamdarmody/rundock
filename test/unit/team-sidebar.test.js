@@ -231,7 +231,12 @@ function shell() {
 // The roster arriving, through the dispatch that delivers it, into the page.
 function deliverRoster(w) {
   const body = appPiece(/case 'agents':([\s\S]*?)\bbreak;/, 'the roster case of the client dispatch');
-  w.d = { type: 'agents', agents: w.agents };
+  // The case also records the workspace the roster was read from, which the
+  // routines list compares each row against. Nothing in this panel reads it,
+  // so it is stubbed here and driven where it is read, in
+  // test/unit/routines-end-to-end.test.js.
+  if (typeof w.setServingWorkspace !== 'function') w.setServingWorkspace = () => {};
+  w.d = { type: 'agents', agents: w.agents, workspace: '/w/open' };
   w.eval(`(function () {${body}\n})()`);
 }
 

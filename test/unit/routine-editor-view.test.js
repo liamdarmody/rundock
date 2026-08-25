@@ -438,6 +438,32 @@ describe('routine editor view: where it runs', () => {
     dom.window.close();
   });
 
+  // WHERE THE ROUTINE BEING MADE WILL RUN, on the step every route into this
+  // editor passes through.
+  //
+  // There is one scheduler and it serves the open workspace. Somebody with
+  // three workspaces was finishing this editor believing they had scheduled
+  // something that fires whenever Rundock is up, and the only place that said
+  // otherwise was documentation they would meet later, if at all.
+  //
+  // ON THE STEP RATHER THAN ANYWHERE ON THE PAGE, for the reason the run-on
+  // caveat is inside its field: a sentence proven present somewhere is a
+  // sentence one layout change away from a screen nobody reads.
+  test('the schedule step says what happens to this routine when its workspace is not open', () => {
+    const { doc, dom } = atSchedule();
+    const caveat = doc.querySelector('[data-routine-editor="workspace-caveat"]');
+    assert.ok(caveat, 'the step that decides when a routine runs also says where it runs');
+    const body = caveat.textContent.replace(/\s+/g, ' ');
+    assert.match(body, /workspace that is open/i, 'it names the rule');
+    assert.match(body, /do not run/i, 'and what happens to this routine while another workspace is open');
+    assert.match(body, /caught up/i, 'and that a slot gone by is served on returning that day');
+    // The step this sits on is the one that carries the schedule controls, so
+    // the sentence cannot be rendered away from the choice it qualifies.
+    assert.ok(doc.querySelector('[data-routine-field="frequency"]'),
+      'the caveat is on the step where the schedule is chosen');
+    dom.window.close();
+  });
+
   test('the time zone reads as a place and never as an offset', () => {
     const { doc, dom } = mount({ agentId: 'piper', agentName: 'Piper', zone: 'Australia/Sydney' });
     dom.window.routineEditorPick('ops-summary:piper');
