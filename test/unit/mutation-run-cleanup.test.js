@@ -43,7 +43,8 @@ const { execFileSync, spawn, spawnSync } = require('node:child_process');
 const { inspect, markerPath } = require('../tools/mutation-run.js');
 const { makeTempDir } = require('../helpers/workspace.js');
 
-const MODULE = path.join(__dirname, '..', 'tools', 'mutation-run.js');
+const REPO = path.join(__dirname, '..', '..');
+const MODULE = path.join(REPO, 'test', 'tools', 'mutation-run.js');
 
 // The one line the stand-in harness breaks, and what it becomes. Distinct
 // enough that a partial write cannot be mistaken for either.
@@ -274,6 +275,59 @@ describe('a run killed in a way nothing can catch', () => {
     assert.match(next.stderr, /git checkout/, 'the refusal must say how to put the file back');
     assert.match(next.stderr, /\.mutation-run\.json/, 'the refusal must say how to clear the record');
   });
+});
+
+describe('every mutation harness runs inside the envelope', () => {
+  // DRIVEN, NOT GREPPED, and the reason is on the record next door: the first
+  // version of the temp-root check read the harness sources for a call, and
+  // stayed green when the call was deleted from the entry point, because the
+  // word survived in a function nothing reached any more. Each harness is
+  // started here for real.
+  //
+  // --guard-only is handled by the envelope itself, AFTER it has armed, so a
+  // harness that never calls it never reaches the flag: it begins its sweep
+  // instead and fails this case by running out of time. Without a flag, the
+  // only way to observe a missing envelope would be to let a harness start
+  // mutating and then kill it, which is the exact act this whole change exists
+  // to make safe.
+  //
+  // Named one by one rather than globbed, so a harness added later fails this
+  // by absence instead of being quietly included and excused.
+  for (const rel of [
+    'test/tools/mutate-render-guards.js',
+    'test/tools/mutate-routine-editor-guards.js',
+    'test/tools/mutate-routines-guards.js',
+    'test/tools/mutate-run-detail-guards.js',
+    'test/tools/mutate-nav-guards.js',
+    'test/tools/mutate-workspace-rollback-guards.js',
+    'test/tools/mutate-fence-guards.js',
+  ]) {
+    test(`${path.basename(rel)} arms before it mutates anything`, (t) => {
+      // A temp root of its own, because most of these refuse to start on a
+      // machine carrying too many fixture directories, and that refusal would
+      // be read here as a harness that never armed.
+      const tmpRoot = makeTempDir('mutation-run-armed-');
+      t.after(() => { try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* gone */ } });
+      const env = { ...process.env, TMPDIR: tmpRoot, TEMP: tmpRoot, TMP: tmpRoot };
+      delete env.NODE_TEST_CONTEXT;
+
+      const run = spawnSync(process.execPath, [rel, '--guard-only'],
+        { cwd: REPO, env, encoding: 'utf8', timeout: 60000 });
+
+      // EITHER ANSWER PROVES IT, and taking only the first would make this case
+      // fail on a developer's own work in progress. Run against a checkout with
+      // unstaged changes to a file the harness mutates, the envelope refuses,
+      // which is the whole point of it. Both lines are written by the envelope
+      // and by nothing else, so either one says it was reached.
+      assert.match(run.stderr || '', /mutation run armed|Refusing to start a mutation run/,
+        `${rel} produced neither an armed line nor a refusal, so it reached no envelope `
+        + `(status ${run.status}, signal ${run.signal})\n${run.stdout}\n${run.stderr}`);
+      assert.ok(run.status === 0 || run.status === 2,
+        `${rel} exited ${run.status}, which is neither armed nor refused\n${run.stderr}`);
+      assert.equal(fs.existsSync(markerPath(REPO)), false,
+        `${rel} left a record behind, which would refuse the next real run`);
+    });
+  }
 });
 
 describe('the verdict, without starting anything', () => {

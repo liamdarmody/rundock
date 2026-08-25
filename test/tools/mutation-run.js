@@ -230,7 +230,12 @@ function inspect({ root = ROOT, files = [] } = {}) {
  * the temp-root preflight each harness already runs, and it means a harness
  * cannot forget to act on the verdict.
  */
-function beginMutationRun({ root = ROOT, files = [] } = {}) {
+function beginMutationRun({ root = ROOT, files: declared = [] } = {}) {
+  // Deduplicated, because a harness names one target per guard and several
+  // guards of the same file are ordinary. Left in, the same path would be read
+  // twice, restored twice, and listed twice in a refusal that is supposed to be
+  // read by a person.
+  const files = [...new Set(declared)];
   const verdict = inspect({ root, files });
   if (!verdict.ok) {
     console.error(verdict.message);
