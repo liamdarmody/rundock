@@ -61,7 +61,15 @@ function isTreeWalkRead(p) {
 }
 
 before(async () => {
-  await h.boot();
+  // The external-change poll is the one other thing in this server that walks
+  // the tree, and it walks on an interval rather than on request. This file
+  // measures the REQUEST path, so the poll is a competing writer to the very
+  // cache under measurement: it can warm the cache between two of this file's
+  // own steps and turn a request that should have walked into a cache hit.
+  // Pushed out of reach rather than left to chance. The poll has its own suite
+  // in test/integration/external-tree-changes.test.js, so nothing here is the
+  // only cover for it, and no assertion below depends on it running.
+  await h.boot({ env: { RUNDOCK_TREE_POLL_MS: String(60 * 60 * 1000) } });
   client = await h.connect();
   // Count only reads under the test workspace, only while a measurement is
   // armed, and never inside a dotfolder, so neither unrelated discovery work
@@ -99,17 +107,32 @@ function flatten(nodes, out = []) {
 
 describe('file tree caching', () => {
   test('an unchanged workspace is not re-walked on every request', async () => {
-    const first = await requestTree();
-    assert.ok(first.dirReads > 0, 'precondition: the first request walks the tree');
+    // Make the first request cold ON PURPOSE. The cache is warm the moment the
+    // watcher is armed at boot, and what made the first request walk anyway was
+    // that scaffolding wrote into the workspace afterwards and bumped the root
+    // mtime. That is boot ordering, not a property of this test, and a
+    // precondition resting on it is one reorder away from silently inverting:
+    // with a warm cache both requests read zero and the assertion below passes
+    // while proving nothing. Creating a file is the same signal scaffolding
+    // happened to produce, made deliberate, and it stays for both requests so
+    // nothing changes BETWEEN them.
+    const primer = path.join(h.workspaceDir, 'cache-probe-primer.md');
+    fs.writeFileSync(primer, '# Makes the tree cache stale before the first request\n');
+    try {
+      const first = await requestTree();
+      assert.ok(first.dirReads > 0, 'precondition: the first request walks the tree');
 
-    const second = await requestTree();
-    assert.strictEqual(second.dirReads, 0,
-      `a second request with no filesystem change must not re-walk the tree. `
-      + `Expected 0 directory reads, got ${second.dirReads}. This walk runs on the `
-      + `Electron main thread and blocks the UI.`);
+      const second = await requestTree();
+      assert.strictEqual(second.dirReads, 0,
+        `a second request with no filesystem change must not re-walk the tree. `
+        + `Expected 0 directory reads, got ${second.dirReads}. This walk runs on the `
+        + `Electron main thread and blocks the UI.`);
 
-    assert.deepStrictEqual(flatten(second.tree), flatten(first.tree),
-      'the cached payload must match the freshly walked one');
+      assert.deepStrictEqual(flatten(second.tree), flatten(first.tree),
+        'the cached payload must match the freshly walked one');
+    } finally {
+      try { fs.unlinkSync(primer); } catch (e) {}
+    }
   });
 
   test('a file created outside Rundock still appears', async () => {
