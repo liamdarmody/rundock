@@ -58,6 +58,15 @@ const APP = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routin
 const HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/unit/routine-write.test.js' };
 // The agent profile, which renders the only way into the scoped editor.
 const PROFILE = { src: path.join(ROOT, 'public', 'views', 'profile.js'), suite: 'test/unit/routine-editor-view.test.js' };
+// The door that starts from a skill rather than from an agent, a list or a
+// panel. Watched by the file that PRESSES the doors rather than by the view
+// suite, because an entry point is tested by the surface a user touches: aimed
+// at the view suite these mutations would report a guard nobody holds, when
+// what they would really be reporting is a proof pointed at the wrong place.
+//
+// The team sidebar target that used to sit here went with the door it watched.
+const SKILL_DOOR = { src: path.join(ROOT, 'public', 'views', 'routine-editor.js'), suite: 'test/unit/routine-editor-doors.test.js' };
+const SKILLS_PAGE = { src: path.join(ROOT, 'public', 'views', 'skills.js'), suite: 'test/unit/routine-editor-doors.test.js' };
 // The data model's write path, where a routine becomes bytes in a file.
 const ROUTINES = { src: path.join(ROOT, 'lib', 'agents', 'routines.js'), suite: 'test/unit/routine-write.test.js' };
 // The same file, watched by the suite that owns the timezone a schedule was
@@ -189,8 +198,14 @@ const MUTATIONS = [
   [VIEW, 'a skill list that has not arrived is not an empty one',
     '    if (state.loading) {',
     '    if (state.loading && false) {'],
+  // Every door that can open the editor before the skill list has landed goes
+  // through this one asker, so deleting the send takes the ask away from all
+  // of them at once. It used to be a line copied into each door, which the
+  // harness refused to mutate the moment there was more than one copy: a
+  // search text matching two places would break whichever came first and prove
+  // nothing about either.
   [VIEW, 'the editor asks for the skill list it is missing',
-    "    if (!loaded && typeof ws !== 'undefined' && ws) ws.send(JSON.stringify({ type: 'get_skills' }));\n",
+    "    ws.send(JSON.stringify({ type: 'get_skills' }));\n",
     ''],
   [VIEW, 'the skill list fills in when it arrives',
     '    state.skills = list || [];\n    state.loading = false;',
@@ -198,9 +213,50 @@ const MUTATIONS = [
   [VIEW, 'the breadcrumb returns to the agent it names',
     "    if (agentId && typeof showProfile === 'function') { showProfile(agentId); return; }\n",
     ''],
+  // ===== THE DOOR THAT STARTS FROM A SKILL =====
+  // THE ONE THAT MATTERS. A skill can belong to more than one agent, and
+  // taking the first is a guess wearing the shape of a decision: the reader
+  // would only discover which agent they had been given by reading the routine
+  // afterwards. This writes the guess in and requires a test to go red for it.
+  [SKILL_DOOR, 'an agent is carried only when exactly one has the skill',
+    '    const only = assigned.length === 1 ? assigned[0] : null;',
+    '    const only = assigned[0] || null;'],
+  [SKILL_DOOR, 'a skill with one agent skips the step there is nothing to pick on',
+    "      step: only ? 'schedule' : 'pick',",
+    "      step: 'pick',"],
+  [SKILL_DOOR, 'the breadcrumb belongs to the skill the editor was opened from',
+    '    if (state.originSkillId && state.originSkillName) {',
+    '    if (false) {'],
+  // The dead end. Without the check, leaving by the breadcrumb calls
+  // selectSkill for a skill that has gone from the list, which returns doing
+  // nothing, and state is already null: the editor stays on screen with every
+  // control answering nothing.
+  [SKILL_DOOR, 'the skill breadcrumb leaves even when the skill has gone',
+    '    if (skillId && canSelectSkill(skillId)) { selectSkill(skillId); return; }',
+    "    if (skillId && typeof selectSkill === 'function') { selectSkill(skillId); return; }"],
+  // Agent-agnostic, but the reader is not asked to find the skill they
+  // pressed a second time.
+  [SKILL_DOOR, 'the pressed skill is ordered first in the agent-agnostic picker',
+    '      skills: only ? [skill] : (skill ? [skill].concat(list.filter(s => s.id !== skill.id)) : list),',
+    '      skills: only ? [skill] : list,'],
+  [SKILL_DOOR, 'leaving by that breadcrumb goes back to the skill it names',
+    '    if (skillId && canSelectSkill(skillId)) { selectSkill(skillId); return; }\n',
+    ''],
+  [SKILLS_PAGE, 'a skill page offers a way to schedule the skill',
+    ' data-skills-action="schedule-skill"',
+    ' data-skills-action="not-a-door"'],
+  // The control is offered only where it can lead somewhere. A skill nobody
+  // has produces no row in the picker, so the control would be a label
+  // promising something the reader cannot reach.
+  [SKILLS_PAGE, 'the way in is offered only where an agent has the skill',
+    '  if (s.assignedAgents.length) {\n    h += `<div class="profile-card">'
+    + '<div class="profile-card-section">\n      <div class="profile-section-label">Schedule</div>',
+    '  if (true) {\n    h += `<div class="profile-card">'
+    + '<div class="profile-card-section">\n      <div class="profile-section-label">Schedule</div>'],
+
   [VIEW, 'the breadcrumb names an agent only when there is one to return to',
-    '    if (state.agentId && state.agentName) {',
-    '    if (state.agentName || true) {'],
+    '    } else if (state.agentId && state.agentName) {',
+    '    } else if (state.agentName || true) {'],
 
   // The dispatch. Each of these deletes one call the client makes into the
   // editor, which is the accident these tests exist to catch.
@@ -332,7 +388,7 @@ function run() {
   // Both files are read up front and both are restored in the same finally, so
   // a throw part way through cannot leave either one mutated.
   const originals = new Map();
-  for (const target of [MODEL, VIEW, APP, HANDLER, PROFILE, ROUTINES, ROUTINES_TZ]) originals.set(target, fs.readFileSync(target.src, 'utf8'));
+  for (const target of [MODEL, VIEW, APP, HANDLER, PROFILE, SKILL_DOOR, SKILLS_PAGE, ROUTINES, ROUTINES_TZ]) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];
   try {
     for (const [target, label, guard, without] of MUTATIONS) {

@@ -38,6 +38,7 @@ const ROUTINES_MODEL_SRC = read('public', 'routines-model.js');
 const ROUTINES_SRC = read('public', 'views', 'routines.js');
 const SCOPE_MODEL_SRC = read('public', 'routines-scope-model.js');
 const PANEL_SRC = read('public', 'views', 'routines-panel.js');
+const SKILLS_VIEW_SRC = read('public', 'views', 'skills.js');
 const APP_SRC = read('public', 'app.js');
 const INDEX_SRC = read('public', 'index.html');
 
@@ -79,6 +80,18 @@ const DOORS = [
     scoped: true,
     pressedBy: 'the panel door opens the editor on whatever the panel is scoped to',
   },
+  // The fifth door, and the only one that starts from the SKILL rather than
+  // from an agent, a list or a panel. It is scoped only when exactly one agent
+  // has the skill; a skill two agents share opens the agent-agnostic picker
+  // instead, and a skill nobody has offers no door at all, both pressed by
+  // their own tests below.
+  {
+    call: 'addRoutineForSkill',
+    file: 'views/skills.js',
+    surface: 'the Schedule this skill control on a skill\'s own page',
+    scoped: 'only when exactly one agent has the skill',
+    pressedBy: 'the skill door opens the editor at the schedule step for that skill',
+  },
 ];
 
 // Doors that exist in the flow but are deliberately not pressed here, each
@@ -94,7 +107,7 @@ const NOT_PRESSED = [
 
 // Where the client can call into the editor from. Everything the editor
 // exports that OPENS it; the rest of its surface is reached from inside.
-const ENTRY_CALLS = ['addRoutine', 'addRoutineForAgent', 'openRoutineEditor'];
+const ENTRY_CALLS = ['addRoutine', 'addRoutineForAgent', 'addRoutineForSkill', 'openRoutineEditor'];
 
 function clientFiles() {
   const out = [];
@@ -176,6 +189,7 @@ function shellMarkup() {
     + '<div id="profile-content"></div>'
     + '<div id="view-routine-editor"><div id="routine-editor-content"></div></div>'
     + '<div id="view-routines"><div id="routines-content"></div></div>'
+    + '<div id="view-skills"><div id="skill-detail-content"></div></div>'
     + '</body></html>';
 }
 
@@ -191,6 +205,7 @@ function shell() {
   w.eval(SCOPE_MODEL_SRC);
   w.eval(ROUTINES_SRC);
   w.eval(PANEL_SRC);
+  w.eval(SKILLS_VIEW_SRC);
 
   w.agents = [
     {
@@ -201,6 +216,8 @@ function shell() {
     { id: 'doc', displayName: 'Doc', colour: '#6BC67E', icon: 'D', status: 'active', runtime: 'claude' },
   ];
   w.conversations = [];
+  w.currentSkillId = null;
+  w.currentView = 'skills';
   w.skills = [
     { id: 'ops-summary', slug: 'ops-summary', name: 'Compile the ops summary',
       assignedAgents: [{ id: 'piper', name: 'Piper' }] },
@@ -337,6 +354,202 @@ describe('the doors, pressed', () => {
   // walks below no longer touch that panel at all and would not notice it
   // coming back.
   //
+  // THE DOOR THAT STARTS FROM A SKILL.
+  //
+  // A skill page is where somebody decides they trust a skill, which is the
+  // moment they want it on a schedule. Pressed here, never called: the whole
+  // reason this file exists is that calling the handler is what let four
+  // entry points look covered while nothing touched their controls.
+  test('the skill door opens the editor at the schedule step for that skill', () => {
+    const { doc, w, dom } = shell();
+    w.selectSkill = w.RundockSkillsView.selectSkill;
+    w.selectSkill('ops-summary');
+
+    // SECONDARY WEIGHT IS PART OF WHAT THIS CONTROL IS, so it is asserted
+    // rather than left to the eye. Promoting it to the primary button would
+    // otherwise keep every test green.
+    const control = doc.querySelector('[data-skills-action="schedule-skill"]');
+    assert.ok(control.classList.contains('settings-btn'),
+      'the control carries the secondary button class');
+    assert.ok(!control.classList.contains('settings-btn-primary'),
+      'the routines surface is the primary way in; this one is the shortcut, not a rival front door');
+
+    press(doc, '[data-skills-action="schedule-skill"]');
+
+    // Step one is already done, so the editor opens on step two with the
+    // skill named in the sentence rather than on a list of one.
+    assert.ok(doc.querySelector('select[data-routine-field="frequency"]'),
+      'the skill door lands on the schedule step, not on the picker');
+    assert.match(editorText(doc), /Compile the ops summary/);
+    assert.strictEqual(doc.querySelector('[data-skill-key]'), null,
+      'nothing is left to pick, so no picker is drawn');
+
+    // And the agent is the one that has it, carried all the way to the save
+    // rather than asserted off internal state.
+    choose(doc, w, 'frequency', 'day');
+    choose(doc, w, 'time', '09:00');
+    press(doc, '.re-actions .settings-btn-primary');
+    press(doc, '[data-routine-editor="save"]');
+    assert.strictEqual(w.sent.length, 1);
+    assert.strictEqual(w.sent[0].agentId, 'piper',
+      'one agent has this skill, so no choice was needed and none was invented');
+    assert.strictEqual(w.sent[0].routine.skill, 'ops-summary');
+    dom.window.close();
+  });
+
+  // A skill can be assigned to more than one agent. Taking the first is a
+  // guess wearing the shape of a decision, so the ambiguous case opens the
+  // agent-agnostic picker that already exists for it and lets the reader say
+  // which agent.
+  test('a skill two agents share opens the agent-agnostic picker rather than guessing', () => {
+    const { doc, w, dom } = shell();
+    // The pressed skill is deliberately NOT first in the workspace list, so
+    // the ordering assertion below can fail. With it first the assertion would
+    // hold whether or not anything ordered it.
+    w.skills = [
+      { id: 'reading-digest', slug: 'reading-digest', name: 'Refresh the reading digest',
+        assignedAgents: [{ id: 'doc', name: 'Doc' }] },
+      { id: 'ops-summary', slug: 'ops-summary', name: 'Compile the ops summary',
+        assignedAgents: [{ id: 'piper', name: 'Piper' }, { id: 'doc', name: 'Doc' }] },
+    ];
+    w.selectSkill = w.RundockSkillsView.selectSkill;
+    w.selectSkill('ops-summary');
+
+    press(doc, '[data-skills-action="schedule-skill"]');
+
+    // Not the schedule step: nothing has been decided, so nothing is shown as
+    // decided.
+    assert.strictEqual(doc.querySelector('select[data-routine-field="frequency"]'), null,
+      'an ambiguous skill must not land on the schedule step, which would mean an agent was chosen');
+    assert.match(editorText(doc), /Pick a skill any of your agents already has/,
+      'the agent-agnostic lead, which is the picker that already exists for this case');
+    // The whole picker is offered and nothing is selected, because choosing an
+    // agent on the reader's behalf would be a guess. What that owes them is
+    // that the skill they pressed is not something they have to find again,
+    // so its rows come first.
+    assert.deepStrictEqual(
+      [...doc.querySelectorAll('[data-skill-key]')].map(r => r.getAttribute('data-skill-key')),
+      ['ops-summary:piper', 'ops-summary:doc', 'reading-digest:doc'],
+      'the pressed skill\'s rows come first, one per agent that could run it, and every other '
+      + 'skill is still offered because the picker stays agent-agnostic',
+    );
+    assert.strictEqual(doc.querySelector('.re-row.sel'), null,
+      'nothing is preselected, because preselecting one of two agents is the guess this avoids');
+
+    // The reader resolves it, and the agent they chose is the one that is saved.
+    press(doc, '[data-skill-key="ops-summary:doc"]');
+    press(doc, '.re-actions .settings-btn-primary');
+    choose(doc, w, 'frequency', 'day');
+    press(doc, '.re-actions .settings-btn-primary');
+    press(doc, '[data-routine-editor="save"]');
+    assert.strictEqual(w.sent[0].agentId, 'doc');
+    dom.window.close();
+  });
+
+  // The case that made this control lie. A routine runs a skill AS an agent,
+  // and the picker is built by walking each skill's assigned agents, so a
+  // skill nobody has produces no row and can never be reached through it.
+  // Pressing the control on such a skill used to land the reader on an offer
+  // to build a skill, while they were looking at one, or on a list of every
+  // other skill with the one they pressed missing.
+  test('a skill no agent has offers no way to schedule it', () => {
+    const { doc, w, dom } = shell();
+    w.skills = [
+      { id: 'unclaimed', slug: 'unclaimed', name: 'Nobody has this one', assignedAgents: [] },
+      { id: 'ops-summary', slug: 'ops-summary', name: 'Compile the ops summary',
+        assignedAgents: [{ id: 'piper', name: 'Piper' }] },
+    ];
+    w.selectSkill = w.RundockSkillsView.selectSkill;
+    w.selectSkill('unclaimed');
+
+    assert.strictEqual(doc.querySelector('[data-skills-action="schedule-skill"]'), null,
+      'a control that cannot lead where its label says must not be on the page at all');
+
+    // And the page still says what to do instead, which is to give it an agent.
+    assert.match(doc.getElementById('skill-detail-content').textContent,
+      /Want to assign this to a specific agent\?/,
+      'the step this reader actually needs is still offered');
+
+    // The control returns as soon as an agent has it, so this is a guard on
+    // the state rather than the control having been dropped.
+    w.selectSkill('ops-summary');
+    assert.ok(doc.querySelector('[data-skills-action="schedule-skill"]'),
+      'a skill an agent has still offers the way in');
+    dom.window.close();
+  });
+
+  // The breadcrumb belongs to the door that opened the editor, and this door
+  // came from a skill. A control reading "Back to Piper" here would be the
+  // exact fault the agent breadcrumb was written to stop: a label that names
+  // a destination the press does not go to.
+  test('the skill door\'s breadcrumb returns to the skill, not to the agent', () => {
+    const { doc, w, dom } = shell();
+    w.selectSkill = w.RundockSkillsView.selectSkill;
+    w.selectSkill('ops-summary');
+    press(doc, '[data-skills-action="schedule-skill"]');
+
+    const back = doc.querySelector('[data-routine-editor="back"]');
+    assert.ok(back, 'the skill door renders a breadcrumb');
+    assert.match(back.textContent, /Compile the ops summary/,
+      'the label names the skill the editor was opened from');
+
+    w.currentSkillId = null;
+    press(doc, '[data-routine-editor="back"]');
+    assert.strictEqual(w.currentSkillId, 'ops-summary', 'and the press goes where the label says');
+    assert.strictEqual(w.navigatedTo, null);
+    dom.window.close();
+  });
+
+  // THE DEAD END, and it is reachable without doing anything unusual. The
+  // skill list is replaced whenever a skill is saved in the background or the
+  // workspace changes, and the editor can be open across either. Leaving by
+  // the breadcrumb then called selectSkill for a skill that is no longer in
+  // the list, which returns doing nothing, while state had already been
+  // nulled. Every control in the editor answers nothing from that moment, and
+  // the rail is the only way out.
+  test('the skill breadcrumb still leaves when the skill has gone from the list', () => {
+    const { doc, w, dom } = shell();
+    w.selectSkill = w.RundockSkillsView.selectSkill;
+    w.selectSkill('ops-summary');
+    press(doc, '[data-skills-action="schedule-skill"]');
+
+    // The workspace changed under the open editor.
+    w.skills = [];
+    w.currentSkillId = null;
+    w.profileShown = null;
+
+    press(doc, '[data-routine-editor="back"]');
+
+    // This door carried an agent, so that is the nearest place the reader
+    // meant to be.
+    assert.strictEqual(w.currentSkillId, null, 'the skill page cannot be opened, so it was not');
+    assert.strictEqual(w.profileShown, 'piper',
+      'the press must still land somewhere rather than leaving a dead editor on screen');
+    dom.window.close();
+  });
+
+  test('a skill door carrying no agent falls through to the routines list', () => {
+    const { doc, w, dom } = shell();
+    // Two agents have it, so the door carries no agent to fall back to.
+    w.skills = [
+      { id: 'ops-summary', slug: 'ops-summary', name: 'Compile the ops summary',
+        assignedAgents: [{ id: 'piper', name: 'Piper' }, { id: 'doc', name: 'Doc' }] },
+    ];
+    w.selectSkill = w.RundockSkillsView.selectSkill;
+    w.selectSkill('ops-summary');
+    press(doc, '[data-skills-action="schedule-skill"]');
+
+    w.skills = [];
+    w.currentSkillId = null;
+    w.navigatedTo = null;
+
+    press(doc, '[data-routine-editor="back"]');
+    assert.strictEqual(w.profileShown, null, 'no agent was carried, so there is no profile to show');
+    assert.strictEqual(w.navigatedTo, 'routines',
+      'with no skill and no agent the reader still leaves, to the list of routines');
+    dom.window.close();
+  });
+
   // ASSERTED AGAINST THE SOURCE AND NOT AGAINST THIS FILE'S DOM. An earlier
   // version of this test looked for the control in a document nothing had
   // rendered the roster into, which is an assertion that cannot fail for the

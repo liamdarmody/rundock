@@ -207,6 +207,40 @@ function selectSkill(id) {
     </div></div>`;
   }
 
+  // Schedule this skill, from the skill's own page.
+  //
+  // SECONDARY WEIGHT, DELIBERATELY. The primary way to make a routine is the
+  // routines surface, which is where somebody who has decided to schedule
+  // something goes. This is the other order: looking at a skill you already
+  // trust and thinking of the schedule second. A shortcut for a reader who is
+  // already here, not a competing front door.
+  //
+  // ONLY WHERE AN AGENT HAS THE SKILL, and the unassigned case is not the same
+  // as the shared one. A routine runs a skill AS an agent, and the picker is
+  // built by walking each skill's assigned agents, so a skill nobody has
+  // produces no row and can never appear in it. Offering the control anyway
+  // meant a reader pressing "Schedule this skill" landed either on an offer to
+  // build a skill, while looking at one, or on a list of every other skill
+  // with the one they pressed missing. A control that does not lead where its
+  // label says teaches a wrong model of the app, which is worse than no
+  // control: the reader believes the label.
+  //
+  // The card above already carries the step this reader actually needs, which
+  // is to give the skill an agent, so nothing is lost by leaving this out.
+  //
+  // AND SAYING NOTHING HERE ABOUT WHY THE CONTROL IS ABSENT IS ALSO DELIBERATE,
+  // not an oversight to be repaired by adding a sentence: a reader meets this
+  // same gap from the other side in the unassigned-skill messaging, and half an
+  // answer in each place is how one surface ends up saying two different things.
+  if (s.assignedAgents.length) {
+    h += `<div class="profile-card"><div class="profile-card-section">
+      <div class="profile-section-label">Schedule</div>
+      <div class="profile-card-text" style="padding-bottom:10px">Give this skill a schedule and your agents take it from there.</div>
+      <button class="settings-btn" type="button" data-skills-action="schedule-skill"
+        data-skill-id="${esc(s.id)}" onclick="addRoutineForSkill('${esc(s.id)}')">Schedule this skill</button>
+    </div></div>`;
+  }
+
   // Collapsible instructions card
   if (s.instructions) {
     const instructionsId = `skill-instructions-${s.id}`;

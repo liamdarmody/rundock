@@ -190,6 +190,7 @@ const MANIFEST = {
   "routine-editor.js": [
     "addRoutine",
     "addRoutineForAgent",
+    "addRoutineForSkill",
     "browserTimezone",
     "openRoutineEditor",
     "renderRoutineEditor",
