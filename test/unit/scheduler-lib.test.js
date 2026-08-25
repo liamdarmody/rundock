@@ -1595,8 +1595,15 @@ test('a codex routine is stopped through the turn it is running', async () => {
         interruptTurn: async (threadId) => { interrupted.push(threadId); },
       };
       await withFakeCodex(server, async (sched) => {
-        assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true, 'the run started');
+        // The instant the tick judged it due, kept apart from the instant the
+        // start stamps, so an assertion that the stamp is not the run record's
+        // beginning is able to fail. Same reason as the suppression test.
+        const DUE = new Date(Date.now() - 120000);
+        assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY, DUE), true, 'the run started');
         assert.ok(await until(() => sub.listenerCount('event') > 0), 'and reached the turn subscription');
+        const stampedByTheStart = sched.routineState[KEY].lastRun;
+        assert.notStrictEqual(stampedByTheStart, runRecords(dir)[0].startedAt,
+          'the stamp and the run record beginning are different instants here');
 
         const [live] = sched.runningRuns();
         assert.ok(live, 'a codex run is reachable from outside it too');
@@ -1604,6 +1611,21 @@ test('a codex routine is stopped through the turn it is running', async () => {
         assert.ok(await until(() => interrupted.length > 0), 'the turn was interrupted');
         assert.deepStrictEqual(interrupted, [filedUnder],
           'on the thread the client filed it under, rather than on an id this test invented');
+
+        // THE REQUEST PATH ON THIS RUNTIME, OBSERVED BEFORE THE TURN ENDS.
+        // The ending stamps lastRun from the clock, so a stop that wrote the
+        // field when it was asked for would be overwritten by the terminal
+        // event below and nothing after it could tell. This runtime's stop is
+        // asynchronous, so the request has already been made and answered by
+        // the time this runs, which is the moment worth looking at.
+        assert.strictEqual(sched.routineState[KEY].lastRun, stampedByTheStart,
+          'the interrupt wrote nothing to lastRun: byte for byte what the start left there');
+        assert.notStrictEqual(sched.routineState[KEY].lastRun, runRecords(dir)[0].startedAt,
+          'and not the beginning off the run record the stop had just reached');
+        assert.strictEqual(sched.routineState[KEY].status, 'running',
+          'and the run still reads as going, because asking for a stop is not an ending');
+        assert.strictEqual(sched.routineSlots.routines[KEY], undefined,
+          'with nothing written into the slot store by the request');
 
         // The turn then ends the way the client ends an interrupted one, and
         // the ending is the client own terminal event rather than one written
@@ -1713,6 +1735,13 @@ test('neither stopping a run nor switching workspaces across one reaches the val
       const SCHEDULE = 'every day at 09:00';
       const YESTERDAY = new Date(2026, 7, 11, 9, 0, 0);     // the last run anybody finished
       const MISSED = new Date(2026, 7, 12, 9, 0, 0);        // today's slot, passed while nobody watched
+      // THE RUN'S BEGINNING AND THE RUN'S STAMP ARE DIFFERENT INSTANTS, which
+      // is the third thing this fixture makes unusual. The tick judges a
+      // routine due at one reading of the clock and hands that instant on as
+      // the run's beginning, while the stamp is a reading of its own. Left
+      // equal, as they are when nothing separates them, an assertion that the
+      // stamp is not the record's beginning cannot fail.
+      const DUE = new Date(2026, 7, 12, 9, 58, 0);          // when the tick judged it due
       const START = new Date(2026, 7, 12, 10, 0, 0);        // the catch-up run, started late
       const SWITCH = new Date(2026, 7, 12, 10, 5, 0);       // a workspace switch while it runs
       const STOP = new Date(2026, 7, 12, 10, 10, 0);        // somebody stops it
@@ -1745,10 +1774,14 @@ test('neither stopping a run nor switching workspaces across one reaches the val
         assert.deepStrictEqual(sched.getNextRun(SCHEDULE, sched.routineState[KEY].lastRun), MISSED,
           'so the catch-up run this routine is still owed today is owed');
 
-        assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true, 'the catch-up run started');
+        assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY, DUE), true, 'the catch-up run started');
         const stampedByTheStart = sched.routineState[KEY].lastRun;
         assert.strictEqual(stampedByTheStart, START.toISOString(),
           'the start stamped the clock, which is the only writer on this path and is left exactly as it was');
+        assert.strictEqual(runRecords(dir)[0].startedAt, DUE.toISOString(),
+          'while the run record carries the instant it was judged due, so the two are telling apart');
+        assert.notStrictEqual(stampedByTheStart, runRecords(dir)[0].startedAt,
+          'which is what makes an assertion that the stamp is not the record beginning able to fail at all');
 
         // HALF TWO, exercised: a workspace switch across a run that is still
         // going. The switch reloads both stores, so it holds the run record,
@@ -1767,7 +1800,31 @@ test('neither stopping a run nor switching workspaces across one reaches the val
         clock = STOP;
         const live = sched.runningRuns();
         assert.strictEqual(live.length, 1, 'the run that is still going can be identified from outside it');
+        const startedAtOnRecord = runRecords(dir)[0].startedAt;
         assert.strictEqual(sched.cancelRun(live[0].id), true, 'and stopped');
+
+        // THE REQUEST ITSELF, OBSERVED BEFORE ANY ENDING CAN COVER FOR IT.
+        //
+        // These assertions are the whole of what pins this half, and they have
+        // to happen HERE. The ending that follows stamps lastRun from the
+        // clock, so a stop that wrote the field at request time, from the run
+        // record's beginning or from the slot store, would be overwritten a
+        // statement later and every assertion after the ending would still
+        // pass. The stop is the moment all three wrong sources are in hand at
+        // once, so it is the moment worth looking at.
+        assert.strictEqual(sched.routineState[KEY].lastRun, stampedByTheStart,
+          'asking for the stop wrote nothing to lastRun: byte for byte what the start left there');
+        assert.notStrictEqual(sched.routineState[KEY].lastRun, STOP.toISOString(),
+          'in particular not the moment the stop was asked for');
+        assert.notStrictEqual(sched.routineState[KEY].lastRun, startedAtOnRecord,
+          'and not the beginning off the run record the stop had just reached');
+        assert.notStrictEqual(sched.routineState[KEY].lastRun, MISSED.toISOString(),
+          'and never the slot store, which must not be joined to this field at all');
+        assert.strictEqual(sched.routineState[KEY].status, 'running',
+          'and asking for a stop is not an ending, so the run still reads as going');
+        assert.deepStrictEqual(sched.routineSlots.routines[KEY].missed, [{ slot: MISSED.toISOString() }],
+          'with nothing added to the slot store by the request either');
+
         child.emit('close', null);
         assert.ok(await until(() => sched.routineState[KEY].status !== 'running'), 'the stopped run ended');
 
