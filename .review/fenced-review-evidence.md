@@ -159,13 +159,15 @@ asserting a fresh guarantee of their own.
 >
 > **AC-11:** The count that do is reported in the evidence.
 
-Fixture files on disk, counted with:
+Fixture files on disk. The column counts **fence marker lines**, which is what
+the pattern matches: a fence contributes two, its opening and its closing, so a
+file showing 4 holds two fenced blocks. Counted with:
 
     for f in $(find test/fixtures -name "*.md" | sort); do
       echo "$(grep -cE '^ {0,3}(`{3,}|~{3,})' "$f") $f"
     done
 
-| Fixture | Fence opening lines |
+| Fixture | Fence marker lines |
 |---|---|
 | `test/fixtures/kanban/backlog.md` | 2 |
 | `test/fixtures/kanban/combined.md` | 2 |
@@ -196,7 +198,8 @@ Fixture files on disk, counted with:
 | `test/fixtures/scoring-table.md` | 0 |
 
 **27 markdown fixture files. 7 contain a fence. 0 were driven through the review
-round trip before this change.**
+round trip before this change.** The headline is a count of files, so it does not
+depend on how the markers per file are counted.
 
 The count that explains why this shipped is the second one. The review suites
 build their documents as strings in the test file and read no fixture from disk
@@ -223,8 +226,9 @@ worked, and none of them could have disagreed.
 Of the four fixture families that do carry a fence, none reached the editor
 either: the kanban files drive the board parser, and `markdown-benign.md` drives
 the chat renderer. `test/fixtures/ofm/code-blocks.md` is the one fence fixture
-the editor round trip does read, and it held only a plain three-backtick fence
-and a `js` fence, so fault two was invisible to it as well.
+the editor round trip does read, and its four marker lines are two blocks: a
+plain three-backtick fence and a `js` fence, so fault two was invisible to it as
+well.
 
 ## The new fixture is a file, not a string
 
@@ -256,15 +260,31 @@ the source marker character, its length and the full info string at parse time
 and writes them back, and it widens the marker when the block's own content
 would otherwise close it.
 
-**One fence shape is still rewritten and is not fixed here.** A fence indented
-by one to three spaces is dedented on save, because the indent is not carried on
-the node and re-indenting the content lines is a separate change to the same
-serialiser. It is recorded rather than left silent:
+**One fence shape is still rewritten and is not fixed here, and disclosure is
+not discharge, so it is pinned by a test rather than by this paragraph.** A
+fence indented one to three spaces is dedented on save:
 
-    in:  "  ```\n  x\n  ```\n"     out:  "```\nx\n```\n"
+    in:  "  ```js\n  const nested = {\n    deep: true,\n  };\n  ```\n"
+    out: "```js\nconst nested = {\n  deep: true,\n};\n```\n"
 
-That drift moves no content across a fence boundary and escapes nothing, so it
-is not the defect this change is about.
+It is not fixable from the node. The parser strips up to the fence's own indent
+from every content line, so a line indented LESS than its fence is afterwards
+indistinguishable from one indented exactly to it, and re-emitting the fence's
+indent on both would move bytes rather than restore them. Carrying the block's
+raw source instead is a different design and a larger change than this one.
+
+`test/fixtures/review/indented-fence.md` and the three tests in
+`an indented fence: a known drift, not a fixed one` hold the gap to its exact
+size, on the same idiom the parity corpus already uses for a carded corruption.
+They assert that the output is the input with the fence indent removed and
+nothing else, so the tests fail if the drift widens; that the block still opens
+and closes where it did, its contents are still inside it, and nothing gained a
+backslash; and that a second cycle changes nothing further, so the file does not
+lose a level of indentation on every save. The first of them also fails if the
+shape is ever fixed, which is what takes this note out of the file with it.
+
+The drift moves no content across a fence boundary and escapes nothing, which is
+what separates it from the two faults this change is about.
 
 ## Proving the prohibitions
 

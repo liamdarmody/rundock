@@ -26,9 +26,15 @@ import { fileURLToPath } from 'node:url';
 import { roundTrip, bootEditorEnv } from '../helpers/editor-harness.js';
 import { parseFile } from '../../public/editor/markdown/pipeline.js';
 
-const FIXTURE = path.join(
-  path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'review', 'fenced-page.md');
-const PAGE = fs.readFileSync(FIXTURE, 'utf-8');
+const FIXTURES = path.join(
+  path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'review');
+const PAGE = fs.readFileSync(path.join(FIXTURES, 'fenced-page.md'), 'utf-8');
+
+// A fence indented under a list or a quote. Kept in its own file rather than in
+// the page above, because the page above has to round-trip byte for byte and
+// this shape does not: see the known-drift test at the end of this file.
+const INDENTED = fs.readFileSync(path.join(FIXTURES, 'indented-fence.md'), 'utf-8');
+const INDENTED_BY = '  ';
 
 const NOW = '2026-08-25T09:00:00.000Z';
 
@@ -306,5 +312,51 @@ describe('the review sidebar, told no', () => {
         pane.remove();
       }
     });
+  });
+});
+
+// A shape this change does NOT fix, pinned rather than described.
+//
+// A fence indented one to three spaces is dedented on save. It cannot be put
+// back from the node: the parser strips up to the fence's own indent from every
+// content line, so a line that was indented LESS than its fence is
+// indistinguishable afterwards from one that was indented exactly to it, and
+// re-emitting the fence's indent on both would move bytes rather than restore
+// them. Carrying the raw source of the block instead is a different design and
+// a larger change than this one.
+//
+// So the gap is held by a test rather than by a paragraph. It asserts what the
+// drift IS, to the byte, which means it fails if the drift widens, and it fails
+// if the drift is fixed, at which point this test and the note beside it in the
+// evidence come out together.
+describe('an indented fence: a known drift, not a fixed one', () => {
+  test('the fence indent is lost and nothing else is', async () => {
+    const out = await roundTrip(INDENTED);
+    assert.notEqual(out, INDENTED,
+      'an indented fence now round-trips: delete this test and the note in the evidence file');
+    const dedented = INDENTED.split('\n')
+      .map((line) => (line.startsWith(INDENTED_BY) ? line.slice(INDENTED_BY.length) : line))
+      .join('\n');
+    assert.equal(out, dedented,
+      'the drift is no longer only the fence indent, so it has widened into something else');
+  });
+
+  test('the drift moves nothing across the fence and escapes nothing', async () => {
+    const out = await roundTrip(INDENTED);
+    // The two properties this whole change is about, held even for the shape
+    // that is not fixed: the block still opens and closes where it did, its
+    // contents are still inside it, and no punctuation gained a backslash.
+    assert.ok(out.includes('```js\nconst nested = {\n  deep: true,\n};\n```'),
+      `the block did not survive as one block:\n${out}`);
+    assert.ok(out.startsWith('Before the block.'), 'text above the block moved');
+    assert.ok(out.trimEnd().endsWith('After the block.'), 'text below the block moved');
+    assert.equal(out.indexOf('\\'), -1, `the dedent escaped something:\n${out}`);
+  });
+
+  test('the drift is spent once: a second cycle changes nothing further', async () => {
+    // A drift that repeated would eat a level of indentation on every save,
+    // which is a different and much worse defect than losing one.
+    const once = await roundTrip(INDENTED);
+    assert.equal(await roundTrip(once), once, 'the file keeps losing indentation on every save');
   });
 });
