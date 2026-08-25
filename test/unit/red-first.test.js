@@ -741,30 +741,29 @@ describe('a renamed source file', () => {
 });
 
 describe('AC-4 with an uncooperative child, which is where the claim was false', () => {
-  // Poll for a condition instead of guessing how long it takes to become
-  // true. Used below so the interrupt is sent once the trapping child has
-  // actually installed its signal handlers, not after a fixed delay that
-  // assumes it has.
+  // Poll for a condition, cancellably, instead of guessing how long it takes
+  // to become true. No timeout of its own: the caller below already has one
+  // (the 20s deadline), and a second, shorter one here duplicated that
+  // teardown without ever stating how the two related. cancel() lets the
+  // caller's own deadline stop this poll instead.
   //
-  // Not test/helpers/harness.js's h.waitUntil, and not an oversight: requiring
-  // that module pulls in test/helpers/workspace.js, which runs
-  // sweepStale(os.tmpdir()) at require time, before any fixture exists or
-  // boot() is ever called, and that sweep can delete directories left behind
-  // by dead processes anywhere under the system temp root (verified by
-  // reading test/helpers/workspace.js:32 and test/helpers/temp-root.js's
-  // sweepStale). This file is a unit test that manages its own throwaway git
-  // repos directly; it must not carry a filesystem-deleting side effect at
-  // import time just to reuse a ten-line poll.
-  function waitForCondition(check, { timeoutMs = 15000, intervalMs = 20, label = 'condition' } = {}) {
-    return new Promise((resolve, reject) => {
-      const deadline = Date.now() + timeoutMs;
+  // Not test/helpers/harness.js's h.waitUntil, and not an oversight:
+  // requiring test/helpers/harness.js loads test/helpers/workspace.js, which
+  // calls sweepStale on the system temp root at require time, before any
+  // fixture exists. This file manages its own throwaway git repos directly
+  // and must not import a helper with a filesystem-deleting side effect.
+  function waitForCondition(check, { intervalMs = 20 } = {}) {
+    let cancelled = false;
+    let timer = null;
+    const promise = new Promise((resolve) => {
       const tick = () => {
+        if (cancelled) return;
         if (check()) return resolve();
-        if (Date.now() >= deadline) return reject(new Error(`timed out waiting for ${label}`));
-        setTimeout(tick, intervalMs);
+        timer = setTimeout(tick, intervalMs);
       };
       tick();
     });
+    return { promise, cancel: () => { cancelled = true; if (timer) clearTimeout(timer); } };
   }
 
   test('a test command that traps SIGINT does not hold the tree hostage', async () => {
@@ -779,28 +778,46 @@ describe('AC-4 with an uncooperative child, which is where the claim was false',
       added: { 'lib2.js': 'module.exports.b = () => 2;\n' },
       testFile: "const assert = require('assert');\nmodule.exports = () => { assert.ok(true); };\n",
     });
-    // Inside the repo the trapping child runs in (its cwd), not the system
-    // temp directory. The command sandbox this test also has to pass under
-    // allows writes to the workspace a command was given, not to an arbitrary
-    // path under the machine's temp root, and the repo is that workspace. A
-    // marker written straight into os.tmpdir() failed under that sandbox
-    // every time; a relative path resolved against the child's own cwd does
-    // not, because it lands inside the one directory the sandbox already
-    // grants.
-    const markerName = '.trap-marker';
-    const marker = path.join(dir, markerName);
+    // Inside the repo's OWN .git directory: writable under the same sandbox
+    // grant that covers the repo (a subpath of `dir`), but never reported by
+    // `git status`, so neither this test's own clean-tree check nor
+    // red-first's need to know the marker was ever there. A plain untracked
+    // file inside the repo's working tree would also be inside that grant,
+    // but shows up in `git status --porcelain`, which is what forced an
+    // earlier version of this test to delete it early, by hand, before the
+    // clean-tree assertion.
+    //
+    // Whether a sandbox grant that denies os.tmpdir() as a write target,
+    // while still permitting this test's own fixture creation (repo() calls
+    // fs.mkdtempSync(os.tmpdir()), a write to that same parent directory),
+    // is even constructible is unproven in this environment: see AC-4 in
+    // .review/setup-race-flakes-evidence.md for what was tried and why it
+    // could not be built. This location is chosen because it is inside the
+    // one directory a workspace-scoped sandbox grant names, not because a
+    // run under such a sandbox was observed to distinguish it from
+    // os.tmpdir() directly.
+    const markerRel = '.git/trap-marker';
+    const markerTmpRel = '.git/trap-marker.tmp';
+    const marker = path.join(dir, markerRel);
     // Behaves like a real suite on the first run: the source is present, so it
     // passes at once. On the REVERTED run the source is gone, and this is where
     // it turns uncooperative: it ignores SIGINT and SIGTERM and keeps running.
     // Written this way because the command is the same on both runs, and a
     // child that hangs on the first one never reaches the revert step at all.
-    // The marker is written AFTER the handlers are registered, so its
-    // existence is proof the handlers are already in place, not a guess.
+    //
+    // The pid is written to a TEMPORARY name and renamed into place, rather
+    // than written directly to the marker path. writeFileSync creates a file
+    // at open(), before a single byte of content lands, so a poll on mere
+    // existence can observe the marker between those two steps and read an
+    // empty file. Rename is atomic on the same filesystem: the marker either
+    // does not exist yet, or exists complete, never partial.
     const trapping = `${JSON.stringify(process.execPath)} -e `
       + JSON.stringify(
         "if (require('fs').existsSync('lib2.js')) process.exit(0);"
         + "process.on('SIGINT', () => {}); process.on('SIGTERM', () => {});"
-        + `require('fs').writeFileSync(${JSON.stringify(markerName)}, String(process.pid));`
+        + "const fs = require('fs');"
+        + `fs.writeFileSync(${JSON.stringify(markerTmpRel)}, String(process.pid));`
+        + `fs.renameSync(${JSON.stringify(markerTmpRel)}, ${JSON.stringify(markerRel)});`
         + 'setTimeout(() => process.exit(1), 30000);');
 
     try {
@@ -812,10 +829,13 @@ describe('AC-4 with an uncooperative child, which is where the claim was false',
 
         let out = '';
         let signalled = false;
+        let markerWait = null;
         const deadline = setTimeout(() => {
+          if (markerWait) markerWait.cancel();
           kid.kill('SIGKILL');
-          reject(new Error('red-first did not exit after the interrupt; the '
-            + 'trapping child held it, which is the defect this covers'));
+          reject(new Error('red-first did not exit after the interrupt, or the '
+            + "trapping child's marker never appeared; either is the defect "
+            + 'this covers'));
         }, 20000);
 
         kid.stdout.on('data', (b) => {
@@ -827,39 +847,36 @@ describe('AC-4 with an uncooperative child, which is where the claim was false',
             // a fixed 300ms delay fired before the child had even started,
             // so the assertion that failed was "did the child start" rather
             // than the restore behaviour this test exists to check.
-            waitForCondition(() => fs.existsSync(marker),
-              { label: `the trapping child's marker at ${marker}` })
-              .then(() => kid.kill('SIGINT'))
-              .catch((e) => {
-                // The child never started at all, a real failure distinct
-                // from the one this test covers. Without this, the deadline
-                // timer and the child both outlive the test: the deadline
-                // fires 20s later, and the outer finally deletes `dir` while
-                // red-first is still running against it.
-                clearTimeout(deadline);
-                kid.kill('SIGKILL');
-                reject(e);
-              });
+            markerWait = waitForCondition(() => fs.existsSync(marker));
+            markerWait.promise.then(() => kid.kill('SIGINT'));
           }
         });
         kid.on('error', reject);
         kid.on('exit', () => {
           clearTimeout(deadline);
+          if (markerWait) markerWait.cancel();
           try {
             assert.strictEqual(signalled, true, 'the run reached the revert step');
             assert.strictEqual(fs.existsSync(marker), true,
               'the trapping child really did start and ignore the signal');
+
+            // The rename above guarantees this content is complete, never a
+            // torn write, so a value that still fails to parse as a positive
+            // integer is a malformed marker rather than a live pid, and must
+            // fail here with its own message rather than reach process.kill,
+            // which treats pid 0 as this process's own group and always
+            // succeeds, turning a broken precondition into a false report
+            // that the child never died.
+            const raw = fs.readFileSync(marker, 'utf8');
+            const kidPid = Number(raw);
+            assert.ok(Number.isInteger(kidPid) && kidPid > 0,
+              `the trapping child's marker at ${marker} did not hold a valid pid (read ${JSON.stringify(raw)})`);
 
             // The assertion that discriminates the kill. Restoring the tree
             // while a child that ignores signals keeps running only holds until
             // that child writes again, so AC-4 needs the child ended, not
             // merely outlived. Checked by pid liveness rather than by ps, which
             // the local sandbox blocks.
-            const kidPid = Number(fs.readFileSync(marker, 'utf8'));
-            // Untracked, inside the repo: clear it before the clean-tree
-            // check below, or that check would fail on a file this test
-            // left behind rather than on anything red-first did.
-            fs.rmSync(marker, { force: true });
             const alive = () => { try { process.kill(kidPid, 0); return true; } catch (e) { return false; } };
             const deadline2 = Date.now() + 3000;
             while (alive() && Date.now() < deadline2) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
@@ -877,10 +894,6 @@ describe('AC-4 with an uncooperative child, which is where the claim was false',
         });
       });
     } finally {
-      // The marker lives inside `dir` now (it used to live in os.tmpdir()),
-      // so the recursive removal below already takes it with it; the exit
-      // handler's own fs.rmSync(marker) is the one that has to run early,
-      // to keep the clean-tree check honest.
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
