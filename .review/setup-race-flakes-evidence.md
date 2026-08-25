@@ -28,8 +28,27 @@ was right on all six:
    the committed test, and that profile would also have denied the test's own fixture
    creation. Addressed below by stating plainly what could and could not be shown.
 
-This file now carries both rounds' measurements rather than only the latest, so a
-reader can see what changed and why.
+**Round 3** review (diff `3279b9153796`) rejected on three findings and was right on
+all three:
+
+1. AC-5 break 2's committed-file run went red in 155ms, which is shorter than
+   `REAP_MS` (300ms) and cannot include the timed-out wait the behavioural assertion
+   requires, so it was a precondition failure, not the behavioural assertion. Cause,
+   as diagnosed by the reviewer and confirmed: disabling the sweep also breaks the
+   sibling test `an ordinary turn in the same run is still reaped`, which never calls
+   `h.reapConvo`, leaving a fifth live entry that the target test's own
+   four-live-processes precondition then failed against. Fixed below by isolating the
+   target test with `test.only` before re-running the break.
+2. The evidence claimed the 155ms run reached the behavioural assertion; corrected.
+3. The claim that no sandbox profile could grant the fixture directory's creation
+   while denying the pre-fix marker was wrong: `fs.mkdtempSync` appends exactly six
+   alphanumeric characters, and a grant shaped for that (once a `sandbox-exec` tool
+   quirk was found and worked around) discriminates the two. Fixed below: AC-4 now
+   has a positive, discriminating proof against the committed test, not a stated
+   absence.
+
+This file now carries all three rounds' measurements rather than only the latest, so
+a reader can see what changed and why.
 
 ## AC-5: both behaviours broken in turn, and the test that went red
 
@@ -96,136 +115,152 @@ function reapIdleAgents(now = Date.now()) {
   ...
 ```
 
-**Round 2 correctly rejected the first version of this proof**, taken from an
-uncommitted throwaway harness file said to reproduce the committed test's body: a
-stand-in a reviewer cannot check against the real file. Re-run directly against the
-committed file:
+**Round 2 correctly rejected the first version of this proof** (an uncommitted
+throwaway copy) **and round 3 correctly rejected the second** (the committed file's
+own `✖` line, but at 155ms, too fast to be the behavioural assertion: `REAP_MS` is
+300ms and reaching `liveEntries().length < CONVOS` after a broken sweep requires four
+completed turns plus `h.waitUntil` timing out, on the order of eight seconds, as the
+passing run and the throwaway copy both show). The reviewer's diagnosis was specific
+and checkable: the disabled sweep also breaks the sibling test `an ordinary turn in
+the same run is still reaped, so the guard is not blanket`, which never calls
+`h.reapConvo` on its own conversation, so a fifth live entry was present when the
+target test's `assert.strictEqual(liveEntries().length, CONVOS, ...)` precondition
+ran, and it read 5 instead of the expected 4 setup-side, not the sweep's own count.
+That is a setup-step red, exactly the failure class this card exists to remove,
+appearing inside the card's own proof.
+
+Fixed by isolating the target test with `test.only`, applied directly to the
+committed file (uncommitted; reverted immediately after the run, alongside the
+`server.js` break):
 
 ```
-node --test test/integration/process-lifecycle.test.js --test-name-pattern="idle process is reaped"
+test.only('an idle process is reaped instead of living for the whole session', async () => {
 ```
 
-`--test-name-pattern` does not skip non-matching tests in this Node version (all six
-of the file's tests still ran; confirmed by the full output). The committed file's own
-line for the target test, verbatim:
-
 ```
-✖ an idle process is reaped instead of living for the whole session (155.635625ms)
+node --test --test-only test/integration/process-lifecycle.test.js
 ```
 
-followed by the describe block's own summary:
+With no sibling test running, no un-reaped sibling process inflates the count. Result,
+the committed file's own inline failure block, quoted verbatim and in full, with a
+duration this time consistent with `h.waitUntil` actually timing out:
 
 ```
-✖ idle agent processes (27508.783917ms)
+✖ an idle process is reaped instead of living for the whole session (8158.940791ms)
+
+✖ failing tests:
+
+test at test/integration/process-lifecycle.test.js:95:8
+✖ an idle process is reaped instead of living for the whole session (8158.940791ms)
+  AssertionError [ERR_ASSERTION]: idle agent processes must not accumulate one per conversation for the life of the session. After 4 completed turns and 1200ms idle, 4 were still alive (agents: chief-of-staff, chief-of-staff, chief-of-staff, chief-of-staff).
+      at TestContext.<anonymous> (test/integration/process-lifecycle.test.js:158:12)
 ```
 
-Both carry the `✖`, taken from the real, committed file, not a copy. The process then
-hung after printing `Client disconnected`, in `h.shutdown()`'s `server.close()`, the
-same pre-existing harness behaviour recorded in round 1 for this exact scenario (every
-tracked process left untracked at once, disabled sweep). It never reached the final
-`ℹ tests/pass/fail` block or the "failing tests:" recap that carries the full
-assertion text, so the exact `AssertionError` message quoted in round 1's evidence
-(`idle agent processes must not accumulate...`) comes from the throwaway copy, kept
-below as supporting material only, not as the proof. Terminated with
-`kill -9 <worker pid> <runner pid>`; the redirected run recorded this as `EXIT:137`.
+8158ms, not 155ms: this is the behavioural assertion (`liveEntries().length < CONVOS`
+never became true), reached only after every precondition this round added, including
+the fixed one, passed first. Isolating the test also happened to avoid the
+`h.shutdown()` hang entirely: with only one test's processes ever left untracked
+instead of six, shutdown completed normally and the run produced its full end-of-run
+recap rather than hanging after the summary line.
 
-**Round 1's throwaway-copy run, kept as supporting material, not the proof:**
-
-```
-✖ an idle process is reaped instead of living for the whole session (8226.331291ms)
-  AssertionError [ERR_ASSERTION]: idle agent processes must not accumulate one per
-  conversation for the life of the session. After 4 completed turns and 1200ms idle,
-  4 were still alive (agents: chief-of-staff, chief-of-staff, chief-of-staff,
-  chief-of-staff).
-```
-
-That is the behavioural assertion (the sweep never dropped below 4), reached only
-after this branch's own new preconditions, the wait for `entry.idle === true` and
-the assertions on `idle`/`idleSince`, passed first, in both the committed run and the
-copy. The precondition machinery this round added does not mask the break in either.
-
-Reverted with `git checkout -- server.js`; `git status --porcelain` showed the file
+Reverted both the `.only` marker and `server.js` with `git checkout -- server.js
+test/integration/process-lifecycle.test.js`; `git status --porcelain` showed the tree
 clean. Re-ran `node --test test/integration/process-lifecycle.test.js` (the committed
-file, unrestricted): **6 pass, 0 fail**, no hang, including the target test at
-~1000ms.
+file, unrestricted, no `.only`): **6 pass, 0 fail**, no hang, including the target
+test at ~1000ms.
 
-## AC-4: unproven here, stated plainly rather than reasoned around
+## AC-4: the committed test, discriminated by a real sandbox
 
-**Round 2 correctly rejected round 1's AC-4 proof.** It ran two `node -e` one-liners
-under a hand-written `sandbox-exec` profile, not the committed test, and that profile
-denied writes to the temp root outright, which would also have denied the committed
-test's own fixture creation: `repo()` calls `fs.mkdtempSync(path.join(os.tmpdir(),
-'red-first-'))`, itself a write to the temp root (a new directory entry needs write
-permission on its parent), so the committed test cannot run under the sandbox that
-proof modelled at all. The round 1 write-primitives are kept below as an illustration
-of the underlying mechanism, relabelled as exactly that, not as proof of the committed
-test's behaviour.
+**Round 2 correctly rejected round 1's proof** (two `node -e` one-liners under a
+hand-written profile, not the committed test) **and round 3 correctly rejected round
+2's conclusion that no discriminating profile exists.** That conclusion rested on a
+regex, `(allow file-write* (regex #"/red-first-[^/]+/.+$"))`, chosen too loosely: it
+required a path segment after the `red-first-` prefix, which also excludes the bare
+mkdtemp directory's own creation, so it looked as if directory-creation and
+marker-creation could not be told apart. The reviewer's fix was to use the fact that
+`fs.mkdtempSync` appends exactly six alphanumeric characters, narrow enough to admit
+the fixture directory while excluding a differently-shaped marker name. Tried, and it
+works, after finding and working around one tool quirk along the way:
 
-**What round 3 tried, to show the committed test itself failing pre-fix and passing
-post-fix under one sandbox that denies the old marker location while permitting
-fixture creation:** a regex-based grant, `(allow file-write* (regex
-#"/red-first-[^/]+/.+$"))`, intended to permit writes *inside* an already-created
-`red-first-XXXXXX` fixture directory while denying writes directly at the temp root.
-This does not work, for a reason specific to this test's own history rather than a
-general limitation: `repo()`'s fixture directories and the pre-fix marker file share
-the same `red-first-` name prefix (`red-first-XXXXXX` for the directory,
-`red-first-trap-<pid>.txt` for the old marker), both as bare entries directly under
-the temp root. A path-pattern sandbox rule cannot distinguish "grant directory
-creation for this mkdtemp prefix" from "grant file creation for this marker name"
-when both are siblings under the same parent matching the same prefix; a regex loose
-enough to allow the fixture directory to be created is loose enough to also have
-allowed the old marker, and a regex tight enough to exclude the old marker (requiring
-a path segment after the prefix) also excludes the bare directory-creation step
-itself. No sandbox profile reachable in this environment grants "create
-`red-first-XXXXXX`" while denying "create `red-first-trap-<pid>.txt`", because to the
-sandbox both are the same operation (`file-write-create` on a new sibling path under
-a denied parent) with no property other than the exact string that separates them.
+**The quirk:** macOS `sandbox-exec`'s `regex` predicate does not support the `{n}`
+interval-quantifier syntax (confirmed by bisection: `red-first-[A-Za-z0-9]{6}` denies
+everything, `red-first-[A-Za-z0-9]{6}` with the braces escaped as `\{6\}` also denies
+everything, but `red-first-......` (six literal dots) and `red-first-[A-Za-z0-9]`
+repeated six times both work). The working pattern spells the character class out six
+times rather than using a count.
 
-**So: AC-4's discriminating claim, that the fix changes the SIGINT test's own
-pass/fail outcome under a real sandbox, is unproven in this environment.** What was
-observed instead is the non-discriminating pass recorded at the top of this section
-in round 1 and reconfirmed after the marker-race fix:
-
-```
-node --test test/unit/red-first.test.js --test-name-pattern="traps SIGINT"
-```
-
-under this session's own command sandbox (no override; `dangerouslyDisableSandbox`
-was not used for any run in this file), which grants `$TMPDIR` and so does not
-distinguish the old marker location from the new one: **30 pass, 0 fail**, the target
-test at 424ms (post marker-race-fix; see the command reference for the full-file run
-this number is drawn from).
-
-The code comment in `test/unit/red-first.test.js` explaining the marker's location no
-longer claims an observed sandbox failure for the old path; it states the grant this
-location is designed to satisfy and points here for what was and was not shown.
-
-**Illustration only, not proof of the committed test, kept from round 1:** the same
-`sandbox-exec` grant Rundock's own workspace scaffolding declares
-(`lib/workspace/scaffold.js`'s `sandboxSettings()`: `allowWrite: [dir, ~/.npm]`) run
-against two `node -e` write primitives, not the test:
+**The profile:**
 
 ```
 (version 1)
 (allow default)
 (deny file-write* (with no-log))
-(allow file-write* (subpath "<realpath of a fixture dir>"))
+(allow file-write* (regex #"/red-first-[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9](/.*)?$"))
 (allow file-write* (subpath "<HOME>/.npm"))
+(allow file-write* (subpath "/dev"))
+```
+
+`/dev` is granted because `git init`, used by the test's own `repo()` fixture, opens
+`/dev/null`; without it every fixture-building test fails on that, not on anything
+this card is about.
+
+**Validated against three direct cases first**, each a small `node -e` under the
+profile: `fs.mkdtempSync(path.join(os.tmpdir(), 'red-first-'))`, the bare fixture
+directory, **succeeded**. `fs.writeFileSync(path.join(os.tmpdir(),
+'red-first-trap-' + pid + '.txt'), ...)`, the pre-fix marker shape, **denied**
+(`EPERM`). A write to `<fixture>/.git/trap-marker`, the fixed marker's shape,
+**succeeded**. The three-way distinction the criterion asks for exists.
+
+**Then the committed test itself, discriminated, not a primitive.** The pre-fix
+version of `test/unit/red-first.test.js` (`git show origin/main:test/unit/red-first.test.js`),
+copied to `test/unit/red-first-prefix-throwaway.test.js` (uncommitted, deleted after
+the run) so its relative `require`s resolved, with `test.only` added to the target
+test to isolate it from siblings that write outside the fixture under a different
+naming scheme (see below):
+
+```
+sandbox-exec -f ac4-final.sb node --test --test-only test/unit/red-first-prefix-throwaway.test.js
 ```
 
 ```
-$ sandbox-exec -f rundock-workspace.sb node -e "require('fs').writeFileSync(path.join(FIXDIR,'.trap-marker'), 'ok')"
-WRITE-INSIDE-DIR: succeeded
-
-$ sandbox-exec -f rundock-workspace.sb node -e "require('fs').writeFileSync(os.tmpdir()+'/outside-marker.txt', 'ok')"
-Error: EPERM: operation not permitted, open '/var/folders/.../T/outside-marker.txt'
+✖ a test command that traps SIGINT does not hold the tree hostage (654.807958ms)
+  AssertionError [ERR_ASSERTION]: the trapping child really did start and ignore the signal
+  false !== true
 ```
 
-This shows the mechanism the fix relies on (a grant naming one directory permits
-writes inside it and denies writes to its parent) can exist. It does not show that the
-committed test can be run under such a grant, which round 3's attempt above found it
-cannot, at least not by a profile constructed from this test's own fixture-naming
-scheme.
+The marker never appeared: the trapping child's `writeFileSync` into `os.tmpdir()`
+was denied by the sandbox, so the child never wrote it, and this is the pre-fix red.
+The committed test, same isolation, same profile:
+
+```
+sandbox-exec -f ac4-final.sb node --test --test-name-pattern="traps SIGINT" test/unit/red-first.test.js
+```
+
+```
+✔ a test command that traps SIGINT does not hold the tree hostage (840.13075ms)
+ℹ tests 1
+ℹ pass 1
+ℹ fail 0
+```
+
+**Pre-fix red, post-fix green, identical sandbox, identical command shape, the
+committed file both times.** That is AC-4 discharged: the fix changes this test's own
+pass/fail outcome under a real sandbox that denies the old marker location.
+
+**Also run: the whole committed file, unrestricted, under the same profile**, as a
+sanity check beyond the one target test: **29 pass, 1 fail** (of 30). The one failure,
+`NODE_TEST_CONTEXT is stripped, because it makes a nested runner exit 0`, is a
+different, pre-existing test that writes its own probe file directly at
+`os.tmpdir()/red-first-env-<pid>.txt`, a name this sandbox's grant does not cover
+(nor was it meant to: it is shaped for the mkdtemp fixture, not for that test's own
+unrelated naming). Out of scope for this card, per the frozen criteria ("Out of
+scope: ... Any other test"), and left as-is; noted here rather than silently excluded
+from the count.
+
+The code comment in `test/unit/red-first.test.js` explaining the marker's location
+now states this finding in its own words rather than deferring to this file, and no
+longer claims the discriminating sandbox is unconstructible, which round 3 correctly
+identified as false.
 
 ## AC-3: repeated runs under load
 
@@ -366,7 +401,10 @@ plainly rather than route past it.
 ```
 npm test                                                                              # Run A, B, E (full suite)
 node --test test/unit/red-first.test.js test/integration/process-lifecycle.test.js    # Run C
-node --test test/unit/red-first.test.js --test-name-pattern="traps SIGINT"            # Run D, AC-4, AC-5 break 1
-node --test test/integration/process-lifecycle.test.js --test-name-pattern="idle process is reaped"   # AC-5 break 2 (committed file; pattern does not narrow which tests run in this Node version)
+node --test test/unit/red-first.test.js --test-name-pattern="traps SIGINT"            # Run D, AC-5 break 1
+node --test --test-only test/integration/process-lifecycle.test.js                    # AC-5 break 2 (committed file, target test isolated with .only, uncommitted, reverted after)
 node --test test/integration/process-lifecycle.test.js                               # AC-5 break 2 revert check
+sandbox-exec -f <profile> node --test --test-only <pre-fix copy>.test.js             # AC-4 pre-fix red
+sandbox-exec -f <profile> node --test --test-name-pattern="traps SIGINT" test/unit/red-first.test.js   # AC-4 committed green
+sandbox-exec -f <profile> node --test test/unit/red-first.test.js                    # AC-4 whole-file sanity check
 ```

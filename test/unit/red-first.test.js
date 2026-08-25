@@ -787,15 +787,18 @@ describe('AC-4 with an uncooperative child, which is where the claim was false',
     // earlier version of this test to delete it early, by hand, before the
     // clean-tree assertion.
     //
-    // Whether a sandbox grant that denies os.tmpdir() as a write target,
-    // while still permitting this test's own fixture creation (repo() calls
-    // fs.mkdtempSync(os.tmpdir()), a write to that same parent directory),
-    // is even constructible is unproven in this environment: see AC-4 in
-    // .review/setup-race-flakes-evidence.md for what was tried and why it
-    // could not be built. This location is chosen because it is inside the
-    // one directory a workspace-scoped sandbox grant names, not because a
-    // run under such a sandbox was observed to distinguish it from
-    // os.tmpdir() directly.
+    // A sandbox that denies os.tmpdir() as a write target, while still
+    // permitting this test's own fixture creation (repo() calls
+    // fs.mkdtempSync(os.tmpdir()), which needs write access to that same
+    // parent directory), IS constructible: fs.mkdtempSync appends exactly
+    // six alphanumeric characters, so a grant naming that shape (six
+    // characters, then optionally more path) admits the fixture directory
+    // and everything inside it while rejecting a marker named directly at
+    // the temp root, such as the flat file this test used to write there.
+    // Demonstrated directly, not reasoned about: see AC-4 in
+    // .review/setup-race-flakes-evidence.md for the sandbox profile, and for
+    // the origin/main version of this test failing under it (the marker
+    // never appears) while this file passes under the identical grant.
     const markerRel = '.git/trap-marker';
     const markerTmpRel = '.git/trap-marker.tmp';
     const marker = path.join(dir, markerRel);
