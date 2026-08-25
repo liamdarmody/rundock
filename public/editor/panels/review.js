@@ -179,7 +179,10 @@ export function attachReviewPanel({ paneElement, editor = null, surface = null, 
     btn.onclick = submit;
     wrap.appendChild(ta);
     wrap.appendChild(btn);
-    return { wrap, ta };
+    // `sync` goes back to the caller so text set on the textarea after it is in
+    // the document can size the box and enable the send button, without a
+    // synthetic input event standing in for a keystroke that never happened.
+    return { wrap, ta, sync };
   }
 
   // Settle flash on exactly what a verdict changed, so every action visibly
@@ -222,7 +225,7 @@ export function attachReviewPanel({ paneElement, editor = null, surface = null, 
 
   function openComposer(mode) {
     if (mode === 'suggest' && !surface.supportsSuggest) mode = 'comment';
-    composer = { mode };
+    composer = { mode, refusal: null, draft: '' };
     surface.setComposing(surface.captureSelection());
     if (!open) setOpen(true); else render();
     const ta = sidebar.querySelector('.review-composer textarea');
@@ -251,15 +254,27 @@ export function attachReviewPanel({ paneElement, editor = null, surface = null, 
     if (quote && quote.trim().length > 1) {
       box.appendChild(el('div', 'review-quote', quote.length > 120 ? quote.slice(0, 117) + '…' : quote));
     }
-    const { wrap, ta } = inputWithSend({
+    // A refused anchor keeps the composer open and says why, so the text that
+    // was typed survives and the selection can be moved somewhere it works.
+    if (composer.refusal) box.appendChild(el('div', 'review-composer-refusal', composer.refusal));
+    const { wrap, ta, sync } = inputWithSend({
       placeholder: isSuggest ? 'Replacement text…' : 'Comment…',
       submitTitle: isSuggest ? 'Suggest' : 'Comment',
       onCancel: closeComposer,
       onSubmit: (text) => {
         const liveRange = surface.liveComposingRange();
         const selector = surface.selectorFor(liveRange);
-        if (isSuggest) controller.suggestReplace(text, selector);
-        else controller.addComment(text, selector);
+        const outcome = isSuggest
+          ? controller.suggestReplace(text, selector)
+          : controller.addComment(text, selector);
+        // A refusal changed nothing, so there is nothing to save and no reason
+        // to dismiss what was typed. Show the reason and leave the box up.
+        if (outcome && outcome.refused) {
+          composer.refusal = outcome.reason;
+          composer.draft = text;
+          render();
+          return;
+        }
         composer = null;
         surface.setComposing(null);
         render();
@@ -268,7 +283,14 @@ export function attachReviewPanel({ paneElement, editor = null, surface = null, 
     });
     box.appendChild(wrap);
     container.appendChild(box);
-    void ta; // focused by openComposer
+    // A refusal re-renders the composer, and a rebuilt textarea is an empty
+    // one, so the text is put back and the box refocused. Losing what somebody
+    // typed because the anchor was in the wrong place is its own small defect.
+    if (composer.draft) {
+      ta.value = composer.draft;
+      sync();
+      ta.focus();
+    }
   }
 
   // ------------------------------------------------------------------

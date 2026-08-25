@@ -161,3 +161,96 @@ describe('commenting on a page of fences', () => {
     });
   });
 });
+
+describe('anchoring inside a fenced block', () => {
+  const CODE_ANCHOR = 'const rate';
+
+  test('a comment anchored inside a fence is refused, with a reason', async () => {
+    await withReview(async ({ editor, review, rangeOf }) => {
+      const range = rangeOf(CODE_ANCHOR, true);
+      editor.commands.setTextSelection(range);
+      const result = review.addComment('Should this be a constant?');
+      assert.equal(result.refused, true, 'the comment was applied inside a fenced block');
+      assert.match(result.reason, /code block/i, 'the refusal carried no usable reason');
+    });
+  });
+
+  test('a refused comment changes nothing, so it cannot half-apply', async () => {
+    await withReview(async ({ editor, review, save, rangeOf }) => {
+      const before = save();
+      editor.commands.setTextSelection(rangeOf(CODE_ANCHOR, true));
+      review.addComment('Should this be a constant?');
+      assert.equal(save(), before, 'a refused comment still changed the file');
+      assert.equal(save(), PAGE, 'a refused comment still changed the file');
+      assert.equal(review.isDirty(), false, 'a refused comment left review data to save');
+      assert.equal(review.listItems().length, 0, 'a refused comment left a construct behind');
+    });
+  });
+
+  test('a suggested replacement inside a fence is refused the same way', async () => {
+    await withReview(async ({ editor, review, save, rangeOf }) => {
+      editor.commands.setTextSelection(rangeOf(CODE_ANCHOR, true));
+      const result = review.suggestReplace('const RATE');
+      assert.equal(result.refused, true, 'the suggestion was applied inside a fenced block');
+      assert.equal(save(), PAGE, 'a refused suggestion still changed the file');
+    });
+  });
+
+  test('a suggested insertion at a cursor inside a fence is refused the same way', async () => {
+    await withReview(async ({ editor, review, save, rangeOf }) => {
+      const range = rangeOf(CODE_ANCHOR, true);
+      editor.commands.setTextSelection({ from: range.from, to: range.from });
+      const result = review.suggestInsert(' // rounded');
+      assert.equal(result.refused, true, 'the insertion was applied inside a fenced block');
+      assert.equal(save(), PAGE, 'a refused insertion still changed the file');
+    });
+  });
+
+  test('the block survives the refusal intact, fence markers and all', async () => {
+    await withReview(async ({ editor, review, save, rangeOf }) => {
+      editor.commands.setTextSelection(rangeOf(CODE_ANCHOR, true));
+      review.addComment('Should this be a constant?');
+      const out = save();
+      assert.ok(out.includes('````markdown\n'), 'the outer fence was cut short');
+      assert.ok(out.includes('```js\nconst rate = 0.42;\n```'), 'the inner fence was cut short');
+      assert.ok(!out.includes('\\'), `the save escaped something:\n${out}`);
+    });
+  });
+});
+
+// The controller returns the refusal; the sidebar is what a person actually
+// sees, so the reason is followed all the way to the composer rather than
+// assumed to arrive there.
+describe('the review sidebar, told no', () => {
+  test('the composer stays open, shows the reason, and keeps what was typed', async () => {
+    await withReview(async ({ editor, review, save, rangeOf }) => {
+      const env = await bootEditorEnv();
+      const { attachReviewPanel } = await import('../../public/editor/panels/review.js');
+      const pane = env.window.document.createElement('div');
+      env.window.document.body.appendChild(pane);
+      let saves = 0;
+      const panel = attachReviewPanel({
+        paneElement: pane, editor, controller: review, onRequestSave: () => { saves += 1; },
+      });
+      try {
+        editor.commands.setTextSelection(rangeOf('const rate', true));
+        panel.openComposer('comment');
+        const box = pane.querySelector('.review-composer textarea');
+        assert.ok(box, 'the composer did not open');
+        box.value = 'Should this be a constant?';
+        box.dispatchEvent(new env.window.KeyboardEvent('keydown', { key: 'Enter' }));
+
+        const refusal = pane.querySelector('.review-composer-refusal');
+        assert.ok(refusal, 'the sidebar closed the composer without saying anything');
+        assert.match(refusal.textContent, /code block/i, 'the reason shown says nothing usable');
+        const reopened = pane.querySelector('.review-composer textarea');
+        assert.equal(reopened.value, 'Should this be a constant?', 'the typed comment was thrown away');
+        assert.equal(saves, 0, 'a refused comment asked for a save');
+        assert.equal(save(), PAGE, 'a refused comment changed the file');
+      } finally {
+        panel.detach();
+        pane.remove();
+      }
+    });
+  });
+});
