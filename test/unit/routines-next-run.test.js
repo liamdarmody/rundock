@@ -73,7 +73,7 @@ function withWorkspace(fn, opts = {}) {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'piper.md'), agentFile({
     name: 'piper', displayName: 'Piper', type: 'specialist', order: 1,
-    routines: [{ name: 'Compile the ops summary', schedule: SCHEDULE, prompt: 'p', ...(opts.routine || {}) }],
+    routines: [{ name: 'Compile the ops summary', schedule: SCHEDULE, prompt: 'p', enabled: true, ...(opts.routine || {}) }],
   }));
   invalidateAgentCache();
   try {

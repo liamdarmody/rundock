@@ -44,7 +44,7 @@ function punctualAgents() {
   return {
     punctual: agentFile({
       name: 'punctual', type: 'specialist', order: 1,
-      routines: [{ name: 'clock-check', schedule: SCHEDULE, prompt: ROUTINE_BODY }],
+      routines: [{ name: 'clock-check', schedule: SCHEDULE, prompt: ROUTINE_BODY, enabled: true }],
     }),
   };
 }

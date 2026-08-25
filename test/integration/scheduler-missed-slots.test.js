@@ -36,7 +36,7 @@ before(async () => {
     agents: {
       sleeper: agentFile({
         name: 'sleeper', type: 'specialist', order: 1,
-        routines: [{ name: 'briefing', schedule: 'every day at 05:00', prompt: BODY }],
+        routines: [{ name: 'briefing', schedule: 'every day at 05:00', prompt: BODY, enabled: true }],
       }),
     },
   });
