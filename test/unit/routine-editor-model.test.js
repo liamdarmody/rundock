@@ -138,6 +138,46 @@ describe('routine editor: choosing a skill', () => {
       assert.ok(!words.includes(alarm), `the offer must not read as a fault: found "${alarm}"`);
     }
   });
+
+  // `onlyUnassignedSkills`: the question `createSkill` cannot answer on its
+  // own, since a workspace with no skill and a workspace whose only skill
+  // belongs to nobody both leave `options` empty.
+  describe('onlyUnassignedSkills', () => {
+    test('false on a genuinely empty workspace, which createSkill already covers', () => {
+      const choice = model.skillChoices({ skills: [], agentId: null });
+      assert.strictEqual(choice.createSkill, true);
+      assert.strictEqual(choice.onlyUnassignedSkills, false,
+        'a workspace with no skill at all was reported as having an unassigned one');
+    });
+
+    test('true when the workspace has a skill and nobody has it', () => {
+      const choice = model.skillChoices({ skills: [{ id: 'orphan', name: 'Orphan', assignedAgents: [] }], agentId: null });
+      assert.strictEqual(choice.options.length, 0);
+      assert.strictEqual(choice.onlyUnassignedSkills, true);
+    });
+
+    test('false once any skill in the workspace has an agent', () => {
+      const choice = model.skillChoices({ skills: skillFixture(), agentId: null });
+      assert.strictEqual(choice.onlyUnassignedSkills, false);
+    });
+
+    // Scoped to an agent who owns none of them, `options` is empty even
+    // though every skill in the workspace genuinely belongs to somebody.
+    // The field is a fact about the skills supplied, not about what this one
+    // call could offer, so it stays false here regardless of scope: reading
+    // it as true would tell this reader an unassigned skill exists when the
+    // workspace has none.
+    test('stays false on a scoped call over skills that are all assigned, just not to this agent', () => {
+      const fullyAssigned = [
+        { id: 'ops-summary', name: 'Compile the ops summary', assignedAgents: [{ id: 'piper', name: 'Piper' }] },
+        { id: 'reading-digest', name: 'Refresh the reading digest', assignedAgents: [{ id: 'doc', name: 'Doc' }] },
+      ];
+      const choice = model.skillChoices({ skills: fullyAssigned, agentId: 'nobody' });
+      assert.strictEqual(choice.options.length, 0, 'sanity: this agent has none of them, so nothing is offered');
+      assert.strictEqual(choice.onlyUnassignedSkills, false,
+        'a scoped call with nothing to offer was read as a workspace with an unassigned skill');
+    });
+  });
 });
 
 describe('routine editor: the schedule is built, not typed', () => {
@@ -421,6 +461,7 @@ describe('routine editor: the words it ships', () => {
       model.timezoneCaption({ zone: 'Europe/London', agentName: 'Piper' }),
       model.timezoneCaption({ zone: 'Europe/London', agentName: null }),
       model.STEP_LEADS,
+      model.UNASSIGNED_REASON,
     ]);
   }
 

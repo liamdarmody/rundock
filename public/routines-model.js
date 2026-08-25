@@ -269,6 +269,17 @@
     aside: 'Looking at a skill you already trust? You can also schedule it right from its own page.',
   };
 
+  // The next step appended to `editor.UNASSIGNED_REASON` for the
+  // only-unassigned-skills variant, named here rather than written inline in
+  // the branch that uses it, the same way every other shipped line on this
+  // pane lives in `EMPTY` above rather than in `emptyState`'s return.
+  //
+  // NO SINGULAR PRONOUN, for the reason `UNASSIGNED_REASON` itself carries
+  // none: this pane names no particular skill and can hold this state with
+  // any number of unassigned skills, so "assign it" would point at nothing
+  // with one and be wrong with more than one.
+  const UNASSIGNED_NEXT_STEP = 'Assign your skills to an agent and they will show up here.';
+
   /**
    * WHICH empty state, decided mechanically rather than by taste.
    *
@@ -295,6 +306,15 @@
    * skills. A skill no agent is assigned cannot be scheduled and therefore
    * does not count, which the picker already decides and this inherits.
    *
+   * A THIRD VARIANT, FOR THE CASE THE CHAIN LEAVES OUT. "No skill exists" and
+   * "a skill exists and nobody has it" both leave the picker's `options` at
+   * zero, and until this pass both took the create-a-skill branch, which told
+   * the second workspace to build the skill it already had. `skillChoices`
+   * already knows the difference, having walked both `skills` and `options`
+   * to answer its own question, so it reports it as `onlyUnassignedSkills`
+   * rather than making this file recompute it as a second rule that could
+   * disagree with the picker's own.
+   *
    * AND IT WAITS. "Skills have not arrived yet" and "there are no skills" are
    * different states and only one of them is an offer. Without the wait, a
    * workspace that does have skills is told to build one for a beat on every
@@ -312,6 +332,29 @@
       return { lead: EMPTY.lead, body: editor.STEP_LEADS.loading, action: null, actionKind: null, aside: null };
     }
     const choice = editor.skillChoices({ skills: (input && input.skills) || [] });
+    // CHECKED BEFORE `createSkill`, because `createSkill` is also true here
+    // and would otherwise win the branch first.
+    if (choice.onlyUnassignedSkills) {
+      return {
+        lead: EMPTY.lead,
+        // THE MECHANISM IS THE SKILL PAGE'S OWN SENTENCE, not a second one
+        // written here: `editor.UNASSIGNED_REASON` is the exact string the
+        // skill's own page states in its Schedule card when that skill has
+        // no agent, so the two surfaces cannot end up disagreeing about why.
+        // `UNASSIGNED_NEXT_STEP`, declared above with the rest of this
+        // pane's shipped copy, is the sentence appended to it.
+        body: `${editor.UNASSIGNED_REASON} ${UNASSIGNED_NEXT_STEP}`,
+        // NEITHER A BUTTON NOR AN ASIDE. Assigning a skill to an agent is
+        // existing behaviour this state points at, not a control this pane
+        // grows. And the aside the other states carry promises scheduling
+        // "right from its own page", which is exactly the thing that page
+        // withholds while the skill has no agent; offering it here would
+        // have this state contradict the one it is naming.
+        action: null,
+        actionKind: null,
+        aside: null,
+      };
+    }
     if (choice.createSkill) {
       // THE ACTION GOES WITH THE AGENT THAT FULFILS IT, AND THE NEXT STEP DOES
       // NOT. Dropping the button on its own would leave a line instructing an

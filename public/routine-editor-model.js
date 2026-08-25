@@ -203,6 +203,43 @@
   // ===== THE SKILL PICKER =====
 
   /**
+   * Why an unassigned skill cannot be scheduled, said once and read by both
+   * surfaces that have to say so: the routines view's own empty state, when
+   * every skill the workspace has is unassigned, and a skill's own page,
+   * when that specific skill is. ONE STRING, so the two cannot drift into
+   * two different explanations of the same fact.
+   *
+   * NEITHER 'NOBODY HAS' NOR 'NO AGENT HAS', DELIBERATELY. A skill's own
+   * page, directly above where this string is shown, already describes an
+   * unassigned skill as available to all agents, and a reason phrased as a
+   * denial that any agent had it would contradict the card sitting above it
+   * on the same page. So this states the MECHANISM instead: a routine is
+   * declared on one specific agent's file, which is a fact about routines
+   * rather than a claim about who has the skill, and it holds together with
+   * the skill being available to every agent rather than instead of it.
+   *
+   * NO DEICTIC EITHER, so 'a skill' rather than 'this skill'. The routines
+   * view can carry this state with any number of unassigned skills and
+   * names none of them, so 'this skill' would point at nothing there, and
+   * with more than one it would be false on the skill's own page too: there
+   * is no single 'this skill' once the workspace has several. Stated as a
+   * general fact about a skill, it reads true wherever it is shown and for
+   * however many skills the state applies to.
+   */
+  const UNASSIGNED_REASON = "A routine is written into one specific agent's file, "
+    + 'so a skill has to be assigned to a specific agent before it can be scheduled.';
+
+  /**
+   * A skill's assigned agents, safe against a skill with none and against
+   * `skill` itself being missing. The one place that reads `assignedAgents`,
+   * so `skillChoices` below has a single spot to trust it from rather than
+   * two copies of the same defensive lookup that could drift apart.
+   */
+  function assignedAgentsOf(skill) {
+    return (skill && skill.assignedAgents) || [];
+  }
+
+  /**
    * What can be scheduled, and for whom.
    *
    * Two entries reach this. From an agent's page the choice is that agent's,
@@ -224,7 +261,7 @@
     const options = [];
 
     for (const skill of skills) {
-      const assigned = (skill && skill.assignedAgents) || [];
+      const assigned = assignedAgentsOf(skill);
       for (const agent of assigned) {
         if (agentId && agent.id !== agentId) continue;
         options.push({
@@ -247,6 +284,16 @@
       createSkill: options.length === 0,
       createSkillLabel: STEP_LEADS.build,
       emptyLead: STEP_LEADS.empty,
+      // A FACT ABOUT THE SKILLS SUPPLIED, NOT ABOUT `options`, and so NOT
+      // SCOPED BY `agentId`. `options` answers "what can this call offer",
+      // which for a scoped call is silent about skills belonging to other
+      // agents; a workspace where every skill belongs to somebody else would
+      // read as "unassigned" under a scoped reading, which is false. This
+      // reads `skills` directly instead, true only when at least one was
+      // supplied and none of them has an agent, which is true or false the
+      // same way whichever scope the call was made with.
+      onlyUnassignedSkills: skills.length > 0
+        && skills.every(skill => assignedAgentsOf(skill).length === 0),
     };
   }
 
@@ -392,6 +439,7 @@
 
   return {
     RUN_ON_SUPPORTED, RUN_ON_CAVEAT, WORKSPACE_CAVEAT, RUN_ON_LABEL, FREQUENCIES, STEP_LEADS, SAVE_DESTINATION,
+    UNASSIGNED_REASON,
     runOnOptions, runOnOption, runOnField, scheduleStepFields,
     skillChoices, stepLead,
     times, buildSchedule, previewSentence,
