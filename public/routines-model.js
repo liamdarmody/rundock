@@ -95,6 +95,28 @@
     label: 'Turn on',
   };
 
+  /**
+   * What a row says when the scheduler cannot read its schedule.
+   *
+   * THE SILENCE THIS ENDS. `parseSchedule` accepts two shapes and returns null
+   * for everything else, at which point the tick skips the routine with no
+   * error, no warning and no log line. A cron-scheduled routine then sits in a
+   * first-class Routines view looking exactly like a routine, and the silence
+   * has moved from a log nobody reads to a surface everybody reads. Migration
+   * never touches a schedule, so every such entry survives an upgrade exactly
+   * as written, which means anyone arriving from cron arrives with these.
+   *
+   * IT NAMES WHAT TO CHANGE, BY EXAMPLE. "Unsupported schedule" sends the
+   * reader to documentation this product does not put in front of them. The
+   * two shapes that work, written out, send them to the editor instead. Both
+   * are given because a reader whose job is weekly should not have to guess
+   * that the daily example generalises.
+   */
+  const SCHEDULE_PROBLEM = {
+    lead: 'Rundock cannot read this schedule, so this routine will not run.',
+    body: 'Change it to say every day at 07:00, or a weekday, like every Monday at 07:00.',
+  };
+
   const LEAD = {
     title: 'Routines',
     lead: 'Every scheduled skill across your team, and when it runs next.',
@@ -495,6 +517,34 @@
   }
 
   /**
+   * Whether the row must say this routine will never fire, and what to change.
+   *
+   * ASKED OF THE SERVER'S ANSWER, NEVER RE-DERIVED HERE. Whether a schedule
+   * parses is the scheduler's question, and its grammar lives beside the tick.
+   * A second copy on this side would be free to disagree with the tick about
+   * which routines can ever run. It is also not the same question as whether
+   * `scheduleWords` has plain words to show: the editor offers times on the
+   * half hour, so `every day at 07:03` has no words and runs perfectly well,
+   * and a row judging readability that way would accuse a working routine.
+   *
+   * AN EXPLICIT FALSE AND NOTHING ELSE. A roster that did not carry the field
+   * says nothing rather than accusing every routine on it, because the field is
+   * new and silence must not become a complaint.
+   *
+   * AND A ROUTINE WITH NO SCHEDULE AT ALL IS LEFT ALONE. That is a different
+   * fault, and telling its owner to change a schedule they never wrote is an
+   * answer to a question nobody asked.
+   *
+   * @param {{schedule?: any, scheduleReadable?: boolean}} [input]
+   */
+  function scheduleProblem(input) {
+    if (!input || input.scheduleReadable !== false) return null;
+    const schedule = input.schedule;
+    if (typeof schedule !== 'string' || !schedule.trim()) return null;
+    return { text: `${SCHEDULE_PROBLEM.lead} ${SCHEDULE_PROBLEM.body}` };
+  }
+
+  /**
    * The offer to turn a held-back routine on, or nothing.
    *
    * READ OFF AN EXPLICIT FALSE, never off a falsy value. A routine that
@@ -530,6 +580,11 @@
     // worse than silence: it is the exact reassurance the reader came for.
     // The offer takes this line's place on the row.
     if (input && input.enabled === false) return null;
+    // Nor does a routine whose schedule nothing here can read. Its next run is
+    // already null, so this changes no output today; it is written because the
+    // rule is the same one, and a later caller that supplied an instant anyway
+    // would otherwise put a time against a routine that will never fire.
+    if (input && input.scheduleReadable === false) return null;
     const words = timeWords(input && input.nextRun, input && input.now, input && input.zone);
     if (!words) return null;
     return { text: `Next run: ${words}`, className: 'next-run' };
@@ -609,6 +664,9 @@
       // every other row, so the view draws nothing where there is nothing to
       // offer.
       offer: enableOffer(input),
+      // The one thing on a row that is neither history nor a promise: a fault
+      // in the routine itself, which only the person who wrote the file can fix.
+      scheduleProblem: scheduleProblem(input),
     };
   }
 
@@ -636,10 +694,10 @@
   }
 
   return {
-    OUTCOMES, LEAD, EMPTY, ACTION_PROBLEM, NOT_ENABLED, CATCH_UP_AFTER_MS,
+    OUTCOMES, LEAD, EMPTY, ACTION_PROBLEM, NOT_ENABLED, SCHEDULE_PROBLEM, CATCH_UP_AFTER_MS,
     actionProblem, emptyState, header,
     dayWords, clockWords, zoneWords, timeWords,
     scheduleWords, routineSentence, sentenceParts,
-    outcomeOf, lastCompletedRunFailed, anyFailure, runStatus, nextRunLabel, enableOffer, orderByNextRun, row, deleteConfirmation,
+    outcomeOf, lastCompletedRunFailed, anyFailure, runStatus, nextRunLabel, enableOffer, scheduleProblem, orderByNextRun, row, deleteConfirmation,
   };
 }));

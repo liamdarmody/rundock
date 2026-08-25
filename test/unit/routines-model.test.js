@@ -896,3 +896,59 @@ describe('a routine nobody has turned on yet', () => {
     assert.strictEqual(row.nextRun, null);
   });
 });
+
+// ===== A SCHEDULE THE SCHEDULER CANNOT READ =====
+//
+// Whether a schedule parses is the SCHEDULER'S question, answered on the server
+// and carried on the roster. It is deliberately not asked again here: the
+// editor offers times on the half hour, so `scheduleWords` returns null for
+// `every day at 07:03` as well, which the scheduler reads perfectly well. A row
+// that judged readability by whether it had plain words to show would tell a
+// working routine it will never fire.
+describe('a routine whose schedule the scheduler cannot read', () => {
+  const problem = (input) => m.scheduleProblem(input);
+
+  test('the row is told it will not run, and what to change', () => {
+    const p = problem({ schedule: '0 7 * * *', scheduleReadable: false });
+    assert.ok(p, 'an unreadable schedule raises nothing');
+    assert.match(p.text, /cannot read this schedule/i);
+    // Both accepted shapes, by example rather than by description. A reader
+    // who has just been told their schedule is wrong needs one they can copy.
+    assert.match(p.text, /every day at 07:00/);
+    assert.match(p.text, /every Monday at 07:00/);
+  });
+
+  test('a schedule the scheduler reads raises nothing', () => {
+    assert.strictEqual(problem({ schedule: 'every day at 07:00', scheduleReadable: true }), null);
+    // Including the ones with no plain words to show, which is the case that
+    // would break if this asked the editor's lists instead of the scheduler.
+    assert.strictEqual(problem({ schedule: 'every day at 07:03', scheduleReadable: true }), null);
+  });
+
+  // A ROSTER THAT DID NOT CARRY THE FIELD SAYS NOTHING, rather than accusing
+  // every routine on it. The fact is new, and a client meeting an older server,
+  // or any caller that builds a row by hand, must not turn silence into a
+  // complaint about a routine that runs perfectly well.
+  test('a routine that never said raises nothing', () => {
+    assert.strictEqual(problem({ schedule: 'every day at 07:00' }), null);
+    assert.strictEqual(problem({}), null);
+    assert.strictEqual(problem(null), null);
+  });
+
+  // A routine with no schedule at all is a different fault, and telling its
+  // owner to change a schedule they never wrote is an answer to a question
+  // nobody asked.
+  test('a routine with no schedule at all is not told to change one', () => {
+    assert.strictEqual(problem({ schedule: null, scheduleReadable: false }), null);
+    assert.strictEqual(problem({ schedule: '   ', scheduleReadable: false }), null);
+  });
+
+  test('the problem reaches the row, and the row promises no run', () => {
+    const row = m.row({
+      name: 'Cron briefing', schedule: '0 7 * * *', scheduleReadable: false,
+      enabled: true, paused: false, nextRun: null, now: NOW, zone: ZONE,
+    });
+    assert.ok(row.scheduleProblem, 'the row drops the problem');
+    assert.strictEqual(row.nextRun, null);
+  });
+});

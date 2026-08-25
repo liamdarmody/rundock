@@ -281,3 +281,103 @@ describe('the roster carries what the row renders', () => {
     });
   });
 });
+
+// ===== A SCHEDULE THE SCHEDULER CANNOT READ =====
+//
+// `parseSchedule` accepts two shapes and returns null for everything else, at
+// which point `getNextRun` returns null and the tick skips the routine with no
+// error, no warning and no log line. A cron-scheduled routine therefore sits in
+// a first-class Routines view looking exactly like a routine, with nothing
+// saying it will never fire. The silence moved from a log nobody reads to a
+// surface everybody reads.
+//
+// AND MIGRATION NEVER TOUCHES A SCHEDULE, so every such entry survives an
+// upgrade exactly as written. Anyone arriving from cron arrives with these.
+//
+// DRIVEN FROM FRONTMATTER TO RENDERED ROW, which is the only place this can be
+// proven. The judgement is the scheduler's grammar, the fact travels on the
+// roster, and the words are the model's, so a test at any one of those three
+// would pass while the row still drew as ordinary.
+describe('a schedule the scheduler cannot read', () => {
+  const CRON = '0 7 * * *';
+
+  function cronWorkspace(fn) {
+    const dir = makeWorkspace({
+      agents: {
+        piper: agentFile({
+          name: 'piper', displayName: 'Piper', type: 'specialist', order: 1,
+          routines: [
+            // Written by somebody moving over from cron, exactly as their
+            // crontab said it.
+            { name: 'Cron briefing', schedule: CRON, prompt: 'p', enabled: true },
+            // The contrast, and the whole of AC-8: a routine that is simply
+            // not due yet. Both are enabled, both are unpaused, neither has
+            // ever run. The only difference is whether Rundock can read the
+            // schedule.
+            { name: 'Not due yet', schedule: SCHEDULE, prompt: 'p', enabled: true },
+          ],
+        }),
+      },
+    });
+    const originalWorkspace = config.getWorkspace();
+    config.setWorkspace(dir);
+    invalidateAgentCache();
+    const previousDeps = sched.wireSchedulerDeps({ now: () => NOW });
+    try {
+      discoverAgents();
+      invalidateAgentCache();
+      return fn(discoverAgents());
+    } finally {
+      config.setWorkspace(originalWorkspace);
+      invalidateAgentCache();
+      sched.wireSchedulerDeps(previousDeps);
+    }
+  }
+
+  // AC-9. Fails if the row renders as an ordinary routine.
+  test('a cron schedule reaches the row saying it will not run, and what to change', () => {
+    cronWorkspace((agents) => {
+      const { doc, dom } = render(agents);
+      const row = rowNamed(doc, 'Cron briefing');
+      const words = text(row);
+      assert.match(words, /cannot read this schedule/i,
+        `the cron row says nothing about its schedule: ${words}`);
+      // NAMES WHAT TO CHANGE, rather than only that something is wrong. A row
+      // that says "unsupported" sends the reader to the documentation; a row
+      // carrying the two shapes that work sends them to the editor.
+      assert.match(words, /every day at 07:00/,
+        'the row does not name a schedule that would work');
+      assert.match(words, /every Monday at 07:00/,
+        'the row does not name the weekly shape either');
+      // And it does not promise a run, because there is no run to promise.
+      assert.ok(!/Next run/.test(words), `the cron row still promises a next run: ${words}`);
+      dom.window.close();
+    });
+  });
+
+  // AC-8. The two rows, side by side, in the rendered output rather than in
+  // the model alone.
+  test('the unreadable row is distinguishable from one that is simply not due yet', () => {
+    cronWorkspace((agents) => {
+      const { doc, dom } = render(agents);
+      const cron = rowNamed(doc, 'Cron briefing');
+      const waiting = rowNamed(doc, 'Not due yet');
+
+      // The ordinary row says when it runs next and carries no complaint.
+      assert.strictEqual(text(waiting.querySelector('.next-run')),
+        'Next run: today, 7:00am, London time');
+      assert.strictEqual(waiting.querySelector('.schedule-problem'), null,
+        'a routine that is merely waiting is drawn as one that cannot run');
+
+      // The cron row is the other way round.
+      assert.ok(cron.querySelector('.schedule-problem'),
+        'the unreadable row carries no mark of its own');
+      assert.strictEqual(cron.querySelector('.next-run'), null);
+
+      // Told apart by their text, not only by a class, so the difference
+      // survives a stylesheet that renders both the same.
+      assert.notStrictEqual(text(cron), text(waiting));
+      dom.window.close();
+    });
+  });
+});

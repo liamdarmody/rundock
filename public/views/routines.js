@@ -225,6 +225,10 @@ function rowHtml(entry, index, withActions) {
     // false and nothing else, so a roster that did not carry the field must
     // arrive here as undefined rather than as a routine somebody switched off.
     enabled: r.enabled,
+    // The scheduler's own verdict on this routine's schedule, carried on the
+    // roster. Passed through untouched: a client that decided this for itself
+    // would be a second copy of a grammar that lives beside the tick.
+    scheduleReadable: r.scheduleReadable,
     now: routinesClock(),
     zone: routinesZone(),
   });
@@ -249,6 +253,16 @@ function rowHtml(entry, index, withActions) {
   // next run for this state: a routine that will not run must not advertise
   // when it will. Withheld on the delete confirmation, like every other
   // control there: that surface is a question, not a list.
+  // A ROUTINE THAT WILL NEVER FIRE SAYS SO, on its own line and in its own
+  // tone, because it is the only state on this list that is a fault in the
+  // routine rather than a fact about its history. It is drawn on the delete
+  // confirmation too, unlike the controls: somebody about to remove a routine
+  // is entitled to know it was never going to run.
+  if (row.scheduleProblem) {
+    body += '<div class="rr-meta rr-problem-line">'
+      + `<span class="schedule-problem">${esc(row.scheduleProblem.text)}</span>`
+      + '</div>';
+  }
   if (row.offer && withActions) {
     body += '<div class="rr-meta rr-offer-line">'
       + `<span class="rr-offer-text">${esc(row.offer.text)}</span>`

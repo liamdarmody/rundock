@@ -243,7 +243,8 @@ describe('one path produces every row\'s next-run time', () => {
       // anchor is not read out of a store that a tick has to fill in first.
       assert.deepStrictEqual(sched.nextRunFor(KEY, SCHEDULE), TODAYS_SLOT);
       assert.deepStrictEqual(sched.routineDisplayFacts(KEY, SCHEDULE),
-        { nextRun: TODAYS_SLOT.toISOString(), lastStart: null, lastSlot: null, missedSlot: null });
+        { nextRun: TODAYS_SLOT.toISOString(), lastStart: null, lastSlot: null, missedSlot: null,
+          scheduleReadable: true });
     });
   });
 
@@ -252,8 +253,14 @@ describe('one path produces every row\'s next-run time', () => {
       sched.wireSchedulerDeps({ now: () => NOW });
       anchor(sched, TODAYS_SLOT);
       assert.strictEqual(sched.nextRunFor(KEY, '0 7 * * *'), null);
+      // AND IT SAYS SO, which is the half that was missing. A null next run
+      // means several things: already ran this period, paused, or a schedule
+      // nothing here understands. Only the last is permanent and only the last
+      // is something the file's author can fix, so the fact travels rather
+      // than being inferred from an absent instant.
       assert.deepStrictEqual(sched.routineDisplayFacts(KEY, '0 7 * * *'),
-        { nextRun: null, lastStart: null, lastSlot: null, missedSlot: null });
+        { nextRun: null, lastStart: null, lastSlot: null, missedSlot: null,
+          scheduleReadable: false });
     });
   });
 
