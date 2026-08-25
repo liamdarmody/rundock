@@ -131,47 +131,74 @@ asserts the write failed before it asserts the routine did not run: a migration
 that quietly succeeded would make that test a duplicate of the one above
 wearing a different name.
 
-## AC-8 and AC-9: the rendered output for both rows, side by side
+**Driven twice, at two different calls.** Making one FILE read-only lets the
+migration take its backup copy and fails on the final write. A read-only
+DIRECTORY, which is what a read-only checkout actually is, fails one call
+earlier, at the copy. Both land in the same catch and both leave the reader's
+answer to do the work, but that was a claim about the migration's control flow
+rather than something anything drove, so the second drive exists and asserts
+the backup never appeared.
 
-Three routines in one workspace, through real discovery to the real view. All
-three are unpaused and none has ever run. Printed as the page carries them.
+## The rendered rows, side by side
+
+Five routines in one workspace, through real discovery to the real view. None
+has ever run and none is failing, so the only thing separating these rows is
+what stops each one running. Printed as the page carries them.
 
 ```
 ROW: Every day at 7:00am, run: Not due yet
-  rendered text : ★Every day at 7:00am, run: Not due yetPiper·Runs on this computer·Next run: today, 7:00am, London time
-  .next-run     : "Next run: today, 7:00am, London time"
-  .schedule-problem : (none)
-  .rr-offer-text    : (none)
+  next run        : "Next run: today, 7:00am, London time"
+  schedule fault  : (none)
+  offer           : (none)
+  Turn on control : absent
 
 ROW: Every day at 7:00am, run: Held back
-  rendered text : ★Every day at 7:00am, run: Held backPiper·Runs on this computerNot running. Turn it on and Rundock will start running it on this schedule.Turn on
-  .next-run     : (none)
-  .schedule-problem : (none)
-  .rr-offer-text    : "Not running. Turn it on and Rundock will start running it on this schedule."
+  next run        : (none)
+  schedule fault  : (none)
+  offer           : "Not running. Turn it on and Rundock will start running it on this schedule. If today's time has already gone, it runs shortly after you turn it on."
+  Turn on control : present
 
 ROW: Cron briefing
-  rendered text : ★Cron briefingPiper·Runs on this computerRundock cannot read this schedule, so this routine will not run. Change it to say every day at 07:00, or a weekday, like every Monday at 07:00.
-  .next-run     : (none)
-  .schedule-problem : "Rundock cannot read this schedule, so this routine will not run. Change it to say every day at 07:00, or a weekday, like every Monday at 07:00."
-  .rr-offer-text    : (none)
+  next run        : (none)
+  schedule fault  : "Rundock cannot read this schedule, so this routine will not run. Change it to say every day at 07:00, or a weekday, like every Monday at 07:00."
+  offer           : (none)
+  Turn on control : absent
 
+ROW: Cron and held back
+  next run        : (none)
+  schedule fault  : "Rundock cannot read this schedule, so this routine will not run. Change it to say every day at 07:00, or a weekday, like every Monday at 07:00."
+  offer           : (none)
+  Turn on control : absent
+
+ROW: Every day at 7:00am, run: Paused and held back
+  next run        : "Paused"
+  schedule fault  : (none)
+  offer           : (none)
+  Turn on control : absent
 ```
 
-The three rows are told apart by their words, not only by a class:
+**Each row says exactly one thing about whether it will run.** That is the rule
+the rows are built to, and it is not free: a row is assembled from lines decided
+independently, so any two of them can disagree.
 
-- **Not due yet** carries a next run and no complaint.
-- **Held back** carries the offer, and no next run, because a routine that will
-  not run must not advertise when it will.
-- **Cron briefing** says the schedule cannot be read and names both shapes that
-  work, and carries no next run either.
+- **Not due yet** promises a run and denies nothing.
+- **Held back** denies one and offers to change that, and says when the first
+  run would land, because a slot that has already gone today is caught up
+  within the minute rather than waiting for tomorrow.
+- **Cron briefing** and **Cron and held back** both name the fault that has to
+  be fixed first and offer nothing, because turning either on would start
+  nothing while the schedule cannot be read.
+- **Paused and held back** says Paused and offers nothing, for the same reason.
 
-Asserted in `test/unit/routines-end-to-end.test.js`, in "the unreadable row is
-distinguishable from one that is simply not due yet" and "a cron schedule
-reaches the row saying it will not run, and what to change". Both drive
-frontmatter to rendered row, which is the only place the claim can be proven:
-the judgement is the scheduler's grammar, the fact travels on the roster, and
-the words are the model's, so a test at any one of those three would pass while
-the row still drew as ordinary.
+The three rows that offer nothing are the rule working. The offer is made only
+where turning it on is the ONLY thing between the routine and running, which is
+the scheduler's own refusal order asked on the row's side.
+
+Asserted in `test/unit/routines-end-to-end.test.js`, which drives frontmatter to
+rendered row, and swept exhaustively in `test/unit/routines-model.test.js`: every
+combination of seven row states is built and rendered, and any row carrying both
+a line that promises a run and one that denies it fails, as does any row
+explaining an absence by a cause that did not apply.
 
 ## Reproducing these
 
@@ -180,7 +207,34 @@ npm install
 node --test test/integration/scheduler-predating-routines.test.js
 node --test test/unit/routines-end-to-end.test.js
 node --test test/unit/routine-model.test.js
+node --test test/unit/routines-model.test.js
 ```
+
+## The rule the rows are held to, and how far it was checked
+
+A row can carry a line that PROMISES the routine will run (a next run, or the
+offer) and a line that DENIES it (Paused, or the unreadable-schedule fault).
+Every pair of those was checked rather than the one that was found:
+
+- a next run and an unreadable schedule cannot co-occur: the model returns no
+  next run for a schedule the scheduler could not parse, pinned by supplying an
+  instant alongside an unreadable schedule so the guard is the thing tested
+- a next run and the offer cannot co-occur: the model returns no next run for a
+  routine that is not enabled
+- a next run and Paused are the same field and mutually exclusive by
+  construction
+- the offer and any of Paused, an unreadable schedule, or a run target this
+  release cannot run: the offer is now withheld on all three
+- a run status and an unreadable schedule cannot co-occur, because a schedule
+  that does not parse yields no run facts at all to report
+
+A run status is deliberately neither kind of line: it reports the past, and the
+row pairs it with the next run on purpose. What it can get wrong is its own
+cause, which is the second rule: the missed line says Rundock was closed, and on
+a routine nobody ever turned on that is untrue.
+
+Both rules are swept over every combination of seven row states rather than the
+pairs anyone thought to write down.
 
 ## What is deliberately not here
 
