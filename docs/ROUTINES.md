@@ -30,6 +30,7 @@ Each entry in the `routines:` array is a YAML object with four fields. The parse
 | `schedule` | string | Rundock-only | Yes | When the routine runs. Accepts only the human-readable forms documented below. The scheduler ignores routines with an unrecognised schedule (silent fail). | `schedule: every day at 05:00` |
 | `prompt` | string | Rundock-only | Yes | The instruction sent to the agent when the routine fires. Treated as a single user message: the same text the user would type. | `prompt: Run the morning briefing` |
 | `description` | string | Rundock-only | No | One-line plain English explanation of the routine, surfaced on the agent profile. Optional: omitting it does not break the routine. | `description: Triage today's tasks, calendar, and content pipeline.` |
+| `enabled` | boolean | Rundock-only | No | Whether the scheduler may run this routine. **Absent means not enabled**, so a routine written before Rundock could run one stays held back until somebody turns it on. See [Upgrading a workspace that already has routines](#upgrading-a-workspace-that-already-has-routines). The editor writes it explicitly, so a routine created there is live at once. | `enabled: true` |
 
 The whole `routines` block is Rundock-only. Claude Code does not parse it. Other tools that read agent frontmatter ignore it.
 
@@ -66,6 +67,30 @@ schedule: every day @ 05:00        # only "at" is recognised
 Cron expressions are not supported. The parser does not raise an error on a cron schedule; the scheduler's next-run calculation simply returns null and the routine is skipped on every tick. If a routine has been declared but appears to never run, the schedule string is the first thing to check.
 
 The schedule is interpreted in the local timezone of the machine running Rundock. There is no timezone field on a routine.
+
+## Upgrading a workspace that already has routines
+
+If a workspace already carried routines before Rundock could run them, the upgrade is the moment they all become live at once. That is rarely what anyone wants: routines written by hand usually sat next to a cron job that was already doing the work, and starting them means the morning briefing goes out twice.
+
+So it does not happen. **A routine whose block has no `enabled` key reads as not enabled.** It is listed, it keeps every word of its file, and it does not run until somebody turns it on. The Routines list shows the offer on the row, and the offer says what accepting it does: Rundock will start running the routine on its schedule.
+
+Absence is the only marker. Nothing looks at run history or at whether the workspace has been seen before:
+
+- A block that says `enabled: true` is live, and the upgrade leaves it alone.
+- A block that says `enabled: false` stays off, and the upgrade leaves that alone too.
+- A block that says nothing is held back, because nothing had ever offered it the field.
+
+Routines made in the editor are unaffected. The editor writes `enabled` explicitly when it creates a routine, so a routine made today is live from the moment it is saved and needs no second act.
+
+The first read of an agent file also fills the absent keys in, so the file ends up saying `enabled: false` where it used to say nothing. That write is best effort: on a workspace that cannot be written to, the routine is still read as not enabled and still does not run. The rule is the read's, not the write's.
+
+### What an upgrade does to a cron-scheduled routine
+
+Nothing at all, which is the point. **Migration never touches a `schedule`, so a cron expression survives an upgrade exactly as it was written.** It is not translated, not rewritten, and not removed.
+
+It also still does not run, and it never did: cron is not one of the two accepted forms, so the next-run calculation returns null and every tick skips the routine. What has changed is that the silence is over. The routine's row in the Routines list now says Rundock cannot read the schedule, and names the two forms that work, so a routine that will never fire is told apart from one that is simply not due yet.
+
+A cron-scheduled routine is therefore held back twice over: its schedule cannot be read, and, if its block never carried `enabled`, it is not enabled either. Fixing the schedule is the part that matters, because a routine turned on with a schedule nothing can read still never runs.
 
 ## Scheduler behaviour
 

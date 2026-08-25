@@ -375,6 +375,58 @@ describe('ROUTINES.md: the hook experiment reports the capture\'s own numbers', 
 });
 
 // ---------------------------------------------------------------------------
+// docs/ROUTINES.md: what an upgrade does to routines that already existed
+// ---------------------------------------------------------------------------
+
+describe('ROUTINES.md: an upgrade starts nothing, and rewrites no schedule', () => {
+  const { normalizeRoutine, migrateAgentRoutines } = require('../../lib/agents/routines.js');
+
+  // THE CLAIM, in the doc's own words: a routine whose block has no `enabled`
+  // key reads as not enabled. Pinned behaviourally, by calling the reader,
+  // because the sentence is the whole reason an upgrade does not start five
+  // routines at once and a source-shape pin would only prove the words are
+  // still on the page.
+  test('a block with no enabled key reads as not enabled, as the page says', () => {
+    assert.strictEqual(normalizeRoutine({ name: 'r', schedule: 'every day at 05:00' }).enabled, false);
+    assert.match(routinesDoc, /A routine whose block has no `enabled` key reads as not enabled/,
+      'ROUTINES.md must state what an upgrade does to a routine that predates the scheduler');
+  });
+
+  // And the other two rows of the same list, which are what stop the rule
+  // being applied as a blanket switch-off.
+  test('an enabled the file already carries is left alone in both directions', () => {
+    assert.strictEqual(normalizeRoutine({ name: 'r', enabled: 'true' }).enabled, true);
+    assert.strictEqual(normalizeRoutine({ name: 'r', enabled: 'false' }).enabled, false);
+  });
+
+  // The cron claim, which is the one a contributor is most likely to act on:
+  // if migration DID rewrite schedules, somebody reading this page would go
+  // looking for the translation and find none.
+  test('migration leaves a cron schedule exactly as it was written', () => {
+    const dir = useWorkspace({
+      agents: {
+        piper: [
+          '---', 'name: piper', 'type: specialist', 'order: 1',
+          'routines:',
+          '  - name: cron-briefing',
+          '    schedule: 0 5 * * *',
+          '    prompt: Run it',
+          '---', '', '# Piper', '',
+        ].join('\n'),
+      },
+    });
+    const file = path.join(dir, '.claude', 'agents', 'piper.md');
+    const before = fs.readFileSync(file, 'utf-8');
+    const after = migrateAgentRoutines(file, before, { owner: 'piper' });
+    assert.match(after, /schedule: 0 5 \* \* \*/,
+      'the migration rewrote a schedule, which this page promises it never does');
+    assert.match(routinesDoc, /Migration never touches a `schedule`/,
+      'ROUTINES.md must state what an upgrade does to a cron-scheduled routine');
+    // And it is still held back, which is the other half of the same sentence.
+    assert.match(after, /enabled: false/);
+  });
+});
+
 // docs/ROUTINES.md: the catch-up window
 // ---------------------------------------------------------------------------
 

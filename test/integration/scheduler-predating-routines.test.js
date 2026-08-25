@@ -244,3 +244,57 @@ test('a routine in a workspace that cannot be written to does not fire either', 
 
   await settleControl();
 });
+
+// AC-2. THE OTHER SIDE OF THE SAME RULE, and the one a fix for AC-1 is most
+// likely to break on its way past.
+//
+// The reader who has just been told their five old routines are held back must
+// not find the same thing happening to the routine they make next. A routine
+// created through the editor carries `enabled` explicitly from birth, so it is
+// live the moment it is saved and there is no second act: no switch to find, no
+// second visit to this list.
+//
+// DRIVEN THROUGH THE EDITOR'S OWN SAVE PATH AND THEN THROUGH A REAL TICK,
+// rather than asserted off the writer. `appendRoutineBlock` writing the key is
+// what makes this true, and a unit test of it says nothing about whether the
+// scheduler then runs the thing: the two are separated by a file, a migration
+// and a gate, which is exactly where a routine created live could stop being
+// live without a single test noticing.
+test('a routine created in the editor is live without a second act', async (t) => {
+  clock.at = NEXT_LATE;
+  armControl();
+  const client = await h.connect();
+  h.writeScenario([
+    { match: { agent: 'worker', promptIncludes: 'ordinary body' }, turn: [{ text: 'routine ran' }] },
+    { match: { agent: 'briefer', promptIncludes: 'brand new body' }, turn: [{ text: 'routine ran' }] },
+  ]);
+
+  client.send({
+    type: 'save_routine',
+    agentId: 'briefer',
+    routine: {
+      name: 'brand-new', schedule: 'every day at 05:00',
+      prompt: 'brand new body', runOn: 'local',
+    },
+  });
+  await client.waitFor(m => m.type === 'routine_saved', { label: 'the routine being saved' });
+
+  // The file says so out loud, which is what makes it live rather than merely
+  // untouched by the migration.
+  const file = path.join(h.workspaceDir, '.claude', 'agents', 'briefer.md');
+  assert.match(fs.readFileSync(file, 'utf-8'), /name: brand-new[\s\S]*?enabled: true/,
+    'the editor wrote a routine without saying whether it may run');
+
+  invalidateAgentCache();
+  driveTick(t);
+
+  await h.waitUntil(() => {
+    const s = h.internal.routineState['briefer:brand-new'];
+    return s && s.status !== 'running';
+  });
+  assert.strictEqual(h.internal.routineState['briefer:brand-new'].status, 'completed',
+    'a routine made a moment ago did not run, so making one now needs a second act');
+
+  await settleControl();
+  client.ws.close();
+});
