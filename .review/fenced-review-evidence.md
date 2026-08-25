@@ -314,7 +314,7 @@ Result, pasted from that run:
 
 | Guard broken | Places found | Tests red | Which |
 |---|---|---|---|
-| a comment refuses a range in a block that holds only text | 1 | 4 | `a comment anchored inside a fence is refused, with a reason`<br>`a refused comment changes nothing, so it cannot half-apply`<br>`the block survives the refusal intact, fence markers and all`<br>`the composer stays open, shows the reason, and keeps what was typed` |
+| a comment refuses a range in a block that holds only text | 1 | 6 | `a comment anchored inside a fence is refused, with a reason`<br>`a refused comment changes nothing, so it cannot half-apply`<br>`the block survives the refusal intact, fence markers and all`<br>`the composer stays open, shows the reason, and keeps what was typed`<br>`a success is the anchor id, nothing to do is false, a refusal names itself`<br>`the refusal reason names a code block only when a code block refused` |
 | a suggested replacement refuses a range in a block that holds only text | 1 | 1 | `a suggested replacement inside a fence is refused the same way` |
 | a suggested insertion refuses a cursor in a block that holds only text | 1 | 1 | `a suggested insertion at a cursor inside a fence is refused the same way` |
 | the fence is the one the file was written with, not a fixed three backticks | 1 | 13 | `the fixture round-trips byte-for-byte`<br>`the four-backtick fence keeps four backticks, so its inner fence stays inside it`<br>`the tilde fence is still a tilde fence`<br>`a fence written into a block is longer than the fences the block now holds`<br>`a second and third cycle change nothing further`<br>`adding a comment in prose changes only the comment markers`<br>`replying to a comment leaves the document bytes alone`<br>`resolving a comment gives the document back its original bytes`<br>`a refused comment changes nothing, so it cannot half-apply`<br>`a suggested replacement inside a fence is refused the same way`<br>`a suggested insertion at a cursor inside a fence is refused the same way`<br>`the block survives the refusal intact, fence markers and all`<br>`the composer stays open, shows the reason, and keeps what was typed` |
@@ -386,3 +386,23 @@ saving.
 Nothing on disk changes. The test serialises the file before the refused
 attempt and after it and compares the two strings, and asserts that the
 controller never became dirty, so no save would have been triggered either.
+
+**The reason is read off the block that refused, rather than assumed.** The
+guard asks a block what it can hold, so it also fires where there is no block at
+all, and a message that always said "a code block" would be naming a cause it
+had not checked. A fenced block is named when it is the one refusing, and the
+wording falls back otherwise.
+`the refusal reason names a code block only when a code block refused` holds
+both halves: it drives a refusal from inside a fence and reads the wording, then
+drives one from a position between blocks and requires that a code block is not
+blamed for it.
+
+**The three authoring commands now have three outcomes where they had two**, and
+that is the kind of change a later caller reads wrongly. A success is still the
+anchor id as a string and nothing to do is still `false`; a refusal is
+`{ refused: true, reason }`, which is truthy, so a caller testing the result for
+truthiness has to check `refused` rather than read a refusal as success. The
+contract is stated at the top of the controller and pinned by
+`a success is the anchor id, nothing to do is false, a refusal names itself`,
+which asserts all three shapes for all three commands. The only caller in the
+tree is the review sidebar, and it is driven by a test of its own.

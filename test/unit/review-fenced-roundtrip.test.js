@@ -360,3 +360,54 @@ describe('an indented fence: a known drift, not a fixed one', () => {
     assert.equal(await roundTrip(once), once, 'the file keeps losing indentation on every save');
   });
 });
+
+// The three authoring commands gained a third outcome, and a third outcome on a
+// function that used to have two is how a caller quietly starts reading a
+// refusal as a success. The one caller in the tree is the review sidebar, and
+// the test above drives it; this pins the shape the next caller will meet.
+describe('what the authoring commands return', () => {
+  test('a success is the anchor id, nothing to do is false, a refusal names itself', async () => {
+    await withReview(async ({ editor, review, rangeOf }) => {
+      const prose = rangeOf(PROSE_ANCHOR, false);
+      const fenced = rangeOf('const rate', true);
+
+      // Nothing to do: false, as it was before there was a third outcome.
+      assert.equal(review.addComment(''), false);
+      assert.equal(review.suggestInsert(''), false);
+      editor.commands.setTextSelection({ from: prose.from, to: prose.from });
+      assert.equal(review.suggestReplace('x'), false, 'an empty selection is nothing to do');
+
+      // Refused: an object that says so, never a bare falsy value a caller
+      // could mistake for nothing having been asked.
+      const refused = review.addComment('why?', fenced);
+      assert.equal(typeof refused, 'object');
+      assert.equal(refused.refused, true);
+      assert.equal(typeof refused.reason, 'string');
+      assert.ok(refused.reason.length > 0);
+
+      // Success: the id, as a string, so an existing caller reading it as one
+      // still gets one.
+      const id = review.addComment('why?', prose);
+      assert.equal(typeof id, 'string');
+      assert.equal(id, 'c1');
+    });
+  });
+
+  test('the refusal reason names a code block only when a code block refused', async () => {
+    // The guard asks what a block can hold rather than checking for a code
+    // block by name, so it also fires where there is no block at all. A reason
+    // that always said "a code block" would be naming a cause it had not
+    // checked.
+    await withReview(async ({ review, rangeOf }) => {
+      const fenced = review.addComment('why?', rangeOf('const rate', true));
+      assert.match(fenced.reason, /^A code block holds plain text only/, fenced.reason);
+
+      // Between blocks there is no block: the position resolves to the
+      // document itself, which cannot hold a construct either.
+      const outside = review.addComment('why?', { from: 0, to: 0 });
+      assert.equal(outside.refused, true, 'a position with no block accepted a comment');
+      assert.doesNotMatch(outside.reason, /code block/i,
+        `a refusal from outside any block blamed a code block: ${outside.reason}`);
+    });
+  });
+});

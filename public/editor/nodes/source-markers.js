@@ -251,10 +251,9 @@ function codeBlockFromStarterKit() {
   return found;
 }
 
-// Code blocks: the fence marker, its length, and the info string. The
-// serializer is a full replacement rather than an addition, so the trailing
-// newline handling below has to be carried over with it (see the comment on
-// updateDOM).
+// Code blocks: the fence marker, its length, and the info string. The markdown
+// spec here replaces the default one key by key, so the trailing newline
+// handling has to be carried over with it (see the comment on updateDOM).
 export const SourceCodeBlock = codeBlockFromStarterKit().extend({
   addAttributes() {
     return {
@@ -299,8 +298,9 @@ export const SourceCodeBlock = codeBlockFromStarterKit().extend({
           // markdown-it ends a fence's rendered content with a newline inside
           // the `code` element, and the code block's `preserveWhitespace: full`
           // would carry it into the node as an extra blank line on every open.
-          // Repeated here because supplying a markdown spec replaces the
-          // default one rather than extending it.
+          // Repeated here because the default spec is merged one key deep:
+          // supplying `parse` replaces the default `parse` whole, this handler
+          // with it, rather than adding to it.
           updateDOM(element) {
             element.innerHTML = element.innerHTML.replace(/\n<\/code><\/pre>/g, '</code></pre>');
           },

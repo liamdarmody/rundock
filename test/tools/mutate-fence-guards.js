@@ -76,13 +76,13 @@ const SERIALISER_IN_CORPUS = { ...SERIALISER, suite: 'test/unit/ofm-parity.test.
 const MUTATIONS = [
   // FAULT ONE, in each of the three places a person can author from.
   [CONTROLLER, 'a comment refuses a range in a block that holds only text',
-    "    if (!rangeHoldsConstructs(from, to)) return REFUSED_IN_PLAIN_TEXT_BLOCK;\n    const id = nextId('c');",
+    "    if (!rangeHoldsConstructs(from, to)) return refusalForRange(from, to);\n    const id = nextId('c');",
     "    const id = nextId('c');"],
   [CONTROLLER, 'a suggested replacement refuses a range in a block that holds only text',
-    "    if (!rangeHoldsConstructs(from, to)) return REFUSED_IN_PLAIN_TEXT_BLOCK;\n    const id = nextId('s');",
+    "    if (!rangeHoldsConstructs(from, to)) return refusalForRange(from, to);\n    const id = nextId('s');",
     "    const id = nextId('s');"],
   [CONTROLLER, 'a suggested insertion refuses a cursor in a block that holds only text',
-    '    if (!blockHoldsConstructs(to)) return REFUSED_IN_PLAIN_TEXT_BLOCK;\n',
+    '    if (!blockHoldsConstructs(to)) return refusalAt(to);\n',
     ''],
   // FAULT TWO, in each of the three things the source fence line carries.
   [SERIALISER, 'the fence is the one the file was written with, not a fixed three backticks',
