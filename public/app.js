@@ -56,7 +56,7 @@ const persist = (() => {
 const sunIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`;
 const moonIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
 
-let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false, currentWorkspacePath=null, workspaceAnalysis=null, workspaceIsEmpty=false, workspaceMode='knowledge', setupComplete=true, conversationsLoaded=false, activeSidebarPill='all', convoLists=[];
+let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false, currentWorkspacePath=null, servingWorkspacePath=null, workspaceAnalysis=null, workspaceIsEmpty=false, workspaceMode='knowledge', setupComplete=true, conversationsLoaded=false, activeSidebarPill='all', convoLists=[];
 let runtimeStatus = null; // { defaultRuntime, claude: {installed, authenticated, version}, codex: {...} }
 const agentLastActivity = {}; // { agentId: { time: Date, label: string } }
 // Per-conversation state: { convoId: { isProcessing, currentStreamingMsg, latestText } }
@@ -265,6 +265,14 @@ function handle(d) {
       workspaceOpenStartedAt = Date.now();
       onWorkspaceReady(d.path, d.analysis, d.isEmpty, d.workspaceMode, d.scaffoldError, d.setupComplete);
       break;
+    // WHICH WORKSPACE THE SCHEDULER IS SERVING, which is not the same question
+    // as which workspace this window opened. There is one scheduler on this
+    // server and several windows can be looking at it, so another window
+    // switching the server leaves this one showing a workspace nothing is
+    // running for. This arrives on every switch, including switches this
+    // window did not ask for, and it carries the path only: the reader stays
+    // where they were and the routines list stops promising runs.
+    case 'serving_workspace': setServingWorkspace(d.path); break;
     case 'folder_picked': if (d.path) selectWorkspace(d.path); break;
     case 'workspace_error': {
       const errEl = document.getElementById('workspace-error');
@@ -288,7 +296,11 @@ function handle(d) {
     // AND THE RAIL, for the same reason one step further out: the roster is
     // also what arrives when a run finishes, which is the only thing that
     // raises or clears the failure dot.
-    case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesPanel(); renderRoutines(); updateRoutineFailureBadge(); renderConvoList(); break;
+    //
+    // THE WORKSPACE THE ROSTER WAS READ FROM ARRIVES WITH IT, on the same
+    // message, so the routines list can never compare rows against a workspace
+    // value that moved after they did. Assigned before anything draws.
+    case 'agents': agents=d.agents; setServingWorkspace(d.workspace); renderAgentList(); renderOrgChart(); renderRoutinesPanel(); renderRoutines(); updateRoutineFailureBadge(); renderConvoList(); break;
     // renderRoutines as well as renderSkills: the routines empty state asks
     // whether the workspace has a skill, so the reply that answers that
     // question is the reply that has to redraw it. Without this the list sits
@@ -1449,9 +1461,36 @@ function resetSidebarForWorkspace() {
   setNavState('conversations');
 }
 
+/**
+ * Record which workspace the server's scheduler is serving.
+ *
+ * THE ONLY WRITER OF THIS VALUE, and every caller hands it a string the SERVER
+ * produced from its own `getWorkspace()`: the path on a serving_workspace
+ * notice, the workspace beside a roster, and the path the server confirms a
+ * workspace_set with. That is the same string discovery stamps on every
+ * routine, so the routines list compares two copies of one value rather than
+ * two paths that were spelled independently and might differ by a separator or
+ * a resolved symlink.
+ *
+ * NEVER SET FROM `currentWorkspacePath`, which is what this window asked to
+ * open and can be out of date the moment another window switches the server.
+ *
+ * A missing value leaves the previous one alone rather than clearing it: an
+ * older server that sends a roster without the workspace beside it has not
+ * said the scheduler stopped serving anything.
+ */
+function setServingWorkspace(path) {
+  if (typeof path !== 'string' || !path) return;
+  servingWorkspacePath = path;
+}
+
 function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupComplete) {
   const isSameWorkspace = (currentWorkspacePath === dir);
   currentWorkspacePath = dir;
+  // The server confirmed this path out of its own root, so it is the serving
+  // workspace as well as the one this window now shows. Set here so a window
+  // that opens a workspace and never receives another message still knows.
+  setServingWorkspace(dir);
   workspaceAnalysis = analysis || null;
   workspaceIsEmpty = !!isEmpty;
   workspaceMode = mode || 'knowledge';

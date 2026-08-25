@@ -48,6 +48,11 @@ const ROOT = path.join(__dirname, '..', '..');
 // noticed as well.
 const MODEL = { src: path.join(ROOT, 'public', 'routine-editor-model.js'), suite: 'test/unit/routine-editor-model.test.js' };
 const VIEW = { src: path.join(ROOT, 'public', 'views', 'routine-editor.js'), suite: 'test/unit/routine-editor-view.test.js' };
+// The model's shape for the schedule step, watched by the file that RENDERS
+// that step. Watched from the model's own suite, taking the caveat off the step
+// stays green: that suite can still read the constant directly, which is
+// exactly the reading this shape exists to stop being sufficient.
+const MODEL_STEP = { src: path.join(ROOT, 'public', 'routine-editor-model.js'), suite: 'test/unit/routine-editor-view.test.js' };
 // The client's message dispatch. It is not a module the suite can load, so its
 // case bodies are cut out and run; mutating it here is what proves those tests
 // are watching the dispatch rather than the stubs they run it against. Wiring
@@ -281,8 +286,8 @@ const MUTATIONS = [
   // first, so this mutation silently broke a different one and nothing turned
   // red. It carries its neighbour now, which makes it unique to this handler.
   [HANDLER, 'the roster is invalidated before it is rebroadcast',
-    "  ctx.agents.invalidateAgentCache();\n  ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents() }));",
-    "  ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents() }));"],
+    "  ws.send(JSON.stringify(message));\n  ctx.agents.invalidateAgentCache();\n  ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents(), workspace: getWorkspace() }));",
+    "  ws.send(JSON.stringify(message));\n  ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents(), workspace: getWorkspace() }));"],
   [HANDLER, 'a refusal from the data model is reported rather than swallowed',
     "    fail(e && e.message ? e.message : 'That routine could not be written.');\n    return;",
     '    return;'],
@@ -346,6 +351,20 @@ const MUTATIONS = [
   [ROUTINES_TZ, 'the migration does not invent a timezone for a routine that never recorded one',
     "const MIGRATED_KEYS = ['runOn', 'enabled', 'paused', 'planHash'];",
     "const MIGRATED_KEYS = ['runOn', 'enabled', 'paused', 'planHash', 'timezone'];"],
+  // WHICH WORKSPACE RUNS THE ROUTINE BEING MADE, said on the step every route
+  // into this editor passes through. A requirement that a sentence APPEARS on
+  // a surface is only proved by taking it away and watching something go red;
+  // the constant on its own can be rendered on a help page and nowhere else
+  // with the model's tests all green.
+  [VIEW, 'the schedule step says which workspace this routine will run in',
+    '    h += `<p class="re-caveat" data-routine-editor="workspace-caveat">${escText(m.scheduleStepFields().workspaceCaveat)}</p>`;\n',
+    ''],
+  [MODEL_STEP, 'the step carries the caveat, so a render of the step cannot drop it',
+    '      workspaceCaveat: WORKSPACE_CAVEAT,\n',
+    ''],
+  [MODEL, 'the caveat names the rule rather than only the consequence',
+    "  const WORKSPACE_CAVEAT = 'Rundock runs the routines of the workspace that is open. '",
+    "  const WORKSPACE_CAVEAT = 'Routines run on a schedule. '"],
 ];
 
 // The reporter is named explicitly rather than left to the default, which
@@ -388,7 +407,7 @@ function run() {
   // Both files are read up front and both are restored in the same finally, so
   // a throw part way through cannot leave either one mutated.
   const originals = new Map();
-  for (const target of [MODEL, VIEW, APP, HANDLER, PROFILE, SKILL_DOOR, SKILLS_PAGE, ROUTINES, ROUTINES_TZ]) originals.set(target, fs.readFileSync(target.src, 'utf8'));
+  for (const target of [MODEL, MODEL_STEP, VIEW, APP, HANDLER, PROFILE, SKILL_DOOR, SKILLS_PAGE, ROUTINES, ROUTINES_TZ]) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];
   try {
     for (const [target, label, guard, without] of MUTATIONS) {

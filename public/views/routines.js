@@ -77,6 +77,45 @@ function routinesClock() {
   return typeof routinesNow === 'function' ? routinesNow() : new Date();
 }
 
+/**
+ * The workspace the server's scheduler is serving, taken from the global the
+ * shell keeps.
+ *
+ * NOT `currentWorkspacePath`, and the difference is the whole of what this
+ * list gets right. That one is the workspace this WINDOW asked to open, and
+ * another window can move the server out from under it. This one is written
+ * only from values the server produced, which is the same string discovery
+ * stamps on every routine, so the comparison below is between two copies of
+ * one value.
+ *
+ * Read through typeof for the same reason the clock is: this file is required
+ * in node with no global at all, and an undeclared identifier throws where a
+ * typeof does not.
+ */
+function routinesServingWorkspace() {
+  return typeof servingWorkspacePath === 'string' ? servingWorkspacePath : null;
+}
+
+/**
+ * The workspace the routines being listed were read out of.
+ *
+ * ONE VALUE FOR THE WHOLE ROSTER, because a roster is only ever read from one
+ * workspace: discovery stamps every routine it reads with the root it read
+ * them from. Taken off the rows rather than from a global so it describes what
+ * is actually on screen, which is the fault the header carried before: it
+ * named the workspace the window remembered, directly above a list of rows
+ * that had come from somewhere else.
+ */
+function routinesRosterWorkspace() {
+  const roster = typeof agents !== 'undefined' && agents ? agents : [];
+  for (const agent of roster) {
+    for (const routine of (agent && agent.routines) || []) {
+      if (routine && typeof routine.workspace === 'string' && routine.workspace) return routine.workspace;
+    }
+  }
+  return null;
+}
+
 function routinesZone() {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
@@ -229,6 +268,11 @@ function rowHtml(entry, index, withActions) {
     // roster. Passed through untouched: a client that decided this for itself
     // would be a second copy of a grammar that lives beside the tick.
     scheduleReadable: r.scheduleReadable,
+    // The workspace this routine was read out of, and the one the server is
+    // serving. Both are the server's own value, compared by the model rather
+    // than assumed equal here.
+    workspace: r.workspace,
+    servingWorkspace: routinesServingWorkspace(),
     now: routinesClock(),
     zone: routinesZone(),
   });
@@ -256,6 +300,17 @@ function rowHtml(entry, index, withActions) {
   if (row.scheduleProblem) {
     body += '<div class="rr-meta rr-problem-line">'
       + `<span class="schedule-problem">${esc(row.scheduleProblem.text)}</span>`
+      + '</div>';
+  }
+  // A ROUTINE NOTHING IS SERVING SAYS WHERE RUNDOCK WENT. Drawn on its own
+  // line and toned unlike the schedule fault above: nothing about the routine
+  // is wrong, so it takes the quiet tone the missed row uses rather than the
+  // danger one. Drawn on the delete confirmation too, for the same reason the
+  // schedule fault is: somebody about to remove a routine is entitled to know
+  // it was not running.
+  if (row.workspaceNote) {
+    body += '<div class="rr-meta rr-note-line">'
+      + `<span class="workspace-note">${esc(row.workspaceNote.text)}</span>`
       + '</div>';
   }
   // THE ROW FOR A ROUTINE NOBODY HAS TURNED ON YET. It takes the next-run
@@ -362,12 +417,13 @@ function routinesScopeName() {
  * the list passes its scoped sentence, and the empty pane passes nothing,
  * because its state line lives in the box below rather than in the header.
  */
-function headerHtml(subtitle) {
+function headerHtml(subtitle, workspace) {
   const model = routinesModel();
   let h = '<div class="profile-header">'
     + `<div class="profile-avatar skill-avatar">${CLOCK_SVG}</div>`
     + `<div><div class="profile-name">${esc(model.LEAD.title)}</div>`
     + (subtitle ? `<div class="routines-subtitle">${esc(subtitle)}</div>` : '')
+    + (workspace ? `<div class="routines-workspace" data-routines-workspace>${esc(workspace)}</div>` : '')
     + '</div></div>';
   // On the header rather than in one of the three branches below, so the
   // refusal is on the page whichever state the list is in when it arrives.
@@ -377,9 +433,25 @@ function headerHtml(subtitle) {
   return h;
 }
 
-/** The header a list of routines carries, scoped or not. */
+/**
+ * The header a list of routines carries, scoped or not.
+ *
+ * WHOSE ROUTINES THESE ARE, ON THE HEADER RATHER THAN ON EACH ROW. It is one
+ * fact about the whole list, and a reader with three workspaces otherwise has
+ * to read it off the window.
+ *
+ * ON THE LIST AND NOT ON THE EMPTY PANE, which is the one caller that passes
+ * no subtitle. "These are the routines in Ledger" above "No routines yet"
+ * describes a list that is not there, and the empty pane's whole shape is one
+ * box carrying what is true and what to do about it.
+ */
 function listHeaderHtml() {
-  return headerHtml(routinesModel().header({ agentName: routinesScopeName() }).subtitle);
+  const head = routinesModel().header({
+    agentName: routinesScopeName(),
+    workspace: routinesRosterWorkspace(),
+    servingWorkspace: routinesServingWorkspace(),
+  });
+  return headerHtml(head.subtitle, head.workspace);
 }
 
 // The one thing each variant offers, and where pressing it goes. Held as a

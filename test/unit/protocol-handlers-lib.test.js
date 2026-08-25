@@ -112,6 +112,61 @@ describe('handler seams (stub ctx, capture ws)', () => {
     }
   });
 
+  // EVERY WINDOW IS TOLD, NOT ONLY THE ONE THAT ASKED.
+  //
+  // There is one scheduler and it serves one workspace, and several windows
+  // can be looking at one server: a browser on the laptop and one on the
+  // phone, which is the setup the always-on documentation recommends. Only the
+  // socket that asked used to hear about a switch, so every other window went
+  // on drawing a next-run time against routines the scheduler had stopped
+  // serving. Nothing on those screens was true and nothing on them said so.
+  //
+  // ASSERTED AGAINST THE BROADCAST AND NOT AGAINST THE ASKING SOCKET, because
+  // the asking socket was always told. The whole content of this is that the
+  // message goes somewhere else as well.
+  test('set_workspace tells every connected client which workspace is now served', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-handlers-'));
+    const broadcast = [];
+    const noop = () => {};
+    const ctx = {
+      signals: { phaseTimer: () => ({ mark: noop, summary: () => '' }), reportStartup: noop },
+      runtime: { killAllChildren: noop, cleanOrphanedProcesses: noop },
+      workspace: {
+        setWorkspaceRoot: (d) => config.setWorkspace(d),
+        armAgentsDirWatcher: noop, armFileTreeWatcher: noop, healWorkspaceIfMoved: noop,
+        saveRecentWorkspace: noop, fileTreeForSend: () => [],
+      },
+      agents: { armAgentsDirWatcher: noop, invalidateAgentCache: noop },
+      store: { clearSearchFailure: noop, ensureSearchEngine: noop },
+      broadcast: (raw) => broadcast.push(JSON.parse(raw)),
+    };
+    try {
+      const ws = captureWs();
+      table.set_workspace(ctx, ws, { type: 'set_workspace', path: dir });
+      assert.ok(ws.sent.some(m => m.type === 'workspace_set'),
+        'sanity: the open path ran to the end rather than into the rollback');
+
+      const notices = broadcast.filter(m => m.type === 'serving_workspace');
+      assert.strictEqual(notices.length, 1, 'exactly one notice, to everybody');
+      assert.strictEqual(notices[0].path, config.getWorkspace(),
+        "the notice carries the server's own root, which is the string discovery stamps on routines");
+      assert.strictEqual(notices[0].path, dir);
+
+      // The roster the asking socket receives carries the same value, so a
+      // window comparing rows against it is comparing two copies of one
+      // string rather than two independently spelled paths.
+      const roster = ws.sent.find(m => m.type === 'agents');
+      assert.ok(roster, 'the asking socket still receives its roster');
+      assert.strictEqual(roster.workspace, config.getWorkspace(),
+        'and the workspace it was read from travels with it');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('set_workspace rolls the root back and answers when the open path throws', () => {
     const table = buildDispatch();
     const original = config.getWorkspace();
