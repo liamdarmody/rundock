@@ -699,15 +699,54 @@ test('the workspace switch does not release a run that is still going', async ()
         agents: { armAgentsDirWatcher: noop, invalidateAgentCache: noop },
         store: { clearSearchFailure: noop, ensureSearchEngine: noop },
       };
+      // WHAT PROVES THE SWITCH'S RESETS RAN, planted before the switch and
+      // read after it.
+      //
+      // This test used to prove that from the run state's status: a live run
+      // persists 'running', the load rewrote 'running' to 'interrupted', and
+      // finding 'interrupted' meant the load had been through. It no longer
+      // rewrites a run this process is still running, and correcting that is
+      // the whole point of the change beside this one, so the proof has to
+      // come from somewhere the correction cannot reach.
+      //
+      // Both stores the load rebuilds are given a fact that exists only on
+      // disk, for a routine with no live run to complicate it. Neither value
+      // can be in memory unless the load put it there, and only
+      // loadRoutineState and the slot load it calls ever put them there. That
+      // is a strictly wider proof than the status was: the status said the run
+      // state had been rebuilt and said nothing at all about the slot records
+      // being reloaded beside it.
+      const PLANTED_KEY = 'planted:by-the-file';
+      const PLANTED_STAMP = '2026-08-10T07:00:00.000Z';
+      const OBSERVED_AT = '2026-08-10T07:01:00.000Z';
+      const rundock = path.join(dir, '.rundock');
+      const stateFile = path.join(rundock, 'routine-state.json');
+      const onDisk = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
+      onDisk[PLANTED_KEY] = { lastRun: PLANTED_STAMP, status: 'completed', duration: 2 };
+      fs.writeFileSync(stateFile, JSON.stringify(onDisk));
+      fs.writeFileSync(path.join(rundock, 'routine-slots.json'),
+        JSON.stringify({ observedAt: OBSERVED_AT, routines: {} }));
+      assert.strictEqual(sched.routineState[PLANTED_KEY], undefined,
+        'and it is only on disk: nothing in memory knows about it yet');
+      assert.strictEqual(sched.routineSlots.observedAt, null,
+        'nor about the observation beside it');
+
       const handlers = freshWorkspaceHandlers(sched);
       handlers.handleSetWorkspace(ctx, ws, { type: 'set_workspace', path: dir });
       assert.ok(sent.some(m => m.type === 'workspace_set'),
         'the switch ran its open path to the end rather than into the rollback');
 
-      // Only loadRoutineState writes this value, so it is the proof the
-      // switch's resets really ran rather than being skipped over.
-      assert.strictEqual(sched.routineState[KEY].status, 'interrupted',
+      // REPLACES the assertion on KEY's status being rewritten to
+      // 'interrupted', which said "the switch rebuilt the run state from the
+      // workspace file" and now says it of a value the correction cannot
+      // touch.
+      assert.deepStrictEqual(sched.routineState[PLANTED_KEY],
+        { lastRun: PLANTED_STAMP, status: 'completed', duration: 2 },
         'the switch rebuilt the run state from the workspace file');
+      assert.strictEqual(sched.routineSlots.observedAt, OBSERVED_AT,
+        'and reloaded the slot records beside it, which the old proof never covered');
+      assert.strictEqual(sched.routineState[KEY].status, 'running',
+        'while the run that is still going goes on saying so, which is what the switch must not change');
       assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), false,
         'and the hold survived it, because the child it describes is still running');
       child.emit('close', 0);
@@ -1002,7 +1041,20 @@ test('a run that is still going in this process keeps reporting running', async 
         assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true, 'the run started');
         assert.strictEqual(runRecords(dir)[0].status, 'running', 'and its record says so');
 
+        // Planted so the reload has something to prove it happened with. The
+        // two assertions this test used to close on were the proof that the
+        // load ran at all: the routine state came back rewritten. It no longer
+        // is, for the live run this test is about, so the load needs a fact of
+        // its own that only a load could deliver.
+        const stateFile = path.join(dir, '.rundock', 'routine-state.json');
+        const onDisk = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
+        onDisk['planted:by-the-file'] = { lastRun: '2026-08-10T07:00:00.000Z', status: 'completed', duration: 2 };
+        fs.writeFileSync(stateFile, JSON.stringify(onDisk));
+        assert.strictEqual(sched.routineState['planted:by-the-file'], undefined, 'and it is only on disk');
+
         sched.loadRoutineState();
+
+        assert.ok(sched.routineState['planted:by-the-file'], 'the reload really ran');
 
         const [record] = runRecords(dir);
         assert.strictEqual(record.status, 'running',
@@ -1011,39 +1063,35 @@ test('a run that is still going in this process keeps reporting running', async 
         assert.strictEqual(record.filesReason, 'running',
           'and its list is unsettled for the true reason, because it really has not finished');
 
-        // WHERE THE TWO STORES DELIBERATELY DISAGREE, asserted here rather
-        // than smoothed over, because a divergence nothing states is one the
-        // next reader meets as a bug.
+        // WHERE THE TWO STORES USED TO DISAGREE, AND WHY THEY NO LONGER DO.
+        // This is the account the previous version of these two assertions
+        // asked for, written at the place it said the change would land.
         //
-        // The criterion behind the test above asks the record and the routine
-        // state to agree about whether a run is still going. ON THIS PATH THEY
-        // DO NOT, and the record is the one telling the truth.
+        // What the two assertions here used to say: that the routine state
+        // came back 'interrupted' while the record stayed 'running', that the
+        // two stores therefore disagreed knowingly, and that the record was
+        // the one telling the truth. The reason given was that a file on disk
+        // cannot tell a dead process's leftovers from a run that is still
+        // going, while the record can, because this process knows which runs
+        // it opened.
         //
-        // Why. loadRoutineState rewrites a routine whose PERSISTED status is
-        // 'running' to 'interrupted', because a file on disk cannot tell a
-        // dead process's leftovers from a run that is still going. That is
-        // pre-existing behaviour, is what the workspace-switch test above
-        // relies on to prove the resets ran, and is untouched by this card.
-        // The RECORD can tell the two apart, because this process knows which
-        // runs it opened, so it stays 'running'.
+        // What changed: the routine state is now read on the same evidence.
+        // The in-flight set names every routine whose run this process started
+        // and has not yet ended, so the load can tell the two apart in the
+        // state exactly as the record close already did, and it does. The
+        // disagreement was tolerated because closing a live run's record to
+        // manufacture agreement would have been a lie; fixing it from the
+        // other side costs no lie at all, and it is the fix, because the load
+        // is also the workspace-switch path and a switch happens while runs
+        // are still going.
         //
-        // WHICH REQUIREMENT WINS, AND WHY. Keeping a live run's record open
-        // wins. Closing it to make the two stores agree would write that a run
-        // still going was cut short: a false statement, produced to satisfy a
-        // criterion, about the exact case the criterion for this test exists
-        // to protect. Agreement is worth having where both stores can be
-        // right, and it is not worth buying with a lie. Making the ROUTINE
-        // STATE respect a live run instead would fix the disagreement from the
-        // other side, and that is a change to startup behaviour older than
-        // this card and is not made here.
-        //
-        // If that pre-existing behaviour is ever fixed, this assertion is
-        // where it lands: it fails, and this comment is the account of what
-        // changed and why the divergence used to be tolerated.
-        assert.strictEqual(sched.routineState[KEY].status, 'interrupted',
-          'the routine state was rewritten by the load, which is behaviour older than this card');
-        assert.notStrictEqual(record.status, sched.routineState[KEY].status,
-          'so the two stores disagree here, knowingly, and the record is the one that is right');
+        // REPLACES 'the routine state was rewritten by the load' with the
+        // opposite claim, and the notStrictEqual on the two stores with the
+        // strictEqual that says they now agree.
+        assert.strictEqual(sched.routineState[KEY].status, 'running',
+          'the routine state is not rewritten for a run this process is still running');
+        assert.strictEqual(record.status, sched.routineState[KEY].status,
+          'so the two stores agree here, and both of them are right');
 
         child.emit('close', 0);
       });
@@ -1119,6 +1167,67 @@ test('closing a restart-orphaned record writes nothing to the value double-fire 
       assert.deepStrictEqual(sched.getNextRun('every day at 09:00', sched.routineState[KEY].lastRun),
         new Date(2026, 7, 12, 9, 0, 0),
         'so the catch-up run this routine is still owed today is still owed');
+    });
+  });
+});
+
+// ===== A LOAD THAT MEETS BOTH KINDS OF RUN =====
+//
+// `loadRoutineState` rewrites any persisted entry whose status is 'running' to
+// 'interrupted', on the reasoning that a file on disk cannot tell a dead
+// process's leftovers from a run that is still going. That is true of the FILE
+// and untrue of the PROCESS: the in-flight set names every routine whose run
+// this process started and has not yet ended, and it is deliberately not
+// cleared by the load for exactly the reason that makes it usable here, which
+// is that the child of a run in flight is not dropped by a workspace switch.
+//
+// The load runs at boot AND on every workspace switch, and a switch happens
+// while runs of this process are still going. So the same load meets both
+// kinds of entry, and the two are told apart by the one piece of evidence that
+// can tell them apart rather than by the file they share.
+//
+// BOTH KINDS AT ONCE, IN ONE FILE, IN ONE LOAD, which is the case a fixture
+// with one entry cannot build. A fix that simply stopped rewriting, or that
+// stopped rewriting whenever anything at all was in flight, satisfies a
+// one-entry fixture of either kind on its own and fails this one.
+test('a load that meets a live run and a dead process leftover at once tells them apart', async () => {
+  await withTempWorkspaceAsync(async (dir, config) => {
+    await withTempHomeAsync(async () => {
+      const DEAD_KEY = 'sleeper:nightly';
+      const DEAD_STAMP = '2026-08-11T09:00:00.000Z';
+      const child = new EventEmitter();
+      await withFakeSpawn(() => child, async (sched) => {
+        assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true, 'the live run started');
+        const liveStamp = sched.routineState[KEY].lastRun;
+
+        // The leftover is added to the file the live run has just written, so
+        // one load meets both. Read and rewritten rather than replaced, because
+        // replacing it would take the live run's own entry out of the file and
+        // there would be nothing for the load to get right.
+        const file = path.join(dir, '.rundock', 'routine-state.json');
+        const onDisk = JSON.parse(fs.readFileSync(file, 'utf-8'));
+        assert.strictEqual(onDisk[KEY].status, 'running',
+          'the live run persisted "running" before its spawn, which is what makes the two entries look alike');
+        onDisk[DEAD_KEY] = { lastRun: DEAD_STAMP, status: 'running', duration: null };
+        fs.writeFileSync(file, JSON.stringify(onDisk));
+
+        openWorkspace(sched, dir, config);
+
+        assert.strictEqual(sched.routineState[KEY].status, 'running',
+          'the run whose child is alive in this process is still reported as running, because it is');
+        assert.strictEqual(sched.routineState[DEAD_KEY].status, 'interrupted',
+          'and the entry no live run answers for is still closed, in the same load, from the same file');
+
+        // Neither reading moves the field the suppression reads. The guard on
+        // that is its own test; these two say it of this path specifically,
+        // where both stamps were in hand at once.
+        assert.strictEqual(sched.routineState[KEY].lastRun, liveStamp,
+          'the live entry keeps its stamp');
+        assert.strictEqual(sched.routineState[DEAD_KEY].lastRun, DEAD_STAMP,
+          'and so does the closed one, so it stays suppressed for the window it started in');
+
+        await endedAfter(sched, async () => { child.emit('close', 0); });
+      });
     });
   });
 });
