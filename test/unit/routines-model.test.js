@@ -386,16 +386,133 @@ describe('which empty state, decided mechanically', () => {
     assert.strictEqual(state.action, editor.STEP_LEADS.build);
   });
 
-  // The condition is the same question the picker already answers, so the two
-  // surfaces cannot disagree about whether a workspace has skills.
-  test('the variant is the question skillChoices already answers', () => {
+  const UNASSIGNED = [{ id: 'orphan', name: 'Orphan', assignedAgents: [] }];
+
+  // The condition is the picker's own question, `skillChoices`, and not a new
+  // one written here. Extended to the third shape: `createSkill` alone cannot
+  // tell "no skill exists" from "a skill exists and nobody has it", since both
+  // leave `options` empty, so the branch also reads `onlyUnassignedSkills`,
+  // which the picker computes from the same walk rather than this file
+  // recomputing it as a second rule.
+  test('the variant is the question skillChoices already answers, across all three shapes', () => {
     const editor = require('../../public/routine-editor-model.js');
-    for (const skills of [[], WITH_SKILL, [{ id: 'orphan', name: 'Orphan', assignedAgents: [] }]]) {
-      const offers = editor.skillChoices({ skills }).createSkill;
+    for (const skills of [[], WITH_SKILL, UNASSIGNED]) {
+      const choice = editor.skillChoices({ skills });
       const state = m.emptyState({ skills, guideName: 'Wren' });
-      assert.strictEqual(state.action === 'Build a skill', offers,
-        'the empty state and the picker disagree about whether this workspace has skills');
+      if (choice.onlyUnassignedSkills) {
+        assert.notStrictEqual(state.action, 'Build a skill',
+          'a workspace with an unassigned skill was offered to build the one it already has');
+      } else {
+        assert.strictEqual(state.action === 'Build a skill', choice.createSkill,
+          'the empty state and the picker disagree about whether this workspace has skills');
+      }
     }
+  });
+
+  // The dependency made observable rather than inferred from agreement on
+  // three fixtures: a local rule written here, such as
+  // `skills.length && !options.length`, would agree with `skillChoices` on
+  // every fixture above and still not be reading it. Patching the answer
+  // `skillChoices` gives, on the very module object `routines-model.js`
+  // holds as `editor`, and checking the branch follows the PATCHED answer
+  // rather than recomputing one from the input, is what tells the two apart.
+  test('the branch follows what skillChoices reports rather than a rule computed here', () => {
+    const editor = require('../../public/routine-editor-model.js');
+    const real = editor.skillChoices;
+    try {
+      // A skill list that would otherwise take the locked-copy branch, with
+      // the stub disagreeing: if the answer came from a local recomputation,
+      // this input would still resolve it to false and the stub would go
+      // unread.
+      editor.skillChoices = () => ({
+        options: [{ id: 'stubbed' }], createSkill: false,
+        createSkillLabel: 'stub', emptyLead: 'stub',
+        onlyUnassignedSkills: true,
+      });
+      const state = m.emptyState({ skills: WITH_SKILL, guideName: 'Wren' });
+      assert.match(state.body, /assign your skills to an agent/i,
+        'emptyState did not follow the stubbed answer, so it is not truly reading skillChoices for this');
+    } finally {
+      editor.skillChoices = real;
+    }
+  });
+
+  // Told to assign the skill it has, never to build one it does not need.
+  test('a workspace whose only skill is unassigned is told to assign it, not build one', () => {
+    const editor = require('../../public/routine-editor-model.js');
+    const state = m.emptyState({ skills: UNASSIGNED, guideName: 'Wren' });
+    assert.strictEqual(state.lead, 'No routines yet.');
+    assert.ok(!/build/i.test(state.body), `told to build a skill it already has: ${state.body}`);
+    assert.match(state.body, /assign your skills to an agent/i);
+    assert.notStrictEqual(state.body, editor.STEP_LEADS.empty,
+      'the unassigned workspace was given the no-skills-at-all sentence');
+  });
+
+  // THE MANY CASE, PINNED RATHER THAN ASSUMED. Every other test in this
+  // block drives exactly one unassigned skill, which is the shape "this
+  // skill" and "it" would have read correctly against by accident; a
+  // workspace with two proves the copy holds for a count the singular forms
+  // could not have.
+  const TWO_UNASSIGNED = [
+    { id: 'orphan-one', name: 'Orphan One', assignedAgents: [] },
+    { id: 'orphan-two', name: 'Orphan Two', assignedAgents: [] },
+  ];
+
+  test('two unassigned skills take the same branch as one, and the copy still reads true', () => {
+    const editor = require('../../public/routine-editor-model.js');
+    const choice = editor.skillChoices({ skills: TWO_UNASSIGNED });
+    assert.strictEqual(choice.onlyUnassignedSkills, true);
+
+    const state = m.emptyState({ skills: TWO_UNASSIGNED, guideName: 'Wren' });
+    assert.ok(!/build/i.test(state.body), `told to build skills it already has: ${state.body}`);
+    assert.ok(!/\bthis skill\b/i.test(state.body), `a deictic naming one skill reached a state with two: ${state.body}`);
+    assert.match(state.body, /assign your skills to an agent/i);
+    assert.match(state.body, /they will show up here/i);
+  });
+
+  // The third variant carries the same five slots the other two do, so it
+  // renders through the one box the view already draws every variant with,
+  // rather than a shape the render has to grow a case for.
+  test('the unassigned-skill state carries the same slots as the other two', () => {
+    const shapes = [
+      m.emptyState({ skills: [], guideName: 'Wren' }),
+      m.emptyState({ skills: UNASSIGNED, guideName: 'Wren' }),
+      m.emptyState({ skills: WITH_SKILL, guideName: 'Wren' }),
+    ];
+    for (const shape of shapes.slice(1)) {
+      assert.deepStrictEqual(Object.keys(shape).sort(), Object.keys(shapes[0]).sort());
+    }
+  });
+
+  // Neither a button nor an aside: assigning a skill to an agent is existing
+  // behaviour this state points at, and the aside the other states carry
+  // promises scheduling "right from its own page", which this state's skill
+  // cannot yet do.
+  test('the unassigned-skill state offers no action and no aside', () => {
+    const state = m.emptyState({ skills: UNASSIGNED, guideName: 'Wren' });
+    assert.strictEqual(state.action, null);
+    assert.strictEqual(state.actionKind, null);
+    assert.strictEqual(state.aside, null);
+  });
+
+  // The reason is the exact string the skill's own page states in its
+  // Schedule card for an unassigned skill, quoted here from the one place both
+  // surfaces read it, so a change to one cannot leave the other behind.
+  test('the reason given here is the shared string the skill page also states', () => {
+    const editor = require('../../public/routine-editor-model.js');
+    const state = m.emptyState({ skills: UNASSIGNED, guideName: 'Wren' });
+    assert.ok(state.body.includes(editor.UNASSIGNED_REASON),
+      `the routines view does not carry the reason the skill page states: ${state.body}`);
+  });
+
+  // Neither 'nobody has' nor 'no agent has': the skill's own page, one card
+  // above where this same reason is shown, already describes an unassigned
+  // skill as available to all agents, and a reason phrased as a denial would
+  // contradict that card on the same page.
+  test('the reason given here does not deny any agent has the skill', () => {
+    const state = m.emptyState({ skills: UNASSIGNED, guideName: 'Wren' });
+    assert.ok(!/nobody has/i.test(state.body), `the reason denies any agent has the skill: ${state.body}`);
+    assert.ok(!/no agent has/i.test(state.body), `the reason denies any agent has the skill: ${state.body}`);
   });
 
   test('skills that have not arrived are not a workspace with no skills', () => {
@@ -443,6 +560,7 @@ describe('which empty state, decided mechanically', () => {
       ['routines, skills exist', m.emptyState({ skills: WITH_SKILL, guideName: 'Wren' })],
       ['routines, no skills, guide', m.emptyState({ skills: [], guideName: 'Wren' })],
       ['routines, no skills, no guide', m.emptyState({ skills: [], guideName: null })],
+      ['routines, only skill unassigned', m.emptyState({ skills: UNASSIGNED, guideName: 'Wren' })],
       ['skills, guide', skillsModel.emptyState({ guideName: 'Wren' })],
       ['skills, no guide', skillsModel.emptyState({})],
     ]) {
@@ -1166,6 +1284,11 @@ describe('a row never says two things that cannot both be true', () => {
     ['a slot that went by', { missedSlot: YESTERDAYS_SLOT }],
     ['a next run', { nextRun: TOMORROWS_SLOT }],
     ['a run that failed', { lastStart: TODAYS_SLOT, lastRunStatus: 'failed', lastSlot: TODAYS_SLOT }],
+    // A ROUTINE THE SCHEDULER HAS MOVED AWAY FROM. It is the newest way a row
+    // can deny a run, and it joins the matrix here rather than being paired by
+    // hand with the seven above it, which is the whole point of the matrix
+    // being read off this list.
+    ['a scheduler that has moved to another workspace', { workspace: '/w/mine', servingWorkspace: '/w/elsewhere' }],
   ];
 
   // What the row says, split by what it claims about running.
@@ -1176,6 +1299,7 @@ describe('a row never says two things that cannot both be true', () => {
     if (row.nextRun && row.nextRun.text !== 'Paused') promising.push(`next run: ${row.nextRun.text}`);
     if (row.nextRun && row.nextRun.text === 'Paused') denying.push('next run: Paused');
     if (row.scheduleProblem) denying.push(`problem: ${row.scheduleProblem.text}`);
+    if (row.workspaceNote) denying.push(`workspace: ${row.workspaceNote.text}`);
     // A RUN STATUS IS DELIBERATELY NEITHER. It reports the past, and the row
     // pairs it with the next run ON PURPOSE, because after a miss or a failure
     // the reader's question is whether it recovered and when it tries again.
@@ -1228,5 +1352,147 @@ describe('a row never says two things that cannot both be true', () => {
         `a row with ${picked.map(([n]) => n).join(' + ')} says "${row.status.text}" `
         + 'about a routine that was never in service');
     }
+  });
+});
+
+// ===========================================================================
+// WHERE A ROUTINE ACTUALLY RUNS
+// ===========================================================================
+//
+// There is one scheduler and it serves one workspace. A routine in any other
+// workspace is dormant, and every surface here used to draw it exactly as it
+// draws one that will fire in an hour.
+//
+// THE COMPARISON IS AGAINST WHAT THE SERVER IS SERVING, NEVER AGAINST WHAT A
+// WINDOW REMEMBERS OPENING, and getting that backwards is worse than the
+// silence it replaced. Several windows can look at one server. When one of
+// them switches the server, the roster the others are handed is the roster of
+// the workspace that IS being served: judged against the path those windows
+// remembered, every one of those rows would be called dormant at the exact
+// moment they were the only routines running, and the dormant ones would be
+// the routines the window still believed were live. Both halves inverted.
+//
+// So both values here come from the server. `workspace` is stamped on each
+// routine by the code that read it; `servingWorkspace` is that same root, sent
+// beside the roster and again on every switch.
+//
+// THE PAIR IS THE TEST. A single assertion that a dormant row says something
+// proves nothing about whether the two can be told apart, and telling them
+// apart is the whole requirement. So the two are built from ONE input with one
+// field changed, and read side by side.
+describe('a routine says whether anything is serving it', () => {
+  const MINE = '/Users/someone/Documents/Ledger';
+  const ELSEWHERE = '/Users/someone/Documents/Field Notes';
+
+  // One routine, in service, due tomorrow, with nothing wrong with it. The
+  // only thing that varies below is where the scheduler is.
+  const ROUTINE = {
+    name: 'morning briefing', schedule: 'every day at 07:00', scheduleReadable: true,
+    runOn: 'local', enabled: true, nextRun: TOMORROWS_SLOT, now: NOW, zone: ZONE,
+    workspace: MINE,
+  };
+
+  test('the two rows are not the same row', () => {
+    const served = m.row(Object.assign({}, ROUTINE, { servingWorkspace: MINE }));
+    const moved = m.row(Object.assign({}, ROUTINE, { servingWorkspace: ELSEWHERE }));
+
+    assert.strictEqual(served.nextRun.text, 'Next run: tomorrow, 7:00am, London time',
+      'the routine the scheduler is serving says when it runs next');
+    assert.strictEqual(served.workspaceNote, null,
+      'and says nothing about workspaces, because there is nothing to say');
+
+    assert.strictEqual(moved.nextRun, null,
+      'the routine nothing is serving promises no run, because none is coming');
+    assert.strictEqual(moved.workspaceNote.text,
+      'Not running. Rundock has moved to Field Notes and is running that workspace\'s routines instead.',
+      'and says where Rundock went instead');
+  });
+
+  // The row cannot say why it stopped without naming where the scheduler is,
+  // and that workspace is the one the header does NOT name.
+  test('the note names where Rundock went, by the name a person calls it', () => {
+    const row = m.row(Object.assign({}, ROUTINE, { servingWorkspace: ELSEWHERE }));
+    assert.match(row.workspaceNote.text, /Field Notes/);
+    assert.doesNotMatch(row.workspaceNote.text, /Documents/,
+      'by the folder name, not by the path it sits at');
+  });
+
+  // The inversion this design exists to prevent, asserted as itself rather
+  // than left to follow from the pair above. A window that remembers ws1 and
+  // is handed ws2's roster is looking at the routines that ARE running.
+  test('a roster from the workspace being served is live, whatever any window remembers', () => {
+    const handedOver = m.row(Object.assign({}, ROUTINE, {
+      workspace: ELSEWHERE, servingWorkspace: ELSEWHERE,
+    }));
+    assert.ok(handedOver.nextRun, 'these are the routines that will fire, so the row says when');
+    assert.strictEqual(handedOver.workspaceNote, null, 'and denies nothing');
+  });
+
+  // The offer says what pressing it does. With the scheduler elsewhere,
+  // pressing it starts nothing, so there is nothing truthful for it to say.
+  test('a held-back routine nothing is serving is not offered a switch that would not start it', () => {
+    const held = Object.assign({}, ROUTINE, { enabled: false });
+    assert.ok(m.enableOffer(Object.assign({}, held, { servingWorkspace: MINE })),
+      'in the served workspace the offer stands');
+    assert.strictEqual(m.enableOffer(Object.assign({}, held, { servingWorkspace: ELSEWHERE })), null,
+      'and with the scheduler elsewhere it is withheld rather than reworded');
+  });
+
+  // Both fields are new. A roster that predates them must not turn into an
+  // accusation, and a caller that did not say what is being served has not
+  // said anything is dormant.
+  test('silence is not a disagreement', () => {
+    for (const missing of [
+      { name: 'no stamp on the routine', fields: { workspace: undefined, servingWorkspace: ELSEWHERE } },
+      { name: 'no serving workspace supplied', fields: { servingWorkspace: undefined } },
+      { name: 'neither', fields: { workspace: undefined, servingWorkspace: undefined } },
+      { name: 'an empty stamp', fields: { workspace: '', servingWorkspace: ELSEWHERE } },
+    ]) {
+      const row = m.row(Object.assign({}, ROUTINE, missing.fields));
+      assert.strictEqual(row.workspaceNote, null, `${missing.name}: no complaint`);
+      assert.ok(row.nextRun, `${missing.name}: and the next run is still drawn`);
+    }
+  });
+
+  test('a workspace path reads as the folder a person would name, on either separator', () => {
+    assert.strictEqual(m.workspaceWords('/Users/someone/Documents/Ledger'), 'Ledger');
+    assert.strictEqual(m.workspaceWords('C:\\Users\\someone\\Documents\\Ledger'), 'Ledger');
+    assert.strictEqual(m.workspaceWords('/Users/someone/Ledger/'), 'Ledger',
+      'a trailing separator names the folder rather than nothing');
+    assert.strictEqual(m.workspaceWords(''), null);
+    assert.strictEqual(m.workspaceWords(null), null);
+  });
+
+  // The header answers the question no row can: what these routines are, and
+  // what became of the ones this list is not showing.
+  test('the header names the workspace the listed routines came from, in both states', () => {
+    const served = m.header({ workspace: MINE, servingWorkspace: MINE });
+    assert.strictEqual(served.workspace,
+      'These are the routines in Ledger. Rundock runs the routines of whichever workspace it has '
+      + 'open, so the routines in your other workspaces are not running.');
+
+    const moved = m.header({ workspace: MINE, servingWorkspace: ELSEWHERE });
+    assert.strictEqual(moved.workspace,
+      'These are the routines in Ledger. Rundock has moved to Field Notes and is running that '
+      + "workspace's routines, so none of these are running.");
+  });
+
+  // THE HEADER DESCRIBES ITS ROWS AND NOT THE WINDOW. Handed the roster of the
+  // workspace being served, it names that workspace and says its routines run,
+  // whatever the window it is drawn in was opened on.
+  test('the header names the roster it is heading, not a remembered path', () => {
+    const head = m.header({ workspace: ELSEWHERE, servingWorkspace: ELSEWHERE });
+    assert.match(head.workspace, /^These are the routines in Field Notes\./);
+    assert.doesNotMatch(head.workspace, /has moved to/,
+      'the listed routines are the ones running, so the header must not say otherwise');
+  });
+
+  test('with no workspace to name there is no line at all', () => {
+    assert.strictEqual(m.header({}).workspace, null,
+      '"the routines in your workspace" tells nobody anything');
+    assert.strictEqual(m.header({ workspace: MINE }).workspace,
+      'These are the routines in Ledger. Rundock runs the routines of whichever workspace it has '
+      + 'open, so the routines in your other workspaces are not running.',
+      'and an unstated serving workspace is not a claim that Rundock has moved');
   });
 });

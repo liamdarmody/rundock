@@ -162,6 +162,31 @@ const VIEW_SCOPE = { src: path.join(ROOT, 'public', 'views', 'routines.js'), sui
 // The handlers behind the row's two controls, and the data model they write
 // through.
 const HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/unit/routine-actions.test.js' };
+// WHERE A ROUTINE RUNS, WATCHED AT THE RENDERED SURFACE AND NOWHERE ELSE.
+//
+// The rule is that a routine in a workspace this window does not have open is
+// not drawn as one that will run. That is a PROHIBITION, and reverting the
+// source it lives in cannot prove one: the test goes red because the code
+// vanished, not because the rule held. A mutation is the only thing that can,
+// because it commits the forbidden act with everything else in place.
+//
+// Watched by the walk that goes from two real workspaces through real
+// discovery to the real view, because each of these rules is a rule about what
+// a reader sees. Proven against the model alone, the roster line that carries
+// the workspace could be deleted with every model test green and the rule
+// unreachable in the product.
+const MODEL_WORKSPACE = { src: path.join(ROOT, 'public', 'routines-model.js'), suite: 'test/unit/routines-end-to-end.test.js' };
+const VIEW_WORKSPACE = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/routines-end-to-end.test.js' };
+const DISCOVERY_WORKSPACE = { src: path.join(ROOT, 'lib', 'agents', 'discovery.js'), suite: 'test/unit/routines-end-to-end.test.js' };
+// The shell's half of the same walk. Watched by the file that runs app.js's own
+// writer and then reads the rendered page, because the doors suite stubs that
+// writer out and would stay green with the shell recording nothing at all.
+const APP_E2E = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routines-end-to-end.test.js' };
+// The server's half: telling every window where the scheduler went. Watched by
+// the file that drives the switch handler through a context whose broadcast it
+// can read, because a notice sent only to the socket that asked is exactly the
+// silence this change removes and every client-side test would stay green.
+const WS_HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'workspace.js'), suite: 'test/unit/protocol-handlers-lib.test.js' };
 const ROUTINES = { src: path.join(ROOT, 'lib', 'agents', 'routines.js'), suite: 'test/unit/routine-actions.test.js' };
 
 // [target, label, the guard as it is written, what it becomes without it]
@@ -828,8 +853,8 @@ const MUTATIONS = [
     '  lines.splice(from, target.end - from);\n',
     ''],
   [HANDLER, 'the roster is invalidated before it is rebroadcast',
-    "  ws.send(JSON.stringify(message));\n  ctx.agents.invalidateAgentCache();\n  ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents() }));",
-    "  ws.send(JSON.stringify(message));\n  ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents() }));"],
+    "  ws.send(JSON.stringify(message));\n  ctx.agents.invalidateAgentCache();\n  ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents(), workspace: getWorkspace() }));",
+    "  ws.send(JSON.stringify(message));\n  ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents(), workspace: getWorkspace() }));"],
   [HANDLER, 'an agent file outside the workspace is refused',
     "  if (!ctx.workspace.isInsideWorkspace(filePath)) { fail('That agent is outside the workspace.'); return null; }\n",
     ''],
@@ -960,6 +985,73 @@ const MUTATIONS = [
   [VIEW, 'the header reads the scope the panel actually holds',
     '  if (!scope) return null;',
     '  if (true) return null;'],
+  // ===== WHERE A ROUTINE RUNS =====
+  // The forbidden act itself: a next-run time drawn against a routine no
+  // scheduler is going to fire.
+  [MODEL_WORKSPACE, 'a routine nothing is serving is drawn with no next run',
+    '    if (!isServed(input)) return null;\n    const words = timeWords(input && input.nextRun, input && input.now, input && input.zone);',
+    '    const words = timeWords(input && input.nextRun, input && input.now, input && input.zone);'],
+  [MODEL_WORKSPACE, 'the row says where Rundock went',
+    '      workspaceNote: workspaceNote(input),\n',
+    ''],
+  [MODEL_WORKSPACE, 'the two workspaces are compared rather than assumed equal',
+    '    return mine === serving;',
+    '    return true;'],
+  [MODEL_WORKSPACE, 'the note names the workspace rather than leaving the slot in',
+    "    return { text: `${NOT_SERVED.lead} ${NOT_SERVED.body.replace('{workspace}', () => serving)}` };",
+    '    return { text: NOT_SERVED.lead };'],
+  // THE INVERSION, WRITTEN IN. Comparing against the path the window remembers
+  // opening calls the served workspace's routines dormant at the moment they
+  // are the only ones running. This is the defect the first round shipped, and
+  // it is here so it cannot ship again quietly.
+  [MODEL_WORKSPACE, 'the comparison is against what the server serves, not what a window remembers',
+    '    const serving = input && input.servingWorkspace;',
+    '    const serving = input && input.openWorkspace;'],
+  [MODEL_WORKSPACE, 'the header describes the rows it heads, in both states',
+    '    if (workspaceName && isServed(input)) {',
+    '    if (workspaceName) {'],
+  [MODEL_WORKSPACE, 'the header names the workspace the listed routines came from',
+    "      workspaceLine = LEAD.workspaceLine.replace('{workspace}', () => workspaceName);",
+    '      workspaceLine = null;'],
+  [DISCOVERY_WORKSPACE, 'the roster carries the workspace a routine was read out of',
+    '        r.workspace = ws;\n',
+    ''],
+  [VIEW_WORKSPACE, 'the row is told which workspace the server is serving',
+    '    workspace: r.workspace,\n    servingWorkspace: routinesServingWorkspace(),\n',
+    '    workspace: r.workspace,\n'],
+  // The header used to name the path the window remembered, directly above a
+  // list of rows that had come from somewhere else.
+  [VIEW_WORKSPACE, 'the header reads the roster it heads rather than a remembered path',
+    '    workspace: routinesRosterWorkspace(),',
+    '    workspace: routinesServingWorkspace(),'],
+  [VIEW_WORKSPACE, 'the roster workspace is read off the rows on screen',
+    '      if (routine && typeof routine.workspace === \'string\' && routine.workspace) return routine.workspace;\n',
+    ''],
+  [VIEW_WORKSPACE, 'the note reaches the page',
+    "      + `<span class=\"workspace-note\">${esc(row.workspaceNote.text)}</span>`",
+    "      + '<span class=\"workspace-note\"></span>'"],
+  [VIEW_WORKSPACE, 'the header line reaches the page',
+    '    + (workspace ? `<div class="routines-workspace" data-routines-workspace>${esc(workspace)}</div>` : \'\')',
+    "    + ''"],
+  [APP_E2E, 'the shell records the workspace that arrives beside a roster',
+    'setServingWorkspace(d.workspace); ',
+    ''],
+  [APP_E2E, 'the shell records the workspace a switch notice names',
+    "    case 'serving_workspace': setServingWorkspace(d.path); break;\n",
+    ''],
+  [APP_E2E, 'the writer keeps the value it was handed',
+    '  servingWorkspacePath = path;',
+    '  servingWorkspacePath = null;'],
+  [WS_HANDLER, 'a switch is announced to every connected client',
+    '  announceServingWorkspace(ctx);\n  // Clean up orphaned processes from previous sessions in this workspace',
+    '  // Clean up orphaned processes from previous sessions in this workspace'],
+  [WS_HANDLER, 'the announcement carries the workspace now being served',
+    "  ctx.broadcast(JSON.stringify({ type: 'serving_workspace', path: getWorkspace() }));",
+    "  ctx.broadcast(JSON.stringify({ type: 'serving_workspace' }));"],
+  [WS_HANDLER, 'the roster carries the workspace it was read from',
+    "  ws.send(JSON.stringify({ type: 'agents', agents: agentList, workspace: getWorkspace() }));\n  try { ws.send(JSON.stringify({ type: 'file_tree'",
+    "  ws.send(JSON.stringify({ type: 'agents', agents: agentList }));\n  try { ws.send(JSON.stringify({ type: 'file_tree'"],
+
 ];
 
 // The reporter is named explicitly rather than left to the default, which
@@ -998,7 +1090,8 @@ function run() {
     SKILLS_VIEW_RAIL, PANEL, SCOPE_MODEL, INDEX_PANEL, APP_PANEL, STYLES_PANEL, VIEW_SCOPE,
     PANEL_PRESS, APP_DISPATCH, VIEW_CONFIRM, APP_WORKSPACE, EDITOR_NAV,
     TEAM_PANEL, INDEX_SWEEP, PROFILE_BOXES, PROFILE_ROUTE,
-    GUIDE_COPY_MOD, TEAM_COPY, PROFILE_COPY, TEAM_DOOR, SIDEBAR_CSS];
+    GUIDE_COPY_MOD, TEAM_COPY, PROFILE_COPY, TEAM_DOOR, SIDEBAR_CSS,
+    MODEL_WORKSPACE, VIEW_WORKSPACE, DISCOVERY_WORKSPACE, APP_E2E, WS_HANDLER];
   const originals = new Map();
   for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];
