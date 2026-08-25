@@ -596,8 +596,13 @@ const MUTATIONS = [
     "    if (statusWord === 'running') return null;",
     ''],
   [MODEL, 'a miss later than the last run is what happened last',
-    '    if (missedSlot && (!started || missedSlot > started)) return \'missed\';',
-    '    if (missedSlot) return \'missed\';'],
+    '    if (missedSlot && (!started || missedSlot > started)) {',
+    '    if (missedSlot) {'],
+  // The other half of the same branch: a routine nobody turned on is not owed
+  // an explanation naming an event that did not happen.
+  [MODEL, 'a routine nobody turned on is not told Rundock was closed on it',
+    "      return input && input.enabled === false ? null : 'missed';",
+    "      return 'missed';"],
   [MODEL, 'a run the process died inside is a failure',
     "    return statusWord === 'failed' || statusWord === 'interrupted';",
     "    return statusWord === 'failed';"],

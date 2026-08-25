@@ -315,6 +315,18 @@ describe('a schedule the scheduler cannot read', () => {
             // ever run. The only difference is whether Rundock can read the
             // schedule.
             { name: 'Not due yet', schedule: SCHEDULE, prompt: 'p', enabled: true },
+            // Held back by the migration and nothing else, so it makes the
+            // offer. Here rather than in a hand-built row because the evidence
+            // claims this row comes out of real discovery.
+            { name: 'Held back', schedule: SCHEDULE, prompt: 'p' },
+            // THE COMBINATION NO FIXTURE IN THIS SUITE HAD. A schedule nothing
+            // can read AND no `enabled` key, which is not a corner case: it is
+            // every pre-existing cron routine after an upgrade, because the
+            // migration fills `enabled: false` and never touches a schedule.
+            // Writing the cron row as `enabled: true` above is what let the
+            // two halves of this change pass separately while contradicting
+            // each other on one row.
+            { name: 'Cron and held back', schedule: CRON, prompt: 'p' },
           ],
         }),
       },
@@ -326,7 +338,12 @@ describe('a schedule the scheduler cannot read', () => {
     try {
       discoverAgents();
       invalidateAgentCache();
-      return fn(discoverAgents());
+      const { doc, dom } = render(discoverAgents());
+      try {
+        return fn(doc);
+      } finally {
+        dom.window.close();
+      }
     } finally {
       config.setWorkspace(originalWorkspace);
       invalidateAgentCache();
@@ -336,8 +353,7 @@ describe('a schedule the scheduler cannot read', () => {
 
   // AC-9. Fails if the row renders as an ordinary routine.
   test('a cron schedule reaches the row saying it will not run, and what to change', () => {
-    cronWorkspace((agents) => {
-      const { doc, dom } = render(agents);
+    cronWorkspace((doc) => {
       const row = rowNamed(doc, 'Cron briefing');
       const words = text(row);
       assert.match(words, /cannot read this schedule/i,
@@ -351,15 +367,46 @@ describe('a schedule the scheduler cannot read', () => {
         'the row does not name the weekly shape either');
       // And it does not promise a run, because there is no run to promise.
       assert.ok(!/Next run/.test(words), `the cron row still promises a next run: ${words}`);
-      dom.window.close();
+    });
+  });
+
+  // THE BLOCKING FINDING FROM REVIEW, driven the way it was asked for: a
+  // frontmatter block with a cron schedule and no `enabled` key, through real
+  // discovery, to the rendered row.
+  test('a cron routine the upgrade held back does not both refuse and promise to run', () => {
+    cronWorkspace((doc) => {
+      const row = rowNamed(doc, 'Cron and held back');
+      const words = text(row);
+      // It still says the thing that is true and actionable.
+      assert.match(words, /cannot read this schedule/i,
+        'the row stopped naming the fault that has to be fixed first');
+      // And it does not also promise that turning it on would start it, which
+      // is false while the schedule cannot be read.
+      assert.ok(!/Rundock will start running it/.test(words),
+        `the row promises a run it cannot make: ${words}`);
+      assert.strictEqual(row.querySelector('[data-routines-action="enable"]'), null,
+        'the row offers a control whose consequence it cannot state truthfully');
+      assert.ok(!/Next run/.test(words));
+    });
+  });
+
+  // The offer still reaches a row that is held back and nothing else, so the
+  // fix above withheld it from the right rows rather than from all of them.
+  test('a routine held back by nothing but the switch still carries the offer', () => {
+    cronWorkspace((doc) => {
+      const row = rowNamed(doc, 'Held back');
+      assert.ok(row.querySelector('.rr-offer-text'), 'the offer row lost its offer');
+      assert.match(text(row), /Rundock will start running it/);
+      assert.ok(row.querySelector('[data-routines-action="enable"]'), 'no control to press');
+      assert.strictEqual(row.querySelector('.next-run'), null,
+        'a routine that will not run advertises when it will');
     });
   });
 
   // AC-8. The two rows, side by side, in the rendered output rather than in
   // the model alone.
   test('the unreadable row is distinguishable from one that is simply not due yet', () => {
-    cronWorkspace((agents) => {
-      const { doc, dom } = render(agents);
+    cronWorkspace((doc) => {
       const cron = rowNamed(doc, 'Cron briefing');
       const waiting = rowNamed(doc, 'Not due yet');
 
@@ -377,7 +424,6 @@ describe('a schedule the scheduler cannot read', () => {
       // Told apart by their text, not only by a class, so the difference
       // survives a stylesheet that renders both the same.
       assert.notStrictEqual(text(cron), text(waiting));
-      dom.window.close();
     });
   });
 });

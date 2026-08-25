@@ -92,6 +92,14 @@
   const NOT_ENABLED = {
     lead: 'Not running.',
     body: 'Turn it on and Rundock will start running it on this schedule.',
+    // AND WHEN THE FIRST RUN LANDS, because for this reader that is the whole
+    // question. A slot that has already gone today is still caught up, so a
+    // briefing scheduled for 05:00 and turned on at 09:00 runs within the
+    // minute rather than tomorrow morning. The person being offered this has
+    // a cron job that already ran that briefing today, so an offer that said
+    // only "on this schedule" would produce, on the very first press, the
+    // double run this whole change exists to prevent.
+    catchUp: 'If today\'s time has already gone, it runs shortly after you turn it on.',
     label: 'Turn on',
   };
 
@@ -450,7 +458,26 @@
     const missedSlot = asDate(input && input.missedSlot);
     const statusWord = (input && input.lastRunStatus) || null;
     if (statusWord === 'running') return null;
-    if (missedSlot && (!started || missedSlot > started)) return 'missed';
+    // A ROUTINE NOBODY TURNED ON DID NOT MISS ANYTHING.
+    //
+    // The slot store records every scheduled slot that went by unobserved, for
+    // every routine, whatever the gate would have said about running it. That
+    // split is deliberate: the store keeps the facts, and what to make of them
+    // is decided here.
+    //
+    // Here, the missed line names its own cause: "Rundock was closed at 7:00am
+    // yesterday". For a routine nobody has ever turned on, that cause is
+    // false. Rundock may have been open all night; the routine was never in
+    // service. It would also sit directly above an offer to turn the routine
+    // on, so the row would explain an absence by an event that did not happen
+    // and then offer to fix a different thing.
+    //
+    // ONLY THE MISSED OUTCOME IS WITHHELD. A run that happened, or failed, is
+    // real history from when this routine was running, and hiding that would
+    // be suppressing the truth rather than declining to invent it.
+    if (missedSlot && (!started || missedSlot > started)) {
+      return input && input.enabled === false ? null : 'missed';
+    }
     if (!started) return null;
     if (lastCompletedRunFailed(input)) return 'failed';
     const lastSlot = asDate(input && input.lastSlot);
@@ -517,6 +544,39 @@
   }
 
   /**
+   * What ELSE would stop this routine running, named after the fact that
+   * decided, or null if nothing would.
+   *
+   * THIS IS THE SCHEDULER'S OWN REFUSAL ORDER, ASKED ON THIS SIDE. The server
+   * refuses a routine for paused, then enabled, then an unsupported run
+   * target, and a row that offers to turn one on is claiming every other gate
+   * would let it through. `enabled` is deliberately absent from this list:
+   * this answers what would stop it BESIDES the switch the offer is about.
+   *
+   * NOT A SECOND COPY OF THE GATE. It never decides whether anything runs. It
+   * decides whether a sentence on a row is true, and it is written here rather
+   * than inline in the offer so the same question can be asked of any other
+   * line that promises a run.
+   *
+   * The run target is read through the editor's own list rather than a literal
+   * here, so which targets work is stated in one place.
+   *
+   * @param {{paused?: boolean, runOn?: any, schedule?: any, scheduleReadable?: boolean}} [input]
+   */
+  function whatElseStopsIt(input) {
+    if (!input) return null;
+    if (input.paused) return 'paused';
+    if (scheduleProblem(input)) return 'schedule';
+    // A roster that did not name a run target says nothing, for the same
+    // reason an absent scheduleReadable says nothing: silence is not a fault.
+    if (input.runOn !== undefined && input.runOn !== null) {
+      const option = editor.runOnOption(input.runOn);
+      if (!option || !option.selectable) return 'runOn';
+    }
+    return null;
+  }
+
+  /**
    * Whether the row must say this routine will never fire, and what to change.
    *
    * ASKED OF THE SERVER'S ANSWER, NEVER RE-DERIVED HERE. Whether a schedule
@@ -558,7 +618,25 @@
    */
   function enableOffer(input) {
     if (!input || input.enabled !== false) return null;
-    return { text: `${NOT_ENABLED.lead} ${NOT_ENABLED.body}`, label: NOT_ENABLED.label };
+    // AND ONLY WHEN TURNING IT ON WOULD ACTUALLY START IT.
+    //
+    // The offer's whole value is that it says what pressing it does. On a row
+    // where something ELSE also stops the routine, that sentence is false:
+    // pressing it starts nothing. A routine that predates the scheduler and
+    // carries a cron schedule is both at once, and it is not a corner case,
+    // it is every pre-existing cron routine after an upgrade, because the
+    // migration fills `enabled: false` and never touches a schedule.
+    //
+    // WITHHELD RATHER THAN REWORDED. There is nothing truthful a Turn on
+    // control can promise on a row that will not run once it is pressed, and
+    // the row already carries the thing that must be fixed first. When that is
+    // fixed the offer appears, which is the order the work has to happen in
+    // anyway.
+    if (whatElseStopsIt(input)) return null;
+    return {
+      text: `${NOT_ENABLED.lead} ${NOT_ENABLED.body} ${NOT_ENABLED.catchUp}`,
+      label: NOT_ENABLED.label,
+    };
   }
 
   /**
@@ -698,6 +776,6 @@
     actionProblem, emptyState, header,
     dayWords, clockWords, zoneWords, timeWords,
     scheduleWords, routineSentence, sentenceParts,
-    outcomeOf, lastCompletedRunFailed, anyFailure, runStatus, nextRunLabel, enableOffer, scheduleProblem, orderByNextRun, row, deleteConfirmation,
+    outcomeOf, lastCompletedRunFailed, anyFailure, runStatus, nextRunLabel, enableOffer, scheduleProblem, whatElseStopsIt, orderByNextRun, row, deleteConfirmation,
   };
 }));

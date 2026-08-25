@@ -167,16 +167,24 @@ test('upgrading a workspace of routines that predate the scheduler starts none o
 test('a routine that predates the scheduler runs once somebody turns it on', async (t) => {
   clock.at = NEXT_LATE;
   armControl();
-  const file = path.join(h.workspaceDir, '.claude', 'agents', 'filer.md');
   h.writeScenario([
     { match: { agent: 'worker', promptIncludes: 'ordinary body' }, turn: [{ text: 'routine ran' }] },
     { match: { agent: 'filer', promptIncludes: 'inbox-file body' }, turn: [{ text: 'routine ran' }] },
   ]);
 
-  fs.writeFileSync(file, agentFile({
-    name: 'filer', type: 'specialist', order: 3,
-    routines: [{ name: 'inbox-file', schedule: 'every day at 12:00', prompt: 'inbox-file body', enabled: true }],
-  }));
+  // PRESSED, NOT WRITTEN BY HAND. This used to rewrite the agent file with
+  // `enabled: true` itself, which proved the scheduler reads the field and
+  // nothing about the act a person actually performs. The handler is unit
+  // tested and the tick is driven here, but the one thing neither covers is
+  // the two agreeing: the message goes through the server, the file is
+  // rewritten by the handler that owns that write, and the tick then reads
+  // whatever it left behind.
+  const client = await h.connect();
+  client.send({
+    type: 'set_routine_enabled', agentId: 'filer', name: 'inbox-file',
+    occurrence: 0, enabled: true,
+  });
+  await client.waitFor(m => m.type === 'routine_enabled', { label: 'the routine being turned on' });
   invalidateAgentCache();
 
   driveTick(t);
@@ -189,6 +197,7 @@ test('a routine that predates the scheduler runs once somebody turns it on', asy
     'the routine the upgrade held back ran as soon as its file said it may');
 
   await settleControl();
+  client.ws.close();
 });
 
 // AC-4. THE CRITERION THIS FILE EXISTS FOR.
@@ -239,6 +248,52 @@ test('a routine in a workspace that cannot be written to does not fire either', 
   assert.ok(!logs.some(l => l.includes('Running routine') && l.includes('frozen-check')),
     'the routine in the unwritable workspace was announced as running');
   assert.ok(logs.some(l => l.includes('frozen-check') && l.includes('enabled is false')),
+    'the refusal did not name the field that decided');
+  assertControlFiredOnThisTick(logs);
+
+  await settleControl();
+});
+
+// AC-4 again, one call earlier. The test above makes one FILE read-only, so the
+// migration's backup copy succeeds and the final write is what fails. A
+// read-only DIRECTORY, which is what a read-only checkout actually is, fails at
+// the backup copy instead. Both land in the same catch and both leave the
+// reader's answer to do the work, but that equivalence is a claim about the
+// migration's control flow rather than something anything here drove, and a
+// claim like that is exactly what stops being true without a test noticing.
+test('a workspace whose agents directory cannot be written to does not fire either', async (t) => {
+  clock.at = NEXT_LATE;
+  armControl();
+  const dir = path.join(h.workspaceDir, '.claude', 'agents');
+  const file = path.join(dir, 'sealed.md');
+  const content = agentFile({
+    name: 'sealed', type: 'specialist', order: 11,
+    routines: [{ name: 'sealed-check', schedule: 'every day at 06:00', prompt: 'sealed body' }],
+  });
+  fs.writeFileSync(file, content);
+  const mode = fs.statSync(dir).mode;
+  fs.chmodSync(dir, 0o555);
+  invalidateAgentCache();
+
+  let logs;
+  try {
+    logs = driveTick(t);
+  } finally {
+    fs.chmodSync(dir, mode);
+  }
+
+  assert.strictEqual(fs.readFileSync(file, 'utf-8'), content,
+    'the file was rewritten, so the directory was not actually sealed');
+  // The proof that this drove the EARLIER call rather than repeating the test
+  // above: with a sealed directory the snapshot cannot be created at all.
+  assert.ok(!fs.existsSync(file + '.pre-routine-model-backup'),
+    'the backup landed, so the failure was the write rather than the copy');
+  assert.ok(logs.some(l => l.includes('[migrate]') && /persist failed/.test(l)),
+    `the migrating write did not fail, so nothing here was proven. Saw: ${JSON.stringify(logs.filter(l => l.includes('migrate')))}`);
+
+  assert.strictEqual(h.internal.routineState['sealed:sealed-check'], undefined,
+    'a routine in a sealed workspace fired anyway');
+  assert.ok(logs.some(l => l.includes('sealed-check') && l.includes('enabled is false')),
     'the refusal did not name the field that decided');
   assertControlFiredOnThisTick(logs);
 
