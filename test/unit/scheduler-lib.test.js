@@ -1214,6 +1214,116 @@ test('a start that throws leaves no run behind for a later stop to find', async 
   });
 });
 
+// ===== A CHILD THAT WILL NOT GO WHEN ASKED =====
+//
+// The ordinary stop ASKS. On this runtime it is a termination signal, and a
+// process is entitled to trap it, to take its time, or to ignore it outright,
+// and this codebase has children that trap theirs. The signaller does not
+// escalate on its own, so a child that ignores the ask goes on running, its
+// ending never arrives, the single-flight hold is never released, and the
+// routine never runs again for the life of the process, while every further
+// stop request answers yes and sends nothing.
+//
+// That is a routine that was stopped and never runs again, which is worse than
+// one that could not be stopped at all. So this drives a real child that really
+// traps the signal, with the real signaller, and asks twice.
+test('a routine whose child ignores the first stop is released by the second, and runs at its next slot', async (t) => {
+  await withTempWorkspaceAsync(async (dir) => {
+    await withTempHomeAsync(async () => {
+      const claude = require(CLAUDE_KEY);
+      const realSignaller = claude.killProcessTree;
+      writeRoutineAgent(dir, [{ name: 'late', schedule: 'every day at 23:00', prompt: 'p' }]);
+
+      const spawned = [];
+      const trapping = [];
+      // Traps the termination signal and carries on, which is the whole
+      // fixture: nothing here can be ended by asking.
+      //
+      // IT SAYS WHEN THE TRAP IS UP, and waiting for that is not politeness. A
+      // child signalled between its spawn and the line that installs the
+      // handler dies on the default handling, which is a fixture proving the
+      // opposite of what it was written for while looking exactly like a fix
+      // that works. This one did that first.
+      const spawnStubbornChild = () => {
+        const proc = require('node:child_process').spawn(
+          process.execPath,
+          ['-e', "process.on('SIGTERM', () => {}); console.log('trapping'); setInterval(() => {}, 100000)"],
+          { detached: true, stdio: ['ignore', 'pipe', 'ignore'] },
+        );
+        proc.stdout.setEncoding('utf-8');
+        proc.stdout.on('data', (chunk) => { if (chunk.includes('trapping')) trapping.push(proc.pid); });
+        spawned.push(proc);
+        return proc;
+      };
+
+      let clock = new Date(2026, 7, 12, 23, 0, 0);
+      try {
+        await withFakeSpawn(spawnStubbornChild, async (sched) => {
+          sched.wireSchedulerDeps({ getWssClients: () => [], now: () => clock });
+          t.mock.timers.enable({ apis: ['setInterval'] });
+          try {
+            sched.startScheduler();
+            t.mock.timers.tick(60_000);
+            assert.strictEqual(spawned.length, 1, 'the slot fired the routine');
+
+            assert.ok(await until(() => trapping.length === 1, 600),
+              'the child has its trap up, so what follows is about a signal being refused');
+
+            const [live] = sched.runningRuns();
+            assert.ok(live, 'the run is reachable');
+            assert.strictEqual(sched.cancelRun(live.id), true, 'and the first stop is asked for');
+
+            // THE ASK IS REFUSED, asserted rather than assumed, because
+            // everything below is only worth anything if the child survived
+            // it. Given time to die and still here afterwards.
+            await until(() => false, 30);
+            assert.strictEqual(sched.routineState[LATE_KEY].status, 'running',
+              'the child trapped the signal and carried on, so the run is still going');
+            assert.strictEqual(spawned[0].exitCode, null, 'and its process is genuinely still alive');
+
+            // A SECOND REQUEST INSIDE THE WAIT IS STILL ONLY AN ASK. Somebody
+            // pressing twice in a moment is not evidence the first ask failed.
+            clock = new Date(2026, 7, 12, 23, 0, 1);
+            assert.strictEqual(sched.cancelRun(live.id), true, 'a request a second later is answered');
+            await until(() => false, 20);
+            assert.strictEqual(sched.routineState[LATE_KEY].status, 'running',
+              'and sends nothing stronger yet, because the first ask has not had its time');
+
+            // Once that time is up, asking again sends the signal a child
+            // cannot decline.
+            clock = new Date(2026, 7, 12, 23, 0, 5);
+            assert.strictEqual(sched.cancelRun(live.id), true, 'the request after the wait is answered');
+            assert.ok(await until(() => sched.routineState[LATE_KEY].status !== 'running', 600),
+              'and this one ended the child, which no signal it could trap would have done');
+            assert.strictEqual(sched.routineState[LATE_KEY].status, 'cancelled', 'recorded as a stop');
+            assert.strictEqual(runRecords(dir)[0].status, 'cancelled', 'in the record too');
+
+            // AND THE POINT OF ALL OF IT. A routine that was stopped and never
+            // runs again is worse than one that could not be stopped.
+            clock = new Date(2026, 7, 13, 23, 0, 0);
+            t.mock.timers.tick(60_000);
+            assert.strictEqual(spawned.length, 2,
+              'the next slot fired it, so the hold a stubborn child used to keep forever is gone');
+            assert.ok(await until(() => sched.runningRuns().length > 0), 'the second run is going');
+            assert.ok(await until(() => trapping.length === 2, 600), 'and its child has its trap up too');
+            const [next] = sched.runningRuns();
+            sched.cancelRun(next.id);
+            clock = new Date(2026, 7, 13, 23, 0, 5);
+            sched.cancelRun(next.id);
+            assert.ok(await until(() => sched.routineState[LATE_KEY].status !== 'running', 600),
+              'and it can be ended the same way');
+          } finally {
+            sched.stopScheduler();
+            t.mock.timers.reset();
+          }
+        }, realSignaller);
+      } finally {
+        for (const proc of spawned) { try { process.kill(-proc.pid, 'SIGKILL'); } catch (e) { /* already gone */ } }
+      }
+    });
+  });
+});
+
 // ===== THE STOP, AGAINST THE SIGNALLER THAT REALLY SENDS IT =====
 //
 // The other runtime's stop is pinned against the real client because a wrong
@@ -1518,7 +1628,9 @@ test('a stop that could not be sent is retried by the next request, and one that
         assert.strictEqual(attempts.length, 3, 'and landed');
         assert.strictEqual(sched.cancelRun(live.id), true, 'a fourth request is still answered');
         assert.strictEqual(attempts.length, 3,
-          'but sends nothing more, because the signal it would repeat has already gone out');
+          'but does not repeat the signal that has already gone out. This test moves in '
+          + 'milliseconds, so it is inside the wait a further request has to clear before it may '
+          + 'send a stronger signal; what happens once that wait is over has its own test');
 
         child.emit('close', null);
         assert.ok(await until(() => sched.routineState[KEY].status !== 'running'), 'the run ended');
@@ -1608,6 +1720,10 @@ test('a routine whose run is going can be reached from outside it and stopped', 
         assert.strictEqual(live[0].routine, ROUTINE.name, 'and which routine');
         assert.strictEqual(live[0].id, runRecords(dir)[0].id,
           'under the id its record is filed by, which is the run own uuid rather than the routine key');
+        assert.strictEqual(live[0].key, KEY,
+          'and it names the routine it is held under, which is what the single-flight key is');
+        assert.strictEqual(live[0].startedAt, runRecords(dir)[0].startedAt,
+          'and when it began, the same instant its record carries');
 
         assert.strictEqual(sched.cancelRun(live[0].id), true, 'and it can be stopped');
         assert.deepStrictEqual(signalled, [[child, 'SIGTERM']],
@@ -1947,10 +2063,30 @@ test('neither stopping a run nor switching workspaces across one reaches the val
         // going. The switch reloads both stores, so it holds the run record,
         // the slot record and the run state at once, which is one line away
         // from stamping any of them into the field below.
+        //
+        // PLANTED SO THE SWITCH CAN BE PROVEN TO HAVE HAPPENED. The proof used
+        // to be that the slot store's observation still read as the fixture
+        // wrote it, which it already did from the first load with no tick in
+        // between, so it held whether or not the second load ran and the
+        // assertions after it could not tell a switch that left lastRun alone
+        // from a switch that never happened. This entry is on disk and not in
+        // memory, so only a load can put it there.
+        const PLANTED_KEY = 'planted:by-the-file';
+        const PLANTED_STAMP = '2026-08-09T07:00:00.000Z';
+        const stateFile = path.join(rundock, 'routine-state.json');
+        const onDisk = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
+        onDisk[PLANTED_KEY] = { lastRun: PLANTED_STAMP, status: 'completed', duration: 2 };
+        fs.writeFileSync(stateFile, JSON.stringify(onDisk));
+        assert.strictEqual(sched.routineState[PLANTED_KEY], undefined,
+          'and it is only on disk: nothing in memory knows about it yet');
+
         clock = SWITCH;
         openWorkspace(sched, dir, config);
-        assert.strictEqual(sched.routineSlots.observedAt, YESTERDAY.toISOString(),
+        assert.strictEqual(sched.routineState[PLANTED_KEY] && sched.routineState[PLANTED_KEY].lastRun,
+          PLANTED_STAMP,
           'the switch really re-read the stores rather than being skipped over');
+        assert.deepStrictEqual(sched.routineSlots.routines[KEY].missed, [{ slot: MISSED.toISOString() }],
+          'with the slot records reloaded beside them, still holding the instant a join would reach for');
         assert.strictEqual(sched.routineState[KEY].lastRun, stampedByTheStart,
           'and it wrote nothing to lastRun: byte for byte what the start left there');
         assert.notStrictEqual(sched.routineState[KEY].lastRun, SWITCH.toISOString(),
