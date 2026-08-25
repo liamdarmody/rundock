@@ -81,7 +81,10 @@ function roster(fn, seed = seedStores, names = NAMES) {
     agents: {
       piper: agentFile({
         name: 'piper', displayName: 'Piper', type: 'specialist', order: 1,
-        routines: names.map(name => ({ name, schedule: SCHEDULE, prompt: 'p' })),
+        // enabled, out loud. These four have run history, so they are routines
+        // somebody turned on; a fixture leaning on the reader's default would
+        // draw four rows offering to turn on routines that have already run.
+        routines: names.map(name => ({ name, schedule: SCHEDULE, prompt: 'p', enabled: true })),
       }),
     },
   });

@@ -138,6 +138,12 @@ const REPLIES = [
   },
   {
     call: 'routinesActionCleared',
+    on: "case 'routine_enabled':",
+    surface: 'a routine turned on, which retires the last refusal',
+    pressedBy: 'a change that goes through retires the last refusal',
+  },
+  {
+    call: 'routinesActionCleared',
     on: "case 'routine_paused':",
     surface: 'a pause that went through, which retires the last refusal',
     pressedBy: 'a change that goes through retires the last refusal',
@@ -1114,7 +1120,7 @@ describe('every reply that reaches this view is enumerated', () => {
   });
 
   test('a change that goes through retires the last refusal', () => {
-    for (const type of ['routine_deleted', 'routine_paused']) {
+    for (const type of ['routine_deleted', 'routine_paused', 'routine_enabled']) {
       const { w, doc, dom } = shell();
       w.routinesActionFailed({ message: 'Routine could not be paused.' });
       assert.ok(doc.querySelector('[data-routines-problem]'));
@@ -1133,11 +1139,17 @@ describe('every reply that reaches this view is enumerated', () => {
   // And the refusal does not outlive the reader's next attempt, whichever
   // control they reach for.
   test('the next action the reader takes clears the last refusal', () => {
-    for (const press of [
-      (doc) => doc.querySelector('[data-routines-action="pause"]').click(),
-      (doc) => doc.querySelector('[data-routines-action="delete"]').click(),
+    for (const [action, routines] of [
+      ['pause', undefined],
+      ['delete', undefined],
+      // The offer on a routine the upgrade held back is a control like any
+      // other, so it clears the last refusal like any other. It needs a row in
+      // that state to exist at all, which is why this loop carries the
+      // workspace as well as the press.
+      ['enable', [{ ...ROUTINE, enabled: false }]],
     ]) {
-      const { w, doc, dom } = shell();
+      const press = (doc) => doc.querySelector(`[data-routines-action="${action}"]`).click();
+      const { w, doc, dom } = shell(routines ? { routines } : {});
       w.renderRoutines();
       w.routinesActionFailed({ message: 'Routine could not be paused.' });
       press(doc);

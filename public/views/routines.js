@@ -221,6 +221,10 @@ function rowHtml(entry, index, withActions) {
     missedSlot: r.missedSlot,
     nextRun: r.nextRun,
     paused: !!r.paused,
+    // PASSED AS THE FILE ANSWERED IT, not coerced. The model reads an explicit
+    // false and nothing else, so a roster that did not carry the field must
+    // arrive here as undefined rather than as a routine somebody switched off.
+    enabled: r.enabled,
     now: routinesClock(),
     zone: routinesZone(),
   });
@@ -240,6 +244,18 @@ function rowHtml(entry, index, withActions) {
   if (!row.status && nextRun) meta += `${sep}${nextRun}`;
 
   let body = `<div class="rr-sentence">${sentence}</div><div class="rr-meta">${meta}</div>`;
+  // THE ROW FOR A ROUTINE NOBODY HAS TURNED ON YET. It takes the next-run
+  // line's place rather than sitting beside it, because the model returns no
+  // next run for this state: a routine that will not run must not advertise
+  // when it will. Withheld on the delete confirmation, like every other
+  // control there: that surface is a question, not a list.
+  if (row.offer && withActions) {
+    body += '<div class="rr-meta rr-offer-line">'
+      + `<span class="rr-offer-text">${esc(row.offer.text)}</span>`
+      + `<button class="btn-link rr-enable" type="button" data-routines-action="enable"`
+      + ` onclick="routinesSetEnabled(${index}, true)">${esc(row.offer.label)}</button>`
+      + '</div>';
+  }
   // Revision 7's second line. Both facts, together, because they answer the
   // one question a reader has after a miss or a failure: did it recover, and
   // when does it try again.
@@ -619,6 +635,26 @@ function routinesViewLastRun(index) {
   if (typeof openRunDetail === 'function') openRunDetail(entry.agent.id, entry.routine.name);
 }
 
+/**
+ * Turn a routine on, for the reader who has just met one the upgrade held back.
+ *
+ * A SEPARATE MESSAGE FROM PAUSE, and it has to be. Pause is a decision this
+ * reader already took and can take back; `enabled` is the answer to a question
+ * nobody had asked them yet. Folding the two into one field would make
+ * resuming a paused routine and consenting to run a routine that predates the
+ * scheduler the same act, and the file would then have no way to say which of
+ * the two a user actually did.
+ */
+function routinesSetEnabled(index, enabled) {
+  const entry = allRoutines()[index];
+  pendingProblem = null;
+  if (!entry || typeof ws === 'undefined' || !ws) return;
+  ws.send(JSON.stringify({
+    type: 'set_routine_enabled', agentId: entry.agent.id, name: entry.routine.name,
+    occurrence: entry.occurrence, enabled,
+  }));
+}
+
 function routinesSetPaused(index, paused) {
   const entry = allRoutines()[index];
   pendingProblem = null;
@@ -631,7 +667,7 @@ function routinesSetPaused(index, paused) {
 
 return {
   renderRoutines, showRoutinesForAgent,
-  routinesAskDelete, routinesCancelDelete, routinesConfirmDelete, routinesSetPaused,
+  routinesAskDelete, routinesCancelDelete, routinesConfirmDelete, routinesSetPaused, routinesSetEnabled,
   routinesOpenSkill,
   routinesActionFailed, routinesActionCleared, routinesViewLastRun,
 };

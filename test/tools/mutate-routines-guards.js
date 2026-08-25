@@ -269,9 +269,18 @@ const MUTATIONS = [
   [VIEW_REPLY, 'a refusal with nothing in it still says something',
     '  pendingProblem = routinesModel().actionProblem(reply);',
     '  pendingProblem = reply && reply.message ? reply.message : null;'],
-  [VIEW_REPLY, 'the next action the reader takes clears the last refusal',
-    '  const entry = allRoutines()[index];\n  pendingProblem = null;\n  if (!entry',
-    '  const entry = allRoutines()[index];\n  if (!entry'],
+  // ONE MUTATION PER CONTROL THAT CLEARS IT, rather than one for the line.
+  // The guard used to live in a single handler, so its text identified it. It
+  // now lives in two, and a find that matched both would break whichever came
+  // first and prove nothing about either: the harness refuses that outright.
+  // So each is named by the function it guards, and adding a third control
+  // that clears the refusal means adding a third row here.
+  [VIEW_REPLY, 'pausing clears the last refusal',
+    'function routinesSetPaused(index, paused) {\n  const entry = allRoutines()[index];\n  pendingProblem = null;\n',
+    'function routinesSetPaused(index, paused) {\n  const entry = allRoutines()[index];\n'],
+  [VIEW_REPLY, 'turning a routine on clears the last refusal',
+    'function routinesSetEnabled(index, enabled) {\n  const entry = allRoutines()[index];\n  pendingProblem = null;\n',
+    'function routinesSetEnabled(index, enabled) {\n  const entry = allRoutines()[index];\n'],
   [MODEL, 'a refusal says nothing was changed',
     "  const ACTION_PROBLEM = 'That routine could not be changed. Nothing has been altered.';",
     "  const ACTION_PROBLEM = 'That routine could not be changed.';"],
@@ -421,6 +430,9 @@ const MUTATIONS = [
   [VIEW, 'a pause says which routine of its name it means',
     "    occurrence: entry.occurrence, paused,",
     "    occurrence: 0, paused,"],
+  [VIEW, 'turning one on says which routine of its name it means',
+    "    occurrence: entry.occurrence, enabled,",
+    "    occurrence: 0, enabled,"],
   [HANDLER, 'which routine of a name is required rather than assumed to be the first',
     '  if (!Number.isInteger(occurrence) || occurrence < 0) {\n    fail(\'Which routine of that name is required.\');\n    return null;\n  }',
     '  if (false) { return null; }'],

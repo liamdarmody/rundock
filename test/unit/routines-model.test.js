@@ -479,7 +479,7 @@ describe('the copy this card ships', () => {
 
   function copyShipped() {
     return everyString([
-      m.LEAD, m.EMPTY, m.OUTCOMES, m.ACTION_PROBLEM,
+      m.LEAD, m.EMPTY, m.OUTCOMES, m.ACTION_PROBLEM, m.NOT_ENABLED,
       ALL_FOUR.map(([, input]) => [status(input), next(input)]),
       m.deleteConfirmation({ agentName: 'Piper', name: 'Compile the ops summary', schedule: 'every day at 07:00' }),
     ]);
@@ -837,5 +837,62 @@ describe('the one state the chrome is allowed to alarm about', () => {
     assert.strictEqual(m.anyFailure([]), false);
     assert.strictEqual(m.anyFailure(), false);
     assert.strictEqual(m.anyFailure(null), false);
+  });
+});
+
+// ===== A ROUTINE THE UPGRADE HELD BACK =====
+//
+// A routine whose file never said `enabled` is not running, and the reason it
+// is not running is that nobody has yet said it may. That is a state with an
+// action attached, which is what separates it from every other state on this
+// list: paused is a decision already taken, and the four outcomes are history.
+// This one is a question waiting for an answer.
+//
+// THE OFFER HAS TO SAY WHAT ACCEPTING IT DOES. Somebody upgrading arrives with
+// cron already running these jobs, so "Turn on" alone reads as tidying a
+// switch. What they need to know before pressing it is that Rundock will begin
+// running the routine itself, which is the sentence that stops a briefing going
+// out twice.
+describe('a routine nobody has turned on yet', () => {
+  const NOT_ENABLED = { enabled: false, nextRun: TOMORROWS_SLOT, paused: false };
+  const offer = (input) => m.enableOffer({ ...input, now: NOW, zone: ZONE });
+
+  test('the offer states that Rundock will begin running it', () => {
+    const o = offer(NOT_ENABLED);
+    assert.ok(o, 'a routine that is not enabled makes no offer');
+    assert.match(o.text, /Rundock/,
+      'the offer does not say who begins running it');
+    assert.match(o.text, /\brun/i,
+      'the offer does not say that turning it on starts it running');
+    assert.strictEqual(o.label, 'Turn on');
+  });
+
+  // The state is only ever reached from the file saying so. A routine that is
+  // enabled, and one that says nothing about it at all because it arrived from
+  // somewhere that does not carry the field, both make no offer: an offer
+  // drawn on a routine that is already running is an invitation to break it.
+  test('nothing else on the list makes this offer', () => {
+    assert.strictEqual(offer({ enabled: true, nextRun: TOMORROWS_SLOT }), null);
+    assert.strictEqual(offer({ nextRun: TOMORROWS_SLOT }), null);
+    assert.strictEqual(offer(null), null);
+  });
+
+  // THE ROW MUST NOT PROMISE A RUN IT WILL NOT MAKE. The server computes a next
+  // run from the schedule alone, so a routine held back by the upgrade still
+  // arrives carrying tomorrow's instant. Rendering it would put "Next run:
+  // tomorrow, 7:00am" on a routine that will never run, which is worse than
+  // saying nothing: it is the exact reassurance the reader is looking for.
+  test('a routine that is not enabled promises no next run', () => {
+    assert.strictEqual(next(NOT_ENABLED), null);
+    // And the ordinary routine beside it still does, so this is the state
+    // rather than a next-run line that stopped working.
+    assert.ok(next({ enabled: true, nextRun: TOMORROWS_SLOT }));
+  });
+
+  test('the offer reaches the row', () => {
+    const row = m.row({ ...NOT_ENABLED, name: 'Compile the ops summary', schedule: 'every day at 07:00', now: NOW, zone: ZONE });
+    assert.ok(row.offer, 'the row drops the offer');
+    assert.strictEqual(row.offer.label, 'Turn on');
+    assert.strictEqual(row.nextRun, null);
   });
 });

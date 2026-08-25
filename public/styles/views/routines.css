@@ -86,3 +86,18 @@
    fact. Quiet: it is an offer to read more, not the thing the row is for. */
 .rr-view-run { font-size: var(--caption); font-weight: 500; color: var(--text-2); background: none; border: 0; padding: 0; font-family: inherit; cursor: pointer; transition: color var(--duration-base) ease; }
 .rr-view-run:hover { color: var(--accent); }
+
+/* The row for a routine nobody has turned on yet.
+
+   IDLE GREY RATHER THAN AMBER, which is the same ruling the four outcomes
+   follow. Amber is spent on "needs the user, not an error", and a routine an
+   upgrade held back is neither alarming nor broken: it is a question waiting
+   for an answer, and after an upgrade there may be five of them at once. A row
+   of amber on first open would read as a workspace in trouble.
+
+   The offer itself takes the accent, because it is the one thing on this row
+   that is an offer rather than a fact. */
+.rr-offer-line { margin-top: 2px; }
+.rr-offer-text { font-size: var(--caption); font-weight: 500; color: var(--idle); }
+.rr-enable { font-size: var(--caption); font-weight: 600; color: var(--accent); background: none; border: 0; padding: 0; font-family: inherit; cursor: pointer; transition: opacity var(--duration-base) ease; }
+.rr-enable:hover { opacity: 0.8; }

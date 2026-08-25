@@ -1819,3 +1819,66 @@ describe('the rail says when a routine has failed', () => {
       'the routines view draws the rail badge, which is the rail rule coming back by hand');
   });
 });
+
+// ===== THE ROW FOR A ROUTINE NOBODY HAS TURNED ON =====
+//
+// After an upgrade these are the rows a person meets, so what they say is the
+// whole of whether the upgrade reads as safe or as broken. Asserted against
+// the RENDERED row, because a model field nobody draws discharges nothing.
+describe('a routine the upgrade held back', () => {
+  const HELD = [routine('Held back', { enabled: false, nextRun: iso(TOMORROWS_SLOT) })];
+
+  test('the row offers to turn it on and says Rundock will start running it', () => {
+    const { doc, w, dom } = shell(HELD);
+    w.renderRoutines();
+    const row = rowNamed(doc, 'Held back');
+    const words = text(row);
+    assert.match(words, /Not running/, 'the row does not say it is not running');
+    assert.match(words, /Rundock will start running it/,
+      'the row does not say what turning it on does');
+    // And it does not promise a run it will not make.
+    assert.strictEqual(row.querySelector('.next-run'), null,
+      'a routine that will not run still advertises a next run');
+    assert.ok(!/Next run/.test(words), `the row still promises a next run: ${words}`);
+    dom.window.close();
+  });
+
+  test('pressing the offer asks for the routine to be turned on', () => {
+    const { doc, w, dom } = shell(HELD);
+    w.renderRoutines();
+    press(doc, '[data-routines-action="enable"]');
+    assert.deepStrictEqual(w.sent,
+      [{ type: 'set_routine_enabled', agentId: 'piper', name: 'Held back', occurrence: 0, enabled: true }]);
+    dom.window.close();
+  });
+
+  // The offer belongs to the state, not to the list. A routine that is running
+  // must not carry an invitation to change that.
+  // A NAME DOES NOT IDENTIFY A ROUTINE, and this control is addressed by the
+  // same triple as every other one on the row. It matters more here than
+  // anywhere else on the list: a file full of routines an upgrade held back is
+  // exactly where two of one name turn up, and turning on the wrong one starts
+  // a job the reader did not ask for while the one they pointed at stays off.
+  test('turning on the second of two namesakes says which one', () => {
+    const held = [
+      routine('Compile the ops summary', { enabled: false, nextRun: iso(TOMORROWS_SLOT) }),
+      routine('Compile the ops summary', { enabled: false, nextRun: iso(TOMORROWS_SLOT) }),
+    ];
+    const { doc, w, dom } = shell(held);
+    w.renderRoutines();
+    rows(doc)[1].querySelector('[data-routines-action="enable"]').click();
+    assert.deepStrictEqual(w.sent, [{
+      type: 'set_routine_enabled', agentId: 'piper', name: 'Compile the ops summary',
+      occurrence: 1, enabled: true,
+    }]);
+    dom.window.close();
+  });
+
+  test('a routine that is running is offered nothing to turn on', () => {
+    const { doc, w, dom } = shell();
+    w.renderRoutines();
+    assert.strictEqual(doc.querySelector('[data-routines-action="enable"]'), null,
+      'an ordinary row offers to turn on a routine that is already on');
+    dom.window.close();
+  });
+});

@@ -502,6 +502,13 @@ function handle(d) {
       routinesActionCleared();
       addSystemMsg('Routine "' + (d.name || '') + '" deleted');
       break;
+    case 'routine_enabled':
+      routinesActionCleared();
+      // No message of its own, for the same reason routine_paused has none:
+      // the roster broadcast that follows redraws the row, which stops
+      // offering to turn the routine on and names its next run instead, and
+      // that is the change the reader asked for.
+      break;
     case 'routine_paused':
       routinesActionCleared();
       // No message of its own. The roster broadcast that follows redraws the

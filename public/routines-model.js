@@ -74,6 +74,27 @@
     'failed': { tone: 'failed', lead: 'Failed' },
   };
 
+  /**
+   * The offer made to a routine nobody has turned on yet.
+   *
+   * WHY THIS STATE EXISTS AT ALL. A routine whose file never carried `enabled`
+   * was written by hand before this product could run one, beside a cron job
+   * that is still doing the work. The reader treats that silence as "not yet"
+   * rather than as consent, so after an upgrade these rows are the ones a
+   * person meets first.
+   *
+   * AND WHY THE SENTENCE SAYS WHAT IT SAYS. The reader arriving here already
+   * has the job running somewhere else. "Turn on" alone reads as tidying a
+   * switch, and the thing they have to know before pressing it is that Rundock
+   * will begin running the routine ITSELF, on top of whatever is running it
+   * today. That is the sentence that stops a morning briefing going out twice.
+   */
+  const NOT_ENABLED = {
+    lead: 'Not running.',
+    body: 'Turn it on and Rundock will start running it on this schedule.',
+    label: 'Turn on',
+  };
+
   const LEAD = {
     title: 'Routines',
     lead: 'Every scheduled skill across your team, and when it runs next.',
@@ -474,6 +495,23 @@
   }
 
   /**
+   * The offer to turn a held-back routine on, or nothing.
+   *
+   * READ OFF AN EXPLICIT FALSE, never off a falsy value. A routine that
+   * arrives from somewhere carrying no `enabled` at all is not a routine
+   * somebody declined to run; it is a caller that did not send the field, and
+   * drawing an offer on a routine that is already running invites a reader to
+   * break it. The data model has already turned an absent key into a real
+   * false by the time anything here sees it.
+   *
+   * @param {{enabled?: boolean}} [input]
+   */
+  function enableOffer(input) {
+    if (!input || input.enabled !== false) return null;
+    return { text: `${NOT_ENABLED.lead} ${NOT_ENABLED.body}`, label: NOT_ENABLED.label };
+  }
+
+  /**
    * When it runs next, or that it is paused.
    *
    * THE INSTANT IS NOT DECIDED HERE. It arrives already computed, by one path
@@ -484,6 +522,14 @@
    */
   function nextRunLabel(input) {
     if (input && input.paused) return { text: 'Paused', className: 'next-run paused-label' };
+    // A ROUTINE NOBODY HAS TURNED ON PROMISES NOTHING, and the guard is here
+    // rather than at the caller because the instant is real. The server works
+    // a next run out from the schedule alone, so a routine the upgrade held
+    // back still arrives carrying tomorrow's slot, and rendering it would put
+    // "Next run: tomorrow, 7:00am" on something that will never run. That is
+    // worse than silence: it is the exact reassurance the reader came for.
+    // The offer takes this line's place on the row.
+    if (input && input.enabled === false) return null;
     const words = timeWords(input && input.nextRun, input && input.now, input && input.zone);
     if (!words) return null;
     return { text: `Next run: ${words}`, className: 'next-run' };
@@ -559,6 +605,10 @@
       runsOn: option ? `Runs on ${option.sentence}` : null,
       status: runStatus(input),
       nextRun: nextRunLabel(input),
+      // The one row state that carries an action rather than a fact. Null on
+      // every other row, so the view draws nothing where there is nothing to
+      // offer.
+      offer: enableOffer(input),
     };
   }
 
@@ -586,10 +636,10 @@
   }
 
   return {
-    OUTCOMES, LEAD, EMPTY, ACTION_PROBLEM, CATCH_UP_AFTER_MS,
+    OUTCOMES, LEAD, EMPTY, ACTION_PROBLEM, NOT_ENABLED, CATCH_UP_AFTER_MS,
     actionProblem, emptyState, header,
     dayWords, clockWords, zoneWords, timeWords,
     scheduleWords, routineSentence, sentenceParts,
-    outcomeOf, lastCompletedRunFailed, anyFailure, runStatus, nextRunLabel, orderByNextRun, row, deleteConfirmation,
+    outcomeOf, lastCompletedRunFailed, anyFailure, runStatus, nextRunLabel, enableOffer, orderByNextRun, row, deleteConfirmation,
   };
 }));
