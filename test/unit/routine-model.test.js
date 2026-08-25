@@ -691,6 +691,29 @@ describe('a routine that predates the scheduler', () => {
     assert.strictEqual(normalizeRoutine({ name: 'r' }).enabled, false);
   });
 
+  // TRUE AND FALSE ARE THE ONLY WORDS THIS READS, and everything else falls
+  // back rather than being guessed at. YAML 1.1 would call `yes` and `on`
+  // booleans, and somebody may reasonably type one; this does not accept them,
+  // so such a routine is held back and its row offers to turn it on.
+  //
+  // Pinned because the fallback moved. While an absent key meant enabled, an
+  // unreadable one did too, so no spelling could be held back by being
+  // misread. Now it can, and which spellings work is a promise rather than an
+  // accident. The direction is the safe one: an unrecognised value stops a
+  // routine rather than starting one nobody asked for, and the row says so.
+  for (const spelling of ['yes', 'on', '1']) {
+    test(`enabled: ${spelling} is not a word this reads, so the routine waits`, () => {
+      assert.strictEqual(normalizeRoutine({ name: 'r', enabled: spelling }).enabled, false);
+    });
+  }
+
+  test('true and false are read whatever their case or quoting', () => {
+    assert.strictEqual(normalizeRoutine({ name: 'r', enabled: 'true' }).enabled, true);
+    assert.strictEqual(normalizeRoutine({ name: 'r', enabled: 'TRUE' }).enabled, true);
+    assert.strictEqual(normalizeRoutine({ name: 'r', enabled: '"true"' }).enabled, true);
+    assert.strictEqual(normalizeRoutine({ name: 'r', enabled: 'false' }).enabled, false);
+  });
+
   // AC-3. Absent and false are the same to the scheduler and different to the
   // user, so the value somebody typed survives in both directions. The cheap
   // version of this card forces every unmigrated block to false and switches
