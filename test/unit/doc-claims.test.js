@@ -23,6 +23,7 @@ const path = require('node:path');
 const promptLib = require('../../lib/agents/prompt.js');
 const { _internal: srv } = require('../../server.js');
 const { makeWorkspace, standardTeam, cleanup } = require('../helpers/workspace.js');
+const { statusesTheSchedulerRecords } = require('../helpers/scheduler-statuses.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 after(cleanup);
@@ -334,6 +335,31 @@ describe('ROUTINES.md: the hook experiment reports the capture\'s own numbers', 
     // the page and the record use the same word.
     assert.match(routinesDoc, /reports `delegated`/,
       'ROUTINES.md must name the reason a delegating run reports, so the page and the run record agree');
+  });
+
+  // The vocabulary is documented in one list on that page and written in one
+  // file, and a word in either that is missing from the other is how a reader
+  // ends up meeting a status the page told them could not happen. Read out of
+  // the scheduler rather than named here, so a word added to the file with no
+  // line on the page fails, and a line on the page for a word nothing writes
+  // fails too.
+  test('every status the scheduler can record is named on the page, and every one named is recorded', () => {
+    const written = statusesTheSchedulerRecords();
+    assert.ok(written.length >= 5, `sanity: only ${written.length} statuses were read out of the scheduler`);
+
+    const listed = routinesDoc.match(/The routine's `status` \(([^)]*)\)/);
+    assert.ok(listed, 'ROUTINES.md must list the statuses a routine can carry');
+    const named = new Set([...listed[1].matchAll(/`(\w+)`/g)].map(m => m[1]));
+    assert.deepStrictEqual([...named].sort(), written,
+      'the statuses the scheduler records and the statuses the page names have to be the same set');
+  });
+
+  test('a run somebody stopped is described, and told apart from one that failed', () => {
+    assert.match(routinesDoc, /reports `cancelled`/,
+      'ROUTINES.md must name the word a stopped run reports, so the page and the run record agree');
+    assert.match(routinesDoc, /runs again at its next slot/,
+      'and must say the routine is released, because a routine that could be stopped and never ran '
+      + 'again would be worse than one that could not be stopped');
   });
 
   test('the word a restart-orphaned record reports is the routine state\'s own', () => {

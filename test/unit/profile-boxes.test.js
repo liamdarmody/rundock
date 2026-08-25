@@ -21,6 +21,7 @@
 // screenshot somebody notices later.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
+const { statusesTheSchedulerRecords } = require('../helpers/scheduler-statuses.js');
 const fs = require('node:fs');
 const path = require('node:path');
 const { JSDOM } = require('jsdom');
@@ -37,32 +38,10 @@ const ROUTINES_SRC = read('public', 'views', 'routines.js');
 // The three boxes, in the order the conformance mock draws them.
 const BOXES = ['Skills', 'Routines', 'Configuration'];
 
-/**
- * Every status a run record can carry, READ OUT OF THE SCHEDULER.
- *
- * Written here as a list, this test would say what its author remembered on
- * the day. `interrupted` is the exact case that makes the point: it arrived
- * with the restarted-run card, months after the surface that printed it was
- * written, and nothing asked the profile about it. So the list is derived from
- * the two places that write a status into the run state, and a sixth one
- * appearing anywhere else in that file is a gap this cannot see and the
- * sanity check below is what bounds it.
- */
-function statusesARunRecordCanCarry() {
-  const src = read('lib', 'scheduler.js');
-  const found = new Set();
-  for (const call of src.matchAll(/recordRoutineRun\(key, \{[\s\S]*?\}\)/g)) {
-    for (const m of call[0].matchAll(/status:\s*(?:\w+\s*\?\s*)?'(\w+)'(?:\s*:\s*'(\w+)')?/g)) {
-      found.add(m[1]);
-      if (m[2]) found.add(m[2]);
-    }
-  }
-  // The startup sweep, which is the only writer that does not go through the
-  // recorder, and the one that produces the word the defect printed.
-  for (const m of src.matchAll(/state\.status = '(\w+)'/g)) found.add(m[1]);
-  return [...found].sort();
-}
-
+// The statuses driven below are read out of the scheduler rather than listed
+// here, by the shared walk in test/helpers/scheduler-statuses.js, which says
+// why at length. Two suites need the same reading and a second copy of it can
+// go blind while still passing.
 const ROUTINES = [
   { name: 'Compile the ops summary', schedule: 'every day at 07:00', state: null },
   { name: 'Draft the stand-up notes', schedule: 'every monday at 08:30', state: null },
@@ -190,10 +169,19 @@ describe('the profile is three boxes', () => {
   // going. The assertion is on the WHOLE page rather than on the row, because
   // the word reaching any part of this profile is the fault.
   test('no status a run record can carry reaches the page', () => {
-    const statuses = statusesARunRecordCanCarry();
+    const statuses = statusesTheSchedulerRecords();
+    // NAMED IN BOTH DIRECTIONS. The walk reads the statuses out of the source,
+    // and these read the statuses back at it, so neither a word dropped from
+    // the file nor a walk that stops seeing one can pass unnoticed. The two
+    // named here are the ones nothing else in the product renders, which makes
+    // them the likeliest to be leaked raw by a surface that never met them.
     assert.ok(statuses.includes('interrupted'),
-      'sanity: the status the restarted-run card introduced is not in the list this walk drives');
-    assert.ok(statuses.length >= 4,
+      'sanity: the status a run the process died inside carries is not in the list this walk drives');
+    assert.ok(statuses.includes('cancelled'),
+      'sanity: the status a run somebody stopped carries is not in the list this walk drives');
+    assert.ok(statuses.includes('completed'),
+      'sanity: the ordinary outcome is not in the list, so the walk has stopped reading the writer');
+    assert.ok(statuses.length >= 5,
       `sanity: only ${statuses.length} statuses were found, so this walk is reading the wrong thing`);
 
     for (const status of statuses) {
