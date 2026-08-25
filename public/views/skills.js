@@ -239,9 +239,17 @@ function selectSkill(id) {
   // the two disagreeing. That reasoning misses the opposite failure: a
   // reader looking specifically for Schedule, on a page that lists Used by,
   // Schedule and Instructions, meets it simply missing, with nothing under
-  // that heading to say why. `editor.UNASSIGNED_REASON` is the one sentence
-  // both surfaces use for this, verbatim, so adding it here cannot make this
-  // page say something the routines view's own empty state does not.
+  // that heading to say why. `UNASSIGNED_REASON` is the one sentence both
+  // surfaces use for this, verbatim, so adding it here cannot make this page
+  // say something the routines view's own empty state does not.
+  //
+  // NOT GUARDED ON THE MODEL BEING LOADED, the same way `renderSkillsEmpty`
+  // above reads `skillsModel()` unguarded: index.html loads
+  // routine-editor-model.js long before views/skills.js, so its absence here
+  // would mean the page itself failed to load rather than a state this
+  // function should quietly work around. A guard that swallowed that would
+  // reproduce, for a different cause, the exact silence this card exists to
+  // remove.
   if (s.assignedAgents.length) {
     h += `<div class="profile-card"><div class="profile-card-section">
       <div class="profile-section-label">Schedule</div>
@@ -250,13 +258,10 @@ function selectSkill(id) {
         data-skill-id="${esc(s.id)}" onclick="addRoutineForSkill('${esc(s.id)}')">Schedule this skill</button>
     </div></div>`;
   } else {
-    const editor = routineEditorModel();
-    if (editor) {
-      h += `<div class="profile-card"><div class="profile-card-section">
-        <div class="profile-section-label">Schedule</div>
-        <div class="profile-card-text">${esc(editor.UNASSIGNED_REASON)}</div>
-      </div></div>`;
-    }
+    h += `<div class="profile-card"><div class="profile-card-section">
+      <div class="profile-section-label">Schedule</div>
+      <div class="profile-card-text">${esc(routineEditorModel().UNASSIGNED_REASON)}</div>
+    </div></div>`;
   }
 
   // Collapsible instructions card

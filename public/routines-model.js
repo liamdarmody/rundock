@@ -250,13 +250,8 @@
       return { lead: EMPTY.lead, body: editor.STEP_LEADS.loading, action: null, actionKind: null, aside: null };
     }
     const choice = editor.skillChoices({ skills: (input && input.skills) || [] });
-    // CHECKED BEFORE `createSkill`, WHICH IS ALSO TRUE HERE. Both a workspace
-    // with no skill and a workspace whose only skill belongs to nobody leave
-    // `options` empty, and until now that meant both took the create-a-skill
-    // branch below, telling the second workspace to build the skill it
-    // already has. `onlyUnassignedSkills` is the question `skillChoices`
-    // already answers for this exact difference, so the branch reads it
-    // rather than a new comparison written here that could disagree with it.
+    // CHECKED BEFORE `createSkill`, because `createSkill` is also true here
+    // and would otherwise win the branch first.
     if (choice.onlyUnassignedSkills) {
       return {
         lead: EMPTY.lead,

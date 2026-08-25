@@ -161,15 +161,21 @@ describe('routine editor: choosing a skill', () => {
       assert.strictEqual(choice.onlyUnassignedSkills, false);
     });
 
-    // Scoped to one agent, `options` can still be empty while other agents'
-    // skills are assigned; this reports what the call itself found rather
-    // than a workspace-wide fact, which is why the routines view's own empty
-    // state calls this unscoped.
-    test('reports what the scoped call itself found, not a workspace-wide fact', () => {
-      const choice = model.skillChoices({ skills: skillFixture(), agentId: 'nobody' });
-      assert.strictEqual(choice.options.length, 0);
-      assert.strictEqual(choice.onlyUnassignedSkills, true,
-        'this call carried skills and produced no option, which is what the field reports');
+    // Scoped to an agent who owns none of them, `options` is empty even
+    // though every skill in the workspace genuinely belongs to somebody.
+    // The field is a fact about the skills supplied, not about what this one
+    // call could offer, so it stays false here regardless of scope: reading
+    // it as true would tell this reader an unassigned skill exists when the
+    // workspace has none.
+    test('stays false on a scoped call over skills that are all assigned, just not to this agent', () => {
+      const fullyAssigned = [
+        { id: 'ops-summary', name: 'Compile the ops summary', assignedAgents: [{ id: 'piper', name: 'Piper' }] },
+        { id: 'reading-digest', name: 'Refresh the reading digest', assignedAgents: [{ id: 'doc', name: 'Doc' }] },
+      ];
+      const choice = model.skillChoices({ skills: fullyAssigned, agentId: 'nobody' });
+      assert.strictEqual(choice.options.length, 0, 'sanity: this agent has none of them, so nothing is offered');
+      assert.strictEqual(choice.onlyUnassignedSkills, false,
+        'a scoped call with nothing to offer was read as a workspace with an unassigned skill');
     });
   });
 });

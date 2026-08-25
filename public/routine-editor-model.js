@@ -160,18 +160,23 @@
   // ===== THE SKILL PICKER =====
 
   /**
-   * Why a skill nobody has cannot be scheduled, said once and read by both
+   * Why an unassigned skill cannot be scheduled, said once and read by both
    * surfaces that have to say so: the routines view's own empty state, when
-   * every skill the workspace has belongs to nobody, and a skill's own page,
-   * when that specific skill does. ONE STRING, so the two cannot drift into
+   * every skill the workspace has is unassigned, and a skill's own page,
+   * when that specific skill is. ONE STRING, so the two cannot drift into
    * two different explanations of the same fact.
    *
-   * THE FACT ITSELF, not a softened version of it. A routine is declared on
-   * an agent file and runs a skill AS that agent, so a skill nothing is
-   * assigned to has no file a routine could be written into.
+   * NEITHER 'NOBODY HAS' NOR 'NO AGENT HAS', DELIBERATELY. A skill's own
+   * page, directly above where this string is shown, already describes an
+   * unassigned skill as available to all agents, and a reason phrased as a
+   * denial that any agent had it would contradict the card sitting above it
+   * on the same page. So this states the MECHANISM instead: a routine is
+   * declared on one specific agent's file, which is a fact about routines
+   * rather than a claim about who has the skill, and it holds together with
+   * the skill being available to every agent rather than instead of it.
    */
-  const UNASSIGNED_REASON = 'A routine runs a skill as one of your agents, '
-    + 'so a skill nobody has cannot be scheduled yet.';
+  const UNASSIGNED_REASON = "A routine is written into one specific agent's file, "
+    + 'so this skill has to be assigned to a specific agent before it can be scheduled.';
 
   /**
    * What can be scheduled, and for whom.
@@ -218,18 +223,16 @@
       createSkill: options.length === 0,
       createSkillLabel: STEP_LEADS.build,
       emptyLead: STEP_LEADS.empty,
-      // THE QUESTION `createSkill` DOES NOT ANSWER: whether the reason
-      // `options` came back empty is that nothing has been built, or that
-      // something has been built and nobody has it. Both leave `options` at
-      // zero, so a caller reading `createSkill` alone cannot tell them apart,
-      // and the routines view's own empty state told a workspace with an
-      // unassigned skill to build the one it already had. This is computed
-      // here, from the same `skills` and `options` this call already walked,
-      // rather than left for a caller to recompute as a second rule that
-      // could disagree with this one. True only when the input carried a
-      // skill: an empty workspace is the OTHER zero-options state, and
-      // `createSkill` already speaks for it.
-      onlyUnassignedSkills: skills.length > 0 && options.length === 0,
+      // A FACT ABOUT THE SKILLS SUPPLIED, NOT ABOUT `options`, and so NOT
+      // SCOPED BY `agentId`. `options` answers "what can this call offer",
+      // which for a scoped call is silent about skills belonging to other
+      // agents; a workspace where every skill belongs to somebody else would
+      // read as "unassigned" under a scoped reading, which is false. This
+      // reads `skills` directly instead, true only when at least one was
+      // supplied and none of them has an agent, which is true or false the
+      // same way whichever scope the call was made with.
+      onlyUnassignedSkills: skills.length > 0
+        && skills.every(skill => !((skill && skill.assignedAgents) || []).length),
     };
   }
 

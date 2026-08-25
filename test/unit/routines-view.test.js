@@ -849,15 +849,24 @@ describe('the empty state, where the only skill is unassigned', () => {
     dom.window.close();
   });
 
-  // The reason given here is the exact sentence the skill's own page states
-  // in its Schedule card for the same skill, quoted from the one place both
-  // surfaces read it, so the two cannot state different reasons.
-  test('the reason quoted here is the skill page\'s own reason, verbatim', () => {
+  // Both surfaces rendered from the same workspace and quoted together,
+  // which is the AC-5 evidence itself rather than each compared separately
+  // to the constant they share: sharing one string proves the two calls
+  // emit the same text, not that the text is true on both pages at once.
+  test('the routines view and the skill\'s own page state the same reason, both rendered', () => {
     const { doc, w, dom } = unassignedShell();
     w.renderRoutines();
-    const page = text(doc.getElementById('routines-content'));
-    assert.ok(page.includes(w.RundockRoutineEditorModel.UNASSIGNED_REASON),
-      `the routines view does not carry the shared reason: ${page}`);
+    const routinesPage = text(doc.getElementById('routines-content'));
+
+    w.currentSkillId = null;
+    w.RundockSkillsView.selectSkill('sk');
+    const skillPage = text(doc.getElementById('skill-detail-content'));
+
+    const reason = w.RundockRoutineEditorModel.UNASSIGNED_REASON;
+    assert.ok(routinesPage.includes(reason),
+      `the routines view does not carry the shared reason: ${routinesPage}`);
+    assert.ok(skillPage.includes(reason),
+      `the skill's own page does not carry the shared reason: ${skillPage}`);
     dom.window.close();
   });
 

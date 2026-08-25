@@ -478,9 +478,19 @@ describe('the doors, pressed', () => {
     dom.window.close();
   });
 
+  // The Schedule section itself, by its own label, rather than the whole
+  // page's text: a change that dropped the section and appended its reason
+  // to the Used by card instead would still pass a whole-page substring
+  // check, which is the vanished-section state this test exists to catch.
+  function scheduleSection(doc) {
+    const label = Array.from(doc.querySelectorAll('#skill-detail-content .profile-section-label'))
+      .find(el => el.textContent.trim() === 'Schedule');
+    return label ? label.closest('.profile-card-section') : null;
+  }
+
   // The control used to vanish with nothing under its own heading. Both
   // shapes of the skill page are driven here, side by side, so the difference
-  // between them is a diff a reviewer can read: one carries the control, the
+  // between them is a diff a reader can check: one carries the control, the
   // other carries the reason the control is missing, and neither is silent.
   test('a skill page with no agent states why it cannot be scheduled, unlike a skill page with one', () => {
     const { doc, w, dom } = shell();
@@ -492,38 +502,44 @@ describe('the doors, pressed', () => {
     w.selectSkill = w.RundockSkillsView.selectSkill;
 
     w.selectSkill('unclaimed');
-    const unclaimedPage = doc.getElementById('skill-detail-content').textContent;
+    const unclaimedSchedule = scheduleSection(doc);
+    assert.ok(unclaimedSchedule, 'no Schedule section on the page for a skill with no agent');
+    assert.ok(unclaimedSchedule.textContent.includes(w.RundockRoutineEditorModel.UNASSIGNED_REASON),
+      `the Schedule section does not say why it cannot be scheduled: ${unclaimedSchedule.textContent}`);
+    assert.strictEqual(unclaimedSchedule.querySelector('[data-skills-action="schedule-skill"]'), null,
+      'a control that cannot lead where its label says is still on the page');
 
     w.selectSkill('ops-summary');
-    const assignedPage = doc.getElementById('skill-detail-content').textContent;
-
-    // The unclaimed shape states the reason, under Schedule, and offers no
-    // control. The assigned shape offers the control and carries no reason,
-    // since nothing there needs explaining.
-    assert.ok(unclaimedPage.includes(w.RundockRoutineEditorModel.UNASSIGNED_REASON),
-      `the skill page with no agent does not say why it cannot be scheduled: ${unclaimedPage}`);
-    assert.ok(!assignedPage.includes(w.RundockRoutineEditorModel.UNASSIGNED_REASON),
+    const assignedSchedule = scheduleSection(doc);
+    assert.ok(assignedSchedule, 'no Schedule section on the page for a skill with an agent');
+    assert.ok(assignedSchedule.querySelector('[data-skills-action="schedule-skill"]'),
+      'a skill an agent has lost its way in to schedule it');
+    assert.ok(!assignedSchedule.textContent.includes(w.RundockRoutineEditorModel.UNASSIGNED_REASON),
       'a skill an agent has carries a reason for an absence that is not true of it');
-    assert.notStrictEqual(unclaimedPage, assignedPage, 'the two shapes read identically');
     dom.window.close();
   });
 
-  // The routines view's own empty state for an unassigned skill states the
-  // identical string, quoted here from the model both surfaces read it from,
-  // so agreement between the two surfaces is a value equality a reviewer can
-  // run rather than two sentences read by eye.
-  test('the skill page\'s reason is the same string the routines view states', () => {
+  // The Used by card, directly above Schedule on the same page, already says
+  // an unassigned skill is available to all agents. The Schedule card's
+  // reason must not deny that in the same breath: a page that both offers a
+  // skill to every agent and states nobody has it is contradicting itself,
+  // which is exactly what AC-5 forbids, and it does not matter that the
+  // string came from one shared constant if that constant disagrees with
+  // the card sitting above it.
+  test('the Used by card and the Schedule card do not contradict each other on an unassigned skill\'s page', () => {
     const { doc, w, dom } = shell();
-    w.skills = [{ id: 'unclaimed', slug: 'unclaimed', name: 'Nobody has this one', assignedAgents: [] }];
+    // Named to hold no false match for the phrases this test checks are
+    // absent: 'unclaimed' elsewhere in the packet names its skill 'Nobody
+    // has this one', which would make the skill's own display name the
+    // thing this assertion caught rather than any claim the page makes.
+    w.skills = [{ id: 'unclaimed', slug: 'unclaimed', name: 'Orphan skill', assignedAgents: [] }];
     w.selectSkill = w.RundockSkillsView.selectSkill;
     w.selectSkill('unclaimed');
-    const skillPage = doc.getElementById('skill-detail-content').textContent;
+    const page = doc.getElementById('skill-detail-content').textContent;
 
-    const routinesModel = require('../../public/routines-model.js');
-    const routinesBody = routinesModel.emptyState({ skills: w.skills, guideName: 'Doc' }).body;
-
-    assert.ok(skillPage.includes(w.RundockRoutineEditorModel.UNASSIGNED_REASON));
-    assert.ok(routinesBody.includes(w.RundockRoutineEditorModel.UNASSIGNED_REASON));
+    assert.match(page, /Available to all agents/, 'sanity: the Used by card renders what this test compares against');
+    assert.ok(!/nobody has/i.test(page), 'the page states nobody has the skill against its own Used by card');
+    assert.ok(!/no agent has/i.test(page), 'the page states no agent has the skill against its own Used by card');
     dom.window.close();
   });
 
