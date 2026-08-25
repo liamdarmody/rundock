@@ -386,16 +386,73 @@ describe('which empty state, decided mechanically', () => {
     assert.strictEqual(state.action, editor.STEP_LEADS.build);
   });
 
-  // The condition is the same question the picker already answers, so the two
-  // surfaces cannot disagree about whether a workspace has skills.
-  test('the variant is the question skillChoices already answers', () => {
+  const UNASSIGNED = [{ id: 'orphan', name: 'Orphan', assignedAgents: [] }];
+
+  // The condition is the picker's own question, `skillChoices`, and not a new
+  // one written here. Extended to the third shape: `createSkill` alone cannot
+  // tell "no skill exists" from "a skill exists and nobody has it", since both
+  // leave `options` empty, so the branch also reads `onlyUnassignedSkills`,
+  // which the picker computes from the same walk rather than this file
+  // recomputing it as a second rule.
+  test('the variant is the question skillChoices already answers, across all three shapes', () => {
     const editor = require('../../public/routine-editor-model.js');
-    for (const skills of [[], WITH_SKILL, [{ id: 'orphan', name: 'Orphan', assignedAgents: [] }]]) {
-      const offers = editor.skillChoices({ skills }).createSkill;
+    for (const skills of [[], WITH_SKILL, UNASSIGNED]) {
+      const choice = editor.skillChoices({ skills });
       const state = m.emptyState({ skills, guideName: 'Wren' });
-      assert.strictEqual(state.action === 'Build a skill', offers,
-        'the empty state and the picker disagree about whether this workspace has skills');
+      if (choice.onlyUnassignedSkills) {
+        assert.notStrictEqual(state.action, 'Build a skill',
+          'a workspace with an unassigned skill was offered to build the one it already has');
+      } else {
+        assert.strictEqual(state.action === 'Build a skill', choice.createSkill,
+          'the empty state and the picker disagree about whether this workspace has skills');
+      }
     }
+  });
+
+  // Told to assign the skill it has, never to build one it does not need.
+  test('a workspace whose only skill is unassigned is told to assign it, not build one', () => {
+    const state = m.emptyState({ skills: UNASSIGNED, guideName: 'Wren' });
+    assert.strictEqual(state.lead, 'No routines yet.');
+    assert.ok(!/build/i.test(state.body), `told to build a skill it already has: ${state.body}`);
+    assert.match(state.body, /assign it to an agent/i);
+    assert.notStrictEqual(state.body, editor().STEP_LEADS.empty,
+      'the unassigned workspace was given the no-skills-at-all sentence');
+  });
+
+  function editor() { return require('../../public/routine-editor-model.js'); }
+
+  // The third variant carries the same five slots the other two do, so it
+  // renders through the one box the view already draws every variant with,
+  // rather than a shape the render has to grow a case for.
+  test('the unassigned-skill state carries the same slots as the other two', () => {
+    const shapes = [
+      m.emptyState({ skills: [], guideName: 'Wren' }),
+      m.emptyState({ skills: UNASSIGNED, guideName: 'Wren' }),
+      m.emptyState({ skills: WITH_SKILL, guideName: 'Wren' }),
+    ];
+    for (const shape of shapes.slice(1)) {
+      assert.deepStrictEqual(Object.keys(shape).sort(), Object.keys(shapes[0]).sort());
+    }
+  });
+
+  // Neither a button nor an aside: assigning a skill to an agent is existing
+  // behaviour this state points at, and the aside the other states carry
+  // promises scheduling "right from its own page", which this state's skill
+  // cannot yet do.
+  test('the unassigned-skill state offers no action and no aside', () => {
+    const state = m.emptyState({ skills: UNASSIGNED, guideName: 'Wren' });
+    assert.strictEqual(state.action, null);
+    assert.strictEqual(state.actionKind, null);
+    assert.strictEqual(state.aside, null);
+  });
+
+  // The reason is the exact string the skill's own page states in its
+  // Schedule card for an unassigned skill, quoted here from the one place both
+  // surfaces read it, so a change to one cannot leave the other behind.
+  test('the reason given here is the shared string the skill page also states', () => {
+    const state = m.emptyState({ skills: UNASSIGNED, guideName: 'Wren' });
+    assert.ok(state.body.includes(editor().UNASSIGNED_REASON),
+      `the routines view does not carry the reason the skill page states: ${state.body}`);
   });
 
   test('skills that have not arrived are not a workspace with no skills', () => {

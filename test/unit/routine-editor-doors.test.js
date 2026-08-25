@@ -478,6 +478,55 @@ describe('the doors, pressed', () => {
     dom.window.close();
   });
 
+  // The control used to vanish with nothing under its own heading. Both
+  // shapes of the skill page are driven here, side by side, so the difference
+  // between them is a diff a reviewer can read: one carries the control, the
+  // other carries the reason the control is missing, and neither is silent.
+  test('a skill page with no agent states why it cannot be scheduled, unlike a skill page with one', () => {
+    const { doc, w, dom } = shell();
+    w.skills = [
+      { id: 'unclaimed', slug: 'unclaimed', name: 'Nobody has this one', assignedAgents: [] },
+      { id: 'ops-summary', slug: 'ops-summary', name: 'Compile the ops summary',
+        assignedAgents: [{ id: 'piper', name: 'Piper' }] },
+    ];
+    w.selectSkill = w.RundockSkillsView.selectSkill;
+
+    w.selectSkill('unclaimed');
+    const unclaimedPage = doc.getElementById('skill-detail-content').textContent;
+
+    w.selectSkill('ops-summary');
+    const assignedPage = doc.getElementById('skill-detail-content').textContent;
+
+    // The unclaimed shape states the reason, under Schedule, and offers no
+    // control. The assigned shape offers the control and carries no reason,
+    // since nothing there needs explaining.
+    assert.ok(unclaimedPage.includes(w.RundockRoutineEditorModel.UNASSIGNED_REASON),
+      `the skill page with no agent does not say why it cannot be scheduled: ${unclaimedPage}`);
+    assert.ok(!assignedPage.includes(w.RundockRoutineEditorModel.UNASSIGNED_REASON),
+      'a skill an agent has carries a reason for an absence that is not true of it');
+    assert.notStrictEqual(unclaimedPage, assignedPage, 'the two shapes read identically');
+    dom.window.close();
+  });
+
+  // The routines view's own empty state for an unassigned skill states the
+  // identical string, quoted here from the model both surfaces read it from,
+  // so agreement between the two surfaces is a value equality a reviewer can
+  // run rather than two sentences read by eye.
+  test('the skill page\'s reason is the same string the routines view states', () => {
+    const { doc, w, dom } = shell();
+    w.skills = [{ id: 'unclaimed', slug: 'unclaimed', name: 'Nobody has this one', assignedAgents: [] }];
+    w.selectSkill = w.RundockSkillsView.selectSkill;
+    w.selectSkill('unclaimed');
+    const skillPage = doc.getElementById('skill-detail-content').textContent;
+
+    const routinesModel = require('../../public/routines-model.js');
+    const routinesBody = routinesModel.emptyState({ skills: w.skills, guideName: 'Doc' }).body;
+
+    assert.ok(skillPage.includes(w.RundockRoutineEditorModel.UNASSIGNED_REASON));
+    assert.ok(routinesBody.includes(w.RundockRoutineEditorModel.UNASSIGNED_REASON));
+    dom.window.close();
+  });
+
   // The breadcrumb belongs to the door that opened the editor, and this door
   // came from a skill. A control reading "Back to Piper" here would be the
   // exact fault the agent breadcrumb was written to stop: a label that names

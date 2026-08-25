@@ -160,6 +160,20 @@
   // ===== THE SKILL PICKER =====
 
   /**
+   * Why a skill nobody has cannot be scheduled, said once and read by both
+   * surfaces that have to say so: the routines view's own empty state, when
+   * every skill the workspace has belongs to nobody, and a skill's own page,
+   * when that specific skill does. ONE STRING, so the two cannot drift into
+   * two different explanations of the same fact.
+   *
+   * THE FACT ITSELF, not a softened version of it. A routine is declared on
+   * an agent file and runs a skill AS that agent, so a skill nothing is
+   * assigned to has no file a routine could be written into.
+   */
+  const UNASSIGNED_REASON = 'A routine runs a skill as one of your agents, '
+    + 'so a skill nobody has cannot be scheduled yet.';
+
+  /**
    * What can be scheduled, and for whom.
    *
    * Two entries reach this. From an agent's page the choice is that agent's,
@@ -204,6 +218,18 @@
       createSkill: options.length === 0,
       createSkillLabel: STEP_LEADS.build,
       emptyLead: STEP_LEADS.empty,
+      // THE QUESTION `createSkill` DOES NOT ANSWER: whether the reason
+      // `options` came back empty is that nothing has been built, or that
+      // something has been built and nobody has it. Both leave `options` at
+      // zero, so a caller reading `createSkill` alone cannot tell them apart,
+      // and the routines view's own empty state told a workspace with an
+      // unassigned skill to build the one it already had. This is computed
+      // here, from the same `skills` and `options` this call already walked,
+      // rather than left for a caller to recompute as a second rule that
+      // could disagree with this one. True only when the input carried a
+      // skill: an empty workspace is the OTHER zero-options state, and
+      // `createSkill` already speaks for it.
+      onlyUnassignedSkills: skills.length > 0 && options.length === 0,
     };
   }
 
@@ -349,6 +375,7 @@
 
   return {
     RUN_ON_SUPPORTED, RUN_ON_CAVEAT, RUN_ON_LABEL, FREQUENCIES, STEP_LEADS, SAVE_DESTINATION,
+    UNASSIGNED_REASON,
     runOnOptions, runOnOption, runOnField,
     skillChoices, stepLead,
     times, buildSchedule, previewSentence,

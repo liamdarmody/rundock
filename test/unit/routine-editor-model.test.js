@@ -138,6 +138,40 @@ describe('routine editor: choosing a skill', () => {
       assert.ok(!words.includes(alarm), `the offer must not read as a fault: found "${alarm}"`);
     }
   });
+
+  // `onlyUnassignedSkills`: the question `createSkill` cannot answer on its
+  // own, since a workspace with no skill and a workspace whose only skill
+  // belongs to nobody both leave `options` empty.
+  describe('onlyUnassignedSkills', () => {
+    test('false on a genuinely empty workspace, which createSkill already covers', () => {
+      const choice = model.skillChoices({ skills: [], agentId: null });
+      assert.strictEqual(choice.createSkill, true);
+      assert.strictEqual(choice.onlyUnassignedSkills, false,
+        'a workspace with no skill at all was reported as having an unassigned one');
+    });
+
+    test('true when the workspace has a skill and nobody has it', () => {
+      const choice = model.skillChoices({ skills: [{ id: 'orphan', name: 'Orphan', assignedAgents: [] }], agentId: null });
+      assert.strictEqual(choice.options.length, 0);
+      assert.strictEqual(choice.onlyUnassignedSkills, true);
+    });
+
+    test('false once any skill in the workspace has an agent', () => {
+      const choice = model.skillChoices({ skills: skillFixture(), agentId: null });
+      assert.strictEqual(choice.onlyUnassignedSkills, false);
+    });
+
+    // Scoped to one agent, `options` can still be empty while other agents'
+    // skills are assigned; this reports what the call itself found rather
+    // than a workspace-wide fact, which is why the routines view's own empty
+    // state calls this unscoped.
+    test('reports what the scoped call itself found, not a workspace-wide fact', () => {
+      const choice = model.skillChoices({ skills: skillFixture(), agentId: 'nobody' });
+      assert.strictEqual(choice.options.length, 0);
+      assert.strictEqual(choice.onlyUnassignedSkills, true,
+        'this call carried skills and produced no option, which is what the field reports');
+    });
+  });
 });
 
 describe('routine editor: the schedule is built, not typed', () => {
@@ -391,6 +425,7 @@ describe('routine editor: the words it ships', () => {
       model.timezoneCaption({ zone: 'Europe/London', agentName: 'Piper' }),
       model.timezoneCaption({ zone: 'Europe/London', agentName: null }),
       model.STEP_LEADS,
+      model.UNASSIGNED_REASON,
     ]);
   }
 

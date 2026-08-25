@@ -26,6 +26,10 @@ function skillsModel() {
   return typeof RundockSkillsModel !== 'undefined' ? RundockSkillsModel : null;
 }
 
+function routineEditorModel() {
+  return typeof RundockRoutineEditorModel !== 'undefined' ? RundockRoutineEditorModel : null;
+}
+
 // Whether the skill list has arrived. NOT the same as it being empty, and the
 // two are indistinguishable from the array alone: an empty list before the
 // reply lands looks exactly like a workspace with nothing in it. The routine
@@ -226,12 +230,18 @@ function selectSkill(id) {
   // control: the reader believes the label.
   //
   // The card above already carries the step this reader actually needs, which
-  // is to give the skill an agent, so nothing is lost by leaving this out.
+  // is to give the skill an agent, so nothing is lost by leaving the control
+  // out.
   //
-  // AND SAYING NOTHING HERE ABOUT WHY THE CONTROL IS ABSENT IS ALSO DELIBERATE,
-  // not an oversight to be repaired by adding a sentence: a reader meets this
-  // same gap from the other side in the unassigned-skill messaging, and half an
-  // answer in each place is how one surface ends up saying two different things.
+  // BUT THE SECTION ITSELF STAYS, AND NOW SAYS WHY. Silence here used to be
+  // deliberate, on the reasoning that a reader meets the same gap from the
+  // other side, in the "Used by" card above, so a second answer here risks
+  // the two disagreeing. That reasoning misses the opposite failure: a
+  // reader looking specifically for Schedule, on a page that lists Used by,
+  // Schedule and Instructions, meets it simply missing, with nothing under
+  // that heading to say why. `editor.UNASSIGNED_REASON` is the one sentence
+  // both surfaces use for this, verbatim, so adding it here cannot make this
+  // page say something the routines view's own empty state does not.
   if (s.assignedAgents.length) {
     h += `<div class="profile-card"><div class="profile-card-section">
       <div class="profile-section-label">Schedule</div>
@@ -239,6 +249,14 @@ function selectSkill(id) {
       <button class="settings-btn" type="button" data-skills-action="schedule-skill"
         data-skill-id="${esc(s.id)}" onclick="addRoutineForSkill('${esc(s.id)}')">Schedule this skill</button>
     </div></div>`;
+  } else {
+    const editor = routineEditorModel();
+    if (editor) {
+      h += `<div class="profile-card"><div class="profile-card-section">
+        <div class="profile-section-label">Schedule</div>
+        <div class="profile-card-text">${esc(editor.UNASSIGNED_REASON)}</div>
+      </div></div>`;
+    }
   }
 
   // Collapsible instructions card

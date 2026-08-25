@@ -767,20 +767,6 @@ describe('the empty state, where no skill exists', () => {
     dom.window.close();
   });
 
-  // The variant is chosen by the same question the picker answers, so the two
-  // surfaces cannot disagree about whether a workspace has skills. A skill
-  // nothing is assigned to cannot be scheduled, so it is not a skill this
-  // question counts.
-  test('an unassigned skill is not a skill this view can offer to schedule', () => {
-    const { doc, w, dom } = shell([], { skills: [{ id: 'sk', name: 'Orphan', assignedAgents: [] }], guide: true });
-    w.renderRoutines();
-    const page = text(doc.getElementById('routines-content'));
-    assert.match(page, /Routines schedule skills your agents already have\./);
-    assert.ok(!page.includes('Pick a tested skill'),
-      'the picker would open on nothing, so the offer to pick is false');
-    dom.window.close();
-  });
-
   // WITH NO GUIDE THE BUTTON GOES AND THE LINE MUST NOT BE LEFT INSTRUCTING AN
   // ACTION WITH NOTHING TO PRESS. "Build one and it will show up here" with no
   // Build a skill beside it is a dead end, so the same agent-independent
@@ -809,6 +795,109 @@ describe('the empty state, where no skill exists', () => {
       'the no-guide sentence reached a workspace that has a guide');
     assert.ok(!/Wren|Doc/.test(page), 'this state names no agent in either variant');
     dom.window.close();
+  });
+});
+
+// Until this pass, a workspace whose only skill belonged to nobody took the
+// exact branch above: told to build the skill it already had. `an unassigned
+// skill is not a skill this view can offer to schedule`, in the describe
+// block above, used to pin that as correct; it was half right. Not offering
+// it to schedule IS correct, and stays correct here. Saying so with the
+// no-skills-at-all sentence was the defect.
+describe('the empty state, where the only skill is unassigned', () => {
+  function unassignedShell(opts = {}) {
+    return shell([], { skills: [{ id: 'sk', name: 'Orphan', assignedAgents: [] }], guide: true, ...opts });
+  }
+
+  // Told to assign the skill it has, not to build one.
+  test('a workspace whose only skill is unassigned is told to assign it, not build one', () => {
+    const { doc, w, dom } = unassignedShell();
+    w.renderRoutines();
+    const page = text(doc.getElementById('routines-content'));
+    assert.match(page, /No routines yet\./);
+    assert.ok(!page.includes('Build a skill'), 'a skill this workspace already has was offered as one to build');
+    assert.ok(!page.includes('Routines schedule skills your agents already have'),
+      'the no-skills-at-all sentence reached a workspace that has one');
+    assert.match(page, /assign it to an agent/i, 'the reader is not told what to do about the skill it has');
+    dom.window.close();
+  });
+
+  // Still not offered to pick, which is the one thing this state shares with
+  // the no-skills-at-all branch and the part of the old test that was right.
+  test('the picker is still not offered: a skill nothing is assigned to cannot be scheduled', () => {
+    const { doc, w, dom } = unassignedShell();
+    w.renderRoutines();
+    const page = text(doc.getElementById('routines-content'));
+    assert.ok(!page.includes('Pick a tested skill'), 'the picker would open on nothing, so the offer to pick is false');
+    dom.window.close();
+  });
+
+  // No new box, no new button styling: the state renders through the exact
+  // markup the other two variants share.
+  test('the state renders through the same box as the other two variants, with no button', () => {
+    const { doc, w, dom } = unassignedShell();
+    w.renderRoutines();
+    const box = doc.querySelector('#routines-content .routines-empty-card');
+    assert.ok(box, 'the unassigned-skill state carries no box, so it does not conform to the pane pattern');
+    const stateLine = box.querySelector('.routines-empty-state');
+    assert.ok(stateLine, 'the state line is not on the page');
+    assert.strictEqual(text(stateLine), 'No routines yet.');
+    assert.strictEqual(doc.querySelectorAll('#routines-content button').length, 0,
+      'assigning a skill to an agent is existing behaviour this state points at, not a control it grows');
+    assert.strictEqual(doc.querySelectorAll('.routines-empty-aside').length, 0,
+      'the aside promises scheduling from the skill\'s own page, which this state\'s skill cannot yet do');
+    dom.window.close();
+  });
+
+  // The reason given here is the exact sentence the skill's own page states
+  // in its Schedule card for the same skill, quoted from the one place both
+  // surfaces read it, so the two cannot state different reasons.
+  test('the reason quoted here is the skill page\'s own reason, verbatim', () => {
+    const { doc, w, dom } = unassignedShell();
+    w.renderRoutines();
+    const page = text(doc.getElementById('routines-content'));
+    assert.ok(page.includes(w.RundockRoutineEditorModel.UNASSIGNED_REASON),
+      `the routines view does not carry the shared reason: ${page}`);
+    dom.window.close();
+  });
+
+  // All three shapes discovery can answer, driven through the one view and
+  // printed together so the difference between them is a diff a reader can
+  // check rather than three separate claims to take on trust.
+  test('all three shapes discovery can answer, side by side', () => {
+    const noSkills = shell([], { skills: [], guide: true });
+    noSkills.w.renderRoutines();
+    const noneText = text(noSkills.doc.getElementById('routines-content'));
+
+    const unassigned = unassignedShell();
+    unassigned.w.renderRoutines();
+    const unassignedText = text(unassigned.doc.getElementById('routines-content'));
+
+    const assigned = shell([], {
+      skills: [{ id: 'sk', name: 'Compile the ops summary', assignedAgents: [{ id: 'piper', name: 'Piper' }] }],
+      guide: true,
+    });
+    assigned.w.renderRoutines();
+    const assignedText = text(assigned.doc.getElementById('routines-content'));
+
+    // No shape is any other shape's text, and each carries the one line that
+    // is true of it and false of the other two.
+    assert.notStrictEqual(noneText, unassignedText);
+    assert.notStrictEqual(unassignedText, assignedText);
+    assert.notStrictEqual(noneText, assignedText);
+    assert.match(noneText, /Routines schedule skills your agents already have\./);
+    assert.ok(!unassignedText.includes('Routines schedule skills your agents already have'));
+    assert.ok(!assignedText.includes('Routines schedule skills your agents already have'));
+    assert.match(unassignedText, /assign it to an agent/i);
+    assert.ok(!noneText.match(/assign it to an agent/i));
+    assert.ok(!assignedText.match(/assign it to an agent/i));
+    assert.match(assignedText, /Pick a tested skill and give it a schedule\./);
+    assert.ok(!noneText.includes('Pick a tested skill'));
+    assert.ok(!unassignedText.includes('Pick a tested skill'));
+
+    noSkills.dom.window.close();
+    unassigned.dom.window.close();
+    assigned.dom.window.close();
   });
 });
 
