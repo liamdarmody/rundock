@@ -1125,18 +1125,35 @@ describe('a row never says two things that cannot both be true', () => {
     });
   }
 
-  // THE WHOLE PAIRING, DRIVEN RATHER THAN REASONED.
+  // THE PAIRING, DRIVEN RATHER THAN REASONED.
   //
   // A row is built from lines decided independently, so the question is not
   // "is this instance fixed" but "which pairs of lines can disagree". Two
   // kinds of line can: one that PROMISES the routine will run, and one that
-  // DENIES it. Every combination of the states that produce them is built and
+  // DENIES it. Every combination of the states listed below is built and
   // rendered here, and any row carrying one of each fails.
   //
   // Reading the pairs off the states rather than listing them by hand is the
-  // point: a new row state joins the matrix by being added to STATES, and if
-  // it can produce both kinds of line the test fails without anybody having
-  // thought to pair it with the others.
+  // point: a state joins the matrix by being added to STATES, and if it can
+  // produce both kinds of line the test fails without anybody having thought
+  // to pair it with the others.
+  //
+  // WHAT THIS SWEEP COVERS, EXACTLY: the states in STATES, and no others. It
+  // is not a sweep over everything a row can carry, and the difference matters
+  // because reading it as one is how a gap gets missed.
+  //
+  // THE RUN STATUS VOCABULARY IS OUTSIDE IT. `lastRunStatus` carries a word
+  // the scheduler chose, and the set of those words grows: `cancelled` was
+  // added after this sweep was written and is not among the states below, so
+  // no row here is built with it. That omission is deliberate rather than an
+  // oversight left standing. A cancelled run currently reads as an ordinary
+  // one on this list, and settling what such a row should say, and what tone
+  // it takes beside the four outcomes, is a decision this file cannot make on
+  // its own. Adding the state here without that decision would pin whatever
+  // the code happens to do today.
+  //
+  // So: this sweep says nothing about a cancelled run. If you came here
+  // believing it did, that belief is the thing to correct.
   const STATES = [
     ['held back', { enabled: false }],
     ['paused', { paused: true }],
@@ -1166,6 +1183,10 @@ describe('a row never says two things that cannot both be true', () => {
     // demand the removal of the second line the row exists to draw. What a run
     // status can get wrong is not the future but its own cause, which is the
     // rule below.
+    //
+    // Only the `missed` outcome is read here, because it is the only one this
+    // sweep has a rule for. Whether every word the scheduler can record ends
+    // up in an outcome at all is a question this sweep does not ask.
     return { promising, denying };
   }
 

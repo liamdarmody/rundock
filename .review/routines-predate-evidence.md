@@ -214,10 +214,10 @@ disagree.
 
 Asserted in `test/unit/routines-end-to-end.test.js`, which drives frontmatter to
 rendered row for the first four and the paused one, and swept in
-`test/unit/routines-model.test.js`: every combination of eight row states is
-built and rendered, and any row carrying both a line that promises a run and one
-that denies it fails, as does any row explaining an absence by a cause that did
-not apply.
+`test/unit/routines-model.test.js`: all 256 combinations of the eight states
+that sweep names are built and rendered, and any row carrying both a line that
+promises a run and one that denies it fails, as does any row explaining an
+absence by a cause that did not apply.
 
 ## The rule the rows are held to, and how far it was checked
 
@@ -254,8 +254,21 @@ still advances, so turning one on does not enumerate a backlog either. A paused
 routine is deliberately untouched by that: it WAS in service and its owner
 suspended it, which is a decision this project already took and pins.
 
-Both rules are swept over every combination of seven row states rather than the
-pairs anyone thought to write down.
+Both rules are swept over all 256 combinations of the eight states that sweep
+names, rather than over the pairs anyone thought to write down.
+
+**What the sweep does not cover, said plainly, because a claim of completeness
+is the kind that gets believed.** It covers the eight states it lists and no
+others. It is not a sweep over everything a row can carry. In particular the run
+status vocabulary is outside it: `lastRunStatus` carries a word the scheduler
+chose, that set grows, and `cancelled` was added to it after this sweep was
+written. No row here is built with that word, so nothing here says anything
+about what such a row shows. A cancelled run currently reads on this list as an
+ordinary one, which is a live defect on the main branch rather than something
+this change introduces or fixes: `public/routines-model.js` is untouched by the
+change that added the word, and the same input produces the same row there.
+Settling what a cancelled row should say, and what tone it takes beside the four
+outcomes, is a decision that belongs with that work rather than this.
 
 ## What is deliberately not here
 
