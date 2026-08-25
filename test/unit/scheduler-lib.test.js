@@ -1499,7 +1499,7 @@ test('neither stopping a run nor switching workspaces across one reaches the val
         assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true, 'the catch-up run started');
         const stampedByTheStart = sched.routineState[KEY].lastRun;
         assert.strictEqual(stampedByTheStart, START.toISOString(),
-          'the start stamped the clock, which is the only writer on this path and is unchanged by this card');
+          'the start stamped the clock, which is the only writer on this path and is left exactly as it was');
 
         // HALF TWO, exercised: a workspace switch across a run that is still
         // going. The switch reloads both stores, so it holds the run record,
