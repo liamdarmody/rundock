@@ -206,3 +206,133 @@ either: the kanban files drive the board parser, and `markdown-benign.md` drives
 the chat renderer. `test/fixtures/ofm/code-blocks.md` is the one fence fixture
 the editor round trip does read, and it held only a plain three-backtick fence
 and a `js` fence, so fault two was invisible to it as well.
+
+## The new fixture is a file, not a string
+
+> **AC-12:** A test drives a real fixture file containing a fence through the
+> round trip, rather than a hand-built string.
+
+`test/fixtures/review/fenced-page.md` is read from disk by
+`test/unit/review-fenced-roundtrip.test.js`. It is a page about writing
+markdown, which is the document that broke: prose with bold, code spans and
+links; a three-backtick fence wrapping markdown; a four-backtick fence wrapping
+a three-backtick fence; and a tilde fence.
+`test/fixtures/ofm/code-blocks.md` gained the same marker variations, so the
+parity corpus covers them too.
+
+## Fence shapes
+
+> **AC-6:** Four-backtick fences are handled, since a page about markdown
+> contains them.
+>
+> **AC-7:** A fence nested inside a larger fence is handled.
+>
+> **AC-8:** A tilde fence is handled, or the diff records that the parser in use
+> does not accept one and what it does instead.
+
+The parser accepts all three. The four-backtick fence, the three-backtick fence
+nested inside it, and the tilde fence are in the fixture and are asserted by
+name in `test/unit/review-fenced-roundtrip.test.js`. The serialiser now records
+the source marker character, its length and the full info string at parse time
+and writes them back, and it widens the marker when the block's own content
+would otherwise close it.
+
+**One fence shape is still rewritten and is not fixed here.** A fence indented
+by one to three spaces is dedented on save, because the indent is not carried on
+the node and re-indenting the content lines is a separate change to the same
+serialiser. It is recorded rather than left silent:
+
+    in:  "  ```\n  x\n  ```\n"     out:  "```\nx\n```\n"
+
+That drift moves no content across a fence boundary and escapes nothing, so it
+is not the defect this change is about.
+
+## Proving the prohibitions
+
+> **AC-1:** Adding a comment to a file containing a fenced block leaves every
+> byte outside the comment markers unchanged.
+>
+> **AC-2:** Editing a comment on such a file leaves every byte outside the
+> comment markers unchanged.
+>
+> **AC-3:** Removing a comment restores the file to what it was before the
+> comment was added, byte for byte.
+
+These are prohibitions, and reverting the source cannot discharge one. Reverting
+makes a test fail because the feature is gone, not because bytes were preserved,
+so a red run proves nothing about the prohibition.
+
+They are proved instead by committing the corruption. `test/tools/mutate-fence-guards.js`
+puts each fault back into the source one at a time and requires a test to go red
+for it, in the shape the other mutation harnesses in `test/tools/` already use.
+It runs inside the pre-commit gate as part of `npm run mutate:guards`.
+
+Run it with:
+
+    node test/tools/mutate-fence-guards.js --markdown
+
+Result, pasted from that run:
+
+| Guard broken | Places found | Tests red | Which |
+|---|---|---|---|
+| a comment refuses a range in a block that holds only text | 1 | 4 | `a comment anchored inside a fence is refused, with a reason`<br>`a refused comment changes nothing, so it cannot half-apply`<br>`the block survives the refusal intact, fence markers and all`<br>`the composer stays open, shows the reason, and keeps what was typed` |
+| a suggested replacement refuses a range in a block that holds only text | 1 | 1 | `a suggested replacement inside a fence is refused the same way` |
+| a suggested insertion refuses a cursor in a block that holds only text | 1 | 1 | `a suggested insertion at a cursor inside a fence is refused the same way` |
+| the fence is the one the file was written with, not a fixed three backticks | 1 | 13 | `the fixture round-trips byte-for-byte`<br>`the four-backtick fence keeps four backticks, so its inner fence stays inside it`<br>`the tilde fence is still a tilde fence`<br>`a fence written into a block is longer than the fences the block now holds`<br>`a second and third cycle change nothing further`<br>`adding a comment in prose changes only the comment markers`<br>`replying to a comment leaves the document bytes alone`<br>`resolving a comment gives the document back its original bytes`<br>`a refused comment changes nothing, so it cannot half-apply`<br>`a suggested replacement inside a fence is refused the same way`<br>`a suggested insertion at a cursor inside a fence is refused the same way`<br>`the block survives the refusal intact, fence markers and all`<br>`the composer stays open, shows the reason, and keeps what was typed` |
+| the fence keeps its marker character, so a tilde fence stays a tilde fence | 1 | 10 | `the fixture round-trips byte-for-byte`<br>`the tilde fence is still a tilde fence`<br>`a second and third cycle change nothing further`<br>`adding a comment in prose changes only the comment markers`<br>`replying to a comment leaves the document bytes alone`<br>`resolving a comment gives the document back its original bytes`<br>`a refused comment changes nothing, so it cannot half-apply`<br>`a suggested replacement inside a fence is refused the same way`<br>`a suggested insertion at a cursor inside a fence is refused the same way`<br>`the composer stays open, shows the reason, and keeps what was typed` |
+| the fence is widened past any fence inside the block | 1 | 1 | `a fence written into a block is longer than the fences the block now holds` |
+| the whole info string is written back, not just the language word | 1 | 1 | `code-blocks.md round-trips byte-for-byte` |
+
+Deliberately not mutated:
+
+- **the escaping of the swept-out text:** it is not a fault of its own and has no line to break. The serialiser escapes paragraph text that would otherwise re-parse as markup, which is correct; it only produced backslashes here because the anchor fault had already turned code into paragraph text. It is reintroduced by the first three rows above and leaves with them, and the tests that go red for them assert on the backslashes as well as on the fence. A row of its own would be a second name for the same mutation.
+- **the panel showing the refusal reason in the composer:** it is display, and the byte-preservation claims do not rest on it. It has a test that drives the real sidebar and reads the rendered reason, which is the right instrument for it; a mutation here would report on that test twice.
+
+### Which row carries which prohibition
+
+Read the rows against the three criteria rather than as a single green block.
+
+**Adding a comment.** The first row is the anchor fault put back. With it back,
+`a refused comment changes nothing, so it cannot half-apply` goes red, and that
+test compares the whole saved file against the fixture's bytes. The fourth and
+fifth rows are the serialisation fault put back, and
+`adding a comment in prose changes only the comment markers` goes red for each:
+that test strips the construct back to the words it wraps and requires what is
+left to be the file that was opened.
+
+**Editing a comment.** `replying to a comment leaves the document bytes alone`
+goes red under the fourth and fifth rows. It is not red under the first three,
+and that is not a gap: the anchor fault only fires when the anchor is inside a
+fenced block, and a refused anchor leaves no comment to reply to.
+
+**Removing a comment.** `resolving a comment gives the document back its
+original bytes` goes red under the fourth and fifth rows, on the same terms and
+with the same exception.
+
+Two limits travel with this table rather than being left for a reader to find.
+A mutation proves a test objects to that specific corruption; it cannot prove
+the test measures the right thing, so the assertions are byte comparisons
+against a file read from disk rather than containment checks. And the review
+block is excluded from those comparisons, because review data has to be stored
+somewhere: what the tests hold fixed is the frontmatter, the body and the
+trailing newline run, and the assertion that the record was written at all sits
+beside each one so an operation that quietly did nothing cannot pass.
+
+## Refusal
+
+> **AC-4:** A comment anchored inside a fenced region either applies correctly
+> or is refused with a stated reason.
+>
+> **AC-5:** A refused anchor changes nothing on disk, so it cannot half-apply.
+
+A construct cannot be placed inside a fenced block correctly, because the block
+holds text and nothing else, so the anchor is refused. The controller checks the
+block's content expression before it does anything at all: before it allocates
+an id, before it opens a transaction, and before it records anything in the
+review data. It returns the refusal and its reason to the caller, and the review
+sidebar keeps the composer open and shows the reason instead of closing it and
+saving.
+
+Nothing on disk changes. The test serialises the file before the refused
+attempt and after it and compares the two strings, and asserts that the
+controller never became dirty, so no save would have been triggered either.

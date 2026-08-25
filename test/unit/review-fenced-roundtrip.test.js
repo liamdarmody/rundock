@@ -51,6 +51,15 @@ function reviewBlock(file) {
   return parseFile(file).endmatter.raw;
 }
 
+// The document with one comment construct put back to the words it wraps. What
+// is left has to be the file that was opened, byte for byte: the comment
+// markers are the only thing a comment is allowed to add.
+const COMMENT = 'Is this the right word here?';
+const MARKED = `{==${PROSE_ANCHOR}==}{>>${COMMENT}<<}{#c1}`;
+function withoutCommentMarkers(file) {
+  return documentBytes(file).replace(MARKED, PROSE_ANCHOR);
+}
+
 async function withReview(fn) {
   const env = await bootEditorEnv();
   const { createReviewController } = await import('../../public/editor/review/controller.js');
@@ -107,6 +116,40 @@ describe('a page of fences, opened and saved', () => {
     assert.ok(out.includes('\n~~~\n'), 'the tilde closing marker was rewritten');
   });
 
+  test('a fence written into a block is longer than the fences the block now holds', async () => {
+    // Somebody pastes an example fence into a code block. The block's own
+    // marker has to grow past it, or the save writes a block that closes at
+    // its first content line and the rest of the file falls out of it.
+    const env = await bootEditorEnv();
+    const element = env.window.document.createElement('div');
+    env.window.document.body.appendChild(element);
+    const { editor } = env.createEditor({ element, rawMarkdown: PAGE });
+    try {
+      let at = null;
+      editor.state.doc.descendants((node, pos) => {
+        if (at === null && node.type.name === 'codeBlock') at = pos + 1 + node.textContent.length;
+        return at === null;
+      });
+      assert.ok(at !== null, 'the fixture has no fenced block to type into');
+      // Typed, not parsed: the characters go into the block as its text, the
+      // way they arrive when somebody pastes an example into a snippet.
+      editor.chain().command(({ tr }) => {
+        tr.insertText('\n```\nnested\n```', at);
+        return true;
+      }).run();
+      const out = env.getMarkdown(editor);
+      assert.ok(out.includes('````markdown\nUse **bold**'),
+        `the block did not grow past the fence typed into it:\n${out}`);
+      // The proof that the marker is long enough is that reading it back gives
+      // one block again, not two blocks and a paragraph between them.
+      const reread = await roundTrip(out);
+      assert.equal(reread, out, 'the saved file does not read back as what was saved');
+    } finally {
+      env.destroyEditor(editor);
+      element.remove();
+    }
+  });
+
   test('a second and third cycle change nothing further', async () => {
     let out = PAGE;
     for (let i = 0; i < 3; i++) out = await roundTrip(out);
@@ -119,16 +162,11 @@ describe('commenting on a page of fences', () => {
     await withReview(async ({ editor, review, save, rangeOf }) => {
       const range = rangeOf(PROSE_ANCHOR, false);
       editor.commands.setTextSelection(range);
-      const id = review.addComment('Is this the right word here?');
+      const id = review.addComment(COMMENT);
       assert.equal(id, 'c1');
       const out = save();
-      const marked = `{==${PROSE_ANCHOR}==}{>>Is this the right word here?<<}{#c1}`;
-      assert.ok(out.includes(marked), `the comment was not written as one construct:\n${out}`);
-      // Put the construct back to the words it wraps, drop the review block,
-      // and what is left has to be the file that was opened. Nothing outside
-      // the markers may have moved.
-      const withoutMarkers = documentBytes(out).replace(marked, PROSE_ANCHOR);
-      assert.equal(withoutMarkers, PAGE, 'bytes outside the comment markers changed');
+      assert.ok(out.includes(MARKED), `the comment was not written as one construct:\n${out}`);
+      assert.equal(withoutCommentMarkers(out), PAGE, 'bytes outside the comment markers changed');
       assert.ok(!out.includes('\\'), `the save escaped something:\n${out}`);
     });
   });
@@ -136,12 +174,14 @@ describe('commenting on a page of fences', () => {
   test('replying to a comment leaves the document bytes alone', async () => {
     await withReview(async ({ editor, review, save, rangeOf }) => {
       editor.commands.setTextSelection(rangeOf(PROSE_ANCHOR, false));
-      review.addComment('Is this the right word here?');
+      review.addComment(COMMENT);
       const before = save();
       review.reply('c1', 'Yes, it is the file format.');
       const after = save();
       assert.equal(documentBytes(after), documentBytes(before),
         'a reply moved bytes in the document it was about');
+      assert.equal(withoutCommentMarkers(after), PAGE,
+        'bytes outside the comment markers changed while a reply was recorded');
       assert.notEqual(reviewBlock(after), reviewBlock(before),
         'the reply was not recorded anywhere, so this proves nothing');
     });
@@ -150,7 +190,7 @@ describe('commenting on a page of fences', () => {
   test('resolving a comment gives the document back its original bytes', async () => {
     await withReview(async ({ editor, review, save, rangeOf }) => {
       editor.commands.setTextSelection(rangeOf(PROSE_ANCHOR, false));
-      review.addComment('Is this the right word here?');
+      review.addComment(COMMENT);
       assert.notEqual(documentBytes(save()), PAGE, 'the comment never went in');
       review.resolve('c1');
       const out = save();
