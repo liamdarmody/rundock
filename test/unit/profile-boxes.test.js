@@ -38,18 +38,10 @@ const ROUTINES_SRC = read('public', 'views', 'routines.js');
 // The three boxes, in the order the conformance mock draws them.
 const BOXES = ['Skills', 'Routines', 'Configuration'];
 
-/**
- * Every status a run record can carry, READ OUT OF THE SCHEDULER.
- *
- * Written here as a list, this test would say what its author remembered on
- * the day. `interrupted` is the exact case that makes the point: it arrived
- * with the restarted-run card, months after the surface that printed it was
- * written, and nothing asked the profile about it. So the list is derived from
- * the two places that write a status into the run state, and a sixth one
- * appearing anywhere else in that file is a gap this cannot see and the
- * sanity check below is what bounds it.
- */
-
+// The statuses driven below are read out of the scheduler rather than listed
+// here, by the shared walk in test/helpers/scheduler-statuses.js, which says
+// why at length. Two suites need the same reading and a second copy of it can
+// go blind while still passing.
 const ROUTINES = [
   { name: 'Compile the ops summary', schedule: 'every day at 07:00', state: null },
   { name: 'Draft the stand-up notes', schedule: 'every monday at 08:30', state: null },

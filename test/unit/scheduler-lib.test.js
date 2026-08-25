@@ -170,6 +170,10 @@ async function withFakeSpawn(fakeSpawn, fn, fakeKill) {
   const claude = require(CLAUDE_KEY);
   const realSpawn = claude.spawnClaude;
   const realKill = claude.killProcessTree;
+  // Checked before it is replaced, in every test that uses this helper: a
+  // stand-in can stand in for a name that no longer exists and never say so.
+  assert.strictEqual(typeof realKill, 'function',
+    'the runtime module has no killProcessTree to stand in for, so the scheduler imports nothing');
   const prevClaudeDeps = claude.wireClaudeRuntimeDeps({ getActualPort: () => 0 });
   const unclaimedStops = [];
   claude.spawnClaude = fakeSpawn;
@@ -1186,6 +1190,30 @@ test('closing a restart-orphaned record writes nothing to the value double-fire 
   });
 });
 
+// A start that threw is an ending too, and it has to leave the run
+// unreachable. A handle left in the map would answer every later stop with yes
+// while signalling at a process id that no longer belongs to anything of ours.
+test('a start that throws leaves no run behind for a later stop to find', async () => {
+  await withTempWorkspaceAsync(async (dir) => {
+    await withTempHomeAsync(async () => {
+      const signalled = [];
+      await withFakeSpawn(() => { throw new Error('spawn refused'); }, async (sched) => {
+        assert.throws(() => sched.executeRoutine(AGENT, ROUTINE, KEY), /spawn refused/,
+          'the start threw, having opened a record first');
+        const [record] = runRecords(dir);
+        assert.ok(record, 'the record it opened on the way is on disk');
+        assert.strictEqual(record.status, 'failed', 'closed as a failure by the guard that rethrew');
+
+        assert.deepStrictEqual(sched.runningRuns(), [],
+          'and nothing is listed as going, because that run is over');
+        assert.strictEqual(sched.cancelRun(record.id), false,
+          'so a stop aimed at the id its record was opened under is refused');
+        assert.deepStrictEqual(signalled, [], 'and signals nothing');
+      }, (target, signal) => { signalled.push([target, signal]); });
+    });
+  });
+});
+
 // ===== THE STOP, AGAINST THE SIGNALLER THAT REALLY SENDS IT =====
 //
 // The other runtime's stop is pinned against the real client because a wrong
@@ -1367,8 +1395,20 @@ test('stopping a codex run sends the real client an interrupt naming the thread 
           assert.ok(started, 'the run reached a turn on the app-server');
           const threadId = started.params.threadId;
           assert.ok(threadId, 'which is filed under a thread');
+
+          // THE TURN IS GENUINELY STILL GOING, asserted rather than assumed,
+          // and this is what makes the ending below evidence of anything. The
+          // ending is what proves the interrupt landed, and it only proves
+          // that if the turn would not have ended anyway. Given time to
+          // finish and asserted still unfinished afterwards, so an app-server
+          // that stopped holding this turn open fails here rather than
+          // passing further down on the recorded word alone.
+          await until(() => false, 20);
+          assert.strictEqual(sched.routineState[KEY].status, 'running',
+            'the turn has not ended on its own, so it is being held open as this fixture asks');
+          assert.strictEqual(runRecords(dir)[0].status, 'running', 'and its record says so too');
           assert.strictEqual(stubRequests(dir).filter(e => e.method === 'turn/interrupt').length, 0,
-            'and nothing has been interrupted yet');
+            'and nothing has been interrupted yet, so the stop below is the first');
 
           const [live] = sched.runningRuns();
           assert.ok(live, 'the run is reachable');
@@ -1391,9 +1431,9 @@ test('stopping a codex run sends the real client an interrupt naming the thread 
           assert.strictEqual(sched.executeRoutine(CODEX_AGENT, HANGING_ROUTINE, KEY), true,
             'and the routine was released');
           await endedAfter(sched, async () => {
-            const live2 = sched.runningRuns()[0];
-            await until(() => live2 && sched.runningRuns().length > 0);
-            sched.cancelRun(live2.id);
+            const [next] = sched.runningRuns();
+            assert.ok(next, 'the second run is reachable, which is what ends it');
+            sched.cancelRun(next.id);
           });
         });
       });
@@ -1429,6 +1469,14 @@ test('a codex run stopped before its turn exists is still stopped, once, when it
           assert.ok(interrupt, 'the stop was honoured once the turn existed');
           assert.strictEqual(interrupt.params.threadId, started.params.threadId,
             'naming the turn that was started after the stop was asked for');
+          // Both positions taken from ONE reading of the log: each reading
+          // parses fresh objects, so comparing one reading's entry against
+          // another's finds nothing and passes for the wrong reason.
+          const wire = stubRequests(dir);
+          const startedAtIndex = wire.findIndex(e => e.method === 'turn/start');
+          const interruptedAtIndex = wire.findIndex(e => e.method === 'turn/interrupt');
+          assert.ok(startedAtIndex >= 0 && interruptedAtIndex > startedAtIndex,
+            'and it was sent after the turn it names was started, rather than into nothing');
 
           assert.ok(await until(() => sched.routineState[KEY].status !== 'running'), 'and the turn ended');
           assert.strictEqual(sched.routineState[KEY].status, 'cancelled', 'recorded as a stop');
@@ -1513,8 +1561,12 @@ test('a stop whose request is refused lets nothing escape, and the run still end
         assert.strictEqual(sched.routineState[KEY].status, 'running',
           'the refusal did not end the run, because a refused stop stopped nothing');
 
-        assert.ok(await until(() => sched.cancelRun(live.id) && asked > 1),
-          'and a later request tries again rather than answering yes and sending nothing');
+        // Asked once, then waited on. Calling the stop inside a poll
+        // predicate makes the poll itself the thing being tested, and hides
+        // how many requests it took.
+        assert.strictEqual(sched.cancelRun(live.id), true, 'a later request is answered');
+        assert.ok(await until(() => asked > 1),
+          'and tries again rather than answering yes and sending nothing');
 
         sub.emit('event', run.done);
         assert.ok(await until(() => sched.routineState[KEY].status !== 'running'), 'the turn then ended');
