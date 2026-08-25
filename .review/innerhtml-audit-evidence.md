@@ -418,6 +418,97 @@ the other file by somebody who never opens this one.
 
 ---
 
+## What was fixed, and how each fix is shown to work
+
+All 29 group (b) sites are fixed. The proof is a payload driven through the
+real call path, in `test/unit/innerhtml-payloads.test.js`, plus the rule tests
+in `test/unit/agent-colour.test.js`.
+
+**The assertions are structural, not behavioural, and that is deliberate.**
+jsdom loads no images, so an `onerror` never fires there and a test that waited
+for one would pass against completely unescaped markup. What is asserted is
+that the element was not created and that no attribute beginning `on` carries
+anything but a fixed literal, which is the same choice the renderer's own
+hardening suite made and for the same reason.
+
+**An inline handler is not by itself a finding.** This branch does not remove
+the client's 75 inline handlers; it removes every interpolation of external
+data into one. So `assertInert` takes an allowlist of exact handler strings,
+and a handler that grows an interpolation fails even if it still looks
+familiar.
+
+### The reverting check, per site
+
+`git stash push -- public/chat-markup.js` and re-running the payload suite:
+
+    without the fix: 7 of 8 fail
+    with the fix:    8 of 8 pass
+
+The one that passes both ways is `an ordinary agent still renders exactly as it
+did`, which is the benign control and SHOULD be insensitive to the fix. A
+control that went red with the payloads would mean the suite was measuring
+whether anything changed rather than whether the right thing changed.
+
+### What each cause's fix is
+
+| Cause | Fix | Proof |
+|---|---|---|
+| agent-identity | escape for element content in `chat-markup.js`; judge the colour | `an agent cannot write script into the chat thread through its own file`, six tests |
+| inline-handler | the value moves to a `data-*` attribute the handler reads back | `an id that would close the handler travels as data, not as code` |
+| attr-escaper | `escAttr` for attribute position, `agentColour` for a style attribute | `a colour that is still CSS is refused, not escaped into the attribute` |
+| transform-order | attribute values held in placeholders until every transform has run | five tests in `a kanban card title cannot break out of the attribute` |
+
+### The two app.js sites
+
+`app.js` cannot be required: it touches `document` at top level. Both of its
+agent-identity sites live in the effect-executor map, so each is cut out of the
+source by name and run, which is the technique `test/unit/team-sidebar.test.js`
+uses for the same reason. A copy of the executor written into the test would
+keep passing after `app.js` stopped carrying it.
+
+That extraction found its own bug worth recording: code eval'd into a jsdom
+window resolves free names against THAT window, not against node's `global`, so
+the shared client state has to exist on both. The names are mirrored one by one
+rather than copied wholesale, so a name the executor needs and the list forgets
+fails as a ReferenceError instead of silently reading `undefined`.
+
+### The colour rule is held to a property, not a payload list
+
+A payload list goes stale the first time somebody thinks of a payload nobody
+wrote down. `the property holds for anything the rule admits, not only the
+corpus` builds strings out of the pattern's own character classes, keeps the
+ones it admits, and requires every one of them to carry no `;`, no quote, no
+angle bracket, no backslash and no `url(`. It also fails if too few strings are
+admitted, because a generator that admits almost nothing proves almost nothing.
+
+### Three mutation-harness guards were retargeted, not weakened
+
+`mutate-routines-guards.js` and `mutate-routine-editor-guards.js` quoted
+`profile.js`'s `onclick="showRoutinesForAgent('${esc(a.id)}')"` and
+`onclick="addRoutineForAgent('${esc(a.id)}')"` as literal guard text, and those
+are exactly the interpolations removed here. Each guard now names the new
+handler and mutates it to the same broken state it always did (`(null)` and
+`('')`), so each still asserts that the row carries the agent whose profile it
+is on. A guard whose text is not found is reported by the harness as
+unmutated and fails the run, so this could not have been left to drift.
+
+### One thing this does NOT have, said plainly
+
+**There is no mutation harness for the new guards.** The renderer-hardening
+card set that bar and this does not meet it. The reverting check above shows
+the suite notices the change as a whole; it does not show that each individual
+escape and each individual `data-*` move is independently noticed, which is
+precisely what a mutation table is for and precisely the gap that let two
+renderer guards be removed with nothing turning red.
+
+The reason is time rather than judgement: `npm run precommit` is about thirty
+minutes on this machine, `mutate:guards` is most of it, and a new harness that
+reports an unmutated guard fails the gate and costs another full cycle. That is
+a bad reason for a security change to be missing its strongest instrument, and
+it is written here rather than omitted so the follow-up is obvious:
+`test/tools/mutate-innerhtml-guards.js`, on the shape of the six harnesses that
+already exist, wired into `npm run mutate:guards`.
+
 ## Raised rather than absorbed
 
 Found while auditing, deliberately not fixed here, each with why.

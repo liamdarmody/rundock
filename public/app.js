@@ -1354,8 +1354,14 @@ function showWorkspacePicker(recent, discovered) {
   const recentEl = document.getElementById('workspace-recent');
   const discoveredEl = document.getElementById('workspace-discovered');
 
+  // `subtitle` is inserted as MARKUP by contract: the Recent list passes
+  // esc(r.path) and the Discovered list passes a built string. Both callers
+  // escape what they pass. `path` is a directory name off the recents file or
+  // a scan of the home directory, and it lands in an attribute, so it takes
+  // escAttr rather than esc: this screen renders BEFORE a workspace has been
+  // chosen, which is before the reader has decided to trust anything.
   const wsCard = (name, subtitle, path) =>
-    `<div class="ws-pick-item ws-card" data-ws-path="${esc(path)}">
+    `<div class="ws-pick-item ws-card" data-ws-path="${escAttr(path)}">
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" style="color:var(--text-2);flex-shrink:0"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
       <div class="ws-card-body">
         <div class="ws-card-name">${esc(name)}</div>

@@ -32,6 +32,16 @@
   }
 }(typeof self !== 'undefined' ? self : this, function () {
 
+// The colour rule, reached off the global at call time. See
+// public/agent-colour.js: escaping stops a value ending its style attribute
+// and does nothing about one that stays inside it and is still CSS. Fails
+// CLOSED to the fallback when the module is absent.
+function agentColour(value, fallback) {
+  const safe = fallback === undefined ? 'var(--accent)' : fallback;
+  return typeof RundockAgentColour !== 'undefined'
+    ? RundockAgentColour.safeColour(value, safe) : safe;
+}
+
 // Which routine the reader has asked to delete, BY IDENTITY: the agent that
 // declares it, its name, and which of that agent's routines of that name it
 // is. Held here rather than on the element because a routine's name is
@@ -365,7 +375,7 @@ function rowHtml(entry, index, withActions) {
     // An agent with no colour of its own falls back to the idle token rather
     // than to a literal, so the one place that value is written stays the one
     // place it is written.
-    + `<div class="avatar sm" style="background:${esc(a.colour || 'var(--idle)')}">${esc(a.icon || '')}</div>`
+    + `<div class="avatar sm" style="background:${agentColour(a.colour, 'var(--idle)')}">${esc(a.icon || '')}</div>`
     + `<div class="rr-body">${body}</div>${actions}</div>`;
 }
 

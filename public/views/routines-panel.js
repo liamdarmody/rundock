@@ -26,6 +26,22 @@
   }
 }(typeof self !== 'undefined' ? self : this, function () {
 
+// Attribute-position escaper and the colour rule, reached off the global at
+// call time. `esc` leaves both quote characters alone, so it cannot hold an
+// attribute closed against a filename someone else chose.
+function escA(value) {
+  if (typeof escAttr === 'function') return escAttr(value);
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function agentColour(value, fallback) {
+  const safe = fallback === undefined ? 'var(--accent)' : fallback;
+  return typeof RundockAgentColour !== 'undefined'
+    ? RundockAgentColour.safeColour(value, safe) : safe;
+}
+
 // Which agent's routines the reader has scoped to, or null for all of them.
 // Null rather than the model's 'all' so the list's filter is a plain falsy
 // check and there is one value meaning "everything" rather than two.
@@ -102,13 +118,18 @@ const PLUS_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" s
  * takes the selected fill where a roster row takes the hover fill: two
  * differences, both visible before you read the header.
  *
- * The handler travels by AGENT ID, which is a slug the workspace generates
- * rather than user-written prose, so it is safe in an attribute in a way a
- * routine name is not.
+ * The handler travels by AGENT ID, and the claim that used to sit here was
+ * that an agent id is "a slug the workspace generates rather than
+ * user-written prose, so it is safe in an attribute in a way a routine name
+ * is not". That is false. An agent id is the agent file's own FILENAME with
+ * .md removed, straight off disk in lib/agents/discovery.js, so it is chosen
+ * by anything that can create a file in .claude/agents, which includes an
+ * agent writing a RUNDOCK:SAVE_AGENT block. The id now travels as data and
+ * the handler reads it back, which is the shape that does not care.
  */
 function scopeRowHtml(row, mark) {
-  return `<div class="scope-item${row.active ? ' active' : ''}" data-scope="${esc(row.id)}"`
-    + ` role="button" tabindex="0" onclick="setRoutinesScope('${esc(row.id)}')">`
+  return `<div class="scope-item${row.active ? ' active' : ''}" data-scope="${escA(row.id)}"`
+    + ` role="button" tabindex="0" onclick="setRoutinesScope(this.dataset.scope)">`
     + mark
     + `<span class="scope-name">${esc(row.name)}</span>`
     + `<span class="scope-count">${row.count}</span></div>`;
@@ -131,7 +152,7 @@ function panelHtml() {
   if (list.owners.length) h += '<div class="scope-divider"></div>';
   for (const row of list.owners) {
     h += scopeRowHtml(row,
-      `<div class="avatar sm" style="background:${esc(row.colour || 'var(--idle)')}">${esc(row.icon)}</div>`);
+      `<div class="avatar sm" style="background:${agentColour(row.colour, 'var(--idle)')}">${esc(row.icon)}</div>`);
   }
   h += '</div>';
 

@@ -35,6 +35,16 @@
   }
 }(typeof self !== 'undefined' ? self : this, function () {
 
+// The colour rule, reached off the global at call time. See
+// public/agent-colour.js: escaping stops a value ending its style attribute
+// and does nothing about one that stays inside it and is still CSS. Fails
+// CLOSED to the fallback when the module is absent.
+function agentColour(value, fallback) {
+  const safe = fallback === undefined ? 'var(--accent)' : fallback;
+  return typeof RundockAgentColour !== 'undefined'
+    ? RundockAgentColour.safeColour(value, safe) : safe;
+}
+
 // What the reader asked to see, and what came back.
 //
 // `record` is deliberately three-valued. `undefined` is "the answer has not
@@ -90,7 +100,7 @@ function agentOf(id) {
 
 function headHtml(title, agent) {
   const avatar = agent
-    ? `<div class="avatar sm" style="background:${escText(agent.colour || 'var(--idle)')}">${escText(agent.icon || '')}</div>`
+    ? `<div class="avatar sm" style="background:${agentColour(agent.colour, 'var(--idle)')}">${escText(agent.icon || '')}</div>`
     : '';
   const who = agent ? (agent.displayName || agent.name || agent.id) : null;
   return '<button class="profile-back rd-back" type="button" data-run-detail="back"'
