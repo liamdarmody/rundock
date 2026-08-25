@@ -33,6 +33,33 @@ const { redFirst, recordOutcome, namesFrom, NAME_LIMIT } = require('../../script
 // implementation were built to agree with each other rather than with the gate.
 const gate = require('../../scripts/precommit-gate.js');
 
+/**
+ * Signal a child once a condition holds, rather than once a guessed number of
+ * milliseconds has passed.
+ *
+ * The two interrupt tests below have to land their signal inside a specific
+ * window in the tool's run. Both used to reach that window by sleeping a fixed
+ * time after a line appeared on stdout, which is a bet that the step in
+ * between takes less than the author guessed. Under load it does not, and the
+ * signal lands in the wrong place: early enough and the test proves nothing
+ * while still passing, later and it arrives mid-checkout and fails for a
+ * reason unrelated to the defect covered.
+ *
+ * Both windows have a filesystem fact that opens them, so each waits for its
+ * own fact. Bounded, because a window that never opens has to fail as a
+ * timeout rather than hang the suite.
+ */
+function killWhen(kid, ready, signal, { timeout = 15000, interval = 10 } = {}) {
+  const deadline = Date.now() + timeout;
+  const poll = () => {
+    if (kid.exitCode !== null || kid.signalCode !== null) return;
+    if (ready()) { kid.kill(signal); return; }
+    if (Date.now() >= deadline) return; // the assertions below report it
+    setTimeout(poll, interval);
+  };
+  poll();
+}
+
 // A throwaway repository with a base commit, then a branch carrying whatever
 // source and test content the case needs.
 function repo({ source, testFile, added = {}, baseSource = 'module.exports.a = () => 1;\n', baseTest = 'module.exports = () => {};\n' }) {
@@ -415,12 +442,16 @@ describe('the restore runs whatever happens, which is the claim AC-4 makes', () 
 
       let out = '';
       let signalled = false;
+      const added = path.join(dir, 'lib2.js');
       kid.stdout.on('data', (b) => {
         out += b.toString();
-        // Interrupt once the source has actually been taken away.
+        // Interrupt once the source has actually been taken away. The log line
+        // is printed BEFORE the checkout that removes it, so the line alone
+        // does not mean the window is open: the fact that does is the added
+        // file being gone from the tree.
         if (!signalled && out.includes('restoring the source')) {
           signalled = true;
-          setTimeout(() => kid.kill('SIGINT'), 150);
+          killWhen(kid, () => !fs.existsSync(added), 'SIGINT');
         }
       });
       kid.on('error', reject);
@@ -783,9 +814,14 @@ describe('AC-4 with an uncooperative child, which is where the claim was false',
 
         kid.stdout.on('data', (b) => {
           out += b.toString();
+          // Interrupt once the trapping child is genuinely trapping. It writes
+          // the marker only after installing both handlers, so the marker
+          // existing is exactly the condition: signal before it and the child
+          // takes the default handling, which is the opposite of the case
+          // this covers.
           if (!signalled && out.includes('restoring the source')) {
             signalled = true;
-            setTimeout(() => kid.kill('SIGINT'), 300);
+            killWhen(kid, () => fs.existsSync(marker), 'SIGINT');
           }
         });
         kid.on('error', reject);
