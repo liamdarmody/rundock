@@ -262,6 +262,60 @@ function resolveBase(repo, requested) {
     + 'Name the base with --base.' };
 }
 
+// Is `older` reachable from `newer`? Exit status is the whole answer, so
+// nothing is parsed.
+function isAncestor(repo, older, newer) {
+  try {
+    execFileSync('git', ['merge-base', '--is-ancestor', older, newer],
+      { cwd: repo, stdio: 'ignore' });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * The narrowest point this branch could have been cut from, or null.
+ *
+ * @returns {{ref: string, sha: string}|null}
+ *
+ * WHY MORE THAN ONE REF IS ASKED. The base decides how far back the revert
+ * reaches, and a base that reaches past the fork point takes away work that had
+ * already merged along with the change under test. The fork point cannot be
+ * read off one ref: it is the NEWEST of the merge bases the trunk refs offer,
+ * because a ref that has fallen behind can only ever name an older one.
+ *
+ * A ref that already contains HEAD is left out. Its merge base IS HEAD, the
+ * diff against it is empty, and taking that for the fork point would make every
+ * file in the change look like a file the change does not touch. This branch's
+ * own pushed ref is exactly such a ref, so only trunks are asked and the check
+ * is made anyway.
+ *
+ * Where the candidates cannot be ordered against each other there is no single
+ * answer and none is offered. The caller then measures against the base it was
+ * given, which is what every run did before this existed.
+ */
+function forkPoint(repo, base) {
+  const head = shaOf(repo, 'HEAD');
+  const refs = new Set([base]);
+  for (const remote of remotesOf(repo)) {
+    const trunk = remoteTrunk(repo, remote);
+    if (trunk) refs.add(trunk);
+  }
+  for (const name of TRUNK_NAMES) {
+    if (shaOf(repo, `refs/heads/${name}`)) refs.add(name);
+  }
+  const points = [];
+  for (const ref of refs) {
+    let sha = null;
+    try { sha = git(repo, ['merge-base', ref, 'HEAD']); } catch (e) { continue; }
+    if (sha === head) continue;
+    points.push({ ref, sha });
+  }
+  return points.find(p => points.every(q => q.sha === p.sha || isAncestor(repo, q.sha, p.sha)))
+    || null;
+}
+
 /**
  * Make `files` look exactly as they do in `ref`, in both the index and the
  * working tree.
@@ -797,6 +851,36 @@ async function redFirst({ repo, base = null, tests, log = () => {}, runner = nul
     sourceFiles = changed.filter(f => !isTest(f));
 
     if (!changed.length) return result('not-provable', `nothing changed against ${baseRef}`);
+
+    // A REVERT THAT REACHES PAST THE FORK POINT IS REFUSED, NOT ANNOTATED.
+    //
+    // Everything below this line reads a verdict off a suite that was run
+    // against a reverted tree, and a tree reverted further back than this
+    // branch starts is somebody else's tree as much as it is this one's. The
+    // tests that then go red can be theirs, and no outcome computed from them
+    // says anything about this change. That is not a caveat to attach to a
+    // PROVEN; it is a reason there is nothing to report.
+    //
+    // Refused whether or not extra files are involved. The same files taken
+    // back further than the fork point carry the earlier work's content too, so
+    // a check made on the file list alone would let exactly that case through.
+    // The list is still named, because the mismatch it describes was present in
+    // the incident, as a file count, and unread.
+    const fork = forkPoint(repo, baseRef);
+    if (fork && fork.sha !== mergeBase) {
+      const own = new Set(git(repo, ['diff', '--no-renames', '--name-only', fork.sha, 'HEAD'])
+        .split('\n').filter(Boolean));
+      const beyond = changed.filter(f => !own.has(f));
+      const extra = git(repo, ['rev-list', '--count', `${mergeBase}..${fork.sha}`]);
+      return result('refused', `${baseRef} sits ${extra} commits before the point this `
+        + 'branch was cut from, so reverting against it takes away work that had already '
+        + "merged and can report that work's tests as proof of this change. Reverted but "
+        + `not part of this change (${beyond.length}): ${beyond.slice(0, 10).join(', ') || 'none'}. `
+        + `Measure against ${fork.ref}, which is where this branch actually starts, or `
+        + 'leave --base off and it is chosen for you.',
+      { source: sourceFiles, tests: testFiles });
+    }
+
     if (!testFiles.length) {
       return result('not-provable', 'the change adds no tests, so there is nothing '
         + 'to prove; that is its own finding', { source: sourceFiles, tests: [] });

@@ -943,6 +943,46 @@ describe('the base a run is measured against, which must not be one that drifts'
     fs.rmSync(remote, { recursive: true, force: true });
   };
 
+  test('a stale local trunk is refused, with the files it would have reverted named', async () => {
+    // The incident itself, driven the way it was driven. Naming the base is
+    // still allowed, so the drift has to be caught where the reach is measured
+    // rather than only where the default is chosen.
+    const { dir, remote } = driftedRepo(VERSION_ONLY);
+    try {
+      const r = await redFirst({ repo: dir, base: 'main', tests: CMD });
+      assert.strictEqual(r.outcome, 'refused', r.reason);
+      // The mismatch itself, said out loud. It was present in the incident as a
+      // file count inside the record and nothing else.
+      assert.match(r.reason, /lib\.js/, 'the file the change never touches is named');
+      assert.match(r.reason, /origin\/main/, 'and the ref that does not drift is named');
+    } finally {
+      clean(dir, remote);
+    }
+  });
+
+  test('the reach is refused even where the files it drags in are the change is own', async () => {
+    // A revert that reaches past the fork point is wrong whether or not the
+    // file lists happen to coincide: the same files are taken back further than
+    // this branch starts, so the tests that go red can be the earlier work's.
+    // Refusing on the file list alone would let exactly that case through.
+    const { dir, remote } = driftedRepo({
+      'lib.js': 'module.exports.a = () => 1;\nmodule.exports.c = () => 3;\n'
+        + 'module.exports.d = () => 4;\n',
+      'test/check.js': "const assert = require('assert');\n"
+        + 'module.exports = () => {\n'
+        + "  assert.strictEqual(require('../lib.js').c(), 3);\n"
+        + "  assert.strictEqual(require('../lib.js').d(), 4);\n"
+        + '};\n',
+    });
+    try {
+      const r = await redFirst({ repo: dir, base: 'main', tests: CMD });
+      assert.strictEqual(r.outcome, 'refused', r.reason);
+      assert.match(r.reason, /none/, 'and it says plainly that no extra file is involved');
+    } finally {
+      clean(dir, remote);
+    }
+  });
+
   test('a version-only change is not-provable, not proven on another branch is tests', async () => {
     // The verdict the incident should have produced, from the invocation that
     // is now the default: nothing of this change's own can go red, and that is
