@@ -151,17 +151,26 @@ async function until(predicate, tries = 200) {
 // unit suite has no equivalent of the integration harness's refusal to run
 // against it, so a unit test that reaches the real spawn runs whatever happens
 // to be installed on the machine.
-async function withFakeSpawn(fakeSpawn, fn) {
+//
+// `fakeKill` is the signal a stop sends, stood in for the same way and for a
+// sharper reason than the spawn. A stand-in child carries whatever process id
+// the test gave it, and the real signaller would send SIGTERM to that id on the
+// machine running the suite. Optional, because only the tests that stop a run
+// need it, and the real signaller is restored either way.
+async function withFakeSpawn(fakeSpawn, fn, fakeKill) {
   const claude = require(CLAUDE_KEY);
   const realSpawn = claude.spawnClaude;
+  const realKill = claude.killProcessTree;
   const prevClaudeDeps = claude.wireClaudeRuntimeDeps({ getActualPort: () => 0 });
   claude.spawnClaude = fakeSpawn;
+  if (fakeKill) claude.killProcessTree = fakeKill;
   try {
     const sched = freshScheduler();
     sched.wireSchedulerDeps({ getWssClients: () => [] });
     return await fn(sched);
   } finally {
     claude.spawnClaude = realSpawn;
+    claude.killProcessTree = realKill;
     claude.wireClaudeRuntimeDeps(prevClaudeDeps);
   }
 }
@@ -1110,6 +1119,125 @@ test('closing a restart-orphaned record writes nothing to the value double-fire 
       assert.deepStrictEqual(sched.getNextRun('every day at 09:00', sched.routineState[KEY].lastRun),
         new Date(2026, 7, 12, 9, 0, 0),
         'so the catch-up run this routine is still owed today is still owed');
+    });
+  });
+});
+
+// ===== THE VALUE DOUBLE-FIRE SUPPRESSION READS =====
+//
+// `routineState.lastRun` is the only input to the suppression, and the slot
+// store must never be joined to it. Reaching into a live run to stop it, and
+// switching workspaces across one, are two separate ways to arrive at that
+// field by accident. So this is ONE fixture driven through BOTH of them,
+// rather than an assertion written twice in two places that can drift apart.
+//
+// THE FIXTURE IS UNUSUAL IN TWO PLACES AT ONCE, deliberately. The routine
+// carries a stamp from an earlier period AND a slot recorded as having passed
+// unserved, and the recorded slot is the NEWER of the two instants. A fixture
+// that made one of those unusual at a time would let a join to the slot store
+// agree with the right answer by arithmetic and never be seen.
+//
+// THE CLOCK MOVES between the start, the switch and the stop, and that is what
+// makes a wrong source visible at all. Under a frozen clock the run's own
+// beginning, the switch and the ending all carry the same instant, so a value
+// lifted out of the run record would read exactly like the value the ending
+// wrote and every assertion below would pass on a broken build.
+//
+// Local time throughout, because getNextRun compares calendar days and hours
+// in local time and a UTC literal mixed into that answers differently by
+// timezone.
+test('neither stopping a run nor switching workspaces across one reaches the value double-fire suppression reads', async () => {
+  await withTempWorkspaceAsync(async (dir, config) => {
+    await withTempHomeAsync(async () => {
+      const SCHEDULE = 'every day at 09:00';
+      const YESTERDAY = new Date(2026, 7, 11, 9, 0, 0);     // the last run anybody finished
+      const MISSED = new Date(2026, 7, 12, 9, 0, 0);        // today's slot, passed while nobody watched
+      const START = new Date(2026, 7, 12, 10, 0, 0);        // the catch-up run, started late
+      const SWITCH = new Date(2026, 7, 12, 10, 5, 0);       // a workspace switch while it runs
+      const STOP = new Date(2026, 7, 12, 10, 10, 0);        // somebody stops it
+      const TOMORROW = new Date(2026, 7, 13, 8, 0, 0);      // before the next slot
+
+      const rundock = path.join(dir, '.rundock');
+      fs.mkdirSync(rundock, { recursive: true });
+      fs.writeFileSync(path.join(rundock, 'routine-state.json'), JSON.stringify({
+        [KEY]: { lastRun: YESTERDAY.toISOString(), status: 'completed', duration: 4 },
+      }));
+      fs.writeFileSync(path.join(rundock, 'routine-slots.json'), JSON.stringify({
+        observedAt: YESTERDAY.toISOString(),
+        routines: { [KEY]: { due: MISSED.toISOString(), schedule: 'daily@9', missed: [{ slot: MISSED.toISOString() }] } },
+      }));
+
+      let clock = START;
+      const child = new EventEmitter();
+      await withFakeSpawn(() => child, async (sched) => {
+        sched.wireSchedulerDeps({ getWssClients: () => [], now: () => clock });
+        openWorkspace(sched, dir, config);
+
+        // THE FIXTURE, ASSERTED BEFORE ANYTHING IS CONCLUDED FROM IT. A load
+        // that dropped either store would satisfy most of what follows while
+        // proving nothing: there would be no slot instant to be joined and no
+        // earlier stamp to be overwritten.
+        assert.strictEqual(sched.routineState[KEY].lastRun, YESTERDAY.toISOString(),
+          'the earlier period stamp loaded');
+        assert.deepStrictEqual(sched.routineSlots.routines[KEY].missed, [{ slot: MISSED.toISOString() }],
+          'and so did the slot that passed unserved, which is the instant a join would reach for');
+        assert.deepStrictEqual(sched.getNextRun(SCHEDULE, sched.routineState[KEY].lastRun), MISSED,
+          'so the catch-up run this routine is still owed today is owed');
+
+        assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true, 'the catch-up run started');
+        const stampedByTheStart = sched.routineState[KEY].lastRun;
+        assert.strictEqual(stampedByTheStart, START.toISOString(),
+          'the start stamped the clock, which is the only writer on this path and is unchanged by this card');
+
+        // HALF TWO, exercised: a workspace switch across a run that is still
+        // going. The switch reloads both stores, so it holds the run record,
+        // the slot record and the run state at once, which is one line away
+        // from stamping any of them into the field below.
+        clock = SWITCH;
+        openWorkspace(sched, dir, config);
+        assert.strictEqual(sched.routineSlots.observedAt, YESTERDAY.toISOString(),
+          'the switch really re-read the stores rather than being skipped over');
+        assert.strictEqual(sched.routineState[KEY].lastRun, stampedByTheStart,
+          'and it wrote nothing to lastRun: byte for byte what the start left there');
+        assert.notStrictEqual(sched.routineState[KEY].lastRun, SWITCH.toISOString(),
+          'in particular not the moment the switch happened');
+
+        // HALF ONE, exercised: the run is reached from outside and stopped.
+        clock = STOP;
+        const live = sched.runningRuns();
+        assert.strictEqual(live.length, 1, 'the run that is still going can be identified from outside it');
+        assert.strictEqual(sched.cancelRun(live[0].id), true, 'and stopped');
+        child.emit('close', null);
+        assert.ok(await until(() => sched.routineState[KEY].status !== 'running'), 'the stopped run ended');
+
+        // The ending stamps the clock, exactly as an ordinary ending does.
+        // Every other instant in this fixture is a wrong source that was in
+        // scope at the moment of the write, so each is ruled out by name.
+        assert.strictEqual(sched.routineState[KEY].lastRun, STOP.toISOString(),
+          'the ending stamped the clock');
+        assert.notStrictEqual(sched.routineState[KEY].lastRun, stampedByTheStart,
+          'rather than the run record own beginning, which the stop had in hand');
+        assert.notStrictEqual(sched.routineState[KEY].lastRun, MISSED.toISOString(),
+          'and never the slot store, which must not be joined to this field at all');
+        assert.notStrictEqual(sched.routineState[KEY].lastRun, YESTERDAY.toISOString(),
+          'and not the stamp it replaced');
+
+        // The slot store is untouched in the other direction too: stopping a
+        // run is not a slot passing unserved, and recording one here would
+        // put a gap on a routine that was served.
+        assert.deepStrictEqual(sched.routineSlots.routines[KEY].missed, [{ slot: MISSED.toISOString() }],
+          'the slot record is exactly as it was, with nothing added by the stop');
+
+        // AND THE SUPPRESSION BEHAVES AS IT DOES AFTER ANY OTHER ENDING,
+        // which is the property the field exists for rather than a property
+        // of its bytes.
+        assert.strictEqual(sched.getNextRun(SCHEDULE, sched.routineState[KEY].lastRun), null,
+          'the routine is held for the rest of the period it already ran in');
+        clock = TOMORROW;
+        assert.deepStrictEqual(sched.getNextRun(SCHEDULE, sched.routineState[KEY].lastRun),
+          new Date(2026, 7, 13, 9, 0, 0),
+          'and is due again at its next slot, which is what a stopped run must not cost it');
+      }, () => {});
     });
   });
 });
