@@ -775,3 +775,25 @@ describe('every control the editor renders resolves to something', () => {
     dom.window.close();
   });
 });
+
+// The Schedule card on an unassigned skill's page reads
+// `routineEditorModel().UNASSIGNED_REASON` with no null guard, matching how
+// `renderSkillsEmpty` reads `skillsModel()` elsewhere in the same file: a
+// missing model fails loudly rather than the page quietly keeping stale
+// content, which is what a guarded call would have done instead. The comment
+// beside that call asserts index.html loads routine-editor-model.js before
+// views/skills.js. A comment cannot fail, so this pins the order itself, cut
+// out of the real page the way every shell above cuts its markup: a
+// reordering fails here BY NAME, rather than as an uncaught exception on the
+// one page a reader would meet it, an unassigned skill's own.
+describe('the script order the unguarded model read depends on', () => {
+  test('index.html loads routine-editor-model.js before views/skills.js', () => {
+    const editorModelAt = INDEX_SRC.indexOf('<script src="/routine-editor-model.js">');
+    const skillsViewAt = INDEX_SRC.indexOf('<script src="/views/skills.js">');
+    assert.ok(editorModelAt !== -1, 'index.html no longer loads routine-editor-model.js');
+    assert.ok(skillsViewAt !== -1, 'index.html no longer loads views/skills.js');
+    assert.ok(editorModelAt < skillsViewAt,
+      'views/skills.js now loads before routine-editor-model.js, so its unguarded '
+      + 'routineEditorModel().UNASSIGNED_REASON read on an unassigned skill\'s page will throw');
+  });
+});

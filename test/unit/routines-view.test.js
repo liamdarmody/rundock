@@ -818,7 +818,7 @@ describe('the empty state, where the only skill is unassigned', () => {
     assert.ok(!page.includes('Build a skill'), 'a skill this workspace already has was offered as one to build');
     assert.ok(!page.includes('Routines schedule skills your agents already have'),
       'the no-skills-at-all sentence reached a workspace that has one');
-    assert.match(page, /assign it to an agent/i, 'the reader is not told what to do about the skill it has');
+    assert.match(page, /assign your skills to an agent/i, 'the reader is not told what to do about the skill it has');
     dom.window.close();
   });
 
@@ -829,6 +829,28 @@ describe('the empty state, where the only skill is unassigned', () => {
     w.renderRoutines();
     const page = text(doc.getElementById('routines-content'));
     assert.ok(!page.includes('Pick a tested skill'), 'the picker would open on nothing, so the offer to pick is false');
+    dom.window.close();
+  });
+
+  // THE MANY CASE, RENDERED. A single unassigned skill is the shape every
+  // other test in this block drives, which is also the one shape a deictic
+  // reads correctly against by accident. Two on the page at once is what
+  // proves the rendered copy holds for a count "this skill" or "it" could
+  // not have named.
+  test('two unassigned skills render the same branch, with copy that names neither', () => {
+    const { doc, w, dom } = unassignedShell({
+      skills: [
+        { id: 'orphan-one', name: 'Orphan One', assignedAgents: [] },
+        { id: 'orphan-two', name: 'Orphan Two', assignedAgents: [] },
+      ],
+    });
+    w.renderRoutines();
+    const page = text(doc.getElementById('routines-content'));
+    assert.match(page, /No routines yet\./);
+    assert.ok(!page.includes('Build a skill'), 'two skills this workspace already has were offered as ones to build');
+    assert.ok(!page.includes('Pick a tested skill'), 'the picker would open on nothing, so the offer to pick is false');
+    assert.ok(!/\bthis skill\b/i.test(page), `a deictic naming one skill reached a page with two: ${page}`);
+    assert.match(page, /assign your skills to an agent/i);
     dom.window.close();
   });
 
@@ -897,9 +919,9 @@ describe('the empty state, where the only skill is unassigned', () => {
     assert.match(noneText, /Routines schedule skills your agents already have\./);
     assert.ok(!unassignedText.includes('Routines schedule skills your agents already have'));
     assert.ok(!assignedText.includes('Routines schedule skills your agents already have'));
-    assert.match(unassignedText, /assign it to an agent/i);
-    assert.ok(!noneText.match(/assign it to an agent/i));
-    assert.ok(!assignedText.match(/assign it to an agent/i));
+    assert.match(unassignedText, /assign your skills to an agent/i);
+    assert.ok(!noneText.match(/assign your skills to an agent/i));
+    assert.ok(!assignedText.match(/assign your skills to an agent/i));
     assert.match(assignedText, /Pick a tested skill and give it a schedule\./);
     assert.ok(!noneText.includes('Pick a tested skill'));
     assert.ok(!unassignedText.includes('Pick a tested skill'));

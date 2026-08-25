@@ -198,6 +198,17 @@
     aside: 'Looking at a skill you already trust? You can also schedule it right from its own page.',
   };
 
+  // The next step appended to `editor.UNASSIGNED_REASON` for the
+  // only-unassigned-skills variant, named here rather than written inline in
+  // the branch that uses it, the same way every other shipped line on this
+  // pane lives in `EMPTY` above rather than in `emptyState`'s return.
+  //
+  // NO SINGULAR PRONOUN, for the reason `UNASSIGNED_REASON` itself carries
+  // none: this pane names no particular skill and can hold this state with
+  // any number of unassigned skills, so "assign it" would point at nothing
+  // with one and be wrong with more than one.
+  const UNASSIGNED_NEXT_STEP = 'Assign your skills to an agent and they will show up here.';
+
   /**
    * WHICH empty state, decided mechanically rather than by taste.
    *
@@ -259,7 +270,9 @@
         // written here: `editor.UNASSIGNED_REASON` is the exact string the
         // skill's own page states in its Schedule card when that skill has
         // no agent, so the two surfaces cannot end up disagreeing about why.
-        body: `${editor.UNASSIGNED_REASON} Assign it to an agent and it will show up here.`,
+        // `UNASSIGNED_NEXT_STEP`, declared above with the rest of this
+        // pane's shipped copy, is the sentence appended to it.
+        body: `${editor.UNASSIGNED_REASON} ${UNASSIGNED_NEXT_STEP}`,
         // NEITHER A BUTTON NOR AN ASIDE. Assigning a skill to an agent is
         // existing behaviour this state points at, not a control this pane
         // grows. And the aside the other states carry promises scheduling

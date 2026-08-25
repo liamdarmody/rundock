@@ -174,9 +174,27 @@
    * declared on one specific agent's file, which is a fact about routines
    * rather than a claim about who has the skill, and it holds together with
    * the skill being available to every agent rather than instead of it.
+   *
+   * NO DEICTIC EITHER, so 'a skill' rather than 'this skill'. The routines
+   * view can carry this state with any number of unassigned skills and
+   * names none of them, so 'this skill' would point at nothing there, and
+   * with more than one it would be false on the skill's own page too: there
+   * is no single 'this skill' once the workspace has several. Stated as a
+   * general fact about a skill, it reads true wherever it is shown and for
+   * however many skills the state applies to.
    */
   const UNASSIGNED_REASON = "A routine is written into one specific agent's file, "
-    + 'so this skill has to be assigned to a specific agent before it can be scheduled.';
+    + 'so a skill has to be assigned to a specific agent before it can be scheduled.';
+
+  /**
+   * A skill's assigned agents, safe against a skill with none and against
+   * `skill` itself being missing. The one place that reads `assignedAgents`,
+   * so `skillChoices` below has a single spot to trust it from rather than
+   * two copies of the same defensive lookup that could drift apart.
+   */
+  function assignedAgentsOf(skill) {
+    return (skill && skill.assignedAgents) || [];
+  }
 
   /**
    * What can be scheduled, and for whom.
@@ -200,7 +218,7 @@
     const options = [];
 
     for (const skill of skills) {
-      const assigned = (skill && skill.assignedAgents) || [];
+      const assigned = assignedAgentsOf(skill);
       for (const agent of assigned) {
         if (agentId && agent.id !== agentId) continue;
         options.push({
@@ -232,7 +250,7 @@
       // supplied and none of them has an agent, which is true or false the
       // same way whichever scope the call was made with.
       onlyUnassignedSkills: skills.length > 0
-        && skills.every(skill => !((skill && skill.assignedAgents) || []).length),
+        && skills.every(skill => assignedAgentsOf(skill).length === 0),
     };
   }
 

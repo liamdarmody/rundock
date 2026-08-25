@@ -430,7 +430,7 @@ describe('which empty state, decided mechanically', () => {
         onlyUnassignedSkills: true,
       });
       const state = m.emptyState({ skills: WITH_SKILL, guideName: 'Wren' });
-      assert.match(state.body, /assign it to an agent/i,
+      assert.match(state.body, /assign your skills to an agent/i,
         'emptyState did not follow the stubbed answer, so it is not truly reading skillChoices for this');
     } finally {
       editor.skillChoices = real;
@@ -443,9 +443,31 @@ describe('which empty state, decided mechanically', () => {
     const state = m.emptyState({ skills: UNASSIGNED, guideName: 'Wren' });
     assert.strictEqual(state.lead, 'No routines yet.');
     assert.ok(!/build/i.test(state.body), `told to build a skill it already has: ${state.body}`);
-    assert.match(state.body, /assign it to an agent/i);
+    assert.match(state.body, /assign your skills to an agent/i);
     assert.notStrictEqual(state.body, editor.STEP_LEADS.empty,
       'the unassigned workspace was given the no-skills-at-all sentence');
+  });
+
+  // THE MANY CASE, PINNED RATHER THAN ASSUMED. Every other test in this
+  // block drives exactly one unassigned skill, which is the shape "this
+  // skill" and "it" would have read correctly against by accident; a
+  // workspace with two proves the copy holds for a count the singular forms
+  // could not have.
+  const TWO_UNASSIGNED = [
+    { id: 'orphan-one', name: 'Orphan One', assignedAgents: [] },
+    { id: 'orphan-two', name: 'Orphan Two', assignedAgents: [] },
+  ];
+
+  test('two unassigned skills take the same branch as one, and the copy still reads true', () => {
+    const editor = require('../../public/routine-editor-model.js');
+    const choice = editor.skillChoices({ skills: TWO_UNASSIGNED });
+    assert.strictEqual(choice.onlyUnassignedSkills, true);
+
+    const state = m.emptyState({ skills: TWO_UNASSIGNED, guideName: 'Wren' });
+    assert.ok(!/build/i.test(state.body), `told to build skills it already has: ${state.body}`);
+    assert.ok(!/\bthis skill\b/i.test(state.body), `a deictic naming one skill reached a state with two: ${state.body}`);
+    assert.match(state.body, /assign your skills to an agent/i);
+    assert.match(state.body, /they will show up here/i);
   });
 
   // The third variant carries the same five slots the other two do, so it
