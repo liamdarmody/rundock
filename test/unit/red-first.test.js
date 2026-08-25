@@ -745,12 +745,22 @@ describe('AC-4 with an uncooperative child, which is where the claim was false',
   // true. Used below so the interrupt is sent once the trapping child has
   // actually installed its signal handlers, not after a fixed delay that
   // assumes it has.
-  function waitForCondition(check, { timeoutMs = 15000, intervalMs = 20 } = {}) {
+  //
+  // Not test/helpers/harness.js's h.waitUntil, and not an oversight: requiring
+  // that module pulls in test/helpers/workspace.js, which runs
+  // sweepStale(os.tmpdir()) at require time, before any fixture exists or
+  // boot() is ever called, and that sweep can delete directories left behind
+  // by dead processes anywhere under the system temp root (verified by
+  // reading test/helpers/workspace.js:32 and test/helpers/temp-root.js's
+  // sweepStale). This file is a unit test that manages its own throwaway git
+  // repos directly; it must not carry a filesystem-deleting side effect at
+  // import time just to reuse a ten-line poll.
+  function waitForCondition(check, { timeoutMs = 15000, intervalMs = 20, label = 'condition' } = {}) {
     return new Promise((resolve, reject) => {
       const deadline = Date.now() + timeoutMs;
       const tick = () => {
         if (check()) return resolve();
-        if (Date.now() >= deadline) return reject(new Error('timed out waiting for condition'));
+        if (Date.now() >= deadline) return reject(new Error(`timed out waiting for ${label}`));
         setTimeout(tick, intervalMs);
       };
       tick();
@@ -817,9 +827,19 @@ describe('AC-4 with an uncooperative child, which is where the claim was false',
             // a fixed 300ms delay fired before the child had even started,
             // so the assertion that failed was "did the child start" rather
             // than the restore behaviour this test exists to check.
-            waitForCondition(() => fs.existsSync(marker))
+            waitForCondition(() => fs.existsSync(marker),
+              { label: `the trapping child's marker at ${marker}` })
               .then(() => kid.kill('SIGINT'))
-              .catch(reject);
+              .catch((e) => {
+                // The child never started at all, a real failure distinct
+                // from the one this test covers. Without this, the deadline
+                // timer and the child both outlive the test: the deadline
+                // fires 20s later, and the outer finally deletes `dir` while
+                // red-first is still running against it.
+                clearTimeout(deadline);
+                kid.kill('SIGKILL');
+                reject(e);
+              });
           }
         });
         kid.on('error', reject);
@@ -857,7 +877,10 @@ describe('AC-4 with an uncooperative child, which is where the claim was false',
         });
       });
     } finally {
-      fs.rmSync(marker, { force: true });
+      // The marker lives inside `dir` now (it used to live in os.tmpdir()),
+      // so the recursive removal below already takes it with it; the exit
+      // handler's own fs.rmSync(marker) is the one that has to run early,
+      // to keep the clean-tree check honest.
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
