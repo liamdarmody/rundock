@@ -110,6 +110,20 @@ describe('a page of fences, opened and saved', () => {
       'the nested fence did not survive inside the outer block');
   });
 
+  test('the markdown inside a fence is written back unescaped', async () => {
+    // The second half of the reported damage, and it has a cause of its own:
+    // the serialiser's escape flag. Turned on, the block's contents are run
+    // through the prose escaper and every asterisk, backtick and bracket in
+    // the example collects a backslash, with no comment involved.
+    const out = await roundTrip(PAGE);
+    assert.ok(out.includes('Use **bold** for emphasis.'),
+      'the bold markers inside the fence did not survive');
+    assert.ok(out.includes('A `code` span, and a [link](https://example.com) beside it.'),
+      'the code span or the link inside the fence did not survive');
+    assert.equal(out.indexOf('\\'), -1,
+      `a backslash was written into a file that contains none:\n${out}`);
+  });
+
   test('the tilde fence is still a tilde fence', async () => {
     const out = await roundTrip(PAGE);
     assert.ok(out.includes('~~~text\n'), 'the tilde opening marker was rewritten');

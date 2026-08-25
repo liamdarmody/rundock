@@ -32,15 +32,22 @@
 // One is anchor placement: a review construct is an inline atom and a fenced
 // block holds text and nothing else, so putting one there closes the block and
 // sweeps the rest of it into a paragraph, where the next save escapes the
-// asterisks and backticks that were code. The escaping is that fault's second
-// symptom rather than a fault of its own, which is why there is no separate
-// mutation for it: it arrives and leaves with the rows below it.
+// asterisks and backticks that were code.
 //
 // The other is serialisation: the fence marker the file was written with was
 // not carried through the round trip, so a four-backtick fence came back three
 // backticks long and the NEXT read closed it at its own inner fence. That one
 // moves the fence boundary with the content still inside a code block, so
 // nothing is escaped. Reintroduced separately, and red in different tests.
+//
+// BOTH FORMS THE USER SAW ARE COMMITTED BACK, and the escaping is the one worth
+// being careful about. In the incident it arrived as a consequence of the
+// anchor fault, and along that route there is no guard to remove: paragraph
+// text is escaped because it is paragraph text. But the serialiser reaches the
+// same damage by a second route with a line of its own, the escape flag on the
+// call that writes a block's contents, and turning it back on escapes a fenced
+// block with no comment anywhere near it. So the escaping is mutated directly
+// as well as arriving with the anchor rows.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -87,6 +94,15 @@ const MUTATIONS = [
   [SERIALISER, 'the fence is widened past any fence inside the block',
     'Math.max(3, srcFence ? srcFence.length : 3, longestInside + 1)',
     'Math.max(3, srcFence ? srcFence.length : 3)'],
+  // FAULT ONE'S SECOND SYMPTOM, WHICH HAS A LINE OF ITS OWN AFTER ALL. The
+  // escaping reached the user as a consequence of the anchor fault, but the
+  // serialiser's escape flag is what stands between a fenced block's contents
+  // and the prose escaper, and turning it back on writes `\*\*bold\*\*` into a
+  // fence with no comment anywhere near it. Two routes to the same damage, so
+  // both are committed back rather than one standing in for the other.
+  [SERIALISER, 'the contents of a fenced block are written literally, not escaped as prose',
+    'state.text(node.textContent, false);',
+    'state.text(node.textContent, true);'],
   [SERIALISER_IN_CORPUS, 'the whole info string is written back, not just the language word',
     "const info = node.attrs.srcInfo != null ? node.attrs.srcInfo : (node.attrs.language || '');",
     "const info = node.attrs.language || '';"],
@@ -97,13 +113,13 @@ const MUTATIONS = [
 // quietly checks less than it claims.
 const NOT_MUTATED = [
   {
-    what: 'the escaping of the swept-out text',
-    why: 'it is not a fault of its own and has no line to break. The serialiser escapes '
-      + 'paragraph text that would otherwise re-parse as markup, which is correct; it only '
-      + 'produced backslashes here because the anchor fault had already turned code into '
-      + 'paragraph text. It is reintroduced by the first three rows above and leaves with '
-      + 'them, and the tests that go red for them assert on the backslashes as well as on '
-      + 'the fence. A row of its own would be a second name for the same mutation.',
+    what: 'the escaping of text swept out of a block by the anchor fault',
+    why: 'that route has no line of its own to break. Once an atom has closed the block, the '
+      + 'remainder is paragraph text, and escaping paragraph text is the serialiser doing the '
+      + 'correct thing: there is no guard there to remove. It is reintroduced by the first '
+      + 'three rows, whose tests assert on the backslashes as well as on the fence. The OTHER '
+      + 'route to the same damage does have a line, and it is mutated: see the escape flag row '
+      + 'above, which escapes a fenced block with no comment involved.',
   },
   {
     what: 'the panel showing the refusal reason in the composer',

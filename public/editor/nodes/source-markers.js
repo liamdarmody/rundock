@@ -282,6 +282,13 @@ export const SourceCodeBlock = codeBlockFromStarterKit().extend({
           // ```js title="x" keeps everything after the marker.
           const info = node.attrs.srcInfo != null ? node.attrs.srcInfo : (node.attrs.language || '');
           state.write(fence + info + '\n');
+          // The second argument is the escape flag, and it is the whole of
+          // what keeps a fenced block's contents literal. Turned on, the
+          // serialiser runs the prose escaper over the block, so the
+          // asterisks, backticks and brackets that are code inside a fence are
+          // written to the file as a backslash before each one, and the rest of
+          // the punctuation goes the same way. That is one of the two ways the
+          // contents of a fenced block have been damaged on save.
           state.text(node.textContent, false);
           state.ensureNewLine();
           state.write(fence);

@@ -47,12 +47,29 @@ that can. The remainder of the fenced block is swept into that paragraph with
 them. That is the early fence close, and it is the same for the standalone
 branch (`tr.insert`) and for both suggestion commands.
 
-The escaping follows from it and is not a separate defect. Once the remainder of
-the block is paragraph text, it is prose, and the markdown serialiser escapes
-prose that would otherwise re-parse as markup. The asterisks, backticks and
-brackets that were code one step earlier are now literal characters in a
-paragraph, so they are written back as `\*\*`, `` \` `` and `\[`. The serialiser
-is doing the correct thing to the wrong content.
+The escaping follows from it along this route. Once the remainder of the block
+is paragraph text, it is prose, and the markdown serialiser escapes prose that
+would otherwise re-parse as markup. The asterisks, backticks and brackets that
+were code one step earlier are now literal characters in a paragraph, so they
+are written back with a backslash before each one. The serialiser is doing the
+correct thing to the wrong content, so along THIS route there is no guard to
+remove: the fix is to stop the content becoming prose.
+
+**The serialiser reaches the same damage by a second route, and that one does
+have a guard.** The call that writes a block's contents carries an escape flag,
+and that flag is the whole of what keeps a fenced block literal. Turned on, the
+prose escaper runs over the block itself. Measured by turning it on:
+
+    in:   Use **bold** for emphasis.
+          A `code` span, and a [link](https://example.com) beside it.
+
+    out:  Use \*\*bold\*\* for emphasis.
+          A \`code\` span, and a \[link\](https://example.com) beside it.
+
+No comment is involved and the fence is intact, and the file gains eighteen
+backslashes that were never in it. That is the reported escaping arriving
+without the anchor fault, which is why it is committed back on a line of its own
+in the mutation table below rather than only as the anchor fault's shadow.
 
 Measured on the document shape from the report, before the change:
 
@@ -121,7 +138,9 @@ guarantee. The two have different signatures, which is what tells them apart
 rather than an argument: fault one adds backslashes to the swept-out text
 because it becomes paragraph content; fault two moves the fence boundary while
 the content stays inside a code block, so nothing is escaped. That difference is
-what the mutation harness measures, one fault at a time.
+what the mutation harness measures, one fault at a time, and the escaping is
+measured twice over: once as the anchor fault's shadow, and once at the
+serialiser's escape flag, which produces it with no comment involved.
 
 ## The guarantee this violates
 
@@ -281,32 +300,43 @@ Result, pasted from that run:
 | the fence is the one the file was written with, not a fixed three backticks | 1 | 13 | `the fixture round-trips byte-for-byte`<br>`the four-backtick fence keeps four backticks, so its inner fence stays inside it`<br>`the tilde fence is still a tilde fence`<br>`a fence written into a block is longer than the fences the block now holds`<br>`a second and third cycle change nothing further`<br>`adding a comment in prose changes only the comment markers`<br>`replying to a comment leaves the document bytes alone`<br>`resolving a comment gives the document back its original bytes`<br>`a refused comment changes nothing, so it cannot half-apply`<br>`a suggested replacement inside a fence is refused the same way`<br>`a suggested insertion at a cursor inside a fence is refused the same way`<br>`the block survives the refusal intact, fence markers and all`<br>`the composer stays open, shows the reason, and keeps what was typed` |
 | the fence keeps its marker character, so a tilde fence stays a tilde fence | 1 | 10 | `the fixture round-trips byte-for-byte`<br>`the tilde fence is still a tilde fence`<br>`a second and third cycle change nothing further`<br>`adding a comment in prose changes only the comment markers`<br>`replying to a comment leaves the document bytes alone`<br>`resolving a comment gives the document back its original bytes`<br>`a refused comment changes nothing, so it cannot half-apply`<br>`a suggested replacement inside a fence is refused the same way`<br>`a suggested insertion at a cursor inside a fence is refused the same way`<br>`the composer stays open, shows the reason, and keeps what was typed` |
 | the fence is widened past any fence inside the block | 1 | 1 | `a fence written into a block is longer than the fences the block now holds` |
+| the contents of a fenced block are written literally, not escaped as prose | 1 | 13 | `the fixture round-trips byte-for-byte`<br>`the four-backtick fence keeps four backticks, so its inner fence stays inside it`<br>`the markdown inside a fence is written back unescaped`<br>`a fence written into a block is longer than the fences the block now holds`<br>`a second and third cycle change nothing further`<br>`adding a comment in prose changes only the comment markers`<br>`replying to a comment leaves the document bytes alone`<br>`resolving a comment gives the document back its original bytes`<br>`a refused comment changes nothing, so it cannot half-apply`<br>`a suggested replacement inside a fence is refused the same way`<br>`a suggested insertion at a cursor inside a fence is refused the same way`<br>`the block survives the refusal intact, fence markers and all`<br>`the composer stays open, shows the reason, and keeps what was typed` |
 | the whole info string is written back, not just the language word | 1 | 1 | `code-blocks.md round-trips byte-for-byte` |
 
 Deliberately not mutated:
 
-- **the escaping of the swept-out text:** it is not a fault of its own and has no line to break. The serialiser escapes paragraph text that would otherwise re-parse as markup, which is correct; it only produced backslashes here because the anchor fault had already turned code into paragraph text. It is reintroduced by the first three rows above and leaves with them, and the tests that go red for them assert on the backslashes as well as on the fence. A row of its own would be a second name for the same mutation.
+- **the escaping of text swept out of a block by the anchor fault:** that route has no line of its own to break. Once an atom has closed the block, the remainder is paragraph text, and escaping paragraph text is the serialiser doing the correct thing: there is no guard there to remove. It is reintroduced by the first three rows, whose tests assert on the backslashes as well as on the fence. The OTHER route to the same damage does have a line, and it is mutated: see the escape flag row above, which escapes a fenced block with no comment involved.
 - **the panel showing the refusal reason in the composer:** it is display, and the byte-preservation claims do not rest on it. It has a test that drives the real sidebar and reads the rendered reason, which is the right instrument for it; a mutation here would report on that test twice.
 
 ### Which row carries which prohibition
 
 Read the rows against the three criteria rather than as a single green block.
 
-**Adding a comment.** The first row is the anchor fault put back. With it back,
+**The corruption is put back in both of its forms.** The report carried an early
+fence close and an escaping, so evidence that covered only the first would be
+evidence for half the criterion. The early close is rows one, four and five; the
+escaping is row seven, the escape flag on the call that writes a block's
+contents, which produces it with no comment anywhere near it.
+
+**Adding a comment.** Under row one, the anchor fault,
 `a refused comment changes nothing, so it cannot half-apply` goes red, and that
-test compares the whole saved file against the fixture's bytes. The fourth and
-fifth rows are the serialisation fault put back, and
-`adding a comment in prose changes only the comment markers` goes red for each:
-that test strips the construct back to the words it wraps and requires what is
-left to be the file that was opened.
+test compares the whole saved file against the fixture's bytes. Under rows four
+and five, the fence marker dropped,
+`adding a comment in prose changes only the comment markers` goes red: that test
+strips the construct back to the words it wraps and requires what is left to be
+the file that was opened. Under row seven, the escaping,
+`the markdown inside a fence is written back unescaped` goes red naming the
+symptom, and `adding a comment in prose changes only the comment markers` goes
+red with it, because that test also refuses a backslash anywhere in the file.
 
 **Editing a comment.** `replying to a comment leaves the document bytes alone`
-goes red under the fourth and fifth rows. It is not red under the first three,
-and that is not a gap: the anchor fault only fires when the anchor is inside a
-fenced block, and a refused anchor leaves no comment to reply to.
+goes red under rows four, five and seven, so both forms are covered here too. It
+is not red under the first three, and that is not a gap: the anchor fault only
+fires when the anchor is inside a fenced block, and a refused anchor leaves no
+comment to reply to.
 
 **Removing a comment.** `resolving a comment gives the document back its
-original bytes` goes red under the fourth and fifth rows, on the same terms and
+original bytes` goes red under rows four, five and seven, on the same terms and
 with the same exception.
 
 Two limits travel with this table rather than being left for a reader to find.
