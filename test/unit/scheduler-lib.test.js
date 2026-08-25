@@ -1171,6 +1171,240 @@ test('closing a restart-orphaned record writes nothing to the value double-fire 
   });
 });
 
+// ===== THE STOP, AGAINST THE CLIENT THAT REALLY RECEIVES IT =====
+//
+// The codex stopper calls a method on whatever getCodexAppServer returned. A
+// test that supplies its own object with a method of that name proves the
+// scheduler calls something it was handed, and nothing about whether the real
+// client has such a method or takes the thread id first. If it does not, the
+// call throws a TypeError, stopLiveRun logs it, the turn goes on running and
+// the run is recorded as stopped: the "recorded, and then did not happen"
+// failure this whole section exists to remove, one layer further down.
+//
+// So these drive the REAL client class, the one getCodexAppServer builds,
+// against the repository's stub app-server, and read the wire. The stub logs
+// every request it receives, so what is asserted is that an interrupt naming
+// this thread left the client, not that a double was called.
+
+// The real client, over the stub binary, shut down before the test returns so
+// no app-server outlives it.
+async function withRealCodexClient(dir, fn) {
+  const server = createCodexAppServer({ binPath: STUB_CODEX, cwd: dir, requestTimeoutMs: 15000 });
+  try {
+    await server.start();
+    return await fn(server);
+  } finally {
+    await server.shutdown();
+  }
+}
+
+// Every request the stub app-server received, read off its own log.
+function stubRequests(dir) {
+  const file = path.join(dir, 'stub-invocations.jsonl');
+  let raw;
+  try { raw = fs.readFileSync(file, 'utf-8'); } catch (e) { return []; }
+  return raw.split('\n').filter(Boolean).map(line => JSON.parse(line));
+}
+
+async function untilRequest(dir, method, tries = 400) {
+  let hit = null;
+  await until(() => (hit = stubRequests(dir).find(e => e.method === method)) != null, tries);
+  return hit;
+}
+
+// A turn that will not end on its own, so there is something still running to
+// stop. The stub completes such a turn only when an interrupt reaches it,
+// which is what makes the ending below evidence that one did.
+const HANGING_ROUTINE = { name: 'r', prompt: 'keep going until somebody stops this run' };
+
+function writeHangingScenario(dir) {
+  fs.writeFileSync(path.join(dir, 'stub-codex-scenario.json'), JSON.stringify({
+    appServer: {
+      rules: [{
+        match: { promptIncludes: HANGING_ROUTINE.prompt },
+        deltas: ['working '],
+        hangAfterDeltas: true,
+      }],
+    },
+  }));
+}
+
+test('stopping a codex run sends the real client an interrupt naming the thread its turn is on', async () => {
+  await withTempWorkspaceAsync(async (dir) => {
+    await withTempHomeAsync(async () => {
+      const CODEX_AGENT = realCodexAgent(dir);
+      writeHangingScenario(dir);
+      await withRealCodexClient(dir, async (server) => {
+        await withFakeCodex(server, async (sched) => {
+          assert.strictEqual(sched.executeRoutine(CODEX_AGENT, HANGING_ROUTINE, KEY), true, 'the run started');
+
+          // The thread the turn is really on, taken off the wire rather than
+          // from anything this test chose.
+          const started = await untilRequest(dir, 'turn/start');
+          assert.ok(started, 'the run reached a turn on the app-server');
+          const threadId = started.params.threadId;
+          assert.ok(threadId, 'which is filed under a thread');
+          assert.strictEqual(stubRequests(dir).filter(e => e.method === 'turn/interrupt').length, 0,
+            'and nothing has been interrupted yet');
+
+          const [live] = sched.runningRuns();
+          assert.ok(live, 'the run is reachable');
+          assert.strictEqual(sched.cancelRun(live.id), true, 'and is stopped');
+
+          // THE ASSERTION THE STAND-IN COULD NOT MAKE. This entry exists only
+          // if the real client has the method the scheduler calls and sent a
+          // request for it, and its thread is the one the client's own turn
+          // was started on. Rename the method on the client and no entry
+          // arrives; change which parameter carries the thread and this
+          // compares unequal.
+          const interrupt = await untilRequest(dir, 'turn/interrupt');
+          assert.ok(interrupt, 'an interrupt left the client and reached the app-server');
+          assert.strictEqual(interrupt.params.threadId, threadId,
+            'naming the thread the turn is on rather than some other identifier');
+
+          assert.ok(await until(() => sched.routineState[KEY].status !== 'running'),
+            'the interrupted turn then ended, which the stub only does when an interrupt reaches it');
+          assert.strictEqual(sched.routineState[KEY].status, 'cancelled', 'recorded as a stop');
+          assert.strictEqual(sched.executeRoutine(CODEX_AGENT, HANGING_ROUTINE, KEY), true,
+            'and the routine was released');
+          await endedAfter(sched, async () => {
+            const live2 = sched.runningRuns()[0];
+            await until(() => live2 && sched.runningRuns().length > 0);
+            sched.cancelRun(live2.id);
+          });
+        });
+      });
+    });
+  });
+});
+
+// A stop asked for before there is anything to send it with. On this runtime
+// that window is several awaits wide: the app-server may still be booting, and
+// a thread and a turn have to exist before a turn can be interrupted. The
+// intent is remembered and honoured when the turn appears, and the client
+// holds the interrupt until the turn it names has been acknowledged, so it is
+// sent once and it is not refused for arriving early.
+test('a codex run stopped before its turn exists is still stopped, once, when it appears', async () => {
+  await withTempWorkspaceAsync(async (dir) => {
+    await withTempHomeAsync(async () => {
+      const CODEX_AGENT = realCodexAgent(dir);
+      writeHangingScenario(dir);
+      await withRealCodexClient(dir, async (server) => {
+        await withFakeCodex(server, async (sched) => {
+          assert.strictEqual(sched.executeRoutine(CODEX_AGENT, HANGING_ROUTINE, KEY), true, 'the run started');
+
+          // BEFORE THE TURN EXISTS, asserted rather than assumed: the run is
+          // already reachable, and nothing has reached the app-server yet.
+          assert.deepStrictEqual(stubRequests(dir).filter(e => e.method === 'turn/start'), [],
+            'no turn has been started, so there is nothing yet to interrupt');
+          const [live] = sched.runningRuns();
+          assert.ok(live, 'and the run is reachable all the same');
+          assert.strictEqual(sched.cancelRun(live.id), true, 'so it can be stopped now');
+
+          const started = await untilRequest(dir, 'turn/start');
+          const interrupt = await untilRequest(dir, 'turn/interrupt');
+          assert.ok(interrupt, 'the stop was honoured once the turn existed');
+          assert.strictEqual(interrupt.params.threadId, started.params.threadId,
+            'naming the turn that was started after the stop was asked for');
+
+          assert.ok(await until(() => sched.routineState[KEY].status !== 'running'), 'and the turn ended');
+          assert.strictEqual(sched.routineState[KEY].status, 'cancelled', 'recorded as a stop');
+          assert.strictEqual(stubRequests(dir).filter(e => e.method === 'turn/interrupt').length, 1,
+            'and exactly one interrupt was sent, not one per await it waited through');
+        });
+      });
+    });
+  });
+});
+
+// A signal that never left has not created the hazard the send-once guard
+// exists for, which is a second signal to a process id that may by then belong
+// to somebody else. Discarding the stopper on a failed attempt leaves the run
+// going with nothing able to stop it and every later request answering yes.
+test('a stop that could not be sent is retried by the next request, and one that was sent is not', async () => {
+  await withTempWorkspaceAsync(async (dir) => {
+    await withTempHomeAsync(async () => {
+      const child = Object.assign(new EventEmitter(), { pid: 4244 });
+      const attempts = [];
+      let refuse = true;
+      await withFakeSpawn(() => child, async (sched) => {
+        assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true, 'the run started');
+        const [live] = sched.runningRuns();
+
+        assert.strictEqual(sched.cancelRun(live.id), true, 'the first stop was asked for');
+        assert.strictEqual(attempts.length, 1, 'and reached the signaller');
+        assert.strictEqual(sched.routineState[KEY].status, 'running',
+          'the run is still going, because nothing was actually signalled');
+
+        assert.strictEqual(sched.cancelRun(live.id), true, 'the second stop was asked for too');
+        assert.strictEqual(attempts.length, 2,
+          'and reached the signaller again, because the first signal never left');
+
+        // Now let one land. After that the guard applies: a signal that did go
+        // out is not sent a second time to a process id that may be reused.
+        refuse = false;
+        assert.strictEqual(sched.cancelRun(live.id), true, 'the third stop was asked for');
+        assert.strictEqual(attempts.length, 3, 'and landed');
+        assert.strictEqual(sched.cancelRun(live.id), true, 'a fourth request is still answered');
+        assert.strictEqual(attempts.length, 3,
+          'but sends nothing more, because the signal it would repeat has already gone out');
+
+        child.emit('close', null);
+        assert.ok(await until(() => sched.routineState[KEY].status !== 'running'), 'the run ended');
+        assert.strictEqual(sched.routineState[KEY].status, 'cancelled', 'as a stop');
+      }, (target, signal) => {
+        attempts.push([target, signal]);
+        if (refuse) throw new Error('no such process');
+      });
+    });
+  });
+});
+
+// The asynchronous half of the same thing, and the reason the stopper cannot
+// simply be called and forgotten. Driven through a stand-in here because what
+// is under test is what this file does with a refusal, not what the client
+// calls its interrupt: the call shape is pinned against the real client above.
+test('a stop whose request is refused lets nothing escape, and the run still ends', async () => {
+  await withTempWorkspaceAsync(async (dir) => {
+    await withTempHomeAsync(async () => {
+      const CODEX_AGENT = realCodexAgent(dir);
+      const run = await realCodexRun();
+      const { thread } = run;
+      const sub = new EventEmitter();
+      let asked = 0;
+      const server = {
+        startThread: async () => thread,
+        startTurn: () => sub,
+        interruptTurn: async () => { asked += 1; throw new Error('no active turn to interrupt'); },
+      };
+      await withFakeCodex(server, async (sched) => {
+        assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true, 'the run started');
+        assert.ok(await until(() => sub.listenerCount('event') > 0), 'and reached its turn');
+
+        const [live] = sched.runningRuns();
+        assert.strictEqual(sched.cancelRun(live.id), true, 'the stop was asked for');
+        assert.ok(await until(() => asked > 0), 'and the request was made');
+
+        // A rejected request is not an ending. The turn is still going, and
+        // the only thing that ends it is the turn itself.
+        assert.strictEqual(sched.routineState[KEY].status, 'running',
+          'the refusal did not end the run, because a refused stop stopped nothing');
+
+        assert.ok(await until(() => sched.cancelRun(live.id) && asked > 1),
+          'and a later request tries again rather than answering yes and sending nothing');
+
+        sub.emit('event', run.done);
+        assert.ok(await until(() => sched.routineState[KEY].status !== 'running'), 'the turn then ended');
+        assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true, 'and released the routine');
+        await endedAfter(sched, async () => {
+          await until(() => sub.listenerCount('event') > 1);
+          sub.emit('event', run.done);
+        });
+      });
+    });
+  });
+});
+
 // ===== REACHING A RUN THAT IS STILL GOING =====
 //
 // A routine that has gone wrong is exactly the one somebody wants to stop, and
