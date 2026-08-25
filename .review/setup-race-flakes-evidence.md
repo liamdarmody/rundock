@@ -179,10 +179,36 @@ The one SIGINT failure (Run A, iteration 4) is reported rather than dropped. Its
 output was not captured. That run only recorded the pass/fail line and the suite
 tally, a gap fixed for Run B and Run C by saving each iteration's complete log under
 `ac3-runs/` and `ac3-targeted/` (not committed; scratch). Eighteen further runs of
-that exact test afterward, split across Run B and Run C, all passed clean, which is
-what independently contended load produces: occasional, not reproducible on demand,
-and not concentrated on any one test. It is recorded here rather than quietly
-excluded because AC-3 asks for a tally, not a cherry-picked one.
+that exact test afterward, split across Run B and Run C, all passed clean. That bounds
+how often it happens; it says nothing about why, because there was no captured output
+to read. Round 2 of review correctly declined to treat 22/23 as discharging AC-3 on
+that basis: an uncaptured failure could be the original precondition race, a
+different race, or the machine, and a reviewer cannot weigh which.
+
+**Run D: the SIGINT test alone, 30 iterations, full output captured for every run,
+under deliberately generated load.** Three concurrent loops of the full suite
+(`npm test`, restarted back to back) ran for the whole window, 57 full-suite passes
+completed across them by the time the 30 iterations finished (19 + 19 + 19, the last
+of each interrupted mid-run when the loops were stopped). Command for each iteration:
+
+```
+node --test test/unit/red-first.test.js --test-name-pattern="traps SIGINT"
+```
+
+Each run's complete output was written to its own file (`ac3-sigint30/run-N.log`, not
+committed; scratch), so a failure would have had somewhere to be read from. Elapsed
+time per run ranged 540ms to 3090ms, well above the 250-350ms typical of an unloaded
+run, evidence the load was real rather than nominal. Tally, read from the 30 log files
+directly rather than from the loop's own running commentary:
+
+**30 pass, 0 fail.**
+
+**AC-3 for this test discharges on that basis.** Combined with Runs A to C, the SIGINT
+test has now been run 53 times under contended load: 52 passes, and the one failure
+from Run A, unreproduced across the 48 runs since, 18 of them adjacent to it in time
+and 30 of them run specifically to chase it with full capture. The honest statement is
+exactly that: once in 53, not captured, and it did not reproduce in 30 captured
+attempts. The idle-reap test's tally is unchanged at 23/23 and was not in question.
 
 ## Red first
 
