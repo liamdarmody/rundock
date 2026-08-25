@@ -136,7 +136,31 @@ wait for the state the interrupt is supposed to catch.
 with `sleep 25`, then asserted mid-flight that the run was still alive. 25
 seconds is a budget for everything the test does in between, including a
 synchronous `spawnSync` that runs git. On a slow runner the sleep ends first
-and the assertion fails for a reason unrelated to what it tests.
+and the assertion fails for a reason unrelated to what it tests. It now uses
+`LONG`, the duration the rest of that file already uses for a suite that must
+not end on its own.
+
+### The remaining duration budgets in `red-first-orphans.test.js`
+
+Four stand-in suites in that file still carry a foreground duration, and they
+are not all the same shape. Listed because the fix above removed only the one
+that had failed.
+
+- **`sleep 30` at lines 303, 386 and 437** is the same budget as the one fixed,
+  and only survives because those three tests do far less between starting the
+  run and asserting on it: no nested `spawnSync`, no second tool invocation.
+  Nothing makes 30 seconds correct, it is just further from the edge. If one of
+  these fails on a loaded runner, it is this, and the fix is the one applied to
+  AC-5, AC-6.
+- **`sleep 3` at line 698** is a different case and must NOT be given `LONG`.
+  Two starts race, one must be refused and the other must reach a conclusion,
+  so the winner is required to FINISH inside the test. A duration nothing can
+  outrun would hang the winner and turn `concluded.length === 1` red. The
+  exposure is real and inverted: the refusal has to land inside those three
+  seconds, and on a slow runner the winner can finish and give back its claim
+  before the loser gets there, at which point the loser concludes instead of
+  being refused. Fixing it needs a barrier the test can wait on, not a
+  different constant.
 
 ### Accepted, with reason
 
