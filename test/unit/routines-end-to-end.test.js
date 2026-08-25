@@ -120,8 +120,15 @@ const MODEL_SRC = read('public', 'routines-model.js');
 const VIEW_SRC = read('public', 'views', 'routines.js');
 const ROUTINES_CSS = read('public', 'styles', 'views', 'routines.css');
 
-/** The client shell, handed exactly what the server sent. */
-function render(agents) {
+/**
+ * The client shell, handed exactly what the server sent.
+ *
+ * `openWorkspace` is the path the shell believes it opened, which the row
+ * compares its own workspace against. Defaulted to whatever workspace the
+ * roster was taken from, so every test written before this field existed
+ * renders as it always did.
+ */
+function render(agents, openWorkspace) {
   const dom = new JSDOM('<!doctype html><html><head><style>' + ROUTINES_CSS + '</style></head><body>'
     + '<nav class="nav-rail"><button class="nav-item" data-nav="routines"></button></nav>'
     + '<div id="view-routines"><div id="routines-content"></div></div>'
@@ -132,6 +139,7 @@ function render(agents) {
   w.eval(MODEL_SRC);
   w.eval(VIEW_SRC);
   w.agents = agents;
+  w.currentWorkspacePath = openWorkspace !== undefined ? openWorkspace : config.getWorkspace();
   w.esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   w.ws = { send: () => {} };
   w.routinesNow = () => NOW;
@@ -444,6 +452,127 @@ describe('a schedule the scheduler cannot read', () => {
         'the waiting row claims its schedule cannot be read');
       assert.ok(!/Next run/.test(text(cron)),
         'the unreadable row promises a next run');
+    });
+  });
+});
+
+// ===========================================================================
+// TWO WORKSPACES, ONE MACHINE
+// ===========================================================================
+//
+// There is one scheduler and it serves one workspace: the tick reads the
+// roster of whichever workspace is open and runs each routine with that
+// workspace as its working directory. A routine in any other workspace is
+// dormant, and every row here used to draw it exactly as it draws one that
+// fires in an hour.
+//
+// WHY A CLIENT EVER HOLDS BOTH. The roster and the open workspace are two
+// facts that arrive in two messages, and the roster is sent to EVERY connected
+// client whenever a routine's state changes. So a window opened on one
+// workspace, while another window moved the server to a different one, is
+// handed rows that were read out of somewhere it is not.
+//
+// THIS WALKS THE WHOLE WAY, like the file it sits in: two real workspaces on
+// disk, two real agent files, the real discovery that stamps each routine with
+// where it was read, and then the real view with the real stylesheet. A row
+// proven against a hand-built object would say nothing about whether anything
+// puts the workspace on the roster at all.
+describe('a routine in a workspace this window does not have open', () => {
+  const SCHEDULE_TWO = 'every day at 07:00';
+
+  /**
+   * Two workspaces, discovered separately, handed to one client as one roster.
+   *
+   * The agents are named apart on purpose: an id is a slug the workspace
+   * generates, so two workspaces can and do produce the same one, and a
+   * collision here would make the two rows indistinguishable for a reason that
+   * has nothing to do with what this file is about.
+   */
+  function twoWorkspaces(fn) {
+    const original = config.getWorkspace();
+    const previousDeps = sched.wireSchedulerDeps({ now: () => NOW });
+    const stateBefore = JSON.parse(JSON.stringify(sched.routineState));
+    try {
+      const built = [];
+      for (const [slug, display] of [['piper', 'Piper'], ['wren', 'Wren']]) {
+        const dir = makeWorkspace({
+          agents: {
+            [slug]: agentFile({
+              name: slug, displayName: display, type: 'specialist', order: 1,
+              routines: [{ name: `${display} briefing`, schedule: SCHEDULE_TWO, prompt: 'p', enabled: true }],
+            }),
+          },
+        });
+        config.setWorkspace(dir);
+        invalidateAgentCache();
+        discoverAgents();
+        invalidateAgentCache();
+        built.push({ dir, agents: JSON.parse(JSON.stringify(discoverAgents())) });
+      }
+      return fn(built[0], built[1]);
+    } finally {
+      config.setWorkspace(original);
+      invalidateAgentCache();
+      sched.wireSchedulerDeps(previousDeps);
+      for (const key of Object.keys(sched.routineState)) delete sched.routineState[key];
+      Object.assign(sched.routineState, stateBefore);
+    }
+  }
+
+  test('the roster says which workspace each routine was read out of', () => {
+    twoWorkspaces((open, other) => {
+      assert.strictEqual(open.agents.find(a => a.id === 'piper').routines[0].workspace, open.dir,
+        'the routine carries the workspace it was found in');
+      assert.strictEqual(other.agents.find(a => a.id === 'wren').routines[0].workspace, other.dir);
+      assert.notStrictEqual(open.dir, other.dir, 'sanity: the two workspaces are two directories');
+    });
+  });
+
+  // THE PAIR, RENDERED. Both rows come out of the same list on the same
+  // screen, so the difference between them is the difference a reader sees.
+  test('it renders as a routine that is not going to run, beside one that is', () => {
+    twoWorkspaces((open, other) => {
+      const { doc, dom } = render(open.agents.concat(other.agents), open.dir);
+      const rows = [...doc.querySelectorAll('.routine-row')];
+      assert.strictEqual(rows.length, 2, 'both routines are listed');
+
+      const here = rowNamed(doc, 'Piper briefing');
+      const elsewhere = rowNamed(doc, 'Wren briefing');
+
+      // The one that will run says when. Today, because neither has ever run
+      // and a slot already gone stays on today for the tick to catch up.
+      assert.strictEqual(text(here.querySelector('.next-run')),
+        'Next run: today, 7:00am, London time');
+      assert.strictEqual(here.querySelector('.workspace-problem'), null,
+        'and says nothing about workspaces, because there is nothing to say');
+
+      // The one that will not says where it is instead.
+      assert.strictEqual(elsewhere.querySelector('.next-run'), null,
+        'the dormant routine promises a run it is not going to get');
+      assert.strictEqual(text(elsewhere.querySelector('.workspace-problem')),
+        `Not running here. This routine is in ${other.dir.split('/').pop()}. `
+        + 'Rundock runs the routines of the workspace that is open, and that is not this one.');
+
+      // Told apart by their WORDS and not only by a class, so the difference
+      // survives a stylesheet that renders both the same. Compared by what
+      // each row must not say rather than by whole-text inequality: the rows
+      // carry different routine names, so their texts can never be equal and
+      // an inequality between them could never fail.
+      assert.ok(!/Next run/.test(text(elsewhere)), 'the dormant row promises a next run');
+      assert.ok(!/Not running here/.test(text(here)), 'the live row denies its own run');
+      dom.window.close();
+    });
+  });
+
+  test('the list says which workspace it is showing', () => {
+    twoWorkspaces((open, other) => {
+      const { doc, dom } = render(open.agents.concat(other.agents), open.dir);
+      const line = doc.querySelector('[data-routines-workspace]');
+      assert.ok(line, 'the header names a workspace at all');
+      assert.strictEqual(text(line),
+        `These are the routines in ${open.dir.split('/').pop()}. Rundock runs the routines of `
+        + 'whichever workspace is open, so the routines in your other workspaces are not running.');
+      dom.window.close();
     });
   });
 });

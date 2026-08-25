@@ -493,47 +493,137 @@ describe('ROUTINES.md: same-day catch-up', () => {
 });
 
 // ---------------------------------------------------------------------------
-// docs/ROUTINES.md: the always-on setup runs the routine on every machine
+// docs/ROUTINES.md: where a routine actually runs
 //
-// The page RECOMMENDS keeping Rundock on a VPS with the workspace synced, and
-// until this was written it said nothing about what a second live instance
-// does. The reader most likely to follow that advice is exactly the reader who
-// ends up with two schedulers and one routine firing twice, so the caveat is
-// pinned to the two facts that make it true rather than left as prose.
+// The page RECOMMENDS keeping Rundock on a VPS with the workspace synced. Two
+// things follow from that recommendation and neither used to be said: a second
+// live instance fires every routine again, and the always-on machine serves
+// the one workspace it has open and none of the others.
+//
+// THE FIRST OF THOSE WAS ONCE DESCRIBED WRONGLY HERE, which is why it is
+// pinned to the mechanism rather than to its consequence. The page used to say
+// the outcome depended on whether the reader's sync tool carried `.rundock/`.
+// It does not: the guard the tick reads is an in-memory copy, filled once when
+// an instance starts and written back in full after each of that instance's
+// own runs, and nothing on the tick path reads the file again. A page that
+// warns a user about a mechanism it has described wrongly is worse than one
+// that stays silent, so the claim and the mechanism are asserted together.
 
-describe('ROUTINES.md: two live instances both fire', () => {
+describe('ROUTINES.md: where a routine actually runs', () => {
   const { scaffoldWorkspace } = require('../../lib/workspace/scaffold.js');
+  const scheduler = require('../../lib/scheduler.js');
+  const { agentFile } = require('../helpers/workspace.js');
 
-  test('the last-run guard is a file inside the workspace, so it is per machine', () => {
-    // The claim: the guard lives in .rundock/ inside the workspace folder. If
-    // it moved to a user-level or machine-level location, the whole caveat
-    // would be wrong in the reader's favour and the page would still say it.
-    const scheduler = fs.readFileSync(path.join(ROOT, 'lib', 'scheduler.js'), 'utf-8');
-    assert.match(scheduler, /routine-state\.json/,
-      'the guard file the caveat describes must still be the one the scheduler writes');
-    assert.match(routinesDoc, /last-run guard[\s\S]{0,120}`\.rundock\/`[\s\S]{0,120}per machine/,
-      'ROUTINES.md must say the guard is per machine, and where it lives');
+  const KEY = 'nightly:briefing';
+  const SCHEDULE = 'every day at 07:00';
+  // Half past nine on a Thursday, built from local components so the pair of
+  // instants below describes the code rather than the machine.
+  const NOW = new Date(2026, 7, 20, 9, 30);
+  const RAN_AT = new Date(2026, 7, 20, 7, 0, 40);
+
+  /** Run `fn` with the scheduler's clock held still. */
+  function atNow(fn) {
+    const previous = scheduler.wireSchedulerDeps({ now: () => NOW });
+    try { return fn(); } finally { scheduler.wireSchedulerDeps(previous); }
+  }
+
+  // THE MECHANISM, DRIVEN. A run recorded to the shared file by another
+  // instance does not reach the value this instance's tick decides with, so
+  // this instance fires the routine it would have been suppressed by.
+  test("a run another instance recorded does not reach the guard this one decides with", () => {
+    const dir = useWorkspace({});
+    atNow(() => {
+      // This instance starts. Nothing has run, so its copy is empty.
+      srv.loadRoutineState();
+      assert.strictEqual(srv.routineState[KEY], undefined, 'sanity: this instance knows of no run');
+
+      // The other instance, sharing this very folder, records one. Written
+      // whole, which is how saveRoutineState writes it.
+      fs.mkdirSync(path.join(dir, '.rundock'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.rundock', 'routine-state.json'),
+        JSON.stringify({ [KEY]: { lastRun: RAN_AT.toISOString(), status: 'completed', duration: 40 } }));
+
+      assert.strictEqual(srv.routineState[KEY], undefined,
+        'the file changed under a running instance and nothing on the tick path read it');
+
+      const state = srv.routineState[KEY];
+      assert.notStrictEqual(srv.getNextRun(SCHEDULE, state && state.lastRun), null,
+        'so this instance still has a run due, which is the second fire the page warns about');
+      assert.strictEqual(srv.getNextRun(SCHEDULE, RAN_AT.toISOString()), null,
+        'and the recorded run WOULD have suppressed it, so it is the not-reading and not the schedule that decides');
+    });
   });
 
-  test('a workspace shared through git does not carry the guard', () => {
-    // The claim the caveat makes about git specifically, checked against the
-    // real tool rather than by reading the scaffold: the entry is written, and
-    // git agrees the file is ignored.
+  test('a workspace shared through git does not carry the guard file at all', () => {
+    // The aside the page makes about git specifically, checked against the real
+    // tool rather than by reading the scaffold.
     const dir = makeWorkspace({});
     scaffoldWorkspace(dir);
     const gitignore = fs.readFileSync(path.join(dir, '.gitignore'), 'utf-8');
     assert.match(gitignore, /^\.rundock\/$/m,
-      'the scaffold must ignore the state folder, which is what makes the git half of the caveat true');
+      'the scaffold must ignore the state folder, which is what makes the git aside true');
   });
 
-  test('the page states the caveat where it recommends the setup that hits it', () => {
-    // Placement is the claim. Stated only in the frontmatter reference, it
+  // ONE SCHEDULER, ONE WORKSPACE. The tick re-discovers agents each pass, and
+  // discovery reads whichever workspace is open, so a routine in any other
+  // workspace is never even considered.
+  test('the roster a tick works from holds the open workspace and nothing else', () => {
+    const routines = [{ name: 'briefing', schedule: SCHEDULE, prompt: 'p', enabled: true }];
+    const here = useWorkspace({ agents: { nightly: agentFile({ name: 'nightly', type: 'specialist', order: 1, routines }) } });
+    const elsewhere = makeWorkspace({ agents: { wren: agentFile({ name: 'wren', type: 'specialist', order: 1, routines }) } });
+    assert.notStrictEqual(here, elsewhere, 'sanity: two workspaces');
+
+    srv.invalidateAgentCache();
+    const names = srv.discoverAgents().filter(a => a.routines && a.routines.length).map(a => a.id);
+    assert.deepStrictEqual(names, ['nightly'],
+      "the other workspace's routine is not on the roster, so no tick can reach it");
+  });
+
+  test('the always-on section says what a second live instance does, and what to do instead', () => {
+    // Placement is half the claim. Stated only in the reference section, it
     // would be absent from the section a reader acts on.
     const alwaysOn = routinesDoc.slice(routinesDoc.indexOf('## Always-on routines'));
     assert.ok(alwaysOn.length > 0, 'sanity: the always-on section exists');
     assert.match(alwaysOn, /runs twice/,
       'the always-on section must say what two live instances do');
-    assert.match(alwaysOn, /four synced machines|four times/,
-      'the always-on section must say what happens at more than two');
+    assert.match(alwaysOn, /Four machines, four runs/,
+      'and what happens at more than two');
+    assert.match(alwaysOn, /viewers/,
+      'and it must name the remedy rather than only the hazard');
+    assert.match(alwaysOn, /one machine|one server ticking/i,
+      'which is that one machine runs the routines');
+  });
+
+  test('the always-on section does not blame the sync tool for the double fire', () => {
+    // The exact sentence that was wrong, and the class of sentence that would
+    // be wrong again. The mechanism is above; this is the page agreeing with it.
+    const alwaysOn = routinesDoc.slice(routinesDoc.indexOf('## Always-on routines'));
+    assert.doesNotMatch(alwaysOn, /depends on whether your sync tool/i,
+      'the outcome does not depend on the sync tool, and the page must not say it does');
+    assert.match(alwaysOn, /does not change that|whether or not/i,
+      'the page must say plainly that the sync tool is not the variable');
+    assert.match(alwaysOn, /in-memory|memory/i,
+      'and name the reason, which is the copy the tick actually reads');
+  });
+
+  test('the always-on section says the machine serves one workspace', () => {
+    const alwaysOn = routinesDoc.slice(routinesDoc.indexOf('## Always-on routines'));
+    assert.match(alwaysOn, /workspace it has open, not of every workspace/i,
+      'a machine running Rundock for one workspace is not running another workspace\'s routines');
+  });
+
+  test('the page gives the reason for serving only the open workspace', () => {
+    // A contributor meeting this behaviour must find why rather than reading it
+    // as an oversight and widening it.
+    const behaviour = routinesDoc.slice(
+      routinesDoc.indexOf('### Routines run for the workspace that is open'),
+      routinesDoc.indexOf('## Always-on routines'),
+    );
+    assert.ok(behaviour.length > 0, 'sanity: the section exists');
+    assert.match(behaviour, /consent/i, 'the reason is named');
+    assert.match(behaviour, /have not opened|not looking at/i,
+      'and said in terms of what running from a closed workspace would do');
+    assert.match(behaviour, /What would change it/i,
+      'and what would overturn it is stated, so the decision is revisitable rather than fixed');
   });
 });

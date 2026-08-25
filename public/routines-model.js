@@ -132,9 +132,44 @@
     body: 'Change it to say every day at 07:00, or a weekday, like every Monday at 07:00.',
   };
 
+  /**
+   * What a row says about a routine that is not in the workspace this window
+   * has open.
+   *
+   * THE FACT IT ENDS. There is one scheduler and it serves one workspace: the
+   * tick reads the roster of whichever workspace is open and runs each routine
+   * with that workspace as its working directory. A routine anywhere else is
+   * dormant, and until this line existed nothing said so anywhere.
+   *
+   * WHY A ROW CAN CARRY A ROUTINE FROM SOMEWHERE ELSE AT ALL. The roster and
+   * the open workspace arrive as two separate messages, and every connected
+   * client is sent the roster whenever a routine's state changes. So a second
+   * window, opened on one workspace while another window switched the server
+   * to a different one, is handed rows it did not ask for. Rendering those
+   * with a next-run time tells that reader their routines are scheduled when
+   * the ones that are scheduled belong to somebody else's screen.
+   *
+   * IT NAMES THE WORKSPACE. "Somewhere else" leaves the reader to work out
+   * which of their folders this row came from, and the name is the one thing
+   * that makes the sentence actionable.
+   */
+  const OTHER_WORKSPACE = {
+    lead: 'Not running here.',
+    // The name is a slot and never a concatenation, the same rule the leads
+    // below follow: the whole sentence is in this object.
+    body: 'This routine is in {workspace}. Rundock runs the routines of the workspace that is open, and that is not this one.',
+  };
+
   const LEAD = {
     title: 'Routines',
     lead: 'Every scheduled skill across your team, and when it runs next.',
+    // WHICH WORKSPACE THIS LIST IS, SAID RATHER THAN INFERRED. The window
+    // title carries the workspace and the list does not, so a reader with
+    // three workspaces has to look somewhere else on the screen to know whose
+    // routines these are, and nothing at all tells them what became of the
+    // other two. Both halves are here: the list names its workspace, and it
+    // says plainly that the routines in the others are not running.
+    workspaceLine: 'These are the routines in {workspace}. Rundock runs the routines of whichever workspace is open, so the routines in your other workspaces are not running.',
     // SCOPED TO ONE AGENT, THE SENTENCE SAYS SO. A filtered list under an
     // unfiltered sentence reads as a list that has lost rows, which is the one
     // reading a header must never invite.
@@ -154,13 +189,24 @@
    * carries it inside the header block instead, which is why it arrives from
    * here rather than being drawn separately.
    *
-   * @param {{agentName?: string|null}} [input] the agent the list is scoped
-   *   to, when it is scoped to one.
+   * @param {{agentName?: string|null, workspace?: string|null}} [input] the
+   *   agent the list is scoped to, when it is scoped to one, and the path of
+   *   the workspace this window has open.
    */
   function header(input) {
     const agentName = (input && input.agentName) || null;
+    // THE WORKSPACE LINE IS ITS OWN FIELD, not folded into the subtitle. The
+    // subtitle already changes with the scope, so a workspace sentence spliced
+    // into it would have to be written twice and would go stale in one of the
+    // two. It is absent rather than vague when no path was supplied: a header
+    // that says "these are the routines in your workspace" has told the reader
+    // nothing they did not have.
+    const workspaceName = workspaceWords(input && input.workspace);
     return {
       title: LEAD.title,
+      workspace: workspaceName
+        ? LEAD.workspaceLine.replace('{workspace}', () => workspaceName)
+        : null,
       // THE NAME IS INSERTED, NEVER INTERPRETED. A string replacement reads
       // dollar sequences in what it is given as instructions: $& is the match,
       // $` and $' the text either side, $$ a literal dollar. An agent can be
@@ -590,6 +636,12 @@
     // wrong one for what would RUN: a routine with no schedule can never run,
     // so leaning on the wording let the offer promise a run there.
     if (!canProduceARun(input)) return true;
+    // A ROUTINE IN ANOTHER WORKSPACE IS NOT STARTED BY TURNING IT ON, and the
+    // offer's whole value is that it says what pressing it does. There is one
+    // scheduler and it serves the open workspace, so the switch is not what is
+    // holding this routine back and moving it would promise a run that the
+    // press cannot deliver.
+    if (!inOpenWorkspace(input)) return true;
     // A roster that did not name a run target says nothing, for the same
     // reason an absent scheduleReadable says nothing: silence is not a fault.
     if (input.runOn !== undefined && input.runOn !== null) {
@@ -639,6 +691,61 @@
     const schedule = input.schedule;
     if (typeof schedule !== 'string' || !schedule.trim()) return null;
     return { text: `${SCHEDULE_PROBLEM.lead} ${SCHEDULE_PROBLEM.body}` };
+  }
+
+  /**
+   * A workspace path as the name a person would call it.
+   *
+   * The last segment, split on either separator, because the same folder is
+   * written with backslashes on one machine and slashes on another and a
+   * reader calls it the same thing on both. Empty segments are dropped, so a
+   * trailing separator names the folder rather than nothing.
+   */
+  function workspaceWords(dir) {
+    if (!dir || typeof dir !== 'string') return null;
+    const parts = dir.split(/[\\/]+/).filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : null;
+  }
+
+  /**
+   * Whether this routine belongs to the workspace this window has open.
+   *
+   * TWO PATHS, COMPARED, NEVER ONE ASSUMED. The routine's own workspace is
+   * stamped on the roster by the side that read the file; the open one is what
+   * this window was told it opened. They are two facts from two messages and
+   * they can disagree.
+   *
+   * SILENCE IS NOT A DISAGREEMENT, the same rule `scheduleReadable` follows. A
+   * routine that arrives carrying no workspace, or a caller that did not say
+   * which workspace is open, has not said the routine is somewhere else, and
+   * accusing every row on a roster that predates this field would be a
+   * complaint invented out of a missing key.
+   *
+   * @param {{workspace?: any, openWorkspace?: any}} [input]
+   */
+  function inOpenWorkspace(input) {
+    const mine = input && input.workspace;
+    const open = input && input.openWorkspace;
+    if (typeof mine !== 'string' || !mine) return true;
+    if (typeof open !== 'string' || !open) return true;
+    return mine === open;
+  }
+
+  /**
+   * Whether the row must say this routine is not in the open workspace, and
+   * which workspace it is in.
+   *
+   * Withheld when the path has no readable name, because the sentence's whole
+   * value is naming the workspace and a sentence with an empty slot in it is
+   * worse than the silence this replaced.
+   *
+   * @param {{workspace?: any, openWorkspace?: any}} [input]
+   */
+  function workspaceProblem(input) {
+    if (inOpenWorkspace(input)) return null;
+    const name = workspaceWords(input.workspace);
+    if (!name) return null;
+    return { text: `${OTHER_WORKSPACE.lead} ${OTHER_WORKSPACE.body.replace('{workspace}', () => name)}` };
   }
 
   /**
@@ -714,6 +821,13 @@
     // fails without this line. A time against a routine that will never fire
     // is the same false promise the offer is withheld for.
     if (input && input.scheduleReadable === false) return null;
+    // NOR DOES A ROUTINE IN A WORKSPACE THIS WINDOW DOES NOT HAVE OPEN. The
+    // instant is real: it is computed from the schedule alone, so a routine
+    // read out of any workspace arrives carrying its next slot. Drawing it
+    // here would put "Next run: tomorrow, 7:00am" on a routine no scheduler is
+    // going to fire, which is the exact reassurance the reader came for and
+    // the one this row must not give. The line below takes its place.
+    if (!inOpenWorkspace(input)) return null;
     const words = timeWords(input && input.nextRun, input && input.now, input && input.zone);
     if (!words) return null;
     return { text: `Next run: ${words}`, className: 'next-run' };
@@ -796,6 +910,10 @@
       // The one thing on a row that is neither history nor a promise: a fault
       // in the routine itself, which only the person who wrote the file can fix.
       scheduleProblem: scheduleProblem(input),
+      // Where this routine actually is, said only when that is not where the
+      // reader is. Nothing about the routine is wrong, which is why it is its
+      // own field rather than a second kind of schedule fault.
+      workspaceProblem: workspaceProblem(input),
     };
   }
 
@@ -823,10 +941,10 @@
   }
 
   return {
-    OUTCOMES, LEAD, EMPTY, ACTION_PROBLEM, NOT_ENABLED, SCHEDULE_PROBLEM, CATCH_UP_AFTER_MS,
+    OUTCOMES, LEAD, EMPTY, ACTION_PROBLEM, NOT_ENABLED, SCHEDULE_PROBLEM, OTHER_WORKSPACE, CATCH_UP_AFTER_MS,
     actionProblem, emptyState, header,
-    dayWords, clockWords, zoneWords, timeWords,
+    dayWords, clockWords, zoneWords, timeWords, workspaceWords,
     scheduleWords, routineSentence, sentenceParts,
-    outcomeOf, lastCompletedRunFailed, anyFailure, runStatus, nextRunLabel, enableOffer, scheduleProblem, somethingElseStopsIt, orderByNextRun, row, deleteConfirmation,
+    outcomeOf, lastCompletedRunFailed, anyFailure, runStatus, nextRunLabel, enableOffer, scheduleProblem, inOpenWorkspace, workspaceProblem, somethingElseStopsIt, orderByNextRun, row, deleteConfirmation,
   };
 }));

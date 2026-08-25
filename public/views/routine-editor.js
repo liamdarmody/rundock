@@ -188,6 +188,13 @@
     if (sentence) h += `<p class="re-preview" data-routine-editor="sentence">${escText(sentence)}</p>`;
     h += runOnField(m);
     if (zone) h += `<p class="re-caption">${escText(zone)}</p>`;
+    // WHERE THE ROUTINE BEING MADE WILL ACTUALLY RUN, on the step that decides
+    // when it runs. Every route into this editor passes through this step, so
+    // nobody finishes a routine without having been told which workspace it
+    // belongs to and what happens while they are in another one. Beside the
+    // run-on caveat rather than folded into it: that one is about a workspace
+    // open on several computers, this one is about several workspaces on one.
+    h += `<p class="re-caveat" data-routine-editor="workspace-caveat">${escText(m.WORKSPACE_CAVEAT)}</p>`;
     h += `<div class="re-actions">
       <button class="settings-btn-primary" type="button" ${sentence ? '' : 'disabled'}
         onclick="routineEditorStep('ready')">Continue</button>

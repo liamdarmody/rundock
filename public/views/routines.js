@@ -77,6 +77,17 @@ function routinesClock() {
   return typeof routinesNow === 'function' ? routinesNow() : new Date();
 }
 
+/**
+ * The workspace this window has open, taken from the global the shell keeps.
+ *
+ * Read through typeof for the same reason the clock is: this file is required
+ * in node with no global at all, and an undeclared identifier throws where a
+ * typeof does not.
+ */
+function routinesOpenWorkspace() {
+  return typeof currentWorkspacePath === 'string' ? currentWorkspacePath : null;
+}
+
 function routinesZone() {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
@@ -229,6 +240,11 @@ function rowHtml(entry, index, withActions) {
     // roster. Passed through untouched: a client that decided this for itself
     // would be a second copy of a grammar that lives beside the tick.
     scheduleReadable: r.scheduleReadable,
+    // The workspace this routine was read out of, and the one this window has
+    // open. Two facts from two messages, compared by the model rather than
+    // assumed equal here.
+    workspace: r.workspace,
+    openWorkspace: routinesOpenWorkspace(),
     now: routinesClock(),
     zone: routinesZone(),
   });
@@ -256,6 +272,17 @@ function rowHtml(entry, index, withActions) {
   if (row.scheduleProblem) {
     body += '<div class="rr-meta rr-problem-line">'
       + `<span class="schedule-problem">${esc(row.scheduleProblem.text)}</span>`
+      + '</div>';
+  }
+  // A ROUTINE THIS WINDOW IS NOT IN A POSITION TO RUN SAYS WHERE IT IS. Drawn
+  // like the schedule fault and toned unlike it: nothing about the routine is
+  // wrong, so it takes the quiet tone the missed row uses rather than the
+  // danger one. Drawn on the delete confirmation too, for the same reason the
+  // schedule fault is: somebody about to remove a routine is entitled to know
+  // it was not running here.
+  if (row.workspaceProblem) {
+    body += '<div class="rr-meta rr-problem-line">'
+      + `<span class="workspace-problem">${esc(row.workspaceProblem.text)}</span>`
       + '</div>';
   }
   // THE ROW FOR A ROUTINE NOBODY HAS TURNED ON YET. It takes the next-run
@@ -362,12 +389,13 @@ function routinesScopeName() {
  * the list passes its scoped sentence, and the empty pane passes nothing,
  * because its state line lives in the box below rather than in the header.
  */
-function headerHtml(subtitle) {
+function headerHtml(subtitle, workspace) {
   const model = routinesModel();
   let h = '<div class="profile-header">'
     + `<div class="profile-avatar skill-avatar">${CLOCK_SVG}</div>`
     + `<div><div class="profile-name">${esc(model.LEAD.title)}</div>`
     + (subtitle ? `<div class="routines-subtitle">${esc(subtitle)}</div>` : '')
+    + (workspace ? `<div class="routines-workspace" data-routines-workspace>${esc(workspace)}</div>` : '')
     + '</div></div>';
   // On the header rather than in one of the three branches below, so the
   // refusal is on the page whichever state the list is in when it arrives.
@@ -377,9 +405,24 @@ function headerHtml(subtitle) {
   return h;
 }
 
-/** The header a list of routines carries, scoped or not. */
+/**
+ * The header a list of routines carries, scoped or not.
+ *
+ * WHOSE ROUTINES THESE ARE, ON THE HEADER RATHER THAN ON EACH ROW. It is one
+ * fact about the whole list, and a reader with three workspaces otherwise has
+ * to read it off the window.
+ *
+ * ON THE LIST AND NOT ON THE EMPTY PANE, which is the one caller that passes
+ * no subtitle. "These are the routines in Ledger" above "No routines yet"
+ * describes a list that is not there, and the empty pane's whole shape is one
+ * box carrying what is true and what to do about it.
+ */
 function listHeaderHtml() {
-  return headerHtml(routinesModel().header({ agentName: routinesScopeName() }).subtitle);
+  const head = routinesModel().header({
+    agentName: routinesScopeName(),
+    workspace: routinesOpenWorkspace(),
+  });
+  return headerHtml(head.subtitle, head.workspace);
 }
 
 // The one thing each variant offers, and where pressing it goes. Held as a

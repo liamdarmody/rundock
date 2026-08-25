@@ -78,14 +78,31 @@
    *
    * There is no machine identity in a routine and nothing coordinates two
    * copies of a workspace, so a workspace opened on four computers is four
-   * separate local schedulers, each with its own idea of what has already run.
-   * Whether that means four runs or an unreliable guard depends on whether the
-   * sync tool carries the state folder, which is a property of the tool. None
-   * of that is solvable in this release, so the copy says what happens instead
-   * of leaving the user to find out.
+   * separate local schedulers. Each keeps the guard that stops a re-fire in
+   * memory, filled once when it starts, so each has its own idea of what has
+   * already run for as long as it stays up. That is four runs, and no sync
+   * tool changes it. None of it is solvable in this release, so the copy says
+   * what happens instead of leaving the user to find out.
    */
   const RUN_ON_CAVEAT = 'Routines run on the machine they were made on. '
     + 'A workspace open on more than one computer runs its routines on each of them.';
+
+  /**
+   * What happens to this routine when its workspace is not the one open, said
+   * where the routine is being made rather than in documentation met later.
+   *
+   * There is one scheduler and it serves the open workspace. Somebody with
+   * three workspaces is therefore making a routine that runs in one of the
+   * three, and nothing on this screen said so: they finished the editor
+   * believing they had scheduled something that fires whenever Rundock is up.
+   *
+   * IT NAMES THE CATCH-UP IN THE SAME BREATH, because without it the sentence
+   * reads as "you will lose runs" and the answer for most people is that they
+   * will not: coming back to the workspace the same day serves the slot.
+   */
+  const WORKSPACE_CAVEAT = 'Rundock runs the routines of the workspace that is open. '
+    + "While you are in another workspace this one's routines do not run, "
+    + 'and a slot that goes by is caught up when you open it again that same day.';
 
   const RUN_ON_LABEL = 'Run on';
 
@@ -348,7 +365,7 @@
   }
 
   return {
-    RUN_ON_SUPPORTED, RUN_ON_CAVEAT, RUN_ON_LABEL, FREQUENCIES, STEP_LEADS, SAVE_DESTINATION,
+    RUN_ON_SUPPORTED, RUN_ON_CAVEAT, WORKSPACE_CAVEAT, RUN_ON_LABEL, FREQUENCIES, STEP_LEADS, SAVE_DESTINATION,
     runOnOptions, runOnOption, runOnField,
     skillChoices, stepLead,
     times, buildSchedule, previewSentence,

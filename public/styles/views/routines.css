@@ -18,6 +18,10 @@
 .routines-content { max-width: 640px; padding: 32px; }
 /* The list header's subtitle: the scoped sentence above the populated list. */
 .routines-subtitle { font-size: var(--body); color: var(--text-2); }
+/* Which workspace this list belongs to, and what that means for the routines in
+   the others. A quieter line than the subtitle above it: it is a standing fact
+   about the list rather than a description of what the list contains. */
+.routines-workspace { font-size: var(--caption); color: var(--text-2); margin-top: 2px; }
 
 /* The list */
 .routine-table { display: flex; flex-direction: column; gap: 10px; }
@@ -96,6 +100,15 @@
    four outcomes keep their own tones, so a failed run and an unreadable
    schedule are told apart by their words rather than by colour alone. */
 .schedule-problem { font-size: var(--caption); font-weight: 600; color: var(--danger); }
+
+/* The row for a routine in a workspace this window does not have open.
+
+   IDLE GREY AND NOT THE DANGER COLOUR, which is the three-tone ruling applied
+   to a fifth thing a row can say. Nothing is wrong with the routine: it is
+   somewhere else, which is the same class of fact as a slot that passed while
+   the machine was shut, and dressing it as an error would teach a reader with
+   several workspaces to ignore the colour that means something. */
+.workspace-problem { font-size: var(--caption); font-weight: 500; color: var(--idle); }
 
 /* The row for a routine nobody has turned on yet.
 

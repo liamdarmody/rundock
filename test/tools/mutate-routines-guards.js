@@ -162,6 +162,22 @@ const VIEW_SCOPE = { src: path.join(ROOT, 'public', 'views', 'routines.js'), sui
 // The handlers behind the row's two controls, and the data model they write
 // through.
 const HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/unit/routine-actions.test.js' };
+// WHERE A ROUTINE RUNS, WATCHED AT THE RENDERED SURFACE AND NOWHERE ELSE.
+//
+// The rule is that a routine in a workspace this window does not have open is
+// not drawn as one that will run. That is a PROHIBITION, and reverting the
+// source it lives in cannot prove one: the test goes red because the code
+// vanished, not because the rule held. A mutation is the only thing that can,
+// because it commits the forbidden act with everything else in place.
+//
+// Watched by the walk that goes from two real workspaces through real
+// discovery to the real view, because each of these rules is a rule about what
+// a reader sees. Proven against the model alone, the roster line that carries
+// the workspace could be deleted with every model test green and the rule
+// unreachable in the product.
+const MODEL_WORKSPACE = { src: path.join(ROOT, 'public', 'routines-model.js'), suite: 'test/unit/routines-end-to-end.test.js' };
+const VIEW_WORKSPACE = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/routines-end-to-end.test.js' };
+const DISCOVERY_WORKSPACE = { src: path.join(ROOT, 'lib', 'agents', 'discovery.js'), suite: 'test/unit/routines-end-to-end.test.js' };
 const ROUTINES = { src: path.join(ROOT, 'lib', 'agents', 'routines.js'), suite: 'test/unit/routine-actions.test.js' };
 
 // [target, label, the guard as it is written, what it becomes without it]
@@ -960,6 +976,39 @@ const MUTATIONS = [
   [VIEW, 'the header reads the scope the panel actually holds',
     '  if (!scope) return null;',
     '  if (true) return null;'],
+  // ===== WHERE A ROUTINE RUNS =====
+  // The forbidden act itself: a next-run time drawn against a routine no
+  // scheduler is going to fire.
+  [MODEL_WORKSPACE, 'a routine in another workspace is drawn with no next run',
+    '    if (!inOpenWorkspace(input)) return null;\n    const words = timeWords(input && input.nextRun, input && input.now, input && input.zone);',
+    '    const words = timeWords(input && input.nextRun, input && input.now, input && input.zone);'],
+  [MODEL_WORKSPACE, 'the row says which workspace the routine is actually in',
+    '      workspaceProblem: workspaceProblem(input),\n',
+    ''],
+  [MODEL_WORKSPACE, 'two workspaces are compared rather than assumed equal',
+    '    return mine === open;',
+    '    return true;'],
+  [MODEL_WORKSPACE, 'the workspace is named by the folder rather than left as a slot',
+    "    return { text: `${OTHER_WORKSPACE.lead} ${OTHER_WORKSPACE.body.replace('{workspace}', () => name)}` };",
+    '    return { text: OTHER_WORKSPACE.lead };'],
+  [MODEL_WORKSPACE, 'the list header names the workspace whose routines it holds',
+    "      workspace: workspaceName\n        ? LEAD.workspaceLine.replace('{workspace}', () => workspaceName)\n        : null,\n",
+    '      workspace: null,\n'],
+  [DISCOVERY_WORKSPACE, 'the roster carries the workspace a routine was read out of',
+    '        r.workspace = ws;\n',
+    ''],
+  [VIEW_WORKSPACE, 'the row is told which workspace this window has open',
+    '    openWorkspace: routinesOpenWorkspace(),\n',
+    ''],
+  [VIEW_WORKSPACE, 'the line naming the other workspace reaches the page',
+    "      + `<span class=\"workspace-problem\">${esc(row.workspaceProblem.text)}</span>`",
+    "      + '<span class=\"workspace-problem\"></span>'"],
+  [VIEW_WORKSPACE, 'the list header is told which workspace it is showing',
+    '    workspace: routinesOpenWorkspace(),\n  });',
+    '  });'],
+  [VIEW_WORKSPACE, 'the header line naming this workspace reaches the page',
+    '    + (workspace ? `<div class="routines-workspace" data-routines-workspace>${esc(workspace)}</div>` : \'\')',
+    "    + ''"],
 ];
 
 // The reporter is named explicitly rather than left to the default, which
@@ -998,7 +1047,8 @@ function run() {
     SKILLS_VIEW_RAIL, PANEL, SCOPE_MODEL, INDEX_PANEL, APP_PANEL, STYLES_PANEL, VIEW_SCOPE,
     PANEL_PRESS, APP_DISPATCH, VIEW_CONFIRM, APP_WORKSPACE, EDITOR_NAV,
     TEAM_PANEL, INDEX_SWEEP, PROFILE_BOXES, PROFILE_ROUTE,
-    GUIDE_COPY_MOD, TEAM_COPY, PROFILE_COPY, TEAM_DOOR, SIDEBAR_CSS];
+    GUIDE_COPY_MOD, TEAM_COPY, PROFILE_COPY, TEAM_DOOR, SIDEBAR_CSS,
+    MODEL_WORKSPACE, VIEW_WORKSPACE, DISCOVERY_WORKSPACE];
   const originals = new Map();
   for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));
   const results = [];

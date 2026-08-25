@@ -346,6 +346,17 @@ const MUTATIONS = [
   [ROUTINES_TZ, 'the migration does not invent a timezone for a routine that never recorded one',
     "const MIGRATED_KEYS = ['runOn', 'enabled', 'paused', 'planHash'];",
     "const MIGRATED_KEYS = ['runOn', 'enabled', 'paused', 'planHash', 'timezone'];"],
+  // WHICH WORKSPACE RUNS THE ROUTINE BEING MADE, said on the step every route
+  // into this editor passes through. A requirement that a sentence APPEARS on
+  // a surface is only proved by taking it away and watching something go red;
+  // the constant on its own can be rendered on a help page and nowhere else
+  // with the model's tests all green.
+  [VIEW, 'the schedule step says which workspace this routine will run in',
+    '    h += `<p class="re-caveat" data-routine-editor="workspace-caveat">${escText(m.WORKSPACE_CAVEAT)}</p>`;\n',
+    ''],
+  [MODEL, 'the caveat names the rule rather than only the consequence',
+    "  const WORKSPACE_CAVEAT = 'Rundock runs the routines of the workspace that is open. '",
+    "  const WORKSPACE_CAVEAT = 'Routines run on a schedule. '"],
 ];
 
 // The reporter is named explicitly rather than left to the default, which
