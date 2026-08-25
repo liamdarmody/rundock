@@ -19,14 +19,21 @@
 // whose check came back inconclusive and retried therefore added a whole suite
 // to the machine each time.
 //
-// THE SECOND EDGE, which is why the last test here is not optional. The obvious
+// THE SECOND EDGE, which is why the AC-8 test here is not optional. The obvious
 // remedy for a leak like this is a pattern kill across the machine, and that
-// reaches processes this tool never started. `a suite this tool did not start
-// is left alone, and is still working afterwards` fails if the cleanup ever
-// widens that far, and it is paired with an assertion that the tool's OWN
-// leftovers really did go, so that doing nothing at all cannot pass it either.
-// It asks whether the foreign suite is still WORKING rather than whether its
-// pid can still be signalled, for a reason its own comment gives at length.
+// reaches processes this tool never started. It asks whether the foreign suite
+// is still WORKING rather than whether its pid can still be signalled, for a
+// reason its own comment gives at length.
+//
+// EXISTING IS NOT RUNNING, AND IT IS THE SAME MISTAKE TWICE. A pid that answers
+// `kill(pid, 0)` may be a process that has already exited and is only waiting
+// to be collected. This file made that mistake once, in the AC-8 check, where a
+// pattern kill passed because the corpse still answered; the tool made it too,
+// in its own liveness probe, where a corpse kept a group looking alive for the
+// whole grace on Linux. So `running()` below asks the process table for a state
+// and treats an exited entry as gone, which is what lets every assertion here
+// be made IMMEDIATELY after the tool exits rather than after a settling window
+// that would also forgive a tool that signalled and walked away.
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
@@ -35,7 +42,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawn, spawnSync } = require('node:child_process');
 
-const { redFirst, runRecordPath } = require('../../scripts/red-first.js');
+const { redFirst, runRecordPath, groupRunning } = require('../../scripts/red-first.js');
 
 const SCRIPT = path.join(__dirname, '..', '..', 'scripts', 'red-first.js');
 
@@ -44,6 +51,17 @@ const SCRIPT = path.join(__dirname, '..', '..', 'scripts', 'red-first.js');
 // means matching these processes on their command line, and a round duration
 // would match a stranger's sleep on a shared machine as well as this file's.
 const LONG = 600000 + (process.pid % 997);
+
+// The tool's own alarm for a group it could not end. Asserted against on every
+// path that ends a live suite, because a warning nobody looks at is how a false
+// alarm on every interrupt goes unnoticed, and a real one goes unnoticed with
+// it.
+const SURVIVOR_WARNING = /survived being ended/;
+
+function noWarning(stderr, where) {
+  assert.doesNotMatch(String(stderr), SURVIVOR_WARNING,
+    `${where}: the tool reported a survivor when everything it started was ended\n${stderr}`);
+}
 
 // A throwaway repository whose branch ADDS a source file and a test that needs
 // it, so the reverted run genuinely fails and the tool takes its ordinary path
@@ -72,10 +90,10 @@ function repo() {
   return dir;
 }
 
-// Where a run leaves the pids it started, OUTSIDE the repository, because
-// anything written inside it dirties the tree the tool is about to check.
-function pidFile(name) {
-  return path.join(os.tmpdir(), `red-first-orphans-${name}-${process.pid}-${Date.now()}.pids`);
+// Scratch paths OUTSIDE the repository, because anything written inside it
+// dirties the tree the tool is about to check.
+function scratch(name) {
+  return path.join(os.tmpdir(), `red-first-orphans-${name}-${process.pid}-${Date.now()}`);
 }
 
 function pidsIn(file) {
@@ -83,11 +101,31 @@ function pidsIn(file) {
   return fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(Number);
 }
 
-const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return false; } };
+/**
+ * Is this pid a process that is still RUNNING, rather than one that has exited
+ * and not yet been collected?
+ *
+ * `kill(pid, 0)` alone cannot tell the two apart, and the difference is the
+ * whole point here: the tool ends its own direct child while its event loop is
+ * blocked, so on Linux that child is briefly an entry in the table with nothing
+ * behind it. Counting that as a survivor would fail every assertion below for a
+ * process that is already dead.
+ *
+ * Where the process table cannot be read at all, the strict answer is given, so
+ * this never quietly forgives a genuine leak.
+ */
+function running(pid) {
+  try { process.kill(pid, 0); } catch (e) { if (e.code !== 'EPERM') return false; }
+  const out = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' });
+  if (out.error) return true;
+  const state = String(out.stdout || '').trim().split('\n')[0].trim();
+  if (!state) return false;
+  return !state.startsWith('Z');
+}
 
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-async function until(predicate, ms = 5000) {
+async function until(predicate, ms = 15000) {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
     if (predicate()) return true;
@@ -96,34 +134,57 @@ async function until(predicate, ms = 5000) {
   return predicate();
 }
 
-// The process table for a set of pids, when this machine will give one. Under a
-// command sandbox that blocks spawning, `ps` is unavailable and the liveness
-// answer below is the whole record. Liveness is what every assertion here uses;
-// the table is printed alongside it so a reader of a run has the same view the
-// measurements were taken from.
+/**
+ * The process table for a set of pids.
+ *
+ * `ps -p` exits non-zero when none of the listed pids exist, which is a
+ * successful lookup that found nothing, not a failure to run ps. Reporting the
+ * second when it was the first put a false statement about the environment into
+ * the committed evidence: it said the table could not be captured in a run
+ * where ps was producing tables seconds later.
+ */
 function table(pids) {
-  const live = pids.map(p => `${p}=${alive(p) ? 'alive' : 'gone'}`).join(' ');
   if (!pids.length) return '(no pids recorded)';
-  try {
-    const out = execFileSync('ps', ['-o', 'pid,ppid,pgid,command', '-p', pids.join(',')],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    return `${live}\n${out}`;
-  } catch (e) {
-    return `${live} (no process table: ps is unavailable here)`;
+  const live = pids.map(p => `${p}=${running(p) ? 'running' : 'gone'}`).join(' ');
+  const out = spawnSync('ps', ['-o', 'pid,ppid,pgid,stat,command', '-p', pids.join(',')],
+    { encoding: 'utf8' });
+  if (out.error) {
+    return `${live}\n(no process table: ps could not be run here: ${out.error.code})`;
   }
+  const text = String(out.stdout || '').trim();
+  const rows = text.split('\n').filter(Boolean);
+  // One line is the column header on its own, which is what ps prints when
+  // nothing matches.
+  if (rows.length <= 1) return `${live}\n(process table empty: none of these pids exist)`;
+  return `${live}\n${text}`;
 }
 
-// A test command shaped like a package runner: it starts a child of its own,
-// detaches that child's stdio so the runner is not held open by it, and then
-// finishes. The child stays in the runner's process group, which is what makes
-// this the case AC-4 names: ending the direct child alone leaves the child of
-// the child running.
-//
-// `$!` is the background child, `$$` the shell itself. Both are recorded so a
-// failure can say which of the two survived.
-function packageRunnerLeaving(file, tail = 'exit 0') {
-  return `sleep ${LONG} >/dev/null 2>&1 & echo $! >> ${JSON.stringify(file)}; `
-    + `echo $$ >> ${JSON.stringify(file)}; ${tail}`;
+/**
+ * A test command shaped like a package runner: it starts a child of its own,
+ * detaches that child's stdio so the runner is not held open by it, and then
+ * finishes. The child stays in the runner's process group, which is what makes
+ * this the case AC-4 names: ending the direct child alone leaves the child of
+ * the child running.
+ *
+ * `$!` is the background child, `$$` the shell itself. Both are recorded so a
+ * failure can say which of the two survived.
+ *
+ * `before` makes the runner write its own process table while both are still
+ * alive, which is the only moment a before-table can be taken when the tool is
+ * driven synchronously.
+ *
+ * `ignoreTerm` sets TERM to ignored in the shell before the child is started.
+ * An ignored disposition survives fork and exec, so the child ignores SIGTERM
+ * too, and only the escalation to SIGKILL can end it.
+ */
+function packageRunnerLeaving(file, opts = {}) {
+  const { tail = 'exit 0', ignoreTerm = false, before = null } = opts;
+  const trap = ignoreTerm ? "trap '' TERM; " : '';
+  const snap = before
+    ? `ps -o pid,ppid,pgid,stat,command -p "$!,$$" >> ${JSON.stringify(before)} 2>&1; `
+    : '';
+  return `${trap}sleep ${LONG} >/dev/null 2>&1 & echo $! >> ${JSON.stringify(file)}; `
+    + `echo $$ >> ${JSON.stringify(file)}; ${snap}${tail}`;
 }
 
 // Nothing here may end a process it did not start, including in its own
@@ -140,12 +201,17 @@ function cli(dir, tests) {
     [SCRIPT, '--repo', dir, '--base', 'main', '--tests', tests], { encoding: 'utf8' });
 }
 
+function readBefore(file) {
+  try { return fs.readFileSync(file, 'utf8').trim(); } catch (e) { return '(not written)'; }
+}
+
 describe('no suite outlives the tool', () => {
   test('AC-1, AC-4, AC-7: a normal exit leaves no suite running, including the runner\'s own child', async (t) => {
     const dir = repo();
-    const file = pidFile('normal');
+    const file = scratch('normal');
+    const before = scratch('normal-before');
     try {
-      const r = cli(dir, packageRunnerLeaving(file));
+      const r = cli(dir, packageRunnerLeaving(file, { before }));
       // The run really did complete rather than dying early, or the absence of
       // survivors would prove nothing about a normal exit.
       assert.match(r.stdout, /\[red-first\] (PROVEN|NOT-DISCRIMINATING|INCONCLUSIVE)/,
@@ -154,13 +220,17 @@ describe('no suite outlives the tool', () => {
       const pids = pidsIn(file);
       // Two runs, each leaving a background child and a shell.
       assert.ok(pids.length >= 2, `the runner must have started something to leave behind: ${pids}`);
-      t.diagnostic(`immediately after the tool exited:\n${table(pids)}`);
+      t.diagnostic(`with the suite live, written by the runner itself:\n${readBefore(before)}`);
+      t.diagnostic(`once the tool had exited:\n${table(pids)}`);
 
-      await until(() => pids.every(p => !alive(p)));
-      const survivors = pids.filter(alive);
-      t.diagnostic(`after settling:\n${table(pids)}`);
+      // Asserted with no settling window. Anything still running at the moment
+      // the tool is gone is a survivor; a tool that signalled its group and
+      // walked away without waiting would fail here, which a window would have
+      // forgiven.
+      const survivors = pids.filter(running);
       assert.deepStrictEqual(survivors, [],
         `a normal exit left ${survivors.length} process(es) running: ${survivors.join(', ')}`);
+      noWarning(r.stderr, 'normal exit');
 
       // The record of a run that has finished must go with it. Left behind, it
       // names a pid that is gone, and the refusal at the top of the tool would
@@ -172,37 +242,132 @@ describe('no suite outlives the tool', () => {
     } finally {
       reap(pidsIn(file));
       fs.rmSync(file, { force: true });
+      fs.rmSync(before, { force: true });
       fs.rmSync(runRecordPath(dir), { force: true });
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test('AC-2: an error exit leaves no suite running', async (t) => {
+  test('AC-1: a suite that ignores SIGTERM is ended anyway, which is what the escalation is for', async (t) => {
+    // The only case where the escalation from SIGTERM to SIGKILL is what keeps
+    // a suite from outliving the tool. Every other stand-in in this file dies
+    // on the first signal, so without this one the escalation could be deleted
+    // and nothing here would notice, while the criterion it answers to is
+    // unconditional.
+    //
+    // The shell sets TERM to ignored before starting its background child, and
+    // an ignored disposition survives exec, so the `sleep` ignores SIGTERM as
+    // well. It is the shape a test runner takes when it traps the signal to
+    // flush its reporters and then does not finish.
     const dir = repo();
-    const file = pidFile('error');
+    const file = scratch('stubborn');
+    const before = scratch('stubborn-before');
     try {
-      // The runner destroys the repository's git directory once it has started
-      // its background child, so the restore that follows throws and the tool
-      // leaves by its error path rather than by returning an outcome. This is
-      // the exit nobody thinks to check, which is why it is driven here rather
-      // than reasoned about.
-      const r = cli(dir, packageRunnerLeaving(file, 'rm -rf .git; exit 0'));
+      const r = cli(dir, packageRunnerLeaving(file, { ignoreTerm: true, before }));
+      assert.match(r.stdout, /\[red-first\] (PROVEN|NOT-DISCRIMINATING|INCONCLUSIVE)/,
+        `the tool must have reached a conclusion\n${r.stdout}\n${r.stderr}`);
+
+      const pids = pidsIn(file);
+      assert.ok(pids.length >= 2, `the runner must have started something to leave behind: ${pids}`);
+      t.diagnostic(`with the stubborn suite live:\n${readBefore(before)}`);
+      t.diagnostic(`once the tool had exited:\n${table(pids)}`);
+
+      const survivors = pids.filter(running);
+      assert.deepStrictEqual(survivors, [],
+        `a suite that ignores SIGTERM outlived the tool: ${survivors.join(', ')}`);
+      noWarning(r.stderr, 'stubborn suite');
+    } finally {
+      reap(pidsIn(file));
+      fs.rmSync(file, { force: true });
+      fs.rmSync(before, { force: true });
+      fs.rmSync(runRecordPath(dir), { force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('AC-2: an error raised while a suite is in flight leaves no suite running', async (t) => {
+    // The error exit that matters, and the one the first version of this test
+    // missed. Destroying the repository after the run had closed produced an
+    // error, but by then the ending after the run had already cleared the
+    // group, so the test could not tell "the error path cleans up" from "every
+    // run end cleans up". Here the exception is raised while the first suite is
+    // still running, so the only thing that can end the group is the path an
+    // error takes out of the process.
+    const dir = repo();
+    const file = scratch('inflight-error');
+    let pids = [];
+    try {
+      const driver = `
+        const { redFirst } = require(${JSON.stringify(SCRIPT)});
+        redFirst({ repo: ${JSON.stringify(dir)}, base: 'main',
+                   tests: ${JSON.stringify(packageRunnerLeaving(file, { tail: `sleep 30` }))} })
+          .catch(() => {});
+        const fs = require('node:fs');
+        const t = setInterval(() => {
+          const started = fs.existsSync(${JSON.stringify(file)})
+            && fs.readFileSync(${JSON.stringify(file)}, 'utf8').trim().split('\\n').length >= 2;
+          if (!started) return;
+          clearInterval(t);
+          throw new Error('raised while a suite was in flight');
+        }, 50);
+      `;
+      const r = spawnSync(process.execPath, ['-e', driver], { encoding: 'utf8', timeout: 60000 });
+      assert.notStrictEqual(r.status, 0, `the driver must have failed\n${r.stdout}\n${r.stderr}`);
+      assert.match(r.stderr, /raised while a suite was in flight/,
+        `the tool must have left by the error, not by returning\n${r.stderr}`);
+
+      pids = pidsIn(file);
+      assert.ok(pids.length >= 2, `a suite must have been in flight: ${pids}`);
+      t.diagnostic(`once the error had taken the process down:\n${table(pids)}`);
+
+      const survivors = pids.filter(running);
+      assert.deepStrictEqual(survivors, [],
+        `an error exit left ${survivors.length} process(es) running: ${survivors.join(', ')}`);
+      noWarning(r.stderr, 'error exit in flight');
+      assert.strictEqual(fs.existsSync(runRecordPath(dir)), false,
+        'an error exit must still give the claim back');
+    } finally {
+      reap(pids.concat(pidsIn(file)));
+      fs.rmSync(file, { force: true });
+      fs.rmSync(runRecordPath(dir), { force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('AC-2: an error out of the run itself also leaves no suite running', async (t) => {
+    // The other shape of error exit, kept because it reaches the outer
+    // `finally` rather than the exit listener: the runner destroys the
+    // repository's git directory once it has started its background child, so
+    // the restore that follows throws.
+    const dir = repo();
+    const file = scratch('error');
+    const before = scratch('error-before');
+    try {
+      const r = cli(dir, packageRunnerLeaving(file, { tail: 'rm -rf .git; exit 0', before }));
       assert.notStrictEqual(r.status, 0, 'the tool must have failed');
-      assert.doesNotMatch(r.stdout, /\[red-first\] (PROVEN|NOT-DISCRIMINATING|REFUSED)/,
+      // Pinned to the exception, not merely to a non-zero status: an
+      // inconclusive result is also non-zero and is an ordinary return.
+      assert.match(r.stderr, /\[red-first\][\s\S]*Error/,
+        `the tool must have printed the thrown error\n${r.stderr}`);
+      assert.doesNotMatch(r.stdout, /\[red-first\] (PROVEN|NOT-DISCRIMINATING|REFUSED|INCONCLUSIVE)/,
         `the tool must have crashed rather than concluded\n${r.stdout}`);
 
       const pids = pidsIn(file);
       assert.ok(pids.length >= 1, `the runner must have started something to leave behind: ${pids}`);
-      t.diagnostic(`immediately after the tool exited:\n${table(pids)}`);
+      t.diagnostic(`with the suite live, written by the runner itself:\n${readBefore(before)}`);
+      t.diagnostic(`once the tool had exited:\n${table(pids)}`);
 
-      await until(() => pids.every(p => !alive(p)));
-      const survivors = pids.filter(alive);
-      t.diagnostic(`after settling:\n${table(pids)}`);
+      const survivors = pids.filter(running);
       assert.deepStrictEqual(survivors, [],
         `an error exit left ${survivors.length} process(es) running: ${survivors.join(', ')}`);
+      noWarning(r.stderr, 'error exit');
+      assert.strictEqual(fs.existsSync(runRecordPath(dir)), false,
+        'an error exit must still give the claim back');
     } finally {
       reap(pidsIn(file));
       fs.rmSync(file, { force: true });
+      fs.rmSync(before, { force: true });
+      fs.rmSync(runRecordPath(dir), { force: true });
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -213,34 +378,45 @@ describe('no suite outlives the tool', () => {
     // while the first suite ran took Node's default handling, which terminates
     // without unwinding and abandons a detached process group.
     const dir = repo();
-    const file = pidFile('signal');
+    const file = scratch('signal');
     let pids = [];
     try {
       const kid = spawn(process.execPath,
-        [SCRIPT, '--repo', dir, '--base', 'main', '--tests', packageRunnerLeaving(file, 'sleep 30')],
+        [SCRIPT, '--repo', dir, '--base', 'main',
+          '--tests', packageRunnerLeaving(file, { tail: 'sleep 30' })],
         { stdio: ['ignore', 'pipe', 'pipe'] });
+      let stderr = '';
+      kid.stderr.on('data', (b) => { stderr += b.toString(); });
       const exited = new Promise(resolve => kid.on('exit', (code, signal) => resolve({ code, signal })));
 
-      const started = await until(() => pidsIn(file).length >= 2, 15000);
+      const started = await until(() => pidsIn(file).length >= 2);
       assert.strictEqual(started, true, 'the first run must be in flight before it is signalled');
       pids = pidsIn(file);
       t.diagnostic(`with the first run in flight:\n${table(pids)}`);
 
+      const sentAt = Date.now();
       kid.kill('SIGTERM');
       const how = await exited;
-      t.diagnostic(`the tool exited with code ${how.code} signal ${how.signal}`);
+      const took = Date.now() - sentAt;
+      t.diagnostic(`the tool exited with code ${how.code} signal ${how.signal} after ${took}ms`);
+      t.diagnostic(`its stderr was: ${stderr.trim() || '(empty)'}`);
+      t.diagnostic(`once the tool had exited:\n${table(pids)}`);
 
-      await until(() => pids.every(p => !alive(p)));
-      const survivors = pids.filter(alive);
-      t.diagnostic(`after the tool exited:\n${table(pids)}`);
+      const survivors = pids.filter(running);
       assert.deepStrictEqual(survivors, [],
         `a signal during the first run left ${survivors.length} process(es) running: ${survivors.join(', ')}`);
+      // The alarm must stay quiet here. It did not on Linux before the ending
+      // learned to tell an exited entry from a running one, and an interrupt is
+      // the most common way this tool is stopped.
+      noWarning(stderr, 'signal during the first run');
     } finally {
       reap(pids.concat(pidsIn(file)));
       fs.rmSync(file, { force: true });
+      fs.rmSync(runRecordPath(dir), { force: true });
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
   test('AC-1: an exit taken while a suite is running leaves nothing behind either', async (t) => {
     // The exit that does not unwind.
     //
@@ -252,13 +428,13 @@ describe('no suite outlives the tool', () => {
     // tool's ever runs. Driven rather than argued, because a backstop nothing
     // reaches is not a backstop, it is a comment.
     const dir = repo();
-    const file = pidFile('inflight');
+    const file = scratch('inflight');
     let pids = [];
     try {
       const driver = `
         const { redFirst } = require(${JSON.stringify(SCRIPT)});
         redFirst({ repo: ${JSON.stringify(dir)}, base: 'main',
-                   tests: ${JSON.stringify(packageRunnerLeaving(file, 'sleep 30'))} })
+                   tests: ${JSON.stringify(packageRunnerLeaving(file, { tail: 'sleep 30' }))} })
           .catch(() => {});
         const fs = require('node:fs');
         setInterval(() => {
@@ -272,13 +448,12 @@ describe('no suite outlives the tool', () => {
 
       pids = pidsIn(file);
       assert.ok(pids.length >= 2, `a suite must have been in flight when it exited: ${pids}`);
-      t.diagnostic(`immediately after the exit:\n${table(pids)}`);
+      t.diagnostic(`once the exit had been taken:\n${table(pids)}`);
 
-      await until(() => pids.every(p => !alive(p)));
-      const survivors = pids.filter(alive);
-      t.diagnostic(`after settling:\n${table(pids)}`);
+      const survivors = pids.filter(running);
       assert.deepStrictEqual(survivors, [],
         `an exit taken mid-run left ${survivors.length} process(es) running: ${survivors.join(', ')}`);
+      noWarning(r.stderr, 'exit taken mid-run');
     } finally {
       reap(pids.concat(pidsIn(file)));
       fs.rmSync(file, { force: true });
@@ -288,22 +463,70 @@ describe('no suite outlives the tool', () => {
   });
 });
 
+describe('telling a process that has exited from one that is still running', () => {
+  test('a group whose remaining members have all exited is judged gone', () => {
+    // The decision on its own, driven on any machine rather than only on the
+    // platform that produces the corpses. On Linux a process this tool has just
+    // killed stays listed as a member of its group until its parent collects
+    // it, which the tool cannot do while it is blocked in a signal listener; a
+    // probe that asks only whether the group id answers therefore keeps saying
+    // "alive" for the whole grace and then reports a survivor that is a corpse.
+    const holder = spawn('sh', ['-c', `sleep ${LONG}`], { detached: true, stdio: 'ignore' });
+    holder.unref();
+    try {
+      const pgid = holder.pid;
+      assert.strictEqual(groupRunning(pgid, () => [{ pid: pgid, state: 'S' }]), true,
+        'a member in any state but exited is a running group');
+      assert.strictEqual(groupRunning(pgid, () => [{ pid: pgid, state: 'Z+' }]), false,
+        'a group whose only member has exited is gone');
+      assert.strictEqual(groupRunning(pgid, () => [{ pid: pgid, state: 'Z' }, { pid: pgid + 1, state: 'S' }]), true,
+        'one running member among the corpses keeps the group alive');
+      assert.strictEqual(groupRunning(pgid, () => []), false,
+        'a group the table does not list at all is gone');
+      assert.strictEqual(groupRunning(pgid, () => null), null,
+        'a machine that will not say gives neither answer');
+    } finally {
+      reap([holder.pid]);
+    }
+  });
+
+  test('a group that no longer exists is gone without consulting the process table', async () => {
+    // The cheap question is asked first, which cannot be seen in the answer:
+    // where both agree they agree. What separates them is the spawn, so that is
+    // what is observed.
+    const gone = spawn('sh', ['-c', 'exit 0'], { detached: true, stdio: 'ignore' });
+    await new Promise(resolve => gone.on('exit', resolve));
+    const cleared = await until(() => {
+      try { process.kill(-gone.pid, 0); return false; } catch (e) { return true; }
+    }, 5000);
+    assert.strictEqual(cleared, true, 'the fixture group must be gone before this is asked');
+
+    let asked = 0;
+    const answer = groupRunning(gone.pid, () => { asked += 1; return null; });
+    assert.strictEqual(answer, false);
+    assert.strictEqual(asked, 0, 'the process table must not be read when the group has gone');
+  });
+});
+
 describe('starting on top of a run that is still going', () => {
   test('AC-5, AC-6: a second start is refused, and the refusal names the run it found', async (t) => {
     // Driven end to end against a real first run rather than a hand-written
     // record, because a hand-written one only proves the reader can read the
     // test's idea of a record.
     const dir = repo();
-    const file = pidFile('refuse');
+    const file = scratch('refuse');
     let first = null;
     let pids = [];
     try {
       first = spawn(process.execPath,
-        [SCRIPT, '--repo', dir, '--base', 'main', '--tests', packageRunnerLeaving(file, 'sleep 25')],
+        [SCRIPT, '--repo', dir, '--base', 'main',
+          '--tests', packageRunnerLeaving(file, { tail: 'sleep 25' })],
         { stdio: ['ignore', 'pipe', 'pipe'] });
+      let firstStderr = '';
+      first.stderr.on('data', (b) => { firstStderr += b.toString(); });
       const firstExited = new Promise(resolve => first.on('exit', resolve));
 
-      const started = await until(() => pidsIn(file).length >= 2, 15000);
+      const started = await until(() => pidsIn(file).length >= 2);
       assert.strictEqual(started, true, 'the first run must have a live suite before the second starts');
       pids = pidsIn(file);
 
@@ -330,13 +553,18 @@ describe('starting on top of a run that is still going', () => {
 
       // And the first run is left alone by the refusal: refusing must not be a
       // disguised way of clearing somebody else's work.
-      assert.strictEqual(alive(written.group), true,
+      assert.strictEqual(running(written.group), true,
         'the refusal must not end the run it found');
 
       first.kill('SIGTERM');
       await firstExited;
       first = null;
-      await until(() => pids.every(p => !alive(p)));
+      t.diagnostic(`the first run's stderr was: ${firstStderr.trim() || '(empty)'}`);
+      noWarning(firstStderr, 'first run torn down with SIGTERM');
+
+      const survivors = pids.filter(running);
+      assert.deepStrictEqual(survivors, [],
+        `tearing the first run down left ${survivors.join(', ')} running`);
       assert.strictEqual(fs.existsSync(record), false,
         'the record must not outlive the run it describes, or every later start is refused');
     } finally {
@@ -347,35 +575,155 @@ describe('starting on top of a run that is still going', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
   test('AC-5: a run that has not spawned its suite yet is live too', async (t) => {
     // The gap between a run starting and its first suite existing. A start made
     // in that gap has no group to find, and letting it through would put two
     // reverters on one working tree, each checking files out from under the
-    // other. Covered here rather than by racing two real runs, because the gap
-    // is a few milliseconds wide and a test that has to hit it would be a flake
-    // rather than a check.
+    // other.
     //
-    // The record is written by hand, and the thing under test is the reader of
-    // it. The process it names is a real live one, so the liveness answer is
-    // measured rather than stubbed.
+    // Driven against the record the tool itself writes, held open with the
+    // injectable runner, rather than against a record this test composed: a
+    // fixture built to agree with the test would stay green while the real
+    // write drifted away from it.
     const dir = repo();
-    const holder = spawn('sh', ['-c', `sleep ${LONG}`], { detached: true, stdio: 'ignore' });
-    holder.unref();
+    let release = null;
+    const gate = new Promise(resolve => { release = resolve; });
     try {
-      await until(() => alive(holder.pid));
-      fs.writeFileSync(runRecordPath(dir), JSON.stringify({
-        pid: holder.pid, group: null, tests: 'npm test',
-        repo: dir, startedAt: new Date().toISOString(),
-      }));
+      const firstRun = redFirst({
+        repo: dir, base: 'main', tests: 'this command is never spawned',
+        runner: () => gate.then(() => true),
+      });
 
-      const r = await redFirst({ repo: dir, base: 'main', tests: 'true' });
-      t.diagnostic(`outcome: ${r.outcome}: ${r.reason}`);
-      assert.strictEqual(r.outcome, 'refused', r.reason);
-      assert.match(r.reason, new RegExp(`\\b${holder.pid}\\b`),
-        'the refusal must name the run it found even with no suite under it');
-      assert.match(r.reason, /no suite under it yet/, r.reason);
+      const record = runRecordPath(dir);
+      const appeared = await until(() => fs.existsSync(record));
+      assert.strictEqual(appeared, true, `the run must record itself before it spawns: ${record}`);
+      const written = JSON.parse(fs.readFileSync(record, 'utf8'));
+      t.diagnostic(`the record the tool wrote: ${JSON.stringify(written)}`);
+      assert.strictEqual(written.group, null, 'no suite has been started yet');
+      assert.strictEqual(written.pid, process.pid, 'the record names the running tool');
+
+      const second = cli(dir, 'echo this must never run');
+      t.diagnostic(`second start said: ${second.stdout.trim()}`);
+      assert.notStrictEqual(second.status, 0, 'a second start must not exit 0');
+      assert.match(second.stdout, /REFUSED/, second.stdout);
+      assert.match(second.stdout, /no suite under it yet/, second.stdout);
+      assert.match(second.stdout, new RegExp(`\\b${process.pid}\\b`),
+        `the refusal must name the run it found\n${second.stdout}`);
+
+      release();
+      await firstRun;
+      assert.strictEqual(fs.existsSync(record), false,
+        'the claim must be given back when the run ends');
     } finally {
-      reap([holder.pid]);
+      if (release) release();
+      fs.rmSync(runRecordPath(dir), { force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('a suite the tool could not end', () => {
+  test('AC-5: the run record is kept naming it, so the next start has something to refuse on', async (t) => {
+    // The one exit where the tool KNOWS it left a suite behind was also the one
+    // that erased the record the next start would need in order to refuse. That
+    // is the AC-5 scenario arriving by the only route the tool can see coming,
+    // and giving the claim back there would let the next run add a second suite
+    // on top of the one this run just failed to end.
+    //
+    // SIGKILL cannot be survived on demand, so the ending is injected: one that
+    // reports the group still running and leaves it alone. Nothing here is
+    // pretended, then. The suite really does outlive the run, which is the
+    // situation, and what is under test is everything the run does about it.
+    // The ending that would normally have dealt with it is covered by the
+    // stubborn-suite test above.
+    const dir = repo();
+    const file = scratch('survivor');
+    let pids = [];
+    try {
+      const driver = `
+        const { redFirst } = require(${JSON.stringify(SCRIPT)});
+        redFirst({ repo: ${JSON.stringify(dir)}, base: 'main',
+                   tests: ${JSON.stringify(packageRunnerLeaving(file))},
+                   groupEnder: () => 'running' })
+          .then((r) => { console.log('OUTCOME ' + r.outcome); process.exit(0); })
+          .catch((e) => { console.error(e); process.exit(1); });
+      `;
+      const r = spawnSync(process.execPath, ['-e', driver], { encoding: 'utf8', timeout: 60000 });
+      assert.strictEqual(r.status, 0, `${r.stdout}\n${r.stderr}`);
+      t.diagnostic(`stderr: ${r.stderr.trim()}`);
+
+      pids = pidsIn(file);
+      assert.ok(pids.length >= 1, `the runner must have started something: ${pids}`);
+
+      // The alarm fires, and names the group, because here the tool genuinely
+      // cannot tell that it ended it.
+      assert.match(r.stderr, SURVIVOR_WARNING,
+        `a group the tool could not confirm gone must be announced\n${r.stderr}`);
+
+      const record = runRecordPath(dir);
+      assert.strictEqual(fs.existsSync(record), true,
+        'the record must be kept when the tool knows it may have left a suite behind');
+      const held = JSON.parse(fs.readFileSync(record, 'utf8'));
+      t.diagnostic(`record kept: ${JSON.stringify(held)}`);
+      assert.strictEqual(held.survivedEnding, true, 'the record says why it was kept');
+      assert.ok(pids.includes(held.group),
+        `the kept record must name a group this run started, got ${held.group} of ${pids}`);
+      assert.match(r.stderr, new RegExp(`\\b${held.group}\\b`),
+        'the warning names the same group the record does');
+    } finally {
+      reap(pidsIn(file));
+      fs.rmSync(file, { force: true });
+      fs.rmSync(runRecordPath(dir), { force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('two starts at once against one repository', () => {
+  test('AC-5: exactly one runs and the other is refused, however close together they are', async (t) => {
+    // The window the first version of the refusal left open. It read the record
+    // at the top of the run and did not write one until three git commands
+    // later, so two starts a few milliseconds apart both saw an empty machine
+    // and both went on to revert the SAME working tree, checking files out from
+    // under each other. Nothing about the tree can be put right afterwards by a
+    // tool that does not know the other one is there.
+    const dir = repo();
+    const fileA = scratch('raceA');
+    const fileB = scratch('raceB');
+    try {
+      const start = (file) => new Promise((resolve) => {
+        const kid = spawn(process.execPath,
+          [SCRIPT, '--repo', dir, '--base', 'main',
+            '--tests', packageRunnerLeaving(file, { tail: 'sleep 3' })],
+          { stdio: ['ignore', 'pipe', 'pipe'] });
+        let out = '';
+        let err = '';
+        kid.stdout.on('data', (b) => { out += b.toString(); });
+        kid.stderr.on('data', (b) => { err += b.toString(); });
+        kid.on('exit', (code) => resolve({ code, out, err }));
+      });
+
+      const [a, b] = await Promise.all([start(fileA), start(fileB)]);
+      t.diagnostic(`first said:  ${a.out.trim().split('\n').pop()}`);
+      t.diagnostic(`second said: ${b.out.trim().split('\n').pop()}`);
+
+      const refused = [a, b].filter(x => /REFUSED: a run of this tool is still live/.test(x.out));
+      const concluded = [a, b].filter(x => /\[red-first\] (PROVEN|NOT-DISCRIMINATING|INCONCLUSIVE)/.test(x.out));
+      assert.strictEqual(refused.length, 1,
+        `exactly one start must be refused\n${a.out}\n---\n${b.out}`);
+      assert.strictEqual(concluded.length, 1,
+        `exactly one start must reach a conclusion\n${a.out}\n---\n${b.out}`);
+
+      const pids = pidsIn(fileA).concat(pidsIn(fileB));
+      assert.deepStrictEqual(pids.filter(running), [],
+        `neither start may leave a suite behind: ${pids.filter(running).join(', ')}`);
+      assert.strictEqual(fs.existsSync(runRecordPath(dir)), false,
+        'the claim must be given back once both have finished');
+    } finally {
+      reap(pidsIn(fileA).concat(pidsIn(fileB)));
+      fs.rmSync(fileA, { force: true });
+      fs.rmSync(fileB, { force: true });
       fs.rmSync(runRecordPath(dir), { force: true });
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -406,8 +754,8 @@ describe('cleanup reaches what this tool started, and stops there', () => {
     // so nothing can pass this by matching on a command line and calling the
     // match narrow.
     const dir = repo();
-    const file = pidFile('foreign');
-    const beat = path.join(os.tmpdir(), `red-first-orphans-beat-${process.pid}-${Date.now()}`);
+    const file = scratch('foreign');
+    const beat = scratch('beat');
     const foreign = spawn('sh',
       ['-c', `n=0; while :; do n=$((n+1)); echo $n > ${beat}; sleep 0.2; done # sleep ${LONG}`],
       { detached: true, stdio: 'ignore' });
@@ -430,9 +778,9 @@ describe('cleanup reaches what this tool started, and stops there', () => {
       // Paired on purpose. Without the first assertion, cleanup that does
       // nothing at all passes this test; without the second, a pattern kill
       // passes it. Only cleanup scoped to what this tool started passes both.
-      await until(() => pids.every(p => !alive(p)));
-      assert.deepStrictEqual(pids.filter(alive), [],
+      assert.deepStrictEqual(pids.filter(running), [],
         'the tool must really have cleaned up its own, or this proves nothing');
+      noWarning(r.stderr, 'run beside a foreign suite');
 
       const before = beats();
       const advanced = await until(() => beats() > before, 10000);
@@ -445,6 +793,7 @@ describe('cleanup reaches what this tool started, and stops there', () => {
       reap([foreign.pid]);
       fs.rmSync(file, { force: true });
       fs.rmSync(beat, { force: true });
+      fs.rmSync(runRecordPath(dir), { force: true });
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
