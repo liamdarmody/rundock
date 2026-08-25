@@ -234,8 +234,12 @@ const MUTATIONS = [
   // A file this module cannot address returns unchanged content, exactly as a
   // no-op edit does. Reading that as success announces a routine stopped that
   // is still scheduled to run.
-  [HANDLER, 'a pause asks whether the write happened, not whether the bytes moved',
-    '  if (!written || written.paused !== paused) {',
+  // The read-back guard moved into the one setter both controls call, so this
+  // watches it there. It covers pausing and turning on at once, which is the
+  // point of sharing it: one guard, one mutation, and no second copy free to
+  // admit something the first refuses.
+  [HANDLER, 'a routine flag change asks whether the write happened, not whether the bytes moved',
+    '  if (!written || written[field] !== value) {',
     '  if (next === before && false) {'],
   [HANDLER, 'a delete counts the blocks rather than looking one up by index',
     '  if (readRoutineBlocks(next, found.name).length !== readRoutineBlocks(before, found.name).length - 1) {',
@@ -269,7 +273,10 @@ const MUTATIONS = [
   [VIEW_REPLY, 'a refusal with nothing in it still says something',
     '  pendingProblem = routinesModel().actionProblem(reply);',
     '  pendingProblem = reply && reply.message ? reply.message : null;'],
-  [VIEW_REPLY, 'the next action the reader takes clears the last refusal',
+  // ONE ROW, because the guard lives in one place: both controls delegate to
+  // one send path. A control added later that clears the refusal itself, rather
+  // than through that path, needs a row of its own.
+  [VIEW_REPLY, 'a control the reader presses clears the last refusal',
     '  const entry = allRoutines()[index];\n  pendingProblem = null;\n  if (!entry',
     '  const entry = allRoutines()[index];\n  if (!entry'],
   [MODEL, 'a refusal says nothing was changed',
@@ -418,18 +425,21 @@ const MUTATIONS = [
   [VIEW, 'a delete says which routine of its name it means',
     "      type: 'delete_routine', agentId: target.agentId, name: target.name, occurrence: target.occurrence,",
     "      type: 'delete_routine', agentId: target.agentId, name: target.name, occurrence: 0,"],
-  [VIEW, 'a pause says which routine of its name it means',
-    "    occurrence: entry.occurrence, paused,",
-    "    occurrence: 0, paused,"],
+  // One send path, so one mutation: dropping the occurrence makes EVERY
+  // control act on the first routine of its name, which both the pause and the
+  // turn-on namesake tests notice.
+  [VIEW, 'a routine flag change says which routine of its name it means',
+    "    occurrence: entry.occurrence, [field]: value,",
+    "    occurrence: 0, [field]: value,"],
   [HANDLER, 'which routine of a name is required rather than assumed to be the first',
     '  if (!Number.isInteger(occurrence) || occurrence < 0) {\n    fail(\'Which routine of that name is required.\');\n    return null;\n  }',
     '  if (false) { return null; }'],
   [HANDLER, 'the delete tells the writer which block',
     '  const next = removeRoutineBlock(before, found.name, found.occurrence);',
     '  const next = removeRoutineBlock(before, found.name);'],
-  [HANDLER, 'the pause tells the writer which block',
-    '  const next = updateRoutineBlock(before, found.name, { paused }, found.occurrence);',
-    '  const next = updateRoutineBlock(before, found.name, { paused });'],
+  [HANDLER, 'a routine flag change tells the writer which block',
+    '  const next = updateRoutineBlock(before, found.name, { [field]: value }, found.occurrence);',
+    '  const next = updateRoutineBlock(before, found.name, { [field]: value });'],
 
   // ===== THE THREE TONES, AS THE PAGE RESOLVES THEM =====
   [STYLES, 'a late run keeps the success colour, and no state is amber',
@@ -585,9 +595,35 @@ const MUTATIONS = [
   [MODEL, 'a run still going names no outcome',
     "    if (statusWord === 'running') return null;",
     ''],
+  // A routine that was never in service is owed no record of what it did not
+  // do, and the withholding has to survive the moment somebody turns it on.
+  [SCHEDULER, 'a routine nobody turned on accrues no missed slots',
+    '  if (!inService) {\n    entry.due = current.toISOString();\n    return;\n  }',
+    '  if (false) { return; }'],
+  // And the anchor still moves while it waits, or turning it on enumerates
+  // every slot since as a backlog of misses.
+  [SCHEDULER, 'the anchor moves even while nothing is being recorded',
+    '  if (!inService) {\n    entry.due = current.toISOString();\n    return;\n  }',
+    '  if (!inService) return;'],
+  // The offer says when the first run lands only where that is true: past
+  // means immediate, ahead means the day and time, none means say nothing.
+  [MODEL, 'the offer only claims an immediate first run when the time has gone',
+    '      timing = when <= now',
+    '      timing = true'],
   [MODEL, 'a miss later than the last run is what happened last',
-    '    if (missedSlot && (!started || missedSlot > started)) return \'missed\';',
-    '    if (missedSlot) return \'missed\';'],
+    "    if (missedSlot && (!started || missedSlot > started) && !heldBack) return 'missed';",
+    "    if (missedSlot && !heldBack) return 'missed';"],
+  // A routine nobody turned on is not owed an explanation naming an event that
+  // did not happen.
+  [MODEL, 'a routine nobody turned on is not told Rundock was closed on it',
+    "    const heldBack = input && input.enabled === false;",
+    '    const heldBack = false;'],
+  // And the withholding skips the OUTCOME rather than the whole status: a run
+  // that really happened is still reported underneath a slot that passed after
+  // it.
+  [MODEL, 'withholding the missed outcome does not hide a run that happened',
+    "    if (missedSlot && (!started || missedSlot > started) && !heldBack) return 'missed';",
+    "    if (missedSlot && (!started || missedSlot > started)) return heldBack ? null : 'missed';"],
   [MODEL, 'a run the process died inside is a failure',
     "    return statusWord === 'failed' || statusWord === 'interrupted';",
     "    return statusWord === 'failed';"],

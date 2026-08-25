@@ -13,11 +13,11 @@ before(async () => {
     agents: {
       runner: agentFile({
         name: 'runner', type: 'specialist', order: 1,
-        routines: [{ name: 'tick-check', schedule: 'every day at 00:00', prompt: 'tick routine body' }],
+        routines: [{ name: 'tick-check', schedule: 'every day at 00:00', prompt: 'tick routine body', enabled: true }],
       }),
       'codex-runner': agentFile({
         name: 'codex-runner', type: 'specialist', order: 2, runtime: 'codex',
-        routines: [{ name: 'codex-check', schedule: 'every day at 00:00', prompt: 'codex routine body' }],
+        routines: [{ name: 'codex-check', schedule: 'every day at 00:00', prompt: 'codex routine body', enabled: true }],
       }),
     },
   });

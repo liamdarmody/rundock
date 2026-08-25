@@ -221,6 +221,14 @@ function rowHtml(entry, index, withActions) {
     missedSlot: r.missedSlot,
     nextRun: r.nextRun,
     paused: !!r.paused,
+    // PASSED AS THE FILE ANSWERED IT, not coerced. The model reads an explicit
+    // false and nothing else, so a roster that did not carry the field must
+    // arrive here as undefined rather than as a routine somebody switched off.
+    enabled: r.enabled,
+    // The scheduler's own verdict on this routine's schedule, carried on the
+    // roster. Passed through untouched: a client that decided this for itself
+    // would be a second copy of a grammar that lives beside the tick.
+    scheduleReadable: r.scheduleReadable,
     now: routinesClock(),
     zone: routinesZone(),
   });
@@ -240,6 +248,32 @@ function rowHtml(entry, index, withActions) {
   if (!row.status && nextRun) meta += `${sep}${nextRun}`;
 
   let body = `<div class="rr-sentence">${sentence}</div><div class="rr-meta">${meta}</div>`;
+  // A ROUTINE THAT WILL NEVER FIRE SAYS SO, on its own line and in its own
+  // tone, because it is the only state on this list that is a fault in the
+  // routine rather than a fact about its history. It is drawn on the delete
+  // confirmation too, unlike the controls: somebody about to remove a routine
+  // is entitled to know it was never going to run.
+  if (row.scheduleProblem) {
+    body += '<div class="rr-meta rr-problem-line">'
+      + `<span class="schedule-problem">${esc(row.scheduleProblem.text)}</span>`
+      + '</div>';
+  }
+  // THE ROW FOR A ROUTINE NOBODY HAS TURNED ON YET. It takes the next-run
+  // line's place rather than sitting beside it, because the model returns no
+  // next run for this state: a routine that will not run must not advertise
+  // when it will. Withheld on the delete confirmation, like every other
+  // control there: that surface is a question, not a list.
+  //
+  // The model withholds the offer entirely on a row where something else also
+  // stops the routine, so this never draws a control whose consequence the row
+  // cannot state truthfully.
+  if (row.offer && withActions) {
+    body += '<div class="rr-meta rr-offer-line">'
+      + `<span class="rr-offer-text">${esc(row.offer.text)}</span>`
+      + `<button class="btn-link rr-enable" type="button" data-routines-action="enable"`
+      + ` onclick="routinesSetEnabled(${index}, true)">${esc(row.offer.label)}</button>`
+      + '</div>';
+  }
   // Revision 7's second line. Both facts, together, because they answer the
   // one question a reader has after a miss or a failure: did it recover, and
   // when does it try again.
@@ -619,19 +653,47 @@ function routinesViewLastRun(index) {
   if (typeof openRunDetail === 'function') openRunDetail(entry.agent.id, entry.routine.name);
 }
 
-function routinesSetPaused(index, paused) {
+/**
+ * Ask the server to set one boolean field on the routine under `index`.
+ *
+ * ONE SEND PATH FOR BOTH CONTROLS. The refusal-clearing guard and the
+ * occurrence-carrying message shape were written twice, once per control, and
+ * the mutation harness had to grow a second row purely to watch the copy. The
+ * occurrence is the load-bearing part: a name does not identify a routine, and
+ * a message that dropped it would act on the first namesake whatever the
+ * reader pointed at.
+ */
+function routinesSetFlag(index, type, field, value) {
   const entry = allRoutines()[index];
   pendingProblem = null;
   if (!entry || typeof ws === 'undefined' || !ws) return;
   ws.send(JSON.stringify({
-    type: 'set_routine_paused', agentId: entry.agent.id, name: entry.routine.name,
-    occurrence: entry.occurrence, paused,
+    type, agentId: entry.agent.id, name: entry.routine.name,
+    occurrence: entry.occurrence, [field]: value,
   }));
+}
+
+/**
+ * Turn a routine on, for the reader who has just met one the upgrade held back.
+ *
+ * A SEPARATE MESSAGE FROM PAUSE, and it has to be. Pause is a decision this
+ * reader already took and can take back; `enabled` is the answer to a question
+ * nobody had asked them yet. Folding the two into one field would make
+ * resuming a paused routine and consenting to run a routine that predates the
+ * scheduler the same act, and the file would then have no way to say which of
+ * the two a user actually did.
+ */
+function routinesSetEnabled(index, enabled) {
+  routinesSetFlag(index, 'set_routine_enabled', 'enabled', enabled);
+}
+
+function routinesSetPaused(index, paused) {
+  routinesSetFlag(index, 'set_routine_paused', 'paused', paused);
 }
 
 return {
   renderRoutines, showRoutinesForAgent,
-  routinesAskDelete, routinesCancelDelete, routinesConfirmDelete, routinesSetPaused,
+  routinesAskDelete, routinesCancelDelete, routinesConfirmDelete, routinesSetPaused, routinesSetEnabled,
   routinesOpenSkill,
   routinesActionFailed, routinesActionCleared, routinesViewLastRun,
 };

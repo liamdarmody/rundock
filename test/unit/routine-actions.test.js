@@ -15,7 +15,7 @@ const path = require('node:path');
 
 const { removeRoutineBlock, topLevelKeyCounts } = require('../../lib/agents/routines.js');
 const { extractFrontmatterText, parseRoutines } = require('../../lib/agents/discovery.js');
-const { handleDeleteRoutine, handleSetRoutinePaused } = require('../../lib/protocol/handlers/team.js');
+const { handleDeleteRoutine, handleSetRoutinePaused, handleSetRoutineEnabled } = require('../../lib/protocol/handlers/team.js');
 const { invalidateAgentCache, discoverAgents } = require('../../lib/agents/discovery.js');
 const config = require('../../lib/config.js');
 const { makeWorkspace, cleanup } = require('../helpers/workspace.js');
@@ -346,7 +346,11 @@ describe('the handlers behind the row', () => {
   // Defaulting a missing occurrence to zero is what makes every forgetful
   // caller act on the first namesake in silence, so it is refused instead.
   test('a message with no occurrence is refused rather than assumed to mean the first', () => {
-    for (const [handler, type] of [[handleDeleteRoutine, 'delete_routine'], [handleSetRoutinePaused, 'set_routine_paused']]) {
+    for (const [handler, type] of [
+      [handleDeleteRoutine, 'delete_routine'],
+      [handleSetRoutinePaused, 'set_routine_paused'],
+      [handleSetRoutineEnabled, 'set_routine_enabled'],
+    ]) {
       const f = fixture();
       try {
         const before = f.read('twin');
@@ -477,5 +481,95 @@ describe('the handlers behind the row', () => {
     const dispatch = buildDispatch();
     assert.strictEqual(dispatch.delete_routine, handleDeleteRoutine);
     assert.strictEqual(dispatch.set_routine_paused, handleSetRoutinePaused);
+    assert.strictEqual(dispatch.set_routine_enabled, handleSetRoutineEnabled);
+  });
+
+  // ===== TURNING ON A ROUTINE THE UPGRADE HELD BACK =====
+  //
+  // AC-5's server half. A routine whose file never carried `enabled` reads as
+  // not enabled, and this is the one path that changes that answer. It is a
+  // separate field from `paused` on purpose: pausing is a decision the reader
+  // already took, and enabling is the answer to a question nobody had asked
+  // them yet, so folding the two together would leave the file unable to say
+  // which of the two a person actually did.
+  test('turning a routine on writes enabled and touches nothing else', () => {
+    const f = fixture();
+    try {
+      handleSetRoutineEnabled(f.ctx, f.ws, {
+        type: 'set_routine_enabled', agentId: 'piper', name: 'morning-digest', occurrence: 0, enabled: true,
+      });
+      const routines = parseRoutines(extractFrontmatterText(f.read('piper')), { owner: 'piper' });
+      const on = routines.find(r => r.name === 'morning-digest');
+      assert.strictEqual(on.enabled, true);
+      assert.strictEqual(on.schedule, 'every day at 08:00', 'turning one on is not rescheduling');
+      assert.strictEqual(on.paused, false, 'and it is not resuming either');
+      // The sibling is untouched, and so is the key nobody told the writer
+      // about. A routine held back by an upgrade sits in a file full of them.
+      assert.strictEqual(routines.find(r => r.name === 'ops-summary').enabled, false);
+      assert.ok(f.read('piper').includes('aRoutineKeyTheWriterDoesNotKnow: keep me too'));
+      assert.deepStrictEqual(f.calls, ['routine_enabled', 'invalidate', 'agents']);
+    } finally { f.restore(); }
+  });
+
+  test('turning one off again is the same road back', () => {
+    const f = fixture();
+    try {
+      const msg = { type: 'set_routine_enabled', agentId: 'piper', name: 'morning-digest', occurrence: 0, enabled: true };
+      handleSetRoutineEnabled(f.ctx, f.ws, msg);
+      handleSetRoutineEnabled(f.ctx, f.ws, { ...msg, enabled: false });
+      const routines = parseRoutines(extractFrontmatterText(f.read('piper')), { owner: 'piper' });
+      assert.strictEqual(routines.find(r => r.name === 'morning-digest').enabled, false);
+    } finally { f.restore(); }
+  });
+
+  // A second press, or two clients asking at once. Nothing to write and
+  // nothing to complain about, exactly as pausing already decides.
+  test('turning on a routine that is already on says so rather than erroring', () => {
+    const f = fixture();
+    try {
+      const msg = { type: 'set_routine_enabled', agentId: 'piper', name: 'morning-digest', occurrence: 0, enabled: true };
+      handleSetRoutineEnabled(f.ctx, f.ws, msg);
+      f.sent.length = 0;
+      handleSetRoutineEnabled(f.ctx, f.ws, msg);
+      assert.strictEqual(f.sent[0].type, 'routine_enabled');
+      assert.strictEqual(f.sent[0].enabled, true);
+    } finally { f.restore(); }
+  });
+
+  test('turning on a routine that is not there is refused', () => {
+    const f = fixture();
+    try {
+      const before = f.read('piper');
+      handleSetRoutineEnabled(f.ctx, f.ws, {
+        type: 'set_routine_enabled', agentId: 'piper', name: 'never-existed', occurrence: 0, enabled: true,
+      });
+      assert.strictEqual(f.read('piper'), before);
+      assert.strictEqual(f.sent[0].type, 'routine_action_error');
+    } finally { f.restore(); }
+  });
+
+  test('turning one on outside the workspace is refused', () => {
+    const f = fixture();
+    try {
+      f.ctx.workspace.isInsideWorkspace = () => false;
+      handleSetRoutineEnabled(f.ctx, f.ws, {
+        type: 'set_routine_enabled', agentId: 'piper', name: 'morning-digest', occurrence: 0, enabled: true,
+      });
+      assert.strictEqual(f.sent[0].type, 'routine_action_error');
+    } finally { f.restore(); }
+  });
+
+  // The second namesake, like every other action on this row. A file full of
+  // routines an upgrade held back is exactly where two of one name turn up.
+  test('turning on the second routine of a name leaves the first alone', () => {
+    const f = fixture();
+    try {
+      handleSetRoutineEnabled(f.ctx, f.ws, {
+        type: 'set_routine_enabled', agentId: 'twin', name: 'ops-summary', occurrence: 1, enabled: true,
+      });
+      const routines = parseRoutines(extractFrontmatterText(f.read('twin')), { owner: 'twin' })
+        .filter(r => r.name === 'ops-summary');
+      assert.deepStrictEqual(routines.map(r => r.enabled), [false, true]);
+    } finally { f.restore(); }
   });
 });

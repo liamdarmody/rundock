@@ -70,18 +70,18 @@ before(async () => {
       // two routines whose state the tests read.
       mute: agentFile({
         name: 'mute', type: 'specialist', order: 1,
-        routines: [{ name: 'mute-check', schedule: 'every day at 09:00' }],
+        routines: [{ name: 'mute-check', schedule: 'every day at 09:00', enabled: true }],
       }),
       // The thrower. Its prompt reaches spawn as an argument Node refuses.
       faulty: agentFile({
         name: 'faulty', type: 'specialist', order: 2,
-        routines: [{ name: 'faulty-check', schedule: 'every day at 09:00', prompt: `bad${NUL}body` }],
+        routines: [{ name: 'faulty-check', schedule: 'every day at 09:00', prompt: `bad${NUL}body`, enabled: true }],
       }),
       // The control, declared LAST so it is only ever reached by a pass that
       // survived both of the routines above it.
       steady: agentFile({
         name: 'steady', type: 'specialist', order: 3,
-        routines: [{ name: 'steady-check', schedule: 'every day at 09:00', prompt: 'steady body' }],
+        routines: [{ name: 'steady-check', schedule: 'every day at 09:00', prompt: 'steady body', enabled: true }],
       }),
     },
   });

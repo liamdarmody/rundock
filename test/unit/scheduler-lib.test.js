@@ -1232,7 +1232,7 @@ test('a routine whose child ignores the first stop is released by the second, an
     await withTempHomeAsync(async () => {
       const claude = require(CLAUDE_KEY);
       const realSignaller = claude.killProcessTree;
-      writeRoutineAgent(dir, [{ name: 'late', schedule: 'every day at 23:00', prompt: 'p' }]);
+      writeRoutineAgent(dir, [{ name: 'late', schedule: 'every day at 23:00', prompt: 'p', enabled: true }]);
 
       const spawned = [];
       const trapping = [];
@@ -1770,7 +1770,7 @@ test('a routine whose run is going can be reached from outside it and stopped', 
 test('a routine whose run was stopped fires again at its next slot', async (t) => {
   await withTempWorkspaceAsync(async (dir) => {
     await withTempHomeAsync(async () => {
-      writeRoutineAgent(dir, [{ name: 'late', schedule: 'every day at 23:00', prompt: 'p' }]);
+      writeRoutineAgent(dir, [{ name: 'late', schedule: 'every day at 23:00', prompt: 'p', enabled: true }]);
       const children = [];
       let clock = new Date(2026, 7, 12, 23, 0, 0);
       await withFakeSpawn(() => {
@@ -2300,7 +2300,11 @@ function observeOnce(t, sched, when) {
   }
 }
 
-const LATE_ROUTINE = [{ name: 'late', schedule: 'every day at 23:00', prompt: 'p' }];
+// enabled out loud: every test using this fixture is about slot arithmetic for
+// a routine in SERVICE, and a routine with no `enabled` key is owed no slot
+// records at all, so leaning on the default would make these tests measure the
+// wrong rule.
+const LATE_ROUTINE = [{ name: 'late', schedule: 'every day at 23:00', prompt: 'p', enabled: true }];
 const LATE_KEY = 'nightly:late';
 
 test('the due instant and the last observed time are persisted, and survive a restart', (t) => {
@@ -2479,7 +2483,7 @@ test('a routine renamed while the machine slept wakes with no history, and the o
     observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
     assert.ok(sched.routineSlots.routines[LATE_KEY], 'the original name was being watched');
 
-    writeRoutineAgent(ws, [{ name: 'renamed', schedule: 'every day at 23:00', prompt: 'p' }]);
+    writeRoutineAgent(ws, [{ name: 'renamed', schedule: 'every day at 23:00', prompt: 'p', enabled: true }]);
     observeOnce(t, sched, new Date(2026, 7, 21, 8, 0, 0));
 
     assert.deepStrictEqual(sched.routineSlots.routines['nightly:renamed'].missed, [],
@@ -2556,7 +2560,7 @@ test('a slot entry with no due instant is dropped on load, without taking the fi
 test('a weekly routine walks a week at a time, so a fortnight closed leaves two records', (t) => {
   withTempWorkspace((ws) => {
     const sched = freshScheduler();
-    writeRoutineAgent(ws, [{ name: 'weekly', schedule: 'every friday at 23:00', prompt: 'p' }]);
+    writeRoutineAgent(ws, [{ name: 'weekly', schedule: 'every friday at 23:00', prompt: 'p', enabled: true }]);
     const key = 'nightly:weekly';
 
     observeOnce(t, sched, new Date(2026, 7, 21, 8, 0, 0)); // Friday 21 August 2026
@@ -2649,7 +2653,7 @@ test('a schedule edited while the machine was closed resyncs instead of recordin
     writeRoutineAgent(ws, LATE_ROUTINE); // 23:00
     observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
 
-    writeRoutineAgent(ws, [{ name: 'late', schedule: 'every day at 22:00', prompt: 'p' }]);
+    writeRoutineAgent(ws, [{ name: 'late', schedule: 'every day at 22:00', prompt: 'p', enabled: true }]);
     observeOnce(t, sched, new Date(2026, 7, 17, 8, 0, 0));
     assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, [],
       'two nights passed, and neither is recorded at an hour the routine was never due at');
@@ -2674,7 +2678,10 @@ test('a schedule edited while the machine was closed resyncs instead of recordin
 test('a paused routine accrues records for the days nobody was watching at all', (t) => {
   withTempWorkspace((ws) => {
     const sched = freshScheduler();
-    writeRoutineAgent(ws, [{ name: 'late', schedule: 'every day at 23:00', prompt: 'p', paused: true }]);
+    // enabled out loud, so this fixture differs from an ordinary routine in
+    // exactly the one field it is about. A block with no `enabled` key is not
+    // in service at all and is owed no records, which is a different rule.
+    writeRoutineAgent(ws, [{ name: 'late', schedule: 'every day at 23:00', prompt: 'p', enabled: true, paused: true }]);
     observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
     observeOnce(t, sched, new Date(2026, 7, 17, 8, 0, 0));
 
@@ -2702,7 +2709,7 @@ test('a schedule edit resyncs the anchor without discarding the history already 
     ];
     assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, earned, 'two nights were already recorded');
 
-    writeRoutineAgent(ws, [{ name: 'late', schedule: 'every day at 22:00', prompt: 'p' }]);
+    writeRoutineAgent(ws, [{ name: 'late', schedule: 'every day at 22:00', prompt: 'p', enabled: true }]);
     observeOnce(t, sched, new Date(2026, 7, 19, 8, 0, 0));
     assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, earned,
       'the edit added nothing and took nothing away');
@@ -2754,7 +2761,7 @@ test('an anchor stored without its schedule resyncs on the first wake rather tha
 test('a slot the scheduler was awake for leaves no record; a day it was closed for leaves one', (t) => {
   withTempWorkspace((ws) => {
     const sched = freshScheduler();
-    writeRoutineAgent(ws, [{ name: 'late', schedule: 'every day at 05:00', prompt: 'p', paused: true }]);
+    writeRoutineAgent(ws, [{ name: 'late', schedule: 'every day at 05:00', prompt: 'p', paused: true, enabled: true }]);
 
     observeOnce(t, sched, new Date(2026, 7, 15, 4, 0, 0));  // awake before the slot
     observeOnce(t, sched, new Date(2026, 7, 15, 9, 0, 0));  // reopened after it, paused, nothing served it
@@ -2811,7 +2818,7 @@ test('a schedule that stopped parsing loses its anchor too, not just a routine t
 
     // A documented pitfall: the hour must be zero-padded, so this parses as a
     // routine and never matches as a schedule.
-    writeRoutineAgent(ws, [{ name: 'late', schedule: 'every day at 9:00', prompt: 'p' }]);
+    writeRoutineAgent(ws, [{ name: 'late', schedule: 'every day at 9:00', prompt: 'p', enabled: true }]);
     observeOnce(t, sched, new Date(2026, 7, 17, 8, 0, 0));
 
     writeRoutineAgent(ws, LATE_ROUTINE);

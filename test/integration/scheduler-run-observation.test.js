@@ -46,26 +46,26 @@ before(async () => {
     agents: {
       writer: agentFile({
         name: 'writer', type: 'specialist', order: 1,
-        routines: [{ name: 'sweep', schedule: 'every day at 05:00', prompt: 'writer sweep' }],
+        routines: [{ name: 'sweep', schedule: 'every day at 05:00', prompt: 'writer sweep', enabled: true }],
       }),
       other: agentFile({
         name: 'other', type: 'specialist', order: 2,
-        routines: [{ name: 'sweep', schedule: 'every day at 05:00', prompt: 'other sweep' }],
+        routines: [{ name: 'sweep', schedule: 'every day at 05:00', prompt: 'other sweep', enabled: true }],
       }),
       // A run whose transcript never appears: the agent tool wrote it
       // somewhere else, pruned it, or never got that far.
       silent: agentFile({
         name: 'silent', type: 'specialist', order: 3,
-        routines: [{ name: 'sweep', schedule: 'every day at 05:00', prompt: 'silent sweep' }],
+        routines: [{ name: 'sweep', schedule: 'every day at 05:00', prompt: 'silent sweep', enabled: true }],
       }),
       // The other runtime, which keeps no session transcript at all.
       'codex-writer': agentFile({
         name: 'codex-writer', type: 'specialist', order: 4, runtime: 'codex',
-        routines: [{ name: 'sweep', schedule: 'every day at 05:00', prompt: 'codex sweep' }],
+        routines: [{ name: 'sweep', schedule: 'every day at 05:00', prompt: 'codex sweep', enabled: true }],
       }),
       slow: agentFile({
         name: 'slow', type: 'specialist', order: 5,
-        routines: [{ name: 'sweep', schedule: 'every day at 05:00', prompt: 'slow sweep' }],
+        routines: [{ name: 'sweep', schedule: 'every day at 05:00', prompt: 'slow sweep', enabled: true }],
       }),
     },
   });

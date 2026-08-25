@@ -31,7 +31,7 @@ before(async () => {
     agents: {
       punctual: agentFile({
         name: 'punctual', type: 'specialist', order: 1,
-        routines: [{ name: 'clock-check', schedule: 'every day at 09:00', prompt: 'clock routine body' }],
+        routines: [{ name: 'clock-check', schedule: 'every day at 09:00', prompt: 'clock routine body', enabled: true }],
       }),
     },
   });

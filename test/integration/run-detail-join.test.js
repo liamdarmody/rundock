@@ -52,7 +52,7 @@ before(async () => {
     agents: {
       [FILE_ID]: agentFile({
         name: FILE_ID, type: 'orchestrator', order: 0,
-        routines: [{ name: ROUTINE, schedule: 'every day at 05:00', prompt: BODY }],
+        routines: [{ name: ROUTINE, schedule: 'every day at 05:00', prompt: BODY, enabled: true }],
       }),
     },
   });
