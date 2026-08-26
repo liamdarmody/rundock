@@ -395,6 +395,89 @@ function restoreMain(branch, { git }) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Tag subcommand
+// ---------------------------------------------------------------------------
+
+// Run after the prepare pull request has been reviewed and merged. It cannot
+// assume the merge landed just because it was asked to run, so it reads the
+// state of `origin/main` and refuses unless the release commit is actually
+// there. Tagging is the irreversible half of a release: the tag is what starts
+// the build, sign, notarise and draft publish workflow.
+//
+// THE GATE IS DELIBERATELY NOT RE-RUN HERE. The tagged commit is always one
+// past the gated one, because the bump commit sits on top of it, so a gate
+// check at this point would be gating a commit that only touches package.json
+// and CHANGELOG.md. The gate check happens once, in prepare, against the
+// pre-bump commit, which is where it has always happened.
+//
+// Throws so it is unit-testable; the main flow converts to fail().
+function tagRelease(version, { root = ROOT, git = gitIn(root), log = logStep } = {}) {
+  const tag = `v${version}`;
+
+  // On main, clean tree, not behind origin, and the tag not already local.
+  preflight(version, { root, git });
+
+  // The tag must land on the reviewed commit, so local main has to BE that
+  // commit rather than merely contain it: the preflight rules out being behind,
+  // and this rules out being ahead.
+  const head = git(['rev-parse', 'HEAD']).trim();
+  const merged = git(['rev-parse', 'origin/main']).trim();
+  if (head !== merged) {
+    throw new Error(
+      `Local main is at ${head.slice(0, 9)} but origin/main is at ${merged.slice(0, 9)}. ` +
+      `The tag must land on the reviewed commit, so local main must carry nothing of its own.`
+    );
+  }
+
+  let pkg;
+  try {
+    pkg = JSON.parse(git(['show', `${merged}:package.json`]));
+  } catch (err) {
+    throw new Error(`Could not read package.json at origin/main: ${err.message}`);
+  }
+  if (pkg.version !== version) {
+    throw new Error(
+      `package.json at origin/main is ${pkg.version}, not ${version}. ` +
+      `The prepare pull request for ${version} has not merged yet: run "npm run release -- prepare ${version}" first, then merge it.`
+    );
+  }
+
+  // The version alone is not proof the release commit landed. A tree with the
+  // bump but no promoted heading would publish a release with empty notes,
+  // which is the failure the changelog promotion exists to prevent.
+  const changelog = git(['show', `${merged}:CHANGELOG.md`]);
+  const headingRe = new RegExp(`^## ${version.replace(/\./g, '\\.')}:`, 'm');
+  if (!headingRe.test(changelog)) {
+    throw new Error(
+      `CHANGELOG.md at origin/main has no "## ${version}:" heading, so the changelog promotion is not on main. ` +
+      `Tagging now would publish a release with no notes.`
+    );
+  }
+
+  if (git(['ls-remote', '--tags', 'origin', `refs/tags/${tag}`]).trim()) {
+    throw new Error(`Tag ${tag} already exists on the remote. Choose a new version, or recut deliberately by deleting it first.`);
+  }
+
+  git(['tag', tag], { stdio: 'pipe' });
+  try {
+    git(['push', 'origin', tag], { stdio: 'pipe' });
+  } catch (err) {
+    // Leave nothing tagged anywhere. A local tag left behind would make the
+    // next attempt fail the preflight instead of retrying the push.
+    let cleanup = 'The local tag has been removed, so nothing is tagged anywhere.';
+    try {
+      git(['tag', '-d', tag], { stdio: 'pipe' });
+    } catch (deleteErr) {
+      cleanup = `The local tag could not be removed either (${deleteErr.message}); delete it with "git tag -d ${tag}" before trying again.`;
+    }
+    throw new Error(`Pushing ${tag} failed: ${err.message}\n\n${cleanup}`);
+  }
+
+  log('tag', `Tagged ${tag} on ${merged.slice(0, 9)} and pushed it`);
+  return { tag, sha: merged };
+}
+
 function commitTagPush(version) {
   const tag = `v${version}`;
   try {
@@ -469,6 +552,7 @@ module.exports = {
   preflight,
   requireGatePass,
   prepareRelease,
+  tagRelease,
   publishRelease,
   ghApiArgs,
 };

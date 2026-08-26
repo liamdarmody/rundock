@@ -20,7 +20,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
-const { prepareRelease } = require('../../scripts/release.js');
+const { prepareRelease, tagRelease } = require('../../scripts/release.js');
 const { GATE_FILE_NAME } = require('../../scripts/release-gate.js');
 
 const CHANGELOG = `# Changelog
@@ -282,5 +282,122 @@ describe('release:prepare puts the version bump through a pull request', () => {
     );
     assert.strictEqual(inOrigin(['tag', '-l']), '', 'still no tag');
     assert.strictEqual(inOrigin(['rev-parse', 'main']), inWork(['rev-parse', 'main']), 'main still untouched');
+  });
+});
+
+describe('release:tag tags what actually merged', () => {
+  // What a merged pull request leaves behind: the release commit reachable from
+  // main, pushed, with local main in step with it.
+  function mergeTheReleaseBranch(version) {
+    inWork(['checkout', 'main']);
+    inWork(['merge', '--no-ff', '-m', `Prepare the ${version} release (#42)`, `release/${version}`]);
+    inWork(['push', 'origin', 'main']);
+  }
+
+  function prepared(version = '0.12.0') {
+    gateOnHead();
+    prepareRelease(version, { root: work, gh: fakeGh(), log: () => {} });
+  }
+
+  test('the prepare pull request has not merged yet: refuses, naming both versions', () => {
+    prepared();
+    inWork(['checkout', 'main']);
+
+    assert.throws(
+      () => tagRelease('0.12.0', { root: work, log: () => {} }),
+      /0\.11\.8[\s\S]*0\.12\.0|0\.12\.0[\s\S]*0\.11\.8/
+    );
+    assert.strictEqual(inOrigin(['tag', '-l']), '', 'nothing tagged');
+  });
+
+  test('the bump merged but the changelog promotion did not: refuses, naming the changelog', () => {
+    // The version alone is not proof the release commit landed: a tag on this
+    // tree would publish a release whose notes were never promoted.
+    inWork(['checkout', 'main']);
+    fs.writeFileSync(path.join(work, 'package.json'), JSON.stringify({ name: 'rundock', version: '0.12.0' }, null, 2) + '\n');
+    inWork(['commit', '-am', 'bump the version only']);
+    inWork(['push', 'origin', 'main']);
+
+    assert.throws(
+      () => tagRelease('0.12.0', { root: work, log: () => {} }),
+      /CHANGELOG/
+    );
+    assert.strictEqual(inOrigin(['tag', '-l']), '', 'nothing tagged');
+  });
+
+  test('after the merge: exactly one tag, on the merged commit, pushed', () => {
+    prepared();
+    mergeTheReleaseBranch('0.12.0');
+    const merged = inOrigin(['rev-parse', 'main']);
+
+    const result = tagRelease('0.12.0', { root: work, log: () => {} });
+
+    assert.strictEqual(result.tag, 'v0.12.0');
+    assert.strictEqual(inOrigin(['tag', '-l']), 'v0.12.0', 'exactly one tag on the remote');
+    assert.strictEqual(inOrigin(['rev-list', '-n', '1', 'v0.12.0']), merged, 'the tag is on the merged commit');
+  });
+
+  test('the tagged commit is the one carrying the version bump and the notes', () => {
+    prepared();
+    mergeTheReleaseBranch('0.12.0');
+    tagRelease('0.12.0', { root: work, log: () => {} });
+
+    assert.strictEqual(JSON.parse(inOrigin(['show', 'v0.12.0:package.json'])).version, '0.12.0');
+    assert.match(gitAt(origin)(['show', 'v0.12.0:CHANGELOG.md']), /^## 0\.12\.0: Foundations \(/m);
+  });
+
+  test('no gate record is needed: the gate governs prepare, not the tag', () => {
+    // The tagged commit is always one past the gated one, because the bump
+    // commit sits on top of it. Re-running the gate here would mean gating a
+    // commit that only touches package.json and CHANGELOG.md, so the check
+    // belongs where it already is, in prepare, against the pre-bump commit.
+    prepared();
+    mergeTheReleaseBranch('0.12.0');
+    fs.rmSync(path.join(work, GATE_FILE_NAME), { force: true });
+
+    assert.doesNotThrow(() => tagRelease('0.12.0', { root: work, log: () => {} }));
+    assert.strictEqual(inOrigin(['tag', '-l']), 'v0.12.0');
+  });
+
+  test('local main carrying an unpushed commit: refuses rather than tagging it', () => {
+    prepared();
+    mergeTheReleaseBranch('0.12.0');
+    fs.writeFileSync(path.join(work, 'CHANGELOG.md'), `${CHANGELOG}\n<!-- local edit -->\n`);
+    inWork(['commit', '-am', 'a local commit nobody reviewed']);
+
+    assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), /origin\/main/);
+    assert.strictEqual(inOrigin(['tag', '-l']), '', 'nothing tagged');
+  });
+
+  test('the tag already exists: refuses', () => {
+    prepared();
+    mergeTheReleaseBranch('0.12.0');
+    inWork(['tag', 'v0.12.0']);
+
+    assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), /v0\.12\.0/);
+    assert.strictEqual(inOrigin(['tag', '-l']), '', 'nothing pushed');
+  });
+
+  test('a dirty tree: refuses', () => {
+    prepared();
+    mergeTheReleaseBranch('0.12.0');
+    fs.writeFileSync(path.join(work, 'CHANGELOG.md'), `${CHANGELOG}\nstray edit\n`);
+
+    assert.throws(() => tagRelease('0.12.0', { root: work, log: () => {} }), /clean/i);
+    assert.strictEqual(inOrigin(['tag', '-l']), '', 'nothing tagged');
+  });
+
+  test('a failed tag push leaves no tag behind, so running it again is not blocked', () => {
+    prepared();
+    mergeTheReleaseBranch('0.12.0');
+    const git = (args) => {
+      if (args[0] === 'push') throw new Error('the remote refused the tag');
+      return gitAt(work)(args);
+    };
+
+    assert.throws(() => tagRelease('0.12.0', { root: work, git, log: () => {} }), /refused the tag/);
+
+    assert.strictEqual(inOrigin(['tag', '-l']), '', 'no tag on the remote');
+    assert.strictEqual(inWork(['tag', '-l']), '', 'no local tag either, so a retry gets past the preflight');
   });
 });
