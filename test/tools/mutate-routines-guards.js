@@ -369,7 +369,7 @@ const MUTATIONS = [
 
   // Where a row goes, watched by the file that presses the route.
   [PROFILE_ROUTE, 'a routine row carries the agent whose profile it is on',
-    'onclick="showRoutinesForAgent(\'${esc(a.id)}\')"',
+    'onclick="showRoutinesForAgent(this.dataset.agentId)"',
     'onclick="showRoutinesForAgent(null)"'],
   [VIEW_SCOPE, 'the list is filtered to the agent it was opened for',
     '  if (typeof setRoutinesScope === \'function\') setRoutinesScope(agentId);',

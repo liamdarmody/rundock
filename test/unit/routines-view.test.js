@@ -433,7 +433,12 @@ describe('the rail is a map of places, always the same size', () => {
     const row = doc.querySelector('.skill-sidebar-item[data-skill="ops"]');
     assert.ok(row, 'sanity: the sidebar lists the skill');
     row.click();
-    const card = doc.getElementById('skill-instructions-ops');
+    // The id is a constant rather than `skill-instructions-${s.id}`. A skill id
+    // is its directory name, and it was being written into this id attribute
+    // AND into the getElementById call in the handler beside it, which put a
+    // name an agent chooses inside a JavaScript string. Only one skill detail
+    // is drawn at a time, so it never needed to vary.
+    const card = doc.getElementById('skill-instructions');
     assert.ok(card, 'sanity: the detail pane draws the collapsible instructions card');
     assert.ok(card.classList.contains('hidden'), 'sanity: that card starts collapsed');
     card.parentElement.parentElement.click();
@@ -444,7 +449,7 @@ describe('the rail is a map of places, always the same size', () => {
 
     assert.strictEqual(doc.getElementById('skill-detail-content').firstElementChild, drawn,
       'pressing the entry rebuilt a pane that already had something in it');
-    const after = doc.getElementById('skill-instructions-ops');
+    const after = doc.getElementById('skill-instructions');
     assert.ok(after && !after.classList.contains('hidden'),
       'pressing the entry collapsed a card the reader had opened');
     dom.window.close();
