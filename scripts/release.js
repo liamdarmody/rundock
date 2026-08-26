@@ -36,7 +36,7 @@ const REPO = 'liamdarmody/rundock';
 // Helpers
 // ---------------------------------------------------------------------------
 
-function log(step, msg) {
+function logStep(step, msg) {
   console.log(`[release:${step}] ${msg}`);
 }
 
@@ -45,9 +45,14 @@ function fail(step, msg) {
   process.exit(1);
 }
 
-function git(args, opts = {}) {
-  return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', ...opts });
+// A git runner bound to one repository. Every step takes its runner as an
+// option so the release flow can be exercised end to end against a throwaway
+// repository in a temp directory rather than against this checkout.
+function gitIn(root) {
+  return (args, opts = {}) => execFileSync('git', args, { cwd: root, encoding: 'utf8', ...opts });
 }
+
+const git = gitIn(ROOT);
 
 // ---------------------------------------------------------------------------
 // Steps
@@ -66,36 +71,37 @@ function getVersion() {
 
 // Must be on main, fully clean tree, in sync with origin, and the tag must not
 // already exist. Runs BEFORE any file is modified so a failed pre-flight leaves
-// the working tree untouched.
-function preflight(version) {
+// the working tree untouched. Throws so it is unit-testable; the main flow
+// converts to fail().
+function preflight(version, { root = ROOT, git = gitIn(root) } = {}) {
   let branch;
   try {
     branch = git(['symbolic-ref', '--short', 'HEAD']).trim();
   } catch (err) {
-    fail('preflight', `Could not determine current branch: ${err.message}`);
+    throw new Error(`Could not determine current branch: ${err.message}`);
   }
   if (branch !== 'main') {
-    fail('preflight', `Must be on main to release (currently on "${branch}").`);
+    throw new Error(`Must be on main to release (currently on "${branch}").`);
   }
 
   const status = git(['status', '--porcelain']).trim();
   if (status) {
-    fail('preflight', `Working tree is not clean. Commit or stash changes before releasing:\n${status}`);
+    throw new Error(`Working tree is not clean. Commit or stash changes before releasing:\n${status}`);
   }
 
   try {
     git(['fetch', 'origin', 'main'], { stdio: 'pipe' });
   } catch (err) {
-    fail('preflight', `git fetch origin main failed: ${err.message}`);
+    throw new Error(`git fetch origin main failed: ${err.message}`);
   }
   const behind = git(['rev-list', '--count', 'HEAD..origin/main']).trim();
   if (parseInt(behind, 10) > 0) {
-    fail('preflight', `Local main is ${behind} commit(s) behind origin/main. Pull before releasing.`);
+    throw new Error(`Local main is ${behind} commit(s) behind origin/main. Pull before releasing.`);
   }
 
   const tag = `v${version}`;
   if (git(['tag', '-l', tag]).trim()) {
-    fail('preflight', `Tag ${tag} already exists locally. Choose a new version or delete the tag.`);
+    throw new Error(`Tag ${tag} already exists locally. Choose a new version or delete the tag.`);
   }
 }
 
@@ -192,8 +198,8 @@ function publishRelease(version, { api = ghApi, log = (msg) => console.log(`[rel
   return { id: draft.id, tag, url: published.html_url };
 }
 
-function setVersion(version) {
-  const pkgPath = path.join(ROOT, 'package.json');
+function setVersion(version, { root = ROOT, log = logStep } = {}) {
+  const pkgPath = path.join(root, 'package.json');
   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
   pkg.version = version;
   fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
@@ -234,29 +240,34 @@ function extractChangelogEntry(version, changelogText) {
 // Promote the `## Unreleased` heading to the versioned heading for this release.
 // If `## ${version}:` already exists, no-op. If neither exists, abort: we must
 // not release without notes. The release name is read from a `**Name:**` line.
-function promoteUnreleasedChangelog(version) {
-  const changelogPath = path.join(ROOT, 'CHANGELOG.md');
+// Returns the versioned heading it wrote, or the one already present, so the
+// caller can quote it without re-parsing the file. Throws so it is
+// unit-testable; the main flow converts to fail().
+function promoteUnreleasedChangelog(version, { root = ROOT, log = logStep } = {}) {
+  const changelogPath = path.join(root, 'CHANGELOG.md');
   if (!fs.existsSync(changelogPath)) {
-    fail('changelog', `CHANGELOG.md not found at ${changelogPath}`);
+    throw new Error(`CHANGELOG.md not found at ${changelogPath}`);
   }
   const original = fs.readFileSync(changelogPath, 'utf8');
 
-  const versionHeadingRe = new RegExp(`^## ${version.replace(/\./g, '\\.')}:`, 'm');
-  if (versionHeadingRe.test(original)) {
+  const versionHeadingRe = new RegExp(`^## ${version.replace(/\./g, '\\.')}:.*$`, 'm');
+  const alreadyPromoted = original.match(versionHeadingRe);
+  if (alreadyPromoted) {
     log('changelog', `Versioned heading for ${version} already present, skipping promotion`);
-    return;
+    return alreadyPromoted[0];
   }
 
   const unreleasedRe = /^## Unreleased[ \t]*$/m;
   if (!unreleasedRe.test(original)) {
-    fail(
-      'changelog',
+    throw new Error(
       `No "## Unreleased" block and no "## ${version}:" block in CHANGELOG.md. ` +
       `Add release notes under "## Unreleased" before running release.`
     );
   }
 
-  const entry = extractChangelogEntry('Unreleased');
+  // Parse the block we already have in memory rather than re-reading the file,
+  // which is what makes this work against any root, not only this checkout.
+  const entry = extractChangelogEntry('Unreleased', original);
   const nameMatch = entry && entry.body.match(/^\s*\*\*Name:\*\*\s*(.+?)\s*$/m);
   let name;
   if (nameMatch) {
@@ -274,6 +285,7 @@ function promoteUnreleasedChangelog(version) {
 
   fs.writeFileSync(changelogPath, updated, 'utf8');
   log('changelog', `Promoted "## Unreleased" to "${newHeading}"`);
+  return newHeading;
 }
 
 function commitTagPush(version) {
@@ -287,7 +299,7 @@ function commitTagPush(version) {
   } catch (err) {
     fail('push', `git commit/tag/push failed: ${err.message}`);
   }
-  log('push', `Committed, pushed main, and pushed tag ${tag}`);
+  logStep('push', `Committed, pushed main, and pushed tag ${tag}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -307,14 +319,18 @@ if (require.main === module) {
     try {
       const result = publishRelease(version);
       console.log('');
-      log('done', `v${version} is live: ${result.url || `https://github.com/${REPO}/releases`}`);
-      log('done', 'Site download links resolve via /releases/latest; no bump needed.');
+      logStep('done', `v${version} is live: ${result.url || `https://github.com/${REPO}/releases`}`);
+      logStep('done', 'Site download links resolve via /releases/latest; no bump needed.');
     } catch (err) {
       fail('publish', err.message);
     }
   } else {
     const version = getVersion();
-    preflight(version);
+    try {
+      preflight(version);
+    } catch (err) {
+      fail('preflight', err.message);
+    }
     // The gate governs the SHA being tagged: check it BEFORE the version-bump
     // commit is created (that commit only adds package.json + CHANGELOG.md on
     // top of the gated code).
@@ -324,15 +340,19 @@ if (require.main === module) {
       fail('gate', err.message);
     }
     setVersion(version);
-    promoteUnreleasedChangelog(version);
+    try {
+      promoteUnreleasedChangelog(version);
+    } catch (err) {
+      fail('changelog', err.message);
+    }
     commitTagPush(version);
 
     console.log('');
-    log('done', `Tagged v${version}. GitHub Actions is now building, signing, notarising, and publishing a DRAFT release.`);
-    log('done', `Watch the build:   https://github.com/${REPO}/actions`);
-    log('done', `Review the draft:  https://github.com/${REPO}/releases`);
-    log('done', `Then publish with: npm run release -- publish ${version}  (binds the tag before flipping the draft flag)`);
-    log('done', `If CI fails (e.g. expired Apple agreement): fix it and re-run the workflow on tag v${version}: no need to revert main.`);
+    logStep('done', `Tagged v${version}. GitHub Actions is now building, signing, notarising, and publishing a DRAFT release.`);
+    logStep('done', `Watch the build:   https://github.com/${REPO}/actions`);
+    logStep('done', `Review the draft:  https://github.com/${REPO}/releases`);
+    logStep('done', `Then publish with: npm run release -- publish ${version}  (binds the tag before flipping the draft flag)`);
+    logStep('done', `If CI fails (e.g. expired Apple agreement): fix it and re-run the workflow on tag v${version}: no need to revert main.`);
   }
 }
 
