@@ -246,14 +246,26 @@ timing is a seam rather than a sleep. Listed so the inventory is complete.
   sweeping by passing `now` forward, never by waiting.
 - **Bounded polls.** `test/unit/signals.test.js` and `signals-lib.test.js`
   (2000/25), `test/unit/red-first-orphans.test.js`'s `until` (15000/50),
+  `test/unit/precommit-gate-orphans.test.js`'s `until` (20000/25),
   `test/unit/codex-appserver.test.js`'s `waitForInvocation` (2000/10). All the
   right shape.
 - **Long-lived children as negative devices.** `setInterval(() => {}, 1e9)` and
   `sleep ${LONG}` in `test/helpers/stub-claude/claude`,
-  `test/unit/pid-file.test.js` and `test/unit/red-first-orphans.test.js` exist
-  so that a process cannot end on its own, which is what makes "still running"
-  attributable to a leak. `LONG` is deliberately non-round so a `ps` match
-  cannot collide with an unrelated sleep.
+  `test/unit/pid-file.test.js`, `test/unit/red-first-orphans.test.js` and
+  `test/unit/precommit-gate-orphans.test.js` exist so that a process cannot end
+  on its own, which is what makes "still running" attributable to a leak.
+  `LONG` is deliberately non-round so a `ps` match cannot collide with an
+  unrelated sleep.
+- **One test that must outlast a grace period.**
+  `test/unit/precommit-gate-orphans.test.js` "a step that ignores SIGTERM is
+  ended anyway" takes about six seconds, and that is the assertion rather than
+  a delay in front of it: the step traps SIGTERM, so the only thing that can
+  end it is the escalation to SIGKILL after `STEP_END_GRACE_MS`. Shortening it
+  would remove the only proof the escalation exists. The other eight tests in
+  that file are around a second each where `ps` can be spawned; where it cannot
+  the signal cases also pay the full grace, because "has the group gone" has no
+  answer without a process table. That is a slow test on a locked-down machine,
+  not a flaky one.
 - **Ordering assertions.** `test/integration/search-warmup.test.js`'s
   `answered < ready` is an ordering claim, not a speed claim, and holds
   regardless of machine speed once the wait itself is bounded properly.

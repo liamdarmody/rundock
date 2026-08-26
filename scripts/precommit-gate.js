@@ -36,11 +36,35 @@
  * This is a local convenience and not the enforcement. CI runs the same checks
  * on every pull request and is the line that actually holds; a developer who
  * has not installed the hooks is not bypassing anything that protects main.
+ *
+ * WHAT IT LEAVES BEHIND
+ *
+ * Nothing, on any exit this process can see. A step is spawned detached and
+ * therefore heads its own process group, and that group is ended before the
+ * gate reports anything: after the step, on a step that failed, from the signal
+ * listeners, and from an 'exit' listener behind both. Only the group this run
+ * started is ever signalled, so a suite or a mutation harness belonging to
+ * somebody else is never touched however alike the command lines look.
+ *
+ * It matters here more than it would in most tools because of what one step is.
+ * `mutate:guards` breaks a real source file on purpose, runs a suite, and puts
+ * the file back, and it puts the file back from a signal handler when the way
+ * out is a signal. The gate used to send it nothing and wait for nothing, so
+ * that handler had no way to fire: the gate died, and `npm`, its shell and the
+ * harness inside carried on rewriting `public/` with nobody watching. A mutated
+ * source file is an ordinary working-tree modification, `git add -A` stages it
+ * without comment, and staging everything before running this is exactly what
+ * the usage above asks for.
+ *
+ * The one way out that is not covered is SIGKILL of the gate itself, which the
+ * kernel delivers to nothing. What catches a harness abandoned that way is the
+ * record it writes while it holds files mutated: see test/tools/mutation-run.js.
  */
 
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { endGroup } = require('./lib/process-group.js');
 
 // The repository this acts on. Overridable ONLY so the entry points can be
 // exercised against a throwaway repository: without it, run() and verify()
@@ -79,8 +103,136 @@ const STEPS = [
   { name: 'check:fixture', args: ['run', 'check:fixture'] },
 ];
 
+// How long a step's process group gets to end on its own before it is ended
+// outright.
+//
+// LONGER THAN THE REVERTING CHECK ASKS FOR, and the difference is the point.
+// That tool spawns a test command, and nothing it spawns has a restore step to
+// skip, so it can afford half a second of politeness. This one spawns a
+// mutation harness that has a real source file rewritten on disk and puts it
+// back from its SIGTERM handler, and that handler cannot run until the suite
+// the harness is blocked on has itself gone. Escalating to SIGKILL before it
+// has finished would turn the tidiest available exit into the exact mess this
+// whole area exists to prevent: a mutated file left in the working tree,
+// indistinguishable from an edit.
+//
+// Paid in full only in two cases, neither of them the ordinary one: a group
+// that ignores SIGTERM, and a machine whose process table cannot be read, where
+// "has the group gone" has no answer until the kernel stops recognising the
+// group id at all. Where `ps` runs, an interrupt costs about a second end to
+// end and this number is never reached.
+const STEP_END_GRACE_MS = 5000;
+
+// How long a step gets to finish flushing its output after it has exited.
+//
+// The wait below is on 'exit' and not on 'close', because 'close' also waits
+// for the pipes and anything the step left behind is holding those open.
+// Waiting for them would turn a leak into a hang. This is the other half of
+// that trade: a step's last few lines are usually still in flight when it
+// exits, and they are the lines a developer reads on a failure.
+const DRAIN_MS = 250;
+
+// How much of a step's output is kept for the failure report.
+//
+// A TAIL RATHER THAN A CAP THAT KILLS, which is the defect this replaces.
+// execFileSync stops capturing at one megabyte and, on overflow, SIGTERMs the
+// DIRECT child and raises ENOBUFS. The direct child is `npm`; the shell chain
+// beneath it and whatever that shell is currently running are not, so a step
+// that had done nothing worse than talk a lot was reported as FAILED while its
+// subtree carried on. Keeping a tail bounds memory without ever killing
+// anything, and the tail is the end of the output, which is the part the
+// failure report prints.
+const OUTPUT_TAIL_BYTES = 1024 * 1024;
+
 function git(args, root = ROOT) {
   return execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+}
+
+// The process group of the step now running, and the ONLY thing this gate ever
+// signals.
+//
+// A NUMBER rather than a child handle, because "what this run is responsible
+// for" is a question two exit paths have to answer where a handle is no use:
+// the signal listeners, and the 'exit' listener, which is reached after the
+// event loop has stopped. A number can be signalled from either.
+//
+// ONE of them, not a collection: the steps are sequential and the ending below
+// clears this before the next spawn, so a second group never coexists with the
+// first.
+let liveGroup = null;
+
+/**
+ * End the group the current step is running in, and forget it once it has gone.
+ *
+ * ONE definition of the ending, called after each step, from the signal
+ * listeners and from the 'exit' listener, rather than three that can drift
+ * apart.
+ *
+ * THE ALARM FIRES ONLY ON A KNOWN SURVIVOR. 'unknown' means the group id still
+ * answers and this machine would not say what is in it, which happens where
+ * spawning `ps` is blocked. Warning then would fire on every ordinary interrupt
+ * on Linux, where a killed child stays listed until it is collected, and an
+ * alarm that cries wolf on every Ctrl-C is one nobody reads.
+ */
+function endLiveGroup() {
+  if (liveGroup === null) return;
+  const pgid = liveGroup;
+  liveGroup = null;
+  if (endGroup(pgid, { graceMs: STEP_END_GRACE_MS }) !== 'running') return;
+  console.error(`[precommit] WARNING: process group ${pgid} survived being ended and is `
+    + 'still running. Nothing further here can reach it, and a mutation harness inside it '
+    + 'may still be holding a source file rewritten; read `git diff` before committing.');
+}
+
+/**
+ * Run one step, and hand back what it said.
+ *
+ * DETACHED, so the step heads its own process group. `npm` starts a shell and
+ * the shell starts a chain of harnesses, and ending the direct child alone
+ * leaves those running: that is how a gate that had already printed its verdict
+ * kept rewriting `public/`. A group can be ended whole.
+ *
+ * The group id is handed back the moment it exists rather than on any later
+ * event, because from that line on there is a subtree on this machine that
+ * nothing else knows about, and every exit between there and the next line has
+ * to be able to find it.
+ */
+function runStep(step, root = ROOT) {
+  return new Promise((resolve, reject) => {
+    const kid = spawn('npm', step.args,
+      { cwd: root, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    // The child heads its own group, so its pid IS the group id.
+    if (kid.pid) liveGroup = kid.pid;
+
+    let out = '';
+    const take = (buf) => {
+      out += buf.toString();
+      if (out.length > OUTPUT_TAIL_BYTES * 2) out = out.slice(-OUTPUT_TAIL_BYTES);
+    };
+    kid.stdout.on('data', take);
+    kid.stderr.on('data', take);
+
+    let ended = null;
+    let settled = false;
+    let timer = null;
+    const settle = () => {
+      if (settled || !ended) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve({ ok: ended.code === 0, code: ended.code, signal: ended.signal, out });
+    };
+    kid.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      reject(err);
+    });
+    kid.on('exit', (code, signal) => {
+      ended = { code, signal };
+      timer = setTimeout(settle, DRAIN_MS);
+    });
+    kid.on('close', settle);
+  });
 }
 
 /** The default branch, read from the remote rather than assumed to be `main`. */
@@ -205,7 +357,9 @@ function refusal({ record, tree, branch, mainBranch, staged = [] }) {
   return null;
 }
 
-function run() {
+const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+
+async function run() {
   const branch = git(['branch', '--show-current']);
   const mainBranch = defaultBranch();
   if (branch === mainBranch) {
@@ -222,34 +376,67 @@ function run() {
     process.exit(1);
   }
 
-  for (const step of STEPS) {
-    process.stdout.write(`[precommit] ${step.name}... `);
-    try {
-      execFileSync('npm', step.args, { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
-      console.log('ok');
-    } catch (err) {
+  // EVERY way this process can end, wired before the first step is spawned.
+  //
+  // WHICH PATH IS RESPONSIBLE FOR WHAT, stated once here. The `finally` inside
+  // the loop ends the group when a step is over, so the next step never shares
+  // the machine with what the last one left. The outer `finally` covers an
+  // error out of the body. The signal listeners cover SIGINT, SIGTERM and
+  // SIGHUP, which is the case that cost four attempts to land a two-line
+  // change: with no listener at all, Node's default handling ends this process
+  // without unwinding, and the harness mid-mutation was simply abandoned. The
+  // 'exit' listener covers the failure path, which leaves by `process.exit` and
+  // therefore runs no `finally` of ours at all. Listeners there may only do
+  // synchronous work, which is why the ending blocks rather than awaits.
+  const onExit = () => endLiveGroup();
+  const onSignal = () => { endLiveGroup(); process.exit(130); };
+  process.on('exit', onExit);
+  for (const signal of SIGNALS) process.on(signal, onSignal);
+
+  try {
+    for (const step of STEPS) {
+      process.stdout.write(`[precommit] ${step.name}... `);
+      let result;
+      try {
+        result = await runStep(step);
+      } finally {
+        // A step being over means its DIRECT child has closed, which does not
+        // mean its group is empty: a package runner starts children that
+        // outlive it, and those were what the gate used to report PASS over.
+        endLiveGroup();
+      }
+      if (result.ok) {
+        console.log('ok');
+        continue;
+      }
       console.log('FAILED');
-      // BOTH streams. The node test runner writes which test failed and why to
-      // STDOUT, and tsc writes its diagnostics there too; stderr carries only
-      // npm's "lifecycle script failed" boilerplate. Capturing stderr alone
-      // left the developer with a bare "test failed" and nothing to act on,
-      // which removes the read-the-result step on the one path where reading
-      // the result is the entire point.
-      const detail = [err.stdout, err.stderr]
-        .map(stream => (stream ? String(stream).trim() : ''))
-        .filter(Boolean)
-        .join('\n');
+      // BOTH streams, interleaved as the step wrote them. The node test runner
+      // writes which test failed and why to STDOUT, and tsc writes its
+      // diagnostics there too; stderr carries only npm's "lifecycle script
+      // failed" boilerplate. Capturing stderr alone left the developer with a
+      // bare "test failed" and nothing to act on, which removes the
+      // read-the-result step on the one path where reading the result is the
+      // entire point.
+      const detail = result.out.trim();
       if (detail) console.error(detail.split('\n').slice(-25).join('\n'));
-      console.error(`[precommit] ${step.name} failed. No record written, so the commit stays blocked.`);
+      // Said out loud when a step was ENDED rather than having failed. Reported
+      // as a bare failure, a step killed by a signal reads as a broken test and
+      // sends the developer looking for one.
+      const how = result.signal ? ` (ended by ${result.signal})` : '';
+      console.error(`[precommit] ${step.name} failed${how}. No record written, so the commit stays blocked.`);
       process.exit(1);
     }
-  }
 
-  // Written only after every step passed, so the record's existence IS the
-  // result being read. There is no separate "did you look at it" step to skip.
-  const record = buildRecord({ tree: currentTree(), branch, at: new Date().toISOString() });
-  writeRecord(record);
-  console.log(`[precommit] PASS. Record written for tree ${record.tree.slice(0, 12)} on ${branch}.`);
+    // Written only after every step passed, so the record's existence IS the
+    // result being read. There is no separate "did you look at it" step to skip.
+    const record = buildRecord({ tree: currentTree(), branch, at: new Date().toISOString() });
+    writeRecord(record);
+    console.log(`[precommit] PASS. Record written for tree ${record.tree.slice(0, 12)} on ${branch}.`);
+  } finally {
+    endLiveGroup();
+    process.off('exit', onExit);
+    for (const signal of SIGNALS) process.off(signal, onSignal);
+  }
 }
 
 function verify() {
@@ -266,7 +453,15 @@ function verify() {
 
 if (require.main === module) {
   if (process.argv.includes('--verify')) verify();
-  else run();
+  else {
+    // An unhandled rejection would print a stack and exit non-zero, which is
+    // the right code for the wrong reason and reads as a failed check. The
+    // 'exit' listener still ends the group either way.
+    run().catch((err) => {
+      console.error(`[precommit] the gate could not run: ${(err && err.message) || err}`);
+      process.exit(1);
+    });
+  }
 }
 
-module.exports = { refusal, buildRecord, writeRecord, readRecord, currentTree, defaultBranch, workingTreeDrift, stagedPaths, isReleaseCommit, RELEASE_FOOTPRINT, RECORD, STEPS };
+module.exports = { refusal, buildRecord, writeRecord, readRecord, currentTree, defaultBranch, workingTreeDrift, stagedPaths, isReleaseCommit, RELEASE_FOOTPRINT, RECORD, STEPS, STEP_END_GRACE_MS };
