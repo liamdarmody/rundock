@@ -60,7 +60,7 @@
  * load the retries were creating.
  */
 
-const { execFileSync, spawn, spawnSync } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -343,141 +343,11 @@ function restoreTo(repo, ref, files) {
   }
 }
 
-// How long a process group started here gets to end on its own before it is
-// ended outright. Short on purpose. The politeness is worth something, since a
-// test runner given the chance will close its reporters and flush its output,
-// but the group being waited on is only ever one this run started, and nothing
-// this tool spawns has a restore step to skip. The cost of waiting longer is
-// paid by a developer watching the tool refuse to exit.
-const END_GRACE_MS = 500;
-const POLL_MS = 50;
-
-// A pause that blocks rather than yields.
-//
-// It has to block, because the last place the ending below runs is an 'exit'
-// listener. By then the event loop has finished and a timer would never fire,
-// so anything asynchronous there is the same as no wait at all.
-function pause(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-/**
- * Does this target still exist?
- *
- * A NEGATIVE number asks about a whole process group, a positive one about a
- * single process; the rule is the same for both, which is why there is one
- * function. Signal 0 asks the kernel without sending anything, and EPERM is a
- * yes: the target is there and this process may not signal it, which is a
- * different answer from the target being gone.
- *
- * EXISTING IS NOT THE SAME AS RUNNING, and the difference is the whole of the
- * defect below this line. See groupRunning.
- */
-function exists(target) {
-  try { process.kill(target, 0); return true; } catch (e) { return e.code === 'EPERM'; }
-}
-
-// The process state that means "already exited, still listed". A process whose
-// parent has not collected it keeps its entry in the table, and its process
-// group with it. Every other state is a process that is still on the machine.
-const EXITED_STATE = 'Z';
-
-/**
- * The members of a process group, as {pid, state}, or null if this machine will
- * not say.
- *
- * Spawning is allowed here even from a signal or 'exit' listener because it is
- * synchronous, which is also why it is asked only when the cheap question above
- * has already answered "something is there".
- *
- * The whole table is listed and filtered here rather than asked for by group,
- * because the flag that selects a process group is not the same one on every
- * platform and picking the wrong one silently selects by something else.
- */
-function psGroupMembers(pgid) {
-  const out = spawnSync('ps', ['-e', '-o', 'pgid=,pid=,stat='],
-    { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] });
-  if (out.error || typeof out.stdout !== 'string') return null;
-  if (out.status !== 0 && !out.stdout.trim()) return null;
-  const members = [];
-  for (const line of out.stdout.split('\n')) {
-    const parts = line.trim().split(/\s+/);
-    if (parts.length < 3) continue;
-    if (Number(parts[0]) !== pgid) continue;
-    members.push({ pid: Number(parts[1]), state: parts[2] });
-  }
-  return members;
-}
-
-/**
- * Is anything in this process group still RUNNING, as opposed to merely listed?
- *
- * @returns {boolean|null} true running, false gone, null this machine will not say
- *
- * THE DISTINCTION IS THE DEFECT, and it is a platform difference that a macOS
- * measurement cannot show. When this process signals its own direct child and
- * then waits, the child dies at once but stays in the table until this process
- * collects it, which it cannot do while the event loop is blocked in the wait.
- * On Linux that corpse is still a member of its process group, so asking the
- * kernel whether the group exists keeps answering yes for the entire grace,
- * the group is then SIGKILLed for no reason, the ending reports that it
- * survived, and an alarm meant for a genuine leak fires on every interrupt.
- * macOS filters exited members out of the same question, so none of it shows
- * there. Continuous integration runs on Linux.
- *
- * So the group is asked about by its members and their states, and a group
- * whose remaining members have all exited is gone.
- *
- * The reader is a parameter so the decision can be driven on any machine,
- * including one whose sandbox blocks spawning, rather than only on the platform
- * that happens to produce corpses.
- */
-function groupRunning(pgid, readMembers = psGroupMembers) {
-  // Cheap first, and on macOS it is usually the only question asked.
-  if (!exists(-pgid)) return false;
-  const members = readMembers(pgid);
-  if (members === null) return null;
-  return members.some(m => !String(m.state).startsWith(EXITED_STATE));
-}
-
-/**
- * End one process group, and say what became of it.
- *
- * @returns {'gone'|'running'|'unknown'}
- *
- * A NEGATIVE pid signals the whole group, which is the point rather than a
- * detail. The test command is spawned detached, so it heads its own group, and
- * a package runner starts children inside that group; ending the direct child
- * alone leaves those children running, which is how a check that had already
- * printed its conclusion kept a full suite on the machine.
- *
- * Ending a group BY NUMBER is also what keeps the remedy from becoming the next
- * defect. The obvious way to clear leftovers is to match command lines across
- * the machine and kill what matches, and that reaches processes this tool never
- * started: a suite in another checkout, or a mutation harness partway through
- * rewriting a file it restores in a `finally` that a killed process never runs.
- * A group id names processes by where they came from rather than by what they
- * look like, so nothing outside this run can be caught by it however similar it
- * looks.
- *
- * SIGTERM first and SIGKILL after the grace, because a child that ignores
- * SIGTERM is the only case where anything but the escalation keeps a suite from
- * outliving this process, and the criterion it answers to is unconditional.
- */
-function endGroup(pgid) {
-  if (groupRunning(pgid) === false) return 'gone';
-  try { process.kill(-pgid, 'SIGTERM'); } catch (e) { /* gone since the check */ }
-  const deadline = Date.now() + END_GRACE_MS;
-  while (Date.now() < deadline) {
-    if (groupRunning(pgid) === false) return 'gone';
-    pause(POLL_MS);
-  }
-  try { process.kill(-pgid, 'SIGKILL'); } catch (e) { /* gone since the check */ }
-  pause(POLL_MS);
-  const after = groupRunning(pgid);
-  if (after === false) return 'gone';
-  return after === null ? 'unknown' : 'running';
-}
+// The process-group lifecycle lives in scripts/lib/process-group.js, because
+// the pre-commit gate has the same subtree to end and got it wrong in the same
+// three ways. `exists` and `groupRunning` are used below; `groupRunning` is
+// re-exported because this tool's own orphan tests drive it directly.
+const { exists, groupRunning, endGroup } = require('./lib/process-group.js');
 
 /**
  * Where a run in progress is recorded, so the next start can see it.
