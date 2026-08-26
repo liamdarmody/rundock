@@ -48,7 +48,7 @@ The server uses Node's native `http` module and the `ws` library for WebSocket. 
 
 ### Runtime subprocesses
 
-Every conversation that is actively producing tokens has a runtime child process attached to it. For Claude Code agents (the default), Rundock spawns `claude` configured to read from the workspace directory, with the workspace's `.mcp.json` for MCP servers, with the workspace's `.claude/settings.local.json` for hooks, and with the agent's name passed so Claude Code loads the right system prompt from `.claude/agents/<slug>.md`.
+Every conversation that is actively producing tokens has a runtime child process attached to it. For Claude Code agents (the default), Rundock spawns `claude` configured to read from the workspace directory, with the workspace's `.mcp.json` for MCP servers (merged with the per-user credentials in `.rundock/mcp-secrets.json` where there are any: see MCP credentials, below), with the workspace's `.claude/settings.local.json` for hooks, and with the agent's name passed so Claude Code loads the right system prompt from `.claude/agents/<slug>.md`.
 
 Agents with `runtime: codex` run on the official Codex CLI instead, through ONE long-lived `codex app-server` process shared by the whole server (spawned lazily on the first Codex turn, supervised with restart-on-crash by `codex-appserver.js`). Each Codex conversation is a thread on that process and each message a streamed turn, with conversation continuity through thread resume and the agent's instructions carried in the first-turn prompt (Codex has no `--agent` equivalent). Codex agents use Codex's own sandbox (workspace-write, approvals on-request); sandbox escalations arrive as per-action approval requests that render as Rundock permission cards. The orchestrator always runs on Claude Code (delegation works through the Agent tool in Claude Code's stream, which Codex does not have). Environment detection and failure classification live in `codex.js`.
 
@@ -87,6 +87,8 @@ Contents:
 | `transcripts/<convoId>.json` | Lightweight conversation transcript for fast UI replay (role, agent, text). Capped to keep file size reasonable. |
 | `child-pids.json` | Running Claude Code subprocess PIDs, used to clean up zombie processes on server restart. Each record carries the command it was spawned as, so a pid the OS has since recycled onto an unrelated process is not signalled. Not every platform can read a command line, and where none can be read the record is assumed to be ours rather than discarded: `pidRecordAlive` in `lib/runtime/claude.js` documents which sources exist, what each costs, and what that assumption gives up. |
 | `search-index.db` | SQLite FTS5 index behind universal search (plus its `-wal`/`-shm` journal files). A **derived artifact**: delete it and the next workspace open rebuilds it from the files and transcripts it indexes. Never a source of truth. See Universal search, below. |
+| `mcp-secrets.json` | Optional, and written by you rather than by Rundock. Per-user MCP credentials keyed by server name: the values that must not travel with the shared `.mcp.json`. See MCP credentials, below. |
+| `mcp-runtime.json` | The shared `.mcp.json` with those values merged back in, written owner-only and pointed at by `--mcp-config`. A **derived artifact**, like the search index: regenerated before every spawn, safe to delete, and absent entirely unless `mcp-secrets.json` supplies a value. |
 
 What does **not** live in `.rundock/`:
 
@@ -95,6 +97,23 @@ What does **not** live in `.rundock/`:
 - **Agent and skill files.** These live in the workspace under `.claude/agents/` and `.claude/skills/`. Rundock reads them; it does not store them in `.rundock/`.
 
 This split matters because it means Rundock's persistence layer is small and easy to reason about. The expensive thing (every token of every conversation) is owned by Claude Code, which Rundock does not need to replicate or back up.
+
+### MCP credentials
+
+`.mcp.json` is shared and `.rundock/` is not, and that difference is the whole of this. MCP servers commonly take an API key as a literal value, and `.mcp.json` sits at the workspace root with nothing excluding it, so on a workspace shared by repository the key reaches every clone and stays in the history from the first commit, where deleting the file afterwards does not remove it. The values can instead go in `.rundock/mcp-secrets.json`, keyed by server name:
+
+```json
+{ "notion": { "env": { "NOTION_API_KEY": "ntn_..." } } }
+```
+
+`lib/workspace/mcp-secrets.js` merges the two before every spawn and `getBareArgs()` points `--mcp-config` at the result. Its header comment carries the reasoning; four properties are worth knowing here.
+
+- **Only `env` and `headers` are taken from the per-user file.** It supplies values and can never change which servers exist or what command runs one, so `.mcp.json` stays the single answer to what the workspace has.
+- **A literal credential left in `.mcp.json` still works.** Where no per-user value applies, the shared path itself is what gets passed, so a workspace that has not moved anything spawns exactly as it did. Moving a key is opt-in, and nothing scaffolds the per-user file or prompts for it.
+- **The merged file wins over the copy Claude Code finds by itself.** Claude Code also discovers `.mcp.json` from the working directory, so a server named in both has two definitions. Measured against claude 2.1.245 with project-scope servers explicitly enabled: the `--mcp-config` entry is the one that starts, and only one server process starts.
+- **It is replaced by rename, never rewritten in place.** The path is resolved again on every spawn, so a truncate-then-write would let an agent starting at that moment read a half-written config and come up with no MCP servers at all.
+
+The environment was the alternative and was rejected. Claude Code expands `${VAR}` inside `.mcp.json`, so injecting the values into the spawn environment would need no file at all, but the environment of a spawned process is inherited by every child it starts: every other MCP server, and every shell command an agent runs. That would show one server's credential to all of them. An inline `--mcp-config` JSON string was rejected for the same kind of reason: it puts every credential in a command line, which on Linux any local user can read.
 
 ## File system layout per workspace
 
@@ -107,7 +126,7 @@ A workspace is any directory that contains, or is intended to contain, Claude Co
 | `.claude/skills/<slug>/SKILL.md` | Optional | Skills the agents can use. Rundock matches them to agents either by explicit `skills:` frontmatter or by body-text mention of the slug. |
 | `System/Playbooks/<slug>/PLAYBOOK.md` | Optional | Alternative skill location, scanned alongside `.claude/skills/`. Used by Personal OS-style workspaces that pre-date the standard skill location. |
 | `.claude/settings.local.json` | Optional | Hooks and per-workspace Claude Code settings. Forwarded to spawned subprocesses. |
-| `.mcp.json` | Optional | MCP server configuration. Forwarded to spawned subprocesses. |
+| `.mcp.json` | Optional | MCP server configuration. Forwarded to spawned subprocesses. Shared with anyone the workspace folder is shared with, git included, so credentials belong in `.rundock/mcp-secrets.json` instead: see MCP credentials, above. |
 | `.rundock/` | Created on first run | Rundock's own session state. See above. Auto-added to `.gitignore`. |
 
 A workspace can also contain any other user files at the root or in subfolders. Rundock does not require a particular folder layout outside of the paths above. The browser's file panel reads from the workspace root and respects `.gitignore`.
@@ -119,7 +138,7 @@ A handful of source files, three production dependencies, no bundler.
 | File | Approximate size | What it owns |
 |---|---|---|
 | `server.js` | ~2,970 lines | HTTP and WebSocket server, composition root, and the wiring that binds the modules below. Subprocess supervision, skill discovery, universal search wiring, permission mediation. |
-| `lib/` | ~6,200 lines | Most of what `server.js` used to hold, extracted into focused modules: `agents/` (discovery, frontmatter parsing, system prompts), `delegation/` (the orchestrator handoff engine, markers, state, handback), `runtime/` (Claude and Codex spawn plumbing), `protocol/handlers/` (one module per WebSocket message family), `workspace/` (boundary, analysis, scaffolding), `store/` (persistence, transcripts), plus `lib/scheduler.js`, `lib/http-router.js`, `lib/config.js`, `lib/signals.js`. |
+| `lib/` | ~6,200 lines | Most of what `server.js` used to hold, extracted into focused modules: `agents/` (discovery, frontmatter parsing, system prompts), `delegation/` (the orchestrator handoff engine, markers, state, handback), `runtime/` (Claude and Codex spawn plumbing), `protocol/handlers/` (one module per WebSocket message family), `workspace/` (boundary, analysis, scaffolding, the MCP credential split), `store/` (persistence, transcripts), plus `lib/scheduler.js`, `lib/http-router.js`, `lib/config.js`, `lib/signals.js`. |
 | `search.js` | ~1,070 lines | The universal search engine: SQLite FTS5 index over workspace files and conversation transcripts, query sanitisation, fuzzy title scoring. Pure module: no WebSocket, no globals, fully unit-testable. See Universal search, below. |
 | `codex.js` | ~250 lines | Codex runtime support: binary/auth/Windows-sandbox detection, thread-id hygiene, error classification, rollout-file resolution. Pure module, fully unit-testable. |
 | `codex-appserver.js` | ~760 lines | The Codex app-server protocol client and supervisor: one long-lived `codex app-server` process serves every Codex conversation (JSON-RPC over stdio), with streamed turns, first-class approval requests, interrupt, crash restart, and pinned policy invariants. Pure module, fully unit-testable against the protocol stub. |

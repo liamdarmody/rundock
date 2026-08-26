@@ -352,6 +352,12 @@ describe('a schedule the scheduler cannot read', () => {
             // Paused AND never turned on. Two reasons not to run, and the row
             // may promise nothing on the strength of either.
             { name: 'Paused and held back', schedule: SCHEDULE, prompt: 'p', paused: true },
+            // A NAME, A SCHEDULE AND NOTHING TO SAY, which is what somebody
+            // writing a routine by hand produces when they stop after the
+            // field they read about first. Written here rather than as a
+            // hand-built row because the claim is that it survives the parser,
+            // the migration and the roster looking exactly like this.
+            { name: 'No prompt', schedule: SCHEDULE, enabled: true },
           ],
         }),
       },
@@ -392,6 +398,37 @@ describe('a schedule the scheduler cannot read', () => {
         'the row does not name the weekly shape either');
       // And it does not promise a run, because there is no run to promise.
       assert.ok(!/Next run/.test(words), `the cron row still promises a next run: ${words}`);
+    });
+  });
+
+  // THE ROW FOR A ROUTINE WITH NOTHING TO SAY, out of a real agent file.
+  //
+  // The scheduler refuses such a routine, and a refusal nobody can see is the
+  // half of the defect that outlives the fix: before it, the row promised a
+  // next run and the run it then made handed the agent the word "null"; a
+  // refusal alone would leave the row promising a run that never comes. The
+  // person who can fix it is the person who wrote the file, so the row is
+  // where it has to be said.
+  test('a routine with no prompt reaches the row saying it will not run, and what to add', () => {
+    cronWorkspace((doc) => {
+      const row = rowNamed(doc, 'No prompt');
+      const words = text(row);
+      assert.match(words, /has no prompt/i,
+        `the row says nothing about the missing instruction: ${words}`);
+      assert.match(words, /Run the morning briefing/,
+        'the row does not name what goes in the field it is asking for');
+      // And it does not promise a run, because there is no run to promise.
+      assert.strictEqual(row.querySelector('.next-run'), null);
+      assert.ok(!/Next run/.test(words), `the row still promises a next run: ${words}`);
+      // It is not accused of a schedule fault either: its schedule is one the
+      // scheduler reads perfectly well, and sending its owner to change it
+      // would answer a question nobody asked.
+      assert.ok(!/cannot read this schedule/i.test(words),
+        'the row blames the schedule for a missing prompt');
+      // The contrast in the same list, from the same workspace: a routine
+      // that is merely waiting says none of this.
+      assert.ok(!/has no prompt/i.test(text(rowNamed(doc, 'Not due yet'))),
+        'a routine with an instruction is accused of having none');
     });
   });
 

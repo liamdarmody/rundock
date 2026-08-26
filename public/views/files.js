@@ -446,7 +446,7 @@ function rebuildFileTree(c, tree) {
     if(editorEmpty) editorEmpty.innerHTML=`
       <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" class="empty-icon"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
       <div class="empty-title">No files yet</div>
-      ${guide ? `<button class="empty-cta" style="margin-top:8px" onclick="startConversation('${guide.id}')">Talk to Doc</button>` : ''}`;
+      ${guide ? `<button class="empty-cta" style="margin-top:8px" data-agent-id="${escAttr(guide.id)}" onclick="startConversation(this.dataset.agentId)">Talk to Doc</button>` : ''}`;
     return;
   }
   if(editorEmpty) editorEmpty.innerHTML=`
