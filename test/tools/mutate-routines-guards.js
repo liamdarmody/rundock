@@ -46,6 +46,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
+const { beginMutationRun } = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 
@@ -1092,8 +1093,9 @@ function run() {
     TEAM_PANEL, INDEX_SWEEP, PROFILE_BOXES, PROFILE_ROUTE,
     GUIDE_COPY_MOD, TEAM_COPY, PROFILE_COPY, TEAM_DOOR, SIDEBAR_CSS,
     MODEL_WORKSPACE, VIEW_WORKSPACE, DISCOVERY_WORKSPACE, APP_E2E, WS_HANDLER];
+  const session = beginMutationRun({ files: targets.map((target) => target.src) });
   const originals = new Map();
-  for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));
+  for (const target of targets) originals.set(target, session.original(target.src));
   const results = [];
   try {
     for (const [target, label, guard, without] of MUTATIONS) {
@@ -1116,7 +1118,7 @@ function run() {
       fs.writeFileSync(target.src, original);
     }
   } finally {
-    for (const [target, original] of originals) fs.writeFileSync(target.src, original);
+    session.finish();
   }
   return results;
 }

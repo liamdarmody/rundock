@@ -525,6 +525,33 @@ describe('state + conversation persistence', () => {
     assert.deepStrictEqual(srv.readMcpServerNames(dir), ['notion']);
   });
 
+  // The wiring, not the merge: lib/workspace/mcp-secrets.js is unit-tested on
+  // its own, and what this pins is that a spawn actually gets pointed at the
+  // merged file. The two assertions that matter are the pair: the same
+  // workspace passes .mcp.json before a per-user value exists and the merged
+  // file after, so nothing changes for a workspace that has not opted in.
+  test('getBareArgs: a per-user credential redirects --mcp-config to the merged file', () => {
+    const dir = useWorkspace({});
+    fs.writeFileSync(path.join(dir, '.mcp.json'),
+      JSON.stringify({ mcpServers: { notion: { command: 'npx', env: { NOTION_API_KEY: '' } } } }));
+
+    const before = srv.getBareArgs();
+    assert.strictEqual(before[before.indexOf('--mcp-config') + 1], path.join(dir, '.mcp.json'),
+      'with no per-user value the shared file is passed, exactly as before');
+
+    fs.mkdirSync(path.join(dir, '.rundock'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.rundock', 'mcp-secrets.json'),
+      JSON.stringify({ notion: { env: { NOTION_API_KEY: 'ntn_live' } } }));
+
+    const after = srv.getBareArgs();
+    const passed = after[after.indexOf('--mcp-config') + 1];
+    assert.strictEqual(passed, path.join(dir, '.rundock', 'mcp-runtime.json'));
+    assert.strictEqual(JSON.parse(fs.readFileSync(passed, 'utf-8')).mcpServers.notion.env.NOTION_API_KEY, 'ntn_live',
+      'the spawn must actually receive the credential');
+    assert.ok(!fs.readFileSync(path.join(dir, '.mcp.json'), 'utf-8').includes('ntn_live'),
+      'and the shared, git-tracked file must not have gained it');
+  });
+
   test('readMcpServerNames: [] on missing/invalid input', () => {
     assert.deepStrictEqual(srv.readMcpServerNames(null), []);
     assert.deepStrictEqual(srv.readMcpServerNames('/nonexistent'), []);

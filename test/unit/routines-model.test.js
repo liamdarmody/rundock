@@ -1132,6 +1132,81 @@ describe('a routine whose schedule the scheduler cannot read', () => {
   });
 });
 
+// ===== A ROUTINE WITH NOTHING TO SAY =====
+//
+// A routine that declares a schedule and no prompt used to be indistinguishable
+// on this list from one that works. It promised a next run, offered to be
+// turned on, fired on time, and handed its agent the four letters n-u-l-l.
+// The server refuses it now, and this is the half that tells the person who
+// wrote the file why nothing is happening.
+//
+// WHETHER THERE IS A PROMPT IS ASKED HERE RATHER THAN CARRIED, which is the
+// opposite of the schedule fault beside it and for a stated reason: whether a
+// schedule PARSES needs the scheduler's grammar, and a second copy of that
+// grammar on this side would be free to disagree with the tick. Whether a
+// value is text needs no grammar at all, and the prompt is already on the
+// roster, so asking it here adds no second answer to disagree with.
+describe('a routine with no prompt', () => {
+  const problem = (input) => m.promptProblem(input);
+
+  test('the row is told it will not run, and what to add', () => {
+    const p = problem({ prompt: null });
+    assert.ok(p, 'a routine with no prompt raises nothing');
+    assert.match(p.text, /has no prompt/i);
+    // NAMES WHAT TO ADD, BY EXAMPLE, the same rule the schedule fault follows.
+    // A reader who has just been told a field is missing needs to know what
+    // goes in it.
+    assert.match(p.text, /Run the morning briefing/);
+  });
+
+  test('a prompt that is only spaces is the same nothing as no prompt at all', () => {
+    assert.ok(problem({ prompt: '   ' }), 'whitespace was read as an instruction');
+    assert.ok(problem({ prompt: '' }), 'a declared, empty prompt was read as an instruction');
+  });
+
+  test('a routine with an instruction raises nothing', () => {
+    assert.strictEqual(problem({ prompt: 'Run the digest' }), null);
+  });
+
+  // SILENCE IS NOT A FAULT, the same rule `scheduleProblem` follows. A caller
+  // that did not send the field is not describing a routine with nothing to
+  // say, and turning that into a complaint would accuse every row built by a
+  // caller that never carried a prompt.
+  test('a caller that never said raises nothing', () => {
+    assert.strictEqual(problem({ schedule: 'every day at 07:00' }), null);
+    assert.strictEqual(problem({}), null);
+    assert.strictEqual(problem(null), null);
+  });
+
+  // NAMED HERE AS WELL AS SWEPT, for the reason the schedule guard is: the
+  // combination sweep below also fails without this, and a named test says
+  // which property broke rather than leaving a combination to be decoded.
+  test('an instant supplied with no prompt is still not promised', () => {
+    assert.strictEqual(m.nextRunLabel({
+      schedule: 'every day at 07:00', scheduleReadable: true, prompt: null,
+      nextRun: TOMORROWS_SLOT, now: NOW, zone: ZONE,
+    }), null, 'a row promised a run for a routine that will never be started');
+    // The same instant with a prompt is promised, so this is the guard rather
+    // than an instant the model cannot render.
+    assert.ok(m.nextRunLabel({
+      schedule: 'every day at 07:00', scheduleReadable: true, prompt: 'Run it',
+      nextRun: TOMORROWS_SLOT, now: NOW, zone: ZONE,
+    }));
+  });
+
+  test('the problem reaches the row, and the row promises no run', () => {
+    const row = m.row({
+      name: 'Morning briefing', schedule: 'every day at 07:00', scheduleReadable: true,
+      prompt: null, enabled: true, paused: false, nextRun: TOMORROWS_SLOT, now: NOW, zone: ZONE,
+    });
+    assert.ok(row.promptProblem, 'the row drops the problem');
+    assert.strictEqual(row.nextRun, null);
+    // And it is a fault of its own rather than the schedule's, so a reader is
+    // not sent to edit a schedule that is perfectly readable.
+    assert.strictEqual(row.scheduleProblem, null);
+  });
+});
+
 // ===== NO ROW SAYS TWO THINGS THAT CANNOT BOTH BE TRUE =====
 //
 // THE DEFECT THIS BLOCK EXISTS FOR, and the reason it is an enumeration rather
@@ -1170,6 +1245,10 @@ describe('a row never says two things that cannot both be true', () => {
     ['no schedule at all', { ...held, schedule: null, scheduleReadable: false }],
     ['a schedule that is only spaces', { ...held, schedule: '   ', scheduleReadable: false }],
     ['a run target this release cannot run', { ...held, runOn: 'agent-computer' }],
+    // A block with a name and a schedule and no prompt. The parser keeps any
+    // block that has a name, so this reaches the roster, and the gate refuses
+    // it because there is nothing to send.
+    ['no prompt at all', { ...held, prompt: null }],
   ];
 
   // A ROUTINE THAT WAS NEVER TURNED ON DID NOT MISS ANYTHING.
@@ -1280,6 +1359,10 @@ describe('a row never says two things that cannot both be true', () => {
     // it covered. A routine with no schedule can never run, and the row says
     // nothing about it, so nothing else in the matrix stood in for it.
     ['no schedule at all', { schedule: null, scheduleReadable: false }],
+    // The other half of the same class: a routine that says WHEN and never
+    // says WHAT. It joins the matrix here rather than being paired by hand
+    // with the eight around it.
+    ['no prompt at all', { prompt: null }],
     ['a run target this release cannot run', { runOn: 'agent-computer' }],
     ['a slot that went by', { missedSlot: YESTERDAYS_SLOT }],
     ['a next run', { nextRun: TOMORROWS_SLOT }],
@@ -1299,6 +1382,7 @@ describe('a row never says two things that cannot both be true', () => {
     if (row.nextRun && row.nextRun.text !== 'Paused') promising.push(`next run: ${row.nextRun.text}`);
     if (row.nextRun && row.nextRun.text === 'Paused') denying.push('next run: Paused');
     if (row.scheduleProblem) denying.push(`problem: ${row.scheduleProblem.text}`);
+    if (row.promptProblem) denying.push(`problem: ${row.promptProblem.text}`);
     if (row.workspaceNote) denying.push(`workspace: ${row.workspaceNote.text}`);
     // A RUN STATUS IS DELIBERATELY NEITHER. It reports the past, and the row
     // pairs it with the next run ON PURPOSE, because after a miss or a failure
