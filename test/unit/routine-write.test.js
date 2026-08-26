@@ -80,6 +80,31 @@ describe('appending a routine block', () => {
     assert.strictEqual(added.enabled, true);
   });
 
+  // WHETHER A NEW ROUTINE MAY RUN IS NEVER LEFT TO A DEFAULT.
+  //
+  // The writer skips both null and undefined, so a caller that sends either
+  // for `enabled` would have no key written at all, and a block with no
+  // `enabled` key reads as not enabled. A routine created here would then
+  // arrive switched off, which is the exact fault this reader's default exists
+  // to prevent, pointed the other way: the person made a routine and it
+  // quietly did not run.
+  //
+  // Absent and null are therefore the same question here, and both get the
+  // same answer written into the file. Nothing about the caller decides it:
+  // this path is how a routine is CREATED, and a created routine is live.
+  for (const [what, enabled] of [['omits it', undefined], ['sends null', null]]) {
+    test(`a routine whose caller ${what} is written as enabled`, () => {
+      const next = appendRoutineBlock(WITH_ROUTINES, { ...NEW_ROUTINE, enabled });
+      const added = routinesIn(next).filter(r => r.name === NEW_ROUTINE.name)[0];
+      assert.ok(added, 'the routine is in the file');
+      assert.strictEqual(added.enabled, true);
+      // On disk as well as through the reader, because the reader would say
+      // false for a missing key and true for a written one, and only the bytes
+      // tell those apart from a key that was never written.
+      assert.match(next, /name: Compile the ops summary[\s\S]*?enabled: true/);
+    });
+  }
+
   test('everything already in the file survives', () => {
     const next = appendRoutineBlock(WITH_ROUTINES, NEW_ROUTINE);
     for (const line of [

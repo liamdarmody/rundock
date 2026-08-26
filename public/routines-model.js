@@ -74,10 +74,199 @@
     'failed': { tone: 'failed', lead: 'Failed' },
   };
 
+  /**
+   * The offer made to a routine nobody has turned on yet.
+   *
+   * WHY THIS STATE EXISTS AT ALL. A routine whose file never carried `enabled`
+   * was written by hand before this product could run one, beside a cron job
+   * that is still doing the work. The reader treats that silence as "not yet"
+   * rather than as consent, so after an upgrade these rows are the ones a
+   * person meets first.
+   *
+   * AND WHY THE SENTENCE SAYS WHAT IT SAYS. The reader arriving here already
+   * has the job running somewhere else. "Turn on" alone reads as tidying a
+   * switch, and the thing they have to know before pressing it is that Rundock
+   * will begin running the routine ITSELF, on top of whatever is running it
+   * today. That is the sentence that stops a morning briefing going out twice.
+   */
+  const NOT_ENABLED = {
+    lead: 'Not running.',
+    body: 'Turn it on and Rundock will start running it on this schedule.',
+    // WHEN THE FIRST RUN LANDS, said only where it is true.
+    //
+    // This reader most needs to know that a slot already gone today is caught
+    // up within the minute: their own scheduler ran the same job this morning,
+    // and an offer naming only the schedule would hand them the double run
+    // this change exists to prevent, on the very first press.
+    //
+    // But that is not true on every row the offer appears on. A routine that
+    // already ran today and was then switched off is suppressed by the run
+    // guard until tomorrow, and a weekly routine turned on away from its
+    // weekday does not run shortly at all. So the sentence is chosen from the
+    // instant the server computed, which already accounts for both, rather
+    // than asserted about all of them.
+    catchUpGone: 'Its scheduled time has already gone, so it runs shortly after you turn it on.',
+    catchUpAhead: 'Turned on now, it runs {when}.',
+    label: 'Turn on',
+  };
+
+  /**
+   * What a row says when the scheduler cannot read its schedule.
+   *
+   * THE SILENCE THIS ENDS. `parseSchedule` accepts two shapes and returns null
+   * for everything else, at which point the tick skips the routine with no
+   * error, no warning and no log line. A cron-scheduled routine then sits in a
+   * first-class Routines view looking exactly like a routine, and the silence
+   * has moved from a log nobody reads to a surface everybody reads. Migration
+   * never touches a schedule, so every such entry survives an upgrade exactly
+   * as written, which means anyone arriving from cron arrives with these.
+   *
+   * IT NAMES WHAT TO CHANGE, BY EXAMPLE. "Unsupported schedule" sends the
+   * reader to documentation this product does not put in front of them. The
+   * two shapes that work, written out, send them to the editor instead. Both
+   * are given because a reader whose job is weekly should not have to guess
+   * that the daily example generalises.
+   */
+  const SCHEDULE_PROBLEM = {
+    lead: 'Rundock cannot read this schedule, so this routine will not run.',
+    body: 'Change it to say every day at 07:00, or a weekday, like every Monday at 07:00.',
+  };
+
+  /**
+   * What a row says when a routine has no instruction to send.
+   *
+   * THE SILENCE THIS ENDS. A routine that declares a schedule and no prompt
+   * was, on this list, indistinguishable from one that works: it named a next
+   * run, it offered to be turned on, and when its slot came the absent value
+   * was coerced on its way to the agent, which then worked unattended on the
+   * four letters n-u-l-l and recorded a completed run. Every surface said the
+   * routine was healthy. The gate refuses it now, and a refusal nobody can see
+   * would leave the row promising a run that never comes, which is the same
+   * silence wearing a different face.
+   *
+   * IT NAMES WHAT TO ADD, BY EXAMPLE, the same rule the schedule fault
+   * follows. "No prompt" is a field name, and a reader who has just been told
+   * a field is missing needs to know what goes in it.
+   *
+   * ITS OWN FAULT AND NOT THE SCHEDULE'S. A routine like this usually has a
+   * schedule the scheduler reads perfectly well, so the line beside it stays
+   * quiet and nobody is sent to edit a schedule that is right.
+   */
+  const PROMPT_PROBLEM = {
+    lead: 'This routine has no prompt, so it will not run.',
+    body: 'Add one: the instruction its agent is sent when it fires, like Run the morning briefing.',
+  };
+
+  /**
+   * What a row says about a routine the scheduler is not serving.
+   *
+   * THE FACT IT ENDS. There is one scheduler and it serves one workspace: the
+   * tick reads the roster of whichever workspace the server has open and runs
+   * each routine with that workspace as its working directory. Routines
+   * anywhere else are dormant, and until this line existed nothing said so.
+   *
+   * WHY A LIST CAN BE SHOWING DORMANT ROUTINES AT ALL. Several windows can
+   * look at one server, which is the setup the always-on documentation
+   * recommends: a browser on the laptop and one on the phone. When one of them
+   * switches the server to another workspace, the others go on showing the
+   * workspace their reader chose, and every routine on those screens has
+   * stopped being served. They are not moved, because a reader's screen is not
+   * another window's to change; they are told.
+   *
+   * IT NAMES WHERE RUNDOCK WENT, not where the routine is. Which workspace
+   * these routines belong to is one fact about the whole list and the header
+   * carries it; repeating it on every row would say it once per routine. What
+   * the row cannot get from the header is why it stopped, and the answer is a
+   * workspace the header does not name.
+   */
+  const NOT_SERVED = {
+    lead: 'Not running.',
+    // The name is a slot and never a concatenation, the same rule the leads
+    // below follow: the whole sentence is in this object.
+    body: 'Rundock has moved to {workspace} and is running that workspace\'s routines instead.',
+  };
+
   const LEAD = {
     title: 'Routines',
     lead: 'Every scheduled skill across your team, and when it runs next.',
+    // WHICH WORKSPACE THIS LIST IS, SAID RATHER THAN INFERRED. The window
+    // title carries the workspace and the list does not, so a reader with
+    // three workspaces has to look somewhere else on the screen to know whose
+    // routines these are, and nothing at all tells them what became of the
+    // other two. Both halves are here: the list names its workspace, and it
+    // says plainly that the routines in the others are not running.
+    //
+    // THE WORKSPACE NAMED IS THE ONE THE ROWS CAME FROM, never the one this
+    // window remembers opening. Those are two different facts and the whole
+    // point of the second line below is that they can disagree; a header that
+    // named the remembered one would sit directly above a list of somebody
+    // else's routines and describe it wrongly.
+    workspaceLine: 'These are the routines in {workspace}. Rundock runs the routines of whichever workspace it has open, so the routines in your other workspaces are not running.',
+    // AND WHEN THE SCHEDULER HAS MOVED ON. The rows below are real routines in
+    // a real workspace and none of them is going to fire, so the line that
+    // would otherwise reassure the reader is replaced rather than joined.
+    movedLine: 'These are the routines in {workspace}. Rundock has moved to {serving} and is running that workspace\'s routines, so none of these are running.',
+    // SCOPED TO ONE AGENT, THE SENTENCE SAYS SO. A filtered list under an
+    // unfiltered sentence reads as a list that has lost rows, which is the one
+    // reading a header must never invite.
+    //
+    // THE NAME IS A SLOT AND NEVER A CONCATENATION, the same rule the editor's
+    // own leads follow: the whole sentence is in this object, so a reviewer
+    // reads the shipped copy here rather than assembling it out of a template
+    // and a variable somewhere else.
+    scopedLead: "Every scheduled skill {agent} runs, and when it runs next.",
   };
+
+  /**
+   * The header this view heads itself with: a title and the sentence under it.
+   *
+   * THE SUBTITLE IS THE LEAD SENTENCE, MOVED. It used to be a paragraph below
+   * the heading; the component this view now shares with the skills view
+   * carries it inside the header block instead, which is why it arrives from
+   * here rather than being drawn separately.
+   *
+   * @param {{agentName?: string|null, workspace?: string|null,
+   *   servingWorkspace?: string|null}} [input] the agent the list is scoped to
+   *   when it is scoped to one, the path the listed routines were read from,
+   *   and the path the server's scheduler is serving.
+   */
+  function header(input) {
+    const agentName = (input && input.agentName) || null;
+    // THE WORKSPACE LINE IS ITS OWN FIELD, not folded into the subtitle. The
+    // subtitle already changes with the scope, so a workspace sentence spliced
+    // into it would have to be written twice and would go stale in one of the
+    // two. It is absent rather than vague when no path was supplied: a header
+    // that says "these are the routines in your workspace" has told the reader
+    // nothing they did not have.
+    //
+    // AND IT DESCRIBES THE ROWS, WHICHEVER OF THE TWO SENTENCES IT PICKS. Both
+    // name the workspace the rows came from; they differ on what is true of
+    // those rows, which is decided by the same comparison every row below
+    // makes, so the header and the list cannot disagree about whether anything
+    // here is running.
+    const workspaceName = workspaceWords(input && input.workspace);
+    const servingName = workspaceWords(input && input.servingWorkspace);
+    let workspaceLine = null;
+    if (workspaceName && isServed(input)) {
+      workspaceLine = LEAD.workspaceLine.replace('{workspace}', () => workspaceName);
+    } else if (workspaceName && servingName) {
+      workspaceLine = LEAD.movedLine
+        .replace('{workspace}', () => workspaceName)
+        .replace('{serving}', () => servingName);
+    }
+    return {
+      title: LEAD.title,
+      workspace: workspaceLine,
+      // THE NAME IS INSERTED, NEVER INTERPRETED. A string replacement reads
+      // dollar sequences in what it is given as instructions: $& is the match,
+      // $` and $' the text either side, $$ a literal dollar. An agent can be
+      // named anything, so a display name carrying $& would put the slot's own
+      // text back into the sentence instead of the name. A function
+      // replacement is handed the match and returns a value, so nothing in
+      // the name is read as a pattern.
+      subtitle: agentName ? LEAD.scopedLead.replace('{agent}', () => agentName) : LEAD.lead,
+    };
+  }
 
   /**
    * What the list says when the server refused a pause or a delete.
@@ -105,6 +294,17 @@
     aside: 'Looking at a skill you already trust? You can also schedule it right from its own page.',
   };
 
+  // The next step appended to `editor.UNASSIGNED_REASON` for the
+  // only-unassigned-skills variant, named here rather than written inline in
+  // the branch that uses it, the same way every other shipped line on this
+  // pane lives in `EMPTY` above rather than in `emptyState`'s return.
+  //
+  // NO SINGULAR PRONOUN, for the reason `UNASSIGNED_REASON` itself carries
+  // none: this pane names no particular skill and can hold this state with
+  // any number of unassigned skills, so "assign it" would point at nothing
+  // with one and be wrong with more than one.
+  const UNASSIGNED_NEXT_STEP = 'Assign your skills to an agent and they will show up here.';
+
   /**
    * WHICH empty state, decided mechanically rather than by taste.
    *
@@ -131,6 +331,15 @@
    * skills. A skill no agent is assigned cannot be scheduled and therefore
    * does not count, which the picker already decides and this inherits.
    *
+   * A THIRD VARIANT, FOR THE CASE THE CHAIN LEAVES OUT. "No skill exists" and
+   * "a skill exists and nobody has it" both leave the picker's `options` at
+   * zero, and until this pass both took the create-a-skill branch, which told
+   * the second workspace to build the skill it already had. `skillChoices`
+   * already knows the difference, having walked both `skills` and `options`
+   * to answer its own question, so it reports it as `onlyUnassignedSkills`
+   * rather than making this file recompute it as a second rule that could
+   * disagree with the picker's own.
+   *
    * AND IT WAITS. "Skills have not arrived yet" and "there are no skills" are
    * different states and only one of them is an offer. Without the wait, a
    * workspace that does have skills is told to build one for a beat on every
@@ -148,6 +357,29 @@
       return { lead: EMPTY.lead, body: editor.STEP_LEADS.loading, action: null, actionKind: null, aside: null };
     }
     const choice = editor.skillChoices({ skills: (input && input.skills) || [] });
+    // CHECKED BEFORE `createSkill`, because `createSkill` is also true here
+    // and would otherwise win the branch first.
+    if (choice.onlyUnassignedSkills) {
+      return {
+        lead: EMPTY.lead,
+        // THE MECHANISM IS THE SKILL PAGE'S OWN SENTENCE, not a second one
+        // written here: `editor.UNASSIGNED_REASON` is the exact string the
+        // skill's own page states in its Schedule card when that skill has
+        // no agent, so the two surfaces cannot end up disagreeing about why.
+        // `UNASSIGNED_NEXT_STEP`, declared above with the rest of this
+        // pane's shipped copy, is the sentence appended to it.
+        body: `${editor.UNASSIGNED_REASON} ${UNASSIGNED_NEXT_STEP}`,
+        // NEITHER A BUTTON NOR AN ASIDE. Assigning a skill to an agent is
+        // existing behaviour this state points at, not a control this pane
+        // grows. And the aside the other states carry promises scheduling
+        // "right from its own page", which is exactly the thing that page
+        // withholds while the skill has no agent; offering it here would
+        // have this state contradict the one it is naming.
+        action: null,
+        actionKind: null,
+        aside: null,
+      };
+    }
     if (choice.createSkill) {
       // THE ACTION GOES WITH THE AGENT THAT FULFILS IT, AND THE NEXT STEP DOES
       // NOT. Dropping the button on its own would leave a line instructing an
@@ -291,11 +523,36 @@
     return `Every ${freq.label} at ${time.label}`;
   }
 
-  function routineSentence(input) {
+  /**
+   * The same sentence, as the two pieces it is made of.
+   *
+   * WHY THE PARTS RATHER THAN A SPLIT AT THE VIEW. The skill name is the one
+   * reachable thing on a row, so the view has to draw it inside its own
+   * element. Recovering it from the assembled string means matching
+   * user-written text inside escaped markup, which is exactly the class of
+   * thing the namesake counter above exists to avoid: a routine may be called
+   * "run: something", and a name carrying a bracket or an ampersand does not
+   * come back out of escaped markup as it went in.
+   *
+   * SO THE MODEL RETURNS THE PIECES AND THE VIEW COMPOSES THEM, which keeps
+   * every word of this sentence asserted here rather than in a DOM test. The
+   * assembled sentence is built FROM the parts rather than beside them, so the
+   * two cannot say different things.
+   *
+   * `lead` carries its own trailing space. A caller that concatenates gets the
+   * sentence back exactly; a caller that puts the name in its own element gets
+   * the space on the outside of it, where a link's underline does not reach.
+   */
+  function sentenceParts(input) {
     const words = scheduleWords(input && input.schedule);
     const name = (input && input.name) || null;
     if (!words || !name) return null;
-    return `${words}, run: ${name}`;
+    return { lead: `${words}, run: `, name: name };
+  }
+
+  function routineSentence(input) {
+    const parts = sentenceParts(input);
+    return parts ? `${parts.lead}${parts.name}` : null;
   }
 
   /**
@@ -311,16 +568,70 @@
    * routine, so while a run is going there is no completed outcome to report,
    * and the row falls back to the single line revision 6 drew.
    */
+  /**
+   * Whether the most recent COMPLETED run failed.
+   *
+   * SEPARATED FROM `outcomeOf` BECAUSE TWO SURFACES ASK TWO DIFFERENT
+   * QUESTIONS, and reading them as one question is what made this wrong.
+   *
+   * A ROW asks what happened most recently, which is the later of a run and a
+   * slot that went by unserved, so a miss after a failure is what the row
+   * says: it is the newer fact and it is the one that explains why nothing
+   * has run since.
+   *
+   * THE RAIL asks whether the last completed run failed, full stop. A failure
+   * followed by a night with the machine shut is still a failure nobody has
+   * seen, and letting the miss mask it would hide the only alarming state in
+   * the product behind the most ordinary event there is. So the dot is
+   * decided here and the row's wording is decided by `outcomeOf`, which leans
+   * on this for its own failure branch so the two cannot disagree about what
+   * a failure IS while disagreeing about what masks it.
+   *
+   * A run still in flight has no completed outcome to report, and a routine
+   * that has never run has none either.
+   */
+  function lastCompletedRunFailed(input) {
+    const statusWord = (input && input.lastRunStatus) || null;
+    if (statusWord === 'running') return false;
+    if (!asDate(input && input.lastStart)) return false;
+    // A run the process died inside did not succeed. It borrows the failure
+    // tone rather than adding a fifth state nothing in the frame draws.
+    return statusWord === 'failed' || statusWord === 'interrupted';
+  }
+
   function outcomeOf(input) {
     const started = asDate(input && input.lastStart);
     const missedSlot = asDate(input && input.missedSlot);
     const statusWord = (input && input.lastRunStatus) || null;
     if (statusWord === 'running') return null;
-    if (missedSlot && (!started || missedSlot > started)) return 'missed';
+    // A ROUTINE NOBODY TURNED ON DID NOT MISS ANYTHING.
+    //
+    // The slot store records every scheduled slot that went by unobserved, for
+    // every routine, whatever the gate would have said about running it. That
+    // split is deliberate: the store keeps the facts, and what to make of them
+    // is decided here.
+    //
+    // Here, the missed line names its own cause: "Rundock was closed at 7:00am
+    // yesterday". For a routine nobody has ever turned on, that cause is
+    // false. Rundock may have been open all night; the routine was never in
+    // service. It would also sit directly above an offer to turn the routine
+    // on, so the row would explain an absence by an event that did not happen
+    // and then offer to fix a different thing.
+    //
+    // ONLY THE MISSED OUTCOME IS WITHHELD. A run that happened, or failed, is
+    // real history from when this routine was running, and hiding that would
+    // be suppressing the truth rather than declining to invent it.
+    // WITHHELD, NOT SHORT-CIRCUITED, and the difference is a run somebody
+    // needs to see. Returning null here hid the whole status rather than the
+    // missed outcome, so a routine that ran, failed, was switched off and then
+    // had a slot pass went silent about the failure: the missed slot is the
+    // newer fact, so this is the branch taken, and there is a real run
+    // underneath it. Skipping only the outcome lets the evaluation below
+    // report what actually happened.
+    const heldBack = input && input.enabled === false;
+    if (missedSlot && (!started || missedSlot > started) && !heldBack) return 'missed';
     if (!started) return null;
-    // A run the process died inside did not succeed. It borrows the failure
-    // tone rather than adding a fifth state nothing in the frame draws.
-    if (statusWord === 'failed' || statusWord === 'interrupted') return 'failed';
+    if (lastCompletedRunFailed(input)) return 'failed';
     const lastSlot = asDate(input && input.lastSlot);
     // How late the run STARTED, with nothing about how long it then took.
     if (lastSlot && started - lastSlot >= CATCH_UP_AFTER_MS) return 'caught-up';
@@ -357,6 +668,297 @@
   }
 
   /**
+   * Whether anything on the team is in the one state the rail is allowed to
+   * alarm about.
+   *
+   * THIS IS THE THREE-TONE RULING REACHING THE CHROME. A catch-up is a
+   * success, a run in flight has no outcome yet, a slot that went by unserved
+   * is history, and a paused routine is not going to run. Only a real failure
+   * is a failure, and a dot that rose on anything else would teach its reader
+   * to ignore the one signal that matters.
+   *
+   * PAUSED IS EXCLUDED BEFORE THE QUESTION IS ASKED, and it has to be rather
+   * than merely happening to be. A paused routine has no next run by
+   * definition, so it can never succeed again, so a dot raised by one could
+   * never be cleared by the rule that clears dots. It would sit on the rail
+   * until the routine was resumed or deleted, which is a permanent alarm about
+   * something the user has already decided to stop.
+   *
+   * A LATER MISSED SLOT DOES NOT MASK A FAILURE HERE, which is where this
+   * parts company with what a row says. See `lastCompletedRunFailed`.
+   *
+   * @param {Array<{lastStart?: any, lastRunStatus?: string|null, lastSlot?: any,
+   *   missedSlot?: any, paused?: boolean}>} [list]
+   */
+  function anyFailure(list) {
+    const routines = Array.isArray(list) ? list : [];
+    return routines.some(routine => !(routine && routine.paused) && lastCompletedRunFailed(routine));
+  }
+
+  /**
+   * Whether anything OTHER than the switch would stop this routine running.
+   *
+   * IT ASKS TWO QUESTIONS AND A CONTRIBUTOR SYNCING IT MUST KEEP BOTH.
+   *
+   * The first is what the scheduler's own gate would refuse, and that half
+   * MIRRORS `routineRefusal` IN lib/scheduler.js: it refuses for paused, then
+   * enabled, then an unsupported run target, then a routine with no prompt to
+   * send, and getNextRun refuses a schedule it cannot parse. A row that offers
+   * to turn a routine on is claiming every
+   * one of those would let it through, so those two lists have to be found
+   * together. `enabled` is deliberately absent from this one: it answers what
+   * would stop the routine BESIDES the switch the offer is about.
+   *
+   * The second is whether any scheduler would look at this routine at all,
+   * which is the workspace check below. It has no counterpart in
+   * `routineRefusal` and never will: the gate only ever sees routines from the
+   * workspace the server is serving, so a routine somewhere else never reaches
+   * it to be refused. Read as a pure mirror, that branch looks like an
+   * unmatched extra and the next person to reconcile the two lists deletes it.
+   *
+   * A BOOLEAN, because that is all the answer is used for. It named the
+   * deciding field for a while and nothing ever read the name.
+   *
+   * IT NEVER DECIDES WHETHER ANYTHING RUNS. It decides whether a sentence on a
+   * row is true. The gate is the server's and stays there.
+   *
+   * The run target is read through the editor's own list rather than a literal
+   * here, so which targets work is stated in one place.
+   *
+   * @param {{paused?: boolean, runOn?: any, schedule?: any, scheduleReadable?: boolean}} [input]
+   */
+  function somethingElseStopsIt(input) {
+    if (!input) return false;
+    if (input.paused) return true;
+    // ASKED OF THE SCHEDULE ITSELF, NOT OF THE LINE THE ROW WOULD DRAW.
+    //
+    // This used to lean on scheduleProblem, which deliberately says nothing
+    // about a routine whose schedule is absent or blank, on the grounds that
+    // telling somebody to change a schedule they never wrote answers a
+    // question nobody asked. That is the right rule for what to SAY and the
+    // wrong one for what would RUN: a routine with no schedule can never run,
+    // so leaning on the wording let the offer promise a run there.
+    if (!canProduceARun(input)) return true;
+    // AND NEITHER IS A ROUTINE WITH NOTHING TO SEND. The gate refuses it on
+    // the same tick it would have run, so an offer here would promise a run
+    // that the press cannot deliver, on a row that is already carrying the
+    // thing to fix first.
+    if (!hasPromptToRun(input)) return true;
+    // A ROUTINE NOTHING IS SERVING IS NOT STARTED BY TURNING IT ON, and the
+    // offer's whole value is that it says what pressing it does. There is one
+    // scheduler and it is somewhere else, so the switch is not what is holding
+    // this routine back and moving it would promise a run that the press
+    // cannot deliver.
+    if (!isServed(input)) return true;
+    // A roster that did not name a run target says nothing, for the same
+    // reason an absent scheduleReadable says nothing: silence is not a fault.
+    if (input.runOn !== undefined && input.runOn !== null) {
+      const option = editor.runOnOption(input.runOn);
+      if (!option || !option.selectable) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Whether this routine's schedule could ever produce a run.
+   *
+   * Two ways it cannot: there is no schedule, or the scheduler has said it
+   * cannot read the one there is. The first is answered here because a missing
+   * value needs no grammar to judge; the second is the server's answer, and an
+   * absent `scheduleReadable` is not taken as a fault.
+   */
+  function canProduceARun(input) {
+    const schedule = input && input.schedule;
+    if (typeof schedule !== 'string' || !schedule.trim()) return false;
+    return input.scheduleReadable !== false;
+  }
+
+  /**
+   * Whether the row must say this routine will never fire, and what to change.
+   *
+   * ASKED OF THE SERVER'S ANSWER, NEVER RE-DERIVED HERE. Whether a schedule
+   * parses is the scheduler's question, and its grammar lives beside the tick.
+   * A second copy on this side would be free to disagree with the tick about
+   * which routines can ever run. It is also not the same question as whether
+   * `scheduleWords` has plain words to show: the editor offers times on the
+   * half hour, so `every day at 07:03` has no words and runs perfectly well,
+   * and a row judging readability that way would accuse a working routine.
+   *
+   * AN EXPLICIT FALSE AND NOTHING ELSE. A roster that did not carry the field
+   * says nothing rather than accusing every routine on it, because the field is
+   * new and silence must not become a complaint.
+   *
+   * AND A ROUTINE WITH NO SCHEDULE AT ALL IS LEFT ALONE. That is a different
+   * fault, and telling its owner to change a schedule they never wrote is an
+   * answer to a question nobody asked.
+   *
+   * @param {{schedule?: any, scheduleReadable?: boolean}} [input]
+   */
+  function scheduleProblem(input) {
+    if (!input || input.scheduleReadable !== false) return null;
+    const schedule = input.schedule;
+    if (typeof schedule !== 'string' || !schedule.trim()) return null;
+    return { text: `${SCHEDULE_PROBLEM.lead} ${SCHEDULE_PROBLEM.body}` };
+  }
+
+  /**
+   * Whether this routine has an instruction to send.
+   *
+   * MIRRORS `hasRunnablePrompt` IN lib/agents/routines.js, which is what the
+   * tick's refusal gate reads. The two have to agree, and this one is asked
+   * here rather than carried on the roster for a reason worth stating, because
+   * it is the opposite of the choice `scheduleReadable` makes two functions
+   * up: whether a schedule PARSES needs the scheduler's grammar, and a second
+   * copy of that grammar on this side would be free to disagree with the tick
+   * about which routines can ever run. Whether a value is text needs no
+   * grammar, the prompt is already on the roster, and asking a question with
+   * one answer produces no second answer to disagree with.
+   *
+   * A BLANK PROMPT IS THE SAME NOTHING AS AN ABSENT ONE, exactly as the data
+   * model has it: a prompt of spaces is not an instruction, and a run spent on
+   * one is a run spent asking an agent to act on whitespace.
+   *
+   * SILENCE IS NOT A FAULT, which is the rule every new row field follows
+   * here. A caller that did not send the field at all is not describing a
+   * routine with nothing to say, and reading that as one would accuse every
+   * row built without a prompt.
+   *
+   * @param {{prompt?: any}} [input]
+   */
+  function hasPromptToRun(input) {
+    const prompt = input ? input.prompt : undefined;
+    if (prompt === undefined) return true;
+    return typeof prompt === 'string' && prompt.trim() !== '';
+  }
+
+  /**
+   * Whether the row must say this routine has nothing to say, and what to add.
+   *
+   * @param {{prompt?: any}} [input]
+   */
+  function promptProblem(input) {
+    if (hasPromptToRun(input)) return null;
+    return { text: `${PROMPT_PROBLEM.lead} ${PROMPT_PROBLEM.body}` };
+  }
+
+  /**
+   * A workspace path as the name a person would call it.
+   *
+   * The last segment, split on either separator, because the same folder is
+   * written with backslashes on one machine and slashes on another and a
+   * reader calls it the same thing on both. Empty segments are dropped, so a
+   * trailing separator names the folder rather than nothing.
+   */
+  function workspaceWords(dir) {
+    if (!dir || typeof dir !== 'string') return null;
+    const parts = dir.split(/[\\/]+/).filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : null;
+  }
+
+  /**
+   * Whether the scheduler is serving the workspace these routines came from.
+   *
+   * BOTH VALUES COME FROM THE SERVER, AND THAT IS THE WHOLE OF WHY THIS CAN BE
+   * A STRING COMPARISON. `workspace` is stamped on each routine by the code
+   * that read it, out of the server's own workspace root; `servingWorkspace`
+   * is that same root, sent by the server on the roster message and on every
+   * switch. Two copies of one string, so a trailing separator, a resolved
+   * symlink or a separator style cannot make a served routine look dormant.
+   *
+   * IT IS NOT THE PATH THE WINDOW REMEMBERS OPENING. That value is this
+   * window's own record of what its reader picked, and another window can move
+   * the server out from under it. Compared against that, a window handed the
+   * new workspace's roster would call every routine in it dormant at the exact
+   * moment those were the only routines running, which is the inverse of the
+   * truth on both sides.
+   *
+   * SILENCE IS NOT A DISAGREEMENT, the same rule `scheduleReadable` follows. A
+   * routine that arrives carrying no workspace, or a caller that did not say
+   * which workspace is being served, has not said anything is dormant, and
+   * accusing every row on a roster that predates these fields would be a
+   * complaint invented out of a missing key.
+   *
+   * @param {{workspace?: any, servingWorkspace?: any}} [input]
+   */
+  function isServed(input) {
+    const mine = input && input.workspace;
+    const serving = input && input.servingWorkspace;
+    if (typeof mine !== 'string' || !mine) return true;
+    if (typeof serving !== 'string' || !serving) return true;
+    return mine === serving;
+  }
+
+  /**
+   * Whether the row must say this routine is not being served, and where the
+   * scheduler went.
+   *
+   * A NOTE AND NOT A PROBLEM, which is why it is neither named nor toned like
+   * `scheduleProblem`. That one is a fault in the routine that only the person
+   * who wrote the file can fix. This is a standing fact about where Rundock
+   * currently is, the routine is exactly as it should be, and the moment the
+   * server comes back to this workspace the line goes and the row runs.
+   *
+   * Withheld when the serving path has no readable name, because the whole
+   * value of the sentence is naming where Rundock went, and a sentence with an
+   * empty slot in it is worse than the silence this replaced.
+   *
+   * @param {{workspace?: any, servingWorkspace?: any}} [input]
+   */
+  function workspaceNote(input) {
+    if (isServed(input)) return null;
+    const serving = workspaceWords(input.servingWorkspace);
+    if (!serving) return null;
+    return { text: `${NOT_SERVED.lead} ${NOT_SERVED.body.replace('{workspace}', () => serving)}` };
+  }
+
+  /**
+   * The offer to turn a held-back routine on, or nothing.
+   *
+   * READ OFF AN EXPLICIT FALSE, never off a falsy value. A routine that
+   * arrives from somewhere carrying no `enabled` at all is not a routine
+   * somebody declined to run; it is a caller that did not send the field, and
+   * drawing an offer on a routine that is already running invites a reader to
+   * break it. The data model has already turned an absent key into a real
+   * false by the time anything here sees it.
+   *
+   * @param {{enabled?: boolean}} [input]
+   */
+  function enableOffer(input) {
+    if (!input || input.enabled !== false) return null;
+    // AND ONLY WHEN TURNING IT ON WOULD ACTUALLY START IT.
+    //
+    // The offer's whole value is that it says what pressing it does. On a row
+    // where something ELSE also stops the routine, that sentence is false:
+    // pressing it starts nothing. A routine that predates the scheduler and
+    // carries a cron schedule is both at once, and it is not a corner case,
+    // it is every pre-existing cron routine after an upgrade, because the
+    // migration fills `enabled: false` and never touches a schedule.
+    //
+    // WITHHELD RATHER THAN REWORDED. There is nothing truthful a Turn on
+    // control can promise on a row that will not run once it is pressed, and
+    // the row already carries the thing that must be fixed first. When that is
+    // fixed the offer appears, which is the order the work has to happen in
+    // anyway.
+    if (somethingElseStopsIt(input)) return null;
+    // The instant is the one the next-run line would have rendered, so the
+    // offer and the row cannot disagree about when this routine is due. It is
+    // absent exactly when the scheduler has nothing to say, which is when this
+    // says nothing too rather than inventing a time.
+    const when = asDate(input.nextRun);
+    const now = asDate(input.now);
+    let timing = '';
+    if (when && now) {
+      timing = when <= now
+        ? ` ${NOT_ENABLED.catchUpGone}`
+        : ` ${NOT_ENABLED.catchUpAhead.replace('{when}', () => timeWords(when, now, input.zone))}`;
+    }
+    return {
+      text: `${NOT_ENABLED.lead} ${NOT_ENABLED.body}${timing}`,
+      label: NOT_ENABLED.label,
+    };
+  }
+
+  /**
    * When it runs next, or that it is paused.
    *
    * THE INSTANT IS NOT DECIDED HERE. It arrives already computed, by one path
@@ -367,9 +969,96 @@
    */
   function nextRunLabel(input) {
     if (input && input.paused) return { text: 'Paused', className: 'next-run paused-label' };
+    // A ROUTINE NOBODY HAS TURNED ON PROMISES NOTHING, and the guard is here
+    // rather than at the caller because the instant is real. The server works
+    // a next run out from the schedule alone, so a routine the upgrade held
+    // back still arrives carrying tomorrow's slot, and rendering it would put
+    // "Next run: tomorrow, 7:00am" on something that will never run. That is
+    // worse than silence: it is the exact reassurance the reader came for.
+    // The offer takes this line's place on the row.
+    if (input && input.enabled === false) return null;
+    // Nor does a routine whose schedule nothing here can read. The server does
+    // not supply an instant for one today, so on that path this changes
+    // nothing; it is here for the row that carries both, which is a state the
+    // combination sweep in test/unit/routines-model.test.js builds and which
+    // fails without this line. A time against a routine that will never fire
+    // is the same false promise the offer is withheld for.
+    if (input && input.scheduleReadable === false) return null;
+    // NOR DOES A ROUTINE WITH NO PROMPT. The instant is real here in a way it
+    // is not above: the schedule parses, so the server computes a next run and
+    // sends it, and the gate then refuses the routine when that instant
+    // arrives. Rendering it would put "Next run: tomorrow, 7:00am" on a row
+    // that will never run, which is the exact reassurance the reader came for.
+    // The fault line takes its place.
+    if (!hasPromptToRun(input)) return null;
+    // NOR DOES A ROUTINE THE SCHEDULER HAS MOVED AWAY FROM. The instant is
+    // real: it is computed from the schedule alone, so a routine read out of
+    // any workspace arrives carrying its next slot. Drawing it here would put
+    // "Next run: tomorrow, 7:00am" on a routine nothing is going to fire,
+    // which is the exact reassurance the reader came for and the one this row
+    // must not give. The note below takes its place.
+    if (!isServed(input)) return null;
     const words = timeWords(input && input.nextRun, input && input.now, input && input.zone);
     if (!words) return null;
     return { text: `Next run: ${words}`, className: 'next-run' };
+  }
+
+  /**
+   * The list in the order a reader needs it: soonest next run first.
+   *
+   * WHY THIS IS NOT THE ORDER THE ROSTER HANDS OVER. The roster is file order,
+   * which is the order routines happen to have been written in, and that is
+   * arbitrary to everyone except whoever wrote the file. Invisible at nine
+   * routines and the thing that makes this view unusable at thirty, and no
+   * agent filter fixes it: whichever agent is selected, the rows underneath
+   * are still in an order nobody chose.
+   *
+   * THREE BANDS, AND THE THIRD IS THE ONE WITH A RULE ATTACHED. A routine with
+   * a next run sorts by it. A routine with none, because its schedule is one
+   * the editor never offered and therefore has no computable slot, cannot be
+   * placed on the timeline at all, so it sits after everything that can be.
+   * Paused routines go last as a group: a paused routine has no next run by
+   * definition, and mixing it into the band above would put "nothing is
+   * scheduled" and "this will not run" in one undifferentiated tail.
+   *
+   * STABLE WITHIN EACH BAND, which is the whole of the paused rule and half of
+   * the other two. Array sort has been required to be stable since ES2019, so
+   * two routines due at the same instant, and every paused routine, keep the
+   * order the roster gave them. The alternative is a list that reshuffles
+   * itself on every redraw for no reason a reader could see.
+   *
+   * NOTHING HERE READS A CLOCK. Sorting by instant needs no `now`: which of
+   * two runs comes first does not depend on when the question is asked.
+   *
+   * @param {any[]} list
+   * @param {(item: any) => {nextRun?: any, paused?: boolean}} [read] where the
+   *   two facts sit on an item. Defaults to the item itself, so this module's
+   *   own tests can drive it with the two facts and nothing else, and the view
+   *   can hand over its own entry shape without this knowing anything about it.
+   */
+  function orderByNextRun(list, read) {
+    const facts = typeof read === 'function' ? read : (item => item);
+    const band = (item) => {
+      const f = facts(item) || {};
+      if (f.paused) return 2;
+      return asDate(f.nextRun) ? 0 : 1;
+    };
+    // ONLY THE FIRST BAND IS SORTED BY TIME, and the guard is the rule rather
+    // than a shortcut. A paused routine can still carry the instant it WOULD
+    // have run at, so comparing instants across the paused band puts a paused
+    // routine that kept its next run behind one that has none, which is an
+    // order derived from a fact the reader was told does not apply. Paused is
+    // a band, not a time; so is having no next run at all.
+    const at = (item) => asDate((facts(item) || {}).nextRun).getTime();
+    // A COPY, NOT THE CALLER'S ARRAY. Array sort reorders in place, and a
+    // caller that also holds the roster order for something else would find it
+    // silently rewritten. The view counts namesakes in roster order before
+    // this runs, and that count is what a delete is addressed by.
+    return list.slice().sort((a, b) => {
+      const gap = band(a) - band(b);
+      if (gap !== 0) return gap;
+      return band(a) === 0 ? at(a) - at(b) : 0;
+    });
   }
 
   /** Everything one row shows, as data. */
@@ -377,10 +1066,29 @@
     const option = editor.runOnOption(input && input.runOn);
     return {
       sentence: routineSentence(input),
+      // The same sentence in pieces, so the view can make the skill name
+      // reachable without matching text back out of its own escaped markup.
+      parts: sentenceParts(input),
       meta: (input && input.agentName) || null,
       runsOn: option ? `Runs on ${option.sentence}` : null,
       status: runStatus(input),
       nextRun: nextRunLabel(input),
+      // The one row state that carries an action rather than a fact. Null on
+      // every other row, so the view draws nothing where there is nothing to
+      // offer.
+      offer: enableOffer(input),
+      // The one thing on a row that is neither history nor a promise: a fault
+      // in the routine itself, which only the person who wrote the file can fix.
+      scheduleProblem: scheduleProblem(input),
+      // The second of the two, and a fault of the same kind: a routine that
+      // says when it runs and never says what to do. Its own line rather than
+      // a second wording of the schedule fault, because a routine with no
+      // prompt usually has a schedule that is perfectly readable.
+      promptProblem: promptProblem(input),
+      // Where Rundock has gone, said only when it has gone somewhere. Nothing
+      // about the routine is wrong, which is why this is a note of its own
+      // rather than a second kind of schedule fault.
+      workspaceNote: workspaceNote(input),
     };
   }
 
@@ -408,10 +1116,10 @@
   }
 
   return {
-    OUTCOMES, LEAD, EMPTY, ACTION_PROBLEM, CATCH_UP_AFTER_MS,
-    actionProblem, emptyState,
-    dayWords, clockWords, zoneWords, timeWords,
-    scheduleWords, routineSentence,
-    outcomeOf, runStatus, nextRunLabel, row, deleteConfirmation,
+    OUTCOMES, LEAD, EMPTY, ACTION_PROBLEM, NOT_ENABLED, SCHEDULE_PROBLEM, PROMPT_PROBLEM, NOT_SERVED, CATCH_UP_AFTER_MS,
+    actionProblem, emptyState, header,
+    dayWords, clockWords, zoneWords, timeWords, workspaceWords,
+    scheduleWords, routineSentence, sentenceParts,
+    outcomeOf, lastCompletedRunFailed, anyFailure, runStatus, nextRunLabel, enableOffer, scheduleProblem, promptProblem, isServed, workspaceNote, somethingElseStopsIt, orderByNextRun, row, deleteConfirmation,
   };
 }));

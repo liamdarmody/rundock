@@ -56,7 +56,7 @@ const persist = (() => {
 const sunIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`;
 const moonIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
 
-let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false, currentWorkspacePath=null, workspaceAnalysis=null, workspaceIsEmpty=false, workspaceMode='knowledge', setupComplete=true, conversationsLoaded=false, activeSidebarPill='all', convoLists=[];
+let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false, currentWorkspacePath=null, servingWorkspacePath=null, workspaceAnalysis=null, workspaceIsEmpty=false, workspaceMode='knowledge', setupComplete=true, conversationsLoaded=false, activeSidebarPill='all', convoLists=[];
 let runtimeStatus = null; // { defaultRuntime, claude: {installed, authenticated, version}, codex: {...} }
 const agentLastActivity = {}; // { agentId: { time: Date, label: string } }
 // Per-conversation state: { convoId: { isProcessing, currentStreamingMsg, latestText } }
@@ -171,6 +171,54 @@ function updateUnreadBadge() {
   }
 }
 
+// THE ONE ALARMING STATE IN THE PRODUCT, ON THE CHROME.
+//
+// The three-tone ruling makes a real failure the only genuinely alarming state
+// a routine can be in, and it could not be seen without opening the view that
+// governs it: somebody whose overnight run failed had no way to know until
+// they went and looked.
+//
+// THE TOKEN IS --danger AND NOT THE CLASS BESIDE IT. `.nav-badge` already
+// exists for unread conversations and is --attention, and amber is deliberately
+// spent on "needs the user, not an error". A failed routine is an error, so it
+// takes its own class and the danger token rather than borrowing amber, which
+// reads as an alert whatever a legend says it means.
+//
+// WHICH ROUTINES COUNT IS THE MODEL'S ANSWER, not this function's. It asks the
+// same question a row asks, so the rule the rows were settled on cannot say one
+// thing on a row and another on the rail.
+function updateRoutineFailureBadge() {
+  const navBtn = document.querySelector('[data-nav="routines"]');
+  if (!navBtn) return;
+  let badge = navBtn.querySelector('.nav-badge-failed');
+  const facts = [];
+  for (const agent of agents || []) {
+    for (const routine of agent.routines || []) {
+      facts.push({
+        // The same fields a row reads, taken the same way, so the rail and the
+        // row cannot disagree about what happened last.
+        lastStart: routine.lastStart,
+        lastRunStatus: routine.state ? routine.state.status : null,
+        lastSlot: routine.lastSlot,
+        missedSlot: routine.missedSlot,
+        // AND WHETHER IT IS PAUSED, which the row does not need and the rail
+        // does. A paused routine can never succeed again, so a dot raised by
+        // one could never be cleared by the rule that clears dots.
+        paused: !!routine.paused,
+      });
+    }
+  }
+  if (RundockRoutinesModel.anyFailure(facts)) {
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.className = 'nav-badge-failed';
+      navBtn.appendChild(badge);
+    }
+  } else {
+    if (badge) badge.remove();
+  }
+}
+
 function esc(t){const d=document.createElement('div');d.textContent=t;return d.innerHTML;}
 function escAttr(t){return t.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function stripMd(t){return t.replace(/\*\*(.*?)\*\*/g,'$1').replace(/\*(.*?)\*/g,'$1').replace(/~~(.*?)~~/g,'$1').replace(/`([^`]+)`/g,'$1').replace(/^#+\s/gm,'').replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g,'$2').replace(/\[\[([^\]]+)\]\]/g,'$1').replace(/==(.*?)==/g,'$1');}
@@ -186,25 +234,6 @@ function formatTimeAgo(input) {
   if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
   return `${Math.floor(diff/86400)}d ago`;
-}
-
-function formatScheduleShort(schedule) {
-  if (!schedule) return '';
-  const s = schedule.toLowerCase();
-  const dailyMatch = s.match(/every day at (\d{2}):(\d{2})/);
-  if (dailyMatch) {
-    const h = parseInt(dailyMatch[1]);
-    const m = dailyMatch[2];
-    return `${h === 0 ? 12 : (h > 12 ? h - 12 : h)}:${m} ${h >= 12 ? 'PM' : 'AM'}`;
-  }
-  const weeklyMatch = s.match(/every (\w+) at (\d{2}):(\d{2})/);
-  if (weeklyMatch) {
-    const day = weeklyMatch[1].charAt(0).toUpperCase() + weeklyMatch[1].slice(1, 3);
-    const h = parseInt(weeklyMatch[2]);
-    const m = weeklyMatch[3];
-    return `${day} ${h === 0 ? 12 : (h > 12 ? h - 12 : h)}:${m} ${h >= 12 ? 'PM' : 'AM'}`;
-  }
-  return schedule;
 }
 
 function getTeamAgents() { return agents.filter(a => a.status === 'onTeam' && a.type !== 'platform'); }
@@ -236,6 +265,14 @@ function handle(d) {
       workspaceOpenStartedAt = Date.now();
       onWorkspaceReady(d.path, d.analysis, d.isEmpty, d.workspaceMode, d.scaffoldError, d.setupComplete);
       break;
+    // WHICH WORKSPACE THE SCHEDULER IS SERVING, which is not the same question
+    // as which workspace this window opened. There is one scheduler on this
+    // server and several windows can be looking at it, so another window
+    // switching the server leaves this one showing a workspace nothing is
+    // running for. This arrives on every switch, including switches this
+    // window did not ask for, and it carries the path only: the reader stays
+    // where they were and the routines list stops promising runs.
+    case 'serving_workspace': setServingWorkspace(d.path); break;
     case 'folder_picked': if (d.path) selectWorkspace(d.path); break;
     case 'workspace_error': {
       const errEl = document.getElementById('workspace-error');
@@ -247,12 +284,28 @@ function handle(d) {
       // Re-render settings if currently viewing workspace settings
       if (currentView === 'settings') renderSettingsSection('workspace');
       break;
-    case 'needs_workspace': showView('workspace'); break;
-    case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesSidebar(); renderRoutines(); renderConvoList(); break;
+    // Takes the chrome down as well as showing the screen. This arrives when
+    // the server has no workspace, which can happen after it had one, so the
+    // rail cannot be assumed to be down already.
+    case 'needs_workspace': setWorkspaceChrome(false); showView('workspace'); break;
+    // THE PANEL IS REDRAWN HERE AS WELL AS THE LIST. The roster is what
+    // arrives when a routine is added or deleted, so the scope rows and their
+    // counts are stale from that moment until something redraws them, and the
+    // scope itself may now name an agent that owns nothing.
+    //
+    // AND THE RAIL, for the same reason one step further out: the roster is
+    // also what arrives when a run finishes, which is the only thing that
+    // raises or clears the failure dot.
+    //
+    // THE WORKSPACE THE ROSTER WAS READ FROM ARRIVES WITH IT, on the same
+    // message, so the routines list can never compare rows against a workspace
+    // value that moved after they did. Assigned before anything draws.
+    case 'agents': agents=d.agents; setServingWorkspace(d.workspace); renderAgentList(); renderOrgChart(); renderRoutinesPanel(); renderRoutines(); updateRoutineFailureBadge(); renderConvoList(); break;
     // renderRoutines as well as renderSkills: the routines empty state asks
     // whether the workspace has a skill, so the reply that answers that
     // question is the reply that has to redraw it. Without this the list sits
     // on its waiting line until the next roster broadcast.
+    case 'run': runArrived(d); break;
     case 'skills': skills=d.skills; skillsLoaded=true; renderSkills(); renderRoutines(); routineEditorSkillsArrived(d.skills); if(palettePendingSkill){const s=palettePendingSkill;palettePendingSkill=null;selectSkill(s);} break;
     case 'conversations':
       handlePersistedConversations(d.conversations, d.lastActiveConversationId);
@@ -460,6 +513,13 @@ function handle(d) {
     case 'routine_deleted':
       routinesActionCleared();
       addSystemMsg('Routine "' + (d.name || '') + '" deleted');
+      break;
+    case 'routine_enabled':
+      routinesActionCleared();
+      // No message of its own, for the same reason routine_paused has none:
+      // the roster broadcast that follows redraws the row, which stops
+      // offering to turn the routine on and names its next run instead, and
+      // that is the change the reader asked for.
       break;
     case 'routine_paused':
       routinesActionCleared();
@@ -844,7 +904,7 @@ function addSystemMsgToConvo(text, convoId, isError = true) {
 // ===== 5. AGENT LIST & SIDEBAR =====
 // Moved to public/views/team.js (Foundations view module):
 // getWorkingAgentIds, renderAgentList, renderConvoEmptyAgents,
-// renderRoutinesSidebar, addToTeam. All resolve via the module's window
+// addToTeam. All resolve via the module's window
 // republication.
 
 // ===== 6. ORG CHART =====
@@ -975,25 +1035,80 @@ function initSidebarResize() {
 
 // ===== 10. VIEWS & NAVIGATION =====
 
-// Sync the nav rail's active icon and the visible sidebar panel to a section.
-// This is deliberately separate from switchNav: destination functions
-// (openConversation, showProfile) call it so they stay consistent no matter
-// where navigation started (nav rail click, search palette, profile links,
-// workspace routing). Before this existed, callers had to remember to pair
-// switchNav with their navigation and several forgot, leaving the rail
-// highlighting one section while the main pane showed another.
+// ===== THE RULE, FOR WHOEVER ADDS THE NEXT DESTINATION =====
+//
+// Show a view. Do not touch the rail.
+//
+// The rail is the only thing telling a reader which of the top-level surfaces
+// they are on, and keeping it true used to be a second thing every destination
+// had to remember: showView revealed a pane and setNavState lit an icon.
+// Several destinations forgot the second, and forgetting it was invisible to
+// every test, so opening the routine editor lit Team, selecting a skill lit
+// nothing, and opening a skill's own file left Skills lit over the editor. The
+// comment that used to sit here recorded that callers forgot before setNavState
+// existed. They kept forgetting after it existed, because a rule you have to
+// remember is not a rule.
+//
+// So the section is a property of the VIEW rather than of the caller. showView
+// resolves it from the table below and sets it, and a new destination cannot
+// get this wrong because it no longer does it at all. setNavState has two
+// callers and only two: showView, and the workspace switch, which is the one
+// moment the chrome is decided before the view is.
+//
+// ADDING A VIEW: give it a row here. `null` means the view is shown with no
+// rail state, which is a decision rather than an omission: the workspace picker
+// hides the rail and the sidebar outright, so there is no section to be on.
+// Every other view names the section its pane belongs to.
+// test/unit/navigation-doors.test.js enumerates every call site of showView in
+// the client against this table, and fails if a view is added to one and not
+// the other.
+//
+// WHICH section is the right one is the single judgement no check can make. The
+// locked mock's chrome-parity rule decides it: a surface's entry stays active
+// across that surface's own screens, which is why the routine editor lights
+// Routines and an agent's page lights Team.
+const NAV_FOR_VIEW = {
+  workspace: null,
+  home: 'team',
+  profile: 'team',
+  chat: 'conversations',
+  'convo-empty': 'conversations',
+  editor: 'files',
+  skills: 'skills',
+  settings: 'settings',
+  'routine-editor': 'routines',
+  routines: 'routines',
+  'run-detail': 'routines',
+};
+
 // Sections whose sidebar belongs to another one. Routines sits beside the
 // team and the locked mock draws it with the team panel for a reason worth
 // keeping: a routine belongs to an agent, and the panel that lists your agents
 // is the one that answers "whose?". Its own Routines section already lives
 // inside that panel.
-const SIDEBAR_FOR = { routines: 'team' };
-
+// A section reveals the panel of its own name, and there is no map that says
+// otherwise. There used to be one, holding a single entry that pointed the
+// routines section at the team panel, which is how the two sidebars came to be
+// one element. An alias map with nothing in it is a redirection waiting to be
+// reintroduced without anybody noticing, so it is gone rather than emptied.
+//
+// CALLED BY showView, and that is the whole mechanism: a destination shows a
+// view and the section comes with it. Called from a destination directly, this
+// is half a navigation, and the halves are what came apart. The one other
+// caller is the workspace reset, which settles the chrome before it knows which
+// view comes next, and says so where it does it.
+//
+// The panel list below is the only list of sidebar panels in the client. There
+// were two: the workspace reset carried a hand-written copy of this function,
+// and when a panel was added to one and not the other, switching workspace left
+// two panels stacked in the same column. A copy also drops whatever the
+// original grows later, which is how that one lost the footer line below and
+// left a reader on Conversations with no way to start one.
 function setNavState(nav) {
   document.querySelectorAll('.nav-item[data-nav]').forEach(n=>n.classList.remove('active'));
   document.querySelector(`[data-nav="${nav}"]`)?.classList.add('active');
-  ['team','conversations','skills','files','settings'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
-  document.getElementById(`sidebar-${SIDEBAR_FOR[nav] || nav}`).classList.remove('hidden');
+  ['team','conversations','skills','files','settings','routines'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
+  document.getElementById(`sidebar-${nav}`).classList.remove('hidden');
   // The New conversation footer lives at sidebar level (so the update strip
   // can sit above it without ever moving it), which makes its visibility
   // this function's job rather than the panel's.
@@ -1005,7 +1120,9 @@ function switchNav(nav) {
   // and search state don't survive into a context where they no longer make
   // sense or reference DOM that's about to be replaced.
   closeFindBar();
-  setNavState(nav);
+  // No setNavState here. Every arm below shows a view, and the view is what
+  // carries the section now, so setting it here as well would be a second
+  // opinion able to disagree with the first.
   if(nav==='settings') { showView('settings'); showSettingsSection('workspace'); }
   else if(nav==='files') {
     editorReturnView = 'editor';
@@ -1038,10 +1155,42 @@ function switchNav(nav) {
   else if(nav==='skills') { showView('skills'); renderSkillsIfEmpty(); if(!skillsLoaded) { ws.send(JSON.stringify({type:'get_skills'})); } }
   else if(nav==='conversations') { if(activeConversation) { showView('chat'); if(unread.clearConvo(activeConversation.id)) { updateUnreadBadge(); renderConvoList(); } } else { const target = pickDefaultConversation(); if(target) { openConversation(target.id); } else { newConversation(); } } }
   else if(nav==='team') { showView('home'); renderOrgChart(); }
-  else if(nav==='routines') { showView('routines'); renderRoutines(); }
+  // ONE DESTINATION, AND ARRIVING FROM THE RAIL ARRIVES ON ALL. A filter that
+  // survives a visit is a filter that hides a failed overnight run from the
+  // person who opened this view to look for one, so the rail passes no agent.
+  // A routine row on an agent's profile passes one, which is the deep link
+  // that announces itself.
+  else if(nav==='routines') { showRoutinesForAgent(null); }
 }
-function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings','routine-editor','routines'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');}  }
+function showView(v) { currentView=v; ['workspace','home','profile','chat','convo-empty','editor','skills','settings','routine-editor','routines','run-detail'].forEach(id=>{const e=document.getElementById(`view-${id}`);if(e){e.classList.add('hidden');e.style.display='none';e.classList.remove('main-view-transition');}}); const e=document.getElementById(`view-${v}`); if(e){e.classList.remove('hidden');e.style.display='flex';e.classList.add('main-view-transition');} const nav=NAV_FOR_VIEW[v]; if(nav) setNavState(nav); }
 function goHome() { discardIfEmpty(); activeConversation=null; switchNav('conversations'); }
+
+// Whether there is any chrome at all.
+//
+// A SECTION AND A SCREEN WITH NO SECTIONS ARE DIFFERENT QUESTIONS, and this is
+// the second one. setNavState answers which section you are on; this answers
+// whether the rail and the sidebar are on screen to answer it. The workspace
+// picker is the only screen where they are not, because a rail entry names a
+// section of a workspace and that screen is what you see when there is none.
+//
+// ONE OWNER, for the reason the panel list has one. The hide and the show were
+// written into the two functions that happened to need them, so a third route
+// to the picker went through neither: the server clears its workspace when the
+// directory stops existing or a switch fails, and the reply that carries that
+// news reached the picker with the rail still up and the previous entry still
+// lit, over a screen that means you have no workspace to have a section of.
+function setWorkspaceChrome(present) {
+  const value = present ? '' : 'none';
+  document.querySelector('.nav-rail').style.display = value;
+  document.querySelector('.sidebar').style.display = value;
+  // The top bar itself stays either way: it carries the window's only drag
+  // region once the OS title bar is removed. Only search hides, since there is
+  // nothing to search yet. Help deliberately remains, because the picker is
+  // the screen where a new user is most likely to want it.
+  const tbs = document.getElementById('tb-search');
+  if (tbs) tbs.style.display = value;
+  document.querySelector('.app')?.classList.toggle('no-workspace', !present);
+}
 
 // Theme. One function applies it everywhere it shows (body class, toggle
 // icon, code highlighting, Windows caption colours); which theme applies is
@@ -1194,16 +1343,7 @@ function handleWorkspaces(d) {
 }
 
 function showWorkspacePicker(recent, discovered) {
-  // Hide nav and sidebar when picking workspace
-  document.querySelector('.nav-rail').style.display = 'none';
-  document.querySelector('.sidebar').style.display = 'none';
-  // The top bar itself stays: it carries the window's only drag region once
-  // the OS title bar is removed. Only search hides, since there is nothing to
-  // search yet. Help deliberately remains, because this is the screen where a
-  // new user is most likely to want it.
-  const tbs = document.getElementById('tb-search');
-  if (tbs) tbs.style.display = 'none';
-  document.querySelector('.app')?.classList.add('no-workspace');
+  setWorkspaceChrome(false);
   showView('workspace');
   // Reset create form
   const createBtn = document.getElementById('create-workspace-btn');
@@ -1214,8 +1354,14 @@ function showWorkspacePicker(recent, discovered) {
   const recentEl = document.getElementById('workspace-recent');
   const discoveredEl = document.getElementById('workspace-discovered');
 
+  // `subtitle` is inserted as MARKUP by contract: the Recent list passes
+  // esc(r.path) and the Discovered list passes a built string. Both callers
+  // escape what they pass. `path` is a directory name off the recents file or
+  // a scan of the home directory, and it lands in an attribute, so it takes
+  // escAttr rather than esc: this screen renders BEFORE a workspace has been
+  // chosen, which is before the reader has decided to trust anything.
   const wsCard = (name, subtitle, path) =>
-    `<div class="ws-pick-item ws-card" data-ws-path="${esc(path)}">
+    `<div class="ws-pick-item ws-card" data-ws-path="${escAttr(path)}">
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" style="color:var(--text-2);flex-shrink:0"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
       <div class="ws-card-body">
         <div class="ws-card-name">${esc(name)}</div>
@@ -1295,9 +1441,62 @@ async function openFolder() {
   }
 }
 
+/**
+ * Put the sidebar back to a known state for a workspace that is not the one
+ * that was open.
+ *
+ * IT ROUTES THROUGH THE ROUTER rather than repeating what the router does.
+ * This used to carry its own copy of the list of panels to hide, and the copy
+ * went stale the moment the routines panel was lifted out of the team one: the
+ * router learned about the sixth panel and this did not, so switching
+ * workspace while on that view left it on screen stacked above the panel this
+ * reveals. Two lists of the same thing is one list that is wrong, and the fix
+ * is one list rather than two that agree.
+ *
+ * Routing here also keeps the New conversation footer in step, which the copy
+ * did not touch at all. A switch made from Files left it hidden until the
+ * conversations reply landed and something downstream called the router. That
+ * was a flicker rather than a defect, and it is one less thing depending on a
+ * reply arriving.
+ */
+function resetSidebarForWorkspace() {
+  // The scope is an agent id, and agent ids belong to the workspace that
+  // declared them. Carried across, it names an agent the next workspace may
+  // not have, and it filters that workspace's routines by it.
+  routinesPanelReset();
+  setNavState('conversations');
+}
+
+/**
+ * Record which workspace the server's scheduler is serving.
+ *
+ * THE ONLY WRITER OF THIS VALUE, and every caller hands it a string the SERVER
+ * produced from its own `getWorkspace()`: the path on a serving_workspace
+ * notice, the workspace beside a roster, and the path the server confirms a
+ * workspace_set with. That is the same string discovery stamps on every
+ * routine, so the routines list compares two copies of one value rather than
+ * two paths that were spelled independently and might differ by a separator or
+ * a resolved symlink.
+ *
+ * NEVER SET FROM `currentWorkspacePath`, which is what this window asked to
+ * open and can be out of date the moment another window switches the server.
+ *
+ * A missing value leaves the previous one alone rather than clearing it: an
+ * older server that sends a roster without the workspace beside it has not
+ * said the scheduler stopped serving anything.
+ */
+function setServingWorkspace(path) {
+  if (typeof path !== 'string' || !path) return;
+  servingWorkspacePath = path;
+}
+
 function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupComplete) {
   const isSameWorkspace = (currentWorkspacePath === dir);
   currentWorkspacePath = dir;
+  // The server confirmed this path out of its own root, so it is the serving
+  // workspace as well as the one this window now shows. Set here so a window
+  // that opens a workspace and never receives another message still knows.
+  setServingWorkspace(dir);
   workspaceAnalysis = analysis || null;
   workspaceIsEmpty = !!isEmpty;
   workspaceMode = mode || 'knowledge';
@@ -1307,12 +1506,7 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   if (scaffoldError) {
     console.warn('[Workspace] Scaffold error:', scaffoldError);
   }
-  // Show nav and sidebar
-  document.querySelector('.nav-rail').style.display = '';
-  document.querySelector('.sidebar').style.display = '';
-  const tbsOn = document.getElementById('tb-search');
-  if (tbsOn) tbsOn.style.display = '';
-  document.querySelector('.app')?.classList.remove('no-workspace');
+  setWorkspaceChrome(true);
   // Load workspace data
   ws.send(JSON.stringify({ type: 'get_agents' }));
   ws.send(JSON.stringify({ type: 'get_files' }));
@@ -1354,10 +1548,13 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   if (cs) { cs.textContent = ''; cs.classList.remove('working'); }
   // Activate conversations sidebar; handlePersistedConversations will
   // open a pinned conversation or newConversation() once data arrives.
-  document.querySelectorAll('.nav-item[data-nav]').forEach(n=>n.classList.remove('active'));
-  document.querySelector('[data-nav="conversations"]')?.classList.add('active');
-  ['team','conversations','skills','files','settings'].forEach(s=>document.getElementById(`sidebar-${s}`).classList.add('hidden'));
-  document.getElementById('sidebar-conversations').classList.remove('hidden');
+  //
+  // ASKED FOR RATHER THAN REPEATED. The chrome half of this was once four
+  // lines here, a hand-written copy of setNavState, which is why it carried a
+  // second list of the sidebar panels and never learned about the New
+  // conversation footer: a reader who switched workspace from any other
+  // section landed on Conversations with no way to start one.
+  resetSidebarForWorkspace();
   // Hide the workspace picker immediately, but do not show any view yet.
   // handlePersistedConversations will pick the right destination (chat for
   // an existing pinned/processing conversation, convo-empty for a populated

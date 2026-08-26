@@ -41,6 +41,26 @@
 .agent-status-state { font-size: var(--caption); font-weight: 500; color: var(--idle); flex-shrink: 0; }
 .agent-status-state.working { color: var(--success); }
 
+/* The routines panel's scope list. DELIBERATELY NOT .agent-status-item: a
+   scope row carries a count where a roster row carries a status, and takes the
+   conversation list's selected fill rather than the roster's hover fill. Two
+   differences, both visible before you read the header, because the complaint
+   this panel answers is that the two sidebars looked the same. */
+.routines-scope-list { padding: 8px; display: flex; flex-direction: column; gap: 2px; }
+.scope-item { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: var(--radius-lg); cursor: pointer; color: var(--text-1); transition: background var(--duration-base) ease; }
+.scope-item:hover { background: var(--elevated); }
+.scope-item.active { background: var(--accent-glow); }
+.scope-item.active .scope-name { color: var(--accent); font-weight: 600; }
+.scope-item.active .scope-count { color: var(--accent); }
+.scope-name { flex: 1; font-size: var(--body); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.scope-count { font-size: var(--caption); font-weight: 600; color: var(--text-3); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+/* The rail's own clock on the row that means the whole surface. */
+.scope-all-icon { width: 24px; height: 24px; border-radius: var(--radius-circle); display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--text-2); background: var(--card); }
+.scope-all-icon svg { width: 13px; height: 13px; }
+.scope-divider { height: 1px; background: var(--border); margin: 6px 10px; }
+/* What a panel says instead of drawing a list it has decided not to draw. */
+.sidebar-quiet { padding: 0 16px 16px; font-size: var(--caption); color: var(--text-3); line-height: 1.6; }
+
 /* Conversation search */
 /* Per-view sidebar search fields removed in favour of the universal search
    palette (nav rail icon / Cmd+K): one engine, one search surface. */
@@ -153,6 +173,15 @@
 .convo-working { width: 8px; height: 8px; min-width: 8px; background: var(--success); border-radius: var(--radius-circle); margin-left: auto; animation: orgPulse 2s ease-in-out infinite; }
 .nav-badge { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--attention); border-radius: var(--radius-circle); pointer-events: none; }
 .nav-badge-working { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--success); border-radius: var(--radius-circle); pointer-events: none; animation: orgPulse 2s ease-in-out infinite; }
+/* A routine whose most recent completed run failed. The three-tone ruling
+   makes that the only genuinely alarming state in the product, and it could
+   not be seen without opening the view that governs it.
+
+   ITS OWN CLASS AND THE DANGER TOKEN, rather than .nav-badge above. That badge
+   is --attention, and amber is deliberately spent on "needs the user, not an
+   error". A failed routine is an error, and amber reads as an alert whatever a
+   legend says it means, so spending it on both would leave neither legible. */
+.nav-badge-failed { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--danger); border-radius: var(--radius-circle); pointer-events: none; }
 
 /* File tree */
 .file-tree { flex: 1; overflow-y: auto; padding: 8px; min-height: 0; }
@@ -183,12 +212,6 @@
 .add-btn { display: flex; align-items: center; justify-content: flex-start; gap: 8px; padding: 10px 8px; margin: 0; width: 100%; border-radius: var(--radius-lg); font-size: var(--body); font-weight: 500; color: var(--text-2); border: 1px solid transparent; transition: background var(--duration-base) ease, border-color var(--duration-base) ease, color var(--duration-base) ease; }
 .add-btn:hover { color: var(--accent); background: var(--accent-glow); border-color: rgba(232,122,90,0.3); }
 
-
-/* Routine sidebar items */
-.routine-item { display: flex; align-items: center; gap: 8px; padding: 8px; font-size: var(--caption); border-radius: var(--radius-lg); transition: background var(--duration-base) ease; cursor: default; }
-.routine-item:hover { background: var(--elevated); }
-.routine-name { flex: 1; color: var(--text-1); font-weight: 500; font-size: var(--body); }
-.avatar.xxs { width: 20px; height: 20px; font-size: 9px; }
 
 /* Sidebar section dividers */
 .sidebar-section-divider { border-top: 1px solid var(--border); margin: 8px 8px 0; padding: 12px 0 6px; }

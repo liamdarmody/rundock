@@ -87,9 +87,11 @@ describe('nested frontmatter block parsers', () => {
   });
 
   // The shape gained typed fields with the routine data model. A file that
-  // declares none of them still means what it always meant: it runs locally,
-  // it is enabled, it is not paused, and its owner is settled by the caller
-  // that knows which agent file this frontmatter came from.
+  // declares none of them runs locally, is not paused, and has its owner
+  // settled by the caller that knows which agent file this frontmatter came
+  // from. It is NOT enabled: a block with no `enabled` key was written before
+  // anything in Rundock could run it, so the upgrade that can run it does not
+  // take that silence for consent.
   //
   // `timezone` is null here rather than the machine's zone, and this is the
   // whole-shape assertion that would notice a default arriving from anywhere:
@@ -105,7 +107,7 @@ describe('nested frontmatter block parsers', () => {
       runOn: 'local',
       timezone: null,
       owner: null,
-      enabled: true,
+      enabled: false,
       paused: false,
       planHash: null,
       planApprovedAt: null,

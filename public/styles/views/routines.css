@@ -16,8 +16,13 @@
    overnight teaches its user to stop trusting amber. */
 
 .routines-content { max-width: 640px; padding: 32px; }
-.routines-lead { margin-bottom: 18px; }
-.routines-empty-lead { margin-bottom: 24px; }
+/* The list header's subtitle: the scoped sentence above the populated list. */
+.routines-subtitle { font-size: var(--body); color: var(--text-2); }
+/* Which workspace the listed routines came from, and what that means for the
+   routines in the others, or where Rundock has gone if it is no longer serving
+   this one. A quieter line than the subtitle above it: it is a standing fact
+   about the list rather than a description of what the list contains. */
+.routines-workspace { font-size: var(--caption); color: var(--text-2); margin-top: 2px; }
 
 /* The list */
 .routine-table { display: flex; flex-direction: column; gap: 10px; }
@@ -26,12 +31,26 @@
 .rr-body { flex: 1; min-width: 0; }
 .rr-sentence { font-size: var(--body); font-weight: 600; color: var(--text-1); margin-bottom: 3px; }
 
+/* The skill name inside the sentence, which is the one reachable thing on a
+   row. A button rather than an anchor: there is no URL behind it, and an
+   anchor with no href is a link a keyboard cannot reach.
+
+   IT INHERITS THE SENTENCE RATHER THAN RESTATING IT. Size and weight come
+   from the line it sits in, so the sentence reads as one sentence and the
+   name is told apart by colour and by the underline that arrives on hover.
+   A second declaration of the size here is how the two drift apart. */
+.rr-skill-link { font: inherit; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: none; }
+.rr-skill-link:hover { color: var(--accent-hover); text-decoration: underline; }
+
 /* The meta lines WRAP. Both of a row's facts have to survive together at any
    width, and the row with the longest status text is exactly the one a
    no-wrap line would drop the next-run time from. */
 .rr-meta { font-size: var(--caption); color: var(--text-2); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .rr-meta .sep { color: var(--text-3); }
-.rr-run-line { margin-top: 2px; }
+/* The spacing every second line on a row shares. One rule rather than three
+   identical ones: the lines differ in what they say and in their tone, not in
+   where they sit. */
+.rr-run-line, .rr-problem-line, .rr-offer-line, .rr-note-line { margin-top: 2px; }
 
 .run-status { font-size: var(--caption); }
 .run-status.ok { font-weight: 600; color: var(--success); }
@@ -57,8 +76,12 @@
 .confirm-card p { margin: 0 0 16px; font-size: var(--caption); color: var(--text-2); line-height: 1.65; }
 .confirm-actions { display: flex; gap: 8px; }
 
-/* The empty state: one job, so one primary action and nothing competing. */
+/* The empty state: one job, so one primary action and nothing competing. The
+   state line heads the box it sits in, the same treatment the confirmation
+   card above gives its own heading, so the pane reads as one thing: what is
+   true, what to do about it, and the control that does it. */
 .routines-empty-card { text-align: center; padding: 44px 24px; }
+.routines-empty-state { font-size: var(--body); font-weight: 700; color: var(--text-1); margin: 0 0 8px; }
 .routines-empty-actions { justify-content: center; }
 .routines-empty-aside { text-align: center; margin-top: 16px; }
 
@@ -66,3 +89,46 @@
    Not the danger colour: nothing broke and nothing was changed, so this is
    the interface answering a question rather than reporting a fault. */
 .routines-problem { font-size: var(--caption); color: var(--attention); line-height: 1.6; margin: -8px 0 16px; }
+
+/* The way into a run's own record, on the line that carries the last-run
+   fact. Quiet: it is an offer to read more, not the thing the row is for. */
+.rr-view-run { font-size: var(--caption); font-weight: 500; color: var(--text-2); background: none; border: 0; padding: 0; font-family: inherit; cursor: pointer; transition: color var(--duration-base) ease; }
+.rr-view-run:hover { color: var(--accent); }
+
+/* A schedule nothing here can read, and a routine with no instruction to send.
+   THE DANGER TOKEN, and these are the one thing on this row that earns it:
+   every other state is either history or a promise, and these are routines
+   that will never run until somebody edits the file. The four outcomes keep
+   their own tones, so a failed run and a fault in the routine are told apart
+   by their words rather than by colour alone.
+
+   ONE RULE FOR BOTH, because they are one kind of thing to a reader and giving
+   them separate declarations is how two faults meant to read alike drift into
+   reading differently. They keep separate NAMES because a row can carry both
+   at once and each names a different thing to fix. */
+.schedule-problem, .prompt-problem { font-size: var(--caption); font-weight: 600; color: var(--danger); }
+
+/* The row for a routine the scheduler has moved away from.
+
+   IDLE GREY AND NOT THE DANGER COLOUR, which is the three-tone ruling applied
+   to a fifth thing a row can say. Nothing is wrong with the routine: Rundock
+   is elsewhere, which is the same class of fact as a slot that passed while
+   the machine was shut, and dressing it as an error would teach a reader with
+   several workspaces to ignore the colour that means something. It is a NOTE
+   and not a problem, which is why it shares neither the name nor the tone of
+   the schedule fault above it. */
+.workspace-note { font-size: var(--caption); font-weight: 500; color: var(--idle); }
+
+/* The row for a routine nobody has turned on yet.
+
+   IDLE GREY RATHER THAN AMBER, which is the same ruling the four outcomes
+   follow. Amber is spent on "needs the user, not an error", and a routine an
+   upgrade held back is neither alarming nor broken: it is a question waiting
+   for an answer, and after an upgrade there may be five of them at once. A row
+   of amber on first open would read as a workspace in trouble.
+
+   The offer itself takes the accent, because it is the one thing on this row
+   that is an offer rather than a fact. */
+.rr-offer-text { font-size: var(--caption); font-weight: 500; color: var(--idle); }
+.rr-enable { font-size: var(--caption); font-weight: 600; color: var(--accent); background: none; border: 0; padding: 0; font-family: inherit; cursor: pointer; transition: opacity var(--duration-base) ease; }
+.rr-enable:hover { opacity: 0.8; }

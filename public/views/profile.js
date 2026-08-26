@@ -12,8 +12,10 @@
 // showView. The generated onclick strings (startConversation, addToTeam,
 // openConversation, selectSkill) resolve on window at click time. Load
 // order (views before app.js) is safe because nothing here touches shared
-// state until the app boots. Function bodies are byte-identical to the
-// app.js originals at column 0.
+// state until the app boots. The Routines box reaches RundockRoutinesModel
+// for a schedule's words and showRoutinesForAgent for a row's destination,
+// and the Setup button reaches RundockGuideCopy for its label, all off the
+// global at call time, in the same way.
 (/** @param {any} root @param {() => object} factory */ function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else {
@@ -22,6 +24,26 @@
   }
 }(typeof self !== 'undefined' ? self : this, function () {
 
+// ATTRIBUTE-POSITION ESCAPER and the colour rule, both reached off the global
+// at call time the same way this file reaches every other helper it does not
+// own. `esc` is right for element content and wrong for an attribute value: it
+// leaves both quote characters alone. An agent id is the agent file's own
+// filename and a skill id is its directory name, so both are chosen by
+// whoever can write into the workspace. See public/agent-colour.js for why a
+// colour is judged rather than escaped.
+function escA(value) {
+  if (typeof escAttr === 'function') return escAttr(value);
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function agentColour(value, fallback) {
+  const safe = fallback === undefined ? 'var(--accent)' : fallback;
+  return typeof RundockAgentColour !== 'undefined'
+    ? RundockAgentColour.safeColour(value, safe) : safe;
+}
+
 function showProfile(agentId) {
   const a=agents.find(x=>x.id===agentId);
   // Missing target (a search hit whose agent is absent from the client list,
@@ -29,25 +51,30 @@ function showProfile(agentId) {
   // leaving the rail on its previous section with no matching pane.
   if(!a) { switchNav('team'); return; }
   // Agent profiles belong to the Team section (the profile's back link goes
-  // there); sync the rail and sidebar for callers arriving from elsewhere,
-  // e.g. the search palette or a skill page's agent chips.
-  setNavState('team');
+  // there), and showView resolves that from the view, so callers arriving from
+  // elsewhere (the search palette, a skill page's agent chips) get the rail and
+  // the sidebar without asking for them.
   const existing=conversations.filter(c=>c.agentId===agentId||(c.sessionIds||[]).some(s=>s.agentId===agentId));
   let h=`<a class="profile-back" onclick="switchNav('team')">&#8592; Back</a>
     <div class="profile-header">
-      <div class="profile-avatar" style="background:${a.colour}">${a.icon}</div>
+      <div class="profile-avatar" style="background:${agentColour(a.colour)}">${esc(a.icon)}</div>
       <div>
-        <div class="profile-name">${a.displayName}</div>
-        ${a.role?`<div style="font-size:var(--body);color:var(--text-2)">${a.role}</div>`:''}
+        <div class="profile-name">${esc(a.displayName)}</div>
+        ${a.role?`<div style="font-size:var(--body);color:var(--text-2)">${esc(a.role)}</div>`:''}
       </div>
     </div>`;
   if(a.description) h+=`<p class="profile-desc" style="margin-bottom:24px">${esc(a.description)}</p>`;
   if(a.status === 'raw') {
-    h+=`<div class="profile-cta"><button class="profile-cta-btn" onclick="startConversation(getGuide()?.id || 'default')">Setup with Doc</button></div>`;
+    // The label names the guide the button opens, so the two cannot disagree:
+    // it used to name one agent and open a conversation with whichever agent
+    // the workspace's platform slot actually held.
+    const guideCopy = typeof RundockGuideCopy !== 'undefined' ? RundockGuideCopy : null;
+    const setupLabel = (guideCopy && guideCopy.guideLine('setup', getGuide()?.displayName)) || '';
+    h+=`<div class="profile-cta"><button class="profile-cta-btn" onclick="startConversation(getGuide()?.id || 'default')">${esc(setupLabel)}</button></div>`;
   } else if(a.status === 'available') {
-    h+=`<div class="profile-cta"><button class="profile-cta-btn" onclick="addToTeam('${a.id}')">Add to team</button></div>`;
+    h+=`<div class="profile-cta"><button class="profile-cta-btn" data-agent-id="${escA(a.id)}" onclick="addToTeam(this.dataset.agentId)">Add to team</button></div>`;
   } else {
-    h+=`<div class="profile-cta"><button class="profile-cta-btn" onclick="startConversation('${a.id}')">New conversation</button></div>`;
+    h+=`<div class="profile-cta"><button class="profile-cta-btn" data-agent-id="${escA(a.id)}" onclick="startConversation(this.dataset.agentId)">New conversation</button></div>`;
   }
   // Capabilities card
   if(a.capabilities) {
@@ -66,49 +93,75 @@ function showProfile(agentId) {
   if(agentSkills.length) {
     h+=`<div class="profile-card"><div class="profile-card-section"><div class="profile-section-label">Skills</div>`;
     for(const s of agentSkills) {
-      h+=`<div class="profile-card-item" style="display:flex;flex-direction:column;gap:2px;cursor:pointer" onclick="switchNav('skills');selectSkill('${s.id}')">
+      h+=`<div class="profile-card-item" style="display:flex;flex-direction:column;gap:2px;cursor:pointer" data-skill-id="${escA(s.id)}" onclick="switchNav('skills');selectSkill(this.dataset.skillId)">
         <span style="font-weight:600">${esc(s.name)}</span>
         ${s.description ? `<span style="font-size:var(--caption);color:var(--text-2)">${esc(s.description)}</span>` : ''}
       </div>`;
     }
     h+=`</div></div>`;
   }
-  // Routines + Configuration card. Always rendered: the Runtime row appears
-  // for every agent, so the card always has content.
+  // Routines box. ALWAYS RENDERED, in both of its states. A box that vanished
+  // once you had used it would take the concept with it, and an agent's own
+  // schedules are what a reader came to this page to see.
+  //
+  // A ROW IS A NAME AND A SCHEDULE, AND THAT DELETES A DEFECT RATHER THAN
+  // FIXING ONE. This surface used to interpolate the run record's status word
+  // straight into the markup and print things like "Last run: 4h ago
+  // (interrupted)". The three-tone ruling decides what an outcome is called
+  // and what tone it gets, it took three rounds to settle, and it never
+  // reached here, so the one place a person met a routine while looking at an
+  // agent was the one place the vocabulary was raw. What happened last time is
+  // not restated here in better words: it is not on this page. It belongs to
+  // the routines view, where routines-model.js already owns both, and a row
+  // here goes there.
   const hasRoutines = a.routines && a.routines.length;
   const hasConnectors = a.capabilities?.connectors;
   {
-    h+=`<div class="profile-card">`;
+    // The routines model, reached the way every other module reaches a
+    // sibling: off the global at call time, with no dependency added to this
+    // view's wrapper for one string.
+    const routinesModel = typeof RundockRoutinesModel !== 'undefined' ? RundockRoutinesModel : null;
+    h+=`<div class="profile-card"><div class="profile-card-section"><div class="profile-section-label">Routines</div>`;
     if(hasRoutines) {
-      h+=`<div class="profile-card-section"><div class="profile-section-label">Routines</div>`;
       for(const r of a.routines) {
-        const stateText = r.state ? (r.state.status === 'running' ? '<span style="color:var(--working)">Running now</span>' : `Last run: ${formatTimeAgo(r.state.lastRun)} (${r.state.status})`) : '<span style="color:var(--text-2)">Not yet run</span>';
-        h+=`<div class="profile-card-item" style="display:flex;flex-direction:column;gap:3px">
+        // The schedule in the words the routines view uses, so the two places
+        // an agent's schedule is written cannot read differently. A schedule
+        // the editor never offered has no plain words, and the stored string
+        // is shown rather than nothing.
+        const when = (routinesModel && routinesModel.scheduleWords(r.schedule)) || r.schedule;
+        h+=`<div class="profile-card-item" style="display:flex;flex-direction:column;gap:3px;cursor:pointer" data-agent-id="${escA(a.id)}" onclick="showRoutinesForAgent(this.dataset.agentId)">
           <span style="font-weight:600">${esc(r.name)}</span>
-          <span style="font-size:var(--caption);color:var(--text-2)">${esc(r.schedule)}</span>
-          <span style="font-size:var(--caption)">${stateText}</span>
+          <span style="font-size:var(--caption);color:var(--text-2)">${esc(when)}</span>
         </div>`;
       }
-      h+=`</div>`;
-    }
-    // Scheduling often starts from the agent: you are already looking at it
-    // and think of the schedule second. The editor opens scoped to this
-    // agent, so the picker offers only the skills it has.
-    h+=`<div class="profile-card-section"><div class="profile-section-label">Add a routine</div>
-      <div class="profile-card-text" style="padding-bottom:10px">Give one of ${esc(a.displayName)}'s skills a schedule.</div>
+    } else {
+      // FEATURE DISCOVERY, AND ONLY THAT. The offer exists to teach that
+      // routines are a thing, in the one place where an agent with no schedule
+      // is being looked at. Once this agent has one it goes, and the next is
+      // added from the routines view's own header control, which inherits the
+      // scope it is pressed in.
+      h+=`<div class="profile-card-text" style="padding-bottom:10px">Give one of ${esc(a.displayName)}'s skills a schedule and it runs without being asked.</div>
       <button class="settings-btn-primary" type="button" data-profile-action="add-routine"
-        data-agent-id="${esc(a.id)}" onclick="addRoutineForAgent('${esc(a.id)}')">Add routine</button>
-    </div>`;
-    if(hasConnectors) {
-      h+=`<div class="profile-card-section"><div class="profile-section-label">Connectors</div>${a.capabilities.connectors.split(',').map(cn=>`<div class="profile-card-item" style="display:flex;align-items:center;justify-content:space-between">${cn.trim()}<span style="color:var(--success);font-size:var(--caption)">Connected</span></div>`).join('')}</div>`;
+        data-agent-id="${escA(a.id)}" onclick="addRoutineForAgent(this.dataset.agentId)">Add routine</button>`;
     }
+    h+=`</div></div>`;
+  }
+  // Configuration box. Model and runtime by the direction; connectors sits
+  // with them because it is configuration by the same reading, and moves only
+  // if the owner says otherwise.
+  {
+    const row = (label, value) => `<div class="profile-card-item" style="display:flex;align-items:center;justify-content:space-between">${label}${value}</div>`;
     const modelLabels = {opus:'Opus (most capable)',sonnet:'Sonnet (fast, efficient)',haiku:'Haiku (lightweight)'};
-    if(a.model) h+=`<div class="profile-card-section"><div class="profile-section-label">Model</div><div class="profile-card-item">${modelLabels[a.model]||a.model}</div></div>`;
+    h+=`<div class="profile-card"><div class="profile-card-section"><div class="profile-section-label">Configuration</div>`;
+    if(hasConnectors) {
+      h+=a.capabilities.connectors.split(',').map(cn=>row(esc(cn.trim()), '<span style="color:var(--success);font-size:var(--caption)">Connected</span>')).join('');
+    }
+    if(a.model) h+=row('Model', `<span style="color:var(--text-2)">${esc(modelLabels[a.model]||a.model)}</span>`);
     // Runtime is stated for every agent, not just Codex ones, so it reads as
     // a fact about the agent rather than a special mark.
-    h+=`<div class="profile-card-section"><div class="profile-section-label">Runtime</div><div class="profile-card-item">${a.runtime === 'codex' ? 'Codex' : 'Claude Code'}</div></div>`;
-    if(a.runtime === 'codex') h+=`<div class="profile-card-section"><div class="profile-section-label">Permissions</div><div class="profile-card-text">${esc(a.displayName)} runs on Codex and uses Codex's built-in sandbox. Claude agents use Rundock's permission prompts.</div></div>`;
-    h+=`</div>`;
+    h+=row('Runtime', `<span style="color:var(--text-2)">${a.runtime === 'codex' ? 'Codex' : 'Claude Code'}</span>`);
+    if(a.runtime === 'codex') h+=`<div class="profile-card-text" style="padding-top:8px">${esc(a.displayName)} runs on Codex and uses Codex's built-in sandbox. Claude agents use Rundock's permission prompts.</div>`;
+    h+=`</div></div>`;
   }
   // Instructions card (collapsible)
   if(a.instructions) h+=`<div class="profile-card" style="cursor:pointer" onclick="document.getElementById('agent-instructions').classList.toggle('hidden')">
@@ -121,7 +174,7 @@ function showProfile(agentId) {
     h+=`<div class="profile-existing"><div class="profile-section-label">Existing conversations</div>`;
     for(const c of existing) {
       const n = c.messageCount ?? c.messages.length;
-      h+=`<div class="profile-existing-item" onclick="openConversation('${c.id}')"><span class="profile-existing-title">${esc(c.title)}</span><span class="profile-existing-meta">${n} message${n === 1 ? '' : 's'}</span></div>`;
+      h+=`<div class="profile-existing-item" data-convo-id="${escA(c.id)}" onclick="openConversation(this.dataset.convoId)"><span class="profile-existing-title">${esc(c.title)}</span><span class="profile-existing-meta">${n} message${n === 1 ? '' : 's'}</span></div>`;
     }
     h+=`</div>`;
   }
@@ -129,7 +182,13 @@ function showProfile(agentId) {
   showView('profile');
   // Highlight in sidebar
   document.querySelectorAll('.agent-status-item').forEach(el=>el.classList.remove('active'));
-  document.querySelector(`[data-agent="${agentId}"]`)?.classList.add('active');
+  // Matched by reading the attribute back rather than by building a selector
+  // out of it. The id is a filename an agent chooses, and a quote in it makes
+  // querySelector throw rather than inject, which took the sidebar highlight
+  // out with it.
+  for (const el of document.querySelectorAll('[data-agent]')) {
+    if (el.dataset.agent === agentId) { el.classList.add('active'); break; }
+  }
 }
 
 return { showProfile };

@@ -34,6 +34,7 @@ const PAST_NINE = new Date(2026, 6, 1, 9, 30, 0);
 const PAST_TEN = new Date(2026, 6, 1, 10, 30, 0);
 const PAST_ELEVEN = new Date(2026, 6, 1, 11, 30, 0);
 const PAST_NOON = new Date(2026, 6, 1, 12, 30, 0);
+const PAST_ONE = new Date(2026, 6, 1, 13, 30, 0);
 const LATE = new Date(2026, 6, 1, 23, 30, 0);
 // The next two Thursdays. The flip test needs a routine that is not due on
 // the Wednesday every other test runs on, or its announcement would be spent
@@ -50,6 +51,8 @@ const PAUSED = 'sleeper:paused-check';
 const DISABLED = 'retiree:disabled-check';
 const ELSEWHERE = 'traveller:elsewhere-check';
 const ORDINARY = 'worker:ordinary-check';
+const NEWCOMER = 'newcomer:newcomer-check';
+const SPEECHLESS = 'speechless:promptless-check';
 const QUIET = 'mute:quiet-check';
 
 const FLIP = 'flipper:flip-check';
@@ -62,7 +65,7 @@ function vanisherFile(withRoutine) {
   return agentFile({
     name: 'vanisher', type: 'specialist', order: 7,
     routines: withRoutine
-      ? [{ name: 'vanish-check', schedule: 'every friday at 06:00', prompt: 'vanish body', paused: true }]
+      ? [{ name: 'vanish-check', schedule: 'every friday at 06:00', prompt: 'vanish body', enabled: true, paused: true }]
       : undefined,
   });
 }
@@ -70,7 +73,7 @@ function vanisherFile(withRoutine) {
 function flipperFile(paused) {
   return agentFile({
     name: 'flipper', type: 'specialist', order: 6,
-    routines: [{ name: 'flip-check', schedule: 'every thursday at 06:00', prompt: 'flip body', paused }],
+    routines: [{ name: 'flip-check', schedule: 'every thursday at 06:00', prompt: 'flip body', enabled: true, paused }],
   });
 }
 
@@ -82,7 +85,7 @@ before(async () => {
     agents: {
       sleeper: agentFile({
         name: 'sleeper', type: 'specialist', order: 1,
-        routines: [{ name: 'paused-check', schedule: 'every day at 09:00', prompt: 'paused body', paused: true }],
+        routines: [{ name: 'paused-check', schedule: 'every day at 09:00', prompt: 'paused body', enabled: true, paused: true }],
       }),
       retiree: agentFile({
         name: 'retiree', type: 'specialist', order: 2,
@@ -90,14 +93,35 @@ before(async () => {
       }),
       traveller: agentFile({
         name: 'traveller', type: 'specialist', order: 3,
-        routines: [{ name: 'elsewhere-check', schedule: 'every day at 11:00', prompt: 'elsewhere body', runOn: 'agent-computer' }],
+        routines: [{ name: 'elsewhere-check', schedule: 'every day at 11:00', prompt: 'elsewhere body', enabled: true, runOn: 'agent-computer' }],
       }),
-      // Declares none of the three fields, so it is also the proof that a
-      // routine written before they existed still fires on the model's
-      // defaults rather than being refused by an absent value.
+      // The control every refusal test below fires beside its refusal, so
+      // "nothing ran" means the gate rather than a scheduler that was never
+      // going to run anything.
+      //
+      // IT SAYS `enabled: true` OUT LOUD, and that is the correction rather
+      // than tidiness. It used to declare none of the three fields and stand
+      // as the proof that a routine written before they existed still fires
+      // on the model's defaults. That default was the defect: a block with no
+      // `enabled` key was written before anything here could run it, so it is
+      // refused now, and `newcomer` below is the routine that says so.
       worker: agentFile({
         name: 'worker', type: 'specialist', order: 4,
-        routines: [{ name: 'ordinary-check', schedule: 'every day at 08:00', prompt: 'ordinary body' }],
+        routines: [{ name: 'ordinary-check', schedule: 'every day at 08:00', prompt: 'ordinary body', enabled: true }],
+      }),
+      // Declares none of the three fields, which is every routine written
+      // before this product could run one.
+      newcomer: agentFile({
+        name: 'newcomer', type: 'specialist', order: 9,
+        routines: [{ name: 'newcomer-check', schedule: 'every day at 12:00', prompt: 'newcomer body' }],
+      }),
+      // A schedule and no prompt, which is the whole of the fixture: the
+      // helper writes no `prompt:` line for a routine that names none, so this
+      // is exactly the block somebody gets from writing the two fields they
+      // read about and stopping.
+      speechless: agentFile({
+        name: 'speechless', type: 'specialist', order: 10,
+        routines: [{ name: 'promptless-check', schedule: 'every day at 13:00', enabled: true }],
       }),
       // Due only late in the day, so nothing else in this file wakes it and
       // the announcement test can count from zero.
@@ -107,11 +131,11 @@ before(async () => {
       vanisher: vanisherFile(true),
       switcher: agentFile({
         name: 'switcher', type: 'specialist', order: 8,
-        routines: [{ name: 'switch-check', schedule: 'every saturday at 06:00', prompt: 'switch body', paused: true }],
+        routines: [{ name: 'switch-check', schedule: 'every saturday at 06:00', prompt: 'switch body', enabled: true, paused: true }],
       }),
       mute: agentFile({
         name: 'mute', type: 'specialist', order: 5,
-        routines: [{ name: 'quiet-check', schedule: 'every day at 23:00', prompt: 'quiet body', paused: true }],
+        routines: [{ name: 'quiet-check', schedule: 'every day at 23:00', prompt: 'quiet body', enabled: true, paused: true }],
       }),
     },
   });
@@ -234,7 +258,60 @@ test('a routine whose runOn is not supported does not fire', async (t) => {
   await settleControl();
 });
 
-test('a routine declaring none of the three fields still fires, and runs through', async (t) => {
+// AC-1, at the tick. A routine whose file never said `enabled` is one somebody
+// wrote by hand before this product could run it, against a cron job that is
+// still doing the work. It is refused by the same gate and named by the same
+// field, so the log line a support question is answered from is the one that
+// already exists.
+test('a routine declaring none of the three fields does not fire', async (t) => {
+  clock.at = PAST_NOON;
+  armControl();
+  seed(NEWCOMER);
+
+  const logs = driveTick(t);
+
+  assert.deepStrictEqual(h.internal.routineState[NEWCOMER], YESTERDAY,
+    'the refused routine kept yesterday\'s run: refusing is not recorded as a run');
+  assertControlFiredOnThisTick(logs);
+  assert.ok(logs.some(l => l.includes('newcomer-check') && l.includes('enabled is false')),
+    'the refusal is announced and names the field that caused it');
+
+  await settleControl();
+});
+
+// A routine with a schedule and no prompt does not fail to start: there is
+// nothing here that throws. The absent value is carried all the way to the
+// spawn and coerced there, so the agent is asked to act on the four letters
+// n-u-l-l, unattended, with a completed run recorded and a healthy-looking
+// history behind it. That is worse than a routine that will not start, which
+// is why the gate refuses it by the same road as the three fields above.
+//
+// THE PROMPT LOG IS THE ASSERTION, not the absence of a run record. A refusal
+// that recorded nothing while still spawning would satisfy the state check
+// alone, and what this card is about is what reached an agent.
+test('a routine with no prompt does not fire, and no agent is handed the word null', async (t) => {
+  clock.at = PAST_ONE;
+  armControl();
+  seed(SPEECHLESS);
+
+  const logs = driveTick(t);
+
+  assert.deepStrictEqual(h.internal.routineState[SPEECHLESS], YESTERDAY,
+    'the refused routine kept yesterday\'s run: refusing is not recorded as a run');
+  assertControlFiredOnThisTick(logs);
+  assert.ok(logs.some(l => l.includes('promptless-check') && l.includes('prompt is null')),
+    'the refusal is announced and names the field that caused it');
+
+  // Read only once a child of THIS tick has finished writing to the log. Read
+  // straight after the tick, an empty log is also what a routine that did fire
+  // leaves behind for the moment before its child gets there, and the
+  // assertion would pass for the opposite of the reason claimed.
+  await settleControl();
+  assert.deepStrictEqual(h.promptsFor('speechless'), [],
+    'an agent was handed a prompt for a routine that has none');
+});
+
+test('a routine that says it is enabled fires, and runs through', async (t) => {
   clock.at = PAST_NOON;
   armControl();
 

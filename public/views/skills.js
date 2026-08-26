@@ -22,8 +22,31 @@
   }
 }(typeof self !== 'undefined' ? self : this, function () {
 
+// ATTRIBUTE-POSITION ESCAPER and the colour rule, reached off the global at
+// call time. A skill id is the skill's DIRECTORY NAME and an agent id is the
+// agent file's filename, so both are chosen by anything that can create a
+// file in the workspace, and both were reaching an inline handler. `esc`
+// leaves quotes alone and is right only for element content; see
+// public/agent-colour.js for why a colour is judged rather than escaped.
+function escA(value) {
+  if (typeof escAttr === 'function') return escAttr(value);
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function agentColour(value, fallback) {
+  const safe = fallback === undefined ? 'var(--accent)' : fallback;
+  return typeof RundockAgentColour !== 'undefined'
+    ? RundockAgentColour.safeColour(value, safe) : safe;
+}
+
 function skillsModel() {
   return typeof RundockSkillsModel !== 'undefined' ? RundockSkillsModel : null;
+}
+
+function routineEditorModel() {
+  return typeof RundockRoutineEditorModel !== 'undefined' ? RundockRoutineEditorModel : null;
 }
 
 // Whether the skill list has arrived. NOT the same as it being empty, and the
@@ -117,14 +140,18 @@ function renderSkillsEmpty(loading) {
     guideName: guide ? (guide.displayName || guide.name || null) : null,
   });
 
+  // THE STATE LINE IS IN THE BOX, WITH THE ACTION IT BELONGS BESIDE, THE SAME
+  // FIX THE ROUTINES PANE MADE TO THE SAME PATTERN. It used to be the
+  // header's subtitle, so the pane read as a sentence above a card rather
+  // than as one thing.
   let h = `<div class="profile-header">
       <div class="profile-avatar skill-avatar">${BOLT_SVG}</div>
       <div>
         <div class="profile-name">${esc(model.TITLE)}</div>
-        ${state.lead ? `<div class="skills-empty-state">${esc(state.lead)}</div>` : ''}
       </div>
     </div>
     <div class="settings-card flow skills-empty-card">
+      ${state.lead ? `<p class="skills-empty-state">${esc(state.lead)}</p>` : ''}
       <p class="settings-lead">${esc(state.body)}</p>`;
   if (state.action) {
     // Skills are built by talking to the agent that builds them; this screen
@@ -143,7 +170,7 @@ function renderSkillsEmpty(loading) {
 function renderSkillsSidebar(list) {
   const sidebar = document.getElementById('skills-sidebar-list');
   sidebar.innerHTML = list.map(s => `
-    <div class="skill-sidebar-item${s.id === currentSkillId ? ' active' : ''}" data-skill="${s.id}" onclick="selectSkill('${s.id}')">
+    <div class="skill-sidebar-item${s.id === currentSkillId ? ' active' : ''}" data-skill="${escA(s.id)}" onclick="selectSkill(this.dataset.skill)">
       <span class="skill-sidebar-name">${esc(s.name)}</span>
     </div>
   `).join('');
@@ -182,8 +209,8 @@ function selectSkill(id) {
       <div class="profile-section-label">Used by</div>
       <div style="display:flex;flex-wrap:wrap;gap:8px;padding-top:4px">`;
     for (const a of s.assignedAgents) {
-      h += `<div class="agent-chip" title="View ${esc(a.name)}'s profile" onclick="switchNav('team');showProfile('${esc(a.id)}')">
-        <div class="avatar sm" style="background:${a.colour}">${a.icon}</div>
+      h += `<div class="agent-chip" title="View ${escA(a.name)}'s profile" data-agent-id="${escA(a.id)}" onclick="switchNav('team');showProfile(this.dataset.agentId)">
+        <div class="avatar sm" style="background:${agentColour(a.colour)}">${esc(a.icon)}</div>
         <div>
           <div class="agent-chip-name">${esc(a.name)}</div>
           <div class="agent-chip-role">${esc(a.role || '')}</div>
@@ -198,14 +225,72 @@ function selectSkill(id) {
       <div class="profile-card-text" style="padding-top:4px">Available to all agents</div>
       <div style="margin-top:8px;font-size:var(--caption);color:var(--text-2);line-height:1.5">
         Want to assign this to a specific agent?
-        ${guide ? `<span style="font-size:var(--caption);font-weight:500;color:var(--accent);cursor:pointer" onclick="startConversation('${guide.id}')" title="Open a conversation with Doc">Talk to Doc</span>.` : ''}
+        ${guide ? `<span style="font-size:var(--caption);font-weight:500;color:var(--accent);cursor:pointer" data-agent-id="${escA(guide.id)}" onclick="startConversation(this.dataset.agentId)" title="Open a conversation with Doc">Talk to Doc</span>.` : ''}
       </div>
+    </div></div>`;
+  }
+
+  // Schedule this skill, from the skill's own page.
+  //
+  // SECONDARY WEIGHT, DELIBERATELY. The primary way to make a routine is the
+  // routines surface, which is where somebody who has decided to schedule
+  // something goes. This is the other order: looking at a skill you already
+  // trust and thinking of the schedule second. A shortcut for a reader who is
+  // already here, not a competing front door.
+  //
+  // ONLY WHERE AN AGENT HAS THE SKILL, and the unassigned case is not the same
+  // as the shared one. A routine runs a skill AS an agent, and the picker is
+  // built by walking each skill's assigned agents, so a skill nobody has
+  // produces no row and can never appear in it. Offering the control anyway
+  // meant a reader pressing "Schedule this skill" landed either on an offer to
+  // build a skill, while looking at one, or on a list of every other skill
+  // with the one they pressed missing. A control that does not lead where its
+  // label says teaches a wrong model of the app, which is worse than no
+  // control: the reader believes the label.
+  //
+  // The card above already carries the step this reader actually needs, which
+  // is to give the skill an agent, so nothing is lost by leaving the control
+  // out.
+  //
+  // BUT THE SECTION ITSELF STAYS, AND NOW SAYS WHY. Silence here used to be
+  // deliberate, on the reasoning that a reader meets the same gap from the
+  // other side, in the "Used by" card above, so a second answer here risks
+  // the two disagreeing. That reasoning misses the opposite failure: a
+  // reader looking specifically for Schedule, on a page that lists Used by,
+  // Schedule and Instructions, meets it simply missing, with nothing under
+  // that heading to say why. `UNASSIGNED_REASON` is the one sentence both
+  // surfaces use for this, verbatim, so adding it here cannot make this page
+  // say something the routines view's own empty state does not.
+  //
+  // NOT GUARDED ON THE MODEL BEING LOADED, the same way `renderSkillsEmpty`
+  // above reads `skillsModel()` unguarded: index.html loads
+  // routine-editor-model.js long before views/skills.js, so its absence here
+  // would mean the page itself failed to load rather than a state this
+  // function should quietly work around. A guard that swallowed that would
+  // reproduce, for a different cause, the exact silence this card exists to
+  // remove.
+  if (s.assignedAgents.length) {
+    h += `<div class="profile-card"><div class="profile-card-section">
+      <div class="profile-section-label">Schedule</div>
+      <div class="profile-card-text" style="padding-bottom:10px">Give this skill a schedule and your agents take it from there.</div>
+      <button class="settings-btn" type="button" data-skills-action="schedule-skill"
+        data-skill-id="${escA(s.id)}" onclick="addRoutineForSkill(this.dataset.skillId)">Schedule this skill</button>
+    </div></div>`;
+  } else {
+    h += `<div class="profile-card"><div class="profile-card-section">
+      <div class="profile-section-label">Schedule</div>
+      <div class="profile-card-text">${esc(routineEditorModel().UNASSIGNED_REASON)}</div>
     </div></div>`;
   }
 
   // Collapsible instructions card
   if (s.instructions) {
-    const instructionsId = `skill-instructions-${s.id}`;
+    // A CONSTANT ID, not one built from the skill's directory name. The name
+    // was written into the id attribute AND into the getElementById call in
+    // the handler beside it, so a directory called `a').remove();//` was a
+    // string literal in a JavaScript position. Only one skill detail is
+    // rendered at a time, so the id never needed to be unique per skill.
+    const instructionsId = 'skill-instructions';
     h += `<div class="profile-card" style="cursor:pointer" onclick="document.getElementById('${instructionsId}').classList.toggle('hidden')">
       <div class="profile-card-section">
         <div class="profile-section-label">Instructions &#9662;</div>

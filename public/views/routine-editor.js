@@ -49,12 +49,22 @@
 
   function freshState(input) {
     return {
-      step: 'pick',
+      // Almost always 'pick', because almost every door has nothing chosen
+      // yet. The skill page is the exception: the reader chose the skill by
+      // being on its page, so opening on the picker would ask again.
+      step: (input && input.step) || 'pick',
       agentId: (input && input.agentId) || null,
       agentName: (input && input.agentName) || null,
       skills: (input && input.skills) || [],
       zone: (input && input.zone) || null,
-      selectedKey: null,
+      // The skill page this was opened from, if any. It owns the breadcrumb,
+      // because a breadcrumb belongs to the door rather than to the state:
+      // the skill door can carry an agent as well, and "Back to Piper" on a
+      // press that came from a skill page is a label naming somewhere the
+      // press does not go.
+      originSkillId: (input && input.originSkillId) || null,
+      originSkillName: (input && input.originSkillName) || null,
+      selectedKey: (input && input.selectedKey) || null,
       frequency: 'day',
       time: '09:00',
       // The default is the only value this release can honour. It is read from
@@ -110,7 +120,7 @@
       // The model decides that; this only renders what it was handed.
       const meta = option.agentName ? `<div class="re-meta">${escText(option.agentName)}</div>` : '';
       h += `<div class="re-row${on ? ' sel' : ''}" data-skill-key="${escText(option.key)}"
-        onclick="routineEditorPick('${escText(option.key)}')">
+        onclick="routineEditorPick(this.dataset.skillKey)">
         <div class="re-dot">${on ? '&#10003;' : ''}</div>
         <div class="re-body"><div class="re-name">${escText(option.name)}</div>${meta}</div>
       </div>`;
@@ -137,7 +147,7 @@
       // nowhere is the same defect as copy that promises what cannot be done.
       h += `<div class="re-row re-compact${on ? ' sel' : ''}${option.selectable ? '' : ' muted'}"
         data-run-on="${escText(option.value)}" data-selectable="${option.selectable}"
-        onclick="routineEditorRunOn('${escText(option.value)}')">
+        onclick="routineEditorRunOn(this.dataset.runOn)">
         <div class="re-dot">${on ? '&#10003;' : ''}</div>
         <div class="re-body">
           <div class="re-name">${escText(option.name)}</div>
@@ -178,6 +188,18 @@
     if (sentence) h += `<p class="re-preview" data-routine-editor="sentence">${escText(sentence)}</p>`;
     h += runOnField(m);
     if (zone) h += `<p class="re-caption">${escText(zone)}</p>`;
+    // WHERE THE ROUTINE BEING MADE WILL ACTUALLY RUN, on the step that decides
+    // when it runs. Every route into this editor passes through this step, so
+    // nobody finishes a routine without having been told which workspace it
+    // belongs to and what happens while they are in another one. Beside the
+    // run-on caveat rather than folded into it: that one is about a workspace
+    // open on several computers, this one is about several workspaces on one.
+    //
+    // READ OFF THE STEP rather than off a bare constant, the same way the
+    // run-on caveat is read off its field: a sentence the model hands back as
+    // part of the step cannot be left out of a render of that step without the
+    // omission being visible here.
+    h += `<p class="re-caveat" data-routine-editor="workspace-caveat">${escText(m.scheduleStepFields().workspaceCaveat)}</p>`;
     h += `<div class="re-actions">
       <button class="settings-btn-primary" type="button" ${sentence ? '' : 'disabled'}
         onclick="routineEditorStep('ready')">Continue</button>
@@ -218,10 +240,15 @@
     const choice = m.skillChoices({ skills: state.skills, agentId: state.agentId });
     const option = selectedOption();
     let h = '';
-    // The breadcrumb names the agent it returns to, and returns to that
-    // agent. Rendered only when there IS one, so the label can never name a
+    // The breadcrumb belongs to the DOOR that opened the editor, not to what
+    // the state happens to carry. The skill door can carry an agent as well,
+    // so the skill is asked first; then the agent; otherwise none. Rendered
+    // only when there is somewhere to name, so the label can never name a
     // destination this editor does not have.
-    if (state.agentId && state.agentName) {
+    if (state.originSkillId && state.originSkillName) {
+      h += `<a class="profile-back" data-routine-editor="back" data-back-to-skill="${escText(state.originSkillId)}"
+        onclick="routineEditorLeave()">&#8592; Back to ${escText(state.originSkillName)}</a>`;
+    } else if (state.agentId && state.agentName) {
       h += `<a class="profile-back" data-routine-editor="back" data-back-to="${escText(state.agentId)}"
         onclick="routineEditorLeave()">&#8592; Back to ${escText(state.agentName)}</a>`;
     }
@@ -242,13 +269,18 @@
   /**
    * Open the editor, scoped to an agent or not.
    *
-   * Two entries reach this. From an agent's page `agentId` is set and the
-   * picker is that agent's. From the routines view it is not, so every agent's
-   * skills are offered and each row names which agent runs it.
+   * Three doors reach this. From an agent's page, and from the routines panel
+   * which inherits that page's scope, `agentId` is set and the picker is that
+   * agent's. From the routines view it is not, so every agent's skills are
+   * offered and each row names which agent runs it. From a skill's own page it
+   * is set only when exactly one agent has that skill, so the skill door is
+   * the one that can carry both a skill and an agent, or a skill and no agent.
    */
   function openRoutineEditor(input) {
     state = freshState(input);
-    if (typeof setNavState === 'function') setNavState('team');
+    // The rail follows the view, resolved by showView from NAV_FOR_VIEW in
+    // app.js. This used to name a section here, and the section it named was
+    // Team, so the editor lit the team entry on a screen about routines.
     if (typeof showView === 'function') showView('routine-editor');
     renderRoutineEditor();
   }
@@ -264,6 +296,19 @@
    */
   function browserTimezone() {
     try { return Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch (e) { return null; }
+  }
+
+  /**
+   * Ask for the skill list when the editor was opened before it arrived.
+   *
+   * ONE LINE IN ONE PLACE, because every door that can open the editor ahead
+   * of the reply needs it and a copy per door is a door that silently stops
+   * asking the day somebody edits only the other one.
+   */
+  function requestSkillsIfMissing(loaded) {
+    if (loaded) return;
+    if (typeof ws === 'undefined' || !ws) return;
+    ws.send(JSON.stringify({ type: 'get_skills' }));
   }
 
   /**
@@ -285,7 +330,7 @@
       loading: !loaded,
       zone: browserTimezone(),
     });
-    if (!loaded && typeof ws !== 'undefined' && ws) ws.send(JSON.stringify({ type: 'get_skills' }));
+    requestSkillsIfMissing(loaded);
   }
 
   /**
@@ -300,6 +345,63 @@
     state.skills = list || [];
     state.loading = false;
     renderRoutineEditor();
+  }
+
+  /**
+   * Open the editor from a skill's own page.
+   *
+   * TWO OUTCOMES, AND THE SECOND ONE IS WHY THIS IS NOT A ONE-LINER.
+   *
+   * One agent has the skill: nothing is ambiguous, so the editor opens on the
+   * schedule step with that skill and that agent already chosen. The reader
+   * pressed a control that said "Schedule this skill" and lands on the step
+   * that schedules it.
+   *
+   * Several agents have it: the editor opens the agent-agnostic picker with
+   * nothing selected, because choosing an agent on the reader's behalf would
+   * be a guess wearing the shape of a decision. They would only discover which
+   * agent they had been given by reading the routine afterwards.
+   *
+   * The pressed skill's rows come FIRST in that picker, one per agent that
+   * could run it. The reader chose the skill by being on its page, so the only
+   * thing left to choose is the agent, and they should never have to find the
+   * skill a second time to do it.
+   *
+   * Either way the breadcrumb goes back to the skill, because that is where
+   * the press came from.
+   *
+   * NO LOADING PATH, AND THAT IS A FACT ABOUT THE DOOR RATHER THAN AN
+   * OMISSION. This door is a control on a skill's own detail page, and that
+   * page is rendered from the skill list. There is no skill page to press
+   * before the list has arrived, so the state the other doors guard against
+   * cannot be reached from here.
+   */
+  function addRoutineForSkill(skillId) {
+    const list = (typeof skills !== 'undefined' && skills) ? skills : [];
+    const skill = list.filter(s => s.id === skillId)[0] || null;
+    const assigned = (skill && skill.assignedAgents) || [];
+    // Exactly one, and never "the first of several".
+    const only = assigned.length === 1 ? assigned[0] : null;
+    // The agent's name comes from the ROSTER, the way the agent door resolves
+    // it, so both doors put the same words in the same field for the same
+    // agent. A skill's assignedAgents entry carries a name of its own, and the
+    // two vocabularies drift: the roster resolves a display name and this does
+    // not have to agree with it.
+    const roster = typeof agents !== 'undefined' && agents ? agents : [];
+    const rostered = only ? roster.filter(a => a.id === only.id)[0] : null;
+    openRoutineEditor({
+      agentId: only ? only.id : null,
+      agentName: only ? ((rostered && rostered.displayName) || only.name || null) : null,
+      // Scoped to the one skill when the agent came with it. Otherwise every
+      // skill, which is what makes the picker agent-agnostic, with the pressed
+      // one first so the reader is never asked to find it again.
+      skills: only ? [skill] : (skill ? [skill].concat(list.filter(s => s.id !== skill.id)) : list),
+      step: only ? 'schedule' : 'pick',
+      selectedKey: only ? `${skill.id}:${only.id}` : null,
+      originSkillId: skill ? skill.id : null,
+      originSkillName: skill ? skill.name : null,
+      zone: browserTimezone(),
+    });
   }
 
   function addRoutine() { addRoutineForAgent(null); }
@@ -357,24 +459,40 @@
    * inside the router that line could only be reached by loading the whole
    * shell, so it had no test and could be deleted with the suite green.
    *
-   * THE ROUTINES SURFACE NOW HAS A PERMANENT RAIL ENTRY, so this resolves to
-   * it rather than to the team panel, and it did before that entry became
-   * permanent because the entry was in the markup either way. That is exactly
-   * why the resolution stays: it reads the shell rather than a belief about
-   * the shell, so the day the panel is lifted out of the team one it is the
-   * rename that has to keep the names, not this function that has to be
-   * remembered.
+   * THE ROUTINES SURFACE HAS A PERMANENT RAIL ENTRY AND A SIDEBAR PANEL OF ITS
+   * OWN, so this resolves to it. That panel used to be a child of the team
+   * one, revealed by an alias in the router, which is the arrangement the
+   * fallback below was written against. The day it was lifted out and given
+   * its own place in the rail, this function was already correct and nothing
+   * here needed editing, which is the whole argument for resolving against the
+   * shell rather than against a belief about it.
    *
    * A destination is usable only if the shell has BOTH halves of it: a rail
-   * button carrying the name, and the sidebar panel the router reveals by that
+   * button carrying the name, and the view panel the router shows by that
    * name. Checking the pair is what makes this a resolution rather than a
-   * guess, and it is why this returns the section that lists routines today
-   * and the routines surface itself the day that one is built, with nothing
-   * here edited.
+   * guess.
+   *
+   * IT ASKS FOR ALL THREE, and each is here because a parent of this file
+   * needed it. The routines section had no sidebar of its own and resolved
+   * against `sidebar-routines` anyway, because an empty element of that name
+   * sat nested inside the team panel holding the old listing: revealing it by
+   * name succeeded and left the reader staring at a hidden parent. That
+   * sentinel is gone and the section now has a real panel of its own, so both
+   * halves the router touches are real and both are asked for. `setNavState`
+   * reveals the sidebar by name and `showView` reveals the view by name, so a
+   * shell missing either cannot show this section, and asking for only one of
+   * them is how the old accident passed as a check.
+   *
+   * THE FALLBACK IS SILENT, which is why the trio is asserted against the real
+   * markup in the doors suite rather than against a shell a test writes for
+   * itself: renaming any of them sends a real save to the team chart with
+   * nothing thrown and nothing logged.
    */
   function navigable(nav) {
     if (typeof document === 'undefined') return false;
-    return !!(document.querySelector(`[data-nav="${nav}"]`) && document.getElementById(`sidebar-${nav}`));
+    return !!(document.querySelector(`[data-nav="${nav}"]`)
+      && document.getElementById(`sidebar-${nav}`)
+      && document.getElementById(`view-${nav}`));
   }
 
   function routinesListNav() {
@@ -396,11 +514,36 @@
    * model of where things are from being shown one.
    */
   function routineEditorLeave() {
+    const skillId = state && state.originSkillId;
     const agentId = state && state.agentId;
     state = null;
+    // The skill page first, because the skill door can also carry an agent and
+    // the breadcrumb it rendered names the skill.
+    //
+    // ONLY IF THAT PAGE CAN STILL BE OPENED, and this is a dead end rather
+    // than a detail. selectSkill returns doing nothing when the id is not in
+    // the list, and the list is replaced whenever a skill is saved in the
+    // background or the workspace changes while the editor is open. State is
+    // already null by then, so every control in the editor answers nothing:
+    // the reader is left looking at a screen that has stopped working, with
+    // the rail as the only way out. Falling through costs one condition.
+    if (skillId && canSelectSkill(skillId)) { selectSkill(skillId); return; }
     if (agentId && typeof showProfile === 'function') { showProfile(agentId); return; }
-    // Opened without an agent, so there is no profile to go back to.
+    // No skill to go back to and no agent, so the list of routines it is.
     if (typeof switchNav === 'function') switchNav(routinesListNav());
+  }
+
+  /**
+   * Whether the skill page for this id can still be opened.
+   *
+   * Asked of the LIST rather than of selectSkill, because selectSkill reports
+   * nothing back: it returns identically whether it drew a page or found no
+   * such skill, so a caller cannot tell the difference afterwards.
+   */
+  function canSelectSkill(skillId) {
+    if (typeof selectSkill !== 'function') return false;
+    const list = (typeof skills !== 'undefined' && skills) ? skills : [];
+    return list.some(s => s.id === skillId);
   }
 
   /**
@@ -467,7 +610,7 @@
   }
 
   return {
-    openRoutineEditor, addRoutineForAgent, addRoutine, browserTimezone,
+    openRoutineEditor, addRoutineForAgent, addRoutineForSkill, addRoutine, browserTimezone,
     routinesListNav, routineEditorSaved, routineEditorFailed, routineEditorSkillsArrived,
     renderRoutineEditor, routineEditorHtml,
     routineEditorPick, routineEditorStep, routineEditorSetField, routineEditorRunOn,

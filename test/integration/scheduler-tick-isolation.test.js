@@ -23,17 +23,25 @@
 // frozen criteria both name a routine that declares a schedule and no prompt:
 // the prompt normalises to null, reaches the spawn arguments, and spawn was
 // said to throw synchronously on a non-string argument. It does not. Node
-// coerces the argument, and the routine runs with the literal prompt "null"
+// coerces the argument, and the routine ran with the literal prompt "null"
 // (measured on Node 24; the coercion is in the spawn binding rather than in
 // the JavaScript validation, which checks strings for NUL bytes and lets
 // everything else through). The defect the card is about is real and its
-// consequence is exactly as described; that one route to it is not.
+// consequence was exactly as described; that one route to it is not.
 //
 // So the `mute` fixture is read by two tests rather than one. The criterion,
 // that a promptless routine never ends the pass, is asserted on its own and
-// holds whichever way a Node jumps. What the routine actually does instead is
-// a separate test, marked as characterisation, because it is a defect with a
-// card of its own and not a property anyone should read as intended.
+// holds whichever way a Node jumps. What the routine does instead is a
+// separate test, and it is the one that changed: the coercion was carded
+// against the routine data model, the data model now refuses a routine with
+// nothing to say, and that test asserts the spawn does not happen rather than
+// characterising what it used to send. The evidence that the behaviour changed
+// is the part worth keeping, which is why it was flipped rather than deleted.
+//
+// WHICH IS ALSO WHY `mute` IS NEVER WAITED ON. A refused routine starts no
+// child and writes no run record, so there is nothing to settle: every test
+// below asserts its ABSENCE from the run state instead, which is the same fact
+// the old wait was standing in for.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -70,18 +78,18 @@ before(async () => {
       // two routines whose state the tests read.
       mute: agentFile({
         name: 'mute', type: 'specialist', order: 1,
-        routines: [{ name: 'mute-check', schedule: 'every day at 09:00' }],
+        routines: [{ name: 'mute-check', schedule: 'every day at 09:00', enabled: true }],
       }),
       // The thrower. Its prompt reaches spawn as an argument Node refuses.
       faulty: agentFile({
         name: 'faulty', type: 'specialist', order: 2,
-        routines: [{ name: 'faulty-check', schedule: 'every day at 09:00', prompt: `bad${NUL}body` }],
+        routines: [{ name: 'faulty-check', schedule: 'every day at 09:00', prompt: `bad${NUL}body`, enabled: true }],
       }),
       // The control, declared LAST so it is only ever reached by a pass that
       // survived both of the routines above it.
       steady: agentFile({
         name: 'steady', type: 'specialist', order: 3,
-        routines: [{ name: 'steady-check', schedule: 'every day at 09:00', prompt: 'steady body' }],
+        routines: [{ name: 'steady-check', schedule: 'every day at 09:00', prompt: 'steady body', enabled: true }],
       }),
     },
   });
@@ -183,7 +191,8 @@ test('a routine whose start throws leaves the routines after it to run', async (
   assert.strictEqual(control.lastRun, dayAt(1, 9, 30).toISOString(), 'on that pass and not a later one');
 
   assert.ok(await settled(STEADY), 'the control run finished');
-  assert.ok(await settled(MUTE), 'and so did the run the malformed routine started');
+  assert.strictEqual(h.internal.routineState[MUTE], undefined,
+    'the promptless routine was refused, so it started nothing and recorded nothing');
 });
 
 test('the end-of-tick bookkeeping survives a start that throws', async (t) => {
@@ -203,7 +212,8 @@ test('the end-of-tick bookkeeping survives a start that throws', async (t) => {
     'and wrote it, which is the half that protects the next process');
 
   assert.ok(await settled(STEADY), 'the control run finished');
-  assert.ok(await settled(MUTE), 'and so did the run the malformed routine started');
+  assert.strictEqual(h.internal.routineState[MUTE], undefined,
+    'the promptless routine was refused, so it started nothing and recorded nothing');
 });
 
 test('a start that throws is attempted once in its period, not once a minute', async (t) => {
@@ -223,7 +233,8 @@ test('a start that throws is attempted once in its period, not once a minute', a
     'and the record still belongs to the attempt that was made');
 
   assert.ok(await settled(STEADY), 'the control run finished');
-  assert.ok(await settled(MUTE), 'and so did the run the malformed routine started');
+  assert.strictEqual(h.internal.routineState[MUTE], undefined,
+    'the promptless routine was refused, so it started nothing and recorded nothing');
 });
 
 test('the routine that threw is released, so the next period reaches it again', async (t) => {
@@ -231,7 +242,8 @@ test('the routine that threw is released, so the next period reaches it again', 
   driveTicks(t);
   assert.strictEqual(h.internal.routineState[FAULTY].status, 'failed', 'the first period met the throwing start');
   assert.ok(await settled(STEADY), 'the first control run finished');
-  assert.ok(await settled(MUTE), 'and so did the first malformed run');
+  assert.strictEqual(h.internal.routineState[MUTE], undefined,
+    'the promptless routine was refused, so it started nothing and recorded nothing');
 
   // A hold that outlived the throw would turn executeRoutine's refusal into
   // the answer instead, and the routine would never be attempted again for
@@ -247,7 +259,8 @@ test('the routine that threw is released, so the next period reaches it again', 
     'and the pass after the failure was an ordinary one');
 
   assert.ok(await settled(STEADY), 'the second control run finished');
-  assert.ok(await settled(MUTE), 'and so did the second malformed run');
+  assert.strictEqual(h.internal.routineState[MUTE], undefined,
+    'the promptless routine was refused, so it started nothing and recorded nothing');
 });
 
 test('a routine that declares a schedule and no prompt does not end the pass', async (t) => {
@@ -258,47 +271,63 @@ test('a routine that declares a schedule and no prompt does not end the pass', a
   driveTicks(t);
 
   // Deliberately says nothing about WHICH disposition the malformed routine
-  // gets, so the criterion does not rest on the coercion below surviving. If a
-  // Node ever restores the throw the card assumed, the routine is recorded as
-  // a failed start instead and this test is still the one that holds.
-  assert.ok(h.internal.routineState[MUTE], 'the malformed routine was considered and reached a record of its own');
+  // gets, so the criterion does not rest on the refusal below staying the
+  // answer. What it asserts is that the pass carried ON past it, in the two
+  // places a pass that ended there would show it: the routine declared AFTER
+  // the malformed one ran on this very pass, and the bookkeeping below the
+  // routine loop happened. If a Node ever restores the throw the card assumed,
+  // the routine is recorded as a failed start instead and this test is still
+  // the one that holds.
   assert.strictEqual(h.internal.routineState[STEADY].lastRun, dayAt(6, 9, 30).toISOString(),
-    'and the routine declared after it ran on the same pass');
+    'the routine declared after the malformed one ran on the same pass');
+  assert.strictEqual(h.internal.routineSlots.observedAt, dayAt(6, 9, 30).toISOString(),
+    'and the pass reached its own end, rather than leaving at the malformed routine');
 
   assert.ok(await settled(STEADY), 'the control run finished');
-  assert.ok(await settled(MUTE), 'and so did the run the malformed routine started');
+  assert.strictEqual(h.internal.routineState[MUTE], undefined,
+    'the promptless routine was refused, so it started nothing and recorded nothing');
 });
 
-// CHARACTERISATION OF A DEFECT, NOT A PROPERTY TO KEEP. A routine that
-// declares a schedule and no prompt is not refused: the null reaches spawn,
-// Node coerces it, and the agent is started on the four characters "null".
-// Nothing about that looks unhealthy from any angle. The routine gets a run
-// record, a duration and a completed status, the panel shows it running and
-// then done, and the only thing wrong is what the agent was asked to do. It is
-// carded against the routine data model, which owns what a routine may say.
+// THE DEFECT THIS FILE CHARACTERISED, NOW ASSERTED AS GONE. A routine that
+// declares a schedule and no prompt used to reach the spawn: the null was
+// pushed into the argument list, Node coerced it, and the agent was started on
+// the four characters "null". Nothing about it looked unhealthy from any
+// angle. The routine got a run record, a duration and a completed status, the
+// panel showed it running and then done, and the only thing wrong was what the
+// agent had been asked to do.
 //
-// Written down here because a defect nothing pins is a defect nothing will
-// notice changing. When the data model refuses a promptless routine, this test
-// goes red and the fix is to flip the assertion and the name, not to delete
-// them: the evidence that the behaviour changed is the part worth keeping.
-test('CHARACTERISATION, pending the data-model card: a promptless routine is run on the literal prompt "null"', async (t) => {
+// The test that recorded that is this one, flipped rather than deleted: the
+// data model now answers whether a routine has anything to say, the tick's
+// refusal gate reads that answer, and the spawn never happens. What is
+// asserted is the ARGUMENT LIST of a real child, because that is where the
+// coercion lived; a test that only read the run state would go green again for
+// a refusal that still spawned.
+test('a promptless routine is refused rather than spawned, so no agent is handed the word null', async (t) => {
   begin(7, [MUTE, STEADY]);
   h.clearInvocations();
 
   driveTicks(t);
 
-  // The invocation log is written by the child, so it lands after the tick.
+  // The invocation log is written by the child, so a spawn that did happen
+  // lands after the tick. The control is waited on first for exactly that
+  // reason: the log is read once a child of this pass has finished writing to
+  // it, so an empty log is a spawn that never happened rather than one that
+  // has not got there yet.
   assert.ok(await settled(STEADY), 'the control run finished');
-  assert.ok(await settled(MUTE), 'and the malformed run finished');
 
   const muteSpawns = h.readInvocations().filter(i => {
     const argv = i.argv || [];
     return argv.includes('--agent') && argv[argv.indexOf('--agent') + 1] === 'mute';
   });
-  assert.strictEqual(muteSpawns.length, 1, 'the malformed routine was spawned rather than refused');
-  const argv = muteSpawns[0].argv;
-  assert.strictEqual(argv[argv.length - 1], 'null',
-    'and the prompt it carried is the string "null", which is a coercion rather than a prompt');
+  assert.deepStrictEqual(muteSpawns.map(i => (i.argv || []).slice(-1)[0]), [],
+    'the promptless routine reached a child, and the last argument is what it was asked to do');
+  assert.strictEqual(h.internal.routineState[MUTE], undefined,
+    'and it recorded no run, so nothing on the list claims it did anything');
+  // WHAT IS NOT ASSERTED HERE, and why. The refusal's log line is announced
+  // once per routine for the life of the process, and the first test in this
+  // file already spent this routine's. The line itself is pinned in
+  // test/integration/scheduler-gating.test.js, beside the three refusals it
+  // shares its wording with.
 });
 
 
@@ -315,7 +344,8 @@ test('a failed start survives the restart it will be read after', async (t) => {
   begin(8, ALL);
   driveTicks(t);
   assert.ok(await settled(STEADY), 'the control run finished');
-  assert.ok(await settled(MUTE), 'and so did the run the malformed routine started');
+  assert.strictEqual(h.internal.routineState[MUTE], undefined,
+    'the promptless routine was refused, so it started nothing and recorded nothing');
 
   const file = path.join(h.workspaceDir, '.rundock', 'routine-state.json');
   const saved = JSON.parse(fs.readFileSync(file, 'utf-8'));
@@ -382,7 +412,11 @@ test('a failed start is not counted among the runs', async (t) => {
   assert.strictEqual(routineEvents('faulty-check').length, 0,
     'and a start that never became a subprocess is not, whatever it would have looked like there');
 
-  assert.ok(await settled(MUTE), 'and the malformed run finished');
+  // The promptless routine is quietened on this day rather than refused, so
+  // its record is the one `quieten` seeded. Nothing here waits on it: a
+  // refusal starts no child, so there has never been anything to settle.
+  assert.strictEqual(routineEvents('mute-check').length, 0,
+    'and neither is a routine that was never started at all');
 });
 
 // The requirement above, stated as the consequence rather than as the rule: a

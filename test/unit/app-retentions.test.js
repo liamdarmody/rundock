@@ -27,6 +27,10 @@ const ALLOWED = {
   EFFECT_EXECUTORS: 'retention 4: effect executors',
   updateWorkingBadge: 'retention 5: application shell',
   updateUnreadBadge: 'retention 5: application shell',
+  // The rail's third badge, and it belongs here for the same reason as the two
+  // above: the nav rail is the shell, and a view that reached into it would be
+  // the rail-presence rule coming back by hand.
+  updateRoutineFailureBadge: 'retention 5: application shell',
   initSidebarResize: 'retention 5: application shell',
   applyTheme: 'retention 5: application shell',
   // Not a retention and not rendering: esc builds a detached node purely to

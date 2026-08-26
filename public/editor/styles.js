@@ -428,6 +428,9 @@ const CSS = `
 .review-composer-close:hover { color: var(--text-1); }
 .review-composer-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .review-composer .review-input { margin-top: 2px; background: var(--base, transparent); }
+/* Why a comment could not be placed. Shown in the composer, which stays open
+   so the text is not lost and the selection can be moved. */
+.review-composer-refusal { font-size: 12px; line-height: 1.4; color: var(--danger); margin-bottom: 6px; }
 
 /* Narrow panes: the sidebar becomes a pinned overlay instead of a column,
    so wide content keeps the full pane width underneath. */

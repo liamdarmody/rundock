@@ -36,6 +36,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
+const { beginMutationRun } = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 
@@ -48,6 +49,11 @@ const ROOT = path.join(__dirname, '..', '..');
 // noticed as well.
 const MODEL = { src: path.join(ROOT, 'public', 'routine-editor-model.js'), suite: 'test/unit/routine-editor-model.test.js' };
 const VIEW = { src: path.join(ROOT, 'public', 'views', 'routine-editor.js'), suite: 'test/unit/routine-editor-view.test.js' };
+// The model's shape for the schedule step, watched by the file that RENDERS
+// that step. Watched from the model's own suite, taking the caveat off the step
+// stays green: that suite can still read the constant directly, which is
+// exactly the reading this shape exists to stop being sufficient.
+const MODEL_STEP = { src: path.join(ROOT, 'public', 'routine-editor-model.js'), suite: 'test/unit/routine-editor-view.test.js' };
 // The client's message dispatch. It is not a module the suite can load, so its
 // case bodies are cut out and run; mutating it here is what proves those tests
 // are watching the dispatch rather than the stubs they run it against. Wiring
@@ -58,9 +64,15 @@ const APP = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routin
 const HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/unit/routine-write.test.js' };
 // The agent profile, which renders the only way into the scoped editor.
 const PROFILE = { src: path.join(ROOT, 'public', 'views', 'profile.js'), suite: 'test/unit/routine-editor-view.test.js' };
-// The team sidebar, which renders the way into the unscoped editor. Watched by
-// the doors suite, which enumerates every way in and presses each one.
-const SIDEBAR = { src: path.join(ROOT, 'public', 'views', 'team.js'), suite: 'test/unit/routine-editor-doors.test.js' };
+// The door that starts from a skill rather than from an agent, a list or a
+// panel. Watched by the file that PRESSES the doors rather than by the view
+// suite, because an entry point is tested by the surface a user touches: aimed
+// at the view suite these mutations would report a guard nobody holds, when
+// what they would really be reporting is a proof pointed at the wrong place.
+//
+// The team sidebar target that used to sit here went with the door it watched.
+const SKILL_DOOR = { src: path.join(ROOT, 'public', 'views', 'routine-editor.js'), suite: 'test/unit/routine-editor-doors.test.js' };
+const SKILLS_PAGE = { src: path.join(ROOT, 'public', 'views', 'skills.js'), suite: 'test/unit/routine-editor-doors.test.js' };
 // The data model's write path, where a routine becomes bytes in a file.
 const ROUTINES = { src: path.join(ROOT, 'lib', 'agents', 'routines.js'), suite: 'test/unit/routine-write.test.js' };
 // The same file, watched by the suite that owns the timezone a schedule was
@@ -176,17 +188,30 @@ const MUTATIONS = [
   [VIEW, 'a save in flight is not sent twice',
     '    if (!state || state.saving) return;',
     '    if (!state) return;'],
-  [VIEW, 'the destination is checked for a sidebar panel, not just a rail entry',
-    '    return !!(document.querySelector(`[data-nav="${nav}"]`) && document.getElementById(`sidebar-${nav}`));',
-    '    return !!document.querySelector(`[data-nav="${nav}"]`);'],
+  // THE CHECK ASKS FOR THREE THINGS AND EACH IS MUTATED AWAY IN TURN. The rail
+  // lights the entry, setNavState reveals the sidebar by name and showView
+  // reveals the view by name, so a shell missing any one of them cannot show
+  // this section and the save has to notice.
+  [VIEW, 'the destination is checked for a view panel, not just a rail entry',
+    '      && document.getElementById(`view-${nav}`));',
+    '      );'],
+  [VIEW, 'the destination is checked for a sidebar panel, not just a view',
+    '      && document.getElementById(`sidebar-${nav}`)\n',
+    ''],
   [VIEW, 'an unreachable destination falls back to one the shell has',
     "    return navigable(destination) ? destination : 'team';",
     '    return destination;'],
   [VIEW, 'a skill list that has not arrived is not an empty one',
     '    if (state.loading) {',
     '    if (state.loading && false) {'],
+  // Every door that can open the editor before the skill list has landed goes
+  // through this one asker, so deleting the send takes the ask away from all
+  // of them at once. It used to be a line copied into each door, which the
+  // harness refused to mutate the moment there was more than one copy: a
+  // search text matching two places would break whichever came first and prove
+  // nothing about either.
   [VIEW, 'the editor asks for the skill list it is missing',
-    "    if (!loaded && typeof ws !== 'undefined' && ws) ws.send(JSON.stringify({ type: 'get_skills' }));\n",
+    "    ws.send(JSON.stringify({ type: 'get_skills' }));\n",
     ''],
   [VIEW, 'the skill list fills in when it arrives',
     '    state.skills = list || [];\n    state.loading = false;',
@@ -194,9 +219,50 @@ const MUTATIONS = [
   [VIEW, 'the breadcrumb returns to the agent it names',
     "    if (agentId && typeof showProfile === 'function') { showProfile(agentId); return; }\n",
     ''],
+  // ===== THE DOOR THAT STARTS FROM A SKILL =====
+  // THE ONE THAT MATTERS. A skill can belong to more than one agent, and
+  // taking the first is a guess wearing the shape of a decision: the reader
+  // would only discover which agent they had been given by reading the routine
+  // afterwards. This writes the guess in and requires a test to go red for it.
+  [SKILL_DOOR, 'an agent is carried only when exactly one has the skill',
+    '    const only = assigned.length === 1 ? assigned[0] : null;',
+    '    const only = assigned[0] || null;'],
+  [SKILL_DOOR, 'a skill with one agent skips the step there is nothing to pick on',
+    "      step: only ? 'schedule' : 'pick',",
+    "      step: 'pick',"],
+  [SKILL_DOOR, 'the breadcrumb belongs to the skill the editor was opened from',
+    '    if (state.originSkillId && state.originSkillName) {',
+    '    if (false) {'],
+  // The dead end. Without the check, leaving by the breadcrumb calls
+  // selectSkill for a skill that has gone from the list, which returns doing
+  // nothing, and state is already null: the editor stays on screen with every
+  // control answering nothing.
+  [SKILL_DOOR, 'the skill breadcrumb leaves even when the skill has gone',
+    '    if (skillId && canSelectSkill(skillId)) { selectSkill(skillId); return; }',
+    "    if (skillId && typeof selectSkill === 'function') { selectSkill(skillId); return; }"],
+  // Agent-agnostic, but the reader is not asked to find the skill they
+  // pressed a second time.
+  [SKILL_DOOR, 'the pressed skill is ordered first in the agent-agnostic picker',
+    '      skills: only ? [skill] : (skill ? [skill].concat(list.filter(s => s.id !== skill.id)) : list),',
+    '      skills: only ? [skill] : list,'],
+  [SKILL_DOOR, 'leaving by that breadcrumb goes back to the skill it names',
+    '    if (skillId && canSelectSkill(skillId)) { selectSkill(skillId); return; }\n',
+    ''],
+  [SKILLS_PAGE, 'a skill page offers a way to schedule the skill',
+    ' data-skills-action="schedule-skill"',
+    ' data-skills-action="not-a-door"'],
+  // The control is offered only where it can lead somewhere. A skill nobody
+  // has produces no row in the picker, so the control would be a label
+  // promising something the reader cannot reach.
+  [SKILLS_PAGE, 'the way in is offered only where an agent has the skill',
+    '  if (s.assignedAgents.length) {\n    h += `<div class="profile-card">'
+    + '<div class="profile-card-section">\n      <div class="profile-section-label">Schedule</div>',
+    '  if (true) {\n    h += `<div class="profile-card">'
+    + '<div class="profile-card-section">\n      <div class="profile-section-label">Schedule</div>'],
+
   [VIEW, 'the breadcrumb names an agent only when there is one to return to',
-    '    if (state.agentId && state.agentName) {',
-    '    if (state.agentName || true) {'],
+    '    } else if (state.agentId && state.agentName) {',
+    '    } else if (state.agentName || true) {'],
 
   // The dispatch. Each of these deletes one call the client makes into the
   // editor, which is the accident these tests exist to catch.
@@ -221,8 +287,8 @@ const MUTATIONS = [
   // first, so this mutation silently broke a different one and nothing turned
   // red. It carries its neighbour now, which makes it unique to this handler.
   [HANDLER, 'the roster is invalidated before it is rebroadcast',
-    "  ctx.agents.invalidateAgentCache();\n  ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents() }));",
-    "  ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents() }));"],
+    "  ws.send(JSON.stringify(message));\n  ctx.agents.invalidateAgentCache();\n  ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents(), workspace: getWorkspace() }));",
+    "  ws.send(JSON.stringify(message));\n  ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents(), workspace: getWorkspace() }));"],
   [HANDLER, 'a refusal from the data model is reported rather than swallowed',
     "    fail(e && e.message ? e.message : 'That routine could not be written.');\n    return;",
     '    return;'],
@@ -231,16 +297,11 @@ const MUTATIONS = [
   // directly, which says nothing about whether anything calls it.
   [PROFILE, 'an agent profile offers a way to schedule its skills',
     '      <button class="settings-btn-primary" type="button" data-profile-action="add-routine"\n'
-    + '        data-agent-id="${esc(a.id)}" onclick="addRoutineForAgent(\'${esc(a.id)}\')">Add routine</button>\n',
-    ''],
+    + '        data-agent-id="${escA(a.id)}" onclick="addRoutineForAgent(this.dataset.agentId)">Add routine</button>`;',
+    '`;'],
   [PROFILE, 'the way in carries the agent whose profile it is on',
-    'onclick="addRoutineForAgent(\'${esc(a.id)}\')"',
+    'onclick="addRoutineForAgent(this.dataset.agentId)"',
     'onclick="addRoutineForAgent(\'\')"'],
-
-  // The other door, and the one four rounds of review reached last.
-  [SIDEBAR, 'the sidebar offers a way in that belongs to no agent',
-    "    + ' data-sidebar-action=\"add-routine\" onclick=\"addRoutine()\">Add</button>'\n",
-    "    + '>Add</button>'\n"],
 
   // Writing a second routines key produces invalid YAML in somebody's file.
   // Two guards stand between it and them, and each is broken on its own here.
@@ -291,6 +352,20 @@ const MUTATIONS = [
   [ROUTINES_TZ, 'the migration does not invent a timezone for a routine that never recorded one',
     "const MIGRATED_KEYS = ['runOn', 'enabled', 'paused', 'planHash'];",
     "const MIGRATED_KEYS = ['runOn', 'enabled', 'paused', 'planHash', 'timezone'];"],
+  // WHICH WORKSPACE RUNS THE ROUTINE BEING MADE, said on the step every route
+  // into this editor passes through. A requirement that a sentence APPEARS on
+  // a surface is only proved by taking it away and watching something go red;
+  // the constant on its own can be rendered on a help page and nowhere else
+  // with the model's tests all green.
+  [VIEW, 'the schedule step says which workspace this routine will run in',
+    '    h += `<p class="re-caveat" data-routine-editor="workspace-caveat">${escText(m.scheduleStepFields().workspaceCaveat)}</p>`;\n',
+    ''],
+  [MODEL_STEP, 'the step carries the caveat, so a render of the step cannot drop it',
+    '      workspaceCaveat: WORKSPACE_CAVEAT,\n',
+    ''],
+  [MODEL, 'the caveat names the rule rather than only the consequence',
+    "  const WORKSPACE_CAVEAT = 'Rundock runs the routines of the workspace that is open. '",
+    "  const WORKSPACE_CAVEAT = 'Routines run on a schedule. '"],
 ];
 
 // The reporter is named explicitly rather than left to the default, which
@@ -330,10 +405,13 @@ function redTests(suite) {
 }
 
 function run() {
-  // Both files are read up front and both are restored in the same finally, so
-  // a throw part way through cannot leave either one mutated.
+  // Every file is read up front and all of them are restored together, so a
+  // throw part way through cannot leave one mutated, and neither can a signal.
+  const targets = [MODEL, MODEL_STEP, VIEW, APP, HANDLER, PROFILE, SKILL_DOOR,
+    SKILLS_PAGE, ROUTINES, ROUTINES_TZ];
+  const session = beginMutationRun({ files: targets.map((target) => target.src) });
   const originals = new Map();
-  for (const target of [MODEL, VIEW, APP, HANDLER, PROFILE, SIDEBAR, ROUTINES, ROUTINES_TZ]) originals.set(target, fs.readFileSync(target.src, 'utf8'));
+  for (const target of targets) originals.set(target, session.original(target.src));
   const results = [];
   try {
     for (const [target, label, guard, without] of MUTATIONS) {
@@ -365,7 +443,7 @@ function run() {
       fs.writeFileSync(target.src, original);
     }
   } finally {
-    for (const [target, original] of originals) fs.writeFileSync(target.src, original);
+    session.finish();
   }
   return results;
 }

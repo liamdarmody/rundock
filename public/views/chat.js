@@ -659,6 +659,16 @@ function renderPermissionCard(d, convoId) {
   card.className = 'msg msg-permission';
   card.id = 'perm-' + requestId;
   const renderRisk = boundary ? 'high' : risk;
+  // Every value below is model-chosen: the tool name, the command text, the
+  // file paths, up to 1500 characters of the content an agent wants to write.
+  // All of them land in TEXT position and are esc()'d, which is the right
+  // escaper for that position. The one ATTRIBUTE interpolation is the request
+  // id, and it takes escAttr instead: esc() leaves both quote characters
+  // intact, so it cannot hold an attribute closed. The id is minted server-side
+  // as base36 and carries no quote today, so this is the position being escaped
+  // for rather than a live hole being closed. It is written that way because
+  // the next person to change where an id comes from should not also have to
+  // notice that the escaper here was chosen for a value that no longer arrives.
   card.innerHTML = `
     <div class="permission-card risk-${renderRisk}">
       <div class="permission-header">
@@ -672,11 +682,11 @@ function renderPermissionCard(d, convoId) {
           ? `<details class="permission-detail-collapse"><summary>Show command</summary><code class="permission-detail">${esc(detail)}</code></details>`
           : `<code class="permission-detail">${esc(detail)}</code>`}
       <div class="permission-actions">
-        <button class="btn-perm btn-allow" data-perm-id="${esc(requestId)}" data-perm-action="allow">Allow</button>
+        <button class="btn-perm btn-allow" data-perm-id="${escAttr(requestId)}" data-perm-action="allow">Allow</button>
         ${grantable
-          ? `<button class="btn-perm btn-always" data-perm-id="${esc(requestId)}" data-perm-action="allow-folder">Always allow this folder</button>`
-          : (!boundary && RundockPermissions.offersAlwaysAllow(risk) ? `<button class="btn-perm btn-always" data-perm-id="${esc(requestId)}" data-perm-action="always">Always allow</button>` : '')}
-        <button class="btn-perm btn-deny" data-perm-id="${esc(requestId)}" data-perm-action="deny">Deny</button>
+          ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="allow-folder">Always allow this folder</button>`
+          : (!boundary && RundockPermissions.offersAlwaysAllow(risk) ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="always">Always allow</button>` : '')}
+        <button class="btn-perm btn-deny" data-perm-id="${escAttr(requestId)}" data-perm-action="deny">Deny</button>
       </div>
     </div>
   `;

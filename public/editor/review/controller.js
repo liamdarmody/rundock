@@ -17,6 +17,14 @@
 //    suggested edits ({~~sel~>replacement~~}{#sN} on a selection,
 //    {++text++}{#sN} at the cursor).
 //
+// RETURN CONTRACT for the three authoring commands, because they have three
+// outcomes and only two of them existed before. A success returns the new
+// anchor id as a string. Nothing to do (empty text, an empty selection where
+// one is required) returns false, unchanged. A range in a block that cannot
+// hold a construct returns { refused: true, reason } and changes nothing, so a
+// caller testing the result for truthiness must check `refused` rather than
+// read a refusal as success. Pinned by test.
+//
 // The endmatter passes through byte-exact until the first review operation;
 // after that getEndmatterRaw() rebuilds the block from the mutated data.
 
@@ -321,6 +329,59 @@ export function createReviewController({ editor, endmatter, author = 'me', now =
   // authoring
   // ------------------------------------------------------------------
 
+  // Every construct is an inline ATOM node, and some blocks hold text and
+  // nothing else. A fenced code block is the one a reviewer meets, because a
+  // page that documents markdown puts a page of markdown inside a fence.
+  //
+  // Putting an atom there does not fail. The editor fits the insertion by
+  // closing the block at that point and opening a paragraph that can hold the
+  // atom, sweeping the rest of the block into the paragraph with it. The next
+  // save writes that remainder out as prose, so the asterisks and backticks
+  // that were code a moment earlier are escaped to `\*\*` and `` \` `` and the
+  // file on disk carries words its author never wrote.
+  //
+  // A construct cannot be placed in such a block by any means, so the answer
+  // is to refuse rather than to place it differently, and to refuse before
+  // anything has happened: before an id is allocated, before a transaction
+  // opens, and before the review data records a thing. A refusal that has
+  // already written half of itself is the defect in a smaller form.
+  // The block's own content expression is the authority on what it can hold,
+  // rather than a list of node names kept in step by hand.
+  function blockHoldsConstructs(pos) {
+    let $pos;
+    try { $pos = editor.state.doc.resolve(pos); } catch { return false; }
+    return $pos.parent.type.contentMatch.matchType(editor.state.schema.nodes.criticComment) != null;
+  }
+
+  // Both ends, because a selection that starts in prose and ends inside a
+  // fence still puts its construct at the end.
+  function rangeHoldsConstructs(from, to) {
+    return blockHoldsConstructs(from) && blockHoldsConstructs(to);
+  }
+
+  // The refusal, and the reason it gives is read off the block that refused
+  // rather than assumed. The guard above is general: it asks what a block can
+  // hold, so it also fires where there is no block at all, and a message that
+  // always said "a code block" would be naming a cause it had not checked. A
+  // fenced block is the one a reviewer actually meets, so it is named when it
+  // is the one refusing.
+  function refusalAt(pos) {
+    let name = null;
+    try { name = editor.state.doc.resolve(pos).parent.type.name; } catch { /* unresolvable */ }
+    const where = name === 'codeBlock' ? 'A code block' : 'This part of the document';
+    return Object.freeze({
+      refused: true,
+      reason: `${where} holds plain text only, so a review mark cannot sit inside it. `
+        + 'Comment on a line outside it instead.',
+    });
+  }
+
+  // Names the end that refused, so a selection running from prose into a fence
+  // reports the fence rather than the paragraph it started in.
+  function refusalForRange(from, to) {
+    return refusalAt(blockHoldsConstructs(from) ? to : from);
+  }
+
   // A selection is safe to wrap as a highlight when it is plain text inside
   // one textblock: no marks (they would be flattened) and no inline nodes.
   function selectionIsPlainText(from, to) {
@@ -342,8 +403,9 @@ export function createReviewController({ editor, endmatter, author = 'me', now =
   // opens (typing in the sidebar blurs the editor), then passes it back.
   function addComment(text, range = null) {
     if (!text) return false;
-    const id = nextId('c');
     const { from, to } = range || editor.state.selection;
+    if (!rangeHoldsConstructs(from, to)) return refusalForRange(from, to);
+    const id = nextId('c');
     editor.chain().command(({ tr, state }) => {
       const comment = state.schema.nodes.criticComment.create({ content: text, id });
       if (selectionIsPlainText(from, to)) {
@@ -363,6 +425,7 @@ export function createReviewController({ editor, endmatter, author = 'me', now =
   function suggestReplace(replacement, range = null) {
     const { from, to } = range || editor.state.selection;
     if (from === to) return false;
+    if (!rangeHoldsConstructs(from, to)) return refusalForRange(from, to);
     const id = nextId('s');
     editor.chain().command(({ tr, state }) => {
       const original = state.doc.textBetween(from, to);
@@ -377,8 +440,9 @@ export function createReviewController({ editor, endmatter, author = 'me', now =
 
   function suggestInsert(text) {
     if (!text) return false;
-    const id = nextId('s');
     const { to } = editor.state.selection;
+    if (!blockHoldsConstructs(to)) return refusalAt(to);
+    const id = nextId('s');
     editor.chain().command(({ tr, state }) => {
       tr.insert(to, state.schema.nodes.criticInsert.create({ content: text, id }));
       return true;

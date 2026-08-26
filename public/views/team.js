@@ -4,7 +4,7 @@
 // markers.js (node-requireable, window-attached); additionally republishes
 // each view function on the root object, because classic-script function
 // declarations were window properties and the callers rely on that: the WS
-// dispatch (renderAgentList, renderOrgChart, renderRoutinesSidebar), routing
+// dispatch (renderAgentList, renderOrgChart), routing
 // (renderOrgChart on the team nav), message handling (getWorkingAgentIds),
 // and the generated onclick handlers (showProfile, addToTeam, orgZoom,
 // startConversation, startSetupConversation).
@@ -17,7 +17,9 @@
 // wiring). ORG_PRESETS moved here as view-local state: no external
 // touchpoints. d3 is the CDN-loaded d3-hierarchy global, resolved on window
 // at call time. Helpers reached the same way: getTeamAgents,
-// getPlatformAgents, formatTimeAgo, formatScheduleShort, esc, getGuide.
+// getPlatformAgents, formatTimeAgo, esc, getGuide. Every sentence that names
+// the guide comes from RundockGuideCopy, reached the same way, so no view
+// carries a guide's name and no copy check has to read four files.
 // Load order (views before app.js) is safe because nothing here touches
 // shared state until the app boots. Function bodies are byte-identical to
 // the app.js originals at column 0.
@@ -28,6 +30,41 @@
     Object.assign(root, root.RundockTeamView);
   }
 }(typeof self !== 'undefined' ? self : this, function () {
+
+// The guide copy, reached off the global at call time, the same way this file
+// reaches every other helper it does not own.
+function guideLine(key, guideName) {
+  const copy = typeof RundockGuideCopy !== 'undefined' ? RundockGuideCopy : null;
+  return (copy && copy.guideLine(key, guideName)) || '';
+}
+
+// ATTRIBUTE-POSITION ESCAPER, reached off the global at call time the same way
+// guideLine above reaches its copy module.
+//
+// `esc` is already a global here and is right for ELEMENT CONTENT: it
+// round-trips through textContent, so it escapes & < > and leaves both quote
+// characters alone. That makes it the wrong escaper for an attribute value,
+// and an agent id is the agent file's own filename, which an agent can choose.
+// `escAttr` in app.js is the one for that position; it had a single caller in
+// the entire client before this change. The local equivalent behind it keeps
+// this module rendering under node --test, where app.js cannot load.
+function escA(value) {
+  if (typeof escAttr === 'function') return escAttr(value);
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// A colour is JUDGED, not escaped. public/agent-colour.js carries the reason:
+// escaping stops a value ending its style attribute and does nothing about one
+// that stays inside it and is still CSS. Fails CLOSED to the fallback when the
+// module is absent, because a colour that cannot be checked is one that should
+// not be written.
+function agentColour(value, fallback) {
+  const safe = fallback === undefined ? 'var(--accent)' : fallback;
+  return typeof RundockAgentColour !== 'undefined'
+    ? RundockAgentColour.safeColour(value, safe) : safe;
+}
 
 function getWorkingAgentIds() {
   const working = new Set();
@@ -53,16 +90,16 @@ function renderAgentList() {
       const last = agentLastActivity[a.id];
       const statusText = isWorking ? 'working' : (last ? formatTimeAgo(last.time) : 'idle');
       const workingClass = isWorking ? ' working' : '';
-      h += `<div class="agent-status-item" onclick="showProfile('${a.id}')" data-agent="${a.id}">
-        <div class="avatar sm" style="background:${a.colour}">${a.icon}</div>
-        <span class="agent-status-name">${a.displayName}</span>
-        <span class="agent-status-state${workingClass}" data-status="${a.id}">${statusText}</span>
+      h += `<div class="agent-status-item" onclick="showProfile(this.dataset.agent)" data-agent="${escA(a.id)}">
+        <div class="avatar sm" style="background:${agentColour(a.colour)}">${esc(a.icon)}</div>
+        <span class="agent-status-name">${esc(a.displayName)}</span>
+        <span class="agent-status-state${workingClass}" data-status="${escA(a.id)}">${statusText}</span>
       </div>`;
     }
   } else if (platform.length) {
     const guide = platform[0];
     h += `<div class="sidebar-empty-state">
-      <div class="sidebar-empty-text">No team agents yet. Doc can explore this workspace and create a team for you.</div>
+      <div class="sidebar-empty-text">${esc(guideLine('sidebar', guide.displayName))}</div>
       <button class="empty-cta" style="width:100%" onclick="startSetupConversation()">Set up your team</button>
     </div>`;
   }
@@ -74,10 +111,10 @@ function renderAgentList() {
       const last = agentLastActivity[a.id];
       const statusText = isWorking ? 'working' : (last ? formatTimeAgo(last.time) : 'idle');
       const workingClass = isWorking ? ' working' : '';
-      h += `<div class="agent-status-item" onclick="showProfile('${a.id}')" data-agent="${a.id}">
-        <div class="avatar sm" style="background:${a.colour}">${a.icon}</div>
-        <span class="agent-status-name">${a.displayName}</span>
-        <span class="agent-status-state${workingClass}" data-status="${a.id}">${statusText}</span>
+      h += `<div class="agent-status-item" onclick="showProfile(this.dataset.agent)" data-agent="${escA(a.id)}">
+        <div class="avatar sm" style="background:${agentColour(a.colour)}">${esc(a.icon)}</div>
+        <span class="agent-status-name">${esc(a.displayName)}</span>
+        <span class="agent-status-state${workingClass}" data-status="${escA(a.id)}">${statusText}</span>
       </div>`;
     }
   }
@@ -87,15 +124,15 @@ function renderAgentList() {
     h += `<div id="available-agents" class="hidden" style="padding:4px 0">`;
     for (const a of available) {
       const isRaw = a.status === 'raw';
-      h += `<div class="agent-status-item" style="${isRaw ? 'opacity:0.6;' : ''}cursor:pointer" onclick="showProfile('${a.id}')">
-        <div class="avatar sm" style="background:${a.colour}">${a.icon}</div>
+      h += `<div class="agent-status-item" style="${isRaw ? 'opacity:0.6;' : ''}cursor:pointer" data-agent="${escA(a.id)}" onclick="showProfile(this.dataset.agent)">
+        <div class="avatar sm" style="background:${agentColour(a.colour)}">${esc(a.icon)}</div>
         <div style="flex:1;min-width:0">
-          <span class="agent-status-name">${a.displayName}</span>
-          <span class="agent-status-desc">${a.description ? a.description.substring(0, 50) : (isRaw ? 'Needs setup' : 'Ready to add')}</span>
+          <span class="agent-status-name">${esc(a.displayName)}</span>
+          <span class="agent-status-desc">${esc(a.description ? a.description.substring(0, 50) : (isRaw ? 'Needs setup' : 'Ready to add'))}</span>
         </div>
         ${isRaw
           ? `<button class="agent-action-btn onboard" onclick="event.stopPropagation(); startConversation(getGuide()?.id || 'default')">Setup</button>`
-          : `<button class="agent-action-btn add" onclick="event.stopPropagation(); addToTeam('${a.id}')">Add to team</button>`
+          : `<button class="agent-action-btn add" data-add-agent="${escA(a.id)}" onclick="event.stopPropagation(); addToTeam(this.dataset.addAgent)">Add to team</button>`
         }
       </div>`;
     }
@@ -122,10 +159,10 @@ function renderConvoEmptyAgents() {
     if (labelEl) { labelEl.textContent = 'Start a conversation'; labelEl.className = 'empty-subtitle'; }
 
     const agentCard = a =>
-      `<div onclick="startConversation('${a.id}')" class="convo-agent-card">
-        <div class="avatar" style="background:${a.colour}">${a.icon}</div>
-        <span class="convo-agent-card-name">${a.displayName}</span>
-        <span class="convo-agent-card-role">${a.role}</span>
+      `<div data-agent-id="${escA(a.id)}" onclick="startConversation(this.dataset.agentId)" class="convo-agent-card">
+        <div class="avatar" style="background:${agentColour(a.colour)}">${esc(a.icon)}</div>
+        <span class="convo-agent-card-name">${esc(a.displayName)}</span>
+        <span class="convo-agent-card-role">${esc(a.role || '')}</span>
       </div>`;
 
     let h = `<div class="convo-agent-grid">${teamAgents.map(agentCard).join('')}</div>`;
@@ -141,44 +178,9 @@ function renderConvoEmptyAgents() {
     const guide = platformAgents[0];
     contentEl.className = '';
     contentEl.innerHTML = guide
-      ? `<div class="sidebar-empty-text" style="text-align:center;max-width:280px;margin:0 auto 8px">Doc can explore this workspace and set up your agent team.</div><button class="empty-cta" style="margin-top:4px" onclick="startSetupConversation()">Set up your team</button>`
+      ? `<div class="sidebar-empty-text" style="text-align:center;max-width:280px;margin:0 auto 8px">${esc(guideLine('conversations', guide.displayName))}</div><button class="empty-cta" style="margin-top:4px" onclick="startSetupConversation()">Set up your team</button>`
       : '';
   }
-}
-
-function renderRoutinesSidebar() {
-  const container = document.getElementById('sidebar-routines');
-  if (!container) return;
-  const allRoutines = [];
-  for (const a of agents) {
-    if (a.routines) {
-      for (const r of a.routines) {
-        allRoutines.push({ ...r, agentName: a.displayName, agentColour: a.colour, agentIcon: a.icon });
-      }
-    }
-  }
-  if (allRoutines.length === 0) { container.innerHTML = ''; return; }
-
-  // The agent-agnostic way in: no agent chosen yet, so the picker spans every
-  // agent's skills and each row names which agent runs it.
-  let h = '<div class="sidebar-section-divider" style="margin:12px 16px 0;padding-top:16px">'
-    + '<span class="sidebar-label">Routines</span>'
-    + '<button class="re-link" type="button" style="float:right"'
-    + ' data-sidebar-action="add-routine" onclick="addRoutine()">Add</button>'
-    + '</div>';
-  h += '<div style="padding:8px 8px 16px">';
-  for (const r of allRoutines) {
-    const statusText = r.state?.status === 'running'
-      ? '<span style="color:var(--working)">Running...</span>'
-      : `<span style="color:var(--text-2)">${formatScheduleShort(r.schedule)}</span>`;
-    h += `<div class="routine-item">
-      <div class="avatar xxs" style="background:${r.agentColour}">${r.agentIcon}</div>
-      <span class="routine-name">${esc(r.name)}</span>
-      ${statusText}
-    </div>`;
-  }
-  h += '</div>';
-  container.innerHTML = h;
 }
 
 function addToTeam(agentId) {
@@ -201,11 +203,15 @@ function orgCardHtml(agent, preset, s, posStyle) {
   const isWorking = getWorkingAgentIds().has(agent.id);
   const dotSize = Math.max(6, r(10));
   const dotClass = isWorking ? 'org-status-dot working' : 'org-status-dot';
-  let h = `<div class="org-card ${preset === 'normal' ? '' : preset}" style="${posStyle}width:${r(p.w)}px;height:${r(p.h)}px;padding:${r(p.padV)}px ${r(p.padH)}px;gap:${r(p.gap)}px;border-radius:${br}px" onclick="showProfile('${agent.id}')">`;
-  h += `<div class="avatar" style="background:${agent.colour};width:${r(p.avatar)}px;height:${r(p.avatar)}px;font-size:${r(p.icon)}px;flex-shrink:0">${agent.icon}</div>`;
-  h += `<div><div class="org-card-name" style="font-size:${r(p.name)}px">${agent.displayName}</div>`;
-  h += `<div class="org-card-role" style="font-size:${r(p.role)}px">${agent.role || ''}</div></div>`;
-  h += `<span class="${dotClass}" data-org-status="${agent.id}" style="width:${dotSize}px;height:${dotSize}px"></span>`;
+  // data-org-agent rather than data-agent: the sidebar's rows already own
+  // [data-agent], and the profile highlight looks a row up by that attribute.
+  // An org card answering to it too would take the highlight whenever it came
+  // first in the document.
+  let h = `<div class="org-card ${preset === 'normal' ? '' : preset}" style="${posStyle}width:${r(p.w)}px;height:${r(p.h)}px;padding:${r(p.padV)}px ${r(p.padH)}px;gap:${r(p.gap)}px;border-radius:${br}px" data-org-agent="${escA(agent.id)}" onclick="showProfile(this.dataset.orgAgent)">`;
+  h += `<div class="avatar" style="background:${agentColour(agent.colour)};width:${r(p.avatar)}px;height:${r(p.avatar)}px;font-size:${r(p.icon)}px;flex-shrink:0">${esc(agent.icon)}</div>`;
+  h += `<div><div class="org-card-name" style="font-size:${r(p.name)}px">${esc(agent.displayName)}</div>`;
+  h += `<div class="org-card-role" style="font-size:${r(p.role)}px">${esc(agent.role || '')}</div></div>`;
+  h += `<span class="${dotClass}" data-org-status="${escA(agent.id)}" style="width:${dotSize}px;height:${dotSize}px"></span>`;
   h += `</div>`;
   return h;
 }
@@ -399,7 +405,10 @@ function renderOrgChart() {
     } else {
       h += '<div class="org-empty-state">';
       h += '<div class="empty-title">Welcome to Rundock</div>';
-      h += '<div class="sidebar-empty-text" style="text-align:center;max-width:320px">Fresh workspace. Doc can help you set up your agent team from scratch.</div>';
+      // The one sentence of the four that draws whether or not a guide exists,
+      // so it is the one that needs a line for a workspace with none. It kept
+      // promising a guide either way, which is the defect in its loudest form.
+      h += `<div class="sidebar-empty-text" style="text-align:center;max-width:320px">${esc(guideLine('fresh', guide && guide.displayName))}</div>`;
       if (guide) {
         h += `<button class="empty-cta" style="margin-top:4px" onclick="startSetupConversation()">Set up your team</button>`;
       }
@@ -442,5 +451,5 @@ function orgZoom(dir) {
   renderOrgChart();
 }
 
-return { getWorkingAgentIds, renderAgentList, renderConvoEmptyAgents, renderRoutinesSidebar, addToTeam, orgCardHtml, renderOrgChart, orgZoom };
+return { getWorkingAgentIds, renderAgentList, renderConvoEmptyAgents, addToTeam, orgCardHtml, renderOrgChart, orgZoom };
 }));

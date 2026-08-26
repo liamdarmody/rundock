@@ -89,7 +89,7 @@ before(async () => {
       // The routine under test: one that talks past the pipe buffer.
       loud: agentFile({
         name: 'loud', type: 'specialist', order: 1,
-        routines: [{ name: 'verbose', schedule: 'every day at 05:00', prompt: LOUD_BODY }],
+        routines: [{ name: 'verbose', schedule: 'every day at 05:00', prompt: LOUD_BODY, enabled: true }],
       }),
       // The control, and it earns its place twice. It fires on the same ticks,
       // so a tick that started nothing is told apart from one that started the
@@ -98,7 +98,7 @@ before(async () => {
       // prints for everybody.
       quiet: agentFile({
         name: 'quiet', type: 'specialist', order: 2,
-        routines: [{ name: 'brief', schedule: 'every day at 05:00', prompt: QUIET_BODY }],
+        routines: [{ name: 'brief', schedule: 'every day at 05:00', prompt: QUIET_BODY, enabled: true }],
       }),
     },
   });

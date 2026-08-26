@@ -27,6 +27,9 @@ before(() => {
   global.ws = null;
   global.userScrolledUp = false;
   global.esc = (t) => { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; };
+  // The attribute escaper, copied character for character from app.js:223.
+  // The card writes the request id through it rather than through esc().
+  global.escAttr = (t) => String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   global.RundockPermissions = require('../../public/permissions.js');
   chat = require('../../public/views/chat.js');
 });

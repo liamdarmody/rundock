@@ -386,16 +386,133 @@ describe('which empty state, decided mechanically', () => {
     assert.strictEqual(state.action, editor.STEP_LEADS.build);
   });
 
-  // The condition is the same question the picker already answers, so the two
-  // surfaces cannot disagree about whether a workspace has skills.
-  test('the variant is the question skillChoices already answers', () => {
+  const UNASSIGNED = [{ id: 'orphan', name: 'Orphan', assignedAgents: [] }];
+
+  // The condition is the picker's own question, `skillChoices`, and not a new
+  // one written here. Extended to the third shape: `createSkill` alone cannot
+  // tell "no skill exists" from "a skill exists and nobody has it", since both
+  // leave `options` empty, so the branch also reads `onlyUnassignedSkills`,
+  // which the picker computes from the same walk rather than this file
+  // recomputing it as a second rule.
+  test('the variant is the question skillChoices already answers, across all three shapes', () => {
     const editor = require('../../public/routine-editor-model.js');
-    for (const skills of [[], WITH_SKILL, [{ id: 'orphan', name: 'Orphan', assignedAgents: [] }]]) {
-      const offers = editor.skillChoices({ skills }).createSkill;
+    for (const skills of [[], WITH_SKILL, UNASSIGNED]) {
+      const choice = editor.skillChoices({ skills });
       const state = m.emptyState({ skills, guideName: 'Wren' });
-      assert.strictEqual(state.action === 'Build a skill', offers,
-        'the empty state and the picker disagree about whether this workspace has skills');
+      if (choice.onlyUnassignedSkills) {
+        assert.notStrictEqual(state.action, 'Build a skill',
+          'a workspace with an unassigned skill was offered to build the one it already has');
+      } else {
+        assert.strictEqual(state.action === 'Build a skill', choice.createSkill,
+          'the empty state and the picker disagree about whether this workspace has skills');
+      }
     }
+  });
+
+  // The dependency made observable rather than inferred from agreement on
+  // three fixtures: a local rule written here, such as
+  // `skills.length && !options.length`, would agree with `skillChoices` on
+  // every fixture above and still not be reading it. Patching the answer
+  // `skillChoices` gives, on the very module object `routines-model.js`
+  // holds as `editor`, and checking the branch follows the PATCHED answer
+  // rather than recomputing one from the input, is what tells the two apart.
+  test('the branch follows what skillChoices reports rather than a rule computed here', () => {
+    const editor = require('../../public/routine-editor-model.js');
+    const real = editor.skillChoices;
+    try {
+      // A skill list that would otherwise take the locked-copy branch, with
+      // the stub disagreeing: if the answer came from a local recomputation,
+      // this input would still resolve it to false and the stub would go
+      // unread.
+      editor.skillChoices = () => ({
+        options: [{ id: 'stubbed' }], createSkill: false,
+        createSkillLabel: 'stub', emptyLead: 'stub',
+        onlyUnassignedSkills: true,
+      });
+      const state = m.emptyState({ skills: WITH_SKILL, guideName: 'Wren' });
+      assert.match(state.body, /assign your skills to an agent/i,
+        'emptyState did not follow the stubbed answer, so it is not truly reading skillChoices for this');
+    } finally {
+      editor.skillChoices = real;
+    }
+  });
+
+  // Told to assign the skill it has, never to build one it does not need.
+  test('a workspace whose only skill is unassigned is told to assign it, not build one', () => {
+    const editor = require('../../public/routine-editor-model.js');
+    const state = m.emptyState({ skills: UNASSIGNED, guideName: 'Wren' });
+    assert.strictEqual(state.lead, 'No routines yet.');
+    assert.ok(!/build/i.test(state.body), `told to build a skill it already has: ${state.body}`);
+    assert.match(state.body, /assign your skills to an agent/i);
+    assert.notStrictEqual(state.body, editor.STEP_LEADS.empty,
+      'the unassigned workspace was given the no-skills-at-all sentence');
+  });
+
+  // THE MANY CASE, PINNED RATHER THAN ASSUMED. Every other test in this
+  // block drives exactly one unassigned skill, which is the shape "this
+  // skill" and "it" would have read correctly against by accident; a
+  // workspace with two proves the copy holds for a count the singular forms
+  // could not have.
+  const TWO_UNASSIGNED = [
+    { id: 'orphan-one', name: 'Orphan One', assignedAgents: [] },
+    { id: 'orphan-two', name: 'Orphan Two', assignedAgents: [] },
+  ];
+
+  test('two unassigned skills take the same branch as one, and the copy still reads true', () => {
+    const editor = require('../../public/routine-editor-model.js');
+    const choice = editor.skillChoices({ skills: TWO_UNASSIGNED });
+    assert.strictEqual(choice.onlyUnassignedSkills, true);
+
+    const state = m.emptyState({ skills: TWO_UNASSIGNED, guideName: 'Wren' });
+    assert.ok(!/build/i.test(state.body), `told to build skills it already has: ${state.body}`);
+    assert.ok(!/\bthis skill\b/i.test(state.body), `a deictic naming one skill reached a state with two: ${state.body}`);
+    assert.match(state.body, /assign your skills to an agent/i);
+    assert.match(state.body, /they will show up here/i);
+  });
+
+  // The third variant carries the same five slots the other two do, so it
+  // renders through the one box the view already draws every variant with,
+  // rather than a shape the render has to grow a case for.
+  test('the unassigned-skill state carries the same slots as the other two', () => {
+    const shapes = [
+      m.emptyState({ skills: [], guideName: 'Wren' }),
+      m.emptyState({ skills: UNASSIGNED, guideName: 'Wren' }),
+      m.emptyState({ skills: WITH_SKILL, guideName: 'Wren' }),
+    ];
+    for (const shape of shapes.slice(1)) {
+      assert.deepStrictEqual(Object.keys(shape).sort(), Object.keys(shapes[0]).sort());
+    }
+  });
+
+  // Neither a button nor an aside: assigning a skill to an agent is existing
+  // behaviour this state points at, and the aside the other states carry
+  // promises scheduling "right from its own page", which this state's skill
+  // cannot yet do.
+  test('the unassigned-skill state offers no action and no aside', () => {
+    const state = m.emptyState({ skills: UNASSIGNED, guideName: 'Wren' });
+    assert.strictEqual(state.action, null);
+    assert.strictEqual(state.actionKind, null);
+    assert.strictEqual(state.aside, null);
+  });
+
+  // The reason is the exact string the skill's own page states in its
+  // Schedule card for an unassigned skill, quoted here from the one place both
+  // surfaces read it, so a change to one cannot leave the other behind.
+  test('the reason given here is the shared string the skill page also states', () => {
+    const editor = require('../../public/routine-editor-model.js');
+    const state = m.emptyState({ skills: UNASSIGNED, guideName: 'Wren' });
+    assert.ok(state.body.includes(editor.UNASSIGNED_REASON),
+      `the routines view does not carry the reason the skill page states: ${state.body}`);
+  });
+
+  // Neither 'nobody has' nor 'no agent has': the skill's own page, one card
+  // above where this same reason is shown, already describes an unassigned
+  // skill as available to all agents, and a reason phrased as a denial would
+  // contradict that card on the same page.
+  test('the reason given here does not deny any agent has the skill', () => {
+    const state = m.emptyState({ skills: UNASSIGNED, guideName: 'Wren' });
+    assert.ok(!/nobody has/i.test(state.body), `the reason denies any agent has the skill: ${state.body}`);
+    assert.ok(!/no agent has/i.test(state.body), `the reason denies any agent has the skill: ${state.body}`);
   });
 
   test('skills that have not arrived are not a workspace with no skills', () => {
@@ -443,6 +560,7 @@ describe('which empty state, decided mechanically', () => {
       ['routines, skills exist', m.emptyState({ skills: WITH_SKILL, guideName: 'Wren' })],
       ['routines, no skills, guide', m.emptyState({ skills: [], guideName: 'Wren' })],
       ['routines, no skills, no guide', m.emptyState({ skills: [], guideName: null })],
+      ['routines, only skill unassigned', m.emptyState({ skills: UNASSIGNED, guideName: 'Wren' })],
       ['skills, guide', skillsModel.emptyState({ guideName: 'Wren' })],
       ['skills, no guide', skillsModel.emptyState({})],
     ]) {
@@ -479,7 +597,7 @@ describe('the copy this card ships', () => {
 
   function copyShipped() {
     return everyString([
-      m.LEAD, m.EMPTY, m.OUTCOMES, m.ACTION_PROBLEM,
+      m.LEAD, m.EMPTY, m.OUTCOMES, m.ACTION_PROBLEM, m.NOT_ENABLED, m.SCHEDULE_PROBLEM,
       ALL_FOUR.map(([, input]) => [status(input), next(input)]),
       m.deleteConfirmation({ agentName: 'Piper', name: 'Compile the ops summary', schedule: 'every day at 07:00' }),
     ]);
@@ -520,5 +638,945 @@ describe('the copy this card ships', () => {
       const text = fs.readFileSync(path.join(root, rel), 'utf-8');
       assert.ok(!/[\u2014\u2013]/.test(text), `${rel} carries a dash the repository check refuses`);
     }
+  });
+});
+
+describe('the order the list is read in', () => {
+  // WHAT MAKES THESE CAPABLE OF FAILING. Every fixture below is written so
+  // that roster order and next-run order DISAGREE, and each asserts the whole
+  // sequence rather than a property of it. A list handed back untouched comes
+  // out in the order it went in, so reverting to roster order turns every one
+  // of these red by name.
+  const item = (name, facts) => ({ name, nextRun: null, paused: false, ...facts });
+
+  const SOON = new Date(2026, 7, 20, 18, 0);
+  const LATER = new Date(2026, 7, 21, 7, 0);
+  const LATEST = new Date(2026, 7, 22, 7, 0);
+
+  test('the soonest next run is first, whatever order the roster held', () => {
+    const roster = [
+      item('third', { nextRun: LATEST }),
+      item('first', { nextRun: SOON }),
+      item('second', { nextRun: LATER }),
+    ];
+    assert.deepStrictEqual(m.orderByNextRun(roster).map(r => r.name),
+      ['first', 'second', 'third'],
+      'the list came back in the order the roster held it, which is file order');
+  });
+
+  test('paused routines are last, grouped, and in roster order among themselves', () => {
+    const roster = [
+      item('paused first in the file', { paused: true }),
+      item('runs later', { nextRun: LATEST }),
+      item('paused second in the file', { paused: true }),
+      item('runs soon', { nextRun: SOON }),
+    ];
+    assert.deepStrictEqual(m.orderByNextRun(roster).map(r => r.name), [
+      'runs soon', 'runs later', 'paused first in the file', 'paused second in the file',
+    ], 'a paused routine has no next run, so it belongs after everything that has one');
+  });
+
+  // A paused routine can still carry the instant it WOULD have run at, and it
+  // must not be sorted by it: paused is a band, not a time.
+  test('a paused routine carrying a next run is still last', () => {
+    const roster = [
+      item('paused but due first', { paused: true, nextRun: SOON }),
+      item('actually runs', { nextRun: LATEST }),
+    ];
+    assert.deepStrictEqual(m.orderByNextRun(roster).map(r => r.name),
+      ['actually runs', 'paused but due first']);
+  });
+
+  // A schedule the editor never offered has no computable slot, so the routine
+  // is real, is listed, and cannot be placed on the timeline.
+  test('a routine with no next run sits after the scheduled ones and before the paused', () => {
+    const roster = [
+      item('paused', { paused: true }),
+      item('no next run'),
+      item('scheduled', { nextRun: LATER }),
+    ];
+    assert.deepStrictEqual(m.orderByNextRun(roster).map(r => r.name),
+      ['scheduled', 'no next run', 'paused']);
+  });
+
+  test('two routines due at the same instant keep the order the roster gave them', () => {
+    const roster = [item('written first', { nextRun: LATER }), item('written second', { nextRun: LATER })];
+    assert.deepStrictEqual(m.orderByNextRun(roster).map(r => r.name),
+      ['written first', 'written second']);
+  });
+
+  // The caller's array is what the namesake count was taken over, so it must
+  // come back as it went in.
+  test('the roster handed in is not reordered underneath the caller', () => {
+    const roster = [item('later', { nextRun: LATEST }), item('sooner', { nextRun: SOON })];
+    m.orderByNextRun(roster);
+    assert.deepStrictEqual(roster.map(r => r.name), ['later', 'sooner'],
+      'the caller\'s list was sorted in place, so the namesake count it holds now names other rows');
+  });
+
+  // The two facts are read through the caller's own accessor, so the model
+  // never has to know the shape of an entry the view assembles.
+  test('the two facts are found wherever the caller says they are', () => {
+    const roster = [
+      { routine: { nextRun: LATEST, paused: false }, tag: 'later' },
+      { routine: { nextRun: SOON, paused: false }, tag: 'sooner' },
+    ];
+    assert.deepStrictEqual(m.orderByNextRun(roster, e => e.routine).map(e => e.tag),
+      ['sooner', 'later']);
+  });
+
+  // Both instants arrive from the server as strings, which is the only shape
+  // this ever sees in the product.
+  test('the instants sort as instants rather than as strings', () => {
+    const roster = [
+      item('nine in the evening', { nextRun: new Date(2026, 7, 20, 21, 0).toISOString() }),
+      item('nine in the morning', { nextRun: new Date(2026, 7, 20, 9, 0).toISOString() }),
+    ];
+    assert.deepStrictEqual(m.orderByNextRun(roster).map(r => r.name),
+      ['nine in the morning', 'nine in the evening']);
+  });
+
+  test('no row is added, dropped or altered by being ordered', () => {
+    const roster = [item('a', { nextRun: LATEST }), item('b', { paused: true }), item('c', { nextRun: SOON })];
+    const ordered = m.orderByNextRun(roster);
+    assert.strictEqual(ordered.length, roster.length);
+    for (const original of roster) {
+      assert.ok(ordered.includes(original), 'ordering replaced a row with a copy of it');
+    }
+  });
+});
+
+describe('the sentence in the pieces the view composes it from', () => {
+  const INPUT = { schedule: 'every day at 07:00', name: 'Compile the ops summary' };
+
+  // AC-B4. Every word of this sentence is asserted here, on the model, and not
+  // on the markup a view happens to produce from it.
+  test('the pieces carry the schedule and the skill name, and nothing else', () => {
+    assert.deepStrictEqual(m.sentenceParts(INPUT),
+      { lead: 'Every day at 7:00am, run: ', name: 'Compile the ops summary' });
+  });
+
+  // The two cannot say different things, because one is built from the other.
+  test('the pieces concatenate to exactly the sentence', () => {
+    const parts = m.sentenceParts(INPUT);
+    assert.strictEqual(parts.lead + parts.name, m.routineSentence(INPUT));
+    assert.strictEqual(m.routineSentence(INPUT), 'Every day at 7:00am, run: Compile the ops summary');
+  });
+
+  // The lead owns the space, so a caller that puts the name in its own element
+  // does not have to invent one and cannot leave the two words joined.
+  test('the space before the name belongs to the lead', () => {
+    assert.match(m.sentenceParts(INPUT).lead, / $/);
+    assert.ok(!/^\s/.test(m.sentenceParts(INPUT).name));
+  });
+
+  // A schedule the editor never offered assembles into nothing rather than
+  // into a sentence that reads as though the product understood it, and the
+  // pieces answer the same way the whole sentence does.
+  test('a schedule with no plain words yields no pieces', () => {
+    assert.strictEqual(m.sentenceParts({ schedule: 'every fortnight at 07:00', name: 'A skill' }), null);
+    assert.strictEqual(m.routineSentence({ schedule: 'every fortnight at 07:00', name: 'A skill' }), null);
+  });
+
+  test('a routine with no name yields no pieces', () => {
+    assert.strictEqual(m.sentenceParts({ schedule: 'every day at 07:00' }), null);
+  });
+
+  test('the row carries the pieces beside the sentence', () => {
+    const row = m.row({ ...INPUT, runOn: 'local', agentName: 'Piper' });
+    assert.strictEqual(row.parts.lead + row.parts.name, row.sentence);
+  });
+
+  test('a row that cannot assemble a sentence carries no pieces either', () => {
+    const row = m.row({ schedule: 'every fortnight at 07:00', name: 'A skill', runOn: 'local' });
+    assert.strictEqual(row.sentence, null);
+    assert.strictEqual(row.parts, null);
+  });
+});
+
+describe('the header this view heads itself with', () => {
+  test('the title is the name of the surface', () => {
+    assert.strictEqual(m.header().title, 'Routines');
+    assert.strictEqual(m.header().title, m.LEAD.title);
+  });
+
+  // AC-C3, unscoped: the locked sentence, word for word.
+  test('unscoped, the subtitle is the locked sentence', () => {
+    assert.strictEqual(m.header().subtitle,
+      'Every scheduled skill across your team, and when it runs next.');
+    assert.strictEqual(m.header({}).subtitle, m.LEAD.lead);
+    assert.strictEqual(m.header({ agentName: null }).subtitle, m.LEAD.lead);
+  });
+
+  // AC-C3, scoped: a filtered list under an unfiltered sentence reads as a
+  // list that has lost rows.
+  test('scoped to an agent, the subtitle names that agent', () => {
+    assert.strictEqual(m.header({ agentName: 'Piper' }).subtitle,
+      'Every scheduled skill Piper runs, and when it runs next.');
+    assert.strictEqual(m.header({ agentName: 'Wren' }).subtitle,
+      'Every scheduled skill Wren runs, and when it runs next.');
+  });
+
+  // The name is substituted into the shipped sentence rather than concatenated
+  // onto a fragment of one, so the whole of what ships is in the model.
+  test('the scoped sentence is one string with a slot in it', () => {
+    assert.match(m.LEAD.scopedLead, /\{agent\}/);
+    assert.ok(!m.header({ agentName: 'Piper' }).subtitle.includes('{agent}'),
+      'the slot reached the page');
+  });
+
+  // A DISPLAY NAME IS USER TEXT AND MUST NOT BE READ AS A PATTERN. A string
+  // replacement interprets dollar sequences in what it is handed: $& is the
+  // match, $` and $' the text either side, $$ a literal dollar. An agent can
+  // be named anything.
+  test('a name carrying a replacement pattern is inserted, not interpreted', () => {
+    for (const name of ['A $& B', "$`", "$'", 'A $$ B', '$1', 'Ops $&$& team']) {
+      assert.strictEqual(m.header({ agentName: name }).subtitle,
+        `Every scheduled skill ${name} runs, and when it runs next.`,
+        `the name ${name} was read as a replacement pattern rather than inserted`);
+    }
+  });
+
+  test('an agent whose name is a token does not rewrite the sentence twice', () => {
+    assert.strictEqual(m.header({ agentName: '{agent}' }).subtitle,
+      'Every scheduled skill {agent} runs, and when it runs next.');
+  });
+});
+
+describe('the one state the chrome is allowed to alarm about', () => {
+  // AC-D2 AT THE MODEL. The rail asks this the same question a row asks, so
+  // the ruling cannot say one thing on a row and another on the chrome. Each
+  // non-failure state is asserted on its own: the four asserted together would
+  // be one failure that could be any of them.
+  const withFacts = (facts) => [{ ...facts }];
+
+  test('a failed most recent completed run is a failure', () => {
+    assert.strictEqual(m.anyFailure(withFacts(FAILED)), true);
+  });
+
+  test('a run the process died inside is a failure', () => {
+    assert.strictEqual(m.anyFailure(withFacts({ ...FAILED, lastRunStatus: 'interrupted' })), true);
+  });
+
+  test('a missed slot is not a failure', () => {
+    assert.strictEqual(m.anyFailure(withFacts(MISSED)), false,
+      'the machine being off is not the routine failing');
+  });
+
+  test('a catch-up is not a failure', () => {
+    assert.strictEqual(m.anyFailure(withFacts(CAUGHT_UP)), false, 'a late run is a success');
+  });
+
+  test('a run in flight is not a failure', () => {
+    assert.strictEqual(m.anyFailure(withFacts({ ...FAILED, lastRunStatus: 'running' })), false,
+      'a run that has not finished has no outcome to report');
+  });
+
+  test('a routine that has never run is not a failure', () => {
+    assert.strictEqual(m.anyFailure(withFacts({ lastStart: null, lastRunStatus: null })), false);
+  });
+
+  test('a run that went fine is not a failure', () => {
+    assert.strictEqual(m.anyFailure(withFacts(RAN_ON_TIME)), false);
+  });
+
+  // AC-D5 at the model.
+  test('one failure among several is a failure', () => {
+    assert.strictEqual(m.anyFailure([RAN_ON_TIME, MISSED, FAILED, CAUGHT_UP]), true);
+  });
+
+  test('another routine succeeding does not clear one that failed', () => {
+    assert.strictEqual(m.anyFailure([FAILED, RAN_ON_TIME]), true);
+  });
+
+  test('a routine that failed and then succeeded is not failing', () => {
+    assert.strictEqual(m.anyFailure([RAN_ON_TIME]), false,
+      'the question is about the most recent completed run, not about history');
+  });
+
+  // THE PAUSE CLAUSE OF AC-D2, WITH A FIXTURE THAT WOULD RAISE THE DOT IF
+  // PAUSE WERE IGNORED. A paused routine with no run history proves nothing
+  // about pause: it is indistinguishable from one that has never run, and the
+  // never-run branch already answers it. The pause has to be the only thing
+  // between the routine and a dot.
+  test('a paused routine whose last run failed is not a failure', () => {
+    assert.strictEqual(m.anyFailure(withFacts({ ...FAILED, paused: true })), false,
+      'a paused routine can never succeed again, so a dot it raised could never be cleared');
+  });
+
+  test('a paused routine whose last run was interrupted is not a failure', () => {
+    assert.strictEqual(
+      m.anyFailure(withFacts({ ...FAILED, lastRunStatus: 'interrupted', paused: true })), false);
+  });
+
+  test('the same routine unpaused is a failure, so the pause is what decides it', () => {
+    assert.strictEqual(m.anyFailure(withFacts({ ...FAILED, paused: false })), true,
+      'sanity: without the pause this fixture raises the dot');
+  });
+
+  test('a paused routine does not hide a failure on another routine', () => {
+    assert.strictEqual(m.anyFailure([{ ...FAILED, paused: true }, { ...FAILED }]), true);
+  });
+
+  // AC-D1, READ LITERALLY, AND THE READING IS RECORDED HERE RATHER THAN LEFT
+  // TO FALL OUT OF THE ROW'S RULE. A row says what happened most recently,
+  // which is the later of a run and a slot that went by unserved. The rail
+  // asks whether the last completed run failed. A failure followed by a night
+  // with the machine shut is still a failure nobody has seen, and letting the
+  // miss mask it would hide the only alarming state in the product behind the
+  // most ordinary event there is.
+  test('a missed slot after a failed run does not mask the failure on the rail', () => {
+    const failedThenMissed = {
+      ...FAILED,
+      missedSlot: new Date(2026, 7, 20, 7, 0),
+      lastStart: new Date(2026, 7, 19, 7, 0),
+      lastSlot: new Date(2026, 7, 19, 7, 0),
+    };
+    assert.strictEqual(m.outcomeOf(failedThenMissed), 'missed',
+      'sanity: the ROW says missed, because that is the newer fact');
+    assert.strictEqual(m.anyFailure([failedThenMissed]), true,
+      'the rail asks about the last completed run, and it failed');
+  });
+
+  // The two questions share what a failure IS, so they cannot drift apart on
+  // that while deliberately differing on what masks one.
+  test('the row and the rail agree on which statuses are failures', () => {
+    for (const status of ['failed', 'interrupted']) {
+      const facts = { ...FAILED, lastRunStatus: status };
+      assert.strictEqual(m.outcomeOf(facts), 'failed', status);
+      assert.strictEqual(m.lastCompletedRunFailed(facts), true, status);
+    }
+    for (const status of ['completed', 'running', null]) {
+      assert.strictEqual(m.lastCompletedRunFailed({ ...FAILED, lastRunStatus: status }), false, String(status));
+    }
+  });
+
+  test('nothing at all is not a failure', () => {
+    assert.strictEqual(m.anyFailure([]), false);
+    assert.strictEqual(m.anyFailure(), false);
+    assert.strictEqual(m.anyFailure(null), false);
+  });
+});
+
+// ===== A ROUTINE THE UPGRADE HELD BACK =====
+//
+// A routine whose file never said `enabled` is not running, and the reason it
+// is not running is that nobody has yet said it may. That is a state with an
+// action attached, which is what separates it from every other state on this
+// list: paused is a decision already taken, and the four outcomes are history.
+// This one is a question waiting for an answer.
+//
+// THE OFFER HAS TO SAY WHAT ACCEPTING IT DOES. Somebody upgrading arrives with
+// cron already running these jobs, so "Turn on" alone reads as tidying a
+// switch. What they need to know before pressing it is that Rundock will begin
+// running the routine itself, which is the sentence that stops a briefing going
+// out twice.
+describe('a routine nobody has turned on yet', () => {
+  // A ROUTINE HELD BACK AND NOTHING ELSE. It carries a schedule the scheduler
+  // can read, because the offer is only made when turning it on is the one
+  // thing in the way, and a fixture with no schedule at all is a routine that
+  // could never run whatever the switch said.
+  const NOT_ENABLED = {
+    enabled: false, paused: false, nextRun: TOMORROWS_SLOT,
+    schedule: 'every day at 07:00', scheduleReadable: true, runOn: 'local',
+  };
+  const offer = (input) => m.enableOffer({ ...input, now: NOW, zone: ZONE });
+
+  test('the offer states that Rundock will begin running it', () => {
+    const o = offer(NOT_ENABLED);
+    assert.ok(o, 'a routine that is not enabled makes no offer');
+    assert.match(o.text, /Rundock/,
+      'the offer does not say who begins running it');
+    assert.match(o.text, /\brun/i,
+      'the offer does not say that turning it on starts it running');
+    assert.strictEqual(o.label, 'Turn on');
+  });
+
+  // The state is only ever reached from the file saying so. A routine that is
+  // enabled, and one that says nothing about it at all because it arrived from
+  // somewhere that does not carry the field, both make no offer: an offer
+  // drawn on a routine that is already running is an invitation to break it.
+  test('nothing else on the list makes this offer', () => {
+    assert.strictEqual(offer({ enabled: true, nextRun: TOMORROWS_SLOT }), null);
+    assert.strictEqual(offer({ nextRun: TOMORROWS_SLOT }), null);
+    assert.strictEqual(offer(null), null);
+  });
+
+  // THE ROW MUST NOT PROMISE A RUN IT WILL NOT MAKE. The server computes a next
+  // run from the schedule alone, so a routine held back by the upgrade still
+  // arrives carrying tomorrow's instant. Rendering it would put "Next run:
+  // tomorrow, 7:00am" on a routine that will never run, which is worse than
+  // saying nothing: it is the exact reassurance the reader is looking for.
+  test('a routine that is not enabled promises no next run', () => {
+    assert.strictEqual(next(NOT_ENABLED), null);
+    // And the ordinary routine beside it still does, so this is the state
+    // rather than a next-run line that stopped working.
+    assert.ok(next({ enabled: true, nextRun: TOMORROWS_SLOT }));
+  });
+
+  // WHEN THE FIRST RUN LANDS IS SAID ONLY WHERE IT IS TRUE.
+  //
+  // Same-day catch-up means a slot already gone today fires within the minute,
+  // which is what this reader most needs to know: their own scheduler ran the
+  // same job this morning. But it is not true on every row the offer appears
+  // on. A routine that already ran today and was then switched off is
+  // suppressed until tomorrow by the run guard, and a weekly routine turned on
+  // away from its weekday does not run shortly at all.
+  //
+  // So the sentence is read off the instant the server computed, which already
+  // accounts for both: it is the same value the next-run line would render.
+  // Past means catch-up, future means then, and none means nothing is said.
+  const offerAt = (nextRun) => offer({ ...NOT_ENABLED, nextRun });
+
+  test('a slot already gone says the first run is immediate', () => {
+    assert.match(offerAt(new Date(2026, 7, 20, 7, 0)).text,
+      /has already gone, so it runs shortly after you turn it on/);
+  });
+
+  test('a run still to come names when, rather than promising it is immediate', () => {
+    const text = offerAt(new Date(2026, 7, 21, 7, 0)).text;
+    assert.match(text, /it runs tomorrow, 7:00am/,
+      'the offer does not say when the first run lands');
+    assert.ok(!/shortly after you turn it on/.test(text),
+      'a routine whose time has not come is told it runs straight away');
+  });
+
+  // A routine that already ran today and was switched off. The scheduler
+  // suppresses it until tomorrow, so it has no next run at all, and the offer
+  // says nothing about timing rather than guessing.
+  test('no next run at all means the offer promises no timing', () => {
+    const text = offerAt(null).text;
+    assert.ok(!/shortly after you turn it on/.test(text));
+    assert.ok(!/it runs /.test(text), `the offer invented a time: ${text}`);
+    assert.match(text, /Rundock will start running it on this schedule/);
+  });
+
+  test('the offer reaches the row', () => {
+    const row = m.row({ ...NOT_ENABLED, name: 'Compile the ops summary', now: NOW, zone: ZONE });
+    assert.ok(row.offer, 'the row drops the offer');
+    assert.strictEqual(row.offer.label, 'Turn on');
+    assert.strictEqual(row.nextRun, null);
+  });
+});
+
+// ===== A SCHEDULE THE SCHEDULER CANNOT READ =====
+//
+// Whether a schedule parses is the SCHEDULER'S question, answered on the server
+// and carried on the roster. It is deliberately not asked again here: the
+// editor offers times on the half hour, so `scheduleWords` returns null for
+// `every day at 07:03` as well, which the scheduler reads perfectly well. A row
+// that judged readability by whether it had plain words to show would tell a
+// working routine it will never fire.
+describe('a routine whose schedule the scheduler cannot read', () => {
+  const problem = (input) => m.scheduleProblem(input);
+
+  test('the row is told it will not run, and what to change', () => {
+    const p = problem({ schedule: '0 7 * * *', scheduleReadable: false });
+    assert.ok(p, 'an unreadable schedule raises nothing');
+    assert.match(p.text, /cannot read this schedule/i);
+    // Both accepted shapes, by example rather than by description. A reader
+    // who has just been told their schedule is wrong needs one they can copy.
+    assert.match(p.text, /every day at 07:00/);
+    assert.match(p.text, /every Monday at 07:00/);
+  });
+
+  test('a schedule the scheduler reads raises nothing', () => {
+    assert.strictEqual(problem({ schedule: 'every day at 07:00', scheduleReadable: true }), null);
+    // Including the ones with no plain words to show, which is the case that
+    // would break if this asked the editor's lists instead of the scheduler.
+    assert.strictEqual(problem({ schedule: 'every day at 07:03', scheduleReadable: true }), null);
+  });
+
+  // A ROSTER THAT DID NOT CARRY THE FIELD SAYS NOTHING, rather than accusing
+  // every routine on it. The fact is new, and a client meeting an older server,
+  // or any caller that builds a row by hand, must not turn silence into a
+  // complaint about a routine that runs perfectly well.
+  test('a routine that never said raises nothing', () => {
+    assert.strictEqual(problem({ schedule: 'every day at 07:00' }), null);
+    assert.strictEqual(problem({}), null);
+    assert.strictEqual(problem(null), null);
+  });
+
+  // A routine with no schedule at all is a different fault, and telling its
+  // owner to change a schedule they never wrote is an answer to a question
+  // nobody asked.
+  test('a routine with no schedule at all is not told to change one', () => {
+    assert.strictEqual(problem({ schedule: null, scheduleReadable: false }), null);
+    assert.strictEqual(problem({ schedule: '   ', scheduleReadable: false }), null);
+  });
+
+  // NAMED HERE AS WELL AS SWEPT. The combination sweep also fails without this
+  // guard, because it builds a row carrying an unreadable schedule and a next
+  // run together. This states the property on its own so the failure names it
+  // rather than naming a combination the reader then has to decode.
+  test('an instant supplied with an unreadable schedule is still not promised', () => {
+    assert.strictEqual(m.nextRunLabel({
+      schedule: '0 7 * * *', scheduleReadable: false,
+      nextRun: TOMORROWS_SLOT, now: NOW, zone: ZONE,
+    }), null, 'a row promised a run for a schedule nothing can read');
+    // The same instant on a readable schedule is promised, so this is the
+    // guard rather than an instant the model cannot render.
+    assert.ok(m.nextRunLabel({
+      schedule: 'every day at 07:00', scheduleReadable: true,
+      nextRun: TOMORROWS_SLOT, now: NOW, zone: ZONE,
+    }));
+  });
+
+  test('the problem reaches the row, and the row promises no run', () => {
+    const row = m.row({
+      name: 'Cron briefing', schedule: '0 7 * * *', scheduleReadable: false,
+      enabled: true, paused: false, nextRun: null, now: NOW, zone: ZONE,
+    });
+    assert.ok(row.scheduleProblem, 'the row drops the problem');
+    assert.strictEqual(row.nextRun, null);
+  });
+});
+
+// ===== A ROUTINE WITH NOTHING TO SAY =====
+//
+// A routine that declares a schedule and no prompt used to be indistinguishable
+// on this list from one that works. It promised a next run, offered to be
+// turned on, fired on time, and handed its agent the four letters n-u-l-l.
+// The server refuses it now, and this is the half that tells the person who
+// wrote the file why nothing is happening.
+//
+// WHETHER THERE IS A PROMPT IS ASKED HERE RATHER THAN CARRIED, which is the
+// opposite of the schedule fault beside it and for a stated reason: whether a
+// schedule PARSES needs the scheduler's grammar, and a second copy of that
+// grammar on this side would be free to disagree with the tick. Whether a
+// value is text needs no grammar at all, and the prompt is already on the
+// roster, so asking it here adds no second answer to disagree with.
+describe('a routine with no prompt', () => {
+  const problem = (input) => m.promptProblem(input);
+
+  test('the row is told it will not run, and what to add', () => {
+    const p = problem({ prompt: null });
+    assert.ok(p, 'a routine with no prompt raises nothing');
+    assert.match(p.text, /has no prompt/i);
+    // NAMES WHAT TO ADD, BY EXAMPLE, the same rule the schedule fault follows.
+    // A reader who has just been told a field is missing needs to know what
+    // goes in it.
+    assert.match(p.text, /Run the morning briefing/);
+  });
+
+  test('a prompt that is only spaces is the same nothing as no prompt at all', () => {
+    assert.ok(problem({ prompt: '   ' }), 'whitespace was read as an instruction');
+    assert.ok(problem({ prompt: '' }), 'a declared, empty prompt was read as an instruction');
+  });
+
+  test('a routine with an instruction raises nothing', () => {
+    assert.strictEqual(problem({ prompt: 'Run the digest' }), null);
+  });
+
+  // SILENCE IS NOT A FAULT, the same rule `scheduleProblem` follows. A caller
+  // that did not send the field is not describing a routine with nothing to
+  // say, and turning that into a complaint would accuse every row built by a
+  // caller that never carried a prompt.
+  test('a caller that never said raises nothing', () => {
+    assert.strictEqual(problem({ schedule: 'every day at 07:00' }), null);
+    assert.strictEqual(problem({}), null);
+    assert.strictEqual(problem(null), null);
+  });
+
+  // NAMED HERE AS WELL AS SWEPT, for the reason the schedule guard is: the
+  // combination sweep below also fails without this, and a named test says
+  // which property broke rather than leaving a combination to be decoded.
+  test('an instant supplied with no prompt is still not promised', () => {
+    assert.strictEqual(m.nextRunLabel({
+      schedule: 'every day at 07:00', scheduleReadable: true, prompt: null,
+      nextRun: TOMORROWS_SLOT, now: NOW, zone: ZONE,
+    }), null, 'a row promised a run for a routine that will never be started');
+    // The same instant with a prompt is promised, so this is the guard rather
+    // than an instant the model cannot render.
+    assert.ok(m.nextRunLabel({
+      schedule: 'every day at 07:00', scheduleReadable: true, prompt: 'Run it',
+      nextRun: TOMORROWS_SLOT, now: NOW, zone: ZONE,
+    }));
+  });
+
+  test('the problem reaches the row, and the row promises no run', () => {
+    const row = m.row({
+      name: 'Morning briefing', schedule: 'every day at 07:00', scheduleReadable: true,
+      prompt: null, enabled: true, paused: false, nextRun: TOMORROWS_SLOT, now: NOW, zone: ZONE,
+    });
+    assert.ok(row.promptProblem, 'the row drops the problem');
+    assert.strictEqual(row.nextRun, null);
+    // And it is a fault of its own rather than the schedule's, so a reader is
+    // not sent to edit a schedule that is perfectly readable.
+    assert.strictEqual(row.scheduleProblem, null);
+  });
+});
+
+// ===== NO ROW SAYS TWO THINGS THAT CANNOT BOTH BE TRUE =====
+//
+// THE DEFECT THIS BLOCK EXISTS FOR, and the reason it is an enumeration rather
+// than one more test. A row is composed of lines decided independently: what
+// happened last time, when it runs next, whether the schedule can be read, and
+// whether anything is being offered. Each was correct on its own. Put two of
+// them on one row and the row could contradict itself.
+//
+// The pairing this is built around: a routine that predates the scheduler AND
+// carries a cron schedule, which is every pre-existing cron routine after an
+// upgrade, since the reader fills an absent `enabled` in as false and nothing
+// ever rewrites a schedule. Such a row has grounds to say both "Rundock cannot
+// read this schedule, so this routine will not run" and "Turn it on and
+// Rundock will start running it on this schedule". The second is false there:
+// turning it on starts nothing, because the schedule is still unreadable.
+//
+// THE RULE THAT REPLACES THE SPECIAL CASE. The offer is made only when turning
+// it on is the ONLY thing standing between the routine and running. That is
+// the scheduler's own refusal order asked on this side, so the offer cannot
+// promise something the gate will refuse for a second reason.
+//
+// The enumeration is the fix rather than the pairing, because that pairing is
+// one of several: paused, an unsupported run target and a routine with no
+// schedule at all each falsify the same sentence.
+describe('a row never says two things that cannot both be true', () => {
+  // Every fact a row can carry that decides whether it runs, and what each one
+  // means for the offer. `held` is the state this card creates.
+  const held = { enabled: false, schedule: 'every day at 07:00', scheduleReadable: true, runOn: 'local', paused: false };
+
+  const BLOCKED = [
+    ['paused as well', { ...held, paused: true }],
+    ['a schedule nothing can read', { ...held, schedule: '0 7 * * *', scheduleReadable: false }],
+    // A block with a name and a prompt and no schedule at all. The parser
+    // keeps any block that has a name, so this reaches the roster, and the
+    // scheduler reports it unreadable because there is nothing to read.
+    ['no schedule at all', { ...held, schedule: null, scheduleReadable: false }],
+    ['a schedule that is only spaces', { ...held, schedule: '   ', scheduleReadable: false }],
+    ['a run target this release cannot run', { ...held, runOn: 'agent-computer' }],
+    // A block with a name and a schedule and no prompt. The parser keeps any
+    // block that has a name, so this reaches the roster, and the gate refuses
+    // it because there is nothing to send.
+    ['no prompt at all', { ...held, prompt: null }],
+  ];
+
+  // A ROUTINE THAT WAS NEVER TURNED ON DID NOT MISS ANYTHING.
+  //
+  // The slot store records every scheduled slot that went by unobserved, for
+  // every routine, whatever the gate would have said. That is deliberate and
+  // pinned in test/unit/scheduler-lib.test.js: the store keeps the facts and
+  // the view decides what to make of them.
+  //
+  // What the view has to make of them here: the missed line names its cause,
+  // "Rundock was closed at 7:00am yesterday". For a routine nobody has ever
+  // turned on that cause is false. Rundock may well have been open all night;
+  // the routine was never in service. Naming the wrong cause on the one screen
+  // a person opens when a routine has not run is worse than naming none, and
+  // it would sit directly above an offer to turn the routine on.
+  //
+  // ONLY THE MISSED OUTCOME IS WITHHELD. A run that happened, or failed, is
+  // real history from when the routine was running, and a row that hid it
+  // would be hiding the truth rather than declining to invent it.
+  test('a routine nobody turned on reports no missed slot', () => {
+    const missed = { missedSlot: YESTERDAYS_SLOT, lastStart: null, lastRunStatus: null, now: NOW, zone: ZONE };
+    assert.strictEqual(m.runStatus({ ...missed, enabled: false }), null,
+      'a routine that was never in service was told Rundock was closed on it');
+    // The same slot on a routine in service still reports, so this is the
+    // state rather than the missed line quietly breaking.
+    const inService = m.runStatus({ ...missed, enabled: true });
+    assert.ok(inService && inService.kind === 'missed');
+  });
+
+  // THE INPUT THE FIRST VERSION OF THIS RULE NEVER MET. A routine that ran and
+  // failed, was switched off, and then had a slot pass. The missed slot is the
+  // NEWER fact, so the withheld branch is the one taken, and returning null
+  // there hides the failure entirely rather than falling through to it. The
+  // rule is that the missed outcome is withheld, not that the row goes quiet.
+  test('a routine switched off after a failure still reports the failure', () => {
+    const status = m.runStatus({
+      enabled: false,
+      lastStart: new Date(2026, 7, 17, 7, 0), lastRunStatus: 'failed',
+      lastSlot: new Date(2026, 7, 17, 7, 0),
+      missedSlot: YESTERDAYS_SLOT,
+      now: NOW, zone: ZONE,
+    });
+    assert.ok(status, 'the row went silent about a run that really happened');
+    assert.strictEqual(status.kind, 'failed',
+      'the failure was hidden by the slot that passed after it');
+  });
+
+  test('a routine nobody turned on still reports a run that really happened', () => {
+    const ran = {
+      enabled: false, lastStart: new Date(2026, 7, 20, 7, 0, 12), lastRunStatus: 'failed',
+      lastSlot: TODAYS_SLOT, missedSlot: null, now: NOW, zone: ZONE,
+    };
+    const status = m.runStatus(ran);
+    assert.ok(status && status.kind === 'failed',
+      'history from when the routine was running was hidden rather than reported');
+  });
+
+  test('the offer is made when turning it on is the only thing in the way', () => {
+    const o = m.enableOffer(held);
+    assert.ok(o, 'a routine held back by nothing but the switch makes no offer');
+    assert.strictEqual(o.label, 'Turn on');
+  });
+
+  // Each of these would make the offer's sentence false, so the offer is
+  // withheld rather than reworded: there is nothing truthful a Turn on control
+  // can promise on a row that will not run once it is pressed.
+  for (const [what, input] of BLOCKED) {
+    test(`no offer on a routine that also has ${what}`, () => {
+      assert.strictEqual(m.enableOffer(input), null,
+        'the row offers to start a routine that would still not run');
+    });
+  }
+
+  // THE PAIRING, DRIVEN RATHER THAN REASONED.
+  //
+  // A row is built from lines decided independently, so the question is not
+  // "is this instance fixed" but "which pairs of lines can disagree". Two
+  // kinds of line can: one that PROMISES the routine will run, and one that
+  // DENIES it. Every combination of the states listed below is built and
+  // rendered here, and any row carrying one of each fails.
+  //
+  // Reading the pairs off the states rather than listing them by hand is the
+  // point: a state joins the matrix by being added to STATES, and if it can
+  // produce both kinds of line the test fails without anybody having thought
+  // to pair it with the others.
+  //
+  // WHAT THIS SWEEP COVERS, EXACTLY: the states in STATES, and no others. It
+  // is not a sweep over everything a row can carry, and the difference matters
+  // because reading it as one is how a gap gets missed.
+  //
+  // THE RUN STATUS VOCABULARY IS OUTSIDE IT. `lastRunStatus` carries a word
+  // the scheduler chose, and the set of those words grows: `cancelled` was
+  // added after this sweep was written and is not among the states below, so
+  // no row here is built with it. That omission is deliberate rather than an
+  // oversight left standing. A cancelled run currently reads as an ordinary
+  // one on this list, and settling what such a row should say, and what tone
+  // it takes beside the four outcomes, is a decision this file cannot make on
+  // its own. Adding the state here without that decision would pin whatever
+  // the code happens to do today.
+  //
+  // So: this sweep says nothing about a cancelled run. If you came here
+  // believing it did, that belief is the thing to correct.
+  const STATES = [
+    ['held back', { enabled: false }],
+    ['paused', { paused: true }],
+    ['an unreadable schedule', { schedule: '0 7 * * *', scheduleReadable: false }],
+    // THE STATE THE SWEEP DID NOT CONTAIN, which is how it claimed more than
+    // it covered. A routine with no schedule can never run, and the row says
+    // nothing about it, so nothing else in the matrix stood in for it.
+    ['no schedule at all', { schedule: null, scheduleReadable: false }],
+    // The other half of the same class: a routine that says WHEN and never
+    // says WHAT. It joins the matrix here rather than being paired by hand
+    // with the eight around it.
+    ['no prompt at all', { prompt: null }],
+    ['a run target this release cannot run', { runOn: 'agent-computer' }],
+    ['a slot that went by', { missedSlot: YESTERDAYS_SLOT }],
+    ['a next run', { nextRun: TOMORROWS_SLOT }],
+    ['a run that failed', { lastStart: TODAYS_SLOT, lastRunStatus: 'failed', lastSlot: TODAYS_SLOT }],
+    // A ROUTINE THE SCHEDULER HAS MOVED AWAY FROM. It is the newest way a row
+    // can deny a run, and it joins the matrix here rather than being paired by
+    // hand with the seven above it, which is the whole point of the matrix
+    // being read off this list.
+    ['a scheduler that has moved to another workspace', { workspace: '/w/mine', servingWorkspace: '/w/elsewhere' }],
+  ];
+
+  // What the row says, split by what it claims about running.
+  function claims(row) {
+    const promising = [];
+    const denying = [];
+    if (row.offer) promising.push(`offer: ${row.offer.text}`);
+    if (row.nextRun && row.nextRun.text !== 'Paused') promising.push(`next run: ${row.nextRun.text}`);
+    if (row.nextRun && row.nextRun.text === 'Paused') denying.push('next run: Paused');
+    if (row.scheduleProblem) denying.push(`problem: ${row.scheduleProblem.text}`);
+    if (row.promptProblem) denying.push(`problem: ${row.promptProblem.text}`);
+    if (row.workspaceNote) denying.push(`workspace: ${row.workspaceNote.text}`);
+    // A RUN STATUS IS DELIBERATELY NEITHER. It reports the past, and the row
+    // pairs it with the next run ON PURPOSE, because after a miss or a failure
+    // the reader's question is whether it recovered and when it tries again.
+    // Counting a missed line as denying a future run would make this test
+    // demand the removal of the second line the row exists to draw. What a run
+    // status can get wrong is not the future but its own cause, which is the
+    // rule below.
+    //
+    // Only the `missed` outcome is read here, because it is the only one this
+    // sweep has a rule for. Whether every word the scheduler can record ends
+    // up in an outcome at all is a question this sweep does not ask.
+    return { promising, denying };
+  }
+
+  test('no combination of row states promises a run and denies one at the same time', () => {
+    const base = { name: 'r', schedule: 'every day at 07:00', scheduleReadable: true, runOn: 'local', now: NOW, zone: ZONE };
+    let combinations = 0;
+    // Every subset of the states above, so each pair is met inside at least
+    // one row rather than only the pairs somebody thought to write down.
+    for (let mask = 0; mask < (1 << STATES.length); mask++) {
+      const picked = STATES.filter((_, i) => mask & (1 << i));
+      const input = Object.assign({}, base, ...picked.map(([, fields]) => fields));
+      const { promising, denying } = claims(m.row(input));
+      combinations++;
+      assert.ok(!(promising.length && denying.length),
+        `a row with ${picked.map(([n]) => n).join(' + ') || 'nothing'} says both:\n`
+        + `  promising: ${promising.join(' | ')}\n  denying:   ${denying.join(' | ')}`);
+    }
+    assert.strictEqual(combinations, 1 << STATES.length,
+      'the sweep did not cover every combination it claims to');
+  });
+
+  // THE SECOND KIND OF FALSEHOOD A ROW CAN CARRY, and the one the sweep above
+  // cannot see: a line that is true about the future while naming a cause that
+  // never happened.
+  //
+  // The missed line says "Rundock was closed at 7:00am yesterday". On a
+  // routine nobody has ever turned on, that is simply untrue: Rundock may have
+  // been open throughout, and the routine was not in service. The row would
+  // explain an absence by an event that did not occur, directly above an offer
+  // to fix something else.
+  test('no row explains an absence by a cause that did not apply', () => {
+    const base = { name: 'r', schedule: 'every day at 07:00', scheduleReadable: true, runOn: 'local', now: NOW, zone: ZONE };
+    for (let mask = 0; mask < (1 << STATES.length); mask++) {
+      const picked = STATES.filter((_, i) => mask & (1 << i));
+      const input = Object.assign({}, base, ...picked.map(([, fields]) => fields));
+      const row = m.row(input);
+      if (!row.status || row.status.kind !== 'missed') continue;
+      assert.notStrictEqual(input.enabled, false,
+        `a row with ${picked.map(([n]) => n).join(' + ')} says "${row.status.text}" `
+        + 'about a routine that was never in service');
+    }
+  });
+});
+
+// ===========================================================================
+// WHERE A ROUTINE ACTUALLY RUNS
+// ===========================================================================
+//
+// There is one scheduler and it serves one workspace. A routine in any other
+// workspace is dormant, and every surface here used to draw it exactly as it
+// draws one that will fire in an hour.
+//
+// THE COMPARISON IS AGAINST WHAT THE SERVER IS SERVING, NEVER AGAINST WHAT A
+// WINDOW REMEMBERS OPENING, and getting that backwards is worse than the
+// silence it replaced. Several windows can look at one server. When one of
+// them switches the server, the roster the others are handed is the roster of
+// the workspace that IS being served: judged against the path those windows
+// remembered, every one of those rows would be called dormant at the exact
+// moment they were the only routines running, and the dormant ones would be
+// the routines the window still believed were live. Both halves inverted.
+//
+// So both values here come from the server. `workspace` is stamped on each
+// routine by the code that read it; `servingWorkspace` is that same root, sent
+// beside the roster and again on every switch.
+//
+// THE PAIR IS THE TEST. A single assertion that a dormant row says something
+// proves nothing about whether the two can be told apart, and telling them
+// apart is the whole requirement. So the two are built from ONE input with one
+// field changed, and read side by side.
+describe('a routine says whether anything is serving it', () => {
+  const MINE = '/Users/someone/Documents/Ledger';
+  const ELSEWHERE = '/Users/someone/Documents/Field Notes';
+
+  // One routine, in service, due tomorrow, with nothing wrong with it. The
+  // only thing that varies below is where the scheduler is.
+  const ROUTINE = {
+    name: 'morning briefing', schedule: 'every day at 07:00', scheduleReadable: true,
+    runOn: 'local', enabled: true, nextRun: TOMORROWS_SLOT, now: NOW, zone: ZONE,
+    workspace: MINE,
+  };
+
+  test('the two rows are not the same row', () => {
+    const served = m.row(Object.assign({}, ROUTINE, { servingWorkspace: MINE }));
+    const moved = m.row(Object.assign({}, ROUTINE, { servingWorkspace: ELSEWHERE }));
+
+    assert.strictEqual(served.nextRun.text, 'Next run: tomorrow, 7:00am, London time',
+      'the routine the scheduler is serving says when it runs next');
+    assert.strictEqual(served.workspaceNote, null,
+      'and says nothing about workspaces, because there is nothing to say');
+
+    assert.strictEqual(moved.nextRun, null,
+      'the routine nothing is serving promises no run, because none is coming');
+    assert.strictEqual(moved.workspaceNote.text,
+      'Not running. Rundock has moved to Field Notes and is running that workspace\'s routines instead.',
+      'and says where Rundock went instead');
+  });
+
+  // The row cannot say why it stopped without naming where the scheduler is,
+  // and that workspace is the one the header does NOT name.
+  test('the note names where Rundock went, by the name a person calls it', () => {
+    const row = m.row(Object.assign({}, ROUTINE, { servingWorkspace: ELSEWHERE }));
+    assert.match(row.workspaceNote.text, /Field Notes/);
+    assert.doesNotMatch(row.workspaceNote.text, /Documents/,
+      'by the folder name, not by the path it sits at');
+  });
+
+  // The inversion this design exists to prevent, asserted as itself rather
+  // than left to follow from the pair above. A window that remembers ws1 and
+  // is handed ws2's roster is looking at the routines that ARE running.
+  test('a roster from the workspace being served is live, whatever any window remembers', () => {
+    const handedOver = m.row(Object.assign({}, ROUTINE, {
+      workspace: ELSEWHERE, servingWorkspace: ELSEWHERE,
+    }));
+    assert.ok(handedOver.nextRun, 'these are the routines that will fire, so the row says when');
+    assert.strictEqual(handedOver.workspaceNote, null, 'and denies nothing');
+  });
+
+  // The offer says what pressing it does. With the scheduler elsewhere,
+  // pressing it starts nothing, so there is nothing truthful for it to say.
+  test('a held-back routine nothing is serving is not offered a switch that would not start it', () => {
+    const held = Object.assign({}, ROUTINE, { enabled: false });
+    assert.ok(m.enableOffer(Object.assign({}, held, { servingWorkspace: MINE })),
+      'in the served workspace the offer stands');
+    assert.strictEqual(m.enableOffer(Object.assign({}, held, { servingWorkspace: ELSEWHERE })), null,
+      'and with the scheduler elsewhere it is withheld rather than reworded');
+  });
+
+  // Both fields are new. A roster that predates them must not turn into an
+  // accusation, and a caller that did not say what is being served has not
+  // said anything is dormant.
+  test('silence is not a disagreement', () => {
+    for (const missing of [
+      { name: 'no stamp on the routine', fields: { workspace: undefined, servingWorkspace: ELSEWHERE } },
+      { name: 'no serving workspace supplied', fields: { servingWorkspace: undefined } },
+      { name: 'neither', fields: { workspace: undefined, servingWorkspace: undefined } },
+      { name: 'an empty stamp', fields: { workspace: '', servingWorkspace: ELSEWHERE } },
+    ]) {
+      const row = m.row(Object.assign({}, ROUTINE, missing.fields));
+      assert.strictEqual(row.workspaceNote, null, `${missing.name}: no complaint`);
+      assert.ok(row.nextRun, `${missing.name}: and the next run is still drawn`);
+    }
+  });
+
+  test('a workspace path reads as the folder a person would name, on either separator', () => {
+    assert.strictEqual(m.workspaceWords('/Users/someone/Documents/Ledger'), 'Ledger');
+    assert.strictEqual(m.workspaceWords('C:\\Users\\someone\\Documents\\Ledger'), 'Ledger');
+    assert.strictEqual(m.workspaceWords('/Users/someone/Ledger/'), 'Ledger',
+      'a trailing separator names the folder rather than nothing');
+    assert.strictEqual(m.workspaceWords(''), null);
+    assert.strictEqual(m.workspaceWords(null), null);
+  });
+
+  // The header answers the question no row can: what these routines are, and
+  // what became of the ones this list is not showing.
+  test('the header names the workspace the listed routines came from, in both states', () => {
+    const served = m.header({ workspace: MINE, servingWorkspace: MINE });
+    assert.strictEqual(served.workspace,
+      'These are the routines in Ledger. Rundock runs the routines of whichever workspace it has '
+      + 'open, so the routines in your other workspaces are not running.');
+
+    const moved = m.header({ workspace: MINE, servingWorkspace: ELSEWHERE });
+    assert.strictEqual(moved.workspace,
+      'These are the routines in Ledger. Rundock has moved to Field Notes and is running that '
+      + "workspace's routines, so none of these are running.");
+  });
+
+  // THE HEADER DESCRIBES ITS ROWS AND NOT THE WINDOW. Handed the roster of the
+  // workspace being served, it names that workspace and says its routines run,
+  // whatever the window it is drawn in was opened on.
+  test('the header names the roster it is heading, not a remembered path', () => {
+    const head = m.header({ workspace: ELSEWHERE, servingWorkspace: ELSEWHERE });
+    assert.match(head.workspace, /^These are the routines in Field Notes\./);
+    assert.doesNotMatch(head.workspace, /has moved to/,
+      'the listed routines are the ones running, so the header must not say otherwise');
+  });
+
+  test('with no workspace to name there is no line at all', () => {
+    assert.strictEqual(m.header({}).workspace, null,
+      '"the routines in your workspace" tells nobody anything');
+    assert.strictEqual(m.header({ workspace: MINE }).workspace,
+      'These are the routines in Ledger. Rundock runs the routines of whichever workspace it has '
+      + 'open, so the routines in your other workspaces are not running.',
+      'and an unstated serving workspace is not a claim that Rundock has moved');
   });
 });

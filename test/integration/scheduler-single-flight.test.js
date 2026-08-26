@@ -47,14 +47,14 @@ before(async () => {
       // outliving its window looks like from the scheduler's side.
       slow: agentFile({
         name: 'slow', type: 'specialist', order: 1,
-        routines: [{ name: 'slow-check', schedule: 'every day at 09:00', prompt: 'slow body' }],
+        routines: [{ name: 'slow-check', schedule: 'every day at 09:00', prompt: 'slow body', enabled: true }],
       }),
       // The control. It fires on the same tick that holds the slow routine,
       // which is both the proof the tick was live and the proof that one
       // routine being in flight does not hold a different one.
       other: agentFile({
         name: 'other', type: 'specialist', order: 2,
-        routines: [{ name: 'other-check', schedule: 'every day at 09:00', prompt: 'other body' }],
+        routines: [{ name: 'other-check', schedule: 'every day at 09:00', prompt: 'other body', enabled: true }],
       }),
       // Two routines, one agent, one name. The data model allows it on
       // purpose and the writer indexes namesakes by occurrence. They share one
@@ -65,21 +65,21 @@ before(async () => {
       twin: agentFile({
         name: 'twin', type: 'specialist', order: 3,
         routines: [
-          { name: 'twin-check', schedule: 'every day at 09:00', prompt: 'first twin body' },
-          { name: 'twin-check', schedule: 'every day at 07:00', prompt: 'second twin body' },
+          { name: 'twin-check', schedule: 'every day at 09:00', prompt: 'first twin body', enabled: true },
+          { name: 'twin-check', schedule: 'every day at 07:00', prompt: 'second twin body', enabled: true },
         ],
       }),
       // Runs to completion in milliseconds, so its release is the success
       // path rather than the failure one.
       brisk: agentFile({
         name: 'brisk', type: 'specialist', order: 4,
-        routines: [{ name: 'brisk-check', schedule: 'every day at 06:00', prompt: 'brisk body' }],
+        routines: [{ name: 'brisk-check', schedule: 'every day at 06:00', prompt: 'brisk body', enabled: true }],
       }),
       // Hangs like the slow routine, and belongs to the failure test alone, so
       // that test starts the run it later kills rather than inheriting one.
       faller: agentFile({
         name: 'faller', type: 'specialist', order: 5,
-        routines: [{ name: 'fall-check', schedule: 'every day at 09:00', prompt: 'fall body' }],
+        routines: [{ name: 'fall-check', schedule: 'every day at 09:00', prompt: 'fall body', enabled: true }],
       }),
     },
   });

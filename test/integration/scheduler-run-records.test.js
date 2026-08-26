@@ -65,7 +65,7 @@ before(async () => {
     agents: {
       keeper: agentFile({
         name: 'keeper', type: 'specialist', order: 1,
-        routines: [{ name: 'briefing', schedule: 'every day at 05:00', prompt: KEEPER_BODY }],
+        routines: [{ name: 'briefing', schedule: 'every day at 05:00', prompt: KEEPER_BODY, enabled: true }],
       }),
       // TWO ROUTINES SHARING A NAME UNDER ONE AGENT, which the data model
       // deliberately allows and test/unit/routine-model.test.js pins. They
@@ -76,8 +76,8 @@ before(async () => {
       twins: agentFile({
         name: 'twins', type: 'specialist', order: 2,
         routines: [
-          { name: 'check', schedule: 'every day at 05:00', prompt: TWIN_EARLY },
-          { name: 'check', schedule: 'every day at 09:00', prompt: TWIN_LATE },
+          { name: 'check', schedule: 'every day at 05:00', prompt: TWIN_EARLY, enabled: true },
+          { name: 'check', schedule: 'every day at 09:00', prompt: TWIN_LATE, enabled: true },
         ],
       }),
       // The thrower. Its prompt reaches spawn as an argument Node refuses, so
@@ -85,7 +85,7 @@ before(async () => {
       // nothing stood in for.
       faulty: agentFile({
         name: 'faulty', type: 'specialist', order: 3,
-        routines: [{ name: 'faulty-check', schedule: 'every day at 05:00', prompt: `bad${NUL}body` }],
+        routines: [{ name: 'faulty-check', schedule: 'every day at 05:00', prompt: `bad${NUL}body`, enabled: true }],
       }),
       // A run whose CHILD fails, which is the only way a routine fails in the
       // field: the CLI crashing, running out of memory, an expired login, the
@@ -94,14 +94,14 @@ before(async () => {
       // start that never reached one.
       crasher: agentFile({
         name: 'crasher', type: 'specialist', order: 4,
-        routines: [{ name: 'crash-check', schedule: 'every day at 05:00', prompt: CRASH_BODY }],
+        routines: [{ name: 'crash-check', schedule: 'every day at 05:00', prompt: CRASH_BODY, enabled: true }],
       }),
       // The second runtime. Routines on it reach the same outcome closure by a
       // completely different route, so a record written on the claude path says
       // nothing about this one.
       'codex-keeper': agentFile({
         name: 'codex-keeper', type: 'specialist', order: 5, runtime: 'codex',
-        routines: [{ name: 'codex-check', schedule: 'every day at 05:00', prompt: 'codex routine body' }],
+        routines: [{ name: 'codex-check', schedule: 'every day at 05:00', prompt: 'codex routine body', enabled: true }],
       }),
       // THE ONLY AGENT IN THIS FILE WHOSE ID AND NAME DIFFER, and it exists for
       // exactly that. The id comes from the filename and the name from the
@@ -110,7 +110,7 @@ before(async () => {
       // marketplace agent normally has them apart.
       mismatched: agentFile({
         name: 'Mismatched Display Name', type: 'specialist', order: 6,
-        routines: [{ name: 'whoami', schedule: 'every day at 05:00', prompt: MISMATCH_BODY }],
+        routines: [{ name: 'whoami', schedule: 'every day at 05:00', prompt: MISMATCH_BODY, enabled: true }],
       }),
     },
   });

@@ -190,6 +190,7 @@ const MANIFEST = {
   "routine-editor.js": [
     "addRoutine",
     "addRoutineForAgent",
+    "addRoutineForSkill",
     "browserTimezone",
     "openRoutineEditor",
     "renderRoutineEditor",
@@ -206,6 +207,13 @@ const MANIFEST = {
     "routinesListNav",
     "saveRoutine",
   ],
+  "routines-panel.js": [
+    "renderRoutinesPanel",
+    "routinesPanelAdd",
+    "routinesPanelReset",
+    "routinesScopeAgentId",
+    "setRoutinesScope",
+  ],
   "routines.js": [
     "renderRoutines",
     "routinesActionCleared",
@@ -213,7 +221,17 @@ const MANIFEST = {
     "routinesAskDelete",
     "routinesCancelDelete",
     "routinesConfirmDelete",
+    "routinesOpenSkill",
+    "routinesSetEnabled",
     "routinesSetPaused",
+    "routinesViewLastRun",
+    "showRoutinesForAgent",
+  ],
+  "run-detail.js": [
+    "openRunDetail",
+    "renderRunDetail",
+    "runArrived",
+    "runDetailBack",
   ],
   "settings.js": [
     "changeWorkspace",
@@ -239,7 +257,6 @@ const MANIFEST = {
     "renderAgentList",
     "renderConvoEmptyAgents",
     "renderOrgChart",
-    "renderRoutinesSidebar",
   ],};
 
 function viewModules() {

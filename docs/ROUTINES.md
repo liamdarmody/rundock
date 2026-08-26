@@ -22,18 +22,19 @@ Routines are a Rundock concept. The `routines:` array is read by Rundock's sched
 
 ## Frontmatter reference
 
-Each entry in the `routines:` array is a YAML object with four fields. The parser is `parseRoutines` in `lib/agents/discovery.js`. It splits the array on `  - name:` markers, reads each indented `key: value` line within a block, and pushes the result if a `name` was found. Anything else in the block is silently dropped.
+Each entry in the `routines:` array is a YAML object with five fields. The parser is `parseRoutines` in `lib/agents/discovery.js`. It splits the array on `  - name:` markers, reads each indented `key: value` line within a block, and pushes the result if a `name` was found. Anything else in the block is silently dropped.
 
 | Field | Type | Scope | Required | Purpose | Example |
 |---|---|---|---|---|---|
 | `name` | string | Rundock-only | Yes | Display name for the routine. Shown in the Routines panel, on the agent profile, and in the scheduler logs. Required: a routine without a `name` is dropped during parse. | `name: Morning briefing` |
-| `schedule` | string | Rundock-only | Yes | When the routine runs. Accepts only the human-readable forms documented below. The scheduler ignores routines with an unrecognised schedule (silent fail). | `schedule: every day at 05:00` |
-| `prompt` | string | Rundock-only | Yes | The instruction sent to the agent when the routine fires. Treated as a single user message: the same text the user would type. | `prompt: Run the morning briefing` |
+| `schedule` | string | Rundock-only | Yes | When the routine runs. Accepts only the human-readable forms documented below. A schedule in any other form never runs, and the routine's row in the Routines list says so and names the two forms that work. | `schedule: every day at 05:00` |
+| `prompt` | string | Rundock-only | Yes | The instruction sent to the agent when the routine fires. Treated as a single user message: the same text the user would type. A routine with no `prompt`, or one that is blank, is refused when its time comes rather than run, and the routine's row in the Routines list says so and shows no next run. | `prompt: Run the morning briefing` |
 | `description` | string | Rundock-only | No | One-line plain English explanation of the routine, surfaced on the agent profile. Optional: omitting it does not break the routine. | `description: Triage today's tasks, calendar, and content pipeline.` |
+| `enabled` | boolean | Rundock-only | No | Whether the scheduler may run this routine. `true`, `yes` and `on` all mean yes; `false`, `no` and `off` all mean no, in any case and with or without quotes. **An absent key, or a value that is not a boolean in any of those spellings, means not enabled**, so the routine is listed and waits to be turned on. See [Upgrading a workspace that already has routines](#upgrading-a-workspace-that-already-has-routines). The editor writes it explicitly, so a routine created there is live at once. | `enabled: true` |
 
 The whole `routines` block is Rundock-only. Claude Code does not parse it. Other tools that read agent frontmatter ignore it.
 
-A minimal valid routine has `name`, `schedule`, and `prompt`. The fourth field, `description`, is for the user reading the profile, not for the scheduler.
+A routine written by hand needs `name`, `schedule`, `prompt` and `enabled: true`. The first three make it a routine; the fourth is what makes Rundock run it, and without it the routine is listed as waiting to be turned on. `description` is for the user reading the profile, not for the scheduler.
 
 ## Schedule format
 
@@ -63,9 +64,35 @@ schedule: every weekday at 18:00   # "weekday" is not a recognised day
 schedule: every day @ 05:00        # only "at" is recognised
 ```
 
-Cron expressions are not supported. The parser does not raise an error on a cron schedule; the scheduler's next-run calculation simply returns null and the routine is skipped on every tick. If a routine has been declared but appears to never run, the schedule string is the first thing to check.
+Cron expressions are not supported. The parser does not raise an error on a cron schedule and the scheduler's next-run calculation returns null, so the routine is skipped on every tick. That much is unchanged; what is no longer silent is the reporting. The routine's row in the Routines list says Rundock cannot read the schedule and names both forms that work, and it shows no next run, so a routine that will never fire is distinguishable from one that is simply not due yet.
 
 The schedule is interpreted in the local timezone of the machine running Rundock. There is no timezone field on a routine.
+
+## Upgrading a workspace that already has routines
+
+If a workspace already carried routines before Rundock could run them, the upgrade is the moment they all become live at once. That is rarely what anyone wants: routines written by hand usually sat next to a cron job that was already doing the work, and starting them means the morning briefing goes out twice.
+
+So it does not happen. **A routine whose block has no `enabled` key reads as not enabled.** It is listed, it keeps every word of its file, and it does not run until somebody turns it on. The Routines list shows the offer on the row, and the offer says what accepting it does: Rundock will start running the routine on its schedule.
+
+Absence is the only marker. Nothing looks at run history or at whether the workspace has been seen before:
+
+- A block that says `enabled: true` is live, and the upgrade leaves it alone.
+- A block that says `enabled: false` stays off, and the upgrade leaves that alone too.
+- A block that says nothing is held back, because nothing had ever offered it the field.
+- A block written `enabled: yes` or `enabled: on` is live, like one written `enabled: true`. Those are booleans in YAML and are read as ones, so a routine somebody deliberately switched on is not switched off by upgrading.
+- A block whose value is not a boolean in any of those spellings is held back, because nothing can tell what was meant and waiting is the safe answer.
+
+Routines made in the editor are unaffected. The editor writes `enabled` explicitly when it creates a routine, so a routine made today is live from the moment it is saved and needs no second act.
+
+The first read of an agent file also fills the absent keys in, so the file ends up saying `enabled: false` where it used to say nothing. That write is best effort: on a workspace that cannot be written to, the routine is still read as not enabled and still does not run. The rule is the read's, not the write's.
+
+### What an upgrade does to a cron-scheduled routine
+
+Nothing at all, which is the point. **Migration never touches a `schedule`, so a cron expression survives an upgrade exactly as it was written.** It is not translated, not rewritten, and not removed.
+
+It also still does not run, and it never did: cron is not one of the two accepted forms, so the next-run calculation returns null and every tick skips the routine. What has changed is that the silence is over. The routine's row in the Routines list now says Rundock cannot read the schedule, and names the two forms that work, so a routine that will never fire is told apart from one that is simply not due yet.
+
+A cron-scheduled routine is therefore held back twice over: its schedule cannot be read, and, if its block never carried `enabled`, it is not enabled either. Fixing the schedule is the part that matters, because a routine turned on with a schedule nothing can read still never runs.
 
 ## Scheduler behaviour
 
@@ -75,7 +102,9 @@ The scheduler ticks every 60 seconds. On each tick:
 2. For every routine on every agent, the scheduler computes `getNextRun(schedule, lastRun)`.
 3. If the next run time has come due (the current time has passed it), Rundock fires the routine.
 
-Each routine has a `lastRun` guard. Daily routines do not re-fire once they have run at or after their scheduled hour that calendar day; weekly routines do not re-fire on the same weekday they last ran on. The guard is persisted to `.rundock/routine-state.json` in the workspace, so it survives a restart and a routine is not fired twice by one.
+A routine that has come due is still refused if its own fields say it should not run: it is paused, it is not enabled, it names a run target this release cannot run, or it has no prompt to send. A refusal is announced in the log once, naming the field that decided, and records no run, so a refused routine keeps whatever history it already had. A routine with no prompt says so on its own row in the Routines list, in the same place and the same tone a schedule nothing can read says so, and neither row shows a next run.
+
+Each routine has a `lastRun` guard. Daily routines do not re-fire once they have run at or after their scheduled hour that calendar day; weekly routines do not re-fire on the same weekday they last ran on. The guard the tick reads is held in memory. It is filled from `.rundock/routine-state.json` in the workspace when Rundock starts and when you switch workspace, and written back in full after every run, so it survives a restart and a routine is not fired twice by one. Nothing on the tick path re-reads that file, which is what the always-on section below is about.
 
 **Routines fire only while Rundock is running, but a missed slot is caught up the same day.** If Rundock is closed at 05:00 and you open it at 09:00, the 05:00 routine fires shortly after launch. A next-run time that has already passed stays on today rather than rolling forward to tomorrow, and the scheduler fires anything already due on its next tick.
 
@@ -87,6 +116,20 @@ The scheduler runs each routine by spawning a headless Claude Code subprocess wi
 
 If you want routines to fire while you are away from your computer, see [Always-on routines: VPS or Claude routines](#always-on-routines-vps-or-claude-routines) for two practical paths.
 
+### Routines run for the workspace that is open
+
+There is one scheduler and it serves one workspace. Each tick re-discovers the agents of whichever workspace is currently open, and runs each routine with that workspace as its working directory. A workspace you are not in has no scheduler of its own.
+
+So a user with routines in three workspaces has, at any moment, at most one workspace's routines running. The other two are dormant. Switching workspace stops the first set and starts the second, and the newly opened one catches up the slots it missed within its catch-up window.
+
+This is a decision rather than an oversight, and the reason is consent rather than effort. Serving every workspace Rundock knows about would mean running agents out of a workspace you have not opened, under that workspace's tool permissions, against files you are not looking at. Rundock's boundary is that the open workspace is the one you consented to, and running work out of a closed one moves that boundary without asking. It is the same rule as the one that stops a routine written before Rundock could run routines from starting by itself after an upgrade: Rundock does not begin executing something on your behalf that you did not knowingly turn on.
+
+What would change it is a user who genuinely needs routines across several workspaces on one machine, where the answer is neither "open the workspace that matters" nor "run a second instance". That would make serving several workspaces a piece of work with the permission question answered first, rather than a shape adopted because it was easier to build.
+
+Three surfaces say so. The Routines list names the workspace the routines it is showing were read from, and says whether Rundock is still serving that workspace. When Rundock has moved elsewhere, every row on that screen shows no next-run time, says which workspace Rundock went to, and is offered no Turn on control, because pressing it would start nothing. And the scheduling step of the routine editor says the same thing to anybody setting a routine up, which is the surface every route into a new routine passes through.
+
+The comparison that decides this is between two values the server produced: the workspace each routine was read from, and the workspace the scheduler is serving. It is never made against the workspace a window remembers opening. Several windows can look at one server, so when one of them switches the workspace the others are still showing the one their reader chose, and the server tells them where it went. They are not moved: a reader's screen is not another window's to change. What changes is that the routines on it stop claiming they are about to run.
+
 ## Always-on routines: VPS or Claude routines
 
 The constraint is real, though narrower than it looks. Rundock's scheduler runs in-process, so routines only fire while the Rundock server is up on your machine. Same-day catch-up covers the common case: close the laptop at night, open it in the morning, and the 04:00 routine runs when you open it. What it cannot do is run at 04:00, or run at all on a day you never open Rundock. There are two practical ways around this, and each has a real cost: one is a small monthly fee plus initial setup time, the other is a separate subscription tier on a different scheduling system. Pick the one that matches the routine you are trying to run.
@@ -97,7 +140,15 @@ Keep Rundock running on a small cloud server (Hetzner, DigitalOcean, Hostinger, 
 
 For a working setup guide, see Liam's gist: [How to Build a 24/7 Personal AI Agent with Claude Code](https://gist.github.com/liamdarmody/4aba083c26ccb1b3b0f1068ec185ef66). It walks through Ubuntu 24.04 on a VPS, Claude Code installation and authentication, server hardening (ufw, fail2ban, unattended-upgrades), Obsidian Sync, and a systemd service so Rundock comes back up after a reboot. It is opinionated and worked end-to-end at the time of writing. The general pattern (VPS plus authenticated Claude Code plus Rundock as a service) is durable; the specific provider, hardening commands, and pricing will drift. Treat the gist as a starting point and verify each step against current docs before running it on a fresh server.
 
-**One machine runs the routines, or every machine does.** A routine records what it does and when, and nothing about where it was made. The last-run guard that stops a routine firing twice is a file in `.rundock/` inside the workspace, so it is per machine, and there is no coordination between two copies of the same workspace. If you keep Rundock open on the VPS and on your laptop with the workspace synced between them, both schedulers tick and each fires the routine on its own guard, so it runs twice. Whether the guard is shared or separate depends on whether your sync tool carries `.rundock/`, which is a property of that tool rather than of Rundock: a workspace shared through git does not carry it, because Rundock adds `.rundock/` to the workspace `.gitignore` when it sets one up. Neither outcome is coordinated, so treat the always-on machine as the one that runs routines and close Rundock elsewhere, or expect a routine on four synced machines to run four times.
+**A second Rundock left running on the same workspace runs every routine a second time.** A routine records what it does and when, and nothing about where it was made, and there is no coordination between two copies of one workspace. If you keep Rundock open on the VPS and on your laptop with the workspace synced between them, both schedulers tick and both fire, so the routine runs twice. Four machines, four runs.
+
+**Your sync tool does not change that, and it is worth being clear about why.** The guard the tick reads is the in-memory copy described under [Scheduler behaviour](#scheduler-behaviour): each instance fills it when it starts, and again if you switch workspace, and writes it back in full after each of its own runs. Nothing on the tick path reads the file again. So an instance that is already up decides using a copy that was current when it started, and it fires whether or not `.rundock/routine-state.json` reached it, and whether it reached it in a second or an hour. (Pinned by `test/unit/scheduler-lib.test.js`, which runs two schedulers against one shared directory and watches both fire.)
+
+The qualifier that makes that exact rather than merely alarming: this is about instances that are **both already running**, which is the always-on case. An instance you start, or switch workspace on, after a synced state file has landed does read that file on the way in, and is held for that slot like any other restart. What no sync tool can do is reach inside a Rundock that is already up. For the record, a workspace shared through git does not carry `.rundock/` at all: Rundock adds it to the workspace `.gitignore` when it sets one up.
+
+**So run routines on one machine and use the others as viewers.** Pick the always-on machine as the one that runs them, and reach it from your laptop and your phone through the browser rather than starting a second Rundock beside it. That is what the VPS setup is for: one server ticking, every other device looking at it. If you would rather run Rundock locally as well, close it while the always-on machine is up, or accept a run per machine.
+
+**And the always-on machine runs the routines of the workspace it has open, not of every workspace you own.** One scheduler, one workspace, as under [Scheduler behaviour](#scheduler-behaviour). A server holding your main workspace open is running that workspace's routines and none of the routines in your other workspaces, however well those are synced onto the same disk. If two workspaces both need routines firing around the clock, that is two instances, each with its own workspace open, and each of them is a machine that will double-fire anything the other also has open.
 
 What this gives you:
 
@@ -146,7 +197,7 @@ This page used to say the pipes were open but unread, and described that as a de
 What Rundock does record:
 
 - The routine's `lastRun` timestamp.
-- The routine's `status` (`running`, `completed`, `failed`, or `interrupted`). `completed` and `failed` normally follow the subprocess exit code; `interrupted` is written on startup when a run was still marked `running` when the process died, so a routine killed mid-run is distinguishable from one that failed.
+- The routine's `status` (`running`, `completed`, `failed`, `cancelled`, or `interrupted`). `completed` and `failed` normally follow the subprocess exit code. `cancelled` is written when the run was stopped from outside it, which is a different fact from a run that failed and is recorded as one. `interrupted` is written when a run left marked `running` is loaded back and nothing in the running process answers for it, so a routine killed mid-run is distinguishable from one that failed. A run that is still going in the process doing the loading is left alone: **switching workspace no longer reports a run in flight as cut short**, because the process knows which runs it started and has not yet ended, and that run goes on reporting `running` until it really ends.
 - The routine's `duration` in seconds.
 - An `error` string, written only when a start never produced a subprocess at all. A routine whose spawn throws is recorded as `failed` with the reason the failure gave, and with a `duration` of zero, because nothing ran. Its `lastRun` is the instant the start was attempted, so the ordinary guard holds it for the rest of its period rather than retrying it every 60 seconds; the next period attempts it again. One routine failing this way does not stop any other routine on the same tick.
 
@@ -161,6 +212,8 @@ It comes from the session transcript Claude Code writes for the run, not from th
 Three limits, stated rather than implied. A file written through a shell command is invisible, because there is no path argument to read: the list covers the file tools and nothing else. A run whose changes cannot be established reports that it does not know, which is a different answer from a run that changed nothing; nothing here turns the first into the second. And a run that **delegated work to a subagent** reports that it does not know, for the reason below.
 
 **A run the process died inside.** A record is opened when a run starts and closed when it ends, and the closing only ever runs from a live handler. So a Rundock that quits, sleeps or is killed mid-run leaves that record open. On the next startup Rundock closes it: the record reports `interrupted`, the same word the routine's own status uses, so the two never disagree about whether that run is still going. The transcript is usually still on disk, which was one of the reasons for reading the transcript rather than the run's output, so an interrupted run can normally still say what it changed. Where the transcript is gone it reports that it does not know and names why, rather than reporting an empty list. It does not report when the run ended, because nothing knows: the process that would have written that instant is the one that died.
+
+**A run somebody stopped.** A run in flight can be reached from outside it, by the id its record is filed under, and stopped. On a Claude run that signals the whole process tree the run started, not only the process Rundock spawned, because the agent starts children of its own. On a Codex run it interrupts that run's turn rather than the shared app-server, which other runs and your own conversations are using. The record then reports `cancelled`, and so does the routine's own status, so the two agree in one word as they do for an interrupted run. **`cancelled` means a stop was asked for before the run ended, not that the stop is what ended it.** Nothing can tell those apart: the signal is delivered by the operating system and the interrupt by another process, and neither reports back which of them an ending was caused by. So a run that was already finishing when you stopped it, one that traps the signal and exits cleanly on its way out, and one whose stop could not be sent at all and then ended by itself, all read as stopped. The alternative would be to describe a routine you stopped as one that simply completed, in the case where you most need to see that your stop is what ended it. A stopped run carries a real ending and a real duration, unlike an interrupted one, because this ending was witnessed. **The routine is released, and runs again at its next slot.** It does not run again in the period it was stopped in: stopping a run does not undo the fact that it ran, so the ordinary once-per-period guard holds for the rest of that day, or that weekday. Stopping a run that has already finished does nothing at all, signals nothing, and leaves the record it already wrote exactly as it was.
 
 **Delegation.** When a run hands work to a subagent, the subagent gets a session transcript of its own, filed under a directory named for the run's session rather than inside the run's own transcript. That file records which tool the subagent asked for and the file it named, and it records the outcome as an English sentence with no structured payload at all. So Rundock can see that a subagent asked to change a file and cannot say what came of it, and reading the sentence to decide whether a file was created or overwritten would be a guess. A run whose subagent asked to change any file therefore reports `delegated`: its changes are not known. A run that delegated work which touched no files keeps its list.
 
@@ -198,7 +251,7 @@ Each row in the panel shows three things:
 
 While a routine is running, the schedule text is replaced with a `Running...` indicator in the workspace's working colour.
 
-The panel is display-only. Routine rows are not clickable. There is no per-routine enable or disable toggle and no delete control. To pause a routine without deleting it, the only mechanism today is to comment it out (or remove it) from the agent's frontmatter; Rundock will pick up the change on the next scheduler tick.
+The panel is display-only: rows there are not clickable. The controls live on the Routines list itself, which each row reaches. A routine that is not enabled carries a **Turn on** control on its row, and the offer says what pressing it does, including that a routine whose time has already gone today runs shortly after being turned on rather than waiting for tomorrow. The offer is withheld where turning it on would not actually start the routine, such as a routine that is also paused or whose schedule cannot be read, because there is nothing truthful a Turn on control can promise on a row that will not run once it is pressed.
 
 The agent profile page shows a richer Routines card for each agent that owns routines. Each entry on the profile shows the routine's `name`, the raw `schedule` string, and a status line: `Last run: <relative time> (<status>)` once a run has occurred, or `Not yet run` before the first run.
 
@@ -226,6 +279,7 @@ capabilities:
 routines:
   - name: Morning briefing
     schedule: every day at 05:00
+    enabled: true
     prompt: Run the morning briefing
     description: Triage today's tasks, calendar, and content pipeline at 5am.
 model: opus
@@ -248,6 +302,7 @@ A handful of patterns that work well in practice. Each one is a small recipe.
 routines:
   - name: Morning briefing
     schedule: every day at 05:00
+    enabled: true
     prompt: Run the morning briefing
     description: Triage today's tasks, calendar, and content pipeline at 5am.
 ```
@@ -258,6 +313,7 @@ routines:
 routines:
   - name: Granola EOD sync
     schedule: every day at 21:00
+    enabled: true
     prompt: Run the Granola end-of-day sync
     description: Pull today's meetings from Granola and write notes, tasks, and people updates.
 ```
@@ -268,6 +324,7 @@ routines:
 routines:
   - name: Weekly research digest
     schedule: every friday at 04:00
+    enabled: true
     prompt: Run the full weekly research pipeline and produce a digest
     description: Weekly content opportunities digest. Runs Friday before the working day starts.
 ```
@@ -278,6 +335,7 @@ routines:
 routines:
   - name: Weekly AI intelligence digest
     schedule: every saturday at 03:00
+    enabled: true
     prompt: Run the full AI research pipeline and produce the weekly signal digest
     description: Weekly AI intelligence digest covering frontier labs, open-source LLMs, and Rundock competitors.
 ```
@@ -288,9 +346,11 @@ routines:
 routines:
   - name: Morning sweep
     schedule: every day at 06:00
+    enabled: true
     prompt: Run the morning sweep
   - name: Afternoon sweep
     schedule: every day at 14:00
+    enabled: true
     prompt: Run the afternoon sweep
 ```
 
@@ -298,7 +358,7 @@ routines:
 
 A few specific things that go wrong silently.
 
-**Cron expressions silently never fire.** The scheduler does not understand cron. A routine with `schedule: 0 5 * * *` parses fine, registers fine, and never runs. There is no error, no warning, no log line. If a routine appears to do nothing, the schedule string is the first thing to check.
+**Cron expressions never fire.** The scheduler does not understand cron. A routine with `schedule: 0 5 * * *` parses fine, registers fine, and never runs. There is still no error and no log line, but it is no longer invisible: the routine's row in the Routines list reports the unreadable schedule and names the two forms that work. If a routine appears to do nothing, its row is the first place to look and the schedule string is the first thing to check.
 
 **Hours without a leading zero never fire.** The pattern is exact. `every day at 9:00` does not match `every day at (\d{2}):(\d{2})`. Always zero-pad.
 
