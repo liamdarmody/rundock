@@ -529,6 +529,53 @@
 
   function addRoutine() { addRoutineForAgent(null); }
 
+  /**
+   * Open the editor on a routine that already exists, to change when it runs.
+   *
+   * ADDRESSED BY THE TRIPLE, NOT BY A ROW. The caller hands over the agent that
+   * declares the routine, its name, and which of that agent's routines of that
+   * name it is, because nothing makes a name unique within a file and the
+   * writer counts namesakes on purpose. Handing over a row object instead would
+   * work until the roster arrived again underneath an open editor, at which
+   * point the save would name a routine nobody is looking at.
+   *
+   * THE ROUTINE IS RESOLVED FROM THE ROSTER HERE rather than passed in, for the
+   * reason the agent door resolves its agent name from the roster: the roster
+   * is the one copy of what the file says, and a caller passing its own would
+   * be a second one free to go stale. A triple that matches nothing opens
+   * nothing, which is the honest outcome for a routine deleted between a render
+   * and a click.
+   *
+   * IT OPENS ON THE SCHEDULE STEP because there is no other step: the skill was
+   * chosen when the routine was made and is not being chosen again.
+   *
+   * THE SCHEDULE IS LOOKED UP RATHER THAN SPLIT. A stored schedule this editor
+   * could not have built pre-fills nothing, and the step says so; filling the
+   * controls from whatever a pattern captured would show the reader a schedule
+   * that is not theirs.
+   */
+  function editRoutineSchedule(agentId, name, occurrence) {
+    const roster = typeof agents !== 'undefined' && agents ? agents : [];
+    const agent = roster.filter(a => a && a.id === agentId)[0] || null;
+    if (!agent) return;
+    // Counted the way the list counts them, in roster order, which is file
+    // order: the nth namesake here is the nth block in the file.
+    const routine = (agent.routines || []).filter(r => r && r.name === name)[occurrence] || null;
+    if (!routine) return;
+    const parsed = model().readSchedule(routine.schedule);
+    openRoutineEditor({
+      step: 'schedule',
+      agentId: agent.id,
+      agentName: agent.displayName || agent.name || null,
+      skills: [],
+      zone: browserTimezone(),
+      runOn: routine.runOn || null,
+      frequency: parsed ? parsed.frequency : null,
+      time: parsed ? parsed.time : null,
+      edit: { agentId: agent.id, name: routine.name, occurrence, schedule: routine.schedule },
+    });
+  }
+
   function routineEditorPick(key) {
     if (!state) return;
     state.selectedKey = key;
@@ -782,7 +829,7 @@
   }
 
   return {
-    openRoutineEditor, addRoutineForAgent, addRoutineForSkill, addRoutine, browserTimezone,
+    openRoutineEditor, addRoutineForAgent, addRoutineForSkill, addRoutine, editRoutineSchedule, browserTimezone,
     routinesListNav, routineEditorSaved, routineEditorFailed, routineEditorSkillsArrived,
     renderRoutineEditor, routineEditorHtml,
     routineEditorPick, routineEditorStep, routineEditorSetField, routineEditorRunOn,

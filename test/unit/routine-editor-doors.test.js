@@ -92,6 +92,17 @@ const DOORS = [
     scoped: 'only when exactly one agent has the skill',
     pressedBy: 'the skill door opens the editor at the schedule step for that skill',
   },
+  // The sixth door, and the only one that opens onto a routine that ALREADY
+  // EXISTS. Every door above starts a routine; this one changes when one runs.
+  // It is scoped by construction rather than by choice: it names the routine it
+  // was pressed on, so the agent comes with it and there is nothing to pick.
+  {
+    call: 'editRoutineSchedule',
+    file: 'views/routines.js',
+    surface: 'the Edit schedule control on a routine row',
+    scoped: 'by the routine it is pressed on',
+    pressedBy: 'the edit door opens the editor on the routine it was pressed on',
+  },
 ];
 
 // Doors that exist in the flow but are deliberately not pressed here, each
@@ -107,7 +118,7 @@ const NOT_PRESSED = [
 
 // Where the client can call into the editor from. Everything the editor
 // exports that OPENS it; the rest of its surface is reached from inside.
-const ENTRY_CALLS = ['addRoutine', 'addRoutineForAgent', 'addRoutineForSkill', 'openRoutineEditor'];
+const ENTRY_CALLS = ['addRoutine', 'addRoutineForAgent', 'addRoutineForSkill', 'editRoutineSchedule', 'openRoutineEditor'];
 
 function clientFiles() {
   const out = [];
@@ -816,6 +827,115 @@ describe('every control the editor renders resolves to something', () => {
         `the client dispatch no longer calls ${call}()`);
       assert.strictEqual(typeof w[call], 'function', `${call} is not published`);
     }
+    dom.window.close();
+  });
+});
+
+// ===== THE DOOR ONTO A ROUTINE THAT ALREADY EXISTS =====
+//
+// Every door above starts a routine. This one changes when an existing one
+// runs, so what it has to carry is not a scope but an IDENTITY: the agent, the
+// name, and which of that agent's routines of that name it is. A door that
+// dropped the last part would open on one routine's times and save over
+// another's, and the reader would have no way to tell from the screen.
+//
+// Pressed rather than called, like every other door here.
+describe('the edit door', () => {
+  test('the edit door opens the editor on the routine it was pressed on', () => {
+    const { doc, w, dom } = shell();
+    w.renderRoutines();
+
+    const control = press(doc, '.routine-row [data-routines-action="edit"]');
+    assert.strictEqual(control.getAttribute('aria-label'), 'Edit schedule',
+      'the control says what it opens, since a pencil on a row could mean renaming it');
+
+    // Step one is not behind this door: the skill was chosen when the routine
+    // was made and is not being chosen again.
+    assert.ok(doc.querySelector('select[data-routine-field="frequency"]'),
+      'the edit door lands on the schedule step, not on the picker');
+    assert.strictEqual(doc.querySelector('[data-skill-key]'), null,
+      'nothing is left to pick, so no picker is drawn');
+
+    // AC-2, read off the rendered controls rather than off internal state: a
+    // select asked to show a value it does not have shows its first one
+    // instead, which is the failure this has to be able to see. The shell's
+    // routine runs at 08:00, which is not the editor's own default.
+    assert.strictEqual(doc.querySelector('select[data-routine-field="frequency"]').value, 'day');
+    assert.strictEqual(doc.querySelector('select[data-routine-field="time"]').value, '08:00');
+    assert.match(editorText(doc), /Existing routine/, 'and it names the routine being changed');
+
+    // And the identity travels all the way to the message, rather than being
+    // asserted off state the reader cannot see.
+    choose(doc, w, 'time', '16:00');
+    press(doc, '.re-actions .settings-btn-primary');
+    press(doc, '[data-routine-editor="save"]');
+    assert.deepStrictEqual(w.sent, [{
+      type: 'set_routine_schedule',
+      agentId: 'piper',
+      name: 'Existing routine',
+      occurrence: 0,
+      schedule: 'every day at 16:00',
+    }]);
+    dom.window.close();
+  });
+
+  // Nothing makes a routine name unique within a file, and the writer counts
+  // namesakes on purpose so a second can be made through this interface. The
+  // row the reader pressed is the routine that moves.
+  test('pressing the second routine of a name edits that one, not the first', () => {
+    const { doc, w, dom } = shell();
+    w.agents = w.agents.map(a => (a.id === 'piper' ? {
+      ...a,
+      routines: [
+        { name: 'Twin', schedule: 'every day at 07:00' },
+        { name: 'Twin', schedule: 'every day at 18:00' },
+      ],
+    } : a));
+    w.renderRoutines();
+
+    // The rows are ordered by next run rather than by file position, so the
+    // one carrying 18:00 is found by what it shows rather than by its index.
+    const rows = [...doc.querySelectorAll('.routine-row')];
+    const second = rows.filter(r => /6:00pm/.test(r.textContent))[0];
+    assert.ok(second, 'sanity: the later of the two namesakes is on the page');
+    second.querySelector('[data-routines-action="edit"]').click();
+
+    assert.strictEqual(doc.querySelector('select[data-routine-field="time"]').value, '18:00',
+      'the editor opened on the times of the row that was pressed');
+    press(doc, '.re-actions .settings-btn-primary');
+    press(doc, '[data-routine-editor="save"]');
+    assert.strictEqual(w.sent.length, 1);
+    assert.strictEqual(w.sent[0].occurrence, 1,
+      'the message names the namesake the reader pointed at');
+    assert.strictEqual(w.sent[0].schedule, 'every day at 18:00');
+    dom.window.close();
+  });
+
+  // A routine whose schedule this editor could not have built is exactly where
+  // the control is worth most: it is a routine that fires nothing, and this is
+  // the way to fix it. The door opens, and the editor accounts for the
+  // difference rather than the row hiding the way in.
+  test('a routine on a schedule the picker cannot show still opens, and says so', () => {
+    const { doc, w, dom } = shell();
+    w.agents = w.agents.map(a => (a.id === 'piper'
+      ? { ...a, routines: [{ name: 'Hand written', schedule: 'every fortnight at 07:00' }] }
+      : a));
+    w.renderRoutines();
+    press(doc, '.routine-row [data-routines-action="edit"]');
+
+    const note = doc.querySelector('[data-routine-editor="stored-schedule"]');
+    assert.ok(note, 'the editor accounts for a schedule its controls cannot show');
+    assert.match(note.textContent, /every fortnight at 07:00/,
+      'and names the stored one rather than describing it');
+
+    // NOTHING IS PRE-FILLED FROM IT, not even the half a pattern would have
+    // recognised. A cadence of "fortnight" and a time of 07:00 split apart
+    // cleanly, and a door that handed those over would put 07:00 on the time
+    // control while the frequency control silently showed its first option: a
+    // schedule the reader never set, wearing the authority of their own.
+    assert.strictEqual(doc.querySelector('select[data-routine-field="time"]').value, '09:00',
+      'the stored time is not one half of a schedule this editor can build, so it is not shown as one');
+    assert.strictEqual(doc.querySelector('select[data-routine-field="frequency"]').value, 'day');
     dom.window.close();
   });
 });

@@ -972,6 +972,79 @@ describe('the variant does not flash', () => {
   });
 });
 
+// ===== THE THIRD CONTROL ON THE ROW =====
+//
+// The other two ask the server for a change the reader has already decided.
+// This one opens a screen where they decide, so what it is judged on is that it
+// is there, that it is distinct from the other two, and that it hands over the
+// identity of the routine it was pressed on. Where it LEADS is pressed by the
+// door enumeration, which drives the real editor.
+describe('a row offers a way to change when it runs', () => {
+  test('every row carries an edit control, distinct from pause and delete', () => {
+    const { doc, w, dom } = shell();
+    w.renderRoutines();
+    for (const row of rows(doc)) {
+      const edit = row.querySelector('[data-routines-action="edit"]');
+      assert.ok(edit, 'a routine that cannot be rescheduled can only be deleted and remade');
+      assert.strictEqual(edit.getAttribute('aria-label'), 'Edit schedule',
+        'a pencil on a row could mean renaming it, so the control says what it opens');
+      // Distinct controls, not one control doing two things.
+      assert.notStrictEqual(edit, row.querySelector('[data-routines-action="delete"]'));
+      assert.ok(!edit.classList.contains('danger'),
+        'changing when a routine runs is not a destructive act and is not dressed as one');
+    }
+    dom.window.close();
+  });
+
+  // A paused routine is still a routine, and its schedule is exactly what
+  // somebody pausing it may be about to change.
+  test('a paused row offers it too', () => {
+    const { doc, w, dom } = shell([routine('Paused one', { paused: true })]);
+    w.renderRoutines();
+    assert.ok(doc.querySelector('[data-routines-action="edit"]'));
+    dom.window.close();
+  });
+
+  // The confirmation draws a row to say which routine is about to go. It offers
+  // nothing, and this is an offer.
+  test('the row in the delete confirmation offers no way to edit it', () => {
+    const { doc, w, dom } = shell();
+    w.renderRoutines();
+    press(doc, '.routine-row [data-routines-action="delete"]');
+    assert.ok(doc.querySelector('.confirm-card'), 'sanity: the confirmation is on screen');
+    assert.strictEqual(
+      doc.querySelector('.routines-confirm-subject [data-routines-action="edit"]'), null);
+    dom.window.close();
+  });
+
+  // It opens a screen rather than asking for a change, so nothing goes to the
+  // server when it is pressed. A control here that sent something would be a
+  // change the reader never confirmed.
+  test('pressing it asks the server for nothing', () => {
+    const { doc, w, dom } = shell();
+    w.renderRoutines();
+    // The editor is not loaded in this shell, so the door resolves to nothing
+    // and the press is inert. What is being checked is that the row itself
+    // sends no message, which holds either way.
+    press(doc, '.routine-row [data-routines-action="edit"]');
+    assert.deepStrictEqual(w.sent, []);
+    dom.window.close();
+  });
+
+  // The refusal from the last action belongs to the list it was raised on, and
+  // this is a reader leaving that list.
+  test('pressing it clears the refusal the last action left', () => {
+    const { doc, w, dom } = shell();
+    w.renderRoutines();
+    w.routinesActionFailed({ type: 'routine_action_error', message: 'That routine could not be changed.' });
+    assert.ok(doc.querySelector('[data-routines-problem]'), 'sanity: the refusal is on the page');
+    press(doc, '.routine-row [data-routines-action="edit"]');
+    w.renderRoutines();
+    assert.strictEqual(doc.querySelector('[data-routines-problem]'), null);
+    dom.window.close();
+  });
+});
+
 describe('delete says what stops', () => {
   // AC-11.
   test('pressing delete names the agent, the routine, the schedule and what survives', () => {
