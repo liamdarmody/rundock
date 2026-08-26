@@ -95,12 +95,18 @@
 .rr-view-run { font-size: var(--caption); font-weight: 500; color: var(--text-2); background: none; border: 0; padding: 0; font-family: inherit; cursor: pointer; transition: color var(--duration-base) ease; }
 .rr-view-run:hover { color: var(--accent); }
 
-/* A schedule nothing here can read. THE DANGER TOKEN, and it is the one place
-   on this row that earns it: every other state is either history or a promise,
-   and this is a routine that will never run until somebody edits the file. The
-   four outcomes keep their own tones, so a failed run and an unreadable
-   schedule are told apart by their words rather than by colour alone. */
-.schedule-problem { font-size: var(--caption); font-weight: 600; color: var(--danger); }
+/* A schedule nothing here can read, and a routine with no instruction to send.
+   THE DANGER TOKEN, and these are the one thing on this row that earns it:
+   every other state is either history or a promise, and these are routines
+   that will never run until somebody edits the file. The four outcomes keep
+   their own tones, so a failed run and a fault in the routine are told apart
+   by their words rather than by colour alone.
+
+   ONE RULE FOR BOTH, because they are one kind of thing to a reader and giving
+   them separate declarations is how two faults meant to read alike drift into
+   reading differently. They keep separate NAMES because a row can carry both
+   at once and each names a different thing to fix. */
+.schedule-problem, .prompt-problem { font-size: var(--caption); font-weight: 600; color: var(--danger); }
 
 /* The row for a routine the scheduler has moved away from.
 

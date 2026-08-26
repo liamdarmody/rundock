@@ -1998,6 +1998,54 @@ describe('a routine the upgrade held back', () => {
     dom.window.close();
   });
 
+  // A ROUTINE WITH NOTHING TO SAY, on the page rather than in the model.
+  //
+  // The row is the only place the person who wrote the file finds out why the
+  // routine never runs: the refusal itself happens on a tick nobody watches.
+  // So this presses the rendered page for the words, and for the promise the
+  // row must no longer make.
+  test('a routine with no prompt says so on the row, and promises no run', () => {
+    const { doc, w, dom } = shell([
+      routine('Morning briefing', { prompt: null, nextRun: iso(TOMORROWS_SLOT) }),
+    ]);
+    w.renderRoutines();
+    const row = rows(doc)[0];
+    const fault = row.querySelector('.prompt-problem');
+    assert.ok(fault, 'the row carries no mark of a routine that cannot run');
+    assert.match(text(fault), /has no prompt/i);
+    assert.match(text(fault), /Run the morning briefing/, 'the row does not name what to add');
+    assert.strictEqual(row.querySelector('.next-run'), null,
+      'a routine that will not run advertises when it will');
+    dom.window.close();
+  });
+
+  // THE TONE IS THE SCHEDULE FAULT'S, read off the page rather than off a
+  // table beside it. Both are faults in the routine that only the person who
+  // wrote the file can fix, and both take the one tone this row spends on
+  // that. Asserted as an equality between two spans in one document, with the
+  // value required to be a real one, so a stylesheet that resolved neither
+  // cannot pass this by resolving both to nothing.
+  test('the prompt fault is drawn in the same tone as the schedule fault', () => {
+    const { doc, w, dom } = shell([
+      routine('Cron briefing', { schedule: '0 7 * * *', scheduleReadable: false }),
+      routine('Morning briefing', { prompt: null, nextRun: iso(TOMORROWS_SLOT) }),
+    ]);
+    w.renderRoutines();
+    const style = (sel) => {
+      const el = doc.querySelector(sel);
+      assert.ok(el, `nothing on the page matches ${sel}`);
+      const s = dom.window.getComputedStyle(el);
+      return { colour: s.color, weight: s.fontWeight };
+    };
+    const schedule = style('.schedule-problem');
+    const prompt = style('.prompt-problem');
+    assert.ok(schedule.colour && schedule.weight,
+      'the schedule fault resolves to nothing, so an equality with it says nothing');
+    assert.deepStrictEqual(prompt, schedule,
+      'the two faults a row can carry are drawn differently, so one of them reads as something else');
+    dom.window.close();
+  });
+
   // THE DELETE CONFIRMATION DRAWS A ROW TOO, and it makes two decisions about
   // it that nothing was pressing: it withholds every control, and it keeps the
   // schedule fault. Both could have been inverted without a failure.
