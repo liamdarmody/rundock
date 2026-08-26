@@ -992,6 +992,21 @@ describe('a routine nobody has turned on yet', () => {
     assert.strictEqual(o.label, 'Turn on');
   });
 
+  // THE RISK IS NAMED, NOT LEFT FOR THE READER TO INFER. A reader arriving
+  // here most likely already has this job running somewhere else (cron, a
+  // script, a scheduled task), and "Rundock will begin running it" on its own
+  // does not say that pressing Turn on can produce two copies of the same
+  // routine. Confirmed against a real report: a beta user, and the owner's
+  // own VPS, both had routines running outside Rundock by exactly this
+  // mechanism before either noticed.
+  test('the offer names the mechanism and the risk directly, rather than implying it', () => {
+    const o = offer(NOT_ENABLED);
+    assert.match(o.text, /cron job or script/i,
+      'the offer does not name what might already be running this routine');
+    assert.match(o.text, /twice/i,
+      'the offer does not say plainly that turning it on can run this routine twice');
+  });
+
   // The state is only ever reached from the file saying so. A routine that is
   // enabled, and one that says nothing about it at all because it arrived from
   // somewhere that does not carry the field, both make no offer: an offer
@@ -1048,7 +1063,10 @@ describe('a routine nobody has turned on yet', () => {
     const text = offerAt(null).text;
     assert.ok(!/shortly after you turn it on/.test(text));
     assert.ok(!/it runs /.test(text), `the offer invented a time: ${text}`);
-    assert.match(text, /Rundock will start running it on this schedule/);
+    assert.match(text, /Rundock starts running it too/);
+    // NAMED, NOT IMPLIED: the exact risk this offer exists to prevent.
+    assert.match(text, /cron job or script/i);
+    assert.match(text, /twice/i);
   });
 
   test('the offer reaches the row', () => {
@@ -1220,8 +1238,8 @@ describe('a routine with no prompt', () => {
 // upgrade, since the reader fills an absent `enabled` in as false and nothing
 // ever rewrites a schedule. Such a row has grounds to say both "Rundock cannot
 // read this schedule, so this routine will not run" and "Turn it on and
-// Rundock will start running it on this schedule". The second is false there:
-// turning it on starts nothing, because the schedule is still unreadable.
+// Rundock starts running it too". The second is false there: turning it on
+// starts nothing, because the schedule is still unreadable.
 //
 // THE RULE THAT REPLACES THE SPECIAL CASE. The offer is made only when turning
 // it on is the ONLY thing standing between the routine and running. That is

@@ -75,6 +75,13 @@ const SKILL_DOOR = { src: path.join(ROOT, 'public', 'views', 'routine-editor.js'
 const SKILLS_PAGE = { src: path.join(ROOT, 'public', 'views', 'skills.js'), suite: 'test/unit/routine-editor-doors.test.js' };
 // The data model's write path, where a routine becomes bytes in a file.
 const ROUTINES = { src: path.join(ROOT, 'lib', 'agents', 'routines.js'), suite: 'test/unit/routine-write.test.js' };
+// The handler that changes WHEN a saved routine runs, and the rule on the
+// writer that decides what may be written into that field. Both are watched by
+// the suite that drives an edit through the interface, because the rule is
+// about a value reaching a file rather than about a function returning false.
+const SCHEDULE_HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/unit/routine-schedule-edit.test.js' };
+const ROUTINES_SCHEDULE = { src: path.join(ROOT, 'lib', 'agents', 'routines.js'), suite: 'test/unit/routine-schedule-edit.test.js' };
+const DISPATCH = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'index.js'), suite: 'test/unit/routine-schedule-edit.test.js' };
 // The same file, watched by the suite that owns the timezone a schedule was
 // set in. It is a second entry rather than a second suite on the first because
 // each mutation runs exactly one suite, and these guards are watched by that
@@ -95,14 +102,25 @@ const MUTATIONS = [
     "  const RUN_ON_SUPPORTED = ['local'];",
     "  const RUN_ON_SUPPORTED = ['local', 'agent-computer'];"],
   [MODEL, 'the preview sentence reads the run-on words off the option',
-    '    return `Every ${freq.label} at ${time.label}, run: ${skillName}, on ${option.sentence}.`;',
-    '    return `Every ${freq.label} at ${time.label}, run: ${skillName}, on this computer.`;'],
+    '    return `Run ${skillName} every ${freq.label} at ${time.label}, on ${option.sentence}.`;',
+    '    return `Run ${skillName} every ${freq.label} at ${time.label}, on this computer.`;'],
   [MODEL, 'the confirmation line reads its second sentence off the option',
     '    return words ? `${words} time. ${option.meta}` : option.meta;',
     '    return words ? `${words} time. Runs while Rundock is open here.` : option.meta;'],
   [MODEL, 'both halves of the schedule are looked up, never taken from the input',
     '    if (!freq || !time) return null;\n    return `every ${freq.value} at ${time.value}`;',
     '    return `every ${input.frequency} at ${input.time}`;'],
+  // The same rule in the other direction, and it fails differently. A form
+  // pre-filled from whatever the pattern captured asks a dropdown to select an
+  // option it does not have, which shows its FIRST option instead, so the
+  // reader is looking at a schedule that is not theirs with nothing saying so.
+  [MODEL, 'a stored schedule is looked up too, never taken from the string',
+    '    const freq = frequency(parts[1]);\n    const time = timeOption(parts[2]);\n'
+    + '    if (!freq || !time) return null;\n    return { frequency: freq.value, time: time.value };',
+    '    return { frequency: parts[1], time: parts[2] };'],
+  [MODEL, 'a stored schedule is read whole, not found inside a longer line',
+    '    const parts = /^every ([a-z]+) at (\\d{2}:\\d{2})$/.exec(schedule.toLowerCase());',
+    '    const parts = /every ([a-z]+) at (\\d{2}:\\d{2})/.exec(schedule.toLowerCase());'],
   [MODEL, 'the picker is scoped to the agent it was opened from',
     '        if (agentId && agent.id !== agentId) continue;\n',
     ''],
@@ -170,15 +188,25 @@ const MUTATIONS = [
     '<div class="re-name">${escText(option.name)}</div>${meta}',
     '<div class="re-name">${option.name}</div>${meta}'],
   [VIEW, 'the time zone reaches the page',
-    '    if (zone) h += `<p class="re-caption">${escText(zone)}</p>`;\n',
-    ''],
+    '    const note = [zone, m.scheduleStepFields().workspaceCaveat].filter(Boolean).join(\' \');',
+    '    const note = [m.scheduleStepFields().workspaceCaveat].filter(Boolean).join(\' \');'],
 
   // The reply path. A save that leaves before the server answers puts the
   // reader on a list without the routine and with nothing said, which is the
   // worst outcome this flow has.
+  // ANCHORED ON THE MESSAGE EACH ONE SENDS, because both roads set the same
+  // three lines and String.replace takes the first: an unanchored search would
+  // break the create road twice and prove nothing about the edit road.
   [VIEW, 'sending is not saving',
-    '    state.saving = true;\n    state.error = null;\n    renderRoutineEditor();',
-    '    state.saving = true;\n    if (typeof switchNav === \'function\') switchNav(routinesListNav());'],
+    '    state.saving = true;\n    state.error = null;\n    renderRoutineEditor();\n'
+    + "    ws.send(JSON.stringify({\n      type: 'save_routine',",
+    '    state.saving = true;\n    if (typeof switchNav === \'function\') switchNav(routinesListNav());\n'
+    + "    ws.send(JSON.stringify({\n      type: 'save_routine',"],
+  [VIEW, 'sending a change is not saving it either',
+    '    state.saving = true;\n    state.error = null;\n    renderRoutineEditor();\n'
+    + "    ws.send(JSON.stringify({\n      type: 'set_routine_schedule',",
+    '    state.saving = true;\n    if (typeof switchNav === \'function\') switchNav(routinesListNav());\n'
+    + "    ws.send(JSON.stringify({\n      type: 'set_routine_schedule',"],
   [VIEW, 'a refusal is shown where the reader is looking',
     '      ? `<p class="re-problem" data-routine-editor="error">${escText(state.error)}</p>`',
     "      ? ''"],
@@ -255,10 +283,10 @@ const MUTATIONS = [
   // has produces no row in the picker, so the control would be a label
   // promising something the reader cannot reach.
   [SKILLS_PAGE, 'the way in is offered only where an agent has the skill',
-    '  if (s.assignedAgents.length) {\n    h += `<div class="profile-card">'
-    + '<div class="profile-card-section">\n      <div class="profile-section-label">Schedule</div>',
-    '  if (true) {\n    h += `<div class="profile-card">'
-    + '<div class="profile-card-section">\n      <div class="profile-section-label">Schedule</div>'],
+    '  if (s.assignedAgents.length) {\n'
+    + "    // SAME SHAPE AS THE AGENT PROFILE'S ROUTINES CARD:",
+    '  if (true) {\n'
+    + "    // SAME SHAPE AS THE AGENT PROFILE'S ROUTINES CARD:"],
 
   [VIEW, 'the breadcrumb names an agent only when there is one to return to',
     '    } else if (state.agentId && state.agentName) {',
@@ -269,9 +297,26 @@ const MUTATIONS = [
   [APP, 'the client tells the editor its skill list arrived',
     'routineEditorSkillsArrived(d.skills); ',
     ''],
+  // ANCHORED ON ITS OWN CASE, because the call it names is now made by two of
+  // them: a routine that was written and a routine that was moved. String
+  // replace takes the first, so an unanchored search would break whichever came
+  // first and report on whatever that turned red.
   [APP, 'the client releases the editor when the routine is written',
-    '      routineEditorSaved();\n',
-    ''],
+    "    case 'routine_saved':\n"
+    + "      addSystemMsg('Routine \"' + (d.name || '') + '\" added to ' + (d.agentId || '') );\n"
+    + '      routineEditorSaved();\n',
+    "    case 'routine_saved':\n"
+    + "      addSystemMsg('Routine \"' + (d.name || '') + '\" added to ' + (d.agentId || '') );\n"],
+  [APP, 'the client releases the editor when a schedule change lands',
+    "      addSystemMsg('Routine \"' + (d.name || '') + '\" now runs ' + (d.schedule || ''));\n"
+    + '      routineEditorSaved();\n',
+    "      addSystemMsg('Routine \"' + (d.name || '') + '\" now runs ' + (d.schedule || ''));\n"],
+  [APP, 'a schedule change that went through retires the last refusal',
+    "    case 'routine_rescheduled':\n      routinesActionCleared();\n",
+    "    case 'routine_rescheduled':\n"],
+  [APP, 'the confirmation names the time the routine now runs',
+    "      addSystemMsg('Routine \"' + (d.name || '') + '\" now runs ' + (d.schedule || ''));",
+    "      addSystemMsg('Routine \"' + (d.name || '') + '\" was changed');"],
   [APP, 'the client hands a refusal back to the editor',
     '      routineEditorFailed(d.message);\n',
     ''],
@@ -296,7 +341,7 @@ const MUTATIONS = [
   // The door. Every other test of the scoped entry calls the entry function
   // directly, which says nothing about whether anything calls it.
   [PROFILE, 'an agent profile offers a way to schedule its skills',
-    '      <button class="settings-btn-primary" type="button" data-profile-action="add-routine"\n'
+    '      <button class="settings-btn" type="button" data-profile-action="add-routine"\n'
     + '        data-agent-id="${escA(a.id)}" onclick="addRoutineForAgent(this.dataset.agentId)">Add routine</button>`;',
     '`;'],
   [PROFILE, 'the way in carries the agent whose profile it is on',
@@ -311,6 +356,94 @@ const MUTATIONS = [
   [ROUTINES, 'whether the file already declares routines is asked of the independent counter',
     "  const declaredRoutines = (topLevelKeyCounts(content) || new Map()).get('routines') || 0;",
     '    const declaredRoutines = locateSection(content.split(\'\\n\')) ? 1 : 0;'],
+
+  // ===== CHANGING WHEN A SAVED ROUTINE RUNS =====
+  //
+  // THE ONE THAT MATTERS MOST HERE is the second: this is the second surface in
+  // the app that draws where a routine runs, and a second surface writing its
+  // own version of that sentence is exactly how the always-on option's promise
+  // ends up on the option that cannot keep it.
+  [VIEW, 'the run target is shown on an edit rather than offered',
+    '    h += state.edit ? fixedRunOnField(m) : runOnField(m);',
+    '    h += runOnField(m);'],
+  [VIEW, 'the shown run target reads its second line off the option',
+    '        <div class="re-meta">${escText(option.meta)}</div>\n      </div>',
+    '        <div class="re-meta">Keeps this routine running while your computer is off.</div>\n      </div>'],
+  [VIEW, 'the step names a stored schedule its controls cannot show',
+    '    if (stored) h += `<p class="re-caveat" data-routine-editor="stored-schedule">${escText(stored)}</p>`;',
+    "    if (stored) h += '';"],
+  [VIEW, 'an edit opens on the routine\'s own times rather than on the defaults',
+    "      frequency: (input && input.frequency) || 'day',\n      time: (input && input.time) || '09:00',",
+    "      frequency: 'day',\n      time: '09:00',"],
+  [VIEW, 'an edit asks for a change rather than for a routine',
+    "      type: 'set_routine_schedule',",
+    "      type: 'save_routine',"],
+  [VIEW, 'an edit says which routine of its name it means',
+    '      occurrence: state.edit.occurrence,',
+    '      occurrence: 0,'],
+  [VIEW, 'an edit is not offered a first step that does not exist',
+    '    let h = `<p class="re-lead">${escText(state.edit ? m.STEP_LEADS.edit : m.STEP_LEADS.schedule)}</p>`;',
+    '    let h = `<p class="re-lead">${escText(m.STEP_LEADS.schedule)}</p>`;'],
+  [VIEW, 'the save button says which of the two roads it is on',
+    "    const label = state.edit ? 'Save changes' : 'Save routine';",
+    "    const label = 'Save routine';"],
+  [VIEW, 'the breadcrumb an edit renders names the list it came from',
+    '    } else if (state.edit) {',
+    '    } else if (false) {'],
+  [VIEW, 'leaving an edit goes to the list, not to the agent it carries',
+    "    if (editing) {\n      if (typeof switchNav === 'function') switchNav(routinesListNav());\n      return;\n    }\n",
+    ''],
+  [MODEL, 'a schedule the editor can build is owed no note',
+    '    if (!schedule || readSchedule(schedule)) return null;',
+    '    if (!schedule) return null;'],
+  [MODEL, 'the note quotes the stored schedule rather than describing it',
+    "    return STORED_SCHEDULE_NOTE.replace('{schedule}', schedule);",
+    '    return STORED_SCHEDULE_NOTE;'],
+
+  // ===== WHEN A SAVED ROUTINE RUNS =====
+  //
+  // THE ONE THESE EXIST FOR is the first: a schedule the scheduler cannot read
+  // is the one bad value on this road that nothing downstream can notice. It
+  // saves, it appears in the list, its row cannot name a next run, and it waits
+  // forever. Every other field this writer touches is a boolean, where the
+  // value could not be wrong, only misplaced.
+  [ROUTINES_SCHEDULE, 'a schedule is checked before it becomes bytes in a file',
+    "  ['schedule', assertWritableSchedule],\n",
+    ''],
+  [ROUTINES_SCHEDULE, 'the grammar is the one the scheduler actually reads',
+    "const SCHEDULE_WORDS =\n  /^every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday) at ([01]\\d|2[0-3]):[0-5]\\d$/;",
+    'const SCHEDULE_WORDS = /^every (\\w+) at (\\d{2}):(\\d{2})$/;'],
+  [ROUTINES_SCHEDULE, 'a schedule is read whole, not found inside a longer line',
+    "const SCHEDULE_WORDS =\n  /^every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday) at ([01]\\d|2[0-3]):[0-5]\\d$/;",
+    'const SCHEDULE_WORDS = /every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday) at ([01]\\d|2[0-3]):[0-5]\\d/;'],
+  // A REFUSAL BELONGS TO THE SURFACE THAT ASKED, and for this one that surface
+  // is the editor. The reader is looking at the sentence builder with a save in
+  // flight; routine_action_error draws on the routines list they have left.
+  [SCHEDULE_HANDLER, 'a refused reschedule answers the editor, not the list behind it',
+    "  const fail = (message) => ws.send(JSON.stringify({ type: 'routine_error', message }));\n"
+    + '  const found = locateRoutineFile(ctx, msg, fail);\n'
+    + '  if (!found) return;\n\n'
+    + '  // TRIMMED BEFORE ANYTHING ELSE SEES IT',
+    "  const fail = routineActionRefusal(ws, msg);\n"
+    + '  const found = locateRoutineFile(ctx, msg, fail);\n'
+    + '  if (!found) return;\n\n'
+    + '  // TRIMMED BEFORE ANYTHING ELSE SEES IT'],
+  [SCHEDULE_HANDLER, 'the writer\'s own words are what the reader is told',
+    '    refuse: (why) => fail(why || `Routine "${found.name}" could not be rescheduled.`),',
+    '    refuse: () => fail(`Routine "${found.name}" could not be rescheduled.`),'],
+  // Removing this leaves the routine safe, because a null value writes nothing
+  // and the read-back then refuses. What it loses is the reason: the reader is
+  // told the routine could not be rescheduled rather than that nothing said
+  // when to run it.
+  [SCHEDULE_HANDLER, 'a message that names no schedule says that is what is missing',
+    "  if (!schedule) {\n    fail('A schedule is required.');\n    return;\n  }",
+    '  if (false) { return; }'],
+  [SCHEDULE_HANDLER, 'the value is trimmed to what the file will read back',
+    '  const schedule = typeof msg.schedule === \'string\' ? msg.schedule.trim() : null;',
+    '  const schedule = typeof msg.schedule === \'string\' ? msg.schedule : null;'],
+  [DISPATCH, 'the edit is something the client can actually ask for',
+    '    set_routine_schedule: team.handleSetRoutineSchedule,\n',
+    ''],
 
   // The timezone a schedule was set in.
   //
@@ -358,14 +491,14 @@ const MUTATIONS = [
   // the constant on its own can be rendered on a help page and nowhere else
   // with the model's tests all green.
   [VIEW, 'the schedule step says which workspace this routine will run in',
-    '    h += `<p class="re-caveat" data-routine-editor="workspace-caveat">${escText(m.scheduleStepFields().workspaceCaveat)}</p>`;\n',
-    ''],
+    '    if (note) h += `<p class="re-caveat" data-routine-editor="workspace-caveat">${escText(note)}</p>`;',
+    '    if (note) h += \'\';'],
   [MODEL_STEP, 'the step carries the caveat, so a render of the step cannot drop it',
     '      workspaceCaveat: WORKSPACE_CAVEAT,\n',
     ''],
   [MODEL, 'the caveat names the rule rather than only the consequence',
-    "  const WORKSPACE_CAVEAT = 'Rundock runs the routines of the workspace that is open. '",
-    "  const WORKSPACE_CAVEAT = 'Routines run on a schedule. '"],
+    "  const WORKSPACE_CAVEAT = 'Rundock only runs the routines of the workspace that is open, '",
+    "  const WORKSPACE_CAVEAT = 'Routines run on a schedule, '"],
 ];
 
 // The reporter is named explicitly rather than left to the default, which
@@ -408,7 +541,7 @@ function run() {
   // Every file is read up front and all of them are restored together, so a
   // throw part way through cannot leave one mutated, and neither can a signal.
   const targets = [MODEL, MODEL_STEP, VIEW, APP, HANDLER, PROFILE, SKILL_DOOR,
-    SKILLS_PAGE, ROUTINES, ROUTINES_TZ];
+    SKILLS_PAGE, ROUTINES, ROUTINES_TZ, SCHEDULE_HANDLER, ROUTINES_SCHEDULE, DISPATCH];
   const session = beginMutationRun({ files: targets.map((target) => target.src) });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));

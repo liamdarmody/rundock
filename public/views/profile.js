@@ -140,8 +140,12 @@ function showProfile(agentId) {
       // is being looked at. Once this agent has one it goes, and the next is
       // added from the routines view's own header control, which inherits the
       // scope it is pressed in.
+      // SECONDARY WEIGHT, matching "Schedule this skill" on the skill page:
+      // both are a shortcut into the same routine editor, not the primary
+      // action of this screen, and reading as loud as "New conversation"
+      // overstated it.
       h+=`<div class="profile-card-text" style="padding-bottom:10px">Give one of ${esc(a.displayName)}'s skills a schedule and it runs without being asked.</div>
-      <button class="settings-btn-primary" type="button" data-profile-action="add-routine"
+      <button class="settings-btn" type="button" data-profile-action="add-routine"
         data-agent-id="${escA(a.id)}" onclick="addRoutineForAgent(this.dataset.agentId)">Add routine</button>`;
     }
     h+=`</div></div>`;

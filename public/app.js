@@ -503,6 +503,15 @@ function handle(d) {
       addSystemMsg(d.message || 'Routine could not be saved');
       routineEditorFailed(d.message);
       break;
+    // A schedule change lands on the same road a save does, because the reader
+    // is in the same place: the editor, with a save in flight, waiting to be
+    // told. A refusal arrives as routine_error above, which is why that case
+    // needs nothing added for this one.
+    case 'routine_rescheduled':
+      routinesActionCleared();
+      addSystemMsg('Routine "' + (d.name || '') + '" now runs ' + (d.schedule || ''));
+      routineEditorSaved();
+      break;
     case 'routine_action_error':
       // The routines list asked, so the routines list is told. Deliberately
       // NOT routine_error: that one belongs to the save flow, and sending a

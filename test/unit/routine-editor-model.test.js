@@ -240,6 +240,112 @@ describe('routine editor: the schedule is built, not typed', () => {
   });
 });
 
+// ===== A SCHEDULE THAT IS ALREADY ON DISK, READ BACK INTO THE BUILDER =====
+//
+// Editing a routine's schedule means opening the sentence builder with the
+// routine's current words already in it, and the builder holds a frequency and
+// a time rather than a sentence. So the sentence has to be taken apart again.
+//
+// THE RULE THIS FOLLOWS IS THE ONE `buildSchedule` FOLLOWS, IN REVERSE. Both
+// halves are looked UP in the lists the editor offers rather than lifted out of
+// the string, so a schedule the editor could not have built reads back as
+// nothing at all. The alternative is a form pre-filled with values no control
+// on it can show: a frequency the dropdown has no option for silently renders
+// as whichever option happens to be first, and the reader is looking at a
+// schedule that is not theirs with nothing saying so.
+describe('routine editor: a stored schedule read back into the builder', () => {
+  test('a schedule the builder made comes back as the two values that made it', () => {
+    assert.deepStrictEqual(model.readSchedule('every monday at 07:00'),
+      { frequency: 'monday', time: '07:00' });
+    assert.deepStrictEqual(model.readSchedule('every day at 06:30'),
+      { frequency: 'day', time: '06:30' });
+  });
+
+  // The property, rather than two examples of it: everything the builder can
+  // produce reads back as exactly the pair that produced it, and rebuilds into
+  // the same string. Nothing the editor can write is a schedule it then cannot
+  // reopen.
+  test('every schedule the builder can produce survives the round trip', () => {
+    for (const frequency of model.FREQUENCIES) {
+      for (const time of model.times()) {
+        const built = model.buildSchedule({ frequency: frequency.value, time: time.value });
+        assert.deepStrictEqual(model.readSchedule(built),
+          { frequency: frequency.value, time: time.value },
+          `${built} did not read back as the values that built it`);
+        assert.strictEqual(model.buildSchedule(model.readSchedule(built)), built);
+      }
+    }
+  });
+
+  // Each of these is a real thing that can be in an agent file: a cadence the
+  // scheduler has never read, a time the editor does not offer, an hour without
+  // its leading zero, and an expression somebody wrote by hand. None of them is
+  // a pair of values this builder can show, so none of them comes back as one.
+  test('a schedule this editor could not have built reads back as nothing', () => {
+    for (const stored of [
+      'every fortnight at 07:00',
+      'every weekday at 18:00',
+      'every day at 07:03',
+      'every day at 9:00',
+      'every day @ 05:00',
+      '0 5 * * *',
+      'run every day at 07:00 please',
+      'every day at 07:00 ',
+      '',
+      null,
+      undefined,
+      42,
+    ]) {
+      assert.strictEqual(model.readSchedule(stored), null,
+        `${JSON.stringify(stored)} must not read back as a pair of values`);
+    }
+  });
+
+  // Agent files are written by hand as well as by this editor, and the
+  // scheduler lowercases before it reads, so a schedule that fires is one this
+  // has to be able to reopen whatever case its author used. The values it
+  // returns are the editor's own, so the rebuilt string is the canonical one
+  // rather than the author's capitalisation carried back out.
+  test('a schedule written in capitals reads back as the values the editor offers', () => {
+    assert.deepStrictEqual(model.readSchedule('Every Monday at 07:00'),
+      { frequency: 'monday', time: '07:00' });
+  });
+
+  // ===== WHAT IS OWED TO A ROUTINE THE PICKER CANNOT SHOW =====
+  //
+  // Refusing to pre-fill is right and it is not enough on its own: the step is
+  // then showing values that are not the routine's, and without a word about it
+  // the reader replaces a schedule they never saw.
+  test('a schedule the editor cannot build is named back, verbatim', () => {
+    const note = model.storedScheduleNote({ schedule: 'every day at 07:03' });
+    assert.match(note, /every day at 07:03/,
+      'the reader wrote that line themselves and quoting it is what lets them judge replacing it');
+    assert.match(note, /Saving replaces it/, 'and it says what saving would do');
+  });
+
+  test('a schedule the editor can build is owed no note at all', () => {
+    assert.strictEqual(model.storedScheduleNote({ schedule: 'every day at 07:00' }), null,
+      'the controls are showing this routine\'s own times, so there is nothing to account for');
+  });
+
+  test('a routine with no schedule at all gets no note either', () => {
+    for (const schedule of [null, undefined, '', '   ', 42]) {
+      assert.strictEqual(model.storedScheduleNote({ schedule }), null,
+        `${JSON.stringify(schedule)} is nothing, and a note quoting nothing says nothing`);
+    }
+    assert.strictEqual(model.storedScheduleNote(null), null);
+  });
+
+  // The note is about the picker rather than about the routine, so it must not
+  // read as a fault. A schedule this editor cannot build may run perfectly well.
+  test('the note names no fault', () => {
+    const note = model.storedScheduleNote({ schedule: 'every fortnight at 07:00' });
+    for (const alarm of ['error', 'invalid', 'broken', 'wrong', 'failed', 'unsupported']) {
+      assert.ok(!note.toLowerCase().includes(alarm), `the note must not read as a fault: found "${alarm}"`);
+    }
+  });
+});
+
 describe('routine editor: where it runs', () => {
   // AC-5
   test('the local option renders "This computer"', () => {
@@ -297,11 +403,11 @@ describe('routine editor: where it runs', () => {
     const args = { frequency: 'monday', time: '07:00', skillName: 'Compile the ops summary' };
     assert.strictEqual(
       model.previewSentence({ ...args, runOn: 'local' }),
-      'Every Monday at 7:00am, run: Compile the ops summary, on this computer.',
+      'Run Compile the ops summary every Monday at 7:00am, on this computer.',
     );
     assert.strictEqual(
       model.previewSentence({ ...args, runOn: 'agent-computer' }),
-      'Every Monday at 7:00am, run: Compile the ops summary, on your Agent Computer.',
+      'Run Compile the ops summary every Monday at 7:00am, on your Agent Computer.',
     );
   });
 
@@ -462,6 +568,7 @@ describe('routine editor: the words it ships', () => {
       model.timezoneCaption({ zone: 'Europe/London', agentName: null }),
       model.STEP_LEADS,
       model.UNASSIGNED_REASON,
+      model.storedScheduleNote({ schedule: 'every fortnight at 07:00' }),
     ]);
   }
 
@@ -490,7 +597,11 @@ describe('routine editor: the words it ships', () => {
   // repository's own check enforces across the tree.
   test('the files this card adds carry no em dash or en dash', () => {
     const root = path.join(__dirname, '..', '..');
-    for (const rel of ['public/routine-editor-model.js', 'test/unit/routine-editor-model.test.js']) {
+    for (const rel of [
+      'public/routine-editor-model.js', 'test/unit/routine-editor-model.test.js',
+      'public/views/routine-editor.js', 'lib/agents/routines.js',
+      'lib/protocol/handlers/team.js', 'test/unit/routine-schedule-edit.test.js',
+    ]) {
       const text = fs.readFileSync(path.join(root, rel), 'utf-8');
       assert.ok(!/[\u2014\u2013]/.test(text), `${rel} carries a dash the repository check refuses`);
     }
