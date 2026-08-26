@@ -516,7 +516,9 @@ if (require.main === module) {
     console.log('');
     logStep('done', `${version} is prepared on ${result.branch}: ${result.pullRequest || 'the pull request is open'}`);
     logStep('done', 'The required checks run on that pull request. Review it and merge it.');
+    logStep('done', 'Once it has merged: git checkout main && git pull');
     logStep('done', `Then tag the merged commit with: npm run release -- tag ${version}`);
+    logStep('done', 'Nothing is tagged until that runs, so a mistake here is a branch to delete.');
   } else if (subcommand === 'tag') {
     const version = versionFor('tag');
     try {
