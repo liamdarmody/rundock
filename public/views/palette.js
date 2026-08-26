@@ -51,6 +51,16 @@
   }
 }(typeof self !== 'undefined' ? self : this, function () {
 
+// The colour rule, reached off the global at call time. See
+// public/agent-colour.js: escaping stops a value ending its style attribute
+// and does nothing about one that stays inside it and is still CSS. Fails
+// CLOSED to the fallback when the module is absent.
+function agentColour(value, fallback) {
+  const safe = fallback === undefined ? 'var(--accent)' : fallback;
+  return typeof RundockAgentColour !== 'undefined'
+    ? RundockAgentColour.safeColour(value, safe) : safe;
+}
+
 let paletteScope = 'all';
 let paletteQuery = '';
 let paletteTimer = null;
@@ -203,12 +213,12 @@ function paletteItemHtml(item, idx) {
     meta = item.snippet ? paletteHl(item.snippet) : esc(dir) + tagStr;
   } else if (item.type === 'conversation') {
     const a = agents.find(x => x.id === item.agentId);
-    icon = `<div class="avatar sm" style="background:${esc(a?.colour || 'var(--card)')};width:26px;height:26px;font-size:12px">${esc(a?.icon || '?')}</div>`;
+    icon = `<div class="avatar sm" style="background:${agentColour(a?.colour, 'var(--card)')};width:26px;height:26px;font-size:12px">${esc(a?.icon || '?')}</div>`;
     title = esc(item.title || 'Untitled conversation');
     meta = item.snippet ? paletteHl(item.snippet) : (a ? esc(a.displayName) : '');
     if (item.matchCount > 1) meta += ` <span style="opacity:0.7">&middot; ${parseInt(item.matchCount, 10) || 0} matches</span>`;
   } else if (item.type === 'agent') {
-    icon = `<div class="avatar sm" style="background:${esc(item.colour || 'var(--card)')};width:26px;height:26px;font-size:12px">${esc(item.icon || '?')}</div>`;
+    icon = `<div class="avatar sm" style="background:${agentColour(item.colour, 'var(--card)')};width:26px;height:26px;font-size:12px">${esc(item.icon || '?')}</div>`;
     title = esc(item.name);
     meta = esc(item.role || '');
   } else if (item.type === 'skill') {

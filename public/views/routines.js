@@ -32,6 +32,16 @@
   }
 }(typeof self !== 'undefined' ? self : this, function () {
 
+// The colour rule, reached off the global at call time. See
+// public/agent-colour.js: escaping stops a value ending its style attribute
+// and does nothing about one that stays inside it and is still CSS. Fails
+// CLOSED to the fallback when the module is absent.
+function agentColour(value, fallback) {
+  const safe = fallback === undefined ? 'var(--accent)' : fallback;
+  return typeof RundockAgentColour !== 'undefined'
+    ? RundockAgentColour.safeColour(value, safe) : safe;
+}
+
 // Which routine the reader has asked to delete, BY IDENTITY: the agent that
 // declares it, its name, and which of that agent's routines of that name it
 // is. Held here rather than on the element because a routine's name is
@@ -268,6 +278,11 @@ function rowHtml(entry, index, withActions) {
     // roster. Passed through untouched: a client that decided this for itself
     // would be a second copy of a grammar that lives beside the tick.
     scheduleReadable: r.scheduleReadable,
+    // WHAT THE ROUTINE SAYS TO DO, passed as the file answered it. The model
+    // asks whether there is anything there at all, which the tick's own gate
+    // also asks: a routine with nothing to send is refused rather than run,
+    // and this is what lets the row say so.
+    prompt: r.prompt,
     // The workspace this routine was read out of, and the one the server is
     // serving. Both are the server's own value, compared by the model rather
     // than assumed equal here.
@@ -300,6 +315,18 @@ function rowHtml(entry, index, withActions) {
   if (row.scheduleProblem) {
     body += '<div class="rr-meta rr-problem-line">'
       + `<span class="schedule-problem">${esc(row.scheduleProblem.text)}</span>`
+      + '</div>';
+  }
+  // AND THE OTHER FAULT OF THE SAME KIND: a routine that says when it runs and
+  // never says what to do. Drawn on its own line and in the same tone, because
+  // it is the same class of thing to a reader: a routine that will not run
+  // until somebody edits the file. Kept separate from the schedule fault
+  // rather than folded into one line, because a routine can carry both and
+  // each names a different thing to fix. Drawn on the delete confirmation too,
+  // for the reason the schedule fault is.
+  if (row.promptProblem) {
+    body += '<div class="rr-meta rr-problem-line">'
+      + `<span class="prompt-problem">${esc(row.promptProblem.text)}</span>`
       + '</div>';
   }
   // A ROUTINE NOTHING IS SERVING SAYS WHERE RUNDOCK WENT. Drawn on its own
@@ -365,7 +392,7 @@ function rowHtml(entry, index, withActions) {
     // An agent with no colour of its own falls back to the idle token rather
     // than to a literal, so the one place that value is written stays the one
     // place it is written.
-    + `<div class="avatar sm" style="background:${esc(a.colour || 'var(--idle)')}">${esc(a.icon || '')}</div>`
+    + `<div class="avatar sm" style="background:${agentColour(a.colour, 'var(--idle)')}">${esc(a.icon || '')}</div>`
     + `<div class="rr-body">${body}</div>${actions}</div>`;
 }
 

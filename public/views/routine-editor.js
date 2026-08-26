@@ -120,7 +120,7 @@
       // The model decides that; this only renders what it was handed.
       const meta = option.agentName ? `<div class="re-meta">${escText(option.agentName)}</div>` : '';
       h += `<div class="re-row${on ? ' sel' : ''}" data-skill-key="${escText(option.key)}"
-        onclick="routineEditorPick('${escText(option.key)}')">
+        onclick="routineEditorPick(this.dataset.skillKey)">
         <div class="re-dot">${on ? '&#10003;' : ''}</div>
         <div class="re-body"><div class="re-name">${escText(option.name)}</div>${meta}</div>
       </div>`;
@@ -147,7 +147,7 @@
       // nowhere is the same defect as copy that promises what cannot be done.
       h += `<div class="re-row re-compact${on ? ' sel' : ''}${option.selectable ? '' : ' muted'}"
         data-run-on="${escText(option.value)}" data-selectable="${option.selectable}"
-        onclick="routineEditorRunOn('${escText(option.value)}')">
+        onclick="routineEditorRunOn(this.dataset.runOn)">
         <div class="re-dot">${on ? '&#10003;' : ''}</div>
         <div class="re-body">
           <div class="re-name">${escText(option.name)}</div>
