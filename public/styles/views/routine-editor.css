@@ -106,11 +106,42 @@
   border-radius: var(--radius-md);
   padding: 5px 28px 5px 8px; cursor: pointer;
   appearance: none; -webkit-appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1L5 5L9 1' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 10px center;
 }
 .re-select:hover { border-color: var(--accent); }
+/* THE ARROW USED TO BE A background-image WITH stroke='currentColor', WHICH
+   DOES NOT WORK: a data URI referenced through url() is an external image
+   resource, and an SVG's own currentColor resolves against that resource's
+   own initial value (black), never against the CSS color of the element
+   that references it. That is why the arrow read fine in light mode, by
+   coincidence (black on a light card), and disappeared in dark mode (black
+   on a dark card). Confirmed by eye before this was rewritten, not assumed.
+
+   THE FIX IS A MASK ON A WRAPPER, NOT ON THE SELECT ITSELF. mask-image masks
+   the element's entire painted box, background and border and text
+   included, so masking .re-select directly would have hidden everything but
+   the arrow-shaped sliver of it. A plain wrapper span carries the mask on
+   its own ::after instead, filled with background-color, which genuinely
+   follows the theme because it is a real CSS colour rather than a colour
+   trapped inside a referenced image. --text-2 is the token already used for
+   secondary glyphs and clears 3:1 against --elevated in both themes (see
+   its own definition in tokens.css). */
+.re-select-wrap { position: relative; display: inline-flex; align-items: center; }
+.re-select-wrap::after {
+  content: '';
+  position: absolute; top: 50%; right: 10px;
+  width: 10px; height: 6px;
+  transform: translateY(-50%);
+  background-color: var(--text-2);
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1L5 5L9 1' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1L5 5L9 1' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+  -webkit-mask-size: contain; mask-size: contain;
+  pointer-events: none;
+}
+/* Hovering anywhere in the wrapper includes hovering the select itself, so
+   this reaches the arrow on the same interaction that already reddens the
+   select's own border below. */
+.re-select-wrap:hover::after { background-color: var(--accent); }
 /* The one state the shipped control never had: a keyboard user tabbing
    through the sentence met the browser's own default ring, which follows
    neither theme and does not match the 2px accent ring every other

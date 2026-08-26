@@ -178,12 +178,22 @@
     h += '<div class="re-sentence"><span class="re-word">Run</span>';
     h += `<span class="re-pill">${escText(option ? option.name : '')}</span>`;
     h += '<span class="re-word">every</span>';
+    // THE ARROW IS DRAWN BY THE WRAPPER, NOT THE SELECT. A <select> is a
+    // replaced element: neither Chromium nor any other engine paints a
+    // ::after on it, so the chevron has to live on a plain element around
+    // it. The wrapper is also why the fix could not stay a background-image
+    // with stroke='currentColor': that colour resolves against the SVG's own
+    // initial value (black) rather than the element's CSS color when the SVG
+    // is loaded as an external image resource, which is exactly why the
+    // arrow read fine in light mode by coincidence and vanished in dark.
+    h += '<span class="re-select-wrap">';
     h += `<select class="re-select" data-routine-field="frequency"
       onchange="routineEditorSetField('frequency', this.value)">`;
     for (const f of m.FREQUENCIES) {
       h += `<option value="${escText(f.value)}"${f.value === state.frequency ? ' selected' : ''}>${escText(f.label)}</option>`;
     }
-    h += '</select><span class="re-word">at</span>';
+    h += '</select></span><span class="re-word">at</span>';
+    h += '<span class="re-select-wrap">';
     h += `<select class="re-select" data-routine-field="time"
       onchange="routineEditorSetField('time', this.value)">`;
     for (const t of m.times()) {
@@ -196,7 +206,7 @@
     // both still end in one: those ARE finished sentences, read once and not
     // interacted with, which is where the owner's own reading of a full stop
     // applies.
-    h += '</select></div>';
+    h += '</select></span></div>';
 
     if (sentence) h += `<p class="re-preview" data-routine-editor="sentence">${escText(sentence)}</p>`;
     h += runOnField(m);
