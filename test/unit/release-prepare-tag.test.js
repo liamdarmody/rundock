@@ -401,3 +401,49 @@ describe('release:tag tags what actually merged', () => {
     assert.strictEqual(inWork(['tag', '-l']), '', 'no local tag either, so a retry gets past the preflight');
   });
 });
+
+describe('the command line refuses the old one step form', () => {
+  // A release used to be one command, and that command pushed to main. It
+  // cannot work against a protected branch, so the bare form has to say what
+  // replaced it rather than start something that dies halfway. Every case here
+  // is refused before any git or gh call, which is why running the real script
+  // against this checkout is safe.
+  const RELEASE = path.join(__dirname, '..', '..', 'scripts', 'release.js');
+
+  function releaseCli(args) {
+    const res = require('node:child_process').spawnSync(process.execPath, [RELEASE, ...args], { encoding: 'utf8' });
+    return { code: res.status, out: `${res.stdout}${res.stderr}` };
+  }
+
+  test('a bare version names the two commands that replaced it', () => {
+    const { code, out } = releaseCli(['0.12.0']);
+    assert.strictEqual(code, 1);
+    assert.match(out, /prepare/);
+    assert.match(out, /tag/);
+  });
+
+  test('no arguments at all prints the usage', () => {
+    const { code, out } = releaseCli([]);
+    assert.strictEqual(code, 1);
+    assert.match(out, /prepare <version>/);
+    assert.match(out, /tag <version>/);
+    assert.match(out, /publish <version>/);
+  });
+
+  test('an unknown subcommand says which one it did not recognise', () => {
+    const { code, out } = releaseCli(['frobnicate', '0.12.0']);
+    assert.strictEqual(code, 1);
+    assert.match(out, /frobnicate/);
+  });
+
+  test('each subcommand requires a semver version', () => {
+    for (const subcommand of ['prepare', 'tag', 'publish']) {
+      const missing = releaseCli([subcommand]);
+      assert.strictEqual(missing.code, 1, `${subcommand} with no version`);
+      assert.match(missing.out, new RegExp(subcommand));
+
+      const nonsense = releaseCli([subcommand, 'v0.12']);
+      assert.strictEqual(nonsense.code, 1, `${subcommand} with a version that is not semver`);
+    }
+  });
+});

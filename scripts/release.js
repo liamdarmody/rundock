@@ -3,24 +3,39 @@
 /**
  * Release script for Rundock (tag-and-let-CI-build model).
  *
- * Bumps the version, promotes the CHANGELOG `## Unreleased` block to a versioned
- * heading, commits, pushes main, and pushes a `v<version>` tag. The GitHub Actions
- * release workflow (.github/workflows/release.yml) then builds, signs, notarises,
- * and publishes a DRAFT GitHub release for that tag. Building no longer happens on
- * your laptop.
+ * A release is three commands, and the gaps between them are the point.
  *
- * After this script: watch the Actions run, then review and publish the draft
- * release. Update the Rundock Site download links once the release is published.
+ *   npm run release:gate                    # the full gauntlet, on the candidate
+ *   npm run release -- prepare <version>    # bump, promote the changelog, open a pull request
+ *   ...review and merge that pull request...
+ *   npm run release -- tag <version>        # tag the merged commit, which starts the build
+ *   ...watch the build, review the draft it publishes...
+ *   npm run release -- publish <version>    # publish the reviewed draft
  *
- * Usage:
- *   npm run release -- <version>     (e.g. npm run release -- 0.8.14)
+ * WHY IT IS NOT ONE COMMAND. It used to be: bump, commit, push main, tag. main
+ * requires status checks with admin enforcement, so that push is rejected every
+ * time and the command could never finish. Teaching it to open a pull request
+ * and wait would keep one command at the cost of burying a real approval point,
+ * so the split is where the human already was.
  *
- * Recovery: if the CI build fails (e.g. an expired Apple agreement), fix the cause
- * and re-run the workflow on the same tag (gh run rerun, or the Actions UI). There
- * is no need to revert main: the bump + tag stay, and CI publishes once it passes.
+ * The gate governs the commit being released and is checked in `prepare`,
+ * before the bump commit exists. It is deliberately NOT re-checked in `tag`:
+ * the tagged commit is always one past the gated one, because the bump sits on
+ * top of it, and it only touches package.json and CHANGELOG.md. What `tag`
+ * checks instead is that the reviewed commit really is on origin/main.
  *
- * No Apple/signing credentials are needed locally any more; those live in GitHub
- * Secrets are provided by the CI environment (see the repository CI settings).
+ * `tag` is the irreversible step. Everything before it can be deleted and done
+ * again; the tag starts the GitHub Actions workflow that builds, signs,
+ * notarises, and publishes a DRAFT release. Building does not happen on your
+ * laptop, and no Apple or signing credentials are needed locally: those live in
+ * the CI environment.
+ *
+ * Recovery: if the CI build fails (e.g. an expired Apple agreement), fix the
+ * cause and re-run the workflow on the same tag (gh run rerun, or the Actions
+ * UI). There is no need to revert main: the bump and the tag stay, and CI
+ * publishes once it passes.
+ *
+ * Update the Rundock Site download links once the release is published.
  */
 
 const { execFileSync } = require('child_process');
@@ -57,17 +72,6 @@ const git = gitIn(ROOT);
 // ---------------------------------------------------------------------------
 // Steps
 // ---------------------------------------------------------------------------
-
-function getVersion() {
-  const version = process.argv[2];
-  if (!version) {
-    fail('version', 'Usage: npm run release -- <version> (e.g. npm run release -- 0.8.14)');
-  }
-  if (!/^\d+\.\d+\.\d+$/.test(version)) {
-    fail('version', `Invalid version "${version}". Expected semver MAJOR.MINOR.PATCH (e.g. 0.8.14).`);
-  }
-  return version;
-}
 
 // Must be on main, fully clean tree, in sync with origin, and the tag must not
 // already exist. Runs BEFORE any file is modified so a failed pre-flight leaves
@@ -478,34 +482,57 @@ function tagRelease(version, { root = ROOT, git = gitIn(root), log = logStep } =
   return { tag, sha: merged };
 }
 
-function commitTagPush(version) {
-  const tag = `v${version}`;
-  try {
-    git(['add', 'package.json', 'CHANGELOG.md'], { stdio: 'inherit' });
-    git(['commit', '-m', `chore: release ${version}`], { stdio: 'inherit' });
-    git(['push', 'origin', 'main'], { stdio: 'inherit' });
-    git(['tag', tag], { stdio: 'inherit' });
-    git(['push', 'origin', tag], { stdio: 'inherit' });
-  } catch (err) {
-    fail('push', `git commit/tag/push failed: ${err.message}`);
-  }
-  logStep('push', `Committed, pushed main, and pushed tag ${tag}`);
-}
-
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
+const USAGE = [
+  'Usage:',
+  '  npm run release -- prepare <version>   bump, promote the changelog, and open the release pull request',
+  '  npm run release -- tag <version>       after that pull request merges, tag the merged commit',
+  '  npm run release -- publish <version>   publish the draft release CI built for that tag',
+].join('\n');
+
 // Guarded so the changelog helpers are requireable (by tests and by
 // scripts/release-notes.js) without starting a release.
 if (require.main === module) {
-  if (process.argv[2] === 'publish') {
-    // npm run release -- publish <version>
-    // Publishes the reviewed draft, binding the tag before the draft flip.
-    const version = process.argv[3];
-    if (!version || !/^\d+\.\d+\.\d+$/.test(version)) {
-      fail('publish', 'Usage: npm run release -- publish <version> (e.g. npm run release -- publish 0.11.7)');
+  const [subcommand, arg] = process.argv.slice(2);
+
+  const versionFor = (step) => {
+    if (!arg || !/^\d+\.\d+\.\d+$/.test(arg)) {
+      fail(step, `Usage: npm run release -- ${step} <version> (e.g. npm run release -- ${step} 0.12.0)`);
     }
+    return arg;
+  };
+
+  if (subcommand === 'prepare') {
+    const version = versionFor('prepare');
+    let result;
+    try {
+      result = prepareRelease(version);
+    } catch (err) {
+      fail('prepare', err.message);
+    }
+    console.log('');
+    logStep('done', `${version} is prepared on ${result.branch}: ${result.pullRequest || 'the pull request is open'}`);
+    logStep('done', 'The required checks run on that pull request. Review it and merge it.');
+    logStep('done', `Then tag the merged commit with: npm run release -- tag ${version}`);
+  } else if (subcommand === 'tag') {
+    const version = versionFor('tag');
+    try {
+      tagRelease(version);
+    } catch (err) {
+      fail('tag', err.message);
+    }
+    console.log('');
+    logStep('done', `Tagged v${version}. GitHub Actions is now building, signing, notarising, and publishing a DRAFT release.`);
+    logStep('done', `Watch the build:   https://github.com/${REPO}/actions`);
+    logStep('done', `Review the draft:  https://github.com/${REPO}/releases`);
+    logStep('done', `Then publish with: npm run release -- publish ${version}  (binds the tag before flipping the draft flag)`);
+    logStep('done', `If CI fails (e.g. expired Apple agreement): fix it and re-run the workflow on tag v${version}: no need to revert main.`);
+  } else if (subcommand === 'publish') {
+    // Publishes the reviewed draft, binding the tag before the draft flip.
+    const version = versionFor('publish');
     try {
       const result = publishRelease(version);
       console.log('');
@@ -514,35 +541,13 @@ if (require.main === module) {
     } catch (err) {
       fail('publish', err.message);
     }
+  } else if (/^\d+\.\d+\.\d+$/.test(subcommand || '')) {
+    // The form this script used to take. It pushed the bump straight to main,
+    // which a protected branch refuses, so it cannot be made to work: say what
+    // replaced it rather than start something that dies halfway through.
+    fail('usage', `A release is now two commands, because the bump goes through a pull request like any other change.\n${USAGE}`);
   } else {
-    const version = getVersion();
-    try {
-      preflight(version);
-    } catch (err) {
-      fail('preflight', err.message);
-    }
-    // The gate governs the SHA being tagged: check it BEFORE the version-bump
-    // commit is created (that commit only adds package.json + CHANGELOG.md on
-    // top of the gated code).
-    try {
-      requireGatePass(git(['rev-parse', 'HEAD']).trim());
-    } catch (err) {
-      fail('gate', err.message);
-    }
-    setVersion(version);
-    try {
-      promoteUnreleasedChangelog(version);
-    } catch (err) {
-      fail('changelog', err.message);
-    }
-    commitTagPush(version);
-
-    console.log('');
-    logStep('done', `Tagged v${version}. GitHub Actions is now building, signing, notarising, and publishing a DRAFT release.`);
-    logStep('done', `Watch the build:   https://github.com/${REPO}/actions`);
-    logStep('done', `Review the draft:  https://github.com/${REPO}/releases`);
-    logStep('done', `Then publish with: npm run release -- publish ${version}  (binds the tag before flipping the draft flag)`);
-    logStep('done', `If CI fails (e.g. expired Apple agreement): fix it and re-run the workflow on tag v${version}: no need to revert main.`);
+    fail('usage', `${subcommand ? `Unknown subcommand "${subcommand}".` : 'No subcommand given.'}\n${USAGE}`);
   }
 }
 
