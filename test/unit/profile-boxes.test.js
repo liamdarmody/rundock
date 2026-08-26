@@ -274,8 +274,15 @@ describe('a routine row carries the destination the routes file presses', () => 
     const { w, doc, dom } = shell();
     w.showProfile('piper');
     const row = routinesBox(doc).querySelector('.profile-card-item');
-    assert.match(row.getAttribute('onclick') || '', /^showRoutinesForAgent\('piper'\)$/,
+    // The agent travels as data rather than as a literal spliced into the
+    // handler, because the id is the agent file's own filename and an agent
+    // chooses that. Both halves are asserted: the handler reads the attribute,
+    // and the attribute carries this agent. Checking only the first would pass
+    // against a row that opens the routines view for nobody.
+    assert.match(row.getAttribute('onclick') || '', /^showRoutinesForAgent\(this\.dataset\.agentId\)$/,
       'a routine row on the profile does not open the routines view for this agent');
+    assert.strictEqual(row.dataset.agentId, 'piper',
+      'the row does not carry the agent whose profile it is on');
     dom.window.close();
   });
 });

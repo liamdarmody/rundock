@@ -18,6 +18,22 @@
 // directory; a cache hit should read none. Validating that nothing changed is
 // expected to use directory stats, not directory reads, which is what makes
 // this a fair measure rather than an implementation detail.
+//
+// What the count must EXCLUDE, and why the exclusion loses nothing. The count
+// used to cover every directory under the workspace, dotfolders included, and
+// the server reads two of those on fixed intervals of its own: the
+// agents-directory poller reads `.claude/agents` every 2s, and the run-record
+// reader reads under `.rundock`. Neither has anything to do with the tree, but
+// either one landing inside a measurement window put a 1 where the assertion
+// demanded a 0. On an idle machine the window is under a millisecond, so it
+// effectively never happened; under contention the window stretches until a
+// 2s tick lands in it, which is the whole shape of this failure.
+//
+// Excluding dotfolders costs no coverage, because getFileTree filters
+// `!item.name.startsWith('.')` before it recurses: the walk this file measures
+// CANNOT read a dotfolder, so a read under one is never the walk. The sibling
+// suite test/integration/external-tree-changes.test.js counts the same way for
+// the same reason.
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -30,13 +46,37 @@ let counting = false;
 let dirReads = 0;
 const realReaddirSync = fs.readdirSync;
 
+/**
+ * Is this a directory read the tree walk could have made?
+ *
+ * Inside the workspace, and outside every dotfolder, because getFileTree
+ * refuses to descend into a name beginning with a dot. Anything read below one
+ * belongs to something else in the server, and counting it would attribute
+ * another component's fixed-interval work to this request.
+ */
+function isTreeWalkRead(p) {
+  if (!p.startsWith(h.workspaceDir)) return false;
+  const rel = path.relative(h.workspaceDir, p);
+  return !rel.split(path.sep).some(seg => seg.startsWith('.'));
+}
+
 before(async () => {
-  await h.boot();
+  // The external-change poll is the one other thing in this server that walks
+  // the tree, and it walks on an interval rather than on request. This file
+  // measures the REQUEST path, so the poll is a competing writer to the very
+  // cache under measurement: it can warm the cache between two of this file's
+  // own steps and turn a request that should have walked into a cache hit.
+  // Pushed out of reach rather than left to chance. The poll has its own suite
+  // in test/integration/external-tree-changes.test.js, so nothing here is the
+  // only cover for it, and no assertion below depends on it running.
+  await h.boot({ env: { RUNDOCK_TREE_POLL_MS: String(60 * 60 * 1000) } });
   client = await h.connect();
-  // Count only reads under the test workspace, and only while a measurement
-  // is armed, so unrelated discovery work cannot inflate the numbers.
+  // Count only reads under the test workspace, only while a measurement is
+  // armed, and never inside a dotfolder, so neither unrelated discovery work
+  // nor the server's own interval pollers can inflate the numbers. See the
+  // header for why the dotfolder exclusion costs no coverage.
   fs.readdirSync = function (p, ...rest) {
-    if (counting && String(p).startsWith(h.workspaceDir)) dirReads++;
+    if (counting && isTreeWalkRead(String(p))) dirReads++;
     return realReaddirSync.call(fs, p, ...rest);
   };
 });
@@ -67,17 +107,32 @@ function flatten(nodes, out = []) {
 
 describe('file tree caching', () => {
   test('an unchanged workspace is not re-walked on every request', async () => {
-    const first = await requestTree();
-    assert.ok(first.dirReads > 0, 'precondition: the first request walks the tree');
+    // Make the first request cold ON PURPOSE. The cache is warm the moment the
+    // watcher is armed at boot, and what made the first request walk anyway was
+    // that scaffolding wrote into the workspace afterwards and bumped the root
+    // mtime. That is boot ordering, not a property of this test, and a
+    // precondition resting on it is one reorder away from silently inverting:
+    // with a warm cache both requests read zero and the assertion below passes
+    // while proving nothing. Creating a file is the same signal scaffolding
+    // happened to produce, made deliberate, and it stays for both requests so
+    // nothing changes BETWEEN them.
+    const primer = path.join(h.workspaceDir, 'cache-probe-primer.md');
+    fs.writeFileSync(primer, '# Makes the tree cache stale before the first request\n');
+    try {
+      const first = await requestTree();
+      assert.ok(first.dirReads > 0, 'precondition: the first request walks the tree');
 
-    const second = await requestTree();
-    assert.strictEqual(second.dirReads, 0,
-      `a second request with no filesystem change must not re-walk the tree. `
-      + `Expected 0 directory reads, got ${second.dirReads}. This walk runs on the `
-      + `Electron main thread and blocks the UI.`);
+      const second = await requestTree();
+      assert.strictEqual(second.dirReads, 0,
+        `a second request with no filesystem change must not re-walk the tree. `
+        + `Expected 0 directory reads, got ${second.dirReads}. This walk runs on the `
+        + `Electron main thread and blocks the UI.`);
 
-    assert.deepStrictEqual(flatten(second.tree), flatten(first.tree),
-      'the cached payload must match the freshly walked one');
+      assert.deepStrictEqual(flatten(second.tree), flatten(first.tree),
+        'the cached payload must match the freshly walked one');
+    } finally {
+      try { fs.unlinkSync(primer); } catch (e) {}
+    }
   });
 
   test('a file created outside Rundock still appears', async () => {

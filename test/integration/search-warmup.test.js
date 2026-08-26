@@ -12,6 +12,20 @@
 // The assertion is ORDERING, not timing: a request sent right after the
 // workspace opens must be answered BEFORE indexing reports itself finished.
 // That holds regardless of how fast the machine running the test is.
+//
+// The WAITS are a different matter, and they are why this file blocked a gate
+// five times. makeLargeWorkspace writes 6,000 markdown files and the server
+// then indexes all of them, once per test. Measured on an idle machine that
+// is 1.5 to 2.2 seconds, against client.waitFor's 8-second default: four-fold
+// headroom on the heaviest fixture in the suite, on the assumption that a CI
+// disk behaves like a local SSD. When it does not, the run fails as "Timed out
+// waiting for search_index ready" and says nothing about the ordering property
+// the file exists to prove.
+//
+// So every wait on the index reaching a state carries an explicit budget
+// naming the work it covers. This weakens no assertion: warm-up that genuinely
+// never completes still fails the test, it just takes longer to say so.
+const INDEX_TIMEOUT_MS = 60000;
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -49,7 +63,7 @@ describe('search index warm-up', () => {
     client.send({ type: 'set_workspace', path: dir });
     await client.waitFor(
       m => m.type === 'system' && m.subtype === 'search_index' && m.state === 'indexing' && m.path === dir,
-      { since, label: 'indexing started' });
+      { since, label: 'indexing started', timeout: INDEX_TIMEOUT_MS });
     // Scan from HERE: set_workspace sends its own agents payload, and matching
     // that instead of the reply to our request would pass by accident.
     const probeSince = client.messages.length;
@@ -57,10 +71,11 @@ describe('search index warm-up', () => {
     client.send({ type: 'get_agents' });
 
     const { index: answered } = await client.waitFor(
-      m => m.type === 'agents', { since: probeSince, label: 'agents reply during indexing' });
+      m => m.type === 'agents',
+      { since: probeSince, label: 'agents reply during indexing', timeout: INDEX_TIMEOUT_MS });
     const { index: ready } = await client.waitFor(
       m => m.type === 'system' && m.subtype === 'search_index' && m.state === 'ready' && m.path === dir,
-      { since: probeSince, label: 'search_index ready' });
+      { since: probeSince, label: 'search_index ready', timeout: INDEX_TIMEOUT_MS });
 
     assert.ok(answered < ready,
       `a request sent while the index is building must be answered before indexing `
@@ -76,7 +91,7 @@ describe('search index warm-up', () => {
 
     const { msg } = await client.waitFor(
       m => m.type === 'system' && m.subtype === 'search_index' && m.state === 'indexing' && m.path === dir,
-      { since, label: 'search_index indexing' });
+      { since, label: 'search_index indexing', timeout: INDEX_TIMEOUT_MS });
     assert.strictEqual(msg.state, 'indexing');
   });
 
@@ -87,12 +102,12 @@ describe('search index warm-up', () => {
     client.send({ type: 'set_workspace', path: dir });
     await client.waitFor(
       m => m.type === 'system' && m.subtype === 'search_index' && m.state === 'ready' && m.path === dir,
-      { since, label: 'search_index ready' });
+      { since, label: 'search_index ready', timeout: INDEX_TIMEOUT_MS });
 
     const searchSince = client.messages.length;
     client.send({ type: 'search_universal', query: 'Warmuptoken7', reqId: 'warmup-1' });
     const { msg } = await client.waitFor(
-      m => m.type === 'search_universal_results' && m.reqId === 'warmup-1', { since: searchSince, label: 'search results' });
+      m => m.type === 'search_universal_results' && m.reqId === 'warmup-1', { since: searchSince, label: 'search results', timeout: INDEX_TIMEOUT_MS });
     const files = (msg.groups && msg.groups.files) || [];
     assert.ok(files.length > 0,
       'a file indexed during warm-up must be findable once warm-up reports ready');

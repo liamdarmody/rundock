@@ -40,7 +40,7 @@ function renderSettingsSection(section) {
       <div class="settings-card">
         <div class="settings-row">
           <span class="settings-label">Path</span>
-          <span class="settings-value" title="${esc(currentWorkspacePath || 'Not set')}">${esc(currentWorkspacePath || 'Not set')}</span>
+          <span class="settings-value" title="${escAttr(currentWorkspacePath || 'Not set')}">${esc(currentWorkspacePath || 'Not set')}</span>
         </div>
         <div class="settings-row">
           <span class="settings-label">Agents</span>

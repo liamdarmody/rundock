@@ -41,6 +41,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
+const { beginMutationRun } = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 
@@ -116,8 +117,9 @@ function redTests(suite) {
 
 function run() {
   const targets = [HANDLER];
+  const session = beginMutationRun({ files: targets.map((target) => target.src) });
   const originals = new Map();
-  for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));
+  for (const target of targets) originals.set(target, session.original(target.src));
   const results = [];
   try {
     for (const [target, label, guard, without] of MUTATIONS) {
@@ -142,7 +144,7 @@ function run() {
       fs.writeFileSync(target.src, original);
     }
   } finally {
-    for (const [target, original] of originals) fs.writeFileSync(target.src, original);
+    session.finish();
   }
   return results;
 }

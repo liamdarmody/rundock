@@ -33,6 +33,33 @@ const { redFirst, recordOutcome, namesFrom, NAME_LIMIT } = require('../../script
 // implementation were built to agree with each other rather than with the gate.
 const gate = require('../../scripts/precommit-gate.js');
 
+/**
+ * Signal a child once a condition holds, rather than once a guessed number of
+ * milliseconds has passed.
+ *
+ * The two interrupt tests below have to land their signal inside a specific
+ * window in the tool's run. Both used to reach that window by sleeping a fixed
+ * time after a line appeared on stdout, which is a bet that the step in
+ * between takes less than the author guessed. Under load it does not, and the
+ * signal lands in the wrong place: early enough and the test proves nothing
+ * while still passing, later and it arrives mid-checkout and fails for a
+ * reason unrelated to the defect covered.
+ *
+ * Both windows have a filesystem fact that opens them, so each waits for its
+ * own fact. Bounded, because a window that never opens has to fail as a
+ * timeout rather than hang the suite.
+ */
+function killWhen(kid, ready, signal, { timeout = 15000, interval = 10 } = {}) {
+  const deadline = Date.now() + timeout;
+  const poll = () => {
+    if (kid.exitCode !== null || kid.signalCode !== null) return;
+    if (ready()) { kid.kill(signal); return; }
+    if (Date.now() >= deadline) return; // the assertions below report it
+    setTimeout(poll, interval);
+  };
+  poll();
+}
+
 // A throwaway repository with a base commit, then a branch carrying whatever
 // source and test content the case needs.
 function repo({ source, testFile, added = {}, baseSource = 'module.exports.a = () => 1;\n', baseTest = 'module.exports = () => {};\n' }) {
@@ -415,12 +442,16 @@ describe('the restore runs whatever happens, which is the claim AC-4 makes', () 
 
       let out = '';
       let signalled = false;
+      const added = path.join(dir, 'lib2.js');
       kid.stdout.on('data', (b) => {
         out += b.toString();
-        // Interrupt once the source has actually been taken away.
+        // Interrupt once the source has actually been taken away. The log line
+        // is printed BEFORE the checkout that removes it, so the line alone
+        // does not mean the window is open: the fact that does is the added
+        // file being gone from the tree.
         if (!signalled && out.includes('restoring the source')) {
           signalled = true;
-          setTimeout(() => kid.kill('SIGINT'), 150);
+          killWhen(kid, () => !fs.existsSync(added), 'SIGINT');
         }
       });
       kid.on('error', reject);
@@ -783,9 +814,14 @@ describe('AC-4 with an uncooperative child, which is where the claim was false',
 
         kid.stdout.on('data', (b) => {
           out += b.toString();
+          // Interrupt once the trapping child is genuinely trapping. It writes
+          // the marker only after installing both handlers, so the marker
+          // existing is exactly the condition: signal before it and the child
+          // takes the default handling, which is the opposite of the case
+          // this covers.
           if (!signalled && out.includes('restoring the source')) {
             signalled = true;
-            setTimeout(() => kid.kill('SIGINT'), 300);
+            killWhen(kid, () => fs.existsSync(marker), 'SIGINT');
           }
         });
         kid.on('error', reject);
@@ -853,6 +889,261 @@ describe('a tree that does not come back clean', () => {
       assert.match(r.reason, /did not come back clean/);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the base a run is measured against, which must not be one that drifts', () => {
+  // The incident these cover, in full, because this tool produced it. A change
+  // of three files reported PROVEN on two tests belonging to work that had
+  // already merged. Branches here are built in git worktrees cut from the
+  // remote trunk, and a worktree does not move the local branch ref that
+  // another worktree has checked out, so `main` in one checkout can sit behind
+  // the commit the branch was actually cut from. The documented invocation was
+  // `--base main`, so the revert took the already-merged work away as well, its
+  // tests went red, and the verdict line, the exit code and the record were
+  // indistinguishable from a genuine pass. The only tell was a file count
+  // inside the record, which nobody reads when the verdict says PROVEN.
+  //
+  // So the default base is taken from a ref that cannot drift, and a revert
+  // that reaches past the point this branch was cut from is refused with the
+  // files it would have taken away named.
+
+  /**
+   * A repository whose local trunk has fallen behind the published one, with
+   * work merged in between that has a discriminating test of its own.
+   *
+   * Not built on repo() above: that fixture commits its base, branches, and
+   * commits the change, which leaves no point at which a third commit can be
+   * published to a remote and then dropped from the local ref. The drift is
+   * the whole subject here, so the ordering has to be explicit.
+   */
+  function driftedRepo(own) {
+    const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'red-first-remote-'));
+    execFileSync('git', ['init', '-q', '--bare', remote], { stdio: 'ignore' });
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'red-first-drift-'));
+    const git = (...args) => execFileSync('git', args, { cwd: dir, stdio: 'ignore' });
+    git('init', '-q');
+    // Named explicitly, and the configs pinned, for the reasons repo() gives.
+    git('symbolic-ref', 'HEAD', 'refs/heads/main');
+    git('config', 'user.email', 't@example.com');
+    git('config', 'user.name', 'T');
+    git('config', 'diff.renames', 'false');
+    const write = (rel, body) => {
+      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      fs.writeFileSync(path.join(dir, rel), body);
+    };
+    write('lib.js', 'module.exports.a = () => 1;\n');
+    write('test/check.js', 'module.exports = () => {};\n');
+    // Every test file in the directory, so a case that adds one does not have
+    // to modify the runner for it to run. A runner that changed would itself be
+    // reverted along with the source, and would then quietly stop calling the
+    // very test the case is about.
+    write('run.js', "const fs = require('fs');\n"
+      + "for (const f of fs.readdirSync('test').sort()) require('./test/' + f)();\n");
+    write('.gitignore', '.precommit-gate.json\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'base');
+    const behind = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).trim();
+    git('remote', 'add', 'origin', remote);
+    git('push', '-q', 'origin', 'main');
+
+    // The work that merged first, carrying a test that really discriminates it.
+    write('lib.js', 'module.exports.a = () => 1;\nmodule.exports.c = () => 3;\n');
+    write('test/check.js', "const assert = require('assert');\n"
+      + "module.exports = () => { assert.strictEqual(require('../lib.js').c(), 3); };\n");
+    git('add', '-A');
+    git('commit', '-q', '-m', 'work that merged before this branch was cut');
+    git('push', '-q', 'origin', 'main');
+
+    // The branch, cut from the published trunk exactly as a worktree cuts it.
+    git('checkout', '-q', '-b', 'change');
+    for (const [rel, body] of Object.entries(own)) write(rel, body);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'the change');
+    // And the local trunk stays where the checkout that owns it left it, which
+    // is the whole of the drift.
+    git('branch', '-f', 'main', behind);
+    return { dir, remote, git };
+  }
+
+  // A version-only change: two manifest files, no test of its own. The shape
+  // the incident had, and the shape that has nothing of its own to go red.
+  const VERSION_ONLY = {
+    'package.json': '{ "name": "x", "version": "0.12.0" }\n',
+    'package-lock.json': '{ "name": "x", "version": "0.12.0" }\n',
+  };
+
+  const clean = (dir, remote) => {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(remote, { recursive: true, force: true });
+  };
+
+  test('a stale local trunk is refused, with the files it would have reverted named', async () => {
+    // The incident itself, driven the way it was driven. Naming the base is
+    // still allowed, so the drift has to be caught where the reach is measured
+    // rather than only where the default is chosen.
+    const { dir, remote } = driftedRepo(VERSION_ONLY);
+    try {
+      const r = await redFirst({ repo: dir, base: 'main', tests: CMD });
+      assert.strictEqual(r.outcome, 'refused', r.reason);
+      // The mismatch itself, said out loud. It was present in the incident as a
+      // file count inside the record and nothing else.
+      assert.match(r.reason, /lib\.js/, 'the file the change never touches is named');
+      assert.match(r.reason, /origin\/main/, 'and the ref that does not drift is named');
+    } finally {
+      clean(dir, remote);
+    }
+  });
+
+  test('the reach is refused even where the files it drags in are the change is own', async () => {
+    // A revert that reaches past the fork point is wrong whether or not the
+    // file lists happen to coincide: the same files are taken back further than
+    // this branch starts, so the tests that go red can be the earlier work's.
+    // Refusing on the file list alone would let exactly that case through.
+    const { dir, remote } = driftedRepo({
+      'lib.js': 'module.exports.a = () => 1;\nmodule.exports.c = () => 3;\n'
+        + 'module.exports.d = () => 4;\n',
+      'test/check.js': "const assert = require('assert');\n"
+        + 'module.exports = () => {\n'
+        + "  assert.strictEqual(require('../lib.js').c(), 3);\n"
+        + "  assert.strictEqual(require('../lib.js').d(), 4);\n"
+        + '};\n',
+    });
+    try {
+      const r = await redFirst({ repo: dir, base: 'main', tests: CMD });
+      assert.strictEqual(r.outcome, 'refused', r.reason);
+      assert.match(r.reason, /none/, 'and it says plainly that no extra file is involved');
+    } finally {
+      clean(dir, remote);
+    }
+  });
+
+  test('a version-only change is not-provable, not proven on another branch is tests', async () => {
+    // The verdict the incident should have produced, from the invocation that
+    // is now the default: nothing of this change's own can go red, and that is
+    // its own finding rather than a pass borrowed from work already merged.
+    const { dir, remote } = driftedRepo(VERSION_ONLY);
+    try {
+      const r = await redFirst({ repo: dir, tests: CMD });
+      assert.strictEqual(r.outcome, 'not-provable', r.reason);
+      assert.match(r.reason, /no tests/i);
+      assert.deepStrictEqual(r.source.slice().sort(), ['package-lock.json', 'package.json'],
+        'and the revert set is this change alone');
+    } finally {
+      clean(dir, remote);
+    }
+  });
+
+  test('with no base given, the published trunk is used and not the local one', async () => {
+    const { dir, remote } = driftedRepo(VERSION_ONLY);
+    try {
+      const r = await redFirst({ repo: dir, tests: CMD });
+      assert.strictEqual(r.base, 'origin/main',
+        'the default is a remote-tracking ref, which no worktree can leave behind');
+    } finally {
+      clean(dir, remote);
+    }
+  });
+
+  test('a change carrying its own test is still proven when the base does not drift', async () => {
+    // The guard against a fix that buys safety by refusing everything.
+    const { dir, remote } = driftedRepo({
+      'lib2.js': 'module.exports.b = () => 2;\n',
+      'test/mine.js': "const assert = require('assert');\n"
+        + "module.exports = () => { assert.strictEqual(require('../lib2.js').b(), 2); };\n",
+    });
+    try {
+      const r = await redFirst({ repo: dir, tests: CMD });
+      assert.strictEqual(r.outcome, 'proven', r.reason);
+      assert.deepStrictEqual(r.source, ['lib2.js'],
+        'and the already-merged work is not in the revert set');
+      assert.deepStrictEqual(r.tests, ['test/mine.js']);
+    } finally {
+      clean(dir, remote);
+    }
+  });
+
+  test('a repository with no remote falls back to its local trunk', async () => {
+    // Nothing to drift against, so the local ref is the only answer there is,
+    // and refusing here would take the tool away from every repository that has
+    // no remote, including the throwaway ones these tests build.
+    const { dir } = repo({
+      added: { 'lib2.js': 'module.exports.b = () => 2;\n' },
+      testFile: "const assert = require('assert');\n"
+        + "module.exports = () => { assert.strictEqual(require('../lib2.js').b(), 2); };\n",
+    });
+    try {
+      const r = await redFirst({ repo: dir, tests: CMD });
+      assert.strictEqual(r.outcome, 'proven', r.reason);
+      assert.strictEqual(r.base, 'main');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a remote that publishes no trunk is refused rather than guessed at', async () => {
+    // Falling back to the local ref here would be the drift again, silently.
+    // Naming the base is one flag; a verdict measured against the wrong tree is
+    // not recoverable by reading the output.
+    const { dir, git } = repo({
+      added: { 'lib2.js': 'module.exports.b = () => 2;\n' },
+      testFile: "const assert = require('assert');\nmodule.exports = () => { assert.ok(true); };\n",
+    });
+    const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'red-first-remote-'));
+    try {
+      execFileSync('git', ['init', '-q', '--bare', remote], { stdio: 'ignore' });
+      git('remote', 'add', 'origin', remote);
+      git('push', '-q', 'origin', 'main:trunk');
+
+      const r = await redFirst({ repo: dir, tests: CMD });
+      assert.strictEqual(r.outcome, 'refused', r.reason);
+      assert.match(r.reason, /--base/, 'and it says how to answer the question it could not');
+    } finally {
+      clean(dir, remote);
+    }
+  });
+
+  test('a remote not called origin still supplies the trunk when it is the only one', async () => {
+    // Preferring origin must not become requiring it: a checkout whose single
+    // remote goes by another name has exactly one answer, and refusing there
+    // would send it back to the local ref that drifts.
+    const { dir, git } = repo({
+      added: { 'lib2.js': 'module.exports.b = () => 2;\n' },
+      testFile: "const assert = require('assert');\n"
+        + "module.exports = () => { assert.strictEqual(require('../lib2.js').b(), 2); };\n",
+    });
+    const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'red-first-remote-'));
+    try {
+      execFileSync('git', ['init', '-q', '--bare', remote], { stdio: 'ignore' });
+      git('remote', 'add', 'upstream', remote);
+      git('push', '-q', 'upstream', 'main');
+
+      const r = await redFirst({ repo: dir, tests: CMD });
+      assert.strictEqual(r.base, 'upstream/main');
+      assert.strictEqual(r.outcome, 'proven', r.reason);
+    } finally {
+      clean(dir, remote);
+    }
+  });
+
+  test('the command with no base of its own measures against the published trunk', () => {
+    // The invocation the contributor guide documents, driven the way a
+    // contributor drives it. Every other case here calls redFirst() directly,
+    // which would leave a default that only exists inside the function passing
+    // while the command still defaulted to the ref that drifts.
+    const { dir, remote } = driftedRepo(VERSION_ONLY);
+    try {
+      const r = spawnSync(process.execPath,
+        [path.join(__dirname, '..', '..', 'scripts', 'red-first.js'),
+          '--repo', dir, '--tests', CMD],
+        { encoding: 'utf8' });
+      assert.match(r.stdout, /measuring against origin\/main/,
+        'the base is printed, so a run cannot be read without knowing what it measured');
+      assert.match(r.stdout, /NOT-PROVABLE/, r.stdout + r.stderr);
+      assert.notStrictEqual(r.status, 0, 'and it is not a pass');
+    } finally {
+      clean(dir, remote);
     }
   });
 });

@@ -22,6 +22,25 @@
   }
 }(typeof self !== 'undefined' ? self : this, function () {
 
+// ATTRIBUTE-POSITION ESCAPER and the colour rule, reached off the global at
+// call time. A skill id is the skill's DIRECTORY NAME and an agent id is the
+// agent file's filename, so both are chosen by anything that can create a
+// file in the workspace, and both were reaching an inline handler. `esc`
+// leaves quotes alone and is right only for element content; see
+// public/agent-colour.js for why a colour is judged rather than escaped.
+function escA(value) {
+  if (typeof escAttr === 'function') return escAttr(value);
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function agentColour(value, fallback) {
+  const safe = fallback === undefined ? 'var(--accent)' : fallback;
+  return typeof RundockAgentColour !== 'undefined'
+    ? RundockAgentColour.safeColour(value, safe) : safe;
+}
+
 function skillsModel() {
   return typeof RundockSkillsModel !== 'undefined' ? RundockSkillsModel : null;
 }
@@ -151,7 +170,7 @@ function renderSkillsEmpty(loading) {
 function renderSkillsSidebar(list) {
   const sidebar = document.getElementById('skills-sidebar-list');
   sidebar.innerHTML = list.map(s => `
-    <div class="skill-sidebar-item${s.id === currentSkillId ? ' active' : ''}" data-skill="${s.id}" onclick="selectSkill('${s.id}')">
+    <div class="skill-sidebar-item${s.id === currentSkillId ? ' active' : ''}" data-skill="${escA(s.id)}" onclick="selectSkill(this.dataset.skill)">
       <span class="skill-sidebar-name">${esc(s.name)}</span>
     </div>
   `).join('');
@@ -190,8 +209,8 @@ function selectSkill(id) {
       <div class="profile-section-label">Used by</div>
       <div style="display:flex;flex-wrap:wrap;gap:8px;padding-top:4px">`;
     for (const a of s.assignedAgents) {
-      h += `<div class="agent-chip" title="View ${esc(a.name)}'s profile" onclick="switchNav('team');showProfile('${esc(a.id)}')">
-        <div class="avatar sm" style="background:${a.colour}">${a.icon}</div>
+      h += `<div class="agent-chip" title="View ${escA(a.name)}'s profile" data-agent-id="${escA(a.id)}" onclick="switchNav('team');showProfile(this.dataset.agentId)">
+        <div class="avatar sm" style="background:${agentColour(a.colour)}">${esc(a.icon)}</div>
         <div>
           <div class="agent-chip-name">${esc(a.name)}</div>
           <div class="agent-chip-role">${esc(a.role || '')}</div>
@@ -206,7 +225,7 @@ function selectSkill(id) {
       <div class="profile-card-text" style="padding-top:4px">Available to all agents</div>
       <div style="margin-top:8px;font-size:var(--caption);color:var(--text-2);line-height:1.5">
         Want to assign this to a specific agent?
-        ${guide ? `<span style="font-size:var(--caption);font-weight:500;color:var(--accent);cursor:pointer" onclick="startConversation('${guide.id}')" title="Open a conversation with Doc">Talk to Doc</span>.` : ''}
+        ${guide ? `<span style="font-size:var(--caption);font-weight:500;color:var(--accent);cursor:pointer" data-agent-id="${escA(guide.id)}" onclick="startConversation(this.dataset.agentId)" title="Open a conversation with Doc">Talk to Doc</span>.` : ''}
       </div>
     </div></div>`;
   }
@@ -255,7 +274,7 @@ function selectSkill(id) {
       <div class="profile-section-label">Schedule</div>
       <div class="profile-card-text" style="padding-bottom:10px">Give this skill a schedule and your agents take it from there.</div>
       <button class="settings-btn" type="button" data-skills-action="schedule-skill"
-        data-skill-id="${esc(s.id)}" onclick="addRoutineForSkill('${esc(s.id)}')">Schedule this skill</button>
+        data-skill-id="${escA(s.id)}" onclick="addRoutineForSkill(this.dataset.skillId)">Schedule this skill</button>
     </div></div>`;
   } else {
     h += `<div class="profile-card"><div class="profile-card-section">
@@ -266,7 +285,12 @@ function selectSkill(id) {
 
   // Collapsible instructions card
   if (s.instructions) {
-    const instructionsId = `skill-instructions-${s.id}`;
+    // A CONSTANT ID, not one built from the skill's directory name. The name
+    // was written into the id attribute AND into the getElementById call in
+    // the handler beside it, so a directory called `a').remove();//` was a
+    // string literal in a JavaScript position. Only one skill detail is
+    // rendered at a time, so the id never needed to be unique per skill.
+    const instructionsId = 'skill-instructions';
     h += `<div class="profile-card" style="cursor:pointer" onclick="document.getElementById('${instructionsId}').classList.toggle('hidden')">
       <div class="profile-card-section">
         <div class="profile-section-label">Instructions &#9662;</div>
