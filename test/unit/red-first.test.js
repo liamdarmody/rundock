@@ -784,17 +784,49 @@ describe('AC-4 with an uncooperative child, which is where the claim was false',
       added: { 'lib2.js': 'module.exports.b = () => 2;\n' },
       testFile: "const assert = require('assert');\nmodule.exports = () => { assert.ok(true); };\n",
     });
-    const marker = path.join(os.tmpdir(), `red-first-trap-${process.pid}.txt`);
+    // Inside the repo's OWN .git directory: writable under the same sandbox
+    // grant that covers the repo (a subpath of `dir`), but never reported by
+    // `git status`, so neither this test's own clean-tree check nor
+    // red-first's need to know the marker was ever there. A plain untracked
+    // file inside the repo's working tree would also be inside that grant,
+    // but shows up in `git status --porcelain`, which is what forced an
+    // earlier version of this test to delete it early, by hand, before the
+    // clean-tree assertion.
+    //
+    // A sandbox that denies os.tmpdir() as a write target, while still
+    // permitting this test's own fixture creation (repo() calls
+    // fs.mkdtempSync(os.tmpdir()), which needs write access to that same
+    // parent directory), IS constructible: fs.mkdtempSync appends exactly
+    // six alphanumeric characters, so a grant naming that shape (six
+    // characters, then optionally more path) admits the fixture directory
+    // and everything inside it while rejecting a marker named directly at
+    // the temp root, such as the flat file this test used to write there.
+    // Demonstrated directly, not reasoned about: see AC-4 in
+    // .review/setup-race-flakes-evidence.md for the sandbox profile, and for
+    // the origin/main version of this test failing under it (the marker
+    // never appears) while this file passes under the identical grant.
+    const markerRel = '.git/trap-marker';
+    const markerTmpRel = '.git/trap-marker.tmp';
+    const marker = path.join(dir, markerRel);
     // Behaves like a real suite on the first run: the source is present, so it
     // passes at once. On the REVERTED run the source is gone, and this is where
     // it turns uncooperative: it ignores SIGINT and SIGTERM and keeps running.
     // Written this way because the command is the same on both runs, and a
     // child that hangs on the first one never reaches the revert step at all.
+    //
+    // The pid is written to a TEMPORARY name and renamed into place, rather
+    // than written directly to the marker path. writeFileSync creates a file
+    // at open(), before a single byte of content lands, so a poll on mere
+    // existence can observe the marker between those two steps and read an
+    // empty file. Rename is atomic on the same filesystem: the marker either
+    // does not exist yet, or exists complete, never partial.
     const trapping = `${JSON.stringify(process.execPath)} -e `
       + JSON.stringify(
         "if (require('fs').existsSync('lib2.js')) process.exit(0);"
         + "process.on('SIGINT', () => {}); process.on('SIGTERM', () => {});"
-        + `require('fs').writeFileSync(${JSON.stringify(marker)}, String(process.pid));`
+        + "const fs = require('fs');"
+        + `fs.writeFileSync(${JSON.stringify(markerTmpRel)}, String(process.pid));`
+        + `fs.renameSync(${JSON.stringify(markerTmpRel)}, ${JSON.stringify(markerRel)});`
         + 'setTimeout(() => process.exit(1), 30000);');
 
     try {
@@ -808,8 +840,9 @@ describe('AC-4 with an uncooperative child, which is where the claim was false',
         let signalled = false;
         const deadline = setTimeout(() => {
           kid.kill('SIGKILL');
-          reject(new Error('red-first did not exit after the interrupt; the '
-            + 'trapping child held it, which is the defect this covers'));
+          reject(new Error('red-first did not exit after the interrupt, or the '
+            + "trapping child's marker never appeared; either is the defect "
+            + 'this covers'));
         }, 20000);
 
         kid.stdout.on('data', (b) => {
@@ -819,6 +852,14 @@ describe('AC-4 with an uncooperative child, which is where the claim was false',
           // existing is exactly the condition: signal before it and the child
           // takes the default handling, which is the opposite of the case
           // this covers.
+          //
+          // Waits for the child to actually exist and have its handlers
+          // installed, rather than guessing how long that takes. Under load,
+          // a fixed 300ms delay fired before the child had even started, so
+          // the assertion that failed was "did the child start" rather than
+          // the restore behaviour this test exists to check. killWhen polls
+          // ready() and bails on its own once the child has already exited,
+          // so nothing here needs to cancel it separately.
           if (!signalled && out.includes('restoring the source')) {
             signalled = true;
             killWhen(kid, () => fs.existsSync(marker), 'SIGINT');
@@ -832,12 +873,23 @@ describe('AC-4 with an uncooperative child, which is where the claim was false',
             assert.strictEqual(fs.existsSync(marker), true,
               'the trapping child really did start and ignore the signal');
 
+            // The rename above guarantees this content is complete, never a
+            // torn write, so a value that still fails to parse as a positive
+            // integer is a malformed marker rather than a live pid, and must
+            // fail here with its own message rather than reach process.kill,
+            // which treats pid 0 as this process's own group and always
+            // succeeds, turning a broken precondition into a false report
+            // that the child never died.
+            const raw = fs.readFileSync(marker, 'utf8');
+            const kidPid = Number(raw);
+            assert.ok(Number.isInteger(kidPid) && kidPid > 0,
+              `the trapping child's marker at ${marker} did not hold a valid pid (read ${JSON.stringify(raw)})`);
+
             // The assertion that discriminates the kill. Restoring the tree
             // while a child that ignores signals keeps running only holds until
             // that child writes again, so AC-4 needs the child ended, not
             // merely outlived. Checked by pid liveness rather than by ps, which
             // the local sandbox blocks.
-            const kidPid = Number(fs.readFileSync(marker, 'utf8'));
             const alive = () => { try { process.kill(kidPid, 0); return true; } catch (e) { return false; } };
             const deadline2 = Date.now() + 3000;
             while (alive() && Date.now() < deadline2) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
@@ -855,7 +907,6 @@ describe('AC-4 with an uncooperative child, which is where the claim was false',
         });
       });
     } finally {
-      fs.rmSync(marker, { force: true });
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

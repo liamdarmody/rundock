@@ -99,15 +99,57 @@ describe('idle agent processes', () => {
         turn: [{ text: 'Answered, nothing further.' }] },
     ]);
 
+    // Production marks an entry idle, with idleSince = now, the instant its
+    // turn completes (the result handler wired in lib/delegation/engine.js),
+    // and reapIdleAgents (server.js) is the sweep that reads those same two
+    // fields: `if (!entry.idle) continue`, then `now - entry.idleSince <
+    // IDLE_REAP_MS`. The sweep runs on its own timer regardless of what this
+    // test is doing. Four turns run one after another, and under load that
+    // setup can itself take longer than REAP_MS: conversation 1 can sit idle
+    // through several sweeps while conversations 2 to 4 are still being set
+    // up, and get reaped before the fourth one even exists. The precondition
+    // below would then read three where four were expected, a failure in
+    // setup rather than in the behaviour this test checks.
+    //
+    // Pin each entry non-idle the moment its turn completes, so nothing is
+    // eligible for reaping while the rest of setup is still running. Before
+    // pinning, wait for and assert that PRODUCTION already marked the entry
+    // idle. Two things this buys, both required rather than cosmetic: (1) it
+    // proves `idle`/`idleSince` are still the real fields the reaper reads,
+    // so a rename fails loudly right here instead of turning the pin and the
+    // release into silent no-ops that let the original race back in with the
+    // test still green; (2) it removes any assumption about whether the
+    // server marks idle before or after the client observes the `result`
+    // message, so there is no window in which this test's own pin could lose
+    // a race against that assignment.
     const ids = [];
     for (let i = 0; i < CONVOS; i++) {
       const convoId = h.freshConvoId('reap');
       ids.push(convoId);
       await completeTurn(convoId, `reap-idle ${i}`);
+      const entry = h.internal.chatProcesses.get(convoId);
+      assert.ok(entry, `precondition: turn ${i} left a live process`);
+      await h.waitUntil(() => entry.idle === true);
+      assert.strictEqual(entry.idle, true,
+        `precondition: production must mark turn ${i} idle on completion, `
+        + `via the same field reapIdleAgents reads`);
+      assert.strictEqual(typeof entry.idleSince, 'number',
+        `precondition: production must set a numeric idleSince on turn ${i}`);
+      entry.idle = false;
     }
 
     assert.strictEqual(liveEntries().length, CONVOS,
       'precondition: every completed conversation leaves a live process');
+
+    // Now release all four at the same instant, so none has a head start on
+    // the others and the idle window this test measures starts exactly here
+    // rather than somewhere back in setup.
+    const releasedAt = Date.now();
+    for (const id of ids) {
+      const entry = h.internal.chatProcesses.get(id);
+      entry.idle = true;
+      entry.idleSince = releasedAt;
+    }
 
     // Nothing is working, so the sweep must retire at least one of them.
     await h.waitUntil(() => liveEntries().length < CONVOS);
