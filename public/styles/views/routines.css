@@ -15,7 +15,14 @@
    ordinary case: an interface that turns amber every time the machine was shut
    overnight teaches its user to stop trusting amber. */
 
-.routines-content { max-width: 640px; padding: 32px; }
+/* 720px, shared with .routine-editor and .run-detail: see the comment on
+   .routine-editor in routine-editor.css for why these three panels take one
+   width rather than the settings scale's 560px. This one used to sit at
+   640px on its own, which was already closer to that width than to
+   settings' than the other two were; brought level so the sentence a routine
+   reads as does not wrap differently depending on which of the three screens
+   it is read from. */
+.routines-content { max-width: 720px; padding: 32px; }
 /* The list header's subtitle: the scoped sentence above the populated list. */
 .routines-subtitle { font-size: var(--body); color: var(--text-2); line-height: 1.5; margin-top: 2px; }
 /* Which workspace the listed routines came from, and what that means for the
@@ -30,9 +37,37 @@
    reads as the icon shrinking rather than the text being long. Scoped to
    Routines only: Skills and Profile keep the one-line subtitle .profile-
    header was sized for, where centring is correct and this would be a no-op
-   at best, a regression at worst. */
+   at best, a regression at worst.
+
+   align-items: flex-start ALONE turned out not to be the fix, even though
+   the computed style was correct: two more things were wrong at the same
+   time, and fixing only the third made the header LOOK unfixed while every
+   inspector said otherwise.
+
+   THE FIRST: the text column (.profile-header's second child, unclassed,
+   shared with Skills and Profile) has no flex-basis of its own, so as a flex
+   item it takes only the width its content prefers rather than the width
+   actually left over once the icon and the gap are spent. A long sentence
+   then wraps a line early, against a column narrower than the row it sits
+   in, and every extra line it wraps to makes the icon look smaller by
+   comparison without the icon having changed. flex: 1 and min-width: 0 make
+   it take the real remaining width, which is the fix that actually shortens
+   the block: combined with widening .routines-content above, the common case
+   is the subtitle on one line and the workspace line on one line, not two
+   each.
+
+   THE SECOND: even at its true width, a name and up to two more lines of
+   prose is still visually heavier than a 56px circle sized for one line, the
+   size Skills and Profile both still use correctly. Rather than shrink the
+   text (the subtitle and workspace sentences carry facts, not filler, and
+   this pass was not asked to cut them), the icon is sized up to the
+   proportion the org chart's own name/role pairing uses: bigger than a
+   one-line label needs, matched to a heavier text block beside it. The glyph
+   inside is scaled with it so the icon does not just gain empty padding. */
 #routines-content .profile-header { align-items: flex-start; }
-#routines-content .profile-avatar { margin-top: 2px; }
+#routines-content .profile-avatar { width: 64px; height: 64px; margin-top: 2px; }
+#routines-content .profile-avatar svg { width: 30px; height: 30px; }
+#routines-content .profile-header > div:last-child { flex: 1; min-width: 0; }
 
 /* The list */
 .routine-table { display: flex; flex-direction: column; gap: 10px; }

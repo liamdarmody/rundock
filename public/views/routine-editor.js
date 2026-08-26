@@ -189,23 +189,34 @@
     for (const t of m.times()) {
       h += `<option value="${escText(t.value)}"${t.value === state.time ? ' selected' : ''}>${escText(t.label)}</option>`;
     }
-    h += '</select><span class="re-word">.</span></div>';
+    // NO TRAILING FULL STOP HERE. This row is a form, not a sentence someone
+    // reads start to finish: a period on the same line as two open dropdowns
+    // read as one more thing to click through rather than as punctuation. The
+    // preview directly below it, and the confirmation line on the next step,
+    // both still end in one: those ARE finished sentences, read once and not
+    // interacted with, which is where the owner's own reading of a full stop
+    // applies.
+    h += '</select></div>';
 
     if (sentence) h += `<p class="re-preview" data-routine-editor="sentence">${escText(sentence)}</p>`;
     h += runOnField(m);
-    if (zone) h += `<p class="re-caption">${escText(zone)}</p>`;
-    // WHERE THE ROUTINE BEING MADE WILL ACTUALLY RUN, on the step that decides
-    // when it runs. Every route into this editor passes through this step, so
-    // nobody finishes a routine without having been told which workspace it
-    // belongs to and what happens while they are in another one. Beside the
-    // run-on caveat rather than folded into it: that one is about a workspace
-    // open on several computers, this one is about several workspaces on one.
+    // ONE NOTE, NOT TWO. The zone and the workspace fact used to be two
+    // separate paragraphs stacked under the run-on field, on top of that
+    // field's own caveat: three blocks of grey text in a row, which is the
+    // "too much text" the design review pass was asked to fix. Both are
+    // still true and neither dropped a word the tests pin, but they are one
+    // thought a reader has once, right after building the sentence ("here is
+    // what this actually means"), so they share one paragraph now.
     //
-    // READ OFF THE STEP rather than off a bare constant, the same way the
-    // run-on caveat is read off its field: a sentence the model hands back as
-    // part of the step cannot be left out of a render of that step without the
-    // omission being visible here.
-    h += `<p class="re-caveat" data-routine-editor="workspace-caveat">${escText(m.scheduleStepFields().workspaceCaveat)}</p>`;
+    // WHERE THE ROUTINE BEING MADE WILL ACTUALLY RUN is still read off the
+    // step rather than off a bare constant, the same way the run-on caveat is
+    // read off its field: a sentence the model hands back as part of the step
+    // cannot be left out of a render of that step without the omission being
+    // visible here. The `data-routine-editor="workspace-caveat"` attribute
+    // stays on this element, unmoved, because the doors test that checks this
+    // screen names which workspace a routine will run in reads it there.
+    const note = [zone, m.scheduleStepFields().workspaceCaveat].filter(Boolean).join(' ');
+    if (note) h += `<p class="re-caveat" data-routine-editor="workspace-caveat">${escText(note)}</p>`;
     h += `<div class="re-actions">
       <button class="settings-btn-primary" type="button" ${sentence ? '' : 'disabled'}
         onclick="routineEditorStep('ready')">Continue</button>

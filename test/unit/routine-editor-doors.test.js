@@ -478,13 +478,20 @@ describe('the doors, pressed', () => {
     dom.window.close();
   });
 
-  // The Schedule section itself, by its own label, rather than the whole
-  // page's text: a change that dropped the section and appended its reason
-  // to the Used by card instead would still pass a whole-page substring
-  // check, which is the vanished-section state this test exists to catch.
+  // The section itself, by its own label, rather than the whole page's text:
+  // a change that dropped the section and appended its reason to the Used by
+  // card instead would still pass a whole-page substring check, which is the
+  // vanished-section state this test exists to catch.
+  //
+  // "Routine" OR "Routines", NOT "Schedule". The design review pass renamed
+  // this heading to name the thing the box holds (a single routine, in the
+  // case every fixture here builds) rather than the feature; it pluralises
+  // only where the box is actually about to list more than one. Matched by
+  // pattern rather than a fixed string so this helper does not have to be
+  // read as endorsing one spelling over the other.
   function scheduleSection(doc) {
     const label = Array.from(doc.querySelectorAll('#skill-detail-content .profile-section-label'))
-      .find(el => el.textContent.trim() === 'Schedule');
+      .find(el => /^Routines?$/.test(el.textContent.trim()));
     return label ? label.closest('.profile-card-section') : null;
   }
 

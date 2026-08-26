@@ -1957,14 +1957,20 @@ describe('the rail says when a routine has failed', () => {
 describe('a routine the upgrade held back', () => {
   const HELD = [routine('Held back', { enabled: false, nextRun: iso(TOMORROWS_SLOT) })];
 
-  test('the row offers to turn it on and says Rundock will start running it', () => {
+  test('the row offers to turn it on and names the duplicate-run risk directly', () => {
     const { doc, w, dom } = shell(HELD);
     w.renderRoutines();
     const row = rowNamed(doc, 'Held back');
     const words = text(row);
     assert.match(words, /Not running/, 'the row does not say it is not running');
-    assert.match(words, /Rundock will start running it/,
+    assert.match(words, /Rundock starts running it too/,
       'the row does not say what turning it on does');
+    // NAMED ON THE RENDERED ROW, not only in the model: a reader here is the
+    // one most likely to already have this job running outside Rundock.
+    assert.match(words, /cron job or script/i,
+      'the row does not name what might already be running this routine');
+    assert.match(words, /twice/i,
+      'the row does not say plainly that turning it on can run this routine twice');
     // And it does not promise a run it will not make.
     assert.strictEqual(row.querySelector('.next-run'), null,
       'a routine that will not run still advertises a next run');

@@ -99,10 +99,17 @@
    * IT NAMES THE CATCH-UP IN THE SAME BREATH, because without it the sentence
    * reads as "you will lose runs" and the answer for most people is that they
    * will not: coming back to the workspace the same day serves the slot.
+   *
+   * TIGHTENED IN THE DESIGN REVIEW PASS, from two sentences of 41 words to
+   * two clauses of 32, joined as one sentence rather than two: "so" carries
+   * the cause the reader needs (this workspace, not that one) in fewer words
+   * than a full stop and a restart did. Every phrase the tests pin (the rule,
+   * "do not run", "caught up") is still here in the same order; what went is
+   * padding around them ("While you are in", "when you open it again").
    */
-  const WORKSPACE_CAVEAT = 'Rundock runs the routines of the workspace that is open. '
-    + "While you are in another workspace this one's routines do not run, "
-    + 'and a slot that goes by is caught up when you open it again that same day.';
+  const WORKSPACE_CAVEAT = 'Rundock only runs the routines of the workspace that is open, '
+    + "so this one's do not run while you are elsewhere. "
+    + 'A missed slot is caught up the same day you return.';
 
   const RUN_ON_LABEL = 'Run on';
 

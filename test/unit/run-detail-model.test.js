@@ -412,6 +412,59 @@ describe('what the run did', () => {
     }
   });
 
+  // ===== WHEN THE RUN STARTED =====
+  //
+  // BUILT FROM LOCAL-COMPONENT DATES, the same reason routines-model.test.js
+  // constructs NOW and every instant with `new Date(y, m, d, h, mi)` rather
+  // than an ISO-UTC string: `dayWords` and `clockWords` read a Date back
+  // through its own local getters, so a pair built the same way agree on
+  // "today" and "yesterday" whatever the machine's own time zone is. Round
+  // tripped through `.toISOString()` and back, because that is the shape
+  // `record.startedAt` actually arrives in: a string, read off disk.
+  describe('when the run started', () => {
+    const NOW_LOCAL = new Date(2026, 7, 24, 9, 0);
+    const startedOn = (y, m, d, h, mi) => model.describeRun(
+      livingRecord({ startedAt: new Date(y, m, d, h, mi).toISOString() }),
+      { now: NOW_LOCAL },
+    ).when;
+
+    test('the same calendar day reads as today', () => {
+      assert.strictEqual(startedOn(2026, 7, 24, 1, 30), 'today, 1:30am');
+    });
+
+    test('the calendar day before reads as yesterday, not as "1 day ago"', () => {
+      assert.strictEqual(startedOn(2026, 7, 23, 22, 0), 'yesterday, 10:00pm');
+    });
+
+    test('within the last week but not yesterday reads as the weekday', () => {
+      // 2026-07-24 is a Monday; four days back is Thursday.
+      assert.strictEqual(startedOn(2026, 7, 20, 7, 0), 'Thursday, 7:00am');
+    });
+
+    test('a week or more back reads as a date, not a weekday', () => {
+      assert.strictEqual(startedOn(2026, 6, 10, 7, 0), '10 July, 7:00am');
+    });
+
+    test('midnight and noon read as twelve, not zero', () => {
+      assert.strictEqual(startedOn(2026, 7, 24, 0, 5), 'today, 12:05am');
+      assert.strictEqual(startedOn(2026, 7, 24, 12, 0), 'today, 12:00pm');
+    });
+
+    test('no started moment says nothing, rather than guessing one', () => {
+      assert.strictEqual(model.startedWords(null, NOW_LOCAL), null);
+      assert.strictEqual(model.startedWords('not a date', NOW_LOCAL), null);
+      // The day half fails without the clock half agreeing, and the
+      // function still says nothing: a moment nobody can place on a
+      // calendar is not reported half-placed on a clock.
+      assert.strictEqual(model.startedWords(new Date(2026, 7, 24, 1, 30).toISOString(), null), null);
+      assert.strictEqual(model.startedWords(new Date(2026, 7, 24, 1, 30).toISOString(), 'not a date'), null);
+    });
+
+    test('a record with no started moment shows none, whichever outcome it is', () => {
+      assert.strictEqual(model.describeRun(null, { now: NOW_LOCAL }).when, null);
+    });
+  });
+
   test('the record on screen is the record on disk', () => {
     const view = model.describeRun(livingRecord(), { now: NOW });
     assert.strictEqual(view.routine, 'Hello World');

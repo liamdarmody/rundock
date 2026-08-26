@@ -109,6 +109,27 @@ function headHtml(title, agent) {
     + (who ? `<p class="settings-caption rd-context">${escText(who)}</p>` : '');
 }
 
+/**
+ * A file path with a break opportunity after each separator, never in the
+ * middle of a directory or file name.
+ *
+ * THE CSS ALONE USED TO CARRY THIS, as `word-break: break-all`, which breaks
+ * at the nearest character that fits regardless of what the character is: a
+ * path several directories deep wrapped mid-word, splitting a name across two
+ * lines with nothing to say the two halves belonged together. A `<wbr>` after
+ * each separator gives the browser a break point only where a reader would
+ * already read one, at a directory boundary, and leaves every name whole.
+ *
+ * `overflow-wrap: anywhere` stays in the stylesheet as the floor beneath
+ * this: the one segment `<wbr>` cannot help, a single name longer than the
+ * box itself, still has somewhere to give.
+ */
+function pathWithBreaks(filePath) {
+  return escText(filePath).split(/([/\\])/)
+    .map(part => (part === '/' || part === '\\') ? `${part}<wbr>` : part)
+    .join('');
+}
+
 function filesHtml(files) {
   // THREE ANSWERS, AND THE UNKNOWN ONE CARRIES NO LIST TO RENDER. The model's
   // unknown shape has no `entries` key at all, so there is nothing here that
@@ -127,7 +148,7 @@ function filesHtml(files) {
     + FILE_ICON
     + '<div class="rd-file-body">'
     + `<span class="rd-file-name" data-run-detail="file-name">${escText(entry.name)}</span>`
-    + `<span class="rd-file-path">${escText(entry.path)}</span></div>`
+    + `<span class="rd-file-path">${pathWithBreaks(entry.path)}</span></div>`
     + `<span class="rd-tag" data-run-detail="change">${escText(entry.changeLabel)}</span></div>`).join('');
   return `<div class="rd-files-label">${escText(files.label)}</div>`
     + `<div class="rd-files" data-run-detail="files">${rows}</div>`
@@ -136,10 +157,18 @@ function filesHtml(files) {
 
 function detailHtml(view, title, agent) {
   const meta = view.duration ? `<p class="settings-caption rd-took">${escText(`Took ${view.duration}.`)}</p>` : '';
+  // WHEN IT STARTED, said next to the outcome rather than left for the
+  // reader to work out from "13 seconds" and a mental subtraction, or not
+  // said at all. `view.when` is null only where there is no started moment
+  // to report (no record at all), so this renders for every one of the four
+  // real outcomes: finished, stopped early, still going, and ending
+  // unwitnessed.
+  const when = view.when ? `<p class="rd-when" data-run-detail="when">${escText(view.when)}</p>` : '';
   return headHtml(title, agent)
     + '<div class="settings-card rd-card">'
-    + `<div class="settings-row"><span class="rd-chip ${escText(view.state.tone)}" data-run-detail="chip">`
-    + `<span class="rd-dot"></span>${escText(view.state.chip)}</span></div>`
+    + `<span class="rd-chip ${escText(view.state.tone)}" data-run-detail="chip">`
+    + `<span class="rd-dot"></span>${escText(view.state.chip)}</span>`
+    + when
     + `<p class="rd-headline" data-run-detail="headline">${escText(view.state.headline)}</p>`
     + (view.state.guidance
       ? `<p class="rd-guidance" data-run-detail="guidance">${escText(view.state.guidance)}</p>`

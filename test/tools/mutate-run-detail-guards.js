@@ -176,8 +176,8 @@ const MUTATIONS = [
     "reason: unknownWords(record ? record.filesReason : 'no-record') };",
     'reason: FILES_UNKNOWN_FALLBACK };'],
   [VIEW, 'the chip carries its tone, so the states are told apart at a glance',
-    '`<div class="settings-row"><span class="rd-chip ${escText(view.state.tone)}" data-run-detail="chip">`',
-    '`<div class="settings-row"><span class="rd-chip" data-run-detail="chip">`'],
+    '`<span class="rd-chip ${escText(view.state.tone)}" data-run-detail="chip">`',
+    '`<span class="rd-chip" data-run-detail="chip">`'],
 
   // ===== WHAT THE RUN CHANGED =====
   // AC-8 REACHES THE FILE LIST'S HEADING TOO. An interrupted run can carry a

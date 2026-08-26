@@ -7,7 +7,16 @@
    want, so the two surfaces can be styled apart before they are styled
    together. */
 
-.routine-editor { max-width: 560px; padding: 32px; }
+/* 720px, not the settings scale's 560px. This view's one hard requirement is
+   that the scheduling sentence reads as a single line: "Run [skill] every
+   [day] at [time]." with a real skill name in the pill, which 560px cannot
+   promise once a name runs past a word or two. 720px is shared with
+   routines.css's .routines-content and run-detail.css's .run-detail, which
+   carry the same sentence and a file path respectively: one width for the
+   three panels a schedule's own words pass through, distinct from 560px
+   (settings, pure prose) and from .profile's unbounded width (cards, not
+   sentences). */
+.routine-editor { max-width: 720px; padding: 32px; }
 
 .re-lead { font-size: var(--body); color: var(--text-2); line-height: 1.5; margin-bottom: 16px; }
 .re-caption { font-size: var(--caption); color: var(--text-2); line-height: 1.5; margin: 12px 0 0; }
@@ -43,20 +52,63 @@
    line of English rather than as a form. */
 .re-sentence { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 16px; background: var(--card); border-radius: var(--radius-xl); margin-bottom: 14px; }
 .re-word { font-size: var(--body); color: var(--text-1); }
+
+/* ===== INLINE SENTENCE FIELDS: .re-select and .re-pill =====
+
+   The sentence reads as English with two kinds of thing set into it: a fixed
+   value (the skill, chosen on the step before this one and not editable
+   here) and two open choices (frequency, time). Both need to read as
+   distinct from the plain words around them, on --card, in both themes, and
+   the two need to read as different FROM EACH OTHER: a fixed value and an
+   open control are not the same kind of thing and should not share a shape.
+
+   SHAPE CARRIES THE DIFFERENCE. .re-pill stays fully rounded, the shape this
+   app already uses for a settled, non-interactive value (see .pill and
+   .agent-chip). .re-select stays --radius-md, the shape every other input
+   and button in the app takes. A reader never has to try clicking the pill
+   to learn it does nothing.
+
+   BOTH SHARE THE SAME SURFACE TREATMENT, because both are "a value set into
+   a sentence" before they are anything else. --elevated is the correct token
+   for both: it is the popover/hover surface, and a dropdown is a popover
+   trigger by exactly the meaning DESIGN.md asks for ("reach for meaning, not
+   appearance"). What was missing was DEFINITION: on --card, --elevated reads
+   as a soft lift in light mode (elevated is white, the brightest surface
+   there) and a soft well in dark mode (elevated sits between surface and
+   card), and at 1px of --border alone the difference from the sentence
+   around it was too faint to read as "this is a control" rather than "this
+   is slightly different text". The shadow below is what a raised chip uses
+   everywhere else it appears in this app (.profile-card, .settings-card:
+   0 1px 3px rgba(0,0,0,0.08)), reused rather than invented so the palette of
+   shadow blacks does not grow by one more near-identical value. */
+.re-select, .re-pill {
+  font-family: inherit; font-size: var(--body); font-weight: 600; color: var(--text-1);
+  background-color: var(--elevated); border: 1px solid var(--border);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  transition: border-color var(--duration-base) ease, box-shadow var(--duration-base) ease;
+}
 /* appearance: none replaces each platform's own dropdown arrow, whose
    built-in padding varies and sits too close to the border on Chrome/macOS,
-   with one drawn arrow the padding below is set around deliberately. */
+   with one drawn arrow the padding below is set around deliberately.
+   stroke-width 1.8 matches every other icon in the app (see the design
+   system's iconography rule); the arrow shipped at 1.5 and was the one place
+   that did not. */
 .re-select {
-  font-family: inherit; font-size: var(--body); font-weight: 600; color: var(--text-1);
-  background-color: var(--elevated); border: 1px solid var(--border); border-radius: var(--radius-md);
+  border-radius: var(--radius-md);
   padding: 5px 28px 5px 8px; cursor: pointer;
   appearance: none; -webkit-appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1L5 5L9 1' stroke='currentColor' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1L5 5L9 1' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 10px center;
 }
 .re-select:hover { border-color: var(--accent); }
-.re-pill { display: inline-flex; align-items: center; gap: 6px; font-size: var(--body); font-weight: 600; color: var(--text-1); background: var(--elevated); border: 1px solid var(--border); border-radius: var(--radius-pill); padding: 4px 12px; }
+/* The one state the shipped control never had: a keyboard user tabbing
+   through the sentence met the browser's own default ring, which follows
+   neither theme and does not match the 2px accent ring every other
+   focusable element in this app takes (.tb-search, .tb-btn, .palette-scope,
+   .pill). */
+.re-select:focus-visible { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 2px; }
+.re-pill { display: inline-flex; align-items: center; gap: 6px; border-radius: var(--radius-pill); padding: 5px 12px; }
 .re-preview { font-size: var(--body); color: var(--text-2); line-height: 1.6; margin-bottom: 4px; }
 
 .re-field { margin-top: 18px; }
@@ -65,13 +117,17 @@
 /* The caveat sits inside the field, under the options it qualifies, because
    where a routine runs and what that costs are one fact. */
 .re-caveat { font-size: var(--caption); color: var(--text-2); line-height: 1.5; margin: 0; }
-/* The workspace caveat sits after the timezone caption as a page-level
-   sibling, not inside a field the way the run-on caveat above does (which is
-   why .re-caveat's own margin stays 0: tight against the options it
-   qualifies is correct there). Without its own top margin it ran flush
-   against the caption above it while everything else on the step kept a
-   consistent 12px rhythm, reading as an uneven wall of text rather than two
-   distinct notes. */
+/* This one carries the merged "how this actually runs" note (the time zone
+   plus the workspace caveat, joined in the view rather than drawn as two
+   paragraphs) as a page-level sibling of the run-on field above it, not
+   inside a field the way the run-on caveat is (which is why .re-caveat's own
+   margin stays 0: tight against the options it qualifies is correct there).
+   It carries its own top margin for the same reason that one does not: run
+   flush against the field above it, it read as a continuation of the run-on
+   caveat rather than a second, separate note. This element used to sit under
+   a standalone timezone caption of its own; merging the two removed a third
+   block of text and the second margin between them, which is most of what
+   the design review pass asked for under "too much text". */
 .re-caveat[data-routine-editor="workspace-caveat"] { margin-top: 12px; }
 
 .re-confirm { background: var(--card); border-radius: var(--radius-xl); padding: 24px; }

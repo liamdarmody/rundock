@@ -170,8 +170,8 @@ const MUTATIONS = [
     '<div class="re-name">${escText(option.name)}</div>${meta}',
     '<div class="re-name">${option.name}</div>${meta}'],
   [VIEW, 'the time zone reaches the page',
-    '    if (zone) h += `<p class="re-caption">${escText(zone)}</p>`;\n',
-    ''],
+    '    const note = [zone, m.scheduleStepFields().workspaceCaveat].filter(Boolean).join(\' \');',
+    '    const note = [m.scheduleStepFields().workspaceCaveat].filter(Boolean).join(\' \');'],
 
   // The reply path. A save that leaves before the server answers puts the
   // reader on a list without the routine and with nothing said, which is the
@@ -358,14 +358,14 @@ const MUTATIONS = [
   // the constant on its own can be rendered on a help page and nowhere else
   // with the model's tests all green.
   [VIEW, 'the schedule step says which workspace this routine will run in',
-    '    h += `<p class="re-caveat" data-routine-editor="workspace-caveat">${escText(m.scheduleStepFields().workspaceCaveat)}</p>`;\n',
-    ''],
+    '    if (note) h += `<p class="re-caveat" data-routine-editor="workspace-caveat">${escText(note)}</p>`;',
+    '    if (note) h += \'\';'],
   [MODEL_STEP, 'the step carries the caveat, so a render of the step cannot drop it',
     '      workspaceCaveat: WORKSPACE_CAVEAT,\n',
     ''],
   [MODEL, 'the caveat names the rule rather than only the consequence',
-    "  const WORKSPACE_CAVEAT = 'Rundock runs the routines of the workspace that is open. '",
-    "  const WORKSPACE_CAVEAT = 'Routines run on a schedule. '"],
+    "  const WORKSPACE_CAVEAT = 'Rundock only runs the routines of the workspace that is open, '",
+    "  const WORKSPACE_CAVEAT = 'Routines run on a schedule, '"],
 ];
 
 // The reporter is named explicitly rather than left to the default, which

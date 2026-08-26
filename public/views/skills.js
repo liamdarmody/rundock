@@ -285,7 +285,16 @@ function selectSkill(id) {
         if (r.skill === s.id) scheduled.push({ agentId: agent.id, routine: r });
       }
     }
-    h += `<div class="profile-card"><div class="profile-card-section"><div class="profile-section-label">Schedule</div>`;
+    // "ROUTINE", SINGULAR, NAMING THE THING THE BOX HOLDS RATHER THAN THE
+    // FEATURE. Scheduling more than one routine onto the same skill is
+    // possible (a skill can be assigned to several agents, and each can
+    // schedule it), just not something this product promotes, so the
+    // heading assumes the common case: one skill, one routine. It only
+    // pluralises where the box is actually about to list more than one,
+    // which is the one place a fixed "Routine" would be a heading that
+    // disagreed with its own list.
+    const heading = scheduled.length > 1 ? 'Routines' : 'Routine';
+    h += `<div class="profile-card"><div class="profile-card-section"><div class="profile-section-label">${heading}</div>`;
     if (scheduled.length) {
       for (const { agentId, routine: r } of scheduled) {
         const when = (routinesModel && routinesModel.scheduleWords(r.schedule)) || r.schedule;
@@ -301,8 +310,11 @@ function selectSkill(id) {
     }
     h += `</div></div>`;
   } else {
+    // Same heading as the assigned branch above: naming the thing this box
+    // is about (a routine) rather than the feature, whether the box holds a
+    // routine, an offer to make one, or the reason it cannot have one yet.
     h += `<div class="profile-card"><div class="profile-card-section">
-      <div class="profile-section-label">Schedule</div>
+      <div class="profile-section-label">Routine</div>
       <div class="profile-card-text">${esc(routineEditorModel().UNASSIGNED_REASON)}</div>
     </div></div>`;
   }
