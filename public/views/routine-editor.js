@@ -65,11 +65,31 @@
       originSkillId: (input && input.originSkillId) || null,
       originSkillName: (input && input.originSkillName) || null,
       selectedKey: (input && input.selectedKey) || null,
-      frequency: 'day',
-      time: '09:00',
+      // The routine being CHANGED, or nothing when one is being made.
+      //
+      // ITS PRESENCE IS WHAT THE WHOLE EDIT MODE IS. A routine that already
+      // exists is addressed by the same triple every other control on the
+      // routines list uses (the agent that declares it, its name, and which of
+      // that agent's routines of that name it is), because nothing makes a name
+      // unique in a file and a message that dropped the last part would change
+      // whichever namesake came first.
+      //
+      // It carries the STORED schedule as well as the identity, so the step can
+      // account for a schedule the controls below cannot show rather than
+      // quietly presenting the defaults as the routine's own times.
+      edit: (input && input.edit) || null,
+      // Pre-filled when a routine is being changed, and the defaults otherwise.
+      // The values arrive already looked up against what this editor offers, so
+      // a stored schedule it cannot show leaves the defaults standing and the
+      // step says so out loud.
+      frequency: (input && input.frequency) || 'day',
+      time: (input && input.time) || '09:00',
       // The default is the only value this release can honour. It is read from
-      // the supported set rather than typed, so it cannot drift from it.
-      runOn: model().RUN_ON_SUPPORTED[0],
+      // the supported set rather than typed, so it cannot drift from it. An
+      // edit carries the routine's own value instead, which it SHOWS and never
+      // offers to change: a routine already declaring the reserved target keeps
+      // it, because this screen is not where that is decided.
+      runOn: (input && input.runOn) || model().RUN_ON_SUPPORTED[0],
       saving: false,
       error: null,
       // Whether the skill list has arrived. NOT the same as it being
@@ -85,6 +105,22 @@
     if (!state || !state.selectedKey) return null;
     const choice = model().skillChoices({ skills: state.skills, agentId: state.agentId });
     return choice.options.filter(o => o.key === state.selectedKey)[0] || null;
+  }
+
+  /**
+   * WHAT IS BEING SCHEDULED, whichever way the reader got here.
+   *
+   * Making a routine, that is the skill they picked, and it comes out of the
+   * picker. Changing one, it is the routine itself, which was named when it was
+   * made and is not being renamed here.
+   *
+   * ONE FUNCTION RATHER THAN A BRANCH AT EVERY READER, because three places ask
+   * (both step renders and the gate that chooses between them) and a branch
+   * missed at any one of them draws a step with an empty pill in it.
+   */
+  function subject() {
+    if (state && state.edit) return { name: state.edit.name };
+    return selectedOption();
   }
 
   // ===== RENDER =====
@@ -163,13 +199,58 @@
     return h + '</div>';
   }
 
+  /**
+   * The same field on the edit road: the routine's run target, SHOWN.
+   *
+   * WHY IT IS SHOWN AND NOT OFFERED. Changing where a routine runs is a
+   * different edit with a different consequence, and this release has one
+   * supported value anyway, so a picker here would be a control with nothing to
+   * choose. Leaving the field out instead would be worse than either: the
+   * reader is about to change when this routine runs and is entitled to see
+   * where it will do it, and a field that disappears on the edit road reads as
+   * a setting that has been lost rather than one that is settled.
+   *
+   * NO MARK AND NO ROW SHAPE, deliberately. The picker's rows carry a tick and
+   * a border that says "pressable", and a row wearing that shape which does
+   * nothing when pressed teaches the reader a wrong model of the screen. This
+   * is a value on a card, which is what a settled value looks like everywhere
+   * else in this app.
+   *
+   * THE COPY IS STILL READ OFF THE OPTION, exactly as the picker reads it. That
+   * is the rule this whole module exists to hold: the words that promise a
+   * routine keeps running while the computer is off belong to the option that
+   * does it, and a second surface writing its own version of that sentence is
+   * how the promise ends up on the option that cannot keep it.
+   *
+   * THE CAVEAT STAYS. It qualifies the field rather than the act of choosing,
+   * and it is as true of a routine being moved as of one being made: a
+   * workspace open on four computers runs this routine on each of them, whether
+   * the reader is setting its time for the first time or the second.
+   */
+  function fixedRunOnField(m) {
+    const field = m.runOnField();
+    const option = m.runOnOption(state.runOn);
+    if (!option) return '';
+    return `<div class="re-field" data-routine-editor="run-on-field">
+      <p class="re-field-label">${escText(field.label)}</p>
+      <div class="re-fixed" data-routine-editor="run-on-fixed">
+        <div class="re-name">${escText(option.name)}</div>
+        <div class="re-meta">${escText(option.meta)}</div>
+      </div>
+      <p class="re-caveat" data-routine-editor="caveat">${escText(field.caveat)}</p>
+    </div>`;
+  }
+
   function scheduleStep(m, option) {
     const sentence = m.previewSentence({
       frequency: state.frequency, time: state.time, skillName: option && option.name, runOn: state.runOn,
     });
     const zone = m.timezoneCaption({ zone: state.zone, agentName: state.agentName });
 
-    let h = `<p class="re-lead">${escText(m.STEP_LEADS.schedule)}</p>`;
+    // EDITING IS NOT STEP TWO OF TWO. There is no step one behind an edit: the
+    // skill and the run target are settled and shown rather than asked for, so
+    // a step counter would offer a first step that does not exist.
+    let h = `<p class="re-lead">${escText(state.edit ? m.STEP_LEADS.edit : m.STEP_LEADS.schedule)}</p>`;
     // Reads as one sentence in the order a person would say it: the skill
     // first, because that is the thing being scheduled, then the cadence.
     // "Every day at 9:00am, run: X" buried the subject at the end of a
@@ -199,7 +280,18 @@
     h += '</select></div>';
 
     if (sentence) h += `<p class="re-preview" data-routine-editor="sentence">${escText(sentence)}</p>`;
-    h += runOnField(m);
+    // WHEN THE ROUTINE'S OWN SCHEDULE IS NOT ONE THESE CONTROLS CAN SHOW.
+    //
+    // Agent files are written by hand, and the scheduler reads more than this
+    // editor offers: any minute of the hour, in any case. The model refuses to
+    // pre-fill from a schedule the dropdowns cannot display, which is right,
+    // and leaves the step showing values that are not the routine's. Without
+    // this line those defaults would read as its current times, and the reader
+    // would replace a schedule they never saw. The note names the stored one
+    // verbatim and says what saving does to it.
+    const stored = state.edit ? m.storedScheduleNote({ schedule: state.edit.schedule }) : null;
+    if (stored) h += `<p class="re-caveat" data-routine-editor="stored-schedule">${escText(stored)}</p>`;
+    h += state.edit ? fixedRunOnField(m) : runOnField(m);
     // ONE NOTE, NOT TWO. The zone and the workspace fact used to be two
     // separate paragraphs stacked under the run-on field, on top of that
     // field's own caveat: three blocks of grey text in a row, which is the
@@ -240,6 +332,10 @@
     const problem = state.error
       ? `<p class="re-problem" data-routine-editor="error">${escText(state.error)}</p>`
       : '';
+    // WHAT THE BUTTON SAYS IT WILL DO, and the two roads do different things.
+    // "Save routine" on an edit would read as making one, next to a sentence
+    // describing a routine that already exists.
+    const label = state.edit ? 'Save changes' : 'Save routine';
     return `<div class="re-confirm">
       <p class="re-confirm-sentence">${escText(sentence)}</p>
       <p class="re-caption">${escText(caption)}
@@ -247,7 +343,7 @@
       ${problem}
       <div class="re-actions">
         <button class="settings-btn-primary" type="button" data-routine-editor="save"
-          ${state.saving ? 'disabled' : ''} onclick="saveRoutine()">${state.saving ? 'Saving' : 'Save routine'}</button>
+          ${state.saving ? 'disabled' : ''} onclick="saveRoutine()">${state.saving ? 'Saving' : label}</button>
       </div>
     </div>`;
   }
@@ -255,7 +351,7 @@
   function routineEditorHtml() {
     const m = model();
     const choice = m.skillChoices({ skills: state.skills, agentId: state.agentId });
-    const option = selectedOption();
+    const option = subject();
     let h = '';
     // The breadcrumb belongs to the DOOR that opened the editor, not to what
     // the state happens to carry. The skill door can carry an agent as well,
@@ -265,11 +361,21 @@
     if (state.originSkillId && state.originSkillName) {
       h += `<a class="profile-back" data-routine-editor="back" data-back-to-skill="${escText(state.originSkillId)}"
         onclick="routineEditorLeave()">&#8592; Back to ${escText(state.originSkillName)}</a>`;
+    } else if (state.edit) {
+      // AN EDIT CAME FROM THE LIST, and the breadcrumb names where the press
+      // came from rather than what the state happens to carry. An edit carries
+      // the owning agent, so without this branch the label would read "Back to
+      // Piper" and go to that agent's profile, which is not where the reader
+      // was. A control that does not do what its label says is worse than no
+      // control: the reader believes the label and learns a wrong model of the
+      // app from being shown one.
+      h += `<a class="profile-back" data-routine-editor="back" data-back-to-routines
+        onclick="routineEditorLeave()">&#8592; Back to routines</a>`;
     } else if (state.agentId && state.agentName) {
       h += `<a class="profile-back" data-routine-editor="back" data-back-to="${escText(state.agentId)}"
         onclick="routineEditorLeave()">&#8592; Back to ${escText(state.agentName)}</a>`;
     }
-    h += '<div class="settings-section-title">Add routine</div>';
+    h += `<div class="settings-section-title">${state.edit ? 'Edit routine' : 'Add routine'}</div>`;
     if (state.step === 'schedule' && option) return h + scheduleStep(m, option);
     if (state.step === 'ready' && option) return h + readyStep(m, option);
     return h + pickStep(m, choice);
@@ -533,7 +639,16 @@
   function routineEditorLeave() {
     const skillId = state && state.originSkillId;
     const agentId = state && state.agentId;
+    // An edit was opened from the routines list, so leaving it goes back there,
+    // which is what the breadcrumb this road renders says. Taken before the
+    // agent, because an edit carries the owning agent too and the agent branch
+    // below would otherwise send the reader to a profile they never came from.
+    const editing = !!(state && state.edit);
     state = null;
+    if (editing) {
+      if (typeof switchNav === 'function') switchNav(routinesListNav());
+      return;
+    }
     // The skill page first, because the skill door can also carry an agent and
     // the breadcrumb it rendered names the skill.
     //
@@ -580,6 +695,10 @@
   function saveRoutine() {
     const m = model();
     if (!state || state.saving) return;
+    // ONE BUTTON, TWO ASKS, and the branch is here rather than at the button so
+    // that the in-flight guard above covers both. A second handler with its own
+    // copy of that guard is a second place for a double send to come back.
+    if (state.edit) { sendScheduleEdit(m); return; }
     const option = selectedOption();
     if (!option) return;
     const draft = m.routineDraft({
@@ -601,6 +720,42 @@
         name: draft.name, schedule: draft.schedule, skill: draft.skill,
         prompt: draft.prompt, runOn: draft.runOn,
       },
+    }));
+  }
+
+  /**
+   * Ask for an existing routine to be moved to a different time.
+   *
+   * IT ASKS FOR A CHANGE AND NEVER FOR A ROUTINE. save_routine appends a block
+   * the file does not have; sent from here it would leave the routine's old
+   * schedule firing beside its new one, under one name, which is worse than
+   * either. This names the routine that is already there, by the same triple
+   * every other control on the routines list uses, so the server edits that
+   * block and no other.
+   *
+   * IT DOES NOT LEAVE HERE, for the reason the create road does not: the write
+   * can be refused for things this screen cannot know, and navigating on send
+   * means the refusal arrives after the editor is gone. The reader would be
+   * looking at a list showing the old time with nothing to explain it.
+   *
+   * A SCHEDULE THAT CANNOT BE BUILT SENDS NOTHING. Both halves go through the
+   * builder rather than being read off the controls, so a value that was never
+   * offered assembles into nothing and this returns rather than asking the
+   * server to store it.
+   */
+  function sendScheduleEdit(m) {
+    const schedule = m.buildSchedule({ frequency: state.frequency, time: state.time });
+    if (!schedule) return;
+    if (typeof ws === 'undefined' || !ws) return;
+    state.saving = true;
+    state.error = null;
+    renderRoutineEditor();
+    ws.send(JSON.stringify({
+      type: 'set_routine_schedule',
+      agentId: state.edit.agentId,
+      name: state.edit.name,
+      occurrence: state.edit.occurrence,
+      schedule,
     }));
   }
 

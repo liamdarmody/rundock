@@ -143,7 +143,45 @@
     empty: 'Routines schedule skills your agents already have. Build one and it will show up here.',
     loading: 'Looking for skills your agents can run.',
     build: 'Build a skill',
+    // EDITING IS NOT STEP TWO OF TWO, and this line exists because saying so
+    // would be false. There is no step one behind it: the skill and the run
+    // target are settled and are shown rather than asked for, so a reader who
+    // arrived here arrived at the whole of what they came to change. A step
+    // counter would offer a first step that does not exist, and its second
+    // sentence says what is NOT about to move, which is the question somebody
+    // editing a live routine actually has.
+    edit: 'Say when this should run instead. Nothing else about the routine changes.',
   };
+
+  /**
+   * The routine's stored schedule, said back to a reader the editor cannot
+   * show it to.
+   *
+   * WHY A SENTENCE IS OWED AT ALL. Agent files are written by hand, and the
+   * scheduler reads more than this editor offers: any minute of the hour, in
+   * any case. `readSchedule` refuses to pre-fill from a schedule the controls
+   * cannot display, which is right, and leaves the form showing values that are
+   * not the routine's with nothing accounting for the difference. So the note
+   * names the stored schedule, verbatim, and says plainly what saving would do
+   * to it.
+   *
+   * IT NAMES THE SCHEDULE RATHER THAN DESCRIBING IT. The reader wrote that line
+   * themselves, in a file they can open, and quoting it is the only thing that
+   * lets them tell whether replacing it matters.
+   *
+   * NEITHER A FAULT NOR A WARNING IN ITS TONE. A schedule this editor cannot
+   * build is an ordinary thing to find: it may be one that runs perfectly well.
+   * What is true is that the picker cannot show it, which is a fact about the
+   * picker, so that is what the sentence says.
+   */
+  const STORED_SCHEDULE_NOTE = "This routine's schedule, {schedule}, is not one this editor can build. "
+    + 'Saving replaces it with the one above.';
+
+  function storedScheduleNote(input) {
+    const schedule = input && typeof input.schedule === 'string' ? input.schedule.trim() : '';
+    if (!schedule || readSchedule(schedule)) return null;
+    return STORED_SCHEDULE_NOTE.replace('{schedule}', schedule);
+  }
 
   // Where save goes. A routine that has been written belongs on the list of
   // routines, so the editor's job finishes by leaving. Named here rather than
@@ -481,7 +519,7 @@
 
   return {
     RUN_ON_SUPPORTED, RUN_ON_CAVEAT, WORKSPACE_CAVEAT, RUN_ON_LABEL, FREQUENCIES, STEP_LEADS, SAVE_DESTINATION,
-    UNASSIGNED_REASON,
+    UNASSIGNED_REASON, STORED_SCHEDULE_NOTE, storedScheduleNote,
     runOnOptions, runOnOption, runOnField, scheduleStepFields,
     skillChoices, stepLead,
     times, buildSchedule, readSchedule, previewSentence,

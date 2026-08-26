@@ -310,6 +310,40 @@ describe('routine editor: a stored schedule read back into the builder', () => {
     assert.deepStrictEqual(model.readSchedule('Every Monday at 07:00'),
       { frequency: 'monday', time: '07:00' });
   });
+
+  // ===== WHAT IS OWED TO A ROUTINE THE PICKER CANNOT SHOW =====
+  //
+  // Refusing to pre-fill is right and it is not enough on its own: the step is
+  // then showing values that are not the routine's, and without a word about it
+  // the reader replaces a schedule they never saw.
+  test('a schedule the editor cannot build is named back, verbatim', () => {
+    const note = model.storedScheduleNote({ schedule: 'every day at 07:03' });
+    assert.match(note, /every day at 07:03/,
+      'the reader wrote that line themselves and quoting it is what lets them judge replacing it');
+    assert.match(note, /Saving replaces it/, 'and it says what saving would do');
+  });
+
+  test('a schedule the editor can build is owed no note at all', () => {
+    assert.strictEqual(model.storedScheduleNote({ schedule: 'every day at 07:00' }), null,
+      'the controls are showing this routine\'s own times, so there is nothing to account for');
+  });
+
+  test('a routine with no schedule at all gets no note either', () => {
+    for (const schedule of [null, undefined, '', '   ', 42]) {
+      assert.strictEqual(model.storedScheduleNote({ schedule }), null,
+        `${JSON.stringify(schedule)} is nothing, and a note quoting nothing says nothing`);
+    }
+    assert.strictEqual(model.storedScheduleNote(null), null);
+  });
+
+  // The note is about the picker rather than about the routine, so it must not
+  // read as a fault. A schedule this editor cannot build may run perfectly well.
+  test('the note names no fault', () => {
+    const note = model.storedScheduleNote({ schedule: 'every fortnight at 07:00' });
+    for (const alarm of ['error', 'invalid', 'broken', 'wrong', 'failed', 'unsupported']) {
+      assert.ok(!note.toLowerCase().includes(alarm), `the note must not read as a fault: found "${alarm}"`);
+    }
+  });
 });
 
 describe('routine editor: where it runs', () => {
@@ -534,6 +568,7 @@ describe('routine editor: the words it ships', () => {
       model.timezoneCaption({ zone: 'Europe/London', agentName: null }),
       model.STEP_LEADS,
       model.UNASSIGNED_REASON,
+      model.storedScheduleNote({ schedule: 'every fortnight at 07:00' }),
     ]);
   }
 
@@ -562,7 +597,11 @@ describe('routine editor: the words it ships', () => {
   // repository's own check enforces across the tree.
   test('the files this card adds carry no em dash or en dash', () => {
     const root = path.join(__dirname, '..', '..');
-    for (const rel of ['public/routine-editor-model.js', 'test/unit/routine-editor-model.test.js']) {
+    for (const rel of [
+      'public/routine-editor-model.js', 'test/unit/routine-editor-model.test.js',
+      'public/views/routine-editor.js', 'lib/agents/routines.js',
+      'lib/protocol/handlers/team.js', 'test/unit/routine-schedule-edit.test.js',
+    ]) {
       const text = fs.readFileSync(path.join(root, rel), 'utf-8');
       assert.ok(!/[\u2014\u2013]/.test(text), `${rel} carries a dash the repository check refuses`);
     }

@@ -194,9 +194,19 @@ const MUTATIONS = [
   // The reply path. A save that leaves before the server answers puts the
   // reader on a list without the routine and with nothing said, which is the
   // worst outcome this flow has.
+  // ANCHORED ON THE MESSAGE EACH ONE SENDS, because both roads set the same
+  // three lines and String.replace takes the first: an unanchored search would
+  // break the create road twice and prove nothing about the edit road.
   [VIEW, 'sending is not saving',
-    '    state.saving = true;\n    state.error = null;\n    renderRoutineEditor();',
-    '    state.saving = true;\n    if (typeof switchNav === \'function\') switchNav(routinesListNav());'],
+    '    state.saving = true;\n    state.error = null;\n    renderRoutineEditor();\n'
+    + "    ws.send(JSON.stringify({\n      type: 'save_routine',",
+    '    state.saving = true;\n    if (typeof switchNav === \'function\') switchNav(routinesListNav());\n'
+    + "    ws.send(JSON.stringify({\n      type: 'save_routine',"],
+  [VIEW, 'sending a change is not saving it either',
+    '    state.saving = true;\n    state.error = null;\n    renderRoutineEditor();\n'
+    + "    ws.send(JSON.stringify({\n      type: 'set_routine_schedule',",
+    '    state.saving = true;\n    if (typeof switchNav === \'function\') switchNav(routinesListNav());\n'
+    + "    ws.send(JSON.stringify({\n      type: 'set_routine_schedule',"],
   [VIEW, 'a refusal is shown where the reader is looking',
     '      ? `<p class="re-problem" data-routine-editor="error">${escText(state.error)}</p>`',
     "      ? ''"],
@@ -287,9 +297,26 @@ const MUTATIONS = [
   [APP, 'the client tells the editor its skill list arrived',
     'routineEditorSkillsArrived(d.skills); ',
     ''],
+  // ANCHORED ON ITS OWN CASE, because the call it names is now made by two of
+  // them: a routine that was written and a routine that was moved. String
+  // replace takes the first, so an unanchored search would break whichever came
+  // first and report on whatever that turned red.
   [APP, 'the client releases the editor when the routine is written',
-    '      routineEditorSaved();\n',
-    ''],
+    "    case 'routine_saved':\n"
+    + "      addSystemMsg('Routine \"' + (d.name || '') + '\" added to ' + (d.agentId || '') );\n"
+    + '      routineEditorSaved();\n',
+    "    case 'routine_saved':\n"
+    + "      addSystemMsg('Routine \"' + (d.name || '') + '\" added to ' + (d.agentId || '') );\n"],
+  [APP, 'the client releases the editor when a schedule change lands',
+    "      addSystemMsg('Routine \"' + (d.name || '') + '\" now runs ' + (d.schedule || ''));\n"
+    + '      routineEditorSaved();\n',
+    "      addSystemMsg('Routine \"' + (d.name || '') + '\" now runs ' + (d.schedule || ''));\n"],
+  [APP, 'a schedule change that went through retires the last refusal',
+    "    case 'routine_rescheduled':\n      routinesActionCleared();\n",
+    "    case 'routine_rescheduled':\n"],
+  [APP, 'the confirmation names the time the routine now runs',
+    "      addSystemMsg('Routine \"' + (d.name || '') + '\" now runs ' + (d.schedule || ''));",
+    "      addSystemMsg('Routine \"' + (d.name || '') + '\" was changed');"],
   [APP, 'the client hands a refusal back to the editor',
     '      routineEditorFailed(d.message);\n',
     ''],
@@ -329,6 +356,49 @@ const MUTATIONS = [
   [ROUTINES, 'whether the file already declares routines is asked of the independent counter',
     "  const declaredRoutines = (topLevelKeyCounts(content) || new Map()).get('routines') || 0;",
     '    const declaredRoutines = locateSection(content.split(\'\\n\')) ? 1 : 0;'],
+
+  // ===== CHANGING WHEN A SAVED ROUTINE RUNS =====
+  //
+  // THE ONE THAT MATTERS MOST HERE is the second: this is the second surface in
+  // the app that draws where a routine runs, and a second surface writing its
+  // own version of that sentence is exactly how the always-on option's promise
+  // ends up on the option that cannot keep it.
+  [VIEW, 'the run target is shown on an edit rather than offered',
+    '    h += state.edit ? fixedRunOnField(m) : runOnField(m);',
+    '    h += runOnField(m);'],
+  [VIEW, 'the shown run target reads its second line off the option',
+    '        <div class="re-meta">${escText(option.meta)}</div>\n      </div>',
+    '        <div class="re-meta">Keeps this routine running while your computer is off.</div>\n      </div>'],
+  [VIEW, 'the step names a stored schedule its controls cannot show',
+    '    if (stored) h += `<p class="re-caveat" data-routine-editor="stored-schedule">${escText(stored)}</p>`;',
+    "    if (stored) h += '';"],
+  [VIEW, 'an edit opens on the routine\'s own times rather than on the defaults',
+    "      frequency: (input && input.frequency) || 'day',\n      time: (input && input.time) || '09:00',",
+    "      frequency: 'day',\n      time: '09:00',"],
+  [VIEW, 'an edit asks for a change rather than for a routine',
+    "      type: 'set_routine_schedule',",
+    "      type: 'save_routine',"],
+  [VIEW, 'an edit says which routine of its name it means',
+    '      occurrence: state.edit.occurrence,',
+    '      occurrence: 0,'],
+  [VIEW, 'an edit is not offered a first step that does not exist',
+    '    let h = `<p class="re-lead">${escText(state.edit ? m.STEP_LEADS.edit : m.STEP_LEADS.schedule)}</p>`;',
+    '    let h = `<p class="re-lead">${escText(m.STEP_LEADS.schedule)}</p>`;'],
+  [VIEW, 'the save button says which of the two roads it is on',
+    "    const label = state.edit ? 'Save changes' : 'Save routine';",
+    "    const label = 'Save routine';"],
+  [VIEW, 'the breadcrumb an edit renders names the list it came from',
+    '    } else if (state.edit) {',
+    '    } else if (false) {'],
+  [VIEW, 'leaving an edit goes to the list, not to the agent it carries',
+    "    if (editing) {\n      if (typeof switchNav === 'function') switchNav(routinesListNav());\n      return;\n    }\n",
+    ''],
+  [MODEL, 'a schedule the editor can build is owed no note',
+    '    if (!schedule || readSchedule(schedule)) return null;',
+    '    if (!schedule) return null;'],
+  [MODEL, 'the note quotes the stored schedule rather than describing it',
+    "    return STORED_SCHEDULE_NOTE.replace('{schedule}', schedule);",
+    '    return STORED_SCHEDULE_NOTE;'],
 
   // ===== WHEN A SAVED ROUTINE RUNS =====
   //
