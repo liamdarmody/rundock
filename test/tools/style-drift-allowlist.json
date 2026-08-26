@@ -163,6 +163,12 @@
       "10px": 1
     }
   },
+  "public/styles/views/routine-editor.css": {
+    "why": "One shadow black, written once in the rule .re-select and .re-pill share. The design review pass gave the sentence's two inline fields a raised-chip shadow because a hairline --border alone did not read as a control on --card in both themes: --elevated sits above --card in light mode (elevated is white) and below it in dark mode (elevated sits between surface and card), so a border-only field looked like a lift in one theme and a well in the other with nothing to anchor either reading. Reused the exact value .profile-card and .settings-card already shade a raised card with, rather than adding a fourth near-identical black. Waiting on a shadow scale in tokens.css, same as those two files.",
+    "allow": {
+      "rgba(0,0,0,0.08)": 1
+    }
+  },
   "public/views/find.js": {
     "why": "Search-match highlight colours, set from JavaScript because they apply to ranges CSS cannot select. Tints of attention and accent, plus absolute black for text on the highlight. Absolute white or black, chosen for contrast against a coloured fill rather than as a theme colour. Deliberate: a token here would make it follow the theme, which is the opposite of what it is for. Waiting on the JS-set style cleanup, tracked separately.",
     "allow": {

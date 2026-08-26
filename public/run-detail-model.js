@@ -280,6 +280,83 @@
     return `${hours} hour${hours === 1 ? '' : 's'}`;
   }
 
+  // ===== WHEN THE RUN STARTED, IN WORDS =====
+  //
+  // WRITTEN AGAIN RATHER THAN IMPORTED FROM public/routines-model.js, which
+  // has the same two functions under the same names. That file is a browser
+  // global this one cannot reach: run-detail-model.js is required directly in
+  // its own node tests with nothing else loaded, the same reason
+  // routine-editor-model.js keeps its own copy of RUN_ON_SUPPORTED rather than
+  // reading the server's. A day word and a clock word are a few lines each;
+  // a second global to load them from is not worth the coupling.
+  //
+  // NEVER A FORMATTER. `toLocaleDateString` and `toLocaleTimeString` read the
+  // runner's locale and ICU build, which would make this file a statement
+  // about the machine it happens to run on rather than about the code, and
+  // every test of it would inherit that.
+  // Full names, matching public/routines-model.js's own DAYS/MONTHS: the two
+  // files say the same day the same way, on two different screens a reader
+  // can have open at once.
+  const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'];
+
+  /**
+   * Whole calendar days from `from` to `to`, counted as days and not as
+   * hours. Ten past midnight tomorrow is tomorrow even though it is under
+   * three hours away, and half past eleven tonight is today even though it
+   * is nearly a day, so both ends are flattened to midnight before they are
+   * compared.
+   */
+  function dayGap(from, to) {
+    const a = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+    const b = new Date(to.getFullYear(), to.getMonth(), to.getDate());
+    return Math.round((b - a) / 86400000);
+  }
+
+  /** The day an instant falls on, as a person would say it. */
+  function dayWords(instant, now) {
+    const when = instant ? new Date(instant) : null;
+    if (!when || isNaN(when.getTime()) || !(now instanceof Date) || isNaN(now.getTime())) return null;
+    const gap = dayGap(now, when);
+    if (gap === 0) return 'today';
+    if (gap === -1) return 'yesterday';
+    if (gap > -7 && gap <= 0) return DAYS[when.getDay()];
+    return `${when.getDate()} ${MONTHS[when.getMonth()]}`;
+  }
+
+  /** The clock, in the same plain words the routine editor offers times in. */
+  function clockWords(instant) {
+    const when = new Date(instant);
+    if (isNaN(when.getTime())) return null;
+    const hour = when.getHours();
+    const hour12 = hour % 12 === 0 ? 12 : hour % 12;
+    return `${hour12}:${String(when.getMinutes()).padStart(2, '0')}${hour < 12 ? 'am' : 'pm'}`;
+  }
+
+  /**
+   * When a run started, as a reader would say it: "today, 2:14pm".
+   *
+   * ONE FACT EVERY OUTCOME CARRIES. A run that finished, one that stopped
+   * early, one still going, and one whose ending nobody witnessed all have a
+   * `startedAt`: it is written the moment the scheduler spawns the run,
+   * before anything about how it ends is known. So this is read once, off
+   * `record.startedAt`, and shown in the same place whatever `state` says,
+   * rather than folded into any one outcome's own words.
+   *
+   * A run cannot be started in the future relative to itself, but a clock
+   * skew or a hand-edited record could still produce a gap in the wrong
+   * direction; `dayWords` reads that as a date rather than guessing a word
+   * for it, which is the same floor a bad gap gets everywhere else in this
+   * codebase's day-word logic.
+   */
+  function startedWords(startedAt, now) {
+    const day = dayWords(startedAt, now);
+    const clock = clockWords(startedAt);
+    if (!day || !clock) return null;
+    return `${day}, ${clock}`;
+  }
+
   /**
    * One run's record, as the words a reader sees.
    *
@@ -305,6 +382,13 @@
       agent: found ? (record.agent || null) : null,
       routine: found ? (record.routine || null) : null,
       startedAt: found ? (record.startedAt || null) : null,
+      // WHEN IT STARTED, IN WORDS, WHICHEVER OF THE FOUR OUTCOMES THIS IS.
+      // Read once here rather than inside `state`, because it is a fact
+      // about the run rather than about how it ended: a finished run, a
+      // failed one, one still going and one nobody saw the end of all
+      // started at some recorded moment, and the box that reports the
+      // outcome is also the only place on this screen that names it.
+      when: found ? startedWords(record.startedAt, opts.now) : null,
       now: opts.now || null,
       state: {
         tone: state.tone,
@@ -333,6 +417,6 @@
   return {
     RUN_STATES, UNRECOGNISED_STATE, NO_RECORD_STATE, FILES_UNKNOWN_WORDS, FILES_UNKNOWN_FALLBACK,
     CHANGE_LABELS, CHANGE_FALLBACK, FILES_LABELS, NO_FILES_CHANGED, UNKNOWN_FILES_LEAD, NO_REASON_GIVEN,
-    changedFiles, unknownWords, durationWords, describeRun, baseName,
+    changedFiles, unknownWords, durationWords, describeRun, baseName, startedWords,
   };
 }));

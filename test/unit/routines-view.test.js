@@ -972,6 +972,79 @@ describe('the variant does not flash', () => {
   });
 });
 
+// ===== THE THIRD CONTROL ON THE ROW =====
+//
+// The other two ask the server for a change the reader has already decided.
+// This one opens a screen where they decide, so what it is judged on is that it
+// is there, that it is distinct from the other two, and that it hands over the
+// identity of the routine it was pressed on. Where it LEADS is pressed by the
+// door enumeration, which drives the real editor.
+describe('a row offers a way to change when it runs', () => {
+  test('every row carries an edit control, distinct from pause and delete', () => {
+    const { doc, w, dom } = shell();
+    w.renderRoutines();
+    for (const row of rows(doc)) {
+      const edit = row.querySelector('[data-routines-action="edit"]');
+      assert.ok(edit, 'a routine that cannot be rescheduled can only be deleted and remade');
+      assert.strictEqual(edit.getAttribute('aria-label'), 'Edit schedule',
+        'a pencil on a row could mean renaming it, so the control says what it opens');
+      // Distinct controls, not one control doing two things.
+      assert.notStrictEqual(edit, row.querySelector('[data-routines-action="delete"]'));
+      assert.ok(!edit.classList.contains('danger'),
+        'changing when a routine runs is not a destructive act and is not dressed as one');
+    }
+    dom.window.close();
+  });
+
+  // A paused routine is still a routine, and its schedule is exactly what
+  // somebody pausing it may be about to change.
+  test('a paused row offers it too', () => {
+    const { doc, w, dom } = shell([routine('Paused one', { paused: true })]);
+    w.renderRoutines();
+    assert.ok(doc.querySelector('[data-routines-action="edit"]'));
+    dom.window.close();
+  });
+
+  // The confirmation draws a row to say which routine is about to go. It offers
+  // nothing, and this is an offer.
+  test('the row in the delete confirmation offers no way to edit it', () => {
+    const { doc, w, dom } = shell();
+    w.renderRoutines();
+    press(doc, '.routine-row [data-routines-action="delete"]');
+    assert.ok(doc.querySelector('.confirm-card'), 'sanity: the confirmation is on screen');
+    assert.strictEqual(
+      doc.querySelector('.routines-confirm-subject [data-routines-action="edit"]'), null);
+    dom.window.close();
+  });
+
+  // It opens a screen rather than asking for a change, so nothing goes to the
+  // server when it is pressed. A control here that sent something would be a
+  // change the reader never confirmed.
+  test('pressing it asks the server for nothing', () => {
+    const { doc, w, dom } = shell();
+    w.renderRoutines();
+    // The editor is not loaded in this shell, so the door resolves to nothing
+    // and the press is inert. What is being checked is that the row itself
+    // sends no message, which holds either way.
+    press(doc, '.routine-row [data-routines-action="edit"]');
+    assert.deepStrictEqual(w.sent, []);
+    dom.window.close();
+  });
+
+  // The refusal from the last action belongs to the list it was raised on, and
+  // this is a reader leaving that list.
+  test('pressing it clears the refusal the last action left', () => {
+    const { doc, w, dom } = shell();
+    w.renderRoutines();
+    w.routinesActionFailed({ type: 'routine_action_error', message: 'That routine could not be changed.' });
+    assert.ok(doc.querySelector('[data-routines-problem]'), 'sanity: the refusal is on the page');
+    press(doc, '.routine-row [data-routines-action="edit"]');
+    w.renderRoutines();
+    assert.strictEqual(doc.querySelector('[data-routines-problem]'), null);
+    dom.window.close();
+  });
+});
+
 describe('delete says what stops', () => {
   // AC-11.
   test('pressing delete names the agent, the routine, the schedule and what survives', () => {
@@ -1393,6 +1466,12 @@ describe('the header is the skills view\'s header', () => {
 
   const routinesHeader = (doc) => doc.querySelector('#routines-content .profile-header');
   const skillsHeader = (doc) => doc.querySelector('#skill-detail-content .profile-header');
+  // THE SUBTITLE IS READ OFF THE PANE, NOT OFF THE HEADER. It sits in
+  // .routines-header-desc, a sibling of .profile-header rather than a child
+  // of it, which is the fix this file's own header test below asserts. A
+  // helper reading it through routinesHeader(doc) would always find nothing
+  // and every test using it would be testing the wrong element.
+  const routinesSubtitle = (doc) => doc.querySelector('#routines-content .routines-subtitle');
 
   // AC-C1. The same component, and it is asserted as the same ELEMENTS rather
   // than as a class name that happens to appear in both files.
@@ -1463,8 +1542,8 @@ describe('the header is the skills view\'s header', () => {
   // unscoped sentence, and it is the locked one.
   test('the subtitle under the title is the locked sentence', () => {
     const { doc, dom } = styled();
-    const subtitle = routinesHeader(doc).querySelector('.routines-subtitle');
-    assert.ok(subtitle, 'the lead sentence did not move into the header');
+    const subtitle = routinesSubtitle(doc);
+    assert.ok(subtitle, 'the lead sentence did not render beneath the header');
     assert.strictEqual(text(subtitle),
       'Every scheduled skill across your team, and when it runs next.');
     dom.window.close();
@@ -1479,7 +1558,7 @@ describe('the header is the skills view\'s header', () => {
       assert.ok(el, 'an element this compares is not on the page');
       return dom.window.getComputedStyle(el).fontSize;
     };
-    const subtitle = size(routinesHeader(doc).querySelector('.routines-subtitle'));
+    const subtitle = size(routinesSubtitle(doc));
     assert.notStrictEqual(subtitle, size(routinesHeader(doc).querySelector('.profile-name')),
       'the subtitle is set at the title size, which is a type size this card was not asked to move');
     dom.window.close();
@@ -1502,20 +1581,20 @@ describe('the header is the skills view\'s header', () => {
       routines: [routine('Wren nightly', { nextRun: iso(TOMORROWS_SLOT) })],
     });
     w.renderRoutines();
-    assert.strictEqual(text(routinesHeader(doc).querySelector('.routines-subtitle')),
+    assert.strictEqual(text(routinesSubtitle(doc)),
       'Every scheduled skill across your team, and when it runs next.',
       'sanity: unscoped, the page carries the locked sentence');
 
     w.setNavState = () => {};
     w.showRoutinesForAgent('piper');
-    assert.strictEqual(text(routinesHeader(doc).querySelector('.routines-subtitle')),
+    assert.strictEqual(text(routinesSubtitle(doc)),
       'Every scheduled skill Piper runs, and when it runs next.',
       'the list is filtered to one agent and the sentence above it still says the whole team');
 
     // And leaving the scope puts the general sentence back, so a filtered
     // sentence cannot outlive the filter.
     w.showRoutinesForAgent(null);
-    assert.strictEqual(text(routinesHeader(doc).querySelector('.routines-subtitle')),
+    assert.strictEqual(text(routinesSubtitle(doc)),
       'Every scheduled skill across your team, and when it runs next.');
     dom.window.close();
   });
@@ -1528,18 +1607,31 @@ describe('the header is the skills view\'s header', () => {
     });
     w.setNavState = () => {};
     w.showRoutinesForAgent('nobody');
-    assert.strictEqual(text(routinesHeader(doc).querySelector('.routines-subtitle')),
+    assert.strictEqual(text(routinesSubtitle(doc)),
       'Every scheduled skill across your team, and when it runs next.',
       'a true general sentence beats a specific one with a hole in it');
     dom.window.close();
   });
 
-  test('the sentence is in the header rather than in a paragraph below it', () => {
+  // The subtitle no longer nests inside .profile-header: it moved to a
+  // sibling block below the header, matching the split views/skills.js draws
+  // between .profile-header and .profile-desc, so the icon is no longer
+  // dwarfed by a two-line text column beside it. What this test still has to
+  // rule out is the ORIGINAL defect, a lead sentence loose in the pane as its
+  // own settings-style paragraph, disconnected from the header rather than
+  // sitting immediately beneath it.
+  test('the sentence sits directly beneath the header, not loose in the pane', () => {
     const { doc, dom } = styled();
     const pane = doc.getElementById('routines-content');
     assert.strictEqual(pane.querySelector('.settings-section-title'), null,
       'the settings heading is still on a view that lists things');
-    assert.ok(routinesHeader(doc).contains(pane.querySelector('.routines-subtitle')));
+    const header = routinesHeader(doc);
+    const desc = pane.querySelector('.routines-header-desc');
+    assert.ok(desc, 'the subtitle block did not render next to the header');
+    assert.ok(desc.contains(pane.querySelector('.routines-subtitle')),
+      'the subtitle is not inside the block that follows the header');
+    assert.strictEqual(header.nextElementSibling, desc,
+      'the subtitle block is not the header\'s immediate sibling');
     dom.window.close();
   });
 
@@ -1548,13 +1640,23 @@ describe('the header is the skills view\'s header', () => {
   // nothing left to say about the state of the list.
   test('the empty pane carries the same header, with the title alone', () => {
     const { doc, dom } = styled([], { skills: [] });
+    const pane = doc.getElementById('routines-content');
     const header = routinesHeader(doc);
     assert.ok(header, 'the empty pane lost the header');
     assert.ok(header.querySelector('.profile-avatar.skill-avatar svg'));
     assert.strictEqual(text(header.querySelector('.profile-name')), 'Routines');
-    assert.strictEqual(header.querySelector('.routines-subtitle'), null,
+    // CHECKED ACROSS THE WHOLE PANE, NOT ONLY INSIDE THE HEADER. The subtitle
+    // now renders as a sibling of .profile-header rather than a child of it
+    // (see the header-restructure tests above), so a header-scoped query
+    // would find no subtitle whether emptyHtml() correctly withholds it or
+    // wrongly draws it: the guard this asserts against is emptyHtml() calling
+    // listHeaderHtml() by mistake, which draws the subtitle beside the
+    // header, not inside it.
+    assert.strictEqual(pane.querySelector('.routines-subtitle'), null,
       'the state line is still the header\'s subtitle, so the pane reads as a sentence above a '
       + 'card rather than as a member of it');
+    assert.strictEqual(pane.querySelector('.routines-header-desc'), null,
+      'the empty pane drew the list header\'s description block rather than the title alone');
     dom.window.close();
   });
 
@@ -1957,14 +2059,20 @@ describe('the rail says when a routine has failed', () => {
 describe('a routine the upgrade held back', () => {
   const HELD = [routine('Held back', { enabled: false, nextRun: iso(TOMORROWS_SLOT) })];
 
-  test('the row offers to turn it on and says Rundock will start running it', () => {
+  test('the row offers to turn it on and names the duplicate-run risk directly', () => {
     const { doc, w, dom } = shell(HELD);
     w.renderRoutines();
     const row = rowNamed(doc, 'Held back');
     const words = text(row);
     assert.match(words, /Not running/, 'the row does not say it is not running');
-    assert.match(words, /Rundock will start running it/,
+    assert.match(words, /Rundock starts running it too/,
       'the row does not say what turning it on does');
+    // NAMED ON THE RENDERED ROW, not only in the model: a reader here is the
+    // one most likely to already have this job running outside Rundock.
+    assert.match(words, /cron job or script/i,
+      'the row does not name what might already be running this routine');
+    assert.match(words, /twice/i,
+      'the row does not say plainly that turning it on can run this routine twice');
     // And it does not promise a run it will not make.
     assert.strictEqual(row.querySelector('.next-run'), null,
       'a routine that will not run still advertises a next run');

@@ -445,7 +445,7 @@ describe('a schedule the scheduler cannot read', () => {
         'the row stopped naming the fault that has to be fixed first');
       // And it does not also promise that turning it on would start it, which
       // is false while the schedule cannot be read.
-      assert.ok(!/Rundock will start running it/.test(words),
+      assert.ok(!/Rundock starts running it too/.test(words),
         `the row promises a run it cannot make: ${words}`);
       assert.strictEqual(row.querySelector('[data-routines-action="enable"]'), null,
         'the row offers a control whose consequence it cannot state truthfully');
@@ -459,7 +459,7 @@ describe('a schedule the scheduler cannot read', () => {
     cronWorkspace((doc) => {
       const row = rowNamed(doc, 'Held back');
       assert.ok(row.querySelector('.rr-offer-text'), 'the offer row lost its offer');
-      assert.match(text(row), /Rundock will start running it/);
+      assert.match(text(row), /Rundock starts running it too/);
       assert.ok(row.querySelector('[data-routines-action="enable"]'), 'no control to press');
       assert.strictEqual(row.querySelector('.next-run'), null,
         'a routine that will not run advertises when it will');
@@ -472,7 +472,7 @@ describe('a schedule the scheduler cannot read', () => {
       assert.strictEqual(text(row.querySelector('.next-run')), 'Paused');
       assert.strictEqual(row.querySelector('[data-routines-action="enable"]'), null,
         'turning it on would leave it paused, so the offer promises a run it cannot make');
-      assert.ok(!/Rundock will start running it/.test(text(row)));
+      assert.ok(!/Rundock starts running it too/.test(text(row)));
     });
   });
 

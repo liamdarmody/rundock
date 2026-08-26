@@ -84,14 +84,25 @@
    * person meets first.
    *
    * AND WHY THE SENTENCE SAYS WHAT IT SAYS. The reader arriving here already
-   * has the job running somewhere else. "Turn on" alone reads as tidying a
-   * switch, and the thing they have to know before pressing it is that Rundock
-   * will begin running the routine ITSELF, on top of whatever is running it
-   * today. That is the sentence that stops a morning briefing going out twice.
+   * has the job running somewhere else: a beta user with routines already
+   * running on her own machine, and the owner's own VPS, are both this exact
+   * case, discovered outside cron specifically as well as inside it. "Turn
+   * on" alone reads as tidying a switch, and the thing they have to know
+   * before pressing it is that Rundock will begin running the routine
+   * ITSELF, on top of whatever is running it today.
+   *
+   * NAMED DIRECTLY RATHER THAN IMPLIED. An earlier version of this sentence
+   * said only that Rundock would start running it, trusting the reader to
+   * work out for themselves that this could mean two copies. That is exactly
+   * the inference the sentence exists so nobody has to make under pressure at
+   * 7am: it now says "cron job or script" and "twice" in as many words,
+   * because a risk implied is a risk half the readers of this row will miss.
    */
   const NOT_ENABLED = {
     lead: 'Not running.',
-    body: 'Turn it on and Rundock will start running it on this schedule.',
+    body: 'Turn it on and Rundock starts running it too. If a cron job or '
+      + 'script already runs this routine, turning it on here runs it '
+      + 'twice, until you turn the other one off.',
     // WHEN THE FIRST RUN LANDS, said only where it is true.
     //
     // This reader most needs to know that a slot already gone today is caught

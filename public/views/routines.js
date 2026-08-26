@@ -193,6 +193,11 @@ const ICONS = {
   play: '<polygon points="6 3 20 12 6 21 6 3"/>',
   trash: '<polyline points="3 6 5 6 21 6"/>'
     + '<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  // A pencil, drawn on the same 24 grid at the same stroke weight as the three
+  // above, so the row reads as one set of controls rather than as two borrowed
+  // from different places.
+  pencil: '<path d="M12 20h9"/>'
+    + '<path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/>',
 };
 
 function iconButton(action, label, paths, onclick, danger) {
@@ -384,6 +389,18 @@ function rowHtml(entry, index, withActions) {
     actions += r.paused
       ? iconButton('resume', 'Resume', ICONS.play, `routinesSetPaused(${index}, false)`, false)
       : iconButton('pause', 'Pause', ICONS.pause, `routinesSetPaused(${index}, true)`, false);
+    // BETWEEN THE TWO IT ALREADY HAD, and the position is the decision. Pause
+    // keeps the place it has always had, because it is the control most
+    // reached for. Delete stays last, where the destructive one belongs. The
+    // new one goes in the gap rather than at either end.
+    //
+    // OFFERED ON EVERY ROW, INCLUDING ONES WHOSE SCHEDULE THIS EDITOR CANNOT
+    // SHOW. That case is exactly where the control is worth most: a routine
+    // written by hand for a cadence the scheduler never reads is one that fires
+    // nothing, and this is the way to fix it. The editor says so when it opens
+    // rather than the row hiding the way in, because a control that is silently
+    // absent teaches nothing.
+    actions += iconButton('edit', 'Edit schedule', ICONS.pencil, `routinesEditSchedule(${index})`, false);
     actions += iconButton('delete', 'Delete', ICONS.trash, `routinesAskDelete(${index})`, true);
     actions += '</div>';
   }
@@ -448,10 +465,24 @@ function headerHtml(subtitle, workspace) {
   const model = routinesModel();
   let h = '<div class="profile-header">'
     + `<div class="profile-avatar skill-avatar">${CLOCK_SVG}</div>`
-    + `<div><div class="profile-name">${esc(model.LEAD.title)}</div>`
-    + (subtitle ? `<div class="routines-subtitle">${esc(subtitle)}</div>` : '')
-    + (workspace ? `<div class="routines-workspace" data-routines-workspace>${esc(workspace)}</div>` : '')
-    + '</div></div>';
+    + `<div><div class="profile-name">${esc(model.LEAD.title)}</div></div>`
+    + '</div>';
+  // THE SENTENCE IS A SIBLING OF THE HEADER, NOT A CHILD OF IT, the same
+  // split views/skills.js's selectSkill() draws between .profile-header (icon
+  // plus name only) and .profile-desc (a full-width block below it). Nested
+  // inside the header's text column, the subtitle and the workspace line had
+  // no width of their own to wrap against: they took whatever the column
+  // happened to leave once the icon and its gap were spent, which on a
+  // two-line fact (scope plus workspace) read as the icon shrinking rather
+  // than the text running long. A sibling block spans the panel's own width
+  // instead, which is the width these sentences were always meant to wrap
+  // against.
+  if (subtitle || workspace) {
+    h += '<div class="routines-header-desc">'
+      + (subtitle ? `<div class="routines-subtitle">${esc(subtitle)}</div>` : '')
+      + (workspace ? `<div class="routines-workspace" data-routines-workspace>${esc(workspace)}</div>` : '')
+      + '</div>';
+  }
   // On the header rather than in one of the three branches below, so the
   // refusal is on the page whichever state the list is in when it arrives.
   if (pendingProblem) {
@@ -790,10 +821,35 @@ function routinesSetPaused(index, paused) {
   routinesSetFlag(index, 'set_routine_paused', 'paused', paused);
 }
 
+/**
+ * Open the editor on this routine's schedule.
+ *
+ * IT SENDS NOTHING, which is what separates it from every other control on this
+ * row. The other three ask the server for a change the reader has already
+ * decided; this one opens a screen where they decide. So there is no message
+ * shape here and no refusal to handle: the editor owns both from the moment it
+ * opens.
+ *
+ * IT CARRIES THE SAME TRIPLE THE OTHERS DO. Nothing makes a routine name unique
+ * within a file, so the agent, the name and which namesake it is travel
+ * together, and the editor carries them through to the message it eventually
+ * sends. A door that dropped the occurrence would open on one routine's times
+ * and save over another's.
+ *
+ * The refusal from the last action goes, for the reason it is held at all: it
+ * answers a control pressed on this list, and the reader is leaving it.
+ */
+function routinesEditSchedule(index) {
+  const entry = allRoutines()[index];
+  pendingProblem = null;
+  if (!entry || typeof editRoutineSchedule !== 'function') return;
+  editRoutineSchedule(entry.agent.id, entry.routine.name, entry.occurrence);
+}
+
 return {
   renderRoutines, showRoutinesForAgent,
   routinesAskDelete, routinesCancelDelete, routinesConfirmDelete, routinesSetPaused, routinesSetEnabled,
-  routinesOpenSkill,
+  routinesOpenSkill, routinesEditSchedule,
   routinesActionFailed, routinesActionCleared, routinesViewLastRun,
 };
 }));
