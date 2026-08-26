@@ -37,8 +37,17 @@
 .re-row.muted:hover { border-color: var(--border); }
 .re-row.muted .re-name { color: var(--text-2); }
 
-.re-dot { width: 18px; height: 18px; flex-shrink: 0; margin-top: 1px; border-radius: var(--radius-circle); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: var(--label); color: var(--accent); }
-.re-row.sel .re-dot { border-color: var(--accent); }
+/* --elevated fills the unselected dot so it reads as its own surface rather
+   than a border alone. Dark mode's --border sits only a few points from
+   --card, too close to read as an outline on an 18px circle with nothing
+   else to define it; --elevated is a genuinely different surface in both
+   themes (a soft lift in light, a soft well in dark, per the .re-select
+   comment above), which is the same mechanism reused rather than a second
+   fix invented for the same problem. Cleared back to transparent once
+   selected, so the row's own accent-glow still shows through the ring
+   rather than being covered by a flat fill. */
+.re-dot { width: 18px; height: 18px; flex-shrink: 0; margin-top: 1px; border-radius: var(--radius-circle); border: 1px solid var(--border); background: var(--elevated); display: flex; align-items: center; justify-content: center; font-size: var(--label); color: var(--accent); }
+.re-row.sel .re-dot { border-color: var(--accent); background: transparent; }
 .re-body { min-width: 0; }
 .re-name { font-size: var(--body); font-weight: 600; color: var(--text-1); }
 .re-meta { font-size: var(--caption); color: var(--text-2); line-height: 1.5; margin-top: 2px; }
