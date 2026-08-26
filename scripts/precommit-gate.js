@@ -409,21 +409,31 @@ function buildRecord({ tree, branch, at }) {
 
 // The release commit's footprint.
 //
-// scripts/release.js bumps the version, promotes the changelog, and commits
-// directly to main. That is by design and the card plan states the constraint:
-// it is the only thing allowed on top of a gated SHA, release.js checks the
-// gate BEFORE creating it, and it touches these two files and nothing else.
+// scripts/release.js bumps the version and promotes the changelog. It is the
+// only thing allowed on top of a gated SHA: release.js checks the gate BEFORE
+// creating it, and it touches these two files and nothing else.
 //
 // The exception is defined by WHAT IS STAGED rather than by an environment
 // variable or the name of the calling process, because a guard any caller can
 // announce its way past is not a guard.
 //
 // RESIDUAL RISK, stated rather than left implicit: this also lets a
-// hand-edited changelog or a hand-edited version reach the default branch
-// without a branch. That is judged acceptable, because neither is code, both
-// are visible in the one place people read before a release, and the
-// alternative is a gate that blocks the release tool it ships beside.
+// hand-edited changelog or a hand-edited version through without the checks.
+// That is judged acceptable, because neither is code, both are visible in the
+// one place people read before a release, and the alternative is a gate that
+// blocks the release tool it ships beside.
 const RELEASE_FOOTPRINT = ['package.json', 'CHANGELOG.md'];
+
+// Where that commit is made. It used to be the default branch, and the
+// protection on main now refuses a direct push, so release.js commits the bump
+// on `release/<version>` and puts it through a pull request instead. The
+// exception follows the commit to the branch it is made on.
+//
+// Exact rather than a prefix: this is the name prepare builds, and a rule that
+// admitted anything beginning with the word would be a name anybody could
+// adopt to skip the checks. The default branch keeps the exception too, for the
+// hand-edited version or changelog the residual risk above describes.
+const RELEASE_BRANCH_RE = /^release\/\d+\.\d+\.\d+$/;
 
 /** Paths staged for the next commit. */
 function stagedPaths(root = ROOT) {
@@ -449,6 +459,8 @@ function refusal({ record, tree, branch, mainBranch, staged = [] }) {
     if (isReleaseCommit(staged)) return null;
     return { code: 'on-default-branch', message: `refusing to commit directly to ${mainBranch}. Branch first.` };
   }
+  // The release commit, on the branch release:prepare makes it on.
+  if (RELEASE_BRANCH_RE.test(branch) && isReleaseCommit(staged)) return null;
   if (!record) {
     return { code: 'no-record', message: `the checks have not been run against this tree. ${rerun}` };
   }
