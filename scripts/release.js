@@ -288,6 +288,113 @@ function promoteUnreleasedChangelog(version, { root = ROOT, log = logStep } = {}
   return newHeading;
 }
 
+// ---------------------------------------------------------------------------
+// Prepare subcommand
+// ---------------------------------------------------------------------------
+
+// Default transport for `gh` invocations that are not API calls. Injected as an
+// option so the prepare flow can be exercised without reaching GitHub, which is
+// the same arrangement publishRelease uses for its API transport.
+function ghCli(root = ROOT) {
+  return (args) => execFileSync('gh', args, { cwd: root, encoding: 'utf8' });
+}
+
+// Short, factual, and held to the same writing rules as anything committed:
+// this text is published under the project's name.
+function pullRequestBody(version, { gatedSha, heading, branch }) {
+  const entry = heading.replace(/^##\s*/, '');
+  return [
+    `Version bump and changelog promotion for ${version}, and nothing else. The commit sits on top of ${gatedSha.slice(0, 9)}, which is the commit the release gate passed on.`,
+    '',
+    `Promoted changelog heading: ${entry}`,
+    `Full entry: https://github.com/${REPO}/blob/${branch}/CHANGELOG.md`,
+    '',
+    `Branch protection requires the checks on this pull request to pass before it can merge, so there is nothing further to run locally. Once it has merged, \`npm run release -- tag ${version}\` tags the merged commit on main, and that tag is what starts the build, sign, notarise and draft publish workflow.`,
+    '',
+  ].join('\n');
+}
+
+// Everything up to the point a human has to look at something: preflight, gate
+// check, version bump, changelog promotion, a commit on `release/<version>`,
+// the branch pushed, and a pull request opened against main. It does not push
+// to main and it does not tag. Throws so it is unit-testable; the main flow
+// converts to fail().
+function prepareRelease(version, { root = ROOT, git = gitIn(root), gh = ghCli(root), log = logStep } = {}) {
+  preflight(version, { root, git });
+
+  // The gate governs the SHA being released: check it BEFORE the version-bump
+  // commit is created, because that commit only adds package.json and
+  // CHANGELOG.md on top of the gated code.
+  const gatedSha = git(['rev-parse', 'HEAD']).trim();
+  requireGatePass(gatedSha, { root });
+
+  const branch = `release/${version}`;
+  if (git(['branch', '--list', branch]).trim()) {
+    throw new Error(`Branch ${branch} already exists locally. Delete it, or finish the release it belongs to.`);
+  }
+  if (git(['ls-remote', '--heads', 'origin', branch]).trim()) {
+    throw new Error(`Branch ${branch} already exists on the remote. An earlier prepare got that far; review its pull request rather than starting again.`);
+  }
+
+  // The push is the boundary between what can be wound back and what cannot.
+  // Before it, the only changes anywhere are the ones made below, because the
+  // preflight proved the tree was clean, so a failure restores exactly what
+  // this function wrote and nothing of anyone else's. After it, the branch is
+  // on the remote and somebody may already be reading it, so the failure says
+  // what exists rather than tidying it away.
+  let pushed = false;
+  try {
+    git(['checkout', '-b', branch], { stdio: 'pipe' });
+    setVersion(version, { root, log });
+    const heading = promoteUnreleasedChangelog(version, { root, log });
+    git(['add', 'package.json', 'CHANGELOG.md'], { stdio: 'pipe' });
+    git(['commit', '-m', `chore: release ${version}`], { stdio: 'pipe' });
+    git(['push', '-u', 'origin', branch], { stdio: 'pipe' });
+    pushed = true;
+    log('prepare', `Pushed ${branch}`);
+
+    const out = gh([
+      'pr', 'create',
+      '--base', 'main',
+      '--head', branch,
+      '--title', `Prepare the ${version} release`,
+      '--body', pullRequestBody(version, { gatedSha, heading, branch }),
+    ]);
+    const pullRequest = String(out || '').trim().split('\n').filter(Boolean).pop() || '';
+    log('prepare', `Opened ${pullRequest || 'the pull request'}`);
+    return { branch, gatedSha, heading, pullRequest };
+  } catch (err) {
+    if (pushed) {
+      throw new Error(
+        `${err.message}\n\nThe branch ${branch} is pushed and carries the release commit, but the pull request was not opened. ` +
+        `Open it against main by hand, or delete the branch and run prepare again. No tag exists either way.`
+      );
+    }
+    const restored = restoreMain(branch, { git });
+    throw new Error(
+      `${err.message}\n\n${restored}`
+    );
+  }
+}
+
+// Put the repository back on main as the preflight found it. Safe only because
+// the preflight refuses a dirty tree, so the sole thing discarded here is the
+// version bump and changelog promotion this run just wrote.
+function restoreMain(branch, { git }) {
+  try {
+    git(['checkout', '--force', 'main'], { stdio: 'pipe' });
+    if (git(['branch', '--list', branch]).trim()) {
+      git(['branch', '-D', branch], { stdio: 'pipe' });
+    }
+    return 'Nothing was pushed. The working tree is back on main as it was, and no tag exists.';
+  } catch (err) {
+    return (
+      `Nothing was pushed, and winding the working tree back failed as well: ${err.message}. ` +
+      `Check "git status" and "git branch" before running prepare again.`
+    );
+  }
+}
+
 function commitTagPush(version) {
   const tag = `v${version}`;
   try {
@@ -356,4 +463,12 @@ if (require.main === module) {
   }
 }
 
-module.exports = { extractChangelogEntry, promoteUnreleasedChangelog, requireGatePass, publishRelease, ghApiArgs };
+module.exports = {
+  extractChangelogEntry,
+  promoteUnreleasedChangelog,
+  preflight,
+  requireGatePass,
+  prepareRelease,
+  publishRelease,
+  ghApiArgs,
+};
