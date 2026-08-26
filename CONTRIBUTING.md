@@ -110,6 +110,8 @@ Rundock has a substantial automated suite, and PRs are expected to keep it green
 
 Expectations for a PR: the full suite green on Node 22 and 24 (CI checks both), new behaviour covered by tests (bug fixes include a regression test that fails before the fix), and byte-for-byte guarantees respected if you touch the editor. Then test by hand against a real workspace with agents: verify your change across the team, conversations, skills, and files views as relevant.
 
+**If a test fails and then passes on a re-run, read [docs/TEST-TIMING.md](docs/TEST-TIMING.md) before re-running again.** It carries the inventory of every assertion in the suite that depends on timing or on how two things interleave, says which are known to be load-sensitive and which are correct as written, and gives the rule for adding a wait: poll for a condition that must be reached, sleep only to prove something never happens. A test not listed there is a new instance of that class and should be classified rather than re-run until green.
+
 ### Proving a test would have failed
 
 A test written after the fix, while looking at the finished code, tends to assert what the fix obviously does. `scripts/red-first.js` runs that requirement mechanically: it takes your change's source away against the point your branch was cut from, re-runs the tests, and reports whether they actually go red.
