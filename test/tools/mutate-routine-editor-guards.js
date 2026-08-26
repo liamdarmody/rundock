@@ -75,6 +75,13 @@ const SKILL_DOOR = { src: path.join(ROOT, 'public', 'views', 'routine-editor.js'
 const SKILLS_PAGE = { src: path.join(ROOT, 'public', 'views', 'skills.js'), suite: 'test/unit/routine-editor-doors.test.js' };
 // The data model's write path, where a routine becomes bytes in a file.
 const ROUTINES = { src: path.join(ROOT, 'lib', 'agents', 'routines.js'), suite: 'test/unit/routine-write.test.js' };
+// The handler that changes WHEN a saved routine runs, and the rule on the
+// writer that decides what may be written into that field. Both are watched by
+// the suite that drives an edit through the interface, because the rule is
+// about a value reaching a file rather than about a function returning false.
+const SCHEDULE_HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/unit/routine-schedule-edit.test.js' };
+const ROUTINES_SCHEDULE = { src: path.join(ROOT, 'lib', 'agents', 'routines.js'), suite: 'test/unit/routine-schedule-edit.test.js' };
+const DISPATCH = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'index.js'), suite: 'test/unit/routine-schedule-edit.test.js' };
 // The same file, watched by the suite that owns the timezone a schedule was
 // set in. It is a second entry rather than a second suite on the first because
 // each mutation runs exactly one suite, and these guards are watched by that
@@ -323,6 +330,51 @@ const MUTATIONS = [
     "  const declaredRoutines = (topLevelKeyCounts(content) || new Map()).get('routines') || 0;",
     '    const declaredRoutines = locateSection(content.split(\'\\n\')) ? 1 : 0;'],
 
+  // ===== WHEN A SAVED ROUTINE RUNS =====
+  //
+  // THE ONE THESE EXIST FOR is the first: a schedule the scheduler cannot read
+  // is the one bad value on this road that nothing downstream can notice. It
+  // saves, it appears in the list, its row cannot name a next run, and it waits
+  // forever. Every other field this writer touches is a boolean, where the
+  // value could not be wrong, only misplaced.
+  [ROUTINES_SCHEDULE, 'a schedule is checked before it becomes bytes in a file',
+    "  ['schedule', assertWritableSchedule],\n",
+    ''],
+  [ROUTINES_SCHEDULE, 'the grammar is the one the scheduler actually reads',
+    "const SCHEDULE_WORDS =\n  /^every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday) at ([01]\\d|2[0-3]):[0-5]\\d$/;",
+    'const SCHEDULE_WORDS = /^every (\\w+) at (\\d{2}):(\\d{2})$/;'],
+  [ROUTINES_SCHEDULE, 'a schedule is read whole, not found inside a longer line',
+    "const SCHEDULE_WORDS =\n  /^every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday) at ([01]\\d|2[0-3]):[0-5]\\d$/;",
+    'const SCHEDULE_WORDS = /every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday) at ([01]\\d|2[0-3]):[0-5]\\d/;'],
+  // A REFUSAL BELONGS TO THE SURFACE THAT ASKED, and for this one that surface
+  // is the editor. The reader is looking at the sentence builder with a save in
+  // flight; routine_action_error draws on the routines list they have left.
+  [SCHEDULE_HANDLER, 'a refused reschedule answers the editor, not the list behind it',
+    "  const fail = (message) => ws.send(JSON.stringify({ type: 'routine_error', message }));\n"
+    + '  const found = locateRoutineFile(ctx, msg, fail);\n'
+    + '  if (!found) return;\n\n'
+    + '  // TRIMMED BEFORE ANYTHING ELSE SEES IT',
+    "  const fail = routineActionRefusal(ws, msg);\n"
+    + '  const found = locateRoutineFile(ctx, msg, fail);\n'
+    + '  if (!found) return;\n\n'
+    + '  // TRIMMED BEFORE ANYTHING ELSE SEES IT'],
+  [SCHEDULE_HANDLER, 'the writer\'s own words are what the reader is told',
+    '    refuse: (why) => fail(why || `Routine "${found.name}" could not be rescheduled.`),',
+    '    refuse: () => fail(`Routine "${found.name}" could not be rescheduled.`),'],
+  // Removing this leaves the routine safe, because a null value writes nothing
+  // and the read-back then refuses. What it loses is the reason: the reader is
+  // told the routine could not be rescheduled rather than that nothing said
+  // when to run it.
+  [SCHEDULE_HANDLER, 'a message that names no schedule says that is what is missing',
+    "  if (!schedule) {\n    fail('A schedule is required.');\n    return;\n  }",
+    '  if (false) { return; }'],
+  [SCHEDULE_HANDLER, 'the value is trimmed to what the file will read back',
+    '  const schedule = typeof msg.schedule === \'string\' ? msg.schedule.trim() : null;',
+    '  const schedule = typeof msg.schedule === \'string\' ? msg.schedule : null;'],
+  [DISPATCH, 'the edit is something the client can actually ask for',
+    '    set_routine_schedule: team.handleSetRoutineSchedule,\n',
+    ''],
+
   // The timezone a schedule was set in.
   //
   // THE ONE THESE EXIST FOR is the first: fill an absent zone in from the
@@ -419,7 +471,7 @@ function run() {
   // Every file is read up front and all of them are restored together, so a
   // throw part way through cannot leave one mutated, and neither can a signal.
   const targets = [MODEL, MODEL_STEP, VIEW, APP, HANDLER, PROFILE, SKILL_DOOR,
-    SKILLS_PAGE, ROUTINES, ROUTINES_TZ];
+    SKILLS_PAGE, ROUTINES, ROUTINES_TZ, SCHEDULE_HANDLER, ROUTINES_SCHEDULE, DISPATCH];
   const session = beginMutationRun({ files: targets.map((target) => target.src) });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));

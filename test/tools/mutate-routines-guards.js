@@ -463,9 +463,13 @@ const MUTATIONS = [
   [HANDLER, 'the delete tells the writer which block',
     '  const next = removeRoutineBlock(before, found.name, found.occurrence);',
     '  const next = removeRoutineBlock(before, found.name);'],
-  [HANDLER, 'a routine flag change tells the writer which block',
-    '  const next = updateRoutineBlock(before, found.name, { [field]: value }, found.occurrence);',
-    '  const next = updateRoutineBlock(before, found.name, { [field]: value });'],
+  // The write moved into the one function both the row's controls and the
+  // schedule edit go through, so the guard text moved with it. Unchanged
+  // otherwise: dropping the occurrence still makes every control act on the
+  // first routine of its name whatever the reader pointed at.
+  [HANDLER, 'a routine field change tells the writer which block',
+    '    next = updateRoutineBlock(before, found.name, { [field]: value }, found.occurrence);',
+    '    next = updateRoutineBlock(before, found.name, { [field]: value });'],
 
   // ===== THE THREE TONES, AS THE PAGE RESOLVES THEM =====
   [STYLES, 'a late run keeps the success colour, and no state is amber',
