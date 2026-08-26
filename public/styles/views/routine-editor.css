@@ -183,3 +183,25 @@
 /* A refusal from the server, shown next to the button that caused it. The
    editor is still on screen precisely so this has somewhere to go. */
 .re-problem { font-size: var(--caption); color: var(--danger); line-height: 1.5; margin: 0 0 4px; }
+
+/* A SETTLED VALUE IN A FIELD, which is what the run-on field becomes when an
+   existing routine is being rescheduled rather than made.
+
+   IT IS NOT .re-row, and the difference is the whole reason this rule exists.
+   A row carries a mark, a hover border and a pointer, all of which say
+   "pressable"; worn by something that does nothing when pressed they teach the
+   reader a wrong model of the screen. So this keeps the card surface and the
+   radius the options have, which is what makes it read as the same field, and
+   drops every affordance, which is what makes it read as already decided. Same
+   padding as .re-row.re-compact so the field does not change height between the
+   two roads. .re-name and .re-meta inside it are the option's own two lines,
+   unchanged: one vocabulary for where a routine runs, whether it is being
+   chosen or shown. */
+.re-fixed { padding: 12px 14px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-xl); margin-bottom: 18px; }
+
+/* The stored schedule the picker cannot show, named above the field it cannot
+   be shown in. It takes the same top margin the workspace note does, and for
+   the same reason: run flush against the preview above it, it reads as a
+   continuation of that sentence rather than as a separate note about the
+   routine as it stands today. */
+.re-caveat[data-routine-editor="stored-schedule"] { margin-top: 12px; }

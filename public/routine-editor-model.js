@@ -143,7 +143,45 @@
     empty: 'Routines schedule skills your agents already have. Build one and it will show up here.',
     loading: 'Looking for skills your agents can run.',
     build: 'Build a skill',
+    // EDITING IS NOT STEP TWO OF TWO, and this line exists because saying so
+    // would be false. There is no step one behind it: the skill and the run
+    // target are settled and are shown rather than asked for, so a reader who
+    // arrived here arrived at the whole of what they came to change. A step
+    // counter would offer a first step that does not exist, and its second
+    // sentence says what is NOT about to move, which is the question somebody
+    // editing a live routine actually has.
+    edit: 'Say when this should run instead. Nothing else about the routine changes.',
   };
+
+  /**
+   * The routine's stored schedule, said back to a reader the editor cannot
+   * show it to.
+   *
+   * WHY A SENTENCE IS OWED AT ALL. Agent files are written by hand, and the
+   * scheduler reads more than this editor offers: any minute of the hour, in
+   * any case. `readSchedule` refuses to pre-fill from a schedule the controls
+   * cannot display, which is right, and leaves the form showing values that are
+   * not the routine's with nothing accounting for the difference. So the note
+   * names the stored schedule, verbatim, and says plainly what saving would do
+   * to it.
+   *
+   * IT NAMES THE SCHEDULE RATHER THAN DESCRIBING IT. The reader wrote that line
+   * themselves, in a file they can open, and quoting it is the only thing that
+   * lets them tell whether replacing it matters.
+   *
+   * NEITHER A FAULT NOR A WARNING IN ITS TONE. A schedule this editor cannot
+   * build is an ordinary thing to find: it may be one that runs perfectly well.
+   * What is true is that the picker cannot show it, which is a fact about the
+   * picker, so that is what the sentence says.
+   */
+  const STORED_SCHEDULE_NOTE = "This routine's schedule, {schedule}, is not one this editor can build. "
+    + 'Saving replaces it with the one above.';
+
+  function storedScheduleNote(input) {
+    const schedule = input && typeof input.schedule === 'string' ? input.schedule.trim() : '';
+    if (!schedule || readSchedule(schedule)) return null;
+    return STORED_SCHEDULE_NOTE.replace('{schedule}', schedule);
+  }
 
   // Where save goes. A routine that has been written belongs on the list of
   // routines, so the editor's job finishes by leaving. Named here rather than
@@ -358,6 +396,41 @@
   }
 
   /**
+   * The reverse of `buildSchedule`: a schedule already on disk, taken back
+   * apart into the two values the builder holds.
+   *
+   * WHY THIS EXISTS. Editing a routine's schedule opens the sentence builder
+   * with that routine's current words already in it, and the builder's state is
+   * a frequency and a time rather than a sentence. Something has to turn one
+   * into the other, and this is the only place that does.
+   *
+   * BOTH HALVES ARE LOOKED UP, NEVER LIFTED OUT OF THE STRING, which is the
+   * same rule `buildSchedule` follows and it matters more in this direction.
+   * An agent file is written by hand as well as by this editor, so the string
+   * arriving here can say anything. Handing back whatever the pattern captured
+   * would pre-fill a form with values no control on it can show: a `<select>`
+   * asked to select an option it does not have shows its first one instead, so
+   * the reader would be looking at a schedule that is not theirs with nothing
+   * saying so. A schedule this editor could not have built therefore reads back
+   * as nothing, and the caller decides what to do about that.
+   *
+   * THE CASE IS FOLDED BEFORE THE LOOKUP, because the scheduler folds it before
+   * it reads. `Every Monday at 07:00` is a routine that fires, so it is one this
+   * has to be able to reopen; the values handed back are the editor's own, so
+   * what is rebuilt afterwards is the canonical spelling rather than the
+   * author's.
+   */
+  function readSchedule(schedule) {
+    if (!schedule || typeof schedule !== 'string') return null;
+    const parts = /^every ([a-z]+) at (\d{2}:\d{2})$/.exec(schedule.toLowerCase());
+    if (!parts) return null;
+    const freq = frequency(parts[1]);
+    const time = timeOption(parts[2]);
+    if (!freq || !time) return null;
+    return { frequency: freq.value, time: time.value };
+  }
+
+  /**
    * The plain sentence the editor shows back.
    *
    * The run-on clause is read off the chosen option. A fixed string here would
@@ -446,10 +519,10 @@
 
   return {
     RUN_ON_SUPPORTED, RUN_ON_CAVEAT, WORKSPACE_CAVEAT, RUN_ON_LABEL, FREQUENCIES, STEP_LEADS, SAVE_DESTINATION,
-    UNASSIGNED_REASON,
+    UNASSIGNED_REASON, STORED_SCHEDULE_NOTE, storedScheduleNote,
     runOnOptions, runOnOption, runOnField, scheduleStepFields,
     skillChoices, stepLead,
-    times, buildSchedule, previewSentence,
+    times, buildSchedule, readSchedule, previewSentence,
     timezoneWords, timezoneCaption, readyCaption,
     routineDraft,
   };

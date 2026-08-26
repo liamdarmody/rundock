@@ -710,6 +710,12 @@ describe('routine editor: the reply reaches the user', () => {
     w.failedWith = [];
     w.routineEditorSaved = () => { w.savedCalled++; };
     w.routineEditorFailed = (m) => { w.failedWith.push(m); };
+    // A schedule change retires the routines list's last refusal, the way
+    // every other routine change that goes through does. Stubbed rather than
+    // left undefined: an absent global would fail these for a reason that has
+    // nothing to do with what the case does.
+    w.clearedCalled = 0;
+    w.routinesActionCleared = () => { w.clearedCalled++; };
     w.d = message;
     w.eval(`(function () {${caseBody(type)}\n})()`);
     return w;
@@ -768,6 +774,22 @@ describe('routine editor: the reply reaches the user', () => {
     assert.strictEqual(w.said.length, 1);
     assert.match(w.said[0], /Compile the ops summary/);
     assert.match(w.said[0], /piper/);
+    assert.deepStrictEqual(w.failedWith, []);
+  });
+
+  // A schedule change lands on the same road, because the reader is in the same
+  // place: the editor, with a save in flight, waiting to be told. Cut out and
+  // RUN like the two above, so a case that exists and does nothing fails here.
+  test('a rescheduled routine is confirmed and the editor is released', () => {
+    const w = runCase('routine_rescheduled', {
+      type: 'routine_rescheduled', agentId: 'piper',
+      name: 'Compile the ops summary', schedule: 'every friday at 16:00',
+    });
+    assert.strictEqual(w.savedCalled, 1, 'the editor leaves on the reply, not on send');
+    assert.strictEqual(w.said.length, 1);
+    assert.match(w.said[0], /Compile the ops summary/, 'the confirmation names the routine');
+    assert.match(w.said[0], /every friday at 16:00/, 'and the time it now runs');
+    assert.strictEqual(w.clearedCalled, 1, 'a change that went through retires the last refusal');
     assert.deepStrictEqual(w.failedWith, []);
   });
 });
@@ -853,6 +875,242 @@ describe('routine editor: the way in from an agent', () => {
     assert.ok(control, 'the control does not depend on the agent already having a skill');
     control.click();
     assert.ok(doc.querySelector('[data-routine-editor="create-skill"]'));
+    dom.window.close();
+  });
+});
+
+// ===== CHANGING WHEN A SAVED ROUTINE RUNS =====
+//
+// The same step 2 the create road ends on, opened with a routine's own values
+// already in it. What is asserted here is what a BROWSER shows: a model
+// carrying the right pre-fill, wired into a view that draws the picker anyway,
+// passes every model test and hands the reader a screen offering to change the
+// two things this road must not touch.
+describe('routine editor view: editing a saved routine', () => {
+  // The routine as the roster carries it, which is what the entry point is
+  // handed. Opened through openRoutineEditor rather than through the control
+  // that presses it, because that control is a separate change with a door
+  // enumeration of its own; what this file owns is the render.
+  function openEdit(over = {}) {
+    const dom = new JSDOM('<!doctype html><html><body>'
+      + '<button class="nav-item" data-nav="team"></button>'
+      + '<div id="view-routine-editor" class="hidden"><div id="routine-editor-content"></div></div>'
+      + '</body></html>', { runScripts: 'dangerously' });
+    const w = dom.window;
+    w.eval(MODEL_SRC);
+    w.eval(VIEW_SRC);
+    w.sent = [];
+    w.ws = { send: (text) => w.sent.push(JSON.parse(text)) };
+    w.navigatedTo = null;
+    w.switchNav = (nav) => { w.navigatedTo = nav; };
+    w.showView = () => {};
+    w.setNavState = () => {};
+    w.profileShown = null;
+    w.showProfile = (id) => { w.profileShown = id; };
+    const schedule = over.schedule === undefined ? 'every monday at 07:00' : over.schedule;
+    const parsed = w.RundockRoutineEditorModel.readSchedule(schedule);
+    w.openRoutineEditor({
+      step: 'schedule',
+      agentId: 'piper',
+      agentName: 'Piper',
+      skills: [],
+      zone: 'Europe/London',
+      runOn: over.runOn || 'local',
+      frequency: parsed ? parsed.frequency : null,
+      time: parsed ? parsed.time : null,
+      edit: {
+        agentId: 'piper',
+        name: over.name || 'Compile the ops summary',
+        occurrence: over.occurrence === undefined ? 0 : over.occurrence,
+        schedule,
+      },
+    });
+    return { dom, w, doc: w.document };
+  }
+
+  // AC-2. The routine's own frequency and time are the ones the controls are
+  // showing, read off the rendered options rather than off internal state: a
+  // select asked to show a value it does not have shows its first one instead,
+  // which is the failure this has to be able to see.
+  test('the sentence builder opens carrying the routine\'s current times', () => {
+    const { doc, dom } = openEdit({ schedule: 'every monday at 07:00' });
+    assert.strictEqual(doc.querySelector('select[data-routine-field="frequency"]').value, 'monday');
+    assert.strictEqual(doc.querySelector('select[data-routine-field="time"]').value, '07:00');
+    assert.match(text(doc), /Compile the ops summary/, 'and it names the routine being changed');
+    assert.match(text(doc), /every Monday at 7:00am/, 'the preview reads back what is on the controls');
+    dom.window.close();
+  });
+
+  // AC-2, the other half: a routine on a different schedule opens on ITS
+  // values. Asserting one routine's times proves the defaults were not simply
+  // left standing.
+  test('a different routine opens on its own times, not on the defaults', () => {
+    const { doc, dom } = openEdit({ schedule: 'every day at 18:30' });
+    assert.strictEqual(doc.querySelector('select[data-routine-field="frequency"]').value, 'day');
+    assert.strictEqual(doc.querySelector('select[data-routine-field="time"]').value, '18:30');
+    dom.window.close();
+  });
+
+  // AC-3. Neither the skill nor the run target is a control on this road, and
+  // neither is missing either: both are on the page as values.
+  test('the skill and the run target are shown and cannot be changed', () => {
+    const { doc, dom } = openEdit();
+    assert.strictEqual(doc.querySelector('[data-skill-key]'), null,
+      'the skill is settled, so no picker is drawn for it');
+    assert.strictEqual(doc.querySelector('[data-run-on]'), null,
+      'the run target is settled, so no pressable option is drawn for it');
+
+    const fixed = doc.querySelector('[data-routine-editor="run-on-fixed"]');
+    assert.ok(fixed, 'and it is shown rather than dropped: a field that vanishes reads as a setting lost');
+    assert.match(fixed.textContent, /This computer/);
+    assert.match(fixed.textContent, /Runs while Rundock is open here/);
+    assert.strictEqual(fixed.getAttribute('onclick'), null, 'nothing on it is pressable');
+
+    // The skill is the pill in the sentence, which is a value rather than a
+    // control by construction.
+    assert.match(doc.querySelector('.re-pill').textContent, /Compile the ops summary/);
+    dom.window.close();
+  });
+
+  // The rule the whole module is shaped around, on the surface this card adds.
+  // A second place drawing the run target is a second place for the always-on
+  // option's promise to end up on the option that cannot keep it.
+  test('the shown run target does not promise what the local option cannot do', () => {
+    const { doc, dom } = openEdit();
+    assert.ok(!text(doc).includes(OFF_COMPUTER_PROMISE),
+      `the local option must not carry "${OFF_COMPUTER_PROMISE}"`);
+    dom.window.close();
+  });
+
+  // The workspace caveat qualifies the field rather than the act of choosing,
+  // and it is as true of a routine being moved as of one being made.
+  test('the caveat about several computers is still shown', () => {
+    const { doc, dom } = openEdit();
+    assert.match(doc.querySelector('[data-routine-editor="caveat"]').textContent,
+      /Routines run on the machine they were made on/);
+    dom.window.close();
+  });
+
+  // Editing is not step two of two: there is no step one behind it.
+  test('the lead does not offer a first step that does not exist', () => {
+    const { doc, dom } = openEdit();
+    assert.ok(!text(doc).includes('Step 2 of 2'), 'nothing behind this screen was step one');
+    assert.match(text(doc), /Nothing else about the routine changes/);
+    assert.match(doc.querySelector('.settings-section-title').textContent, /Edit routine/);
+    dom.window.close();
+  });
+
+  // The routine's stored schedule, when the controls cannot show it. Without
+  // this the defaults read as the routine's own times and the reader replaces a
+  // schedule they never saw.
+  test('a schedule the picker cannot show is named on the step', () => {
+    const { doc, dom } = openEdit({ schedule: 'every day at 07:03' });
+    const note = doc.querySelector('[data-routine-editor="stored-schedule"]');
+    assert.ok(note, 'the step accounts for the difference between the controls and the file');
+    assert.match(note.textContent, /every day at 07:03/);
+    dom.window.close();
+  });
+
+  test('a schedule the picker can show is left to speak for itself', () => {
+    const { doc, dom } = openEdit({ schedule: 'every monday at 07:00' });
+    assert.strictEqual(doc.querySelector('[data-routine-editor="stored-schedule"]'), null,
+      'the controls are showing this routine\'s own times, so there is nothing to account for');
+    dom.window.close();
+  });
+
+  // A routine name is author text and reaches the page through the pill and
+  // through the note, so both are checked rather than only the one that is
+  // obviously a value.
+  test('a routine name reaches the page as text, not as markup', () => {
+    const nasty = '<img src=x onerror=alert(1)>';
+    const { doc, dom } = openEdit({ name: nasty, schedule: 'every fortnight at 07:00' });
+    assert.strictEqual(doc.querySelector('#routine-editor-content img'), null);
+    assert.strictEqual(doc.querySelector('.re-pill').textContent.trim(), nasty);
+    dom.window.close();
+  });
+
+  // AC-4's client half, and the reason it is not save_routine: that message
+  // appends a block, so sent from here it would leave the old schedule firing
+  // beside the new one under one name.
+  test('saving asks for the routine to be moved, by the identity it was opened with', () => {
+    const { doc, w, dom } = openEdit({ schedule: 'every monday at 07:00', occurrence: 2 });
+    const select = doc.querySelector('select[data-routine-field="time"]');
+    select.value = '16:00';
+    select.dispatchEvent(new w.Event('change'));
+    doc.querySelector('.re-actions .settings-btn-primary').click();
+    doc.querySelector('[data-routine-editor="save"]').click();
+
+    assert.deepStrictEqual(w.sent, [{
+      type: 'set_routine_schedule',
+      agentId: 'piper',
+      name: 'Compile the ops summary',
+      occurrence: 2,
+      schedule: 'every monday at 16:00',
+    }]);
+    assert.strictEqual(w.navigatedTo, null, 'sending is not saving: the editor waits to be told');
+    dom.window.close();
+  });
+
+  test('the button says what it does, which is not making a routine', () => {
+    const { doc, dom } = openEdit();
+    doc.querySelector('.re-actions .settings-btn-primary').click();
+    assert.match(doc.querySelector('[data-routine-editor="save"]').textContent, /Save changes/);
+    dom.window.close();
+  });
+
+  test('a change in flight is not sent twice', () => {
+    const { doc, w, dom } = openEdit();
+    doc.querySelector('.re-actions .settings-btn-primary').click();
+    doc.querySelector('[data-routine-editor="save"]').click();
+    w.saveRoutine();
+    assert.strictEqual(w.sent.length, 1);
+    dom.window.close();
+  });
+
+  // The server refused it. The editor is still on screen precisely so the
+  // answer has somewhere to go, and the reader is not moved off it.
+  test('a refused change is shown where the reader is looking', () => {
+    const { doc, w, dom } = openEdit();
+    doc.querySelector('.re-actions .settings-btn-primary').click();
+    doc.querySelector('[data-routine-editor="save"]').click();
+    w.routineEditorFailed('That schedule could not be written.');
+    assert.match(doc.querySelector('[data-routine-editor="error"]').textContent,
+      /That schedule could not be written/);
+    assert.strictEqual(w.navigatedTo, null, 'a refused change does not leave the editor');
+    dom.window.close();
+  });
+
+  test('a change the server wrote returns to the list, the way a save does', () => {
+    const { doc, w, dom } = openEdit();
+    doc.querySelector('.re-actions .settings-btn-primary').click();
+    doc.querySelector('[data-routine-editor="save"]').click();
+    w.routineEditorSaved();
+    assert.strictEqual(w.navigatedTo, 'team',
+      'this shell has no routines section, so the destination resolves to one it does have');
+    dom.window.close();
+  });
+
+  // The breadcrumb names where the press came from. An edit carries the owning
+  // agent too, so without its own branch the label would read "Back to Piper"
+  // and go to a profile the reader was never on.
+  test('the breadcrumb goes back to the list the edit was opened from', () => {
+    const { doc, w, dom } = openEdit();
+    const back = doc.querySelector('[data-routine-editor="back"]');
+    assert.match(back.textContent, /Back to routines/);
+    assert.ok(!back.textContent.includes('Piper'), 'the press did not come from an agent profile');
+    back.click();
+    assert.strictEqual(w.profileShown, null, 'and it does not go to one');
+    assert.strictEqual(w.navigatedTo, 'team', 'it resolves to the list, or to what this shell has instead');
+    dom.window.close();
+  });
+
+  // A routine already declaring the reserved target keeps it: this screen does
+  // not decide where a routine runs, so it shows what the file says.
+  test('a routine on the reserved target keeps it, and it is still not offered', () => {
+    const { doc, dom } = openEdit({ runOn: 'agent-computer' });
+    const fixed = doc.querySelector('[data-routine-editor="run-on-fixed"]');
+    assert.match(fixed.textContent, /Your Agent Computer/);
+    assert.strictEqual(doc.querySelector('[data-run-on]'), null, 'and nothing offers to change it');
     dom.window.close();
   });
 });
