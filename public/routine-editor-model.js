@@ -358,6 +358,41 @@
   }
 
   /**
+   * The reverse of `buildSchedule`: a schedule already on disk, taken back
+   * apart into the two values the builder holds.
+   *
+   * WHY THIS EXISTS. Editing a routine's schedule opens the sentence builder
+   * with that routine's current words already in it, and the builder's state is
+   * a frequency and a time rather than a sentence. Something has to turn one
+   * into the other, and this is the only place that does.
+   *
+   * BOTH HALVES ARE LOOKED UP, NEVER LIFTED OUT OF THE STRING, which is the
+   * same rule `buildSchedule` follows and it matters more in this direction.
+   * An agent file is written by hand as well as by this editor, so the string
+   * arriving here can say anything. Handing back whatever the pattern captured
+   * would pre-fill a form with values no control on it can show: a `<select>`
+   * asked to select an option it does not have shows its first one instead, so
+   * the reader would be looking at a schedule that is not theirs with nothing
+   * saying so. A schedule this editor could not have built therefore reads back
+   * as nothing, and the caller decides what to do about that.
+   *
+   * THE CASE IS FOLDED BEFORE THE LOOKUP, because the scheduler folds it before
+   * it reads. `Every Monday at 07:00` is a routine that fires, so it is one this
+   * has to be able to reopen; the values handed back are the editor's own, so
+   * what is rebuilt afterwards is the canonical spelling rather than the
+   * author's.
+   */
+  function readSchedule(schedule) {
+    if (!schedule || typeof schedule !== 'string') return null;
+    const parts = /^every ([a-z]+) at (\d{2}:\d{2})$/.exec(schedule.toLowerCase());
+    if (!parts) return null;
+    const freq = frequency(parts[1]);
+    const time = timeOption(parts[2]);
+    if (!freq || !time) return null;
+    return { frequency: freq.value, time: time.value };
+  }
+
+  /**
    * The plain sentence the editor shows back.
    *
    * The run-on clause is read off the chosen option. A fixed string here would
@@ -449,7 +484,7 @@
     UNASSIGNED_REASON,
     runOnOptions, runOnOption, runOnField, scheduleStepFields,
     skillChoices, stepLead,
-    times, buildSchedule, previewSentence,
+    times, buildSchedule, readSchedule, previewSentence,
     timezoneWords, timezoneCaption, readyCaption,
     routineDraft,
   };

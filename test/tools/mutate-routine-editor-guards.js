@@ -103,6 +103,17 @@ const MUTATIONS = [
   [MODEL, 'both halves of the schedule are looked up, never taken from the input',
     '    if (!freq || !time) return null;\n    return `every ${freq.value} at ${time.value}`;',
     '    return `every ${input.frequency} at ${input.time}`;'],
+  // The same rule in the other direction, and it fails differently. A form
+  // pre-filled from whatever the pattern captured asks a dropdown to select an
+  // option it does not have, which shows its FIRST option instead, so the
+  // reader is looking at a schedule that is not theirs with nothing saying so.
+  [MODEL, 'a stored schedule is looked up too, never taken from the string',
+    '    const freq = frequency(parts[1]);\n    const time = timeOption(parts[2]);\n'
+    + '    if (!freq || !time) return null;\n    return { frequency: freq.value, time: time.value };',
+    '    return { frequency: parts[1], time: parts[2] };'],
+  [MODEL, 'a stored schedule is read whole, not found inside a longer line',
+    '    const parts = /^every ([a-z]+) at (\\d{2}:\\d{2})$/.exec(schedule.toLowerCase());',
+    '    const parts = /every ([a-z]+) at (\\d{2}:\\d{2})/.exec(schedule.toLowerCase());'],
   [MODEL, 'the picker is scoped to the agent it was opened from',
     '        if (agentId && agent.id !== agentId) continue;\n',
     ''],
