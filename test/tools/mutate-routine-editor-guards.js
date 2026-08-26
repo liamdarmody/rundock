@@ -95,8 +95,8 @@ const MUTATIONS = [
     "  const RUN_ON_SUPPORTED = ['local'];",
     "  const RUN_ON_SUPPORTED = ['local', 'agent-computer'];"],
   [MODEL, 'the preview sentence reads the run-on words off the option',
-    '    return `Every ${freq.label} at ${time.label}, run: ${skillName}, on ${option.sentence}.`;',
-    '    return `Every ${freq.label} at ${time.label}, run: ${skillName}, on this computer.`;'],
+    '    return `Run ${skillName} every ${freq.label} at ${time.label}, on ${option.sentence}.`;',
+    '    return `Run ${skillName} every ${freq.label} at ${time.label}, on this computer.`;'],
   [MODEL, 'the confirmation line reads its second sentence off the option',
     '    return words ? `${words} time. ${option.meta}` : option.meta;',
     '    return words ? `${words} time. Runs while Rundock is open here.` : option.meta;'],
@@ -255,10 +255,10 @@ const MUTATIONS = [
   // has produces no row in the picker, so the control would be a label
   // promising something the reader cannot reach.
   [SKILLS_PAGE, 'the way in is offered only where an agent has the skill',
-    '  if (s.assignedAgents.length) {\n    h += `<div class="profile-card">'
-    + '<div class="profile-card-section">\n      <div class="profile-section-label">Schedule</div>',
-    '  if (true) {\n    h += `<div class="profile-card">'
-    + '<div class="profile-card-section">\n      <div class="profile-section-label">Schedule</div>'],
+    '  if (s.assignedAgents.length) {\n'
+    + "    // SAME SHAPE AS THE AGENT PROFILE'S ROUTINES CARD:",
+    '  if (true) {\n'
+    + "    // SAME SHAPE AS THE AGENT PROFILE'S ROUTINES CARD:"],
 
   [VIEW, 'the breadcrumb names an agent only when there is one to return to',
     '    } else if (state.agentId && state.agentName) {',
@@ -296,7 +296,7 @@ const MUTATIONS = [
   // The door. Every other test of the scoped entry calls the entry function
   // directly, which says nothing about whether anything calls it.
   [PROFILE, 'an agent profile offers a way to schedule its skills',
-    '      <button class="settings-btn-primary" type="button" data-profile-action="add-routine"\n'
+    '      <button class="settings-btn" type="button" data-profile-action="add-routine"\n'
     + '        data-agent-id="${escA(a.id)}" onclick="addRoutineForAgent(this.dataset.agentId)">Add routine</button>`;',
     '`;'],
   [PROFILE, 'the way in carries the agent whose profile it is on',

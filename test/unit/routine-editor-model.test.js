@@ -297,11 +297,11 @@ describe('routine editor: where it runs', () => {
     const args = { frequency: 'monday', time: '07:00', skillName: 'Compile the ops summary' };
     assert.strictEqual(
       model.previewSentence({ ...args, runOn: 'local' }),
-      'Every Monday at 7:00am, run: Compile the ops summary, on this computer.',
+      'Run Compile the ops summary every Monday at 7:00am, on this computer.',
     );
     assert.strictEqual(
       model.previewSentence({ ...args, runOn: 'agent-computer' }),
-      'Every Monday at 7:00am, run: Compile the ops summary, on your Agent Computer.',
+      'Run Compile the ops summary every Monday at 7:00am, on your Agent Computer.',
     );
   });
 

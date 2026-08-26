@@ -519,6 +519,43 @@ describe('the doors, pressed', () => {
     dom.window.close();
   });
 
+  // SAME SHAPE AS THE AGENT PROFILE'S ROUTINES CARD: once a routine exists
+  // for this skill, the control that offers to make one is redundant and
+  // goes, replaced by the routine itself, the same way the profile page's
+  // Routines card stops offering "Add routine" once the agent has one.
+  test('a skill already scheduled shows the routine instead of the button', () => {
+    const { doc, w, dom } = shell();
+    // The default fixture gives piper a routine with no `skill` field, which
+    // must not match anything; this scopes one to ops-summary specifically.
+    w.agents[0].routines = [
+      { name: 'Existing routine', schedule: 'every day at 08:00', skill: 'unrelated-skill' },
+      { name: 'Compile the ops summary daily', schedule: 'every day at 09:00', skill: 'ops-summary' },
+    ];
+    w.skills = [
+      { id: 'ops-summary', slug: 'ops-summary', name: 'Compile the ops summary',
+        assignedAgents: [{ id: 'piper', name: 'Piper' }] },
+    ];
+    w.selectSkill = w.RundockSkillsView.selectSkill;
+    w.selectSkill('ops-summary');
+
+    const section = scheduleSection(doc);
+    assert.ok(section, 'no Schedule section on the page for a scheduled skill');
+    assert.strictEqual(section.querySelector('[data-skills-action="schedule-skill"]'), null,
+      'the button stayed up beside the routine it duplicates');
+    assert.match(section.textContent, /Compile the ops summary daily/,
+      'the routine that exists for this skill is not shown');
+    assert.doesNotMatch(section.textContent, /Existing routine/,
+      'a routine scheduling a different skill leaked into this one\'s Schedule card');
+
+    // Pressing the routine is wired to the same handler the agent profile's
+    // own routine rows use, scoped to the agent that owns it.
+    const row = section.querySelector('[data-agent-id]');
+    assert.strictEqual(row.getAttribute('onclick'), 'showRoutinesForAgent(this.dataset.agentId)',
+      'the routine row does not use the same destination the profile page\'s routine rows do');
+    assert.strictEqual(row.dataset.agentId, 'piper');
+    dom.window.close();
+  });
+
   // The Used by card, directly above Schedule on the same page, already says
   // an unassigned skill is available to all agents. The Schedule card's
   // reason must not deny that in the same breath: a page that both offers a
@@ -646,7 +683,7 @@ describe('the whole journey, by pressing only', () => {
     choose(doc, w, 'time', '07:00');
     press(doc, '[data-run-on="local"]');
 
-    assert.match(editorText(doc), /Every Monday at 7:00am, run: Compile the ops summary, on this computer\./);
+    assert.match(editorText(doc), /Run Compile the ops summary every Monday at 7:00am, on this computer\./);
     press(doc, '.re-actions .settings-btn-primary');
 
     assert.match(editorText(doc), /London time\. Runs while Rundock is open here\./);

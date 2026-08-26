@@ -170,7 +170,14 @@
     const zone = m.timezoneCaption({ zone: state.zone, agentName: state.agentName });
 
     let h = `<p class="re-lead">${escText(m.STEP_LEADS.schedule)}</p>`;
-    h += '<div class="re-sentence"><span class="re-word">Every</span>';
+    // Reads as one sentence in the order a person would say it: the skill
+    // first, because that is the thing being scheduled, then the cadence.
+    // "Every day at 9:00am, run: X" buried the subject at the end of a
+    // clause; "Run X every day at 9:00am" states it first and needs no comma
+    // to separate the two halves.
+    h += '<div class="re-sentence"><span class="re-word">Run</span>';
+    h += `<span class="re-pill">${escText(option ? option.name : '')}</span>`;
+    h += '<span class="re-word">every</span>';
     h += `<select class="re-select" data-routine-field="frequency"
       onchange="routineEditorSetField('frequency', this.value)">`;
     for (const f of m.FREQUENCIES) {
@@ -182,8 +189,7 @@
     for (const t of m.times()) {
       h += `<option value="${escText(t.value)}"${t.value === state.time ? ' selected' : ''}>${escText(t.label)}</option>`;
     }
-    h += '</select><span class="re-word">, run:</span>';
-    h += `<span class="re-pill">${escText(option ? option.name : '')}</span></div>`;
+    h += '</select><span class="re-word">.</span></div>';
 
     if (sentence) h += `<p class="re-preview" data-routine-editor="sentence">${escText(sentence)}</p>`;
     h += runOnField(m);

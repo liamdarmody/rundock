@@ -270,12 +270,36 @@ function selectSkill(id) {
   // reproduce, for a different cause, the exact silence this card exists to
   // remove.
   if (s.assignedAgents.length) {
-    h += `<div class="profile-card"><div class="profile-card-section">
-      <div class="profile-section-label">Schedule</div>
-      <div class="profile-card-text" style="padding-bottom:10px">Give this skill a schedule and your agents take it from there.</div>
+    // SAME SHAPE AS THE AGENT PROFILE'S ROUTINES CARD: a prompt to schedule
+    // while nothing is, replaced by the routine itself once one exists,
+    // rather than the button staying up beside a routine it duplicates.
+    // A skill can be scheduled by more than one of its assigned agents, so
+    // this looks across all of them rather than just the first.
+    const roster = typeof agents !== 'undefined' && agents ? agents : [];
+    const routinesModel = typeof RundockRoutinesModel !== 'undefined' ? RundockRoutinesModel : null;
+    const scheduled = [];
+    for (const assigned of s.assignedAgents) {
+      const agent = roster.filter(ag => ag && ag.id === assigned.id)[0];
+      if (!agent || !agent.routines) continue;
+      for (const r of agent.routines) {
+        if (r.skill === s.id) scheduled.push({ agentId: agent.id, routine: r });
+      }
+    }
+    h += `<div class="profile-card"><div class="profile-card-section"><div class="profile-section-label">Schedule</div>`;
+    if (scheduled.length) {
+      for (const { agentId, routine: r } of scheduled) {
+        const when = (routinesModel && routinesModel.scheduleWords(r.schedule)) || r.schedule;
+        h += `<div class="profile-card-item" style="display:flex;flex-direction:column;gap:3px;cursor:pointer" data-agent-id="${escA(agentId)}" onclick="showRoutinesForAgent(this.dataset.agentId)">
+          <span style="font-weight:600">${esc(r.name)}</span>
+          <span style="font-size:var(--caption);color:var(--text-2)">${esc(when)}</span>
+        </div>`;
+      }
+    } else {
+      h += `<div class="profile-card-text" style="padding-bottom:10px">Give this skill a schedule and your agents take it from there.</div>
       <button class="settings-btn" type="button" data-skills-action="schedule-skill"
-        data-skill-id="${escA(s.id)}" onclick="addRoutineForSkill(this.dataset.skillId)">Schedule this skill</button>
-    </div></div>`;
+        data-skill-id="${escA(s.id)}" onclick="addRoutineForSkill(this.dataset.skillId)">Schedule this skill</button>`;
+    }
+    h += `</div></div>`;
   } else {
     h += `<div class="profile-card"><div class="profile-card-section">
       <div class="profile-section-label">Schedule</div>

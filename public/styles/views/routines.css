@@ -17,12 +17,22 @@
 
 .routines-content { max-width: 640px; padding: 32px; }
 /* The list header's subtitle: the scoped sentence above the populated list. */
-.routines-subtitle { font-size: var(--body); color: var(--text-2); }
+.routines-subtitle { font-size: var(--body); color: var(--text-2); line-height: 1.5; margin-top: 2px; }
 /* Which workspace the listed routines came from, and what that means for the
    routines in the others, or where Rundock has gone if it is no longer serving
    this one. A quieter line than the subtitle above it: it is a standing fact
    about the list rather than a description of what the list contains. */
-.routines-workspace { font-size: var(--caption); color: var(--text-2); margin-top: 2px; }
+.routines-workspace { font-size: var(--caption); color: var(--text-2); margin-top: 4px; }
+
+/* The subtitle and the workspace line together can run to three lines, well
+   past the icon's own 56px, which .profile-header's shared align-items:
+   center then centres the icon against, and a small icon beside a tall block
+   reads as the icon shrinking rather than the text being long. Scoped to
+   Routines only: Skills and Profile keep the one-line subtitle .profile-
+   header was sized for, where centring is correct and this would be a no-op
+   at best, a regression at worst. */
+#routines-content .profile-header { align-items: flex-start; }
+#routines-content .profile-avatar { margin-top: 2px; }
 
 /* The list */
 .routine-table { display: flex; flex-direction: column; gap: 10px; }

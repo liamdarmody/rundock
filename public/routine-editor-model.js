@@ -363,7 +363,7 @@
     const option = runOnOption(input && input.runOn);
     const skillName = (input && input.skillName) || null;
     if (!freq || !time || !option || !skillName) return null;
-    return `Every ${freq.label} at ${time.label}, run: ${skillName}, on ${option.sentence}.`;
+    return `Run ${skillName} every ${freq.label} at ${time.label}, on ${option.sentence}.`;
   }
 
   // ===== TIME ZONES, IN WORDS =====

@@ -359,7 +359,7 @@ describe('routine editor view: the schedule is built, not typed', () => {
     w.routineEditorSetField('time', '07:00');
     assert.match(
       doc.querySelector('[data-routine-editor="sentence"]').textContent,
-      /Every Monday at 7:00am, run: Compile the ops summary, on this computer\./,
+      /Run Compile the ops summary every Monday at 7:00am, on this computer\./,
     );
     dom.window.close();
   });
@@ -489,7 +489,7 @@ describe('routine editor view: saving', () => {
   test('the confirmation step reads the whole thing back in one sentence', () => {
     const { doc, dom } = atReady();
     const body = text(doc);
-    assert.match(body, /Every Monday at 7:00am, run: Compile the ops summary, on this computer\./);
+    assert.match(body, /Run Compile the ops summary every Monday at 7:00am, on this computer\./);
     assert.match(body, /London time\. Runs while Rundock is open here\./);
     dom.window.close();
   });

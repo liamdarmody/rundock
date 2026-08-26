@@ -933,8 +933,8 @@ const MUTATIONS = [
     "      subtitle: agentName ? LEAD.scopedLead.replace('{agent}', () => agentName) : LEAD.lead,",
     '      subtitle: LEAD.lead,'],
   [STYLES, 'the subtitle takes the body size rather than restating the title',
-    '.routines-subtitle { font-size: var(--body); color: var(--text-2); }',
-    '.routines-subtitle { font-size: var(--title); color: var(--text-2); }'],
+    '.routines-subtitle { font-size: var(--body); color: var(--text-2); line-height: 1.5; margin-top: 2px; }',
+    '.routines-subtitle { font-size: var(--title); color: var(--text-2); line-height: 1.5; margin-top: 2px; }'],
   // ===== THE FAILURE DOT =====
   // The three-tone ruling reaching the chrome. A dot that rises on a missed
   // slot teaches its reader to ignore the dot, which is what the ruling was
