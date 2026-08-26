@@ -230,9 +230,13 @@ jobs:
   # the API with the same changelog-derived name and notes. The releaseInfo
   # flags stay until this step has proven itself at a real tag, then they can
   # go, so there is one mechanism rather than two.
+  #
+  # The last step of this job then reads the draft back and asserts it is what
+  # the tag should have produced. Until it existed, a green release workflow
+  # proved only that no step had thrown: the draft itself was never checked.
   # ---------------------------------------------------------------------------
   finalize:
-    name: Name and fill the draft release
+    name: Name, fill, and verify the draft release
     needs: [macos, windows]
     runs-on: ubuntu-latest
     steps:
@@ -267,6 +271,22 @@ jobs:
             -f name="$(cat release-info/release-name.txt)" \
             -f body="$(cat release-info/release-notes.md)" > /dev/null
           echo "Draft release ${RELEASE_ID} named and filled from the changelog."
+
+      - name: Verify the draft release
+        # Deliberately after the patch above rather than merely after the
+        # builds. The tag binding drops on any edit that omits tag_name, and
+        # the patch is itself such an edit, so a check that ran before it
+        # would attest to a state nobody publishes. Cutting 0.11.7 produced a
+        # draft with the right name, the right notes and all nine artefacts,
+        # bound to an untagged- placeholder rather than the tag.
+        #
+        # The script re-fetches the release list itself. It does not reuse
+        # RELEASE_ID above, and could not: each run block is a fresh shell.
+        # That is the behaviour wanted anyway, since the question is what
+        # actually landed, not what the patch was aimed at.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/verify-release-draft.js --info-dir release-info
 
   # ---------------------------------------------------------------------------
   # SCAFFOLDED, INACTIVE. Reserved for future Linux support.
