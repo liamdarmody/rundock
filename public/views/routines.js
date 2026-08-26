@@ -448,10 +448,24 @@ function headerHtml(subtitle, workspace) {
   const model = routinesModel();
   let h = '<div class="profile-header">'
     + `<div class="profile-avatar skill-avatar">${CLOCK_SVG}</div>`
-    + `<div><div class="profile-name">${esc(model.LEAD.title)}</div>`
-    + (subtitle ? `<div class="routines-subtitle">${esc(subtitle)}</div>` : '')
-    + (workspace ? `<div class="routines-workspace" data-routines-workspace>${esc(workspace)}</div>` : '')
-    + '</div></div>';
+    + `<div><div class="profile-name">${esc(model.LEAD.title)}</div></div>`
+    + '</div>';
+  // THE SENTENCE IS A SIBLING OF THE HEADER, NOT A CHILD OF IT, the same
+  // split views/skills.js's selectSkill() draws between .profile-header (icon
+  // plus name only) and .profile-desc (a full-width block below it). Nested
+  // inside the header's text column, the subtitle and the workspace line had
+  // no width of their own to wrap against: they took whatever the column
+  // happened to leave once the icon and its gap were spent, which on a
+  // two-line fact (scope plus workspace) read as the icon shrinking rather
+  // than the text running long. A sibling block spans the panel's own width
+  // instead, which is the width these sentences were always meant to wrap
+  // against.
+  if (subtitle || workspace) {
+    h += '<div class="routines-header-desc">'
+      + (subtitle ? `<div class="routines-subtitle">${esc(subtitle)}</div>` : '')
+      + (workspace ? `<div class="routines-workspace" data-routines-workspace>${esc(workspace)}</div>` : '')
+      + '</div>';
+  }
   // On the header rather than in one of the three branches below, so the
   // refusal is on the page whichever state the list is in when it arrives.
   if (pendingProblem) {
