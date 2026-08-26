@@ -256,13 +256,16 @@ timing is a seam rather than a sleep. Listed so the inventory is complete.
   on its own, which is what makes "still running" attributable to a leak.
   `LONG` is deliberately non-round so a `ps` match cannot collide with an
   unrelated sleep.
-- **One test that must outlast a grace period.**
-  `test/unit/precommit-gate-orphans.test.js` "a step that ignores SIGTERM is
-  ended anyway" takes about six seconds, and that is the assertion rather than
-  a delay in front of it: the step traps SIGTERM, so the only thing that can
-  end it is the escalation to SIGKILL after `STEP_END_GRACE_MS`. Shortening it
-  would remove the only proof the escalation exists. The other eight tests in
-  that file are around a second each where `ps` can be spawned; where it cannot
+- **Two tests that must outlast a grace period.** In
+  `test/unit/precommit-gate-orphans.test.js`, "a step that ignores SIGTERM is
+  ended anyway" and "a harness that never yields" each take about six seconds,
+  and in both cases that is the assertion rather than a delay in front of it.
+  The first traps SIGTERM, so the only thing that can end it is the escalation
+  to SIGKILL after `STEP_END_GRACE_MS`. The second cannot dispatch a signal at
+  all, which is the real shape of every mutation harness, so the grace has to
+  elapse before the gate can know its own recovery is needed. Shortening either
+  removes the only proof of the mechanism it covers. The other eight tests in
+  that file are around a second each where `ps` can be spawned; where it cannot,
   the signal cases also pay the full grace, because "has the group gone" has no
   answer without a process table. That is a slow test on a locked-down machine,
   not a flaky one.

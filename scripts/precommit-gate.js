@@ -48,13 +48,30 @@
  *
  * It matters here more than it would in most tools because of what one step is.
  * `mutate:guards` breaks a real source file on purpose, runs a suite, and puts
- * the file back, and it puts the file back from a signal handler when the way
- * out is a signal. The gate used to send it nothing and wait for nothing, so
- * that handler had no way to fire: the gate died, and `npm`, its shell and the
- * harness inside carried on rewriting `public/` with nobody watching. A mutated
- * source file is an ordinary working-tree modification, `git add -A` stages it
- * without comment, and staging everything before running this is exactly what
- * the usage above asks for.
+ * the file back. The gate used to send it nothing and wait for nothing, so the
+ * gate died and `npm`, its shell and the harness inside carried on rewriting
+ * `public/` with nobody watching. A mutated source file is an ordinary
+ * working-tree modification, `git add -A` stages it without comment, and
+ * staging everything before running this is exactly what the usage above asks
+ * for.
+ *
+ * ENDING THE GROUP IS NOT ENOUGH ON ITS OWN, and this was measured rather than
+ * assumed. Each harness registers a SIGTERM handler that puts its files back,
+ * and that handler is correct, but it can never run while the harness is
+ * working: the harness's whole body is a synchronous loop of `execFileSync`
+ * calls, and Node dispatches a JavaScript signal handler from the event loop,
+ * which does not turn until that body has finished. A real harness sent SIGTERM
+ * directly absorbed it for thirty seconds without restoring anything and then
+ * died to SIGKILL with the file still mutated.
+ *
+ * So the gate puts the files back itself when the harness could not. It reads
+ * the record the run writes while it holds files rewritten, and restores those
+ * paths FROM THE INDEX. That is safe for the one reason that makes it possible
+ * at all: a mutation run refuses to start when a file it is about to rewrite
+ * has unstaged changes, so at the moment the harness read its originals the
+ * working tree and the index agreed on those paths. Restoring from the index
+ * therefore puts back exactly the bytes the harness read, and there is nothing
+ * unstaged on those paths for it to discard.
  *
  * The one way out that is not covered is SIGKILL of the gate itself, which the
  * kernel delivers to nothing. What catches a harness abandoned that way is the
@@ -64,7 +81,7 @@
 const { execFileSync, spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const { endGroup } = require('./lib/process-group.js');
+const { endGroup, exists, pause, POLL_MS } = require('./lib/process-group.js');
 
 // The repository this acts on. Overridable ONLY so the entry points can be
 // exercised against a throwaway repository: without it, run() and verify()
@@ -178,10 +195,91 @@ function endLiveGroup() {
   if (liveGroup === null) return;
   const pgid = liveGroup;
   liveGroup = null;
-  if (endGroup(pgid, { graceMs: STEP_END_GRACE_MS }) !== 'running') return;
+  // Read BEFORE the ending, and act afterwards only on this same record. A
+  // record whose pid is ALREADY dead here belongs to some earlier run that was
+  // abandoned, and it is doing its job by being there: the next mutation run
+  // reads it, refuses, and names the files a person should look at. Repairing
+  // that quietly would remove the one trace of a run nobody watched end.
+  const held = readMutationRun();
+  const ours = held && exists(held.pid) ? held : null;
+
+  const outcome = endGroup(pgid, { graceMs: STEP_END_GRACE_MS });
+  if (ours) reclaim(ours);
+  if (outcome !== 'running') return;
   console.error(`[precommit] WARNING: process group ${pgid} survived being ended and is `
     + 'still running. Nothing further here can reach it, and a mutation harness inside it '
     + 'may still be holding a source file rewritten; read `git diff` before committing.');
+}
+
+// The record a mutation run writes while it holds files rewritten. The name is
+// fixed by test/tools/mutation-run.js, which owns the format.
+const MUTATION_MARKER = '.mutation-run.json';
+
+// How long a pid from an ended group gets to leave the process table before the
+// recovery below gives up on it and says so.
+const SETTLE_MS = 1000;
+
+function readMutationRun(root = ROOT) {
+  try {
+    const held = JSON.parse(fs.readFileSync(path.join(root, MUTATION_MARKER), 'utf8'));
+    return held && typeof held.pid === 'number' && Array.isArray(held.files) ? held : null;
+  } catch { return null; }
+}
+
+/**
+ * Put back what a mutation run was holding when this gate ended it.
+ *
+ * Called only with a record that named a LIVE pid a moment ago, so the run it
+ * describes is one this gate has just ended rather than somebody else's.
+ *
+ * RESTORED FROM THE INDEX, and the distinction is the whole safety argument. A
+ * mutation run refuses to start when a file it is about to rewrite has unstaged
+ * changes, so on those paths the working tree and the index agreed when the
+ * originals were read: the index holds exactly the bytes the harness would have
+ * written back. Restoring from HEAD instead would reach past staged work and
+ * throw it away, which is the failure this repository has already paid for
+ * elsewhere.
+ *
+ * Every path is named on the way out. A tool that silently rewrites files in
+ * the working tree, even correctly, is one nobody can check afterwards.
+ */
+function reclaim(held, root = ROOT, settleMs = SETTLE_MS) {
+  // The group has been ended, so this pid should be gone. A brief window where
+  // it is still listed is ordinary rather than a survivor: a process is cleared
+  // from the table by whoever adopts it, not the instant it dies. Waiting for
+  // it matters because the alternative is returning quietly and leaving the
+  // file mutated, which is the outcome this whole function exists to prevent.
+  const deadline = Date.now() + settleMs;
+  while (exists(held.pid) && Date.now() < deadline) pause(POLL_MS);
+  if (exists(held.pid)) {
+    console.error(`[precommit] a mutation run (pid ${held.pid}) is still there after its group `
+      + 'was ended, so its files have been left alone rather than written over. Read '
+      + '`git diff` before committing.');
+    return;
+  }
+  const current = readMutationRun(root);
+  // Gone means the harness got to run its own restore after all, which is the
+  // better outcome and leaves nothing to do. A different record means another
+  // run started in the meantime and this is no longer anybody's business here.
+  if (!current || current.pid !== held.pid) return;
+
+  const restored = [];
+  for (const file of held.files) {
+    try {
+      // Only a path that really differs from the index, so the recovery never
+      // runs a checkout it had no reason to run.
+      if (!git(['diff', '--name-only', '--', file], root)) continue;
+      execFileSync('git', ['checkout', '--', file], { cwd: root, stdio: 'ignore' });
+      restored.push(file);
+    } catch (err) {
+      console.error(`[precommit] could not put ${file} back: ${(err && err.message) || err}`);
+    }
+  }
+  try { fs.rmSync(path.join(root, MUTATION_MARKER), { force: true }); } catch { /* leaving anyway */ }
+  if (!restored.length) return;
+  console.error(`[precommit] a mutation harness was ended mid-run holding ${restored.length} `
+    + 'file(s) rewritten, and its own restore could not run. Put back from the index:');
+  for (const file of restored) console.error(`             ${file}`);
 }
 
 /**
@@ -192,10 +290,16 @@ function endLiveGroup() {
  * leaves those running: that is how a gate that had already printed its verdict
  * kept rewriting `public/`. A group can be ended whole.
  *
- * The group id is handed back the moment it exists rather than on any later
- * event, because from that line on there is a subtree on this machine that
- * nothing else knows about, and every exit between there and the next line has
- * to be able to find it.
+ * The group id is recorded on the line the child is created rather than on any
+ * later event, because from that line on there is a subtree on this machine
+ * that nothing else knows about, and every exit between there and the next line
+ * has to be able to find it.
+ *
+ * THE WAIT IS ON 'exit' AND NOT ON 'close'. 'close' also waits for the pipes,
+ * and anything the step left behind is holding those open, so waiting for it
+ * would turn a leak into a hang. A short drain follows so the lines a step
+ * wrote just before exiting are still read, and whichever of the two arrives
+ * first settles the step.
  */
 function runStep(step, root = ROOT) {
   return new Promise((resolve, reject) => {
