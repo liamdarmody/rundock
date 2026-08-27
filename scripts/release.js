@@ -24,16 +24,24 @@
  * top of it, and it only touches package.json and CHANGELOG.md. What `tag`
  * checks instead is that the reviewed commit really is on origin/main.
  *
- * `tag` is the irreversible step. Everything before it can be deleted and done
- * again; the tag starts the GitHub Actions workflow that builds, signs,
- * notarises, and publishes a DRAFT release. Building does not happen on your
- * laptop, and no Apple or signing credentials are needed locally: those live in
- * the CI environment.
+ * `tag` starts something that cannot be un-started: the GitHub Actions
+ * workflow that builds, signs, notarises, and publishes a DRAFT release.
+ * Building does not happen on your laptop, and no Apple or signing
+ * credentials are needed locally: those live in the CI environment. But CI
+ * never makes anything public. It produces a DRAFT and stops there.
+ *
+ * `publish` is the step that matters most, and CI never runs it. Only a
+ * human decides a specific version is ready for everyone, by running
+ * `publish` themselves with --confirm naming that exact version (see
+ * hasPublishConfirmation). This was not always enforced: on 2026-08-27 an
+ * agent ran `publish` unprompted, straight after fixing unrelated build
+ * bugs, because nothing but a naming convention separated it from `tag`.
+ * See Ratchet-Log "A split command is not a control", 2026-08-27.
  *
  * Recovery: if the CI build fails (e.g. an expired Apple agreement), fix the
  * cause and re-run the workflow on the same tag (gh run rerun, or the Actions
- * UI). There is no need to revert main: the bump and the tag stay, and CI
- * publishes once it passes.
+ * UI). There is no need to revert main: the bump and the tag stay, and the
+ * draft is still there to publish once CI passes.
  *
  * Update the Rundock Site download links once the release is published.
  */
@@ -200,6 +208,22 @@ function publishRelease(version, { api = ghApi, log = (msg) => console.log(`[rel
   const published = api('PATCH', `repos/${REPO}/releases/${draft.id}`, { draft: false });
   log(`Published: ${published.html_url || `release ${draft.id}`}`);
   return { id: draft.id, tag, url: published.html_url };
+}
+
+// Reads --confirm <version> from argv and checks it names the exact version
+// being published. This is a friction boundary, not a security one: anyone
+// who can run this script can also type the flag. Its purpose is that the
+// command tag prints for its own next step deliberately does not include a
+// working --confirm, so publish can never be run by copying the previous
+// step's own output. See Ratchet-Log "A split command is not a control",
+// 2026-08-27: publish and tag were already separate commands specifically
+// so a human decides when the last one runs, and nothing but that naming
+// convention stopped an agent running it unprompted mid-task. A stale
+// confirmation for a different version does not satisfy this, so an old
+// command cannot be reused for a new release by habit.
+function hasPublishConfirmation(argv, version) {
+  const i = argv.indexOf('--confirm');
+  return i !== -1 && argv[i + 1] === version;
 }
 
 function setVersion(version, { root = ROOT, log = logStep } = {}) {
@@ -488,9 +512,9 @@ function tagRelease(version, { root = ROOT, git = gitIn(root), log = logStep } =
 
 const USAGE = [
   'Usage:',
-  '  npm run release -- prepare <version>   bump, promote the changelog, and open the release pull request',
-  '  npm run release -- tag <version>       after that pull request merges, tag the merged commit',
-  '  npm run release -- publish <version>   publish the draft release CI built for that tag',
+  '  npm run release -- prepare <version>                    bump, promote the changelog, and open the release pull request',
+  '  npm run release -- tag <version>                        after that pull request merges, tag the merged commit',
+  '  npm run release -- publish <version> --confirm <version>   publish the draft release CI built for that tag, only after you have tested it yourself',
 ].join('\n');
 
 // Guarded so the changelog helpers are requireable (by tests and by
@@ -530,11 +554,22 @@ if (require.main === module) {
     logStep('done', `Tagged v${version}. GitHub Actions is now building, signing, notarising, and publishing a DRAFT release.`);
     logStep('done', `Watch the build:   https://github.com/${REPO}/actions`);
     logStep('done', `Review the draft:  https://github.com/${REPO}/releases`);
-    logStep('done', `Then publish with: npm run release -- publish ${version}  (binds the tag before flipping the draft flag)`);
+    logStep('done', 'Do not publish yet. Download and test the draft build on your own machine(s) first.');
+    logStep('done', `Once you have decided v${version} is ready for everyone: npm run release -- publish ${version} --confirm ${version}`);
     logStep('done', `If CI fails (e.g. expired Apple agreement): fix it and re-run the workflow on tag v${version}: no need to revert main.`);
   } else if (subcommand === 'publish') {
     // Publishes the reviewed draft, binding the tag before the draft flip.
+    // --confirm is required and must name this exact version: see
+    // hasPublishConfirmation's own comment for why.
     const version = versionFor('publish');
+    if (!hasPublishConfirmation(process.argv, version)) {
+      fail('publish',
+        `Publishing v${version} makes it downloadable by everyone, not just you testing the draft.\n` +
+        `  This requires --confirm ${version}, typed fresh for this exact version after you have tested the build yourself:\n` +
+        `    npm run release -- publish ${version} --confirm ${version}\n` +
+        `  Never run this because it was the next line printed by an earlier step, and an agent must never supply --confirm on its own.`
+      );
+    }
     try {
       const result = publishRelease(version);
       console.log('');
@@ -561,5 +596,6 @@ module.exports = {
   prepareRelease,
   tagRelease,
   publishRelease,
+  hasPublishConfirmation,
   ghApiArgs,
 };
