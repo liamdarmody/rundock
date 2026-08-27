@@ -86,9 +86,59 @@ jobs:
     name: Packaged-app smoke test
     uses: ./.github/workflows/smoke.yml
 
+  # ---------------------------------------------------------------------------
+  # Create the draft release once, before either platform build runs.
+  # electron-builder's own "create if the release is missing" check is not
+  # safe to rely on: the Windows job builds two targets (NSIS installer and
+  # portable exe) in one invocation, and on v0.12.0 both targets' uploads
+  # reached that check in the same instant, both saw nothing there, and both
+  # created a release. The installer landed on one duplicate, its own
+  # blockmap on the other, a release the auto-updater cannot diff against,
+  # not merely a cosmetic double entry.
+  #
+  # Idempotent: a re-run of this job, or a retry after a prior attempt
+  # partially succeeded, finds the release it already made and does nothing
+  # further. Draft releases are not addressable via /releases/tags/<tag> (see
+  # the finalize job below), so the existence check lists and matches on
+  # tag_name instead of trusting a direct lookup.
+  # ---------------------------------------------------------------------------
+  create-release:
+    name: Create the draft release
+    needs: [test, e2e, smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Extract release name and notes from the changelog
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          node scripts/release-notes.js "$VERSION" --out release-info
+
+      - name: Create the draft release if it does not already exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          EXISTING=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
+            --jq ".[] | select(.tag_name==\"${GITHUB_REF_NAME}\") | .id" | head -1)
+          if [ -n "$EXISTING" ]; then
+            echo "Release $EXISTING already exists for $GITHUB_REF_NAME; leaving it as is."
+            exit 0
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --draft \
+            --title "$(cat release-info/release-name.txt)" \
+            --notes-file release-info/release-notes.md
+          echo "Created draft release for $GITHUB_REF_NAME."
+
   macos:
     name: Build macOS (arm64 + x64)
-    needs: [test, e2e, smoke]
+    needs: [test, e2e, smoke, create-release]
     runs-on: macos-latest
     # Declares the protected release environment, which is where the signing
     # secrets now live. They were repository secrets, readable by ANY workflow
@@ -164,7 +214,7 @@ jobs:
   # ---------------------------------------------------------------------------
   windows:
     name: Build Windows (x64)
-    needs: [test, e2e, smoke]
+    needs: [test, e2e, smoke, create-release]
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -205,9 +255,10 @@ jobs:
 
       - name: Build and publish
         # Use bash (available on Windows runners) so version extraction matches macOS.
-        # Passing the same releaseInfo as the macOS job is deliberate: whichever
-        # job reaches the draft release first names it, and identical values make
-        # the order irrelevant.
+        # The create-release job above has already made the draft, so this
+        # releaseInfo is redundant with what is already on it rather than a
+        # race to set it: electron-builder finds the existing release by tag
+        # and uploads into it instead of creating one.
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -221,15 +272,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ---------------------------------------------------------------------------
-  # Name and fill the draft release deterministically. electron-builder is also
-  # passed releaseInfo above, but the first live run (v0.11.5) showed it does
-  # not reliably apply it to the draft it attaches artefacts to: the draft
-  # arrived untitled with an empty body and was filled by hand, the exact
-  # manual step this pipeline exists to remove. This job is the single
-  # deterministic writer: after both builds finish, it patches the draft via
-  # the API with the same changelog-derived name and notes. The releaseInfo
-  # flags stay until this step has proven itself at a real tag, then they can
-  # go, so there is one mechanism rather than two.
+  # Name and fill the draft release deterministically. create-release above
+  # already names it once, and electron-builder's releaseInfo flags on each
+  # build job name it again, but the first live run (v0.11.5) showed
+  # electron-builder does not reliably apply releaseInfo to the draft it
+  # attaches artefacts to: the draft arrived untitled with an empty body and
+  # was filled by hand, the exact manual step this pipeline exists to remove.
+  # This job is the single deterministic writer of record: after both builds
+  # finish, it patches the draft via the API with the same changelog-derived
+  # name and notes, so the final state does not depend on any build job
+  # having applied its copy correctly.
   #
   # The last step of this job then reads the draft back and asserts it is what
   # the tag should have produced. Until it existed, a green release workflow
