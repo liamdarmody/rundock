@@ -4,9 +4,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
-## Unreleased
-
-**Name:** Routine Editor & Reliability
+## 0.12.0: Routine Editor & Reliability (2026-08-27)
 
 You can now schedule a skill to run on a cadence through a form, and change that schedule later without deleting and recreating it. This release also closes two real risks: agent-controlled content can no longer inject executable markup into the interface, and MCP credentials can be kept out of the file your team shares.
 
@@ -35,7 +33,6 @@ You can now schedule a skill to run on a cadence through a form, and change that
 - **Rundock ships a current, offline-pinned browser engine**, closing several security backports relevant now that agents can produce unattended content on a schedule.
 - **A command reaching outside your workspace now asks first, everywhere a file edit already would:** a shell command touching your home directory or elsewhere on the machine previously ran with no approval card in Code-mode workspaces. Rundock now reads each command for paths outside your workspace and raises the boundary card naming them. This is a best effort over how a path is normally written: a destination built while the command runs, or an unusual spelling such as `~someone/file` or `-C/tmp`, raises no card. Two places it deliberately stays quiet regardless: the system executable directories (`/bin`, `/sbin`, `/usr/bin`, `/usr/sbin`, `/usr/local/bin`, `/opt/homebrew/bin`) and device paths such as `/dev/null`, since carding those would teach you to click through the one warning that matters.
 - **On macOS, the operating system itself now refuses writes outside your workspace, independent of the approval card above:** this governs writes, not reads: you can still read anything on the machine, and nothing here stops that. Rundock's runtime is given the exact list of writable folders: your workspace, the npm cache, and the runtime's own default locations, which it keeps and does not remove. A write anywhere else fails at the OS level regardless of how the destination was spelled. Available only where your installed Claude Code supports it and your workspace has no conflicting sandbox settings of its own; the approval card remains the whole boundary on Windows, Linux, and macOS outside those conditions.
-
 
 ## 0.11.8: Editor Hardening (2026-08-20)
 
