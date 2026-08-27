@@ -41,9 +41,17 @@ const changelog = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf-8');
 // pin below passed while the current entry named five of the six exempt
 // directories, because a 0.9 entry about PATH detection happened to mention
 // the sixth.
+//
+// Bounded by heading structure, not by a literal version string: the release
+// script renames "## Unreleased" to "## <version>: ..." the moment a release
+// branch is prepared, so a pin naming today's version number would go blind
+// (empty slice, every assertion failing) on the very next release. The
+// topmost "## " heading is always the entry being shipped, whatever it is
+// named; the second bounds it.
+const changelogHeadings = [...changelog.matchAll(/^## .*$/gm)];
 const unreleased = changelog.slice(
-  changelog.indexOf('## Unreleased'),
-  changelog.indexOf('## 0.11.8'),
+  changelogHeadings[0].index,
+  changelogHeadings[1]?.index ?? changelog.length,
 );
 const architecture = fs.readFileSync(path.join(ROOT, 'ARCHITECTURE.md'), 'utf-8');
 const skillsDoc = fs.readFileSync(path.join(ROOT, 'docs', 'SKILLS.md'), 'utf-8');
