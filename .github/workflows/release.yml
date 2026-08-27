@@ -310,6 +310,14 @@ jobs:
       - name: Patch the draft release with the name and notes
         # Draft releases are not addressable via /releases/tags/<tag>, so list
         # and match on tag_name instead.
+        #
+        # tag_name is resent here even though it is not changing. GitHub's
+        # release PATCH endpoint drops the tag binding to a generated
+        # "untagged-<hash>" placeholder on any edit that omits it: cutting
+        # 0.11.7 produced a draft with the right name, the right notes and
+        # all nine artefacts, bound to that placeholder rather than the tag,
+        # and 0.12.0 hit the same thing when this step patched name and body
+        # without it. Every future PATCH to this release must carry it.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -320,17 +328,20 @@ jobs:
             exit 1
           fi
           gh api -X PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            -f tag_name="${GITHUB_REF_NAME}" \
             -f name="$(cat release-info/release-name.txt)" \
             -f body="$(cat release-info/release-notes.md)" > /dev/null
           echo "Draft release ${RELEASE_ID} named and filled from the changelog."
 
       - name: Verify the draft release
         # Deliberately after the patch above rather than merely after the
-        # builds. The tag binding drops on any edit that omits tag_name, and
-        # the patch is itself such an edit, so a check that ran before it
-        # would attest to a state nobody publishes. Cutting 0.11.7 produced a
-        # draft with the right name, the right notes and all nine artefacts,
-        # bound to an untagged- placeholder rather than the tag.
+        # builds: the patch is the step most likely to disturb the tag
+        # binding (see its comment), so a check that ran before it would
+        # attest to a state nobody publishes. Kept as a second, independent
+        # line of defence even with tag_name now resent above: this is
+        # exactly the class of defect (an omitted field silently resetting
+        # state) that recurs when someone next edits this step without
+        # reading why the field is there.
         #
         # The script re-fetches the release list itself. It does not reuse
         # RELEASE_ID above, and could not: each run block is a fresh shell.
