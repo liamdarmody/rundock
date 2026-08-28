@@ -34,7 +34,7 @@ all three:
 1. AC-5 break 2's committed-file run went red in 155ms, which is shorter than
    `REAP_MS` (300ms) and cannot include the timed-out wait the behavioural assertion
    requires, so it was a precondition failure, not the behavioural assertion. Cause,
-   as diagnosed by the reviewer and confirmed: disabling the sweep also breaks the
+   as diagnosed by a reader of the change and confirmed: disabling the sweep also breaks the
    sibling test `an ordinary turn in the same run is still reaped`, which never calls
    `h.reapConvo`, leaving a fifth live entry that the target test's own
    four-live-processes precondition then failed against. Fixed below by isolating the
@@ -120,7 +120,7 @@ throwaway copy) **and round 3 correctly rejected the second** (the committed fil
 own `✖` line, but at 155ms, too fast to be the behavioural assertion: `REAP_MS` is
 300ms and reaching `liveEntries().length < CONVOS` after a broken sweep requires four
 completed turns plus `h.waitUntil` timing out, on the order of eight seconds, as the
-passing run and the throwaway copy both show). The reviewer's diagnosis was specific
+passing run and the throwaway copy both show). The diagnosis from review was specific
 and checkable: the disabled sweep also breaks the sibling test `an ordinary turn in
 the same run is still reaped, so the guard is not blanket`, which never calls
 `h.reapConvo` on its own conversation, so a fifth live entry was present when the
@@ -177,7 +177,7 @@ hand-written profile, not the committed test) **and round 3 correctly rejected r
 regex, `(allow file-write* (regex #"/red-first-[^/]+/.+$"))`, chosen too loosely: it
 required a path segment after the `red-first-` prefix, which also excludes the bare
 mkdtemp directory's own creation, so it looked as if directory-creation and
-marker-creation could not be told apart. The reviewer's fix was to use the fact that
+marker-creation could not be told apart. The fix was to use the fact that
 `fs.mkdtempSync` appends exactly six alphanumeric characters, narrow enough to admit
 the fixture directory while excluding a differently-shaped marker name. Tried, and it
 works, after finding and working around one tool quirk along the way:
@@ -253,7 +253,7 @@ sanity check beyond the one target test: **29 pass, 1 fail** (of 30). The one fa
 different, pre-existing test that writes its own probe file directly at
 `os.tmpdir()/red-first-env-<pid>.txt`, a name this sandbox's grant does not cover
 (nor was it meant to: it is shaped for the mkdtemp fixture, not for that test's own
-unrelated naming). Out of scope for this card, per the frozen criteria ("Out of
+unrelated naming). Out of scope for this card, per the acceptance criteria ("Out of
 scope: ... Any other test"), and left as-is; noted here rather than silently excluded
 from the count.
 
