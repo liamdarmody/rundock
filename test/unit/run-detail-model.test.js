@@ -64,7 +64,7 @@ function reasonsTheWritersEmit() {
 // vocabulary, taken from lib/scheduler.js's own statement of it. `interrupted`
 // is included deliberately: it is the one a reader is most likely to leak,
 // because it is written in exactly one place and by nothing anybody watches.
-const STATUSES = ['running', 'succeeded', 'failed', 'interrupted'];
+const STATUSES = ['running', 'succeeded', 'failed', 'cancelled', 'interrupted'];
 
 // Every reason a file list can be unknown. Six come from the transcript
 // reader, one ('running') from the scheduler itself, and the last two only
@@ -272,7 +272,7 @@ describe('no raw status word reaches the reader', () => {
   });
 
   test('a status this version has never seen is described rather than printed', () => {
-    for (const odd of ['cancelled', 'queued', null, undefined, 42]) {
+    for (const odd of ['queued', 'aborted', null, undefined, 42]) {
       const view = model.describeRun(livingRecord({ status: odd }), { now: NOW });
       for (const said of words(view.state)) {
         assert.ok(!said.includes(String(odd)),
@@ -308,6 +308,40 @@ describe('no raw status word reaches the reader', () => {
       'the succeeded headline does not say the run reached its ending, so it is true of a run that did not');
     assert.match(ok.state.headline, /did what it was asked to/i,
       'the succeeded headline does not say the run did the work, so it says only that it happened');
+  });
+
+  test('a run somebody stopped is not read as a failure', () => {
+    const cancelled = model.describeRun(livingRecord({ status: 'cancelled' }), { now: NOW });
+    const failed = model.describeRun(livingRecord({ status: 'failed', error: 'Permission denied' }), { now: NOW });
+    // WITNESSED, UNLIKE INTERRUPTED, so it does not borrow that tone either:
+    // this ending really happened and was recorded, it just was not the
+    // ending the routine was working towards.
+    assert.notStrictEqual(cancelled.state.tone, failed.state.tone,
+      'a stopped run borrows the failure tone, so a reader cannot tell "you stopped it" from "it broke"');
+    assert.notStrictEqual(cancelled.state.tone, 'bad');
+    assert.notStrictEqual(cancelled.state.chip, failed.state.chip);
+    assert.notStrictEqual(cancelled.state.headline, failed.state.headline);
+    // NOT ONLY "DIFFERENT FROM FAILED": a status this version has never seen
+    // (see the next describe block's own 'queued' fixture) also reads
+    // differently from failed, by falling to UNRECOGNISED_STATE, so nothing
+    // above proves 'cancelled' is a RECOGNISED status rather than one this
+    // table happens not to have. Pinned against that fallback directly, so
+    // deleting the cancelled entry from RUN_STATES turns this red rather than
+    // leaving it green on the unrecognised words.
+    const unrecognised = model.describeRun(livingRecord({ status: 'queued' }), { now: NOW });
+    assert.notStrictEqual(cancelled.state.tone, unrecognised.state.tone,
+      'a stopped run reads as a status this version does not recognise');
+    assert.notStrictEqual(cancelled.state.chip, unrecognised.state.chip,
+      'a stopped run reads as a status this version does not recognise');
+    assert.notStrictEqual(cancelled.state.headline, unrecognised.state.headline,
+      'a stopped run reads as a status this version does not recognise');
+    // THE ONE THING THE RECORD CANNOT PROVE: that the stop is what ended the
+    // run, rather than the run ending on its own in the same moment. The
+    // guidance must carry that qualifier, positively, rather than merely
+    // lacking an over-claim: UNRECOGNISED_STATE's own guidance also lacks the
+    // over-claim, so the absence alone cannot tell the two apart.
+    assert.match(cancelled.state.guidance, /may have finished|not proof/i,
+      'the guidance does not carry the qualifier that a stop asked for is not proof it is what ended the run');
   });
 
   test('a run cut short by a restart says the ending never ran, in words the failed run does not use', () => {
@@ -346,6 +380,30 @@ describe('no raw status word reaches the reader', () => {
     // carry no reason at all. That has to read as a fact rather than a gap.
     const noReason = model.describeRun(livingRecord({ status: 'failed', error: null }), { now: NOW });
     assert.ok(noReason.state.guidance.length > 20 && !/null|undefined/.test(noReason.state.guidance));
+  });
+});
+
+describe('whether a run can be stopped', () => {
+  // run-detail.js draws its Stop control off this flag rather than off the
+  // raw status word, which is the same "no raw status word leaves this file"
+  // rule this file holds everywhere else, applied to the one screen that is
+  // not this file.
+  test('only a run still going is stoppable', () => {
+    for (const status of STATUSES) {
+      const view = model.describeRun(livingRecord({ status }), { now: NOW });
+      assert.strictEqual(view.state.stoppable, status === 'running',
+        `${status} reports stoppable:${view.state.stoppable}`);
+    }
+  });
+
+  test('a status this version has never seen is not stoppable', () => {
+    const view = model.describeRun(livingRecord({ status: 'queued' }), { now: NOW });
+    assert.strictEqual(view.state.stoppable, false);
+  });
+
+  test('no record at all is not stoppable', () => {
+    const view = model.describeRun(null, { now: NOW });
+    assert.strictEqual(view.state.stoppable, false);
   });
 });
 

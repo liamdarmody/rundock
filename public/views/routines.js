@@ -361,10 +361,24 @@ function rowHtml(entry, index, withActions) {
       + ` onclick="routinesSetEnabled(${index}, true)">${esc(row.offer.label)}</button>`
       + '</div>';
   }
-  // Revision 7's second line. Both facts, together, because they answer the
-  // one question a reader has after a miss or a failure: did it recover, and
-  // when does it try again.
-  if (row.status) {
+  // A run in progress, checked before the three-tone line below and instead
+  // of it: outcomeOf (routines-model.js) deliberately answers `null` while
+  // `lastRunStatus` is 'running', because "on time / caught up / missed /
+  // failed" are all verdicts on a run that has ENDED, and this one has not.
+  // That withholding is right for the model; it is not a reason for the row
+  // to say nothing. Before this, the row went blank for exactly as long as a
+  // run was in progress, including "View last run", which is the one control
+  // that would have let a reader reach it. See run-detail-model.js's
+  // 'running' state ("Still going"), built and unreachable until this line.
+  if (r.state && r.state.status === 'running') {
+    body += '<div class="rr-meta rr-run-line">'
+      + '<span class="run-status live">Still going</span>'
+      + (withActions
+        ? `${sep}<button class="btn-link rr-view-run" type="button" data-routines-action="view-run"`
+          + ` onclick="routinesViewLastRun(${index})">View run</button>`
+        : '')
+      + '</div>';
+  } else if (row.status) {
     body += '<div class="rr-meta rr-run-line">'
       + `<span class="run-status ${row.status.tone}">${esc(row.status.text)}</span>`
       + (nextRun ? `${sep}${nextRun}` : '')

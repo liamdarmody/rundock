@@ -54,6 +54,12 @@ function agentColour(value, fallback) {
 let asked = null;
 let record;
 
+// Whether a stop has been asked for on the run currently on screen. Reset
+// whenever the screen is opened fresh (openRunDetail) or a new record arrives
+// (runArrived): a stale "Stopping…" surviving onto a DIFFERENT run's record
+// would tell the reader their stop landed on the wrong one.
+let stopRequested = false;
+
 // The clock, taken from the global so a test can supply one. Undeclared
 // identifiers are safe under typeof, so this works when the module is required
 // in node with no global at all.
@@ -155,14 +161,37 @@ function filesHtml(files) {
     + `<p class="settings-caption rd-cannot-open">${escText(CANNOT_OPEN)}</p>`;
 }
 
+/**
+ * The Stop control, drawn only where `view.state.stoppable` says a run is
+ * still going: the model's own answer, per public/run-detail-model.js's "no
+ * raw status word leaves this file": this screen never asks whether
+ * `record.status === 'running'` itself.
+ *
+ * TWO STATES, NOT A DISABLED BUTTON THAT LOOKS THE SAME PRESSED OR NOT. A
+ * click here cannot confirm the run has stopped: cancelRun only sends the
+ * signal, and the ending arrives later on its own clock (see runDetailStop),
+ * so the only honest immediate feedback is "asked for", not "done".
+ */
+function stopHtml(view) {
+  if (!view.state.stoppable) return '';
+  if (stopRequested) {
+    return '<div class="rd-stop-row">'
+      + '<button class="settings-btn rd-stop" type="button" data-run-detail="stop" disabled>Stopping…</button>'
+      + '</div>';
+  }
+  return '<div class="rd-stop-row">'
+    + '<button class="settings-btn-danger rd-stop" type="button" data-run-detail="stop" onclick="runDetailStop()">Stop this run</button>'
+    + '</div>';
+}
+
 function detailHtml(view, title, agent) {
   const meta = view.duration ? `<p class="settings-caption rd-took">${escText(`Took ${view.duration}.`)}</p>` : '';
   // WHEN IT STARTED, said next to the outcome rather than left for the
   // reader to work out from "13 seconds" and a mental subtraction, or not
   // said at all. `view.when` is null only where there is no started moment
-  // to report (no record at all), so this renders for every one of the four
-  // real outcomes: finished, stopped early, still going, and ending
-  // unwitnessed.
+  // to report (no record at all), so this renders for every one of the five
+  // real outcomes: finished, stopped early, stopped by request, still going,
+  // and ending unwitnessed.
   const when = view.when ? `<p class="rd-when" data-run-detail="when">${escText(view.when)}</p>` : '';
   return headHtml(title, agent)
     + '<div class="settings-card rd-card">'
@@ -174,6 +203,7 @@ function detailHtml(view, title, agent) {
       ? `<p class="rd-guidance" data-run-detail="guidance">${escText(view.state.guidance)}</p>`
       : '')
     + meta
+    + stopHtml(view)
     + '</div>'
     + filesHtml(view.files);
 }
@@ -214,6 +244,7 @@ function renderRunDetail() {
 function openRunDetail(agentId, routine) {
   asked = { agentId, routine };
   record = undefined;
+  stopRequested = false;
   // No section named here: showView resolves it from NAV_FOR_VIEW, which maps
   // run-detail to Routines because a run belongs to a routine.
   if (typeof showView === 'function') showView('run-detail');
@@ -235,7 +266,88 @@ function runArrived(reply) {
   // `null` is kept as `null`: it means no record, which is a state of its own
   // and is not a run that changed nothing.
   record = reply.run === undefined ? null : reply.run;
+  // A PENDING STOP SURVIVES A RECORD THAT STILL SAYS THE RUN IS GOING.
+  // cancelRun only sends the signal; the ending arrives later on its own
+  // clock (see runDetailStop), so a record that still reads as stoppable is
+  // not evidence the stop failed. runDetailRosterUpdated below asks for a
+  // fresh record on EVERY roster broadcast while this screen is open on a
+  // running run, and a roster broadcast fires on far more than this run
+  // ending (any agent's routine starting or ending fires the same message),
+  // so a reply arriving mid-stop for an unrelated reason must not be read as
+  // "the stop did nothing". Only a record that has actually ended, i.e. is no
+  // longer stoppable, clears the flag: that is the one case where sitting on
+  // "Stopping…" would be the wrong answer, and it is also stopRequestArrived's
+  // own stated contract for what "Stopping…" stays up until.
+  const view = runDetailModel() && runDetailModel().describeRun(record, { now: runDetailClock() });
+  if (!view || !view.state.stoppable) stopRequested = false;
   renderRunDetail();
+}
+
+/**
+ * Ask the run on screen to stop.
+ *
+ * OPTIMISTIC, ON PURPOSE: the button becomes "Stopping…" before any reply
+ * arrives, because the alternative is a click that appears to do nothing for
+ * however long the round trip takes. stopRequestArrived below corrects course
+ * if the ask turns out to have reached nothing.
+ */
+function runDetailStop() {
+  if (!asked || stopRequested) return;
+  stopRequested = true;
+  renderRunDetail();
+  if (typeof ws !== 'undefined' && ws) {
+    ws.send(JSON.stringify({ type: 'cancel_routine_run', agentId: asked.agentId, routine: asked.routine }));
+  }
+}
+
+/**
+ * The server's answer to a stop request: only ever "the signal was sent" or
+ * "there was nothing running to send it to", never "the run has stopped".
+ * See runs.js's handleCancelRoutineRun for why the second half of that is
+ * true and stays true here.
+ *
+ * ONLY THE REFUSAL IS ACTED ON. A `stopped: true` reply changes nothing here:
+ * "Stopping…" is already showing, and it stays showing until an actual record
+ * says otherwise, which is what runDetailRosterUpdated below is for. A
+ * `stopped: false` reply means the assumption behind the button was wrong:
+ * nothing was running under that name any more, so the honest move is to ask
+ * what the record actually says now, not to sit on a request that landed on
+ * nothing.
+ */
+function stopRequestArrived(reply) {
+  if (!asked || !reply) return;
+  // Compared in the opposite order from runArrived's own agent/routine guard
+  // below: same check, same OR, but the two lines are not byte-identical, so
+  // a mutation tool searching this file for one of them by exact text finds
+  // one match rather than two. Behaviourally these are the same guard.
+  if (reply.routine !== asked.routine || reply.agentId !== asked.agentId) return;
+  if (reply.stopped) return;
+  stopRequested = false;
+  if (typeof ws !== 'undefined' && ws) {
+    ws.send(JSON.stringify({ type: 'get_run', agentId: asked.agentId, routine: asked.routine }));
+  }
+}
+
+/**
+ * The roster changed. Called from app.js's 'agents' case, unconditionally,
+ * the same as every other view's own refresh there.
+ *
+ * ASKS AGAIN ONLY WHERE THE ANSWER MIGHT HAVE CHANGED. A roster broadcast
+ * fires on far more than this one run ending (any agent's routine starting,
+ * ending, or being edited fires the same message), so this re-asks only when
+ * this screen is open on a run that was, last it heard, still going. That is
+ * also the one case where sitting on a stale record is actually wrong: a
+ * "Still going" or "Stopping…" that has in fact ended, shown to a reader who
+ * is looking at this exact screen.
+ */
+function runDetailRosterUpdated() {
+  if (!asked || !record) return;
+  const model = runDetailModel();
+  const view = model && model.describeRun(record, { now: runDetailClock() });
+  if (!view || !view.state.stoppable) return;
+  if (typeof ws !== 'undefined' && ws) {
+    ws.send(JSON.stringify({ type: 'get_run', agentId: asked.agentId, routine: asked.routine }));
+  }
 }
 
 /** Back to the list this was opened from. */
@@ -243,5 +355,8 @@ function runDetailBack() {
   if (typeof switchNav === 'function') switchNav('routines');
 }
 
-return { renderRunDetail, openRunDetail, runArrived, runDetailBack };
+return {
+  renderRunDetail, openRunDetail, runArrived, runDetailBack,
+  runDetailStop, stopRequestArrived, runDetailRosterUpdated,
+};
 }));

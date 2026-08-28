@@ -1,4 +1,4 @@
-// Motion layer: records the five scripted interactions with Playwright video,
+// Motion layer: records the scripted interactions in CLIPS with Playwright video,
 // then converts each to a web-optimized, palette-optimized, infinitely looping
 // GIF with ffmpeg (palettegen/paletteuse). Clips are short (roughly 4-8s),
 // silent, and loopable.
@@ -17,7 +17,16 @@ import {
   seedWorking, seedLastActive, fitOrgChart, installCursor, cursorTo, cursorKind,
   ORG_WORKING, ORG_LAST_ACTIVE,
 } from './harness.mjs';
-import { DEMO_IDS } from './generate-workspace.mjs';
+import {
+  DEMO_IDS, ARTIFACT_REVIEW_REL, artifactSidecarContent, sidecarNameFor,
+  MARKDOWN_REVIEW_NOTE_REL, markdownReviewNoteContent, ROSTER, agentFile,
+} from './generate-workspace.mjs';
+
+// The one agent assigned the 'meeting-notes' skill (see generate-workspace
+// .mjs's AGENT_SKILLS), which is why clipRoutineEditor's ".re-row:has-text
+// ('Meeting Notes')" click resolves to exactly one row and saves the new
+// routine into this agent's file rather than asking which agent first.
+const ROUTINE_EDITOR_AGENT_ID = 'rea';
 
 const require = createRequire(import.meta.url);
 
@@ -173,6 +182,86 @@ async function clipArtifactComment(page, { mark }) {
   await page.waitForTimeout(700);
 }
 
+// The markdown counterpart to clipArtifactComment above: select a passage,
+// leave a comment, and an agent's suggestion sits right there in the sidebar
+// to accept. Real interactions throughout (a genuine triple-click selection,
+// the real floating toolbar, the real composer, the real Accept button), not
+// scripted state.
+//
+// The comment and the accept are both live, so, same as the artifact clip,
+// this clip needs its note reset before each theme run; see the `reset` hook
+// on this clip's CLIPS entry.
+async function clipMarkdownReview(page, { mark }) {
+  await openFile(page, MARKDOWN_REVIEW_NOTE_REL);
+  await page.waitForSelector('.ProseMirror h1', { timeout: 10000 });
+  await installCursor(page);
+  await page.waitForTimeout(500);
+
+  // Locate the passage to comment on.
+  const at = await page.evaluate(() => {
+    const p = [...document.querySelectorAll('.ProseMirror p')]
+      .find((n) => /earn the scroll/i.test(n.textContent));
+    if (!p) return null;
+    const r = p.getBoundingClientRect();
+    return { x: r.left + Math.min(50, r.width / 3), y: r.top + r.height / 2 };
+  });
+  await cursorKind(page, 'text');
+  if (at) { await cursorTo(page, at.x, at.y, 500); await page.waitForTimeout(450); }
+  mark();
+
+  // Triple-click selects the whole paragraph: a real native selection, so the
+  // editor's own selectionchange handling (not a scripted Range) drives the
+  // floating toolbar exactly as a user's selection would.
+  if (at) await page.mouse.click(at.x, at.y, { clickCount: 3 });
+  const toolbar = await page.waitForSelector('#tiptap-toolbar.visible', { timeout: 3000 }).catch(() => null);
+  await page.waitForTimeout(500);
+
+  // Comment button on the floating toolbar.
+  const commentBtn = toolbar ? await page.$('#tiptap-toolbar .tb-comment') : null;
+  if (commentBtn) {
+    const bb = await commentBtn.boundingBox();
+    if (bb) {
+      await cursorKind(page, 'hand2');
+      await cursorTo(page, bb.x + bb.width / 2, bb.y + bb.height / 2, 400);
+      await page.waitForTimeout(320);
+    }
+    await commentBtn.click().catch(() => {});
+  }
+  await page.waitForTimeout(600);
+
+  // Type the comment into the composer.
+  const composer = await page.$('.review-composer textarea');
+  if (composer) {
+    const cb = await composer.boundingBox();
+    if (cb) {
+      await cursorKind(page, 'text');
+      await cursorTo(page, cb.x + Math.min(60, cb.width / 2), cb.y + cb.height / 2, 380);
+      await page.waitForTimeout(280);
+    }
+    await composer.type('Can we open with a stronger claim?', { delay: 35 });
+    await page.waitForTimeout(500);
+    const sendBtn = await page.$('.review-composer .review-send');
+    if (sendBtn) { await cursorKind(page, 'hand2'); await sendBtn.click().catch(() => {}); }
+  }
+  await page.waitForTimeout(900);
+
+  // The agent's suggestion card is already in the sidebar (pre-authored, as
+  // an agent's authoring direction always is for markdown: see
+  // markdownReviewNoteContent's comment in generate-workspace.mjs). Move to
+  // it and accept it.
+  const acceptBtn = await page.$('.review-card.suggestion .review-btn.accept');
+  if (acceptBtn) {
+    const bb = await acceptBtn.boundingBox();
+    if (bb) {
+      await cursorKind(page, 'hand2');
+      await cursorTo(page, bb.x + bb.width / 2, bb.y + bb.height / 2, 450);
+      await page.waitForTimeout(350);
+    }
+    await acceptBtn.click().catch(() => {});
+  }
+  await page.waitForTimeout(1000);
+}
+
 async function clipSearch(page, { mark }) {
   await page.evaluate(() => switchNav('team'));
   await page.waitForTimeout(400);
@@ -268,21 +357,166 @@ async function clipOrgStatus(page, { mark }) {
   await page.waitForTimeout(4000);
 }
 
+// The routine editor: Add routine -> pick a skill -> say when -> confirm,
+// ending back on the routines list with the new routine showing. Real
+// interactions throughout (the actual "+" control, the actual skill row, the
+// actual time <select>, the actual Save button), not scripted state, so this
+// demonstrates exactly the form 0.12.0 shipped rather than a mocked-up one.
+//
+// Meeting Notes (Rea) is picked deliberately: it has no demo routine already
+// (unlike Weekly Digest, Publish Check, Daily Brief, Nightly Build Check,
+// which are all seeded with run history for the `routines` still), so this
+// clip visibly adds a fifth, fresh routine rather than re-creating one that
+// already exists.
+// Paced for reading, not just for the cursor to arrive: this is a 3-screen
+// wizard (pick a skill, say when, confirm), and the first cut of this clip
+// moved through all three screens too fast to actually read any of them.
+// Cursor travel stays quick and natural; the dwell time AFTER each screen
+// settles is what got lengthened, so a viewer has time to read "Step 1 of 2"
+// before the skill list changes, and to read the sentence before it changes.
+async function clipRoutineEditor(page, { mark }) {
+  await page.evaluate(() => switchNav('routines'));
+  await page.waitForSelector('#routines-content .routine-row', { timeout: 10000 });
+  await installCursor(page);
+  await page.waitForTimeout(600);
+
+  const addBtn = await page.$('#routines-add-btn');
+  const bb0 = addBtn && await addBtn.boundingBox();
+  if (bb0) {
+    await cursorKind(page, 'hand2');
+    await cursorTo(page, bb0.x + bb0.width / 2, bb0.y + bb0.height / 2, 500);
+    await page.waitForTimeout(500);
+  }
+  mark();
+  if (addBtn) await addBtn.click();
+  await page.waitForSelector('#routine-editor-content .re-row', { timeout: 8000 });
+  // Let "Add routine, Step 1 of 2" and the skill list actually register.
+  await page.waitForTimeout(1000);
+
+  // Step 1: pick a skill.
+  const skillRow = await page.$('#routine-editor-content .re-row:has-text("Meeting Notes")');
+  if (skillRow) {
+    const bb = await skillRow.boundingBox();
+    if (bb) {
+      await cursorKind(page, 'hand2');
+      await cursorTo(page, bb.x + bb.width / 2, bb.y + bb.height / 2, 450);
+      await page.waitForTimeout(400);
+    }
+    await skillRow.click();
+  }
+  // Hold on the selected (checked) row before moving to Continue.
+  await page.waitForTimeout(900);
+  let continueBtn = await page.$('#routine-editor-content .re-actions button:not([disabled])');
+  if (continueBtn) {
+    const bb = await continueBtn.boundingBox();
+    if (bb) { await cursorTo(page, bb.x + bb.width / 2, bb.y + bb.height / 2, 400); await page.waitForTimeout(350); }
+    await continueBtn.click();
+  }
+
+  // Step 2: say when. Frequency defaults to "day"; only the time needs
+  // setting for the sentence to read as a deliberate choice, not a default
+  // left untouched.
+  await page.waitForSelector('#routine-editor-content select[data-routine-field="time"]', { timeout: 8000 });
+  // Let "Step 2 of 2" and the default sentence ("...every day at 9:00am")
+  // actually register before it changes under the reader.
+  await page.waitForTimeout(1100);
+  const timeSelect = await page.$('#routine-editor-content select[data-routine-field="time"]');
+  if (timeSelect) {
+    const bb = await timeSelect.boundingBox();
+    if (bb) {
+      await cursorKind(page, 'text');
+      await cursorTo(page, bb.x + bb.width / 2, bb.y + bb.height / 2, 400);
+      await page.waitForTimeout(350);
+    }
+    await timeSelect.selectOption('21:00');
+  }
+  // Hold on the updated sentence ("...every day at 9:00pm") so it reads as a
+  // deliberate choice, not a flicker.
+  await page.waitForTimeout(1300);
+  continueBtn = await page.$('#routine-editor-content .re-actions button:not([disabled])');
+  if (continueBtn) {
+    const bb = await continueBtn.boundingBox();
+    if (bb) {
+      await cursorKind(page, 'hand2');
+      await cursorTo(page, bb.x + bb.width / 2, bb.y + bb.height / 2, 400);
+      await page.waitForTimeout(350);
+    }
+    await continueBtn.click();
+  }
+
+  // Step 3: confirm. Saving is a real write to the demo workspace's agent
+  // file, exactly as a real save would be; the workspace is discarded after
+  // capture.
+  await page.waitForSelector('#routine-editor-content [data-routine-editor="save"]', { timeout: 8000 });
+  // Let the confirm sentence be read before the button gets pressed.
+  await page.waitForTimeout(1300);
+  const saveBtn = await page.$('#routine-editor-content [data-routine-editor="save"]');
+  if (saveBtn) {
+    const bb = await saveBtn.boundingBox();
+    if (bb) {
+      await cursorKind(page, 'hand2');
+      await cursorTo(page, bb.x + bb.width / 2, bb.y + bb.height / 2, 450);
+      await page.waitForTimeout(400);
+    }
+    await saveBtn.click();
+  }
+  // routineEditorSaved() navigates back to the routines list on its own; the
+  // new routine is what proves the save actually landed. Hold on it so the
+  // new, highlighted row is legible, not just glimpsed.
+  await page.waitForSelector('#routines-content .routine-row', { timeout: 10000 });
+  await page.waitForTimeout(1600);
+}
+
 // Clip registry. `themes` is which themes to record (theme reads in all of
 // these, but the spec only mandates parity for the org-status clip; the others
 // default to both for completeness).
 // `gif` overrides the default {fps:15, width:1280} for clips that would
 // otherwise crowd the file-size budget (the review clip has a lot of motion:
 // a selection highlight plus type-in).
+// `reset(workspace)` runs before EVERY theme run of that clip, not just once
+// per pipeline run. Both theme runs of a clip share one server/workspace
+// (captureMotion below), and any clip whose live actions save to disk (a
+// comment, an accepted suggestion, a saved routine) would otherwise have its
+// dark run open a file (or read routine state) the light run already left
+// mutated. See generate-workspace.mjs's ARTIFACT_REVIEW_REL and
+// MARKDOWN_REVIEW_NOTE_REL comments for the fuller version of this story.
 export const CLIPS = [
   { name: 'kanban-drag', feature: 'Kanban card drag between columns', run: clipKanbanDrag },
-  { name: 'review-comment', feature: 'Adding a comment on an artifact', run: clipArtifactComment, gif: { width: 1152 } },
+  {
+    name: 'review-comment', feature: 'Adding a comment on an artifact', run: clipArtifactComment, gif: { width: 1152 },
+    reset: (workspace) => fs.writeFileSync(
+      path.join(workspace, '.rundock', 'reviews', sidecarNameFor(ARTIFACT_REVIEW_REL)),
+      JSON.stringify(artifactSidecarContent(), null, 2),
+    ),
+  },
+  {
+    name: 'markdown-review', feature: 'Adding a comment on a markdown note, and accepting an agent\'s suggestion',
+    run: clipMarkdownReview, gif: { width: 1152 },
+    reset: (workspace) => fs.writeFileSync(
+      path.join(workspace, MARKDOWN_REVIEW_NOTE_REL), markdownReviewNoteContent(),
+    ),
+  },
   { name: 'search', feature: 'Cmd+K universal search, then opening the result', run: clipSearch },
   // Streaming plus a handoff has continuous type-in over a longer clip (high
   // entropy); trim width and fps to stay inside the size budget.
   { name: 'streaming', feature: 'Orchestrator routes to a specialist, whose reply streams in', run: clipStreamingHandoff, gif: { fps: 12, width: 1080 } },
   // ssBuffer:0 keeps the pre-mark navigation frames out of the trimmed clip.
   { name: 'org-chart-status', feature: 'Org chart live status', run: clipOrgStatus, ssBuffer: 0 },
+  {
+    name: 'routine-editor', feature: 'Schedule a skill to a cadence, through a form',
+    run: clipRoutineEditor, gif: { width: 1152 },
+    // Saving is a real write to the demo workspace's agent file (see
+    // clipRoutineEditor's own comment), and both theme runs share one
+    // workspace: without this, the dark run would find the routine the light
+    // run already saved sitting on the same file, and either save a
+    // duplicate or read a workspace that no longer shows a fresh add. Rewrite
+    // the one agent file this clip can touch back to its pristine, routine-
+    // free content before every theme run.
+    reset: (workspace) => fs.writeFileSync(
+      path.join(workspace, '.claude', 'agents', `${ROUTINE_EDITOR_AGENT_ID}.md`),
+      agentFile(ROSTER.find((a) => a.id === ROUTINE_EDITOR_AGENT_ID)),
+    ),
+  },
 ];
 
 export const MOTION_THEMES = ['light', 'dark'];
@@ -298,6 +532,10 @@ export async function captureMotion({ browser, url, workspace, outDir, log = () 
     for (const theme of MOTION_THEMES) {
       let ctx;
       try {
+        // Reset before EVERY theme run, not just once: see the CLIPS registry
+        // comment above for why a clip with live, disk-writing actions needs
+        // this on both its light and dark runs, not only the first.
+        if (clip.reset) clip.reset(workspace);
         // Boot already in the target theme so the clip never flips mid-record.
         ctx = await newContext(browser, { motion: true, recordVideoDir: videoDir, theme });
         const page = await ctx.newPage();

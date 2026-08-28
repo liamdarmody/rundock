@@ -4,6 +4,16 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+**Name:** TBD
+
+You can now stop a routine that's already running, instead of quitting Rundock to interrupt it.
+
+### Added
+
+- **Stop a routine that's already running:** previously the only way to stop a misbehaving routine was quitting Rundock entirely. A run in progress now shows "Still going" on its row, with a way to open it for the first time while it's still running, and its own screen carries a Stop control that reaches the run directly, including in the brief window before its process has actually started. Its record shows it was stopped, with a real duration, since the ending was witnessed.
+
 ## 0.12.0: Routine Editor & Reliability (2026-08-27)
 
 You can now schedule a skill to run on a cadence through a form, and change that schedule later without deleting and recreating it. This release also closes two real risks: agent-controlled content can no longer inject executable markup into the interface, and MCP credentials can be kept out of the file your team shares.
@@ -13,7 +23,6 @@ You can now schedule a skill to run on a cadence through a form, and change that
 - **Schedule a skill to run on a cadence, through a form:** pick an agent, the skill, and how often to run it, and Rundock writes the routine into the agent's file and runs it on its own server, so it behaves the same on macOS, Windows and Linux. Before this, setting one up meant hand-editing frontmatter or asking Doc in conversation. An existing routine's schedule can be changed in the same form, without deleting and recreating it.
 - **See what a routine actually did:** every run leaves a record of the files it changed, when it started, how long it took, and how it ended, reachable from a "View last run" link. A run cut short by Rundock closing shows as unfinished rather than failed, since it may have completed moments before closing.
 - **Keep MCP API keys out of the file your team shares:** `.mcp.json` sits in the shared workspace folder, so a key written there travelled with every git clone and stayed in history even after deletion. Values now live in `.rundock/mcp-secrets.json`, already excluded from git, and are injected only when an agent starts. A key already written in `.mcp.json` keeps working until you move it.
-- **Stop a routine that's already running:** previously the only way to stop a misbehaving routine was quitting Rundock entirely. A run can now be stopped directly, including in the brief window before its process has actually started, and its record shows it was stopped, with a real duration, since the ending was witnessed.
 
 ### Fixed
 

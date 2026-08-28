@@ -29,16 +29,16 @@
 //
 // NO RAW STATUS WORD LEAVES THIS FILE.
 //
-// A record says `running`, `succeeded`, `failed` or `interrupted`. That is the
-// run store's own vocabulary, chosen so the record and the routine state
-// describe an abandoned run in one word rather than two, and it is not
-// English. One of the four is actively misleading if printed: `interrupted` is
-// written in exactly one place, by the startup close, for a record a dead
-// process left open, and it means the ending never ran rather than that the
-// run failed. The work may well have finished a moment before the machine went
-// down. Naming an outcome nobody witnessed is the invention the record store
-// refuses everywhere else, and it would be a poor place for this screen to
-// start.
+// A record says `running`, `succeeded`, `failed`, `cancelled` or `interrupted`.
+// That is the run store's own vocabulary, chosen so the record and the
+// routine state describe an abandoned run in one word rather than two, and it
+// is not English. One of the five is actively misleading if printed:
+// `interrupted` is written in exactly one place, by the startup close, for a
+// record a dead process left open, and it means the ending never ran rather
+// than that the run failed. The work may well have finished a moment before
+// the machine went down. Naming an outcome nobody witnessed is the invention
+// the record store refuses everywhere else, and it would be a poor place for
+// this screen to start.
 //
 // So every word comes from a table keyed by the status, the table is TOTAL (a
 // status this version has never seen still yields plain words), and nothing
@@ -90,6 +90,12 @@
       chip: 'Still going',
       headline: 'This run is still going.',
       guidance: 'Nothing about it is settled yet, including what it has changed.',
+      // THE ONLY STATE THIS IS TRUE FOR. Read by run-detail.js to decide
+      // whether to draw the Stop control, so that file never branches on the
+      // raw word 'running' itself: see this file's own "NO RAW STATUS WORD
+      // LEAVES THIS FILE" header. A run in any other state has already ended;
+      // there is nothing left to stop.
+      stoppable: true,
     },
     succeeded: {
       filesLabel: 'complete',
@@ -104,6 +110,28 @@
       chip: 'Stopped early',
       headline: 'This run started and did not get through what it was asked to.',
       guidance: null,
+    },
+    // NOT A FAILURE EITHER, for a different reason than interrupted below: this
+    // ending was WITNESSED (lib/scheduler.js writes it the moment the child
+    // actually closes, the same as succeeded or failed), it is just not the
+    // ending the routine was working towards. `filesLabel: 'partial'` is
+    // shared with failed on purpose: a stopped run and a failed one are the
+    // same shape from the file list's point of view, files changed, then it
+    // stopped, and the shared label already says exactly that.
+    //
+    // WHAT "CANCELLED" DOES NOT CLAIM, because the record cannot: a stop asked
+    // for and a run ending are two different events (the process may already
+    // have been finishing when the stop arrived, or may ignore the ordinary
+    // signal for a moment before the stronger one lands), and nothing records
+    // which of them caused the other. The guidance says only that a stop was
+    // asked for before the run ended, never that the stop is what ended it.
+    cancelled: {
+      filesLabel: 'partial',
+      tone: 'stopped',
+      chip: 'Stopped',
+      headline: 'This run was stopped before it finished.',
+      guidance: 'A stop was asked for before this run ended. That is not proof the stop is '
+        + 'what ended it: this run may have finished on its own in the same moment.',
     },
     // NOT A FAILURE, and the words say so twice: the chip does not name an
     // outcome and the headline names the ending rather than the work. What is
@@ -395,6 +423,7 @@
         chip: state.chip,
         headline: state.headline,
         guidance: guidanceFor(state, found ? record : null),
+        stoppable: !!state.stoppable,
       },
       duration: found ? durationWords(record.durationMs) : null,
       files: changedFiles(found ? record : null, FILES_LABELS[state.filesLabel] || FILES_LABELS.complete),
