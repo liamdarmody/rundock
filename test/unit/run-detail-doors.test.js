@@ -73,6 +73,18 @@ const REPLIES = [
     surface: 'the record coming back from the server',
     pressedBy: 'the record arriving from the server draws this screen',
   },
+  {
+    call: 'stopRequestArrived',
+    on: "case 'routine_run_stop_requested':",
+    surface: 'the server\'s answer to a stop request: sent, or nothing to send it to',
+    pressedBy: 'the stop reply reaches this screen through the real client dispatch',
+  },
+  {
+    call: 'runDetailRosterUpdated',
+    on: "case 'agents':",
+    surface: 'a roster broadcast, which may mean the run on screen just ended',
+    pressedBy: 'a roster broadcast through the real dispatch refreshes a run still going',
+  },
 ];
 
 // Ways in that exist in the flow and are deliberately not pressed here, each
@@ -307,6 +319,50 @@ describe('the doors, pressed', () => {
     const text = doc.getElementById('run-detail-content').textContent;
     assert.match(text, /Ops Summary\.md/, 'the record arrived and the screen was left on its waiting line');
     assert.match(text, /Edited/);
+    dom.window.close();
+  });
+
+  test('the stop reply reaches this screen through the real client dispatch', () => {
+    const { w, doc, dom } = shell();
+    w.renderRoutines();
+    doc.querySelectorAll('[data-routines-action="view-run"]')[1].click();
+    const running = { ...RECORD, status: 'running', endedAt: null, durationMs: null };
+    w.runArrived({ type: 'run', agentId: 'piper', routine: 'Compile the ops summary', run: running });
+    w.runDetailStop();
+    w.sent.length = 0;
+    const at = APP_SRC.indexOf("case 'routine_run_stop_requested':");
+    assert.ok(at !== -1, 'app.js no longer carries the routine_run_stop_requested case of the client dispatch');
+    const body = APP_SRC.slice(at + "case 'routine_run_stop_requested':".length, APP_SRC.indexOf('break;', at));
+    // stopped:false, so the reply itself proves the wiring: it has to ask the
+    // server what the record actually says now, through the real case body
+    // rather than by calling stopRequestArrived directly.
+    w.d = { type: 'routine_run_stop_requested', agentId: 'piper', routine: 'Compile the ops summary', stopped: false };
+    w.eval(`(function () {${body}\n})()`);
+    assert.deepStrictEqual(w.sent, [{ type: 'get_run', agentId: 'piper', routine: 'Compile the ops summary' }],
+      "the routine_run_stop_requested case does not call stopRequestArrived");
+    dom.window.close();
+  });
+
+  test('a roster broadcast through the real dispatch refreshes a run still going', () => {
+    const { w, doc, dom } = shell();
+    w.renderRoutines();
+    doc.querySelectorAll('[data-routines-action="view-run"]')[1].click();
+    const running = { ...RECORD, status: 'running', endedAt: null, durationMs: null };
+    w.runArrived({ type: 'run', agentId: 'piper', routine: 'Compile the ops summary', run: running });
+    w.sent.length = 0;
+    const at = APP_SRC.indexOf("case 'agents':");
+    assert.ok(at !== -1, 'app.js no longer carries the agents case of the client dispatch');
+    const body = APP_SRC.slice(at + "case 'agents':".length, APP_SRC.indexOf('break;', at));
+    // Every other global the roster case reaches for, stubbed so this one
+    // line can be pressed without the rest of the case throwing first.
+    for (const name of ['setServingWorkspace', 'renderAgentList', 'renderOrgChart',
+      'renderRoutinesPanel', 'renderConvoList']) {
+      w[name] = () => {};
+    }
+    w.d = { type: 'agents', agents: w.agents, workspace: '/w' };
+    w.eval(`(function () {${body}\n})()`);
+    assert.deepStrictEqual(w.sent, [{ type: 'get_run', agentId: 'piper', routine: 'Compile the ops summary' }],
+      'the agents case does not call runDetailRosterUpdated');
     dom.window.close();
   });
 });

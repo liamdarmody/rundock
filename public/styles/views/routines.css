@@ -76,6 +76,10 @@
 .run-status.ok-quiet { font-weight: 500; color: var(--success); }
 .run-status.neutral { font-weight: 500; color: var(--idle); }
 .run-status.failed { font-weight: 600; color: var(--danger); }
+/* A run in progress. Not one of the model's four tones (outcomeOf never
+   returns while lastRunStatus is 'running'): this is the row's own "Still
+   going" line, styled to match run-detail's .rd-chip.live on the same token. */
+.run-status.live { font-weight: 500; color: var(--working); }
 
 .next-run { font-size: var(--caption); font-weight: 600; color: var(--success); }
 .next-run.paused-label { color: var(--text-3); font-weight: 500; }

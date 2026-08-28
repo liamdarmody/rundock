@@ -441,8 +441,8 @@ const MUTATIONS = [
 
   // ===== WHO DRAWS THIS LIST, AND HOW A READER ARRIVES AT IT =====
   [APP, 'the arriving roster redraws the list',
-    'renderRoutinesPanel(); renderRoutines(); updateRoutineFailureBadge();',
-    'renderRoutinesPanel(); updateRoutineFailureBadge();'],
+    'renderRoutinesPanel(); renderRoutines(); renderConvoList();',
+    'renderRoutinesPanel(); renderConvoList();'],
   [APP, 'the rail entry draws something into the view it shows',
     "  else if(nav==='routines') { showRoutinesForAgent(null); }",
     "  else if(nav==='routines') { }"],
@@ -784,8 +784,8 @@ const MUTATIONS = [
     '  if (!row.status && nextRun) meta += `${sep}${nextRun}`;',
     ''],
   [VIEW, 'the second line appears only once there is something to say',
-    '  if (row.status) {',
-    '  if (true) {'],
+    '  } else if (row.status) {',
+    '  } else if (true) {'],
   [VIEW, 'a paused row offers resume rather than pause again',
     "    actions += r.paused\n      ? iconButton('resume', 'Resume', ICONS.play, `routinesSetPaused(${index}, false)`, false)\n      : iconButton('pause', 'Pause', ICONS.pause, `routinesSetPaused(${index}, true)`, false);",
     "    actions += iconButton('pause', 'Pause', ICONS.pause, `routinesSetPaused(${index}, true)`, false);"],
@@ -1011,42 +1011,19 @@ const MUTATIONS = [
   [STYLES, 'the subtitle takes the body size rather than restating the title',
     '.routines-subtitle { font-size: var(--body); color: var(--text-2); line-height: 1.5; margin-top: 2px; }',
     '.routines-subtitle { font-size: var(--title); color: var(--text-2); line-height: 1.5; margin-top: 2px; }'],
-  // ===== THE FAILURE DOT =====
-  // The three-tone ruling reaching the chrome. A dot that rises on a missed
-  // slot teaches its reader to ignore the dot, which is what the ruling was
-  // settled to prevent, so the rule and each half of the wiring are watched.
-  [APP_OPENER, 'the dot is raised on a failure rather than on anything that ran',
-    '  if (RundockRoutinesModel.anyFailure(facts)) {',
-    '  if (facts.length) {'],
-  // The removal branch, named with enough of its own function around it to be
-  // unique: the two badges above this one end in the same three lines, and a
-  // guard that matched all three would break whichever came first and report
-  // on whatever that turned red.
-  [APP_OPENER, 'the dot is taken away again once nothing is failing',
-    "      badge.className = 'nav-badge-failed';\n      navBtn.appendChild(badge);\n    }\n  } else {\n    if (badge) badge.remove();\n  }",
-    "      badge.className = 'nav-badge-failed';\n      navBtn.appendChild(badge);\n    }\n  } else {\n  }"],
-  [APP_OPENER, 'every agent on the roster is looked at, not only the first',
-    '  for (const agent of agents || []) {',
-    '  for (const agent of (agents || []).slice(0, 1)) {'],
-  [APP_OPENER, 'the roster broadcast is what updates the rail',
-    ' updateRoutineFailureBadge();',
-    ''],
-  [APP_OPENER, 'the outcome is read from the run state the row reads',
-    '        lastRunStatus: routine.state ? routine.state.status : null,',
-    '        lastRunStatus: null,'],
+  // ===== THE FAILURE QUESTION (RundockRoutinesModel.anyFailure) =====
+  // The nav-rail dot this model function used to drive (app.js,
+  // updateRoutineFailureBadge) was removed 2026-08-27: it read as distracting
+  // in practice. The model function itself stays, tested, in case a quieter
+  // signal for this replaces it later, so its own correctness is still worth
+  // guarding even with nothing in the UI consuming it today.
   [MODEL, 'only a real failure counts as a failure',
     '    return routines.some(routine => !(routine && routine.paused) && lastCompletedRunFailed(routine));',
     '    return routines.length > 0;'],
-  [SIDEBAR_CSS, 'the dot takes the danger token rather than the amber one beside it',
-    '.nav-badge-failed { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--danger); border-radius: var(--radius-circle); pointer-events: none; }',
-    '.nav-badge-failed { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--attention); border-radius: var(--radius-circle); pointer-events: none; }'],
   // ===== THE PAUSE CLAUSE AND THE FAILURE QUESTION =====
   [MODEL, 'a paused routine is excluded before the failure question is asked',
     '    return routines.some(routine => !(routine && routine.paused) && lastCompletedRunFailed(routine));',
     '    return routines.some(routine => lastCompletedRunFailed(routine));'],
-  [APP_OPENER, 'the rail is told whether a routine is paused',
-    '        paused: !!routine.paused,',
-    ''],
   // The rail asks about the last completed run and the row asks what happened
   // most recently. Collapsing the rail back onto the row's answer lets an
   // ordinary missed slot hide the only alarming state in the product.

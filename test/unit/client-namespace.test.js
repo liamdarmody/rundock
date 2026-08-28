@@ -234,6 +234,9 @@ const MANIFEST = {
     "renderRunDetail",
     "runArrived",
     "runDetailBack",
+    "runDetailRosterUpdated",
+    "runDetailStop",
+    "stopRequestArrived",
   ],
   "settings.js": [
     "changeWorkspace",

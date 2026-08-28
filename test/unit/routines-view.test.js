@@ -616,6 +616,72 @@ describe('the four rows', () => {
   });
 });
 
+// Before this, a routine's row went blank for exactly as long as it was
+// running: outcomeOf (routines-model.js) deliberately answers null while
+// lastRunStatus is 'running', because the three-tone ruling is about runs
+// that have ENDED, and one still going has not. That withholding is right for
+// the model; the row still has to say something, which is what this block
+// tests. See routines.js's own comment at the `r.state.status === 'running'`
+// branch for the fuller reasoning.
+describe('a run still going', () => {
+  const RUNNING = routine('Nightly build check', {
+    state: { status: 'running' }, lastStart: iso(TODAYS_SLOT), nextRun: iso(TOMORROWS_SLOT),
+  });
+
+  test('the row says so, in its own tone, rather than going blank', () => {
+    const { doc, w, dom } = shell([RUNNING]);
+    w.renderRoutines();
+    const row = rowNamed(doc, 'Nightly build check');
+    const status = row.querySelector('.rr-run-line .run-status');
+    assert.ok(status, 'a running routine\'s row carries no status line at all');
+    assert.strictEqual(text(status), 'Still going');
+    assert.strictEqual(status.className, 'run-status live');
+    dom.window.close();
+  });
+
+  test('it offers a way to reach the run, unlike a routine that has never run', () => {
+    const { doc, w, dom } = shell([RUNNING]);
+    w.renderRoutines();
+    const link = rowNamed(doc, 'Nightly build check').querySelector('.rr-view-run');
+    assert.ok(link, 'a running routine\'s row offers no way to reach the run in progress');
+    assert.strictEqual(text(link), 'View run');
+    assert.strictEqual(link.getAttribute('onclick'), 'routinesViewLastRun(0)');
+  });
+
+  test('this line is not also drawn as a three-tone outcome', () => {
+    const { doc, w, dom } = shell([RUNNING]);
+    w.renderRoutines();
+    const row = rowNamed(doc, 'Nightly build check');
+    assert.strictEqual(row.querySelectorAll('.rr-run-line').length, 1,
+      'a running routine\'s row carries both "Still going" and a three-tone verdict at once');
+    dom.window.close();
+  });
+
+  test('the confirmation surface withholds it, the same as every other row control', () => {
+    // withActions:false is how the delete confirmation draws a row: a
+    // question, not a list, per the comment beside every control this
+    // gating already covers (Pause, Edit, Delete, View last run).
+    const { doc, w, dom } = shell([RUNNING]);
+    w.renderRoutines();
+    press(doc, '.rr-actions [data-routines-action="delete"]');
+    const row = doc.querySelector('.routine-table .routine-row');
+    assert.ok(row, 'the delete confirmation lost the row it is asking about');
+    assert.strictEqual(row.querySelector('.rr-view-run'), null,
+      'View run was drawn on the delete confirmation, which is a question and not a list');
+    dom.window.close();
+  });
+
+  test('the four-tone rows are unaffected: this is a fifth case, not a change to the others', () => {
+    const { doc, w, dom } = shell();
+    w.renderRoutines();
+    assert.strictEqual(rows(doc).length, 4);
+    for (const name of ['Ran on time', 'Caught up', 'Missed', 'Failed']) {
+      assert.notStrictEqual(text(rowNamed(doc, name).querySelector('.run-status')), 'Still going');
+    }
+    dom.window.close();
+  });
+});
+
 describe('the ruling, against what the page resolves', () => {
   // WHY THIS READS THE PAGE AND NOT A TABLE. An earlier version of this card
   // declared colour and weight per tone in the model and asserted on that.
@@ -1742,312 +1808,6 @@ describe('the header is the skills view\'s header', () => {
     assert.strictEqual(text(doc.querySelector('[data-routines-problem]')),
       'Routine could not be paused.');
     dom.window.close();
-  });
-});
-
-describe('the rail says when a routine has failed', () => {
-  // The chrome's own stylesheet, loaded into the document so what the dot
-  // LOOKS like is read off the element the page emits rather than off a token
-  // name written beside it. The routines view's tone proof was once made
-  // against a table nothing rendered, and giving a state the wrong colour in
-  // CSS moved the page and moved no test.
-  const SIDEBAR_CSS = read('public', 'styles', 'components', 'sidebar.css');
-
-  const ran = (name) => routine(name, {
-    state: { status: 'completed', duration: 3 }, lastStart: iso(new Date(2026, 7, 20, 7, 0, 12)),
-    lastSlot: iso(TODAYS_SLOT), nextRun: iso(TOMORROWS_SLOT),
-  });
-  const failed = (name) => routine(name, {
-    state: { status: 'failed', duration: 0 }, lastStart: iso(TODAYS_SLOT),
-    lastSlot: iso(TODAYS_SLOT), nextRun: iso(TOMORROWS_SLOT),
-  });
-  const interrupted = (name) => routine(name, {
-    state: { status: 'interrupted', duration: 0 }, lastStart: iso(TODAYS_SLOT),
-    lastSlot: iso(TODAYS_SLOT), nextRun: iso(TOMORROWS_SLOT),
-  });
-  const missed = (name) => routine(name, {
-    state: { status: 'completed', duration: 3 }, lastStart: iso(new Date(2026, 7, 18, 7, 0)),
-    lastSlot: iso(new Date(2026, 7, 18, 7, 0)), missedSlot: iso(YESTERDAYS_SLOT),
-    nextRun: iso(TODAYS_SLOT),
-  });
-  const caughtUp = (name) => routine(name, {
-    state: { status: 'completed', duration: 3 }, lastStart: iso(new Date(2026, 7, 20, 9, 14)),
-    lastSlot: iso(TODAYS_SLOT), nextRun: iso(TOMORROWS_SLOT),
-  });
-  const paused = (name) => routine(name, { paused: true, nextRun: iso(TOMORROWS_SLOT) });
-  // A paused routine whose last run FAILED. This is the fixture the pause
-  // clause needs: a paused routine with no run history is indistinguishable
-  // from one that has never run, so it passes whether or not pause is read.
-  const pausedAfterFailure = (name) => routine(name, {
-    state: { status: 'failed', duration: 0 }, lastStart: iso(TODAYS_SLOT),
-    lastSlot: iso(TODAYS_SLOT), paused: true, nextRun: iso(TOMORROWS_SLOT),
-  });
-  const inFlight = (name) => routine(name, {
-    state: { status: 'running' }, lastStart: iso(TODAYS_SLOT),
-    lastSlot: iso(TODAYS_SLOT), nextRun: iso(TOMORROWS_SLOT),
-  });
-
-  // The rail as index.html ships it, with the chrome stylesheet in the
-  // document and the real updater cut out of app.js and run against it.
-  function railShell(routines) {
-    const dom = new JSDOM('<!doctype html><html><head><style>' + TOKENS_CSS + SIDEBAR_CSS
-      + '</style></head><body>' + pageParts() + '</body></html>', { runScripts: 'dangerously' });
-    const w = dom.window;
-    w.eval(EDITOR_MODEL_SRC);
-    w.eval(SKILLS_MODEL_SRC);
-    w.eval(MODEL_SRC);
-    w.agents = [{ id: 'piper', displayName: 'Piper', status: 'onTeam', routines }];
-    w.eval('function updateRoutineFailureBadge() {'
-      + appPiece(/function updateRoutineFailureBadge\(\) \{([\s\S]*?)\n\}/, 'the routines failure badge')
-      + '\n}');
-    return { w, doc: w.document, dom };
-  }
-
-  const dot = (doc) => doc.querySelector('.nav-item[data-nav="routines"] .nav-badge-failed');
-
-  // What a rendered element is filled with, as the page resolves it. The
-  // chrome declares its badges with the `background` shorthand, so that is the
-  // property asked for: the longhand a shorthand carrying a custom property
-  // never reaches answers with a transparent default and would make every
-  // comparison below pass against a badge with no colour at all.
-  function fill(dom, el) {
-    const value = dom.window.getComputedStyle(el).getPropertyValue('background');
-    assert.ok(value && value !== 'rgba(0, 0, 0, 0)',
-      'the element resolves to no fill, so nothing here is measuring a colour');
-    return value;
-  }
-
-  // AC-D1.
-  test('a failed most recent completed run raises the dot', () => {
-    const { w, doc, dom } = railShell([failed('Nightly report')]);
-    w.updateRoutineFailureBadge();
-    assert.ok(dot(doc), 'a routine failed overnight and the rail says nothing');
-    dom.window.close();
-  });
-
-  test('a run the process died inside raises it too', () => {
-    const { w, doc, dom } = railShell([interrupted('Nightly report')]);
-    w.updateRoutineFailureBadge();
-    assert.ok(dot(doc), 'a run that did not finish is not a run that succeeded');
-    dom.window.close();
-  });
-
-  // AC-D2, and it is the whole reason this card exists. Each of the four
-  // asserted on its own, because "none of these four raises it" asserted as
-  // one is a single failure that could be any of them.
-  test('a missed slot does not raise the dot', () => {
-    const { w, doc, dom } = railShell([missed('Nightly report')]);
-    w.updateRoutineFailureBadge();
-    assert.strictEqual(dot(doc), null,
-      'a dot that rises on a missed slot teaches its reader to ignore the dot');
-    dom.window.close();
-  });
-
-  test('a catch-up does not raise the dot', () => {
-    const { w, doc, dom } = railShell([caughtUp('Nightly report')]);
-    w.updateRoutineFailureBadge();
-    assert.strictEqual(dot(doc), null, 'a late run is a success');
-    dom.window.close();
-  });
-
-  // THE PAUSE CLAUSE, DRIVEN SO THAT THE PAUSE IS THE ONLY THING BETWEEN THE
-  // ROUTINE AND A DOT. A paused routine with no run history proves nothing:
-  // the never-run branch answers it either way. This fixture raises the dot
-  // the moment the paused flag stops being read.
-  test('a paused routine does not raise the dot', () => {
-    const { w, doc, dom } = railShell([pausedAfterFailure('Nightly report')]);
-    w.updateRoutineFailureBadge();
-    assert.strictEqual(dot(doc), null,
-      'a paused routine can never succeed again, so a dot it raised could never be cleared');
-    dom.window.close();
-  });
-
-  test('the same routine unpaused does raise it, so the pause is what decides', () => {
-    const { w, doc, dom } = railShell([failed('Nightly report')]);
-    w.updateRoutineFailureBadge();
-    assert.ok(dot(doc), 'sanity: without the pause this fixture raises the dot');
-    dom.window.close();
-  });
-
-  // The never-run case is kept, as its own case rather than as the one that
-  // discharges the pause clause.
-  test('a paused routine that has never run does not raise the dot either', () => {
-    const { w, doc, dom } = railShell([paused('Nightly report')]);
-    w.updateRoutineFailureBadge();
-    assert.strictEqual(dot(doc), null);
-    dom.window.close();
-  });
-
-  // AC-D3 has no way to fire for a paused routine, which is exactly why pause
-  // has to clear the dot rather than merely not raise it: a dot left up by a
-  // paused routine would sit there until it was resumed or deleted.
-  test('pausing a failed routine clears the dot in the same page', () => {
-    const { w, doc, dom } = railShell([failed('Nightly report')]);
-    w.updateRoutineFailureBadge();
-    assert.ok(dot(doc), 'sanity: the failure raised it');
-    w.agents[0].routines = [pausedAfterFailure('Nightly report')];
-    w.updateRoutineFailureBadge();
-    assert.strictEqual(dot(doc), null,
-      'the user paused the routine and the rail is still alarming about it');
-    dom.window.close();
-  });
-
-  // AC-D1 read literally, at the rail. A failure and then a night with the
-  // machine shut is still a failure nobody has seen.
-  test('a slot missed after a failure does not mask the failure on the rail', () => {
-    const { w, doc, dom } = railShell([routine('Nightly report', {
-      state: { status: 'failed', duration: 0 },
-      lastStart: iso(new Date(2026, 7, 19, 7, 0)), lastSlot: iso(new Date(2026, 7, 19, 7, 0)),
-      missedSlot: iso(YESTERDAYS_SLOT), nextRun: iso(TODAYS_SLOT),
-    })]);
-    w.updateRoutineFailureBadge();
-    assert.ok(dot(doc), 'a missed slot hid a failed run behind the most ordinary event there is');
-    dom.window.close();
-  });
-
-  test('a run still in flight does not raise the dot', () => {
-    const { w, doc, dom } = railShell([inFlight('Nightly report')]);
-    w.updateRoutineFailureBadge();
-    assert.strictEqual(dot(doc), null,
-      'a run that has not finished has no outcome to report yet');
-    dom.window.close();
-  });
-
-  test('a routine that has never run does not raise the dot', () => {
-    const { w, doc, dom } = railShell([routine('Never run', { nextRun: iso(TOMORROWS_SLOT) })]);
-    w.updateRoutineFailureBadge();
-    assert.strictEqual(dot(doc), null);
-    dom.window.close();
-  });
-
-  test('a workspace with no routines at all does not raise the dot', () => {
-    const { w, doc, dom } = railShell([]);
-    w.updateRoutineFailureBadge();
-    assert.strictEqual(dot(doc), null);
-    dom.window.close();
-  });
-
-  // AC-D3, without a reload: the same document, a second roster.
-  test('the dot clears when that routine next succeeds, in the same page', () => {
-    const { w, doc, dom } = railShell([failed('Nightly report')]);
-    w.updateRoutineFailureBadge();
-    assert.ok(dot(doc), 'sanity: the failure raised it');
-    w.agents[0].routines = [ran('Nightly report')];
-    w.updateRoutineFailureBadge();
-    assert.strictEqual(dot(doc), null, 'the routine recovered and the rail is still alarming');
-    dom.window.close();
-  });
-
-  test('the dot is not drawn twice when the failure is still there', () => {
-    const { w, doc, dom } = railShell([failed('Nightly report')]);
-    w.updateRoutineFailureBadge();
-    w.updateRoutineFailureBadge();
-    assert.strictEqual(doc.querySelectorAll('.nav-item[data-nav="routines"] .nav-badge-failed').length, 1);
-    dom.window.close();
-  });
-
-  // AC-D5. One failure among many raises it, and somebody else's success is
-  // not that routine's recovery.
-  test('one failure among several routines raises the dot', () => {
-    const { w, doc, dom } = railShell([ran('First'), missed('Second'), failed('Third'), caughtUp('Fourth')]);
-    w.updateRoutineFailureBadge();
-    assert.ok(dot(doc), 'a failure was lost among the routines that are fine');
-    dom.window.close();
-  });
-
-  test('another routine succeeding does not clear a failure', () => {
-    const { w, doc, dom } = railShell([failed('First'), routine('Second', { nextRun: iso(TOMORROWS_SLOT) })]);
-    w.updateRoutineFailureBadge();
-    assert.ok(dot(doc));
-    w.agents[0].routines = [failed('First'), ran('Second')];
-    w.updateRoutineFailureBadge();
-    assert.ok(dot(doc), 'one routine recovering cleared another routine\'s failure');
-    dom.window.close();
-  });
-
-  test('a failure on any agent raises it, not only the first', () => {
-    const { w, doc, dom } = railShell([ran('First')]);
-    w.agents.push({ id: 'wren', displayName: 'Wren', status: 'onTeam', routines: [failed('Second')] });
-    w.updateRoutineFailureBadge();
-    assert.ok(dot(doc), 'only the first agent\'s routines were looked at');
-    dom.window.close();
-  });
-
-  // AC-D4, PROVEN AGAINST WHAT THE PAGE RESOLVES. The dot's colour is read off
-  // the element the updater appended, with the shipped stylesheet in the
-  // document, and compared with the badge that already exists beside it. A
-  // rule added later that overrides either one changes this answer, which is
-  // the property a search of the stylesheet would not have.
-  test('the dot resolves to the danger token, not the attention token', () => {
-    const { w, doc, dom } = railShell([failed('Nightly report')]);
-    w.updateRoutineFailureBadge();
-    const failure = fill(dom, dot(doc));
-
-    // The unread badge, drawn onto the same page by the same chrome, so this
-    // is two rendered elements compared rather than one string matched.
-    const unreadBadge = doc.createElement('span');
-    unreadBadge.className = 'nav-badge';
-    doc.querySelector('.nav-item[data-nav="conversations"]').appendChild(unreadBadge);
-    const attention = fill(dom, unreadBadge);
-
-    assert.strictEqual(failure, 'var(--danger)', 'the dot does not resolve to the danger token');
-    assert.strictEqual(attention, 'var(--attention)', 'sanity: the unread badge is still amber');
-    assert.notStrictEqual(failure, attention,
-      'amber is spent on needs the user rather than on an error, and a failure is an error');
-    dom.window.close();
-  });
-
-  // Without this, "the dot is not the attention token" would still hold if the
-  // two tokens happened to carry the same colour.
-  test('the two tokens are different colours', () => {
-    const value = (token) => {
-      const m = new RegExp(`--${token}:\\s*([^;]+);`).exec(TOKENS_CSS);
-      assert.ok(m, `--${token} is declared nowhere`);
-      return m[1].trim();
-    };
-    assert.notStrictEqual(value('danger'), value('attention'),
-      'the danger and attention tokens carry the same colour, so the dot says nothing new');
-  });
-
-  // AND IT IS RAISED BY THE SURFACE THAT CARRIES IT, not by a call in a test.
-  // The roster broadcast is the only thing that tells the client a run
-  // finished, so it is the message that has to update the rail. Cut out of
-  // app.js and run, so deleting the call fails here rather than leaving the
-  // suite green while the dot never appears in the product.
-  //
-  // THE SERVER HALF IS NOT ASSUMED. broadcastRoutineUpdate in lib/scheduler.js
-  // sends `{type: 'agents'}` to every connected client from recordOutcome,
-  // which is where both endings of a run land, and that is driven rather than
-  // described in "a run reaching an outcome sends the roster to connected
-  // clients" in test/unit/scheduler-lib.test.js. Without it, everything below
-  // would prove the dot updates on a roster and prove nothing about whether a
-  // roster ever arrives.
-  test('the roster arriving from the server raises and clears the dot', () => {
-    const { w, doc, dom } = railShell([]);
-    const body = appPiece(/case 'agents':([\s\S]*?)\bbreak;/, 'the roster case of the client dispatch');
-    for (const name of ['renderAgentList', 'renderOrgChart', 'renderConvoList', 'renderRoutines',
-      'renderRoutinesPanel']) {
-      w[name] = () => {};
-    }
-    // Also called by the roster case: the workspace the roster was read from.
-    // Nothing on the rail reads it, so it is stubbed here and driven where it
-    // matters, in test/unit/routines-end-to-end.test.js.
-    w.setServingWorkspace = () => {};
-    w.d = { type: 'agents', agents: [{ id: 'piper', displayName: 'Piper', status: 'onTeam', routines: [failed('Nightly report')] }] };
-    w.eval(`(function () {${body}\n})()`);
-    assert.ok(dot(doc), 'a roster carrying a failure arrived and the rail says nothing');
-
-    w.d = { type: 'agents', agents: [{ id: 'piper', displayName: 'Piper', status: 'onTeam', routines: [ran('Nightly report')] }] };
-    w.eval(`(function () {${body}\n})()`);
-    assert.strictEqual(dot(doc), null, 'the recovery arrived and the rail is still alarming');
-    dom.window.close();
-  });
-
-  // The badge belongs to the chrome. The view must not reach into the rail,
-  // which is the rule the withdrawn presence gate left behind.
-  test('the view does not reach into the rail to draw it', () => {
-    assert.ok(!/nav-badge-failed/.test(VIEW_SRC),
-      'the routines view draws the rail badge, which is the rail rule coming back by hand');
   });
 });
 

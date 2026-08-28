@@ -48,10 +48,24 @@ const changelog = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf-8');
 // (empty slice, every assertion failing) on the very next release. The
 // topmost "## " heading is always the entry being shipped, whatever it is
 // named; the second bounds it.
+//
+// SKIPS A LEADING "## Unreleased", IF ONE HAS SINCE BEEN ADDED. The claims
+// pinned below (the workspace boundary card, the macOS sandbox) belong to the
+// 0.12.0 release specifically: they were written the day it shipped, when its
+// own heading was topmost. Work on the NEXT release starts by adding a fresh
+// "## Unreleased" above it, same as this file's own comment already expects
+// for one release out. That new section carries no claim these pins are
+// about, so grabbing whatever is now topmost would blind every assertion here
+// the moment that next section existed, for the same reason named above:
+// an empty slice, every assertion failing, on a release these pins were never
+// about. So: skip a leading "## Unreleased" and bind to the heading after it,
+// which is 0.12.0 today and will be whatever ships next once 0.12.0 itself is
+// no longer near the top.
 const changelogHeadings = [...changelog.matchAll(/^## .*$/gm)];
-const unreleased = changelog.slice(
-  changelogHeadings[0].index,
-  changelogHeadings[1]?.index ?? changelog.length,
+const shippedIdx = changelogHeadings[0][0].trim() === '## Unreleased' ? 1 : 0;
+const shippedEntry = changelog.slice(
+  changelogHeadings[shippedIdx].index,
+  changelogHeadings[shippedIdx + 1]?.index ?? changelog.length,
 );
 const architecture = fs.readFileSync(path.join(ROOT, 'ARCHITECTURE.md'), 'utf-8');
 const skillsDoc = fs.readFileSync(path.join(ROOT, 'docs', 'SKILLS.md'), 'utf-8');
@@ -113,9 +127,9 @@ describe('the workspace boundary says what it enforces, per platform', () => {
     const dirs = declared[1].split(',').map(d => d.trim().replace(/^'|'$/g, '')).filter(Boolean);
     assert.ok(dirs.length >= 3, 'sanity: the list was parsed');
     for (const d of dirs) {
-      assert.ok(unreleased.includes(d), `the release notes name ${d}, which the code does not card`);
+      assert.ok(shippedEntry.includes(d), `the release notes name ${d}, which the code does not card`);
     }
-    assert.match(unreleased, /\/dev\/null/, 'and the device paths');
+    assert.match(shippedEntry, /\/dev\/null/, 'and the device paths');
   });
 
   test('the copy does not claim the command check sees every visible target', () => {
@@ -125,10 +139,10 @@ describe('the workspace boundary says what it enforces, per platform', () => {
     // reading a shell command without running it has no complete answer. What
     // changed is the claim: the guarantee is the operating-system half, and
     // the card is a best effort that names where it stops.
-    assert.match(unreleased, /best effort/i, 'the release notes call the check what it is');
-    assert.match(unreleased, /raise no card|raises no card/i,
+    assert.match(shippedEntry, /best effort/i, 'the release notes call the check what it is');
+    assert.match(shippedEntry, /raise no card|raises no card/i,
       'and say plainly that some targets raise nothing');
-    assert.match(unreleased, /~someone\/file|-C\/tmp/,
+    assert.match(shippedEntry, /~someone\/file|-C\/tmp/,
       'with at least one named example of a spelling it does not recognise');
     assert.match(architecture, /best-effort check over common spellings/i,
       'the audit section separates the guarantee from the best effort');
