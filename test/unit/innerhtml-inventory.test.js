@@ -3,7 +3,7 @@
 //
 // WHY THIS FILE EXISTS
 //
-// `.review/innerhtml-audit-evidence.md` makes one claim a document cannot
+// `docs/evidence/innerhtml-audit-evidence.md` makes one claim a document cannot
 // keep on its own: that every innerHTML assignment in public/ was looked at.
 // That claim was true of the renderer-hardening work too, and its header
 // comment now names a figure (86) that the same command measures as 91,
@@ -24,7 +24,7 @@ const path = require('node:path');
 const { findSites, classify, totals } = require('../tools/innerhtml-sites.js');
 
 const ROOT = path.join(__dirname, '..', '..');
-const AUDIT = path.join(ROOT, '.review', 'innerhtml-audit-evidence.md');
+const AUDIT = path.join(ROOT, 'docs', 'evidence', 'innerhtml-audit-evidence.md');
 
 describe('the innerHTML inventory', () => {
   test('every assignment in public/ is classified', () => {
@@ -32,7 +32,7 @@ describe('the innerHTML inventory', () => {
     assert.deepStrictEqual(
       unclassified.map((s) => `${s.file}[${s.index}] line ${s.line}`), [],
       'an innerHTML assignment exists that the classification table says nothing about. '
-      + 'Read .review/innerhtml-audit-evidence.md, answer the two questions it sets, '
+      + 'Read docs/evidence/innerhtml-audit-evidence.md, answer the two questions it sets, '
       + 'and add an entry to TABLE in test/tools/innerhtml-sites.js');
   });
 

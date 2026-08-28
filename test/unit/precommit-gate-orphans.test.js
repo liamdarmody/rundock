@@ -34,7 +34,7 @@
 // rather than because something survived. A prohibition is proven the other way
 // round: commit the forbidden act, run the test, watch it go red for the reason
 // it names. That was done for each case below and the runs are recorded in
-// .review/precommit-gate-orphans-evidence.md.
+// docs/evidence/precommit-gate-orphans-evidence.md.
 //
 // EXISTING IS NOT RUNNING. A pid that answers `kill(pid, 0)` may be a process
 // that has already exited and is only waiting to be collected. `running()`

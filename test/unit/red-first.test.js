@@ -802,7 +802,7 @@ describe('AC-4 with an uncooperative child, which is where the claim was false',
     // and everything inside it while rejecting a marker named directly at
     // the temp root, such as the flat file this test used to write there.
     // Demonstrated directly, not reasoned about: see AC-4 in
-    // .review/setup-race-flakes-evidence.md for the sandbox profile, and for
+    // docs/evidence/setup-race-flakes-evidence.md for the sandbox profile, and for
     // the origin/main version of this test failing under it (the marker
     // never appears) while this file passes under the identical grant.
     const markerRel = '.git/trap-marker';
