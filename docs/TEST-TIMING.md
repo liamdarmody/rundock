@@ -85,7 +85,7 @@ Three classifications:
 
 ### Has actually failed
 
-These are the documented instances. Evidence is in `.review/` and in commit
+These are the documented instances. Evidence is in `docs/evidence/` and in commit
 messages.
 
 | Test | Evidence | Status |
@@ -93,11 +93,11 @@ messages.
 | `test/integration/file-tree-cache.test.js` "an unchanged workspace is not re-walked", "editing file CONTENTS does not force a re-walk" | Counter included `.claude`, racing the 2s agents poller | **fixed** |
 | `test/integration/search-warmup.test.js` all three tests | Blocked a card's gate five times; 6,000-file index against an 8s default | **fixed** |
 | `test/unit/red-first.test.js` "an interrupt during the reverted run does not leave the tree reverted" | Signal fired after a guessed 150ms | **fixed** |
-| `test/unit/red-first.test.js` "a test command that traps SIGINT does not hold the tree hostage" | Same shape at 300ms; recorded as a flake in `.review/scheduler-lifecycle-evidence.md` | **fixed** |
+| `test/unit/red-first.test.js` "a test command that traps SIGINT does not hold the tree hostage" | Same shape at 300ms; recorded as a flake in `docs/evidence/scheduler-lifecycle-evidence.md` | **fixed** |
 | `test/unit/red-first-orphans.test.js` "AC-5, AC-6: a second start is refused..." | Failed once on CI Node 24 under load; `sleep 25` is a budget for the test's own duration | **fixed** |
 | Playwright browser suite | 2026-08-14, traced to contention | **isolate** (see below) |
-| `test/integration/delegation.test.js` "agent CRUD while an orchestrator is live flags it..." | Spawn count 1, saw 2, twice during gate runs; `.review/scheduler-lifecycle-evidence.md` | **not fixed**, see below |
-| `test/integration/process-lifecycle.test.js` | Failed once in setup; `.review/navigation-inventory-evidence.md` | **not fixed**, see below |
+| `test/integration/delegation.test.js` "agent CRUD while an orchestrator is live flags it..." | Spawn count 1, saw 2, twice during gate runs; `docs/evidence/scheduler-lifecycle-evidence.md` | **not fixed**, see below |
+| `test/integration/process-lifecycle.test.js` | Failed once in setup; `docs/evidence/navigation-inventory-evidence.md` | **not fixed**, see below |
 
 The server already carries one fix of this exact class: `rebaselineAgentsWatcher`
 in `server.js` exists because the arm-then-scaffold order guaranteed a roster
@@ -343,7 +343,7 @@ are recorded here but not reconciled.
 **`test/integration/delegation.test.js:775`**, "agent CRUD while an
 orchestrator is live flags it". Asserts a spawn count of one; observed two,
 twice, during gate runs taken while a disk cleanup was running. The prior
-investigation in `.review/scheduler-lifecycle-evidence.md` established
+investigation in `docs/evidence/scheduler-lifecycle-evidence.md` established
 structurally that the scheduler cannot contribute an invocation in that file
 (`standardTeam()` declares no routines) and empirically that ten full runs on a
 quiet machine are green. The second invocation's origin is therefore still
@@ -354,7 +354,7 @@ guessing at it would produce a change that cannot be shown to help.
 
 **`test/integration/process-lifecycle.test.js:109`**, the precondition *every
 completed conversation leaves a live process*. Recorded in
-`.review/navigation-inventory-evidence.md` as failing once in its own setup
+`docs/evidence/navigation-inventory-evidence.md` as failing once in its own setup
 rather than in an assertion, and passing on re-run. It failed again during a
 full-suite run on this branch, which finally gives it a captured message and a
 mechanism.

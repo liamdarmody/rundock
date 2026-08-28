@@ -8,7 +8,7 @@
 // the mechanism they call has vanished rather than because a suite survived.
 // A prohibition is proven the other way round: commit the forbidden act, run
 // the test, watch it go red for the reason it names. That was done for each
-// case below and the run is recorded in .review/red-first-orphans-evidence.md.
+// case below and the run is recorded in docs/evidence/red-first-orphans-evidence.md.
 //
 // WHAT WAS MEASURED, which is why this file exists at all. The tool spawns its
 // test command detached, and a package runner starts children of its own. On a

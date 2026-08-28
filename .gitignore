@@ -22,16 +22,11 @@ scripts/screenshots/.banned-tokens.json
 # Release gate record (per-machine, references a local SHA)
 .release-gate.json
 
-# Review records are NOT tracked. They were, and the reason they stopped is
-# worth keeping: each row cites the hash of the criteria it was judged against,
-# and those criteria are not in this repository, so no reader with only a clone
-# can resolve the hash to anything. A record nobody outside can verify is not a
-# record, it is an artefact of somebody else's process.
-#
-# They live with the criteria they cite, and the fact of review stays here in
-# the form a reader can actually use: the pull request states the verdict, the
-# models and what was judged, in prose.
+# Output from review tooling that is not part of this project is not tracked.
+# Nothing under these paths can be built, run or verified from a clone, so
+# nothing under them belongs in one. Pull requests describe the change.
 .independent-review/
+.review/
 
 # Local pre-commit gate record: names the tree the checks passed on.
 .precommit-gate.json

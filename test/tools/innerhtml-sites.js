@@ -5,7 +5,7 @@
 //
 // WHY THIS IS A TOOL AND NOT A LIST IN A REVIEW FILE
 //
-// The audit this belongs to (.review/innerhtml-audit-evidence.md) makes one
+// The audit this belongs to (docs/evidence/innerhtml-audit-evidence.md) makes one
 // claim that a prose list cannot keep: that EVERY assignment was looked at. A
 // list in a document is true on the day it is written and silently false the
 // first time somebody adds an assignment, and nothing tells them. That is
@@ -332,7 +332,7 @@ function report({ rows, unclassified, orphaned, vendorCount }, countsOnly) {
   if (unclassified.length) {
     failed = 1;
     console.error('\nUNCLASSIFIED: an innerHTML assignment exists that the table says nothing about.');
-    console.error('Answer the two questions in .review/innerhtml-audit-evidence.md and add an entry:');
+    console.error('Answer the two questions in docs/evidence/innerhtml-audit-evidence.md and add an entry:');
     for (const s of unclassified) console.error(`  ${s.file}[${s.index}] at line ${s.line}`);
   }
   if (orphaned.length) {

@@ -1,26 +1,14 @@
 'use strict';
 // What review artefacts this repository keeps, and what it refuses to keep.
 //
-// Rundock is public. Some changes here are checked by a review harness that is
-// not part of this project and is not needed to build, test or release it.
-// NOTHING that harness produces is tracked here.
+// Rundock is public. Some changes are checked by review tooling that is not
+// part of this project and is not needed to build, test or release it.
+// Nothing that tooling produces is tracked here: not its output, not its
+// configuration, not the evidence written for it. None of that can be built,
+// run or verified from a clone, so none of it belongs in one.
 //
-// This reverses an earlier rule, and the reason is worth keeping, because the
-// earlier rule was stated confidently and was wrong in a way that reads as
-// right. It kept the verdict ledgers on the grounds that each row carries the
-// hash of the criteria it was judged against, "so a verdict stays verifiable
-// even though those criteria are not here". Those two halves contradict each
-// other. A hash is only verifiable against the document it hashes, and that
-// document is not in this repository, so no reader with a clone can resolve a
-// single row. What was kept was the FEELING of an audit trail.
-//
-// The test that replaces it is the same shape as the one it replaces: state
-// the rule, not the files that happen to exist today.
-//
-// What a reader of this repository gets instead is the part they can actually
-// use. Every pull request says what was judged, by which models, and what the
-// verdict was, in prose, in the language of the change rather than the
-// language of the board.
+// The tests below state the rule rather than the files that happen to exist
+// today, so a later artefact under a plausible name cannot arrive tracked.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const { execFileSync } = require('node:child_process');
@@ -42,8 +30,8 @@ function isIgnored(rel) {
 
 describe('review artefacts', () => {
   test('nothing under the review directory is tracked', () => {
-    const found = tracked().filter(f => f.startsWith('.independent-review/'));
-    assert.deepStrictEqual(found, [], 'review output belongs with the criteria it cites, not here');
+    const found = tracked().filter(f => f.startsWith('.independent-review/') || f.startsWith('.review/'));
+    assert.deepStrictEqual(found, [], 'review output is not part of this project');
   });
 
   // Asserts the RULE rather than the files that exist today, so a later
@@ -55,6 +43,7 @@ describe('review artefacts', () => {
       '.independent-review/some-future-change.jsonl',
       '.independent-review/round-1/report.md',
       '.independent-review/anything-at-all',
+      '.review/some-evidence.md',
     ]) {
       assert.strictEqual(isIgnored(rel), true, `${rel} must be ignored`);
     }
