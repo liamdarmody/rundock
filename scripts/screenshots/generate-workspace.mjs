@@ -112,18 +112,143 @@ const AGENT_SKILLS = {
 // Routines seeded onto a few agents (parsed from agent frontmatter by the
 // server). Schedules use the "every <weekday> at HH:MM" grammar the scheduler
 // recognises, so the routines panel reads as real scheduled work.
+// `enabled: true` is required, not decorative: a routine block with no
+// `enabled` key reads as "written by hand before Rundock had a scheduler" and
+// stays off (lib/agents/routines.js, normalizeRoutine). Without it every demo
+// routine below would render as pending turn-on rather than as the active,
+// already-running routines the screenshot needs to show.
 const ROUTINES = {
-  cos:   [{ name: 'Daily brief',    schedule: 'every day at 08:00',    prompt: 'Summarise what needs attention today and flag anything overdue.' }],
-  reese: [{ name: 'Weekly digest',  schedule: 'every monday at 09:00', prompt: 'Run the weekly market scan and save a short brief.' }],
-  ana:   [{ name: 'Publish check',  schedule: 'every friday at 16:00', prompt: 'Reconcile what published this week against the plan.' }],
+  cos:   [{ name: 'Daily brief',           schedule: 'every day at 08:00',    prompt: 'Summarise what needs attention today and flag anything overdue.', enabled: true }],
+  reese: [{ name: 'Weekly digest',         schedule: 'every monday at 09:00', prompt: 'Run the weekly market scan and save a short brief.', enabled: true }],
+  ana:   [{ name: 'Publish check',         schedule: 'every friday at 16:00', prompt: 'Reconcile what published this week against the plan.', enabled: true }],
+  dev:   [{ name: 'Nightly build check',   schedule: 'every day at 23:00',    prompt: 'Confirm last night’s scheduled build completed and flag anything that failed.', enabled: true }],
 };
 
 // Fixed run history for the routines panel (a populated .rundock/routine-state.json).
+// Keys are `${agentId}:${routine name}`, matching how the scheduler stamps run
+// state (lib/scheduler.js, lib/agents/discovery.js). The orchestrator's key is
+// `default`, not its file slug `cos`: the server aliases whichever agent is
+// `type: orchestrator` to the client-facing id `default` (confirmed by
+// inspecting the live `agents` array in a running capture; `agents.find(a =>
+// a.id === 'cos')` returns nothing, `id === 'default'` returns Cos with
+// `isDefault: true`). Keying this `cos:Daily brief` instead, the more
+// "obviously correct" spelling, silently orphans the run history exactly the
+// way the original `default:Daily brief` key looked wrong but wasn't.
+//
+// Each entry demonstrates one tone from the three-tone run-status ruling
+// (Design-Briefs/routines-three-tone/BRIEF.md, approved 2026-08-22): ran on
+// time, caught up (ran late, same day), and failed. The fourth tone, missed,
+// is data the scheduler records separately (a slot that passed while Rundock
+// was closed) and is seeded in ROUTINE_SLOTS below, not here.
 const ROUTINE_STATE = {
-  'default:Daily brief': { lastRun: '2026-07-18T08:00:12.000Z', status: 'completed', duration: 42 },
-  'reese:Weekly digest': { lastRun: '2026-07-13T09:00:20.000Z', status: 'completed', duration: 118 },
-  'ana:Publish check':   { lastRun: '2026-07-17T16:00:08.000Z', status: 'completed', duration: 27 },
+  // Ran on time: started 07:02:00Z (08:02 BST), 2 minutes after its 08:00 BST
+  // slot on the same day, comfortably inside the 5-minute on-time window.
+  'default:Daily brief':     { lastRun: '2026-07-18T07:02:42.000Z', status: 'completed', duration: 42 },
+  // Caught up: started 08:58:22Z (09:58 BST), ~58 minutes after its 09:00 BST
+  // Monday slot, well past the 5-minute window, same calendar day.
+  'reese:Weekly digest':     { lastRun: '2026-07-13T09:00:20.000Z', status: 'completed', duration: 118 },
+  // Failed: the failed status alone decides the tone, so timing doesn't matter.
+  'ana:Publish check':       { lastRun: '2026-07-17T16:00:08.000Z', status: 'failed', duration: 27 },
+  // A real prior run, two nights before the missed slot seeded below, so the
+  // row reads as an established routine that missed one night rather than one
+  // that has never run.
+  'dev:Nightly build check': { lastRun: '2026-07-16T22:02:30.000Z', status: 'completed', duration: 30 },
 };
+
+// Seeds one recorded miss for dev's Nightly build check: last night's 23:00
+// BST slot passed while Rundock was closed, the fourth tone, missed
+// (.rundock/routine-slots.json, a separate store from routine-state.json;
+// see lib/scheduler.js routineSlots).
+//
+// `observedAt: null` is deliberate. The live scheduler ticks every 60 seconds
+// against REAL wall-clock time (not the capture harness's frozen browser
+// clock), and on a tick with a prior observation it walks forward from the
+// stored `due` to now, recording every slot in between as missed. `due` here
+// is fixed to the same 2026-07-18 date as the rest of this demo workspace, so
+// by the time a real capture runs, weeks later, that walk would append a
+// missed entry for every day in between and bury the one this fixture
+// actually wants shown. With no prior observation the first tick skips that
+// walk entirely (lib/scheduler.js recordPassedSlots: `if (observedBefore)`),
+// resyncs `due` to the real current slot, and leaves this seeded miss exactly
+// as written: the display only ever reads the LATEST missed entry
+// (routineDisplayFacts), so this stays correct regardless of when the
+// pipeline actually runs.
+const ROUTINE_SLOTS = {
+  observedAt: null,
+  routines: {
+    'dev:Nightly build check': {
+      due: '2026-07-18T22:00:00.000Z',
+      schedule: 'daily:23:0',
+      missed: [{ slot: '2026-07-17T22:00:00.000Z' }],
+    },
+  },
+};
+
+// --- HTML artifact review sidecar (anchored comments) -----------------------
+// Exported (path + content, separately) so the motion pipeline can reset this
+// file between a clip's own light/dark runs. The clip that opens this
+// artifact (motion.mjs clipArtifactComment) adds a live comment during
+// capture, and both theme runs share one server/workspace, so without a
+// reset the dark run would open a file the light run had already commented
+// on: the same staleness the markdown review clip below guards against.
+export const ARTIFACT_REVIEW_REL = 'Artifacts/Launch Page.html';
+
+// Quotes are exact substrings of the artifact's RENDERED text (not markup),
+// so the anchoring engine locates them and draws the review marks on open.
+export function artifactSidecarContent() {
+  return {
+    format: 'rundock-review-sidecar/1',
+    path: ARTIFACT_REVIEW_REL,
+    comments: {
+      c1: { by: 'Cos', at: '2026-07-18T10:04:00.000Z',
+        quote: 'Run your studio from one place',
+        prefix: '', suffix: 'A self-contained',
+        body: 'Strong headline. Can we test a shorter variant next to it?' },
+      c2: { by: 'Des', at: '2026-07-18T10:12:00.000Z', re: 'c1',
+        body: 'On it. I will mock a two-line and a one-line version.' },
+      c3: { by: 'Ana', at: '2026-07-18T10:20:00.000Z',
+        quote: 'one place you own',
+        prefix: 'in ', suffix: '.',
+        body: 'The "you own" line is our strongest angle. Worth pulling into the headline?' },
+    },
+    suggestions: {},
+    review: {},
+  };
+}
+
+// --- Markdown review note ----------------------------------------------
+// The markdown counterpart to the HTML artifact above: a passage to select
+// and comment on, plus an agent's suggestion already sitting in the sidebar
+// (CriticMarkup, {~~from~>to~~}{#id} plus an endmatter `suggestions:` block,
+// see public/editor/review/criticmarkup.js and endmatter.js). A separate note
+// rather than added to Welcome.md: Welcome.md is reused across several other
+// stills (markdown-note, callouts) and seeding review constructs into it
+// would leak review chrome into shots that have nothing to do with review.
+//
+// Suggestions in markdown are the AGENT's authoring direction, not something
+// a human composes through the floating toolbar (public/editor/panels/
+// floating-toolbar.js deliberately offers only Comment to a human: see its
+// INLINE_DEFS comment). So unlike the comment, which the clip adds live
+// through the real composer, the suggestion is pre-authored here, exactly as
+// the HTML artifact's sidecar comments are pre-authored above.
+export const MARKDOWN_REVIEW_NOTE_REL = 'Notes/Launch Copy.md';
+
+export function markdownReviewNoteContent() {
+  return [
+    '---', 'title: Launch Copy', 'status: in-review', 'tags: [demo, launch]', 'updated: 2026-07-18', '---', '',
+    '# Launch copy review', '',
+    'The intro paragraph sets up the whole page, so it has to earn the scroll.', '',
+    'Every draft moves faster when the team can review it right where it lives, '
+      + '{~~without exporting it anywhere else~>without leaving the workspace~~}{#s1}.', '',
+    'This is the first line prospects read before they decide whether the rest is worth their time.', '',
+    '---',
+    'suggestions:',
+    '  s1:',
+    '    by: cleo',
+    '    at: "2026-07-18T09:40:00.000Z"',
+    '',
+  ].join('\n');
+}
 
 // Tokens that must never appear in the built workspace. The gate greps for
 // these (whole-word, case-insensitive) and throws if any are found. The
@@ -237,7 +362,7 @@ function buildPdf(lines) {
 // FNV-1a sidecar filename, ported byte-for-byte from
 // public/viewers/sidecar-controller.js so a hand-authored review sidecar lands
 // at the exact path the client loads on open.
-function sidecarNameFor(p) {
+export function sidecarNameFor(p) {
   let h = 0x811c9dc5;
   for (let i = 0; i < p.length; i++) {
     h ^= p.charCodeAt(i);
@@ -257,7 +382,7 @@ function jsonlAssistant(text, ts) {
   return JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] }, timestamp: ts }) + '\n';
 }
 
-function agentFile(a) {
+export function agentFile(a) {
   const lines = ['---', `name: ${a.id}`, `displayName: ${a.displayName}`, `role: ${a.role}`,
     `type: ${a.type}`, `order: ${a.order}`];
   if (a.reportsTo) lines.push(`reportsTo: ${a.reportsTo}`);
@@ -267,7 +392,10 @@ function agentFile(a) {
   const myRoutines = ROUTINES[a.id];
   if (myRoutines) {
     lines.push('routines:');
-    myRoutines.forEach((r) => lines.push(`  - name: ${r.name}`, `    schedule: ${r.schedule}`, `    prompt: ${r.prompt}`));
+    myRoutines.forEach((r) => lines.push(
+      `  - name: ${r.name}`, `    schedule: ${r.schedule}`, `    prompt: ${r.prompt}`,
+      `    enabled: ${r.enabled === true}`,
+    ));
   }
   lines.push('---', '', `You are ${a.displayName}, the ${a.role}. ${a.description}`, '');
   return lines.join('\n');
@@ -445,32 +573,18 @@ export function buildWorkspace(opts = {}) {
   } catch (e) { console.warn('  Could not normalise the boards:', e.message); }
 
   // --- Review sidecar: anchored comments on the HTML artifact ---------------
-  // Quotes are exact substrings of the artifact's RENDERED text (not markup),
-  // so the anchoring engine locates them and draws the review marks on open.
-  const artifactRel = 'Artifacts/Launch Page.html';
-  const sidecar = {
-    format: 'rundock-review-sidecar/1',
-    path: artifactRel,
-    comments: {
-      c1: { by: 'Cos', at: '2026-07-18T10:04:00.000Z',
-        quote: 'Run your studio from one place',
-        prefix: '', suffix: 'A self-contained',
-        body: 'Strong headline. Can we test a shorter variant next to it?' },
-      c2: { by: 'Des', at: '2026-07-18T10:12:00.000Z', re: 'c1',
-        body: 'On it. I will mock a two-line and a one-line version.' },
-      c3: { by: 'Ana', at: '2026-07-18T10:20:00.000Z',
-        quote: 'one place you own',
-        prefix: 'in ', suffix: '.',
-        body: 'The "you own" line is our strongest angle. Worth pulling into the headline?' },
-    },
-    suggestions: {},
-    review: {},
-  };
-  write(path.join('.rundock', 'reviews', sidecarNameFor(artifactRel)),
-    JSON.stringify(sidecar, null, 2));
+  write(path.join('.rundock', 'reviews', sidecarNameFor(ARTIFACT_REVIEW_REL)),
+    JSON.stringify(artifactSidecarContent(), null, 2));
 
-  // --- Routine run state ----------------------------------------------------
+  // --- Markdown review note: a passage to comment on, plus a pre-authored
+  // agent suggestion (CriticMarkup) the reader accepts. See
+  // markdownReviewNoteContent() for why this is a separate note rather than
+  // added to Welcome.md.
+  write(MARKDOWN_REVIEW_NOTE_REL, markdownReviewNoteContent());
+
+  // --- Routine run state ------------------------------------------------
   write(path.join('.rundock', 'routine-state.json'), JSON.stringify(ROUTINE_STATE, null, 2));
+  write(path.join('.rundock', 'routine-slots.json'), JSON.stringify(ROUTINE_SLOTS, null, 2));
 
   // --- Conversations: metadata + fake $HOME transcripts ---------------------
   // The projects subfolder name is the absolute workspace path with every

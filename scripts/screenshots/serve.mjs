@@ -45,6 +45,14 @@ async function spawnAttempt({ workspace, home, port, quiet }) {
       USERPROFILE: home,      // Windows equivalent
       WORKSPACE: workspace,
       RUNDOCK_ELECTRON: '1',  // keep the recent-workspaces file inside the fake home
+      // The demo workspace's routines are seeded as enabled with real run
+      // history so the routines panel has something real to show, but with
+      // no genuine tick history behind them they read as overdue on real
+      // wall-clock time from the moment the process starts. A capture run
+      // long enough for one tick to land would otherwise let the scheduler
+      // actually fire one against fake data and overwrite the seeded state.
+      // See server.js's SCHEDULER_DISABLED for the other half of this.
+      RUNDOCK_DISABLE_SCHEDULER: '1',
     },
     stdio: quiet ? ['ignore', 'ignore', 'pipe'] : 'inherit',
   });
