@@ -1,6 +1,7 @@
-# Evidence: the scheduler starts when a workspace does
+# The scheduler starts when a workspace does
 
-Recorded here because a reviewer sees the change and nothing else. Every
+Recorded here so that anyone reading the change can check its claims without
+being in the room. Every
 measurement below is reproducible from a clone with the command shown beside
 it, and nothing here asks for a number on trust.
 

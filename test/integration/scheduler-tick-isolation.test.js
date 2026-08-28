@@ -19,8 +19,8 @@
 // of t.mock.timers.tick(), the routine declared after it had no state at all,
 // and routineSlots.observedAt was still null.
 //
-// WHAT THE CARD SAID THE ROUTE WAS, AND WHAT IT ACTUALLY IS. The card and the
-// frozen criteria both name a routine that declares a schedule and no prompt:
+// WHAT THE CARD SAID THE ROUTE WAS, AND WHAT IT ACTUALLY IS. The card and its
+// acceptance criteria both name a routine that declares a schedule and no prompt:
 // the prompt normalises to null, reaches the spawn arguments, and spawn was
 // said to throw synchronously on a non-string argument. It does not. Node
 // coerces the argument, and the routine ran with the literal prompt "null"
