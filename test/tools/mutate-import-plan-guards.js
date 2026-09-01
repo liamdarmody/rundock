@@ -30,9 +30,12 @@ const PLAN = {
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
-  [PLAN, 'the manifest is sorted by id, not by discovery order',
+  [PLAN, 'the manifest sort cannot be inverted',
     "  return entries.sort((a, b) => (a.id < b.id ? -1 : 1));",
     "  return entries.sort((a, b) => (a.id < b.id ? 1 : -1));"],
+  [PLAN, 'the manifest sort cannot be removed outright',
+    "  return entries.sort((a, b) => (a.id < b.id ? -1 : 1));",
+    '  return entries;'],
   [PLAN, 'an empty package is a refusal, not an empty plan',
     "  if (entries.length === 0) refuse('the package contains no agents and no skills');\n",
     ''],

@@ -167,6 +167,39 @@ describe('nothing inside an item or its containers escapes observation', () => {
 });
 
 describe('the manifest is deterministic', () => {
+  // Discovery of ONE tree with the readdir it actually performs forced into
+  // deliberately non-ascending orders: red if the sort is removed, whatever
+  // order the underlying filesystem happens to hand back.
+  test('the same tree discovered under shuffled directory enumeration yields the identical manifest', () => {
+    const root = makeTempDir('plan-src-');
+    write(root, '.claude/agents/ape.md', AGENT_TEXT);
+    write(root, '.claude/agents/mid.md', AGENT_TEXT);
+    write(root, '.claude/agents/zed.md', AGENT_TEXT);
+    write(root, '.claude/skills/alpha/SKILL.md', 'a');
+    write(root, '.claude/skills/zulu/SKILL.md', 'z');
+    const baseline = discoverPackage(root);
+    const shuffledDiscover = (permute) => {
+      const real = fs.readdirSync;
+      fs.readdirSync = (dir, opts) => {
+        const entries = real(dir, opts);
+        const d = String(dir);
+        if (d.endsWith(path.join('.claude', 'agents')) || d.endsWith(path.join('.claude', 'skills'))) {
+          return permute([...entries]);
+        }
+        return entries;
+      };
+      try { return discoverPackage(root); } finally { fs.readdirSync = real; }
+    };
+    for (const [label, permute] of [
+      ['reversed', (a) => a.reverse()],
+      ['rotated', (a) => [...a.slice(1), a[0]]],
+    ]) {
+      assert.deepStrictEqual(shuffledDiscover(permute), baseline, label);
+    }
+    assert.deepStrictEqual(baseline.map((e) => e.id),
+      ['agent:ape', 'agent:mid', 'agent:zed', 'skill:alpha', 'skill:zulu']);
+  });
+
   test('identical source trees built in different orders produce identical, id-sorted manifests', () => {
     const a = makeTempDir('plan-src-a-');
     write(a, '.claude/skills/zeta/SKILL.md', 'z');
