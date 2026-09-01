@@ -49,8 +49,13 @@ const MUTATIONS = [
     '  if (options.receipt && evaluation.writes.length > 0) {',
     '  if (options.receipt) {'],
   [HANDLERS, 'the approval is used exactly as submitted, never repaired',
-    "    const result = applyImport(workspace, path.resolve(String(msg.sourcePath || '')), msg.approval, { receipt: {} });",
-    "    const result = applyImport(workspace, path.resolve(String(msg.sourcePath || '')), { ...msg.approval, schema: 'rundock.package-import-approval/v1' }, { receipt: {} });"],
+    '    const result = applyImport(workspace, sourcePathOf(msg), msg.approval, { receipt: {} });',
+    "    const result = applyImport(workspace, sourcePathOf(msg), { ...msg.approval, schema: 'rundock.package-import-approval/v1' }, { receipt: {} });"],
+  [HANDLERS, 'an absent source path refuses instead of defaulting to the working directory',
+    "  if (typeof msg.sourcePath !== 'string' || msg.sourcePath.trim() === '') {\n"
+    + "    throw new Error('sourcePath is required: the package source directory to read');\n"
+    + '  }\n',
+    ''],
   [INDEX, 'the plan operation is registered in the dispatch table',
     '    plan_package_import: packages.handlePlanPackageImport,\n',
     ''],
