@@ -31,8 +31,7 @@ function write(root, relative, content) {
   return absolute;
 }
 
-// The complete workspace as one comparable value: every file with its exact
-// bytes, every empty directory, in one sorted listing.
+// The complete workspace as one comparable value.
 function tree(root, current = root) {
   const result = [];
   for (const entry of fs.readdirSync(current, { withFileTypes: true })
@@ -50,9 +49,8 @@ function tree(root, current = root) {
   return result;
 }
 
-// One standard transaction the failure tests all share: a file overwrite, an
-// add under parents the run must create, and an exact directory replacement.
-// Built fresh per call so every fault case starts from the same tree.
+// The shared transaction: a file overwrite, an add under created parents,
+// an exact directory replacement. Built fresh per fault case.
 function fixture() {
   const root = workspace();
   write(root, 'notes/keep.md', 'foreign');
@@ -75,9 +73,8 @@ function runFixture(root, writes, replaceDirs, afterStep) {
   return writeAsUnit(root, writes, { replaceDirs, afterStep });
 }
 
-// How many afterStep boundaries the standard fixture passes through, probed
-// once on a throwaway copy so every per-boundary loop below is exhaustive by
-// construction rather than by a hand-counted constant.
+// The boundaries the standard fixture passes through, probed once so the
+// per-boundary loops below are exhaustive by construction.
 function fixtureSteps() {
   const { root, writes, replaceDirs } = fixture();
   const steps = [];
@@ -87,6 +84,19 @@ function fixtureSteps() {
 
 const STEPS = fixtureSteps();
 const PREPARE_STEPS = STEPS.filter((step) => step.startsWith('prepare:')).length;
+
+// The probed list is pinned to an explicit literal before any loop uses it,
+// so a vanished, renamed or reordered boundary turns the suite red instead
+// of silently deleting the tests it generates; the loops stay probe-driven
+// so new boundaries are still covered automatically.
+test('the standard fixture crosses exactly the twelve recorded boundaries, in order', () => {
+  assert.deepStrictEqual(STEPS, [
+    'prepare:journal', 'prepare:stage', 'prepare:stage', 'prepare:stage',
+    'prepare:backup', 'prepare:backup', 'commit:transition',
+    // the overwrite pair, the added file, the directory-replacement pair
+    'commit:remove', 'commit:rename', 'commit:rename', 'commit:remove', 'commit:rename',
+  ]);
+});
 
 describe('writeAsUnit', () => {
   test('writes files and exact directory replacements in input order', () => {
@@ -142,12 +152,15 @@ describe('boundary validation rejects the whole plan with the tree untouched', (
     ['a relative destination', () => ({ writes: [{ path: 'a.md', content: 'x' }] }), /absolute path/],
     ['a destination outside the workspace', (root) => ({ writes: [{ path: path.join(root, '..', 'escape.md'), content: 'x' }] }), /inside the workspace/],
     ['a destination inside the transaction state', (root) => ({ writes: [{ path: path.join(root, IMPORT_SUBDIR, 'x.md'), content: 'x' }] }), /transaction state/],
-    ['the transaction-state directory itself as a destination', (root) => ({
-      replaceDirs: [{ path: path.join(root, IMPORT_SUBDIR), files: [] }],
-    }), /transaction state/],
-    ['an ancestor of the transaction state as a destination', (root) => ({
-      writes: [{ path: path.join(root, '.rundock'), content: 'x' }],
-    }), /transaction state/],
+    ['the transaction-state directory itself as a destination', (root) => ({ replaceDirs: [{ path: path.join(root, IMPORT_SUBDIR), files: [] }] }), /transaction state/],
+    ['an ancestor of the transaction state as a destination', (root) => ({ writes: [{ path: path.join(root, '.rundock'), content: 'x' }] }), /transaction state/],
+    ['a destination beside the import root but under the state root', (root) => ({ writes: [{ path: path.join(root, '.rundock', 'other.md'), content: 'x' }] }), /transaction state/],
+    ['a case-variant of the transaction state as a destination', (root) => ({ writes: [{ path: path.join(root, '.RUNDOCK', 'import', 'run', 'backup', '0'), content: 'x' }] }), /transaction state/],
+    ['case-variant duplicate destinations', (root) => ({ writes: [{ path: path.join(root, 'A.md'), content: 'x' }, { path: path.join(root, 'a.md'), content: 'y' }] }), /duplicate destination/],
+    ['replaceDirs that is not an array', () => ({ replaceDirs: 'nope' }), /replaceDirs must be an array/],
+    ['a null directory-replacement entry', () => ({ replaceDirs: [null] }), /replacement files must be an array/],
+    ['a directory replacement whose files is not an array', (root) => ({ replaceDirs: [{ path: path.join(root, 'dir'), files: 'nope' }] }), /replacement files must be an array/],
+    ['a replacement file whose content is neither string nor Buffer', (root) => ({ replaceDirs: [{ path: path.join(root, 'dir'), files: [{ rel: 'a.md', content: 9 }] }] }), /replacement file content must be a string or Buffer/],
     ['duplicate destinations', (root) => {
       const p = path.join(root, 'a.md');
       return { writes: [{ path: p, content: 'x' }, { path: p, content: 'y' }] };
@@ -325,9 +338,8 @@ describe('recovery after real process death', () => {
       'a.md:' + Buffer.from('original a').toString('base64'),
       'blocked/inner.md:' + Buffer.from('original b').toString('base64'),
     ];
-    // The mid-commit state a died run left behind: the first destination
-    // mutated, and the second's parent replaced by a file, so its restore
-    // cannot complete until the obstruction is cleared.
+    // Mid-commit state of a died run: first destination mutated, second's
+    // parent replaced by a file so its restore cannot complete yet.
     write(root, 'a.md', 'new a');
     write(root, 'blocked', 'obstruction');
     fs.mkdirSync(path.join(root, IMPORT_SUBDIR, 'run', 'backup'), { recursive: true });
@@ -349,10 +361,9 @@ describe('recovery after real process death', () => {
     // The first recovery restores a.md, then fails on the obstructed entry.
     assert.throws(() => recoverPendingWrites(root));
     assert.strictEqual(read(path.join(root, 'a.md')), 'original a');
-    // The journal and the COMPLETE backup set survive the failed attempt:
-    // restores copy rather than move, which is what makes a second attempt
-    // possible at all. An implementation that renamed backups into place
-    // would have consumed backup 0 and fail the re-run below.
+    // The journal and COMPLETE backup set survive the failed attempt:
+    // restores copy rather than move. A renaming implementation would have
+    // consumed backup 0 and fail the re-run below.
     assert.strictEqual(read(journalPath(root)), journal);
     assert.strictEqual(read(path.join(root, IMPORT_SUBDIR, 'run', 'backup', '0')), 'original a');
     assert.strictEqual(read(path.join(root, IMPORT_SUBDIR, 'run', 'backup', '1')), 'original b');
@@ -385,6 +396,24 @@ describe('recovery from literal journals', () => {
       createdDirs: [],
     }, (run) => fs.writeFileSync(path.join(run, 'staging', '0'), 'staged'));
     assert.deepStrictEqual(recoverPendingWrites(root), { recovered: 1 });
+    assert.deepStrictEqual(tree(root), ['kept.md:' + Buffer.from('kept').toString('base64')]);
+  });
+
+  test('recovery removes a stale journal temporary left by an interrupted update', () => {
+    const root = workspace();
+    write(root, 'kept.md', 'kept');
+    state(root, {
+      version: 1,
+      runId: 'literal',
+      createdState: ['.rundock/import', '.rundock'],
+      phase: 'preparing',
+      entries: [],
+      createdDirs: [],
+    });
+    fs.writeFileSync(`${journalPath(root)}.literal.tmp`, 'half-written update');
+    assert.deepStrictEqual(recoverPendingWrites(root), { recovered: 1 });
+    // Pre-state including no `.rundock`: the temporary would otherwise
+    // keep the state directories from emptying.
     assert.deepStrictEqual(tree(root), ['kept.md:' + Buffer.from('kept').toString('base64')]);
   });
 
@@ -437,11 +466,11 @@ describe('a journal that cannot be trusted fails closed', () => {
     ['malformed JSON', 'this is { not json', /malformed JSON/],
     ['an unsupported version', (j) => { j.version = 99; return j; }, /unsupported version/],
     ['an unknown phase', (j) => { j.phase = 'exploded'; return j; }, /unknown phase/],
-    ['a destination escaping the workspace', (j) => { j.entries[0].destination = '../outside.md'; return j; }, /escapes the workspace/],
+    ['a destination escaping the workspace', (j) => { j.entries[0].destination = '../outside.md'; return j; }, /stay inside the workspace/],
     ['an absolute destination', (j) => { j.entries[0].destination = '/etc/hosts'; return j; }, /relative path/],
     ['an unsafe backup slot', (j) => { j.entries[0].slot = '../0'; return j; }, /unsafe slot/],
     ['a missing run identity', (j) => { delete j.runId; return j; }, /run identity/],
-    ['a destination that uses transaction state', (j) => { j.entries[0].destination = '.rundock'; return j; }, /uses transaction state/],
+    ['a destination that uses transaction state', (j) => { j.entries[0].destination = '.rundock'; return j; }, /transaction state/],
     ['a missing state-ownership record', (j) => { delete j.createdState; return j; }, /state-ownership/],
   ];
 
@@ -486,7 +515,7 @@ describe('a journal that cannot be trusted fails closed', () => {
   });
 
   for (const [name, dir, message] of [
-    ['escaping created-directory record', '../out', /escapes the workspace/],
+    ['escaping created-directory record', '../out', /stay inside the workspace/],
     ['absolute created-directory record', '/abs', /must be a relative path/],
   ]) {
     test(`an ${name} blocks a committing recovery before any mutation`, () => {
