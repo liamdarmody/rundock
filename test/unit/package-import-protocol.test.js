@@ -290,6 +290,26 @@ describe('the protocol boundary', () => {
   });
 });
 
+describe('the receipt seam is what the file is built from', () => {
+  const original = config.getWorkspace();
+  test.after(() => config.setWorkspace(original));
+
+  test('an injected clock and run suffix name the receipt, and its body carries them', () => {
+    const { workspace, sourceRoot } = fixture();
+    const { applyImport } = require('../../lib/packages/import-apply.js');
+    const approval = decide(planVia(sourceRoot), { 'agent:scribe': 'add', 'skill:writer': 'overwrite' });
+    // A clock whose local and UTC dates differ in most timezones: the date
+    // component must be the UTC one, which slicing the ISO string guarantees.
+    const now = '2026-01-02T23:30:00.000Z';
+    const result = applyImport(workspace, sourceRoot, approval, { receipt: { now, run: 'fixedrun' } });
+    const expected = `${RECEIPTS}/2026-01-02-fixedrun.json`;
+    assert.strictEqual(result.receipt, expected);
+    const receipt = JSON.parse(fs.readFileSync(path.join(workspace, expected), 'utf8'));
+    assert.strictEqual(receipt.schema, 'rundock.package-import-receipt/v1');
+    assert.strictEqual(receipt.appliedAt, now);
+  });
+});
+
 describe('the receipt lives and dies with the transaction', () => {
   const original = config.getWorkspace();
   test.after(() => config.setWorkspace(original));
