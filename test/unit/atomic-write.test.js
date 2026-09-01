@@ -142,6 +142,12 @@ describe('boundary validation rejects the whole plan with the tree untouched', (
     ['a relative destination', () => ({ writes: [{ path: 'a.md', content: 'x' }] }), /absolute path/],
     ['a destination outside the workspace', (root) => ({ writes: [{ path: path.join(root, '..', 'escape.md'), content: 'x' }] }), /inside the workspace/],
     ['a destination inside the transaction state', (root) => ({ writes: [{ path: path.join(root, IMPORT_SUBDIR, 'x.md'), content: 'x' }] }), /transaction state/],
+    ['the transaction-state directory itself as a destination', (root) => ({
+      replaceDirs: [{ path: path.join(root, IMPORT_SUBDIR), files: [] }],
+    }), /transaction state/],
+    ['an ancestor of the transaction state as a destination', (root) => ({
+      writes: [{ path: path.join(root, '.rundock'), content: 'x' }],
+    }), /transaction state/],
     ['duplicate destinations', (root) => {
       const p = path.join(root, 'a.md');
       return { writes: [{ path: p, content: 'x' }, { path: p, content: 'y' }] };
@@ -183,6 +189,37 @@ describe('boundary validation rejects the whole plan with the tree untouched', (
         () => writeAsUnit(root, plan.writes || [], { replaceDirs: plan.replaceDirs, afterStep: plan.afterStep }),
         message,
       );
+      assert.deepStrictEqual(tree(root), before);
+    });
+  }
+
+  test('rejects a destination that reaches through a symlinked directory', () => {
+    const root = workspace();
+    const outside = workspace();
+    const outsideFile = write(outside, 'a.md', 'external');
+    fs.symlinkSync(outside, path.join(root, 'notes'));
+    assert.throws(
+      () => writeAsUnit(root, [{ path: path.join(root, 'notes', 'a.md'), content: 'x' }]),
+      /symlink/,
+    );
+    assert.strictEqual(read(outsideFile), 'external');
+    assert.strictEqual(fs.existsSync(path.join(root, '.rundock')), false);
+  });
+
+  // [name, workspace value or builder]
+  const BAD_WORKSPACES = [
+    ['a workspace that is not a string', () => 7],
+    ['an empty workspace path', () => ''],
+    ['a workspace path that is a file', (root) => write(root, 'file.md', 'x')],
+  ];
+
+  for (const [name, build] of BAD_WORKSPACES) {
+    test(`writeAsUnit and recoverPendingWrites both reject ${name}`, () => {
+      const root = workspace();
+      const bad = build(root);
+      const before = tree(root);
+      assert.throws(() => writeAsUnit(bad, [{ path: path.join(root, 'a.md'), content: 'x' }]));
+      assert.throws(() => recoverPendingWrites(bad));
       assert.deepStrictEqual(tree(root), before);
     });
   }
@@ -281,18 +318,50 @@ describe('recovery after real process death', () => {
     });
   }
 
-  test('recovery is repeatable after its own interruption', () => {
-    const { root, writes, replaceDirs, before } = fixture();
-    const boundary = STEPS.length - 1; // dead mid-commit, journal committing
-    const child = runChildKilledAfter(root, writes, replaceDirs, boundary);
-    assert.strictEqual(child.signal, 'SIGKILL', child.stderr);
-    // A first recovery that dies partway leaves the journal and backups in
-    // place because restores copy rather than move; model that by restoring
-    // once by hand and then running the real recovery over the same state.
-    const journal = JSON.parse(read(journalPath(root)));
-    assert.strictEqual(journal.phase, 'committing');
+  test('a committing recovery interrupted partway completes when re-run from the same state', () => {
+    // The pre-state the journal describes: two files that both existed.
+    const root = workspace();
+    const pre = [
+      'a.md:' + Buffer.from('original a').toString('base64'),
+      'blocked/inner.md:' + Buffer.from('original b').toString('base64'),
+    ];
+    // The mid-commit state a died run left behind: the first destination
+    // mutated, and the second's parent replaced by a file, so its restore
+    // cannot complete until the obstruction is cleared.
+    write(root, 'a.md', 'new a');
+    write(root, 'blocked', 'obstruction');
+    fs.mkdirSync(path.join(root, IMPORT_SUBDIR, 'run', 'backup'), { recursive: true });
+    fs.writeFileSync(path.join(root, IMPORT_SUBDIR, 'run', 'backup', '0'), 'original a');
+    fs.writeFileSync(path.join(root, IMPORT_SUBDIR, 'run', 'backup', '1'), 'original b');
+    const journal = JSON.stringify({
+      version: 1,
+      runId: 'literal',
+      createdState: ['.rundock/import', '.rundock'],
+      phase: 'committing',
+      entries: [
+        { slot: 0, type: 'file', priorType: 'file', destination: 'a.md' },
+        { slot: 1, type: 'file', priorType: 'file', destination: 'blocked/inner.md' },
+      ],
+      createdDirs: [],
+    });
+    fs.writeFileSync(journalPath(root), journal);
+
+    // The first recovery restores a.md, then fails on the obstructed entry.
+    assert.throws(() => recoverPendingWrites(root));
+    assert.strictEqual(read(path.join(root, 'a.md')), 'original a');
+    // The journal and the COMPLETE backup set survive the failed attempt:
+    // restores copy rather than move, which is what makes a second attempt
+    // possible at all. An implementation that renamed backups into place
+    // would have consumed backup 0 and fail the re-run below.
+    assert.strictEqual(read(journalPath(root)), journal);
+    assert.strictEqual(read(path.join(root, IMPORT_SUBDIR, 'run', 'backup', '0')), 'original a');
+    assert.strictEqual(read(path.join(root, IMPORT_SUBDIR, 'run', 'backup', '1')), 'original b');
+
+    // Clear the obstruction; the same recovery now completes from the same
+    // on-disk state and lands the exact pre-state tree.
+    fs.rmSync(path.join(root, 'blocked'));
     assert.deepStrictEqual(recoverPendingWrites(root), { recovered: 1 });
-    assert.deepStrictEqual(tree(root), before);
+    assert.deepStrictEqual(tree(root), pre);
   });
 });
 
@@ -310,6 +379,7 @@ describe('recovery from literal journals', () => {
     state(root, {
       version: 1,
       runId: 'literal',
+      createdState: ['.rundock/import', '.rundock'],
       phase: 'preparing',
       entries: [{ slot: 0, type: 'file', priorType: 'file', destination: 'kept.md' }],
       createdDirs: [],
@@ -328,6 +398,7 @@ describe('recovery from literal journals', () => {
     state(root, {
       version: 1,
       runId: 'literal',
+      createdState: ['.rundock/import', '.rundock'],
       phase: 'committing',
       entries: [
         { slot: 0, type: 'file', priorType: 'file', destination: 'over.md' },
@@ -354,6 +425,7 @@ describe('a journal that cannot be trusted fails closed', () => {
     return {
       version: 1,
       runId: 'literal',
+      createdState: [],
       phase: 'preparing',
       entries: [{ slot: 0, type: 'file', priorType: 'absent', destination: 'a.md' }],
       createdDirs: [],
@@ -369,6 +441,8 @@ describe('a journal that cannot be trusted fails closed', () => {
     ['an absolute destination', (j) => { j.entries[0].destination = '/etc/hosts'; return j; }, /relative path/],
     ['an unsafe backup slot', (j) => { j.entries[0].slot = '../0'; return j; }, /unsafe slot/],
     ['a missing run identity', (j) => { delete j.runId; return j; }, /run identity/],
+    ['a destination that uses transaction state', (j) => { j.entries[0].destination = '.rundock'; return j; }, /uses transaction state/],
+    ['a missing state-ownership record', (j) => { delete j.createdState; return j; }, /state-ownership/],
   ];
 
   for (const [name, spec, message] of BAD) {
@@ -390,6 +464,58 @@ describe('a journal that cannot be trusted fails closed', () => {
     });
   }
 
+  test('a journal that exists but cannot be read raises and keeps blocking writes', () => {
+    const root = workspace();
+    write(root, 'kept.md', 'kept');
+    fs.mkdirSync(journalPath(root), { recursive: true }); // a directory at the journal path
+    const before = tree(root);
+    let raised;
+    try {
+      recoverPendingWrites(root);
+    } catch (e) {
+      raised = e;
+    }
+    assert.match(raised.message, /unreadable/);
+    assert.strictEqual(raised.code, 'ERR_ATOMIC_JOURNAL');
+    assert.deepStrictEqual(tree(root), before);
+    assert.strictEqual(fs.statSync(journalPath(root)).isDirectory(), true);
+    assert.throws(
+      () => writeAsUnit(root, [{ path: path.join(root, 'b.md'), content: 'x' }]),
+      /another write transaction is pending/,
+    );
+  });
+
+  for (const [name, dir, message] of [
+    ['escaping created-directory record', '../out', /escapes the workspace/],
+    ['absolute created-directory record', '/abs', /must be a relative path/],
+  ]) {
+    test(`an ${name} blocks a committing recovery before any mutation`, () => {
+      const root = workspace();
+      write(root, 'over.md', 'partially new');
+      fs.mkdirSync(path.join(root, IMPORT_SUBDIR, 'run', 'backup'), { recursive: true });
+      fs.writeFileSync(path.join(root, IMPORT_SUBDIR, 'run', 'backup', '0'), 'original');
+      const journal = JSON.stringify({
+        version: 1,
+        runId: 'literal',
+        createdState: [],
+        phase: 'committing',
+        entries: [{ slot: 0, type: 'file', priorType: 'file', destination: 'over.md' }],
+        createdDirs: [dir],
+      });
+      fs.writeFileSync(journalPath(root), journal);
+      const before = tree(root);
+      assert.throws(() => recoverPendingWrites(root), message);
+      // Validation refused the journal before restoring anything: the
+      // half-written destination is untouched and the journal preserved.
+      assert.deepStrictEqual(tree(root), before);
+      assert.strictEqual(read(journalPath(root)), journal);
+      assert.throws(
+        () => writeAsUnit(root, [{ path: path.join(root, 'b.md'), content: 'x' }]),
+        /another write transaction is pending/,
+      );
+    });
+  }
+
   test('a committing journal with a missing backup blocks recovery before any mutation', () => {
     const root = workspace();
     write(root, 'over.md', 'current');
@@ -397,6 +523,7 @@ describe('a journal that cannot be trusted fails closed', () => {
     const journal = JSON.stringify({
       version: 1,
       runId: 'literal',
+      createdState: [],
       phase: 'committing',
       entries: [{ slot: 0, type: 'file', priorType: 'file', destination: 'over.md' }],
       createdDirs: [],
@@ -415,6 +542,7 @@ describe('a journal that cannot be trusted fails closed', () => {
     const journal = JSON.stringify({
       version: 1,
       runId: 'literal',
+      createdState: [],
       phase: 'committing',
       entries: [{ slot: 0, type: 'file', priorType: 'file', destination: 'over.md' }],
       createdDirs: [],

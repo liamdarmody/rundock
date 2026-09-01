@@ -32,10 +32,10 @@ const PRIMITIVE = {
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
   [PRIMITIVE, 'the preparation journal is written before any staging or backup work',
-    "    writeJournal(root, journal);\n    afterStep({ phase: 'prepare', action: 'journal' });",
-    "    afterStep({ phase: 'prepare', action: 'journal' });"],
-  [PRIMITIVE, 'an existing journal blocks a second write',
-    "  if (fs.existsSync(journalPath(root))) {\n    throw new Error('another write transaction is pending; run recovery before writing');\n  }\n",
+    "  createJournal(root, journal);\n  try {",
+    '  try {'],
+  [PRIMITIVE, 'the journal is created exclusively, so an existing journal blocks a second write',
+    ", { flag: 'wx' }",
     ''],
   [PRIMITIVE, 'every existing destination is backed up before the commit boundary',
     '      if (entry.priorType === \'file\') fs.cpSync(entry.destination, backupPath(root, slot));\n'
@@ -45,8 +45,8 @@ const MUTATIONS = [
     "    journal.phase = 'committing';\n    writeJournal(root, journal);\n",
     ''],
   [PRIMITIVE, 'a destination failure rolls the completed writes back',
-    '  } catch (commitFailure) {\n    restoreFromJournal(root, journal);\n    removeState(root);\n    throw commitFailure;\n  }',
-    '  } catch (commitFailure) {\n    throw commitFailure;\n  }'],
+    '    assertRestorable(root, journal);\n    restoreFromJournal(root, journal);\n    removeState(root, journal.createdState);\n    throw commitFailure;',
+    '    throw commitFailure;'],
   [PRIMITIVE, 'a journal that does not parse is refused rather than ignored',
     "    throw invalidJournal('malformed JSON');",
     '    return null;'],
