@@ -339,26 +339,35 @@ test('two comments on one artifact both render and mark independently', async ({
   await expect(page.frameLocator('iframe.viewer-frame').locator('mark[data-rundock-review]')).toHaveCount(2);
 });
 
-test('a comment re-anchors when a live external change keeps the quoted passage', async ({ page }) => {
+test('a comment re-anchors when a live external change keeps the quoted passage', async ({ page }, testInfo) => {
+  const artifactPath = `live-artifact-${testInfo.repeatEachIndex}.html`;
   await boot(page);
-  // Dedicated artifact so the live change cannot disturb other tests.
-  await page.evaluate(() => new Promise((resolve) => {
-    ws.send(JSON.stringify({ type: 'save_file', path: 'live-artifact.html', content: '<html><body><p id="p">Keep this exact passage here.</p><p>filler</p></body></html>' }));
+  // Each repetition gets its own artifact and sidecar, so stress runs cannot
+  // inherit comments from an earlier repetition in the shared workspace.
+  await page.evaluate((filePath) => new Promise((resolve) => {
+    ws.send(JSON.stringify({ type: 'save_file', path: filePath, content: '<html><body><p id="p">Keep this exact passage here.</p><p>filler</p></body></html>' }));
     setTimeout(resolve, 300);
-  }));
+  }), artifactPath);
   await openFilesView(page);
-  await page.evaluate(() => { ws.send(JSON.stringify({ type: 'read_file', path: 'live-artifact.html' })); });
+  await page.evaluate((filePath) => { ws.send(JSON.stringify({ type: 'read_file', path: filePath })); }, artifactPath);
   await expect(page.locator('iframe.viewer-frame')).toBeVisible();
   await selectInFrame(page, '#p');
   await page.locator('.artifact-comment-btn').dispatchEvent('mousedown');
   await page.locator('.review-composer textarea').fill('live note');
   await page.locator('.review-composer textarea').press('Enter');
   await expect(page.locator('.review-card.comment')).toHaveCount(1);
+  const { sidecarPathFor } = await import('../../public/viewers/sidecar-controller.js');
+  const sidecarPath = sidecarPathFor(artifactPath);
+  await expect.poll(async () => {
+    const response = await page.request.get('/api/file?path=' + encodeURIComponent(sidecarPath));
+    if (!response.ok()) return null;
+    return JSON.parse(await response.text()).comments.c1?.body || null;
+  }).toBe('live note');
   // An external tool changes the file but keeps the quoted passage. The live
   // watcher pushes the change; the comment must re-anchor, not vanish.
-  await page.evaluate(() => {
-    ws.send(JSON.stringify({ type: 'save_file', path: 'live-artifact.html', content: '<html><body><h1>New heading</h1><p id="p">Keep this exact passage here.</p></body></html>' }));
-  });
+  await page.evaluate((filePath) => {
+    ws.send(JSON.stringify({ type: 'save_file', path: filePath, content: '<html><body><h1>New heading</h1><p id="p">Keep this exact passage here.</p></body></html>' }));
+  }, artifactPath);
   await expect(page.frameLocator('iframe.viewer-frame').locator('h1')).toHaveText('New heading'); // refreshed
   await expect(page.locator('.review-card.comment')).toHaveCount(1);
   await expect(page.frameLocator('iframe.viewer-frame').locator('mark[data-rundock-review]')).toHaveText('Keep this exact passage here.');
