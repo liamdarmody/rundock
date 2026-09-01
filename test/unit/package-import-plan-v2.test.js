@@ -9,6 +9,7 @@ const { discoverPackage, buildPlan } = require('../../lib/packages/import-plan.j
 const { snapshotCurrent, digestFile, digestDirectory, withProvenance } = require('../../lib/packages/import-apply.js');
 const { evaluateImport } = require('../../lib/packages/import-evaluate.js');
 const { makeTempDir } = require('../helpers/workspace.js');
+const { execFileSync } = require('node:child_process');
 
 const SOURCE = { id: 'github.com/example/pack', reference: 'v1.0.0' };
 
@@ -112,6 +113,82 @@ describe('discoverPackage refuses what it cannot honestly offer', () => {
   }
 });
 
+describe('nothing inside an item or its containers escapes observation', () => {
+  test('a symlinked file nested inside a skill is refused, its target never read', () => {
+    const root = makeTempDir('plan-src-');
+    const outside = makeTempDir('plan-out-');
+    const target = write(outside, 'secret.md', 'outside bytes');
+    write(root, '.claude/skills/writer/SKILL.md', 'x');
+    fs.symlinkSync(target, path.join(root, '.claude/skills/writer/link.md'));
+    const outsideBefore = tree(outside);
+    assert.throws(() => discoverPackage(root), /link\.md is a symlink/);
+    assert.deepStrictEqual(tree(outside), outsideBefore);
+  });
+
+  test('a symlinked subdirectory nested inside a skill is refused, never followed', () => {
+    const root = makeTempDir('plan-src-');
+    const outside = makeTempDir('plan-out-');
+    write(outside, 'nested/deep.md', 'outside bytes');
+    write(root, '.claude/skills/writer/SKILL.md', 'x');
+    fs.symlinkSync(path.join(outside, 'nested'), path.join(root, '.claude/skills/writer/sub'));
+    const outsideBefore = tree(outside);
+    assert.throws(() => discoverPackage(root), /sub is a symlink/);
+    assert.deepStrictEqual(tree(outside), outsideBefore);
+  });
+
+  test('a fifo nested inside a skill is refused as an unsupported entry type', (t) => {
+    const root = makeTempDir('plan-src-');
+    write(root, '.claude/skills/writer/SKILL.md', 'x');
+    try {
+      execFileSync('mkfifo', [path.join(root, '.claude/skills/writer/pipe')]);
+    } catch {
+      t.skip('mkfifo unavailable');
+      return;
+    }
+    assert.throws(() => discoverPackage(root), /pipe is an unsupported entry type/);
+  });
+
+  test('a symlinked container directory is refused by name, never followed', () => {
+    const root = makeTempDir('plan-src-');
+    const outside = makeTempDir('plan-out-');
+    write(outside, 'skills/writer/SKILL.md', 'x');
+    fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
+    fs.symlinkSync(path.join(outside, 'skills'), path.join(root, '.claude', 'skills'));
+    assert.throws(() => discoverPackage(root), /\.claude\/skills is a symlink/);
+  });
+
+  test('a failed observation propagates instead of reading as an empty package', () => {
+    const root = makeTempDir('plan-src-');
+    write(root, '.claude/agents/scribe.md', AGENT_TEXT);
+    const realReaddir = fs.readdirSync;
+    fs.readdirSync = (dir, opts) => {
+      if (String(dir).endsWith(path.join('.claude', 'agents'))) {
+        const e = new Error('EACCES: injected'); e.code = 'EACCES'; throw e;
+      }
+      return realReaddir(dir, opts);
+    };
+    try {
+      assert.throws(() => discoverPackage(root), (e) => e.code === 'EACCES');
+    } finally {
+      fs.readdirSync = realReaddir;
+    }
+  });
+
+  test('a failed stat of the source root propagates rather than reading as missing', () => {
+    const root = makeTempDir('plan-src-');
+    const realLstat = fs.lstatSync;
+    fs.lstatSync = (target, opts) => {
+      if (target === root) { const e = new Error('EACCES: injected'); e.code = 'EACCES'; throw e; }
+      return realLstat(target, opts);
+    };
+    try {
+      assert.throws(() => discoverPackage(root), (e) => e.code === 'EACCES');
+    } finally {
+      fs.lstatSync = realLstat;
+    }
+  });
+});
+
 describe('the manifest is deterministic', () => {
   test('identical source trees built in different orders produce identical, id-sorted manifests', () => {
     const a = makeTempDir('plan-src-a-');
@@ -177,22 +254,54 @@ describe('buildPlan', () => {
     assert.deepStrictEqual(scribe.agent, { plannedDefault: false, approvedDefault: false });
   });
 
-  test('a decided plan survives JSON and the real evaluator end to end', () => {
+  test('every decision reaches the real evaluator for both kinds, colliding and not', () => {
+    // Workspace: colliding default agent (lead), colliding non-default agent
+    // (scribe), colliding agent to skip (parker), colliding skills (writer,
+    // parked). Absent: agent newby, skill fresh. One decided plan covers
+    // agent add/overwrite-of-default/overwrite-of-non-default/skip and skill
+    // add/overwrite/skip, all through evaluateImport after JSON.
     const workspace = workspaceFixture();
+    write(workspace, '.claude/agents/lead.md', DEFAULT_AGENT);
+    write(workspace, '.claude/agents/scribe.md', '---\nname: scribe-old\n---\n\nOld.\n');
+    write(workspace, '.claude/agents/parker.md', '---\nname: parker\n---\n\nParked.\n');
     const sourceRoot = sourceFixture();
+    write(sourceRoot, '.claude/agents/parker.md', '---\nname: parker\n---\n\nParked v2.\n');
+    write(sourceRoot, '.claude/agents/newby.md', AGENT_TEXT);
+    write(sourceRoot, '.claude/skills/fresh/SKILL.md', 'fresh');
     const plan = buildPlan(workspace, sourceRoot, SOURCE);
+    const lead = plan.items.find((i) => i.id === 'agent:lead');
+    assert.deepStrictEqual([lead.collision, lead.agent.plannedDefault], [true, true]);
     const approval = JSON.parse(JSON.stringify(decide(plan, {
-      'agent:scribe': 'add',
-      'agent:lead': 'add',
+      'agent:lead': 'overwrite', // a live default, carried through
+      'agent:scribe': 'overwrite', // a live non-default
+      'agent:parker': 'skip',
+      'agent:newby': 'add',
       'skill:writer': 'overwrite',
       'skill:parked': 'skip',
+      'skill:fresh': 'add',
     })));
     const result = evaluateImport(approval, snapshotCurrent(workspace, sourceRoot, approval));
     assert.strictEqual(result.status, 'ready');
-    assert.deepStrictEqual(result.writes.map((w) => w.id), ['agent:lead', 'agent:scribe', 'skill:writer']);
-    assert.deepStrictEqual(result.skipped.map((w) => w.id), ['skill:parked']);
+    assert.deepStrictEqual(result.writes.map((w) => w.id),
+      ['agent:lead', 'agent:newby', 'agent:scribe', 'skill:fresh', 'skill:writer']);
+    assert.deepStrictEqual(result.skipped.map((w) => w.id), ['agent:parker', 'skill:parked']);
     assert.deepStrictEqual(result.blocked, []);
     assert.deepStrictEqual(result.stale, []);
+  });
+
+  test('a CRLF agent\'s approved digest and approved default describe the same bytes', () => {
+    const workspace = makeTempDir('plan-ws-');
+    const sourceRoot = makeTempDir('plan-src-');
+    write(sourceRoot, '.claude/agents/crlf.md', '---\r\nname: crlf\r\norder: 0\r\n---\r\n\r\nBody.\r\n');
+    const plan = buildPlan(workspace, sourceRoot, SOURCE);
+    const item = plan.items.find((i) => i.id === 'agent:crlf');
+    const approvedText = withProvenance('---\r\nname: crlf\r\norder: 0\r\n---\r\n\r\nBody.\r\n', SOURCE.id);
+    assert.strictEqual(item.approvedDigest, digestFile(Buffer.from(approvedText, 'utf8')));
+    assert.strictEqual(item.agent.approvedDefault, true);
+    const approval = JSON.parse(JSON.stringify(decide(plan, { 'agent:crlf': 'add' })));
+    const result = evaluateImport(approval, snapshotCurrent(workspace, sourceRoot, approval));
+    assert.strictEqual(result.status, 'ready');
+    assert.deepStrictEqual(result.writes.map((w) => w.id), ['agent:crlf']);
   });
 
   test('refuses a source identity the caller did not really supply', () => {
