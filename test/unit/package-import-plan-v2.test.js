@@ -5,7 +5,8 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { discoverPackage, buildPlan } = require('../../lib/packages/import-plan.js');
+const { discoverPackage, buildPlan, decide } = require('../../lib/packages/import-plan.js');
+const { readNormalisedFile, parseAgentFrontmatter, agentIsDefault } = require('../../lib/agents/discovery.js');
 const { snapshotCurrent, digestFile, digestDirectory, withProvenance } = require('../../lib/packages/import-apply.js');
 const { evaluateImport } = require('../../lib/packages/import-evaluate.js');
 const { makeTempDir } = require('../helpers/workspace.js');
@@ -36,30 +37,6 @@ function tree(root, current = root) {
     }
   }
   return result;
-}
-
-// Decisions turn a plan into the approval object the evaluator accepts. A
-// skip approves the reviewed pre-state itself, so its approved digest and
-// default state collapse onto the planned ones.
-function decide(plan, decisions) {
-  return {
-    schema: plan.schema,
-    source: plan.source,
-    manifest: plan.manifest,
-    items: plan.items.map((item) => {
-      const decision = decisions[item.id];
-      const skip = decision === 'skip';
-      return {
-        ...item,
-        decision,
-        approvedDigest: skip ? item.plannedDigest : item.approvedDigest,
-        agent: item.agent === null ? null : {
-          plannedDefault: item.agent.plannedDefault,
-          approvedDefault: skip ? item.agent.plannedDefault : item.agent.approvedDefault,
-        },
-      };
-    }),
-  };
 }
 
 const AGENT_TEXT = '---\nname: writer\n---\n\nWrite things.\n';
@@ -302,6 +279,43 @@ describe('buildPlan', () => {
     const result = evaluateImport(approval, snapshotCurrent(workspace, sourceRoot, approval));
     assert.strictEqual(result.status, 'ready');
     assert.deepStrictEqual(result.writes.map((w) => w.id), ['agent:crlf']);
+  });
+
+  test("the plan's approved default equals the product's file-based reading of the approved bytes", () => {
+    for (const [name, text] of [
+      ['lf', '---\nname: probe\norder: 0\n---\n\nB.\n'],
+      ['crlf', '---\r\nname: probe\r\norder: 0\r\n---\r\n\r\nB.\r\n'],
+      ['bom', '\ufeff---\nname: probe\norder: 0\n---\n\nB.\n'],
+      ['non-default lf', '---\nname: probe\n---\n\nB.\n'],
+    ]) {
+      const workspace = makeTempDir('plan-ws-');
+      const sourceRoot = makeTempDir('plan-src-');
+      write(sourceRoot, '.claude/agents/probe.md', text);
+      const item = buildPlan(workspace, sourceRoot, SOURCE).items[0];
+      // The exact approved bytes, on disk, read through the product's own
+      // file-based reader: any drift between approvedDefaultOf's in-memory
+      // normalisation and readNormalisedFile turns this red.
+      const pinned = write(makeTempDir('plan-pin-'), 'probe.md', withProvenance(text, SOURCE.id));
+      const real = agentIsDefault(parseAgentFrontmatter(readNormalisedFile(pinned)));
+      assert.strictEqual(item.agent.approvedDefault, real, name);
+    }
+  });
+
+  test('decide attaches decisions verbatim and owns the skip collapse', () => {
+    const workspace = workspaceFixture();
+    write(workspace, '.claude/agents/lead.md', DEFAULT_AGENT);
+    const sourceRoot = sourceFixture();
+    const plan = buildPlan(workspace, sourceRoot, SOURCE);
+    const approval = decide(plan, {
+      'agent:scribe': 'add', 'agent:lead': 'skip', 'skill:writer': 'overwrite', 'skill:parked': 'skip',
+    });
+    const planLead = plan.items.find((i) => i.id === 'agent:lead');
+    const lead = approval.items.find((i) => i.id === 'agent:lead');
+    assert.strictEqual(lead.approvedDigest, planLead.plannedDigest);
+    assert.strictEqual(lead.agent.approvedDefault, planLead.agent.plannedDefault);
+    const scribe = approval.items.find((i) => i.id === 'agent:scribe');
+    const planScribe = plan.items.find((i) => i.id === 'agent:scribe');
+    assert.deepStrictEqual(scribe, { ...planScribe, decision: 'add' });
   });
 
   test('refuses a source identity the caller did not really supply', () => {
