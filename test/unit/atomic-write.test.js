@@ -49,18 +49,21 @@ function tree(root, current = root) {
   return result;
 }
 
-// The shared transaction: a file overwrite, an add under created parents,
-// an exact directory replacement. Built fresh per fault case.
+// The shared transaction, built fresh per fault case.
 function fixture() {
   const root = workspace();
   write(root, 'notes/keep.md', 'foreign');
   const oldNote = write(root, 'notes/old.md', 'before');
   write(root, 'skills/writer/SKILL.md', 'v1');
   write(root, 'skills/writer/refs/a.md', 'ref');
+  // A pre-existing EMPTY parent holding a destination: it must survive every
+  // rollback and recovery, unlike the parents the run itself creates.
+  fs.mkdirSync(path.join(root, 'kept-empty'));
   const added = path.join(root, 'deep/new/tree/added.md');
   const writes = [
     { path: oldNote, content: 'after' },
     { path: added, content: 'added' },
+    { path: path.join(root, 'kept-empty', 'new.md'), content: 'kept new' },
   ];
   const replaceDirs = [{
     path: path.join(root, 'skills/writer'),
@@ -86,15 +89,14 @@ const STEPS = fixtureSteps();
 const PREPARE_STEPS = STEPS.filter((step) => step.startsWith('prepare:')).length;
 
 // The probed list is pinned to an explicit literal before any loop uses it,
-// so a vanished, renamed or reordered boundary turns the suite red instead
-// of silently deleting the tests it generates; the loops stay probe-driven
-// so new boundaries are still covered automatically.
-test('the standard fixture crosses exactly the twelve recorded boundaries, in order', () => {
+// so a vanished or reordered boundary turns the suite red instead of
+// silently deleting the tests it generates.
+test('the standard fixture crosses exactly the fourteen recorded boundaries, in order', () => {
   assert.deepStrictEqual(STEPS, [
-    'prepare:journal', 'prepare:stage', 'prepare:stage', 'prepare:stage',
+    'prepare:journal', 'prepare:stage', 'prepare:stage', 'prepare:stage', 'prepare:stage',
     'prepare:backup', 'prepare:backup', 'commit:transition',
-    // the overwrite pair, the added file, the directory-replacement pair
-    'commit:remove', 'commit:rename', 'commit:rename', 'commit:remove', 'commit:rename',
+    // overwrite pair, added file, file under the kept empty parent, replacement pair
+    'commit:remove', 'commit:rename', 'commit:rename', 'commit:rename', 'commit:remove', 'commit:rename',
   ]);
 });
 
@@ -297,7 +299,7 @@ describe('a preparation failure changes no destination', () => {
       assert.deepStrictEqual(tree(root), before);
       // The failed preparation cleaned up after itself, so the next write runs.
       const result = runFixture(root, writes, replaceDirs);
-      assert.strictEqual(result.written.length, 3);
+      assert.strictEqual(result.written.length, 4);
     });
   }
 });
@@ -402,18 +404,10 @@ describe('recovery from literal journals', () => {
   test('recovery removes a stale journal temporary left by an interrupted update', () => {
     const root = workspace();
     write(root, 'kept.md', 'kept');
-    state(root, {
-      version: 1,
-      runId: 'literal',
-      createdState: ['.rundock/import', '.rundock'],
-      phase: 'preparing',
-      entries: [],
-      createdDirs: [],
-    });
+    state(root, { version: 1, runId: 'literal', createdState: ['.rundock/import', '.rundock'], phase: 'preparing', entries: [], createdDirs: [] });
     fs.writeFileSync(`${journalPath(root)}.literal.tmp`, 'half-written update');
     assert.deepStrictEqual(recoverPendingWrites(root), { recovered: 1 });
-    // Pre-state including no `.rundock`: the temporary would otherwise
-    // keep the state directories from emptying.
+    // Pre-state with no `.rundock`: the temporary must not survive.
     assert.deepStrictEqual(tree(root), ['kept.md:' + Buffer.from('kept').toString('base64')]);
   });
 
@@ -472,6 +466,8 @@ describe('a journal that cannot be trusted fails closed', () => {
     ['a missing run identity', (j) => { delete j.runId; return j; }, /run identity/],
     ['a destination that uses transaction state', (j) => { j.entries[0].destination = '.rundock'; return j; }, /transaction state/],
     ['a missing state-ownership record', (j) => { delete j.createdState; return j; }, /state-ownership/],
+    ['an escaping state-ownership record', (j) => { j.createdState = ['../..']; return j; }, /state-ownership/],
+    ['an in-workspace but non-state state-ownership record', (j) => { j.createdState = ['notes']; return j; }, /state-ownership/],
   ];
 
   for (const [name, spec, message] of BAD) {
@@ -482,7 +478,10 @@ describe('a journal that cannot be trusted fails closed', () => {
       const text = typeof spec === 'string' ? spec : JSON.stringify(spec(validJournal()));
       fs.writeFileSync(journalPath(root), text);
       const before = tree(root);
-      assert.throws(() => recoverPendingWrites(root), message);
+      let raised;
+      try { recoverPendingWrites(root); } catch (e) { raised = e; }
+      assert.match(raised.message, message);
+      assert.strictEqual(raised.code, 'ERR_ATOMIC_JOURNAL');
       assert.deepStrictEqual(tree(root), before);
       assert.strictEqual(read(journalPath(root)), text);
       // And it still blocks normal writes until explicitly repaired.
@@ -523,14 +522,7 @@ describe('a journal that cannot be trusted fails closed', () => {
       write(root, 'over.md', 'partially new');
       fs.mkdirSync(path.join(root, IMPORT_SUBDIR, 'run', 'backup'), { recursive: true });
       fs.writeFileSync(path.join(root, IMPORT_SUBDIR, 'run', 'backup', '0'), 'original');
-      const journal = JSON.stringify({
-        version: 1,
-        runId: 'literal',
-        createdState: [],
-        phase: 'committing',
-        entries: [{ slot: 0, type: 'file', priorType: 'file', destination: 'over.md' }],
-        createdDirs: [dir],
-      });
+      const journal = JSON.stringify({ version: 1, runId: 'literal', createdState: [], phase: 'committing', entries: [{ slot: 0, type: 'file', priorType: 'file', destination: 'over.md' }], createdDirs: [dir] });
       fs.writeFileSync(journalPath(root), journal);
       const before = tree(root);
       assert.throws(() => recoverPendingWrites(root), message);
@@ -545,18 +537,33 @@ describe('a journal that cannot be trusted fails closed', () => {
     });
   }
 
+  test('an escaping state-ownership record blocks a committing recovery and touches nothing outside', () => {
+    const root = workspace();
+    write(root, 'over.md', 'partially new');
+    fs.mkdirSync(path.join(root, IMPORT_SUBDIR, 'run', 'backup'), { recursive: true });
+    fs.writeFileSync(path.join(root, IMPORT_SUBDIR, 'run', 'backup', '0'), 'original');
+    const journal = JSON.stringify({ version: 1, runId: 'literal', createdState: ['../..'], phase: 'committing', entries: [{ slot: 0, type: 'file', priorType: 'file', destination: 'over.md' }], createdDirs: [] });
+    fs.writeFileSync(journalPath(root), journal);
+    const before = tree(root);
+    const outside = path.resolve(root, '..');
+    let raised;
+    try { recoverPendingWrites(root); } catch (e) { raised = e; }
+    assert.match(raised.message, /state-ownership/);
+    assert.strictEqual(raised.code, 'ERR_ATOMIC_JOURNAL');
+    assert.deepStrictEqual(tree(root), before);
+    assert.strictEqual(read(journalPath(root)), journal);
+    assert.strictEqual(fs.statSync(outside).isDirectory(), true); // the escape target survives
+    assert.throws(
+      () => writeAsUnit(root, [{ path: path.join(root, 'b.md'), content: 'x' }]),
+      /another write transaction is pending/,
+    );
+  });
+
   test('a committing journal with a missing backup blocks recovery before any mutation', () => {
     const root = workspace();
     write(root, 'over.md', 'current');
     fs.mkdirSync(path.join(root, IMPORT_SUBDIR, 'run', 'backup'), { recursive: true });
-    const journal = JSON.stringify({
-      version: 1,
-      runId: 'literal',
-      createdState: [],
-      phase: 'committing',
-      entries: [{ slot: 0, type: 'file', priorType: 'file', destination: 'over.md' }],
-      createdDirs: [],
-    });
+    const journal = JSON.stringify({ version: 1, runId: 'literal', createdState: [], phase: 'committing', entries: [{ slot: 0, type: 'file', priorType: 'file', destination: 'over.md' }], createdDirs: [] });
     fs.writeFileSync(journalPath(root), journal);
     const before = tree(root);
     assert.throws(() => recoverPendingWrites(root), /backup 0 is missing/);
@@ -568,14 +575,7 @@ describe('a journal that cannot be trusted fails closed', () => {
     const root = workspace();
     write(root, 'over.md', 'current');
     fs.mkdirSync(path.join(root, IMPORT_SUBDIR, 'run', 'backup', '0'), { recursive: true });
-    const journal = JSON.stringify({
-      version: 1,
-      runId: 'literal',
-      createdState: [],
-      phase: 'committing',
-      entries: [{ slot: 0, type: 'file', priorType: 'file', destination: 'over.md' }],
-      createdDirs: [],
-    });
+    const journal = JSON.stringify({ version: 1, runId: 'literal', createdState: [], phase: 'committing', entries: [{ slot: 0, type: 'file', priorType: 'file', destination: 'over.md' }], createdDirs: [] });
     fs.writeFileSync(journalPath(root), journal);
     const before = tree(root);
     assert.throws(() => recoverPendingWrites(root), /backup 0 is not a file/);
