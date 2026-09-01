@@ -12,8 +12,8 @@ const {
   digestDirectory,
   withProvenance,
 } = require('../../lib/packages/import-apply.js');
-const { journalPath, IMPORT_SUBDIR } = require('../../lib/workspace/atomic-write.js');
-const { readNormalisedFile, parseAgentFrontmatter } = require('../../lib/agents/discovery.js');
+const { journalPath, writeAsUnit, IMPORT_SUBDIR } = require('../../lib/workspace/atomic-write.js');
+const { readNormalisedFile, parseAgentFrontmatter, agentIsDefault } = require('../../lib/agents/discovery.js');
 const { makeTempDir } = require('../helpers/workspace.js');
 
 const SOURCE_ID = 'github.com/example/pack';
@@ -54,10 +54,10 @@ function digestPath(absolute) {
     : digestFile(fs.readFileSync(absolute));
 }
 
+// Normalise the way readNormalisedFile does, then apply the product's own
+// default rule, so this helper cannot encode a competing definition.
 function declaresDefault(text) {
-  if (!text.startsWith('---\n')) return false;
-  const end = text.indexOf('\n---', 4);
-  return end !== -1 && /^order:\s*0\s*$/m.test(text.slice(4, end));
+  return agentIsDefault(parseAgentFrontmatter(text.replace(/^\ufeff/, '').replace(/\r\n/g, '\n')));
 }
 
 // Build a valid approval from a source tree and the current workspace with
@@ -96,6 +96,25 @@ function buildApproval(workspace, sourceRoot, decisions) {
     source: { id: SOURCE_ID, reference: 'v1.0.0' },
     manifest: entries.map(({ id, kind, slug, sourceDigest }) => ({ id, kind, slug, sourceDigest })),
     items: entries,
+  };
+}
+
+// A minimal single-item approval whose approvedDigest is supplied raw, for
+// cases where deriving it through the transformation is the thing under test.
+function buildApprovalWithRawApproved(workspace, sourceRoot, id, approvedDigest) {
+  const [kind, slug] = id.split(':');
+  const destination = `.claude/agents/${slug}.md`;
+  const sourceDigest = digestPath(path.join(sourceRoot, destination));
+  const item = {
+    id, kind, slug, destination, collision: false, decision: 'add',
+    plannedDigest: 'absent', approvedDigest, sourceDigest,
+    agent: { plannedDefault: false, approvedDefault: false },
+  };
+  return {
+    schema: 'rundock.package-import-approval/v1',
+    source: { id: SOURCE_ID, reference: 'v1.0.0' },
+    manifest: [{ id, kind, slug, sourceDigest }],
+    items: [item],
   };
 }
 
@@ -322,6 +341,40 @@ describe('applyImport', () => {
     assert.strictEqual(read(workspace, 'notes/keep.md'), 'foreign');
   });
 
+  test('a CRLF agent keeps its frontmatter, its keys and its own line endings', () => {
+    const workspace = makeTempDir('import-apply-ws-');
+    const sourceRoot = makeTempDir('import-apply-src-');
+    write(sourceRoot, '.claude/agents/crlf.md', '---\r\nname: crlf\r\norder: 5\r\n---\r\n\r\nBody.\r\n');
+    applyImport(workspace, sourceRoot, buildApproval(workspace, sourceRoot, { 'agent:crlf': 'add' }));
+    assert.strictEqual(read(workspace, '.claude/agents/crlf.md'),
+      '---\r\nname: crlf\r\norder: 5\r\nsource: github.com/example/pack\r\n---\r\n\r\nBody.\r\n');
+    const meta = parseAgentFrontmatter(readNormalisedFile(path.join(workspace, '.claude/agents/crlf.md')));
+    assert.strictEqual(meta.name, 'crlf');
+    assert.strictEqual(meta.order, '5');
+    assert.strictEqual(meta.source, SOURCE_ID);
+  });
+
+  test('a BOM-prefixed agent lands readable by the product parser, with one frontmatter block', () => {
+    const workspace = makeTempDir('import-apply-ws-');
+    const sourceRoot = makeTempDir('import-apply-src-');
+    write(sourceRoot, '.claude/agents/bom.md', '\ufeff---\nname: bom\n---\n\nB.\n');
+    applyImport(workspace, sourceRoot, buildApproval(workspace, sourceRoot, { 'agent:bom': 'add' }));
+    assert.strictEqual(read(workspace, '.claude/agents/bom.md'), '---\nname: bom\nsource: github.com/example/pack\n---\n\nB.\n');
+    const meta = parseAgentFrontmatter(readNormalisedFile(path.join(workspace, '.claude/agents/bom.md')));
+    assert.strictEqual(meta.name, 'bom');
+    assert.strictEqual(meta.source, SOURCE_ID);
+  });
+
+  test('frontmatter that opens but never closes is refused with nothing written', () => {
+    const workspace = makeTempDir('import-apply-ws-');
+    const sourceRoot = makeTempDir('import-apply-src-');
+    const bad = write(sourceRoot, '.claude/agents/broken.md', '---\nname: broken\n');
+    const approval = buildApprovalWithRawApproved(workspace, sourceRoot, 'agent:broken', digestFile(fs.readFileSync(bad)));
+    const before = tree(workspace);
+    assert.throws(() => applyImport(workspace, sourceRoot, approval), /never closes/);
+    assert.deepStrictEqual(tree(workspace), before);
+  });
+
   test('a decisions-blocked evaluation performs zero destination writes', () => {
     const workspace = makeTempDir('import-apply-ws-');
     const sourceRoot = makeTempDir('import-apply-src-');
@@ -400,6 +453,27 @@ describe('applyImport', () => {
   });
 });
 
+// Run the real primitive over a directory destination on a scratch tree and
+// read its journal off disk at the first commit boundary.
+function captureRealCommittingJournal() {
+  const scratch = makeTempDir('journal-capture-');
+  write(scratch, '.claude/skills/parked/SKILL.md', 'parked');
+  let captured = null;
+  try {
+    writeAsUnit(scratch, [], {
+      replaceDirs: [{ path: path.join(scratch, '.claude/skills/parked'), files: [{ rel: 'SKILL.md', content: 'v2' }] }],
+      afterStep: (step) => {
+        if (step.phase === 'commit' && step.action === 'remove') {
+          captured = JSON.parse(fs.readFileSync(journalPath(scratch), 'utf8'));
+          throw new Error('captured');
+        }
+      },
+    });
+  } catch { /* the abort is the point; the primitive rolls the scratch back */ }
+  assert.ok(captured, 'no committing journal was captured');
+  return captured;
+}
+
 describe('recovery comes before everything', () => {
   test('an interrupted prior transaction is recovered before the snapshot', () => {
     const { workspace, sourceRoot, approval } = fixture();
@@ -410,14 +484,23 @@ describe('recovery comes before everything', () => {
     // run after the snapshot, this same apply reports the skill as stale.
     write(workspace, '.claude/skills/parked/SKILL.md', 'half-committed bytes');
     write(workspace, path.join(IMPORT_SUBDIR, 'run', 'backup', '0', 'SKILL.md'), 'parked');
-    fs.writeFileSync(journalPath(workspace), JSON.stringify({
+    const planted = {
       version: 1,
       runId: 'stale',
       createdState: [],
       phase: 'committing',
       entries: [{ slot: 0, type: 'dir', priorType: 'dir', destination: '.claude/skills/parked' }],
       createdDirs: [],
-    }));
+    };
+    // The literal must be shaped exactly like a journal the real primitive
+    // leaves mid-commit, so lane A format drift turns this test red instead
+    // of leaving it proving recovery of a state nothing produces.
+    const real = captureRealCommittingJournal();
+    assert.deepStrictEqual(Object.keys(planted).sort(), Object.keys(real).sort());
+    assert.strictEqual(planted.phase, real.phase);
+    assert.deepStrictEqual(Object.keys(planted.entries[0]).sort(), Object.keys(real.entries[0]).sort());
+    assert.strictEqual(planted.entries[0].type, real.entries[0].type);
+    fs.writeFileSync(journalPath(workspace), JSON.stringify(planted));
     const result = applyImport(workspace, sourceRoot, approval);
     assert.strictEqual(result.status, 'ready');
     assert.strictEqual(result.written.length, 2);
@@ -436,15 +519,21 @@ describe('recovery comes before everything', () => {
 });
 
 describe('a fault at any write boundary leaves the pre-apply workspace after recovery', () => {
-  const boundaries = (() => {
+  const recorded = (() => {
     const { workspace, sourceRoot, approval } = fixture();
     const steps = [];
-    applyImport(workspace, sourceRoot, approval, { afterStep: (s) => steps.push(`${s.phase}:${s.action}`) });
+    applyImport(workspace, sourceRoot, approval, {
+      afterStep: (s) => steps.push({ label: `${s.phase}:${s.action}`, destination: s.destination || null }),
+    });
     return steps;
   })();
+  const boundaries = recorded.map((s) => s.label);
 
-  test('the fixture crosses write boundaries for both a file and a directory destination', () => {
-    assert.ok(boundaries.length >= 6, boundaries.join(','));
+  test('both the agent file and the skill directory contribute write boundaries', () => {
+    const touched = new Set(recorded.filter((s) => s.destination)
+      .map((s) => s.destination.split(path.sep).slice(-2).join('/')));
+    assert.ok(touched.has('agents/scribe.md'), [...touched].join(','));
+    assert.ok(touched.has('skills/writer'), [...touched].join(','));
     assert.ok(boundaries.includes('commit:rename'));
     assert.ok(boundaries.includes('prepare:backup'));
   });
