@@ -48,6 +48,14 @@ const MUTATIONS = [
   [ADAPTER, 'a directory digest covers where each file lives, not only its bytes',
     '      hash.update(`${relative}\\0`);\n',
     ''],
+  [ADAPTER, 'every eligible write lands in one transaction, not several',
+    '  const result = writeAsUnit(workspace, writes, { replaceDirs, afterStep: options.afterStep });',
+    '  const first = writeAsUnit(workspace, writes, { afterStep: options.afterStep });\n'
+    + '  const second = writeAsUnit(workspace, [], { replaceDirs, afterStep: options.afterStep });\n'
+    + '  const result = { written: [...first.written, ...second.written] };'],
+  [ADAPTER, 'recovery runs before the snapshot, not merely at some point',
+    '  recoverPendingWrites(workspace);\n  const current = snapshotCurrent(workspace, sourceRoot, approval);',
+    '  const current = snapshotCurrent(workspace, sourceRoot, approval);\n  recoverPendingWrites(workspace);'],
 ];
 
 // Guards deliberately NOT mutated, each with the reason.

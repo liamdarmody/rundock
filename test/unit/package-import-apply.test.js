@@ -177,12 +177,33 @@ describe('snapshotCurrent', () => {
     const { workspace, sourceRoot, approval } = fixture();
     write(workspace, '.claude/agents/alpha.md', DEFAULT_AGENT_A);
     write(workspace, '.claude/agents/plain.md', AGENT_TEXT);
-    write(workspace, '.claude/agents/Not A Slug.md', DEFAULT_AGENT_B);
+    write(workspace, '.claude/agents/Not A Slug.md', AGENT_TEXT);
     const current = snapshotCurrent(workspace, sourceRoot, approval);
     assert.deepStrictEqual(current.agents.map((a) => [a.destination, a.isDefault]), [
       ['.claude/agents/alpha.md', true],
       ['.claude/agents/plain.md', false],
     ]);
+  });
+});
+
+describe('the snapshot refuses what it cannot represent', () => {
+  test('a symlink at a canonical agent path aborts the snapshot and the apply', () => {
+    const { workspace, sourceRoot, approval } = fixture();
+    write(workspace, 'real.md', DEFAULT_AGENT_A);
+    fs.mkdirSync(path.join(workspace, '.claude/agents'), { recursive: true });
+    fs.symlinkSync(path.join(workspace, 'real.md'), path.join(workspace, '.claude/agents/lead.md'));
+    const before = tree(workspace);
+    assert.throws(() => snapshotCurrent(workspace, sourceRoot, approval), /unsupported filesystem entry type/);
+    assert.throws(() => applyImport(workspace, sourceRoot, approval), /unsupported filesystem entry type/);
+    assert.deepStrictEqual(tree(workspace), before);
+  });
+
+  test('a default agent outside canonical naming refuses the import rather than hiding the default', () => {
+    const { workspace, sourceRoot, approval } = fixture();
+    write(workspace, '.claude/agents/Not A Slug.md', DEFAULT_AGENT_B);
+    const before = tree(workspace);
+    assert.throws(() => applyImport(workspace, sourceRoot, approval), /outside canonical naming/);
+    assert.deepStrictEqual(tree(workspace), before);
   });
 });
 
@@ -226,6 +247,43 @@ describe('applyImport', () => {
     const written = read(workspace, '.claude/agents/scribe.md');
     assert.match(written, /^source: somewhere\/else$/m);
     assert.strictEqual(written.match(/^source:/gm).length, 1);
+  });
+
+  test('overwriting an agent that already carries a source lands exactly the approved bytes', () => {
+    const workspace = makeTempDir('import-apply-ws-');
+    const sourceRoot = makeTempDir('import-apply-src-');
+    write(workspace, '.claude/agents/scribe.md', '---\nname: scribe\nsource: previous/place\n---\n\nOld body.\n');
+    write(workspace, 'notes/keep.md', 'foreign');
+    write(sourceRoot, '.claude/agents/scribe.md', AGENT_TEXT);
+    const approval = buildApproval(workspace, sourceRoot, { 'agent:scribe': 'overwrite' });
+    const approvedText = withProvenance(AGENT_TEXT, SOURCE_ID);
+    applyImport(workspace, sourceRoot, approval);
+    // Byte-for-byte the approved post-state: the prior source value is gone
+    // because the approved bytes replaced the file, and apply logic itself
+    // introduced nothing beyond them.
+    assert.strictEqual(read(workspace, '.claude/agents/scribe.md'), approvedText);
+    assert.strictEqual(read(workspace, '.claude/agents/scribe.md').match(/^source:/gm).length, 1);
+    assert.strictEqual(read(workspace, 'notes/keep.md'), 'foreign');
+  });
+
+  test('a decisions-blocked evaluation performs zero destination writes', () => {
+    const workspace = makeTempDir('import-apply-ws-');
+    const sourceRoot = makeTempDir('import-apply-src-');
+    write(sourceRoot, '.claude/agents/alpha.md', DEFAULT_AGENT_A);
+    write(sourceRoot, '.claude/agents/beta.md', DEFAULT_AGENT_B);
+    const approval = buildApproval(workspace, sourceRoot, { 'agent:alpha': 'add', 'agent:beta': 'add' });
+    const before = tree(workspace);
+    const result = applyImport(workspace, sourceRoot, approval);
+    assert.strictEqual(result.status, 'decisions-blocked');
+    assert.deepStrictEqual(result.written, []);
+    assert.deepStrictEqual(tree(workspace), before);
+  });
+
+  test('an evaluator validation error propagates with zero destination writes', () => {
+    const { workspace, sourceRoot, approval, before } = fixture();
+    approval.schema = 'rundock.package-import-approval/v0';
+    assert.throws(() => applyImport(workspace, sourceRoot, approval), /Invalid package import approval\.schema/);
+    assert.deepStrictEqual(tree(workspace), before);
   });
 
   test('bytes that do not hash to the approved digest are refused with nothing written', () => {
@@ -281,13 +339,25 @@ describe('applyImport', () => {
 describe('recovery comes before everything', () => {
   test('an interrupted prior transaction is recovered before the snapshot', () => {
     const { workspace, sourceRoot, approval } = fixture();
-    fs.mkdirSync(path.join(workspace, IMPORT_SUBDIR, 'run', 'staging'), { recursive: true });
+    // A genuinely half-committed prior transaction over the skipped skill:
+    // the destination holds replaced bytes, and the pre-transaction bytes the
+    // approval was planned against live only in the journal's backup. The
+    // snapshot can therefore match the approval ONLY if recovery ran first;
+    // run after the snapshot, this same apply reports the skill as stale.
+    write(workspace, '.claude/skills/parked/SKILL.md', 'half-committed bytes');
+    write(workspace, path.join(IMPORT_SUBDIR, 'run', 'backup', '0', 'SKILL.md'), 'parked');
     fs.writeFileSync(journalPath(workspace), JSON.stringify({
-      version: 1, runId: 'stale', createdState: [], phase: 'preparing', entries: [], createdDirs: [],
+      version: 1,
+      runId: 'stale',
+      createdState: [],
+      phase: 'committing',
+      entries: [{ slot: 0, type: 'dir', priorType: 'dir', destination: '.claude/skills/parked' }],
+      createdDirs: [],
     }));
     const result = applyImport(workspace, sourceRoot, approval);
     assert.strictEqual(result.status, 'ready');
     assert.strictEqual(result.written.length, 2);
+    assert.strictEqual(read(workspace, '.claude/skills/parked/SKILL.md'), 'parked');
     assert.strictEqual(fs.existsSync(journalPath(workspace)), false);
   });
 
