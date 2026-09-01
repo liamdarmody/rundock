@@ -351,6 +351,33 @@ describe('buildPlan', () => {
     assert.deepStrictEqual(scribe, { ...planScribe, decision: 'add' });
   });
 
+  test('a skipped agent keeps its LIVE default membership, in both directions, through the evaluator', () => {
+    // The collapse must change the value to be discriminated: live default
+    // with a non-default source version, and the reverse.
+    const NON_DEFAULT_LEAD = '---\nname: lead\n---\n\nNo longer lead.\n';
+    for (const [name, live, source] of [
+      ['live default, source non-default', DEFAULT_AGENT, NON_DEFAULT_LEAD],
+      ['live non-default, source default', NON_DEFAULT_LEAD, DEFAULT_AGENT],
+    ]) {
+      const workspace = makeTempDir('plan-ws-');
+      const sourceRoot = makeTempDir('plan-src-');
+      write(workspace, '.claude/agents/lead.md', live);
+      write(sourceRoot, '.claude/agents/lead.md', source);
+      const plan = buildPlan(workspace, sourceRoot, SOURCE);
+      const item = plan.items[0];
+      assert.notStrictEqual(item.agent.plannedDefault, item.agent.approvedDefault, name);
+      const approval = JSON.parse(JSON.stringify(decide(plan, { 'agent:lead': 'skip' })));
+      const decided = approval.items[0];
+      assert.strictEqual(decided.agent.approvedDefault, item.agent.plannedDefault, name);
+      assert.strictEqual(decided.approvedDigest, item.plannedDigest, name);
+      const result = evaluateImport(approval, snapshotCurrent(workspace, sourceRoot, approval));
+      assert.strictEqual(result.status, 'ready', name);
+      assert.deepStrictEqual(result.skipped.map((w) => w.id), ['agent:lead'], name);
+      assert.deepStrictEqual(result.blocked, [], name);
+      assert.deepStrictEqual(result.stale, [], name);
+    }
+  });
+
   test('refuses a source identity the caller did not really supply', () => {
     const workspace = workspaceFixture();
     const sourceRoot = sourceFixture();

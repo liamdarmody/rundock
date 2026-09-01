@@ -45,6 +45,9 @@ const MUTATIONS = [
   [PLAN, 'the collision fact is derived from the live destination',
     '    const collision = plannedDigest !== ABSENT_DIGEST;',
     '    const collision = false;'],
+  [PLAN, "a skipped agent's default state collapses onto the planned one",
+    '          approvedDefault: skip ? item.agent.plannedDefault : item.agent.approvedDefault,',
+    '          approvedDefault: item.agent.approvedDefault,'],
   [PLAN, 'a non-slug agent name is refused, never silently dropped',
     "    if (!entry.name.endsWith('.md') || !SLUG.test(entry.name.slice(0, -3))) {\n"
     + "      refuse(`agents/${entry.name} is not a canonical agent file name`);\n"
