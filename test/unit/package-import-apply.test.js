@@ -60,9 +60,8 @@ function declaresDefault(text) {
   return end !== -1 && /^order:\s*0\s*$/m.test(text.slice(4, end));
 }
 
-// Build a valid approval from a source tree and the current workspace, using
-// the module's own exported digest and provenance functions, which is exactly
-// what the future plan module will do.
+// Build a valid approval from a source tree and the current workspace with
+// the module's own exported helpers, as the future plan module will.
 function buildApproval(workspace, sourceRoot, decisions) {
   const entries = [];
   for (const [id, decision] of Object.entries(decisions)) {
@@ -104,8 +103,7 @@ const AGENT_TEXT = '---\nname: writer\n---\n\nWrite things.\n';
 const DEFAULT_AGENT_A = '---\nname: alpha\norder: 0\n---\n\nLead.\n';
 const DEFAULT_AGENT_B = '---\nname: beta\norder: 0\n---\n\nAlso lead.\n';
 
-// The standard fixture: an agent to add, a skill to overwrite, a skill to
-// skip, and a foreign workspace file nothing may touch.
+// An agent to add, a skill to overwrite, a skill to skip, a foreign file.
 function fixture() {
   const workspace = makeTempDir('import-apply-ws-');
   const sourceRoot = makeTempDir('import-apply-src-');
@@ -159,21 +157,12 @@ describe('canonical digests', () => {
 
 describe('withProvenance', () => {
   test('inserts the source line inside existing frontmatter, pinned byte-for-byte', () => {
-    assert.strictEqual(
-      withProvenance('---\nname: writer\n---\n\nBody.\n', 'a/b'),
-      '---\nname: writer\nsource: a/b\n---\n\nBody.\n',
-    );
-    assert.strictEqual(
-      withProvenance('---\nsource: kept/value\n---\n\nBody.\n', 'a/b'),
-      '---\nsource: kept/value\n---\n\nBody.\n',
-    );
+    assert.strictEqual(withProvenance('---\nname: writer\n---\n\nBody.\n', 'a/b'), '---\nname: writer\nsource: a/b\n---\n\nBody.\n');
+    assert.strictEqual(withProvenance('---\nsource: kept/value\n---\n\nBody.\n', 'a/b'), '---\nsource: kept/value\n---\n\nBody.\n');
   });
 
   test('creates frontmatter when the agent has none, pinned byte-for-byte', () => {
-    assert.strictEqual(
-      withProvenance('Just a body.\n', 'a/b'),
-      '---\nsource: a/b\n---\n\nJust a body.\n',
-    );
+    assert.strictEqual(withProvenance('Just a body.\n', 'a/b'), '---\nsource: a/b\n---\n\nJust a body.\n');
   });
 });
 
@@ -327,8 +316,7 @@ describe('applyImport', () => {
     // introduced nothing beyond them.
     assert.strictEqual(read(workspace, '.claude/agents/scribe.md'), approvedText);
     assert.strictEqual(read(workspace, '.claude/agents/scribe.md').match(/^source:/gm).length, 1);
-    // The product's own frontmatter reader must see the value, so a source
-    // line landing outside the frontmatter block fails here.
+    // The product's own frontmatter reader must see the value.
     const meta = parseAgentFrontmatter(readNormalisedFile(path.join(workspace, '.claude/agents/scribe.md')));
     assert.strictEqual(meta.source, SOURCE_ID);
     assert.strictEqual(read(workspace, 'notes/keep.md'), 'foreign');
