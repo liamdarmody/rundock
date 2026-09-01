@@ -1,15 +1,14 @@
 #!/usr/bin/env node
 'use strict';
-// Take the import apply adapter's guards apart one at a time and report which
-// tests notice. The adapter's whole job is refusing to write what it cannot
-// verify and executing exactly what the evaluator allowed, and every one of
-// those refusals could be deleted with the happy path still green unless a
-// test is proven to notice.
+// Take the protocol boundary's guards apart one at a time and report which
+// tests notice. The receipt's membership in the one transaction, the
+// zero-write rule, the verbatim approval and the dispatch registrations are
+// each the kind of guarantee a green suite could quietly stop checking.
 //
-//   node test/tools/mutate-import-apply-guards.js            # report
-//   node test/tools/mutate-import-apply-guards.js --markdown # as a table
+//   node test/tools/mutate-import-protocol-guards.js            # report
+//   node test/tools/mutate-import-protocol-guards.js --markdown # as a table
 //
-// The harness is the same shape as mutate-atomic-write-guards.js and is
+// The harness is the same shape as mutate-import-plan-guards.js and is
 // deliberately a second copy rather than a shared module, for the reason
 // stated there: pulling them together means editing an instrument already in
 // the gate, and mixing that refactor into a change is how a gate quietly
@@ -24,56 +23,54 @@ const { beginMutationRun } = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 
-const ADAPTER = {
+const APPLY = {
   src: path.join(ROOT, 'lib', 'packages', 'import-apply.js'),
-  suite: 'test/unit/package-import-apply.test.js',
+  suite: 'test/unit/package-import-protocol.test.js',
+};
+const HANDLERS = {
+  src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'packages.js'),
+  suite: 'test/unit/package-import-protocol.test.js',
+};
+const INDEX = {
+  src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'index.js'),
+  suite: 'test/unit/package-import-protocol.test.js',
 };
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
-  [ADAPTER, 'an interrupted prior transaction is recovered before anything else',
-    '  recoverPendingWrites(workspace);\n',
-    ''],
-  [ADAPTER, 'only a ready evaluation reaches the filesystem',
-    "  if (evaluation.status !== 'ready') return { ...evaluation, written: [], receipt: null };",
-    "  if (evaluation.status === 'ready') return { ...evaluation, written: [], receipt: null };"],
-  [ADAPTER, 'bytes that do not hash to the approved digest are never written',
-    '    if (digestFile(transformed) !== write.approvedDigest) {\n'
-    + '      throw new Error(`bytes for ${write.id} do not match the approved digest; refusing to write`);\n'
-    + '    }\n',
-    ''],
-  [ADAPTER, 'the provenance transformation is actually applied to written agents',
-    "    const transformed = Buffer.from(withProvenance(bytes.toString('utf8'), sourceId), 'utf8');",
-    '    const transformed = bytes;'],
-  [ADAPTER, 'a directory digest covers where each file lives, not only its bytes',
-    '      hash.update(`${relative}\\0`);\n',
-    ''],
-  [ADAPTER, 'every eligible write lands in one transaction, not several',
-    '  const result = writeAsUnit(workspace, writes, { replaceDirs, afterStep: options.afterStep });',
-    '  const first = writeAsUnit(workspace, writes, { afterStep: options.afterStep });\n'
-    + '  const second = writeAsUnit(workspace, [], { replaceDirs, afterStep: options.afterStep });\n'
-    + '  const result = { written: [...first.written, ...second.written] };'],
-  [ADAPTER, 'a skill write is verified against the approved digest like any other bytes',
-    '  if (write.approvedDigest !== write.sourceDigest) {\n'
-    + '    throw new Error(`bytes for ${write.id} do not match the approved digest; refusing to write`);\n'
+  [APPLY, 'the receipt is a member of the one transaction, not a separate write',
+    '    writes.push({\n'
+    + '      path: toAbsolute(workspace, receipt),\n'
+    + "      content: `${JSON.stringify(buildReceipt(approval, evaluation, appliedAt), null, 2)}\\n`,\n"
+    + '    });',
+    "    fs.mkdirSync(path.dirname(toAbsolute(workspace, receipt)), { recursive: true });\n"
+    + "    fs.writeFileSync(toAbsolute(workspace, receipt), `${JSON.stringify(buildReceipt(approval, evaluation, appliedAt), null, 2)}\\n`);"],
+  [APPLY, 'a zero-write apply writes no receipt',
+    '  if (options.receipt && evaluation.writes.length > 0) {',
+    '  if (options.receipt) {'],
+  [HANDLERS, 'the approval is used exactly as submitted, never repaired',
+    '    const result = applyImport(workspace, sourcePathOf(msg), msg.approval, { receipt: {} });',
+    "    const result = applyImport(workspace, sourcePathOf(msg), { ...msg.approval, schema: 'rundock.package-import-approval/v1' }, { receipt: {} });"],
+  [HANDLERS, 'an absent source path refuses instead of defaulting to the working directory',
+    "  if (typeof msg.sourcePath !== 'string' || msg.sourcePath.trim() === '') {\n"
+    + "    throw new Error('sourcePath is required: the package source directory to read');\n"
     + '  }\n',
     ''],
-  [ADAPTER, 'a failed observation aborts instead of reading as absence',
-    "    if (e.code === 'ENOENT' || e.code === 'ENOTDIR') return ABSENT_DIGEST;\n    throw e;",
-    '    return ABSENT_DIGEST;'],
-  [ADAPTER, 'recovery runs before the snapshot, not merely at some point',
-    '  recoverPendingWrites(workspace);\n  const current = snapshotCurrent(workspace, sourceRoot, approval);',
-    '  const current = snapshotCurrent(workspace, sourceRoot, approval);\n  recoverPendingWrites(workspace);'],
+  [INDEX, 'the plan operation is registered in the dispatch table',
+    '    plan_package_import: packages.handlePlanPackageImport,\n',
+    ''],
+  [INDEX, 'the apply operation is registered in the dispatch table',
+    '    apply_package_import: packages.handleApplyPackageImport,\n',
+    ''],
 ];
 
 // Guards deliberately NOT mutated, each with the reason.
 const NOT_MUTATED = [
   {
-    what: 'the source-digest verification in materialise',
-    why: 'the digest it checks was already matched against the same file by the snapshot moments '
-      + 'earlier in the same call, so no fixture can make it fire without a race seam the module '
-      + 'deliberately does not expose. It is defence in depth for the window between snapshot and '
-      + 'read-back; a mutation nothing can honestly discharge is noise. Left as a named gap.',
+    what: 'the structured-error wrapper in the handlers',
+    why: 'every error test asserts the reply type, operation and message directly, so deleting the '
+      + 'wrapper turns those tests red by construction; the mutations here are reserved for the '
+      + 'guarantees a green suite could plausibly stop checking.',
   },
 ];
 
@@ -106,7 +103,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [ADAPTER];
+  const targets = [APPLY, HANDLERS, INDEX];
   const session = beginMutationRun({ files: targets.map((target) => target.src) });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));
