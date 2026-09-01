@@ -48,12 +48,7 @@ function approval(items) {
     schema: APPROVAL_SCHEMA,
     source: { id: 'package:local:test', reference: null },
     manifest: items
-      .map(item => ({
-        id: item.id,
-        kind: item.kind,
-        slug: item.slug,
-        sourceDigest: item.sourceDigest,
-      }))
+      .map(item => ({ id: item.id, kind: item.kind, slug: item.slug, sourceDigest: item.sourceDigest }))
       .sort((left, right) => left.id.localeCompare(right.id)),
     items,
   };
@@ -61,10 +56,8 @@ function approval(items) {
 
 function current(destinations, sources, agents = []) {
   return {
-    destinations: Object.entries(destinations).map(([destination, value]) => ({
-      destination,
-      digest: value,
-    })),
+    destinations: Object.entries(destinations)
+      .map(([destination, value]) => ({ destination, digest: value })),
     sources: Object.entries(sources).map(([id, value]) => ({ id, digest: value })),
     agents,
   };
@@ -188,6 +181,32 @@ test('rejects agent metadata that contradicts the matching current digest', () =
     destination: item.destination, digest: item.plannedDigest, isDefault: false,
   }] });
   assert.throws(() => evaluateImport(approval([item]), snapshot), /planned default metadata/);
+
+  const approvedSnapshot = currentFor([item], {
+    destinations: { [item.destination]: item.approvedDigest },
+    agents: [{ destination: item.destination, digest: item.approvedDigest, isDefault: true }],
+  });
+  assert.throws(() => evaluateImport(approval([item]), approvedSnapshot), /approved default metadata/);
+});
+
+test('rejects malformed manifest, item and current fact combinations', () => {
+  const first = skill('first', { approvedDigest: digest('1'), sourceDigest: digest('2') });
+  const second = skill('second', { approvedDigest: digest('3'), sourceDigest: digest('4') });
+  const unsorted = approval([first, second]);
+  unsorted.manifest.reverse();
+  assert.throws(() => evaluateImport(unsorted, currentFor([first, second])), /sorted by id/);
+  const mismatch = approval([first]);
+  mismatch.manifest[0].sourceDigest = digest('5');
+  assert.throws(() => evaluateImport(mismatch, currentFor([first])), /match its manifest entry/);
+  const duplicate = approval([first]);
+  duplicate.items.push({ ...first });
+  assert.throws(() => evaluateImport(duplicate, currentFor([first])), /duplicate item id/);
+  assert.throws(() => evaluateImport(approval([{ ...first, agent: {} }]), currentFor([first])), /must be null for a skill/);
+  assert.throws(() => evaluateImport(approval([first]), current({}, { [first.id]: first.sourceDigest })), /is missing/);
+  const absent = agent('absent');
+  assert.throws(() => evaluateImport(approval([absent]), currentFor([absent], { agents: [{
+    destination: absent.destination, digest: digest('6'), isDefault: false,
+  }] })), /contains absent destination/);
 });
 
 const overwriteItem = skill('notes', {
@@ -210,6 +229,8 @@ for (const row of [
   { name: 'overwrite at A', item: overwriteItem, currentDigest: digest('2'), outcome: 'unchanged' },
   { name: 'overwrite at other C', item: overwriteItem, currentDigest: digest('3'), outcome: 'stale' },
   { name: 'skip absent at P and A', item: skippedAbsentItem, currentDigest: ABSENT_DIGEST, outcome: 'skipped' },
+  { name: 'agent skip absent at P and A', item: agent('skipped', { decision: 'skip', approvedDigest: ABSENT_DIGEST }), currentDigest: ABSENT_DIGEST, outcome: 'skipped' },
+  { name: 'agent add at A', item: agent('present'), currentDigest: digest('c'), outcome: 'unchanged' },
   { name: 'skip at P and A', item: skippedExistingItem, currentDigest: digest('1'), outcome: 'skipped' },
   { name: 'skip at other C', item: skippedExistingItem, currentDigest: digest('2'), outcome: 'stale' },
 ]) {
@@ -227,7 +248,6 @@ for (const row of [
         : [],
     );
     const result = evaluateImport(input, snapshot);
-
     assert.deepEqual(ids(result[row.outcome]), [row.item.id]);
     if (row.outcome === 'stale') {
       assert.equal(result.status, 'stale');
@@ -272,13 +292,12 @@ test('source bytes are not required when approved bytes are already present', ()
     approval([item]),
     current({ [item.destination]: item.approvedDigest }, { [item.id]: digest('1') }),
   );
-
   assert.equal(result.status, 'ready');
   assert.deepEqual(ids(result.unchanged), [item.id]);
   assert.deepEqual(result.stale, []);
 });
 
-test('a current source item absent from approval cannot enter writes', () => {
+test('a current source item absent from approval cannot enter any outcome', () => {
   const approved = skill();
   const result = evaluateImport(
     approval([approved]),
@@ -287,8 +306,11 @@ test('a current source item absent from approval cannot enter writes', () => {
       { [approved.id]: approved.sourceDigest, 'skill:later': digest('1') },
     ),
   );
-
-  assert.deepEqual(ids(result.writes), [approved.id]);
+  assert.equal(result.status, 'ready');
+  assert.deepEqual(
+    ['writes', 'unchanged', 'skipped', 'blocked', 'stale'].flatMap(key => ids(result[key])),
+    [approved.id],
+  );
 });
 
 test('blocks an added default when the workspace already has one', () => {
@@ -300,7 +322,6 @@ test('blocks an added default when the workspace already has one', () => {
     digest: digest('1'),
     isDefault: true,
   };
-
   const result = evaluateImport(
     approval([incoming]),
     currentFor([incoming], { agents: [existing] }),
@@ -376,11 +397,14 @@ test('keeps an unrelated skill eligible when default choices conflict', () => {
     approvedDigest: digest('5'),
     sourceDigest: digest('6'),
   });
-  const items = [first, unrelated, second];
+  const nonDefault = agent('non-default', {
+    approvedDigest: digest('7'), sourceDigest: digest('8'),
+  });
+  const items = [first, unrelated, nonDefault, second];
   const result = evaluateImport(approval(items), currentFor(items));
   assert.equal(result.status, 'ready');
   assert.deepEqual(ids(result.blocked), [first.id, second.id]);
-  assert.deepEqual(ids(result.writes), [unrelated.id]);
+  assert.deepEqual(ids(result.writes), [nonDefault.id, unrelated.id]);
 });
 
 test('keeps a skipped default and writes an unrelated item', () => {
@@ -407,7 +431,6 @@ test('keeps a skipped default and writes an unrelated item', () => {
       }],
     }),
   );
-
   assert.equal(result.status, 'ready');
   assert.deepEqual(ids(result.skipped), [skipped.id]);
   assert.deepEqual(ids(result.writes), [unrelated.id]);
@@ -455,8 +478,7 @@ test('permuting every input collection produces the same result', () => {
     ],
   });
   const rightCurrent = {
-    destinations: [...leftCurrent.destinations].reverse(),
-    sources: [...leftCurrent.sources].reverse(),
+    destinations: [...leftCurrent.destinations].reverse(), sources: [...leftCurrent.sources].reverse(),
     agents: [...leftCurrent.agents].reverse(),
   };
 
@@ -484,10 +506,7 @@ test('replaying exact approved destinations produces only unchanged outcomes', (
   const result = evaluateImport(
     approval([first, second]),
     current(
-      {
-        [first.destination]: first.approvedDigest,
-        [second.destination]: second.approvedDigest,
-      },
+      { [first.destination]: first.approvedDigest, [second.destination]: second.approvedDigest },
       {},
     ),
   );
@@ -501,11 +520,7 @@ test('write outcomes expose only approved adapter fields', () => {
   const item = skill();
   const result = evaluateImport(approval([item]), currentFor([item]));
 
-  assert.deepEqual(result.writes, [{
-    id: item.id,
-    kind: item.kind,
-    destination: item.destination,
-    approvedDigest: item.approvedDigest,
-    sourceDigest: item.sourceDigest,
-  }]);
+  assert.deepEqual(result.writes, [{ id: item.id, kind: item.kind,
+    destination: item.destination, approvedDigest: item.approvedDigest,
+    sourceDigest: item.sourceDigest }]);
 });
