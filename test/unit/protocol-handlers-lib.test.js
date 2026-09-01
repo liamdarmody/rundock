@@ -28,6 +28,7 @@ const EXPECTED_TYPES = [
   'pick_folder', 'create_workspace', 'set_workspace_mode',
   'get_agents', 'get_runtime_status', 'get_files', 'get_skills', 'get_run',
   'cancel_routine_run',
+  'plan_package_import', 'apply_package_import',
   'get_conversations', 'set_last_active_conversation', 'save_conversation',
   'get_lists', 'create_list', 'delete_list', 'delete_conversation',
   'read_file', 'add_to_team',
