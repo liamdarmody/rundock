@@ -53,6 +53,14 @@ const MUTATIONS = [
     '  const first = writeAsUnit(workspace, writes, { afterStep: options.afterStep });\n'
     + '  const second = writeAsUnit(workspace, [], { replaceDirs, afterStep: options.afterStep });\n'
     + '  const result = { written: [...first.written, ...second.written] };'],
+  [ADAPTER, 'a skill write is verified against the approved digest like any other bytes',
+    '  if (write.approvedDigest !== write.sourceDigest) {\n'
+    + '    throw new Error(`bytes for ${write.id} do not match the approved digest; refusing to write`);\n'
+    + '  }\n',
+    ''],
+  [ADAPTER, 'a failed observation aborts instead of reading as absence',
+    "    if (e.code === 'ENOENT' || e.code === 'ENOTDIR') return ABSENT_DIGEST;\n    throw e;",
+    '    return ABSENT_DIGEST;'],
   [ADAPTER, 'recovery runs before the snapshot, not merely at some point',
     '  recoverPendingWrites(workspace);\n  const current = snapshotCurrent(workspace, sourceRoot, approval);',
     '  const current = snapshotCurrent(workspace, sourceRoot, approval);\n  recoverPendingWrites(workspace);'],

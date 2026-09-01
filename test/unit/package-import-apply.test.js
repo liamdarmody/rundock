@@ -13,6 +13,7 @@ const {
   withProvenance,
 } = require('../../lib/packages/import-apply.js');
 const { journalPath, IMPORT_SUBDIR } = require('../../lib/workspace/atomic-write.js');
+const { readNormalisedFile, parseAgentFrontmatter } = require('../../lib/agents/discovery.js');
 const { makeTempDir } = require('../helpers/workspace.js');
 
 const SOURCE_ID = 'github.com/example/pack';
@@ -156,6 +157,26 @@ describe('canonical digests', () => {
   });
 });
 
+describe('withProvenance', () => {
+  test('inserts the source line inside existing frontmatter, pinned byte-for-byte', () => {
+    assert.strictEqual(
+      withProvenance('---\nname: writer\n---\n\nBody.\n', 'a/b'),
+      '---\nname: writer\nsource: a/b\n---\n\nBody.\n',
+    );
+    assert.strictEqual(
+      withProvenance('---\nsource: kept/value\n---\n\nBody.\n', 'a/b'),
+      '---\nsource: kept/value\n---\n\nBody.\n',
+    );
+  });
+
+  test('creates frontmatter when the agent has none, pinned byte-for-byte', () => {
+    assert.strictEqual(
+      withProvenance('Just a body.\n', 'a/b'),
+      '---\nsource: a/b\n---\n\nJust a body.\n',
+    );
+  });
+});
+
 describe('snapshotCurrent', () => {
   test('reports destination digests for file, directory and absent destinations', () => {
     const { workspace, sourceRoot, approval } = fixture();
@@ -187,6 +208,49 @@ describe('snapshotCurrent', () => {
 });
 
 describe('the snapshot refuses what it cannot represent', () => {
+  test('every default declaration form discovery accepts is seen as a default', () => {
+    const { workspace, sourceRoot, approval } = fixture();
+    write(workspace, '.claude/agents/bybool.md', '---\nisDefault: true\n---\n\nA.\n');
+    write(workspace, '.claude/agents/bystring.md', '---\nisDefault: "true"\n---\n\nB.\n');
+    write(workspace, '.claude/agents/byorder.md', '---\norder: 0\n---\n\nC.\n');
+    write(workspace, '.claude/agents/plain.md', AGENT_TEXT);
+    const current = snapshotCurrent(workspace, sourceRoot, approval);
+    assert.deepStrictEqual(current.agents.map((a) => [a.destination, a.isDefault]), [
+      ['.claude/agents/bybool.md', true],
+      ['.claude/agents/byorder.md', true],
+      ['.claude/agents/bystring.md', true],
+      ['.claude/agents/plain.md', false],
+    ]);
+  });
+
+  test('a non-canonical default declared via isDefault refuses the import too', () => {
+    const { workspace, sourceRoot, approval } = fixture();
+    write(workspace, '.claude/agents/Not A Slug Two.md', '---\nisDefault: true\n---\n\nD.\n');
+    const before = tree(workspace);
+    assert.throws(() => applyImport(workspace, sourceRoot, approval), /outside canonical naming/);
+    assert.deepStrictEqual(tree(workspace), before);
+  });
+
+  test('a destination that cannot be observed aborts rather than reading as absent', (t) => {
+    if (process.getuid && process.getuid() === 0) { t.skip('root ignores modes'); return; }
+    const { workspace, sourceRoot, approval, before } = fixture();
+    const skills = path.join(workspace, '.claude', 'skills');
+    fs.chmodSync(skills, 0o000);
+    try {
+      assert.throws(() => applyImport(workspace, sourceRoot, approval), /EACCES|EPERM/);
+    } finally {
+      fs.chmodSync(skills, 0o755);
+    }
+    assert.deepStrictEqual(tree(workspace), before);
+  });
+
+  test('a file standing where the agents directory belongs aborts the snapshot', () => {
+    const { workspace, sourceRoot, approval, before } = fixture();
+    write(workspace, '.claude/agents', 'not a directory');
+    assert.throws(() => applyImport(workspace, sourceRoot, approval), /ENOTDIR/);
+    assert.deepStrictEqual(tree(workspace), [...before, '.claude/agents:' + Buffer.from('not a directory').toString('base64')].sort());
+  });
+
   test('a symlink at a canonical agent path aborts the snapshot and the apply', () => {
     const { workspace, sourceRoot, approval } = fixture();
     write(workspace, 'real.md', DEFAULT_AGENT_A);
@@ -263,6 +327,10 @@ describe('applyImport', () => {
     // introduced nothing beyond them.
     assert.strictEqual(read(workspace, '.claude/agents/scribe.md'), approvedText);
     assert.strictEqual(read(workspace, '.claude/agents/scribe.md').match(/^source:/gm).length, 1);
+    // The product's own frontmatter reader must see the value, so a source
+    // line landing outside the frontmatter block fails here.
+    const meta = parseAgentFrontmatter(readNormalisedFile(path.join(workspace, '.claude/agents/scribe.md')));
+    assert.strictEqual(meta.source, SOURCE_ID);
     assert.strictEqual(read(workspace, 'notes/keep.md'), 'foreign');
   });
 
@@ -291,6 +359,14 @@ describe('applyImport', () => {
     const item = approval.items.find((i) => i.id === 'agent:scribe');
     item.approvedDigest = digestFile(Buffer.from('something else'));
     item.agent.approvedDefault = false;
+    assert.throws(() => applyImport(workspace, sourceRoot, approval), /do not match the approved digest/);
+    assert.deepStrictEqual(tree(workspace), before);
+  });
+
+  test('a skill whose approved digest disagrees with its source is refused with nothing written', () => {
+    const { workspace, sourceRoot, approval, before } = fixture();
+    const item = approval.items.find((i) => i.id === 'skill:writer');
+    item.approvedDigest = digestFile(Buffer.from('some other tree'));
     assert.throws(() => applyImport(workspace, sourceRoot, approval), /do not match the approved digest/);
     assert.deepStrictEqual(tree(workspace), before);
   });
