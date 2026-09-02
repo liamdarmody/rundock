@@ -1410,7 +1410,7 @@ test('the signaller the scheduler imports is real, takes a child handle, and end
 // stronger reading, where the signal never left at all and the child then
 // exited successfully of its own accord, so that the meaning cannot be
 // quietly narrowed later without this turning red.
-test('a run whose stop never left, and which then ends well, still reads as stopped', async () => {
+test('a run whose stop never left, and which then ends well, reads as what it really was', async () => {
   await withTempWorkspaceAsync(async (dir) => {
     await withTempHomeAsync(async () => {
       const child = Object.assign(new EventEmitter(), { pid: 4245 });
@@ -1419,20 +1419,22 @@ test('a run whose stop never left, and which then ends well, still reads as stop
         assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true, 'the run started');
         const [live] = sched.runningRuns();
 
-        assert.strictEqual(sched.cancelRun(live.id), true, 'a stop was asked for');
-        assert.strictEqual(attempts, 1, 'and reached the signaller');
+        // CANCELLED MEANS DELIVERED. The signaller throws, so the ask never
+        // went, and the caller is told so rather than told a comfortable yes.
+        assert.strictEqual(sched.cancelRun(live.id), false, 'the ask did not go, and the caller is told');
+        assert.strictEqual(attempts, 1, 'though it did reach the signaller');
 
         // The child exits ZERO, on its own, untouched: the signal never left,
         // so nothing about this ending was caused by the stop.
         child.emit('close', 0);
         assert.ok(await until(() => sched.routineState[KEY].status !== 'running'), 'the run ended');
 
-        assert.strictEqual(runRecords(dir)[0].status, 'cancelled',
-          'and reads as stopped, because a stop was asked for before it ended');
-        assert.notStrictEqual(runRecords(dir)[0].status, 'succeeded',
-          'rather than as a run nobody had asked to stop, which is the reading this word does not carry');
-        assert.strictEqual(sched.routineState[KEY].status, 'cancelled',
-          'with both stores saying the same thing about it');
+        assert.strictEqual(runRecords(dir)[0].status, 'succeeded',
+          'and reads as the ending it actually had, because no stop was ever delivered');
+        assert.notStrictEqual(runRecords(dir)[0].status, 'cancelled',
+          'never as a stop the user would wrongly believe worked');
+        assert.strictEqual(sched.routineState[KEY].status, 'completed',
+          'in the vocabulary that store uses for the same fact');
       }, () => { attempts += 1; throw new Error('no such process'); });
     });
   });
@@ -1563,7 +1565,7 @@ test('stopping a codex run sends the real client an interrupt naming the thread 
 // intent is remembered and honoured when the turn appears, and the client
 // holds the interrupt until the turn it names has been acknowledged, so it is
 // sent once and it is not refused for arriving early.
-test('a codex run stopped before its turn exists is still stopped, once, when it appears', async () => {
+test('a codex run stopped before its turn exists never starts one', async () => {
   await withTempWorkspaceAsync(async (dir) => {
     await withTempHomeAsync(async () => {
       const CODEX_AGENT = realCodexAgent(dir);
@@ -1580,25 +1582,62 @@ test('a codex run stopped before its turn exists is still stopped, once, when it
           assert.ok(live, 'and the run is reachable all the same');
           assert.strictEqual(sched.cancelRun(live.id), true, 'so it can be stopped now');
 
-          const started = await untilRequest(dir, 'turn/start');
-          const interrupt = await untilRequest(dir, 'turn/interrupt');
-          assert.ok(interrupt, 'the stop was honoured once the turn existed');
-          assert.strictEqual(interrupt.params.threadId, started.params.threadId,
-            'naming the turn that was started after the stop was asked for');
-          // Both positions taken from ONE reading of the log: each reading
-          // parses fresh objects, so comparing one reading's entry against
-          // another's finds nothing and passes for the wrong reason.
-          const wire = stubRequests(dir);
-          const startedAtIndex = wire.findIndex(e => e.method === 'turn/start');
-          const interruptedAtIndex = wire.findIndex(e => e.method === 'turn/interrupt');
-          assert.ok(startedAtIndex >= 0 && interruptedAtIndex > startedAtIndex,
-            'and it was sent after the turn it names was started, rather than into nothing');
-
-          assert.ok(await until(() => sched.routineState[KEY].status !== 'running'), 'and the turn ended');
+          // THE ENTIRE PURPOSE OF STOPPING A ROUTINE IS TO STOP IT DOING
+          // THINGS. A stop that arrived before the turn is honoured by never
+          // starting the turn: no thread, no turn, no interrupt, because
+          // there is nothing to interrupt, asserted on the wire.
+          assert.ok(await until(() => sched.routineState[KEY].status !== 'running'), 'the run ended');
           assert.strictEqual(sched.routineState[KEY].status, 'cancelled', 'recorded as a stop');
-          assert.strictEqual(stubRequests(dir).filter(e => e.method === 'turn/interrupt').length, 1,
-            'and exactly one interrupt was sent, not one per await it waited through');
+          const wire = stubRequests(dir);
+          assert.deepStrictEqual(wire.filter(e => e.method === 'thread/start'), [],
+            'no thread was started either: the stop arrived before the thread, so the '
+            + 'earlier of the two checkpoints is the one that has to hold, and a run '
+            + 'that started a thread it never used would prove only the later one');
+          assert.deepStrictEqual(wire.filter(e => e.method === 'turn/start'), [],
+            'no turn start ever reached the app server');
+          assert.deepStrictEqual(wire.filter(e => e.method === 'turn/interrupt'), [],
+            'and nothing needed interrupting, because nothing was started');
         });
+      });
+    });
+  });
+});
+
+// The LATER of the two checkpoints, witnessed on its own. The test above
+// cancels before the thread, so the earlier checkpoint honours the stop and
+// the later one is never consulted; deleting the later one alone would leave
+// that test green. This one lets the run pass the earlier checkpoint, lands
+// the stop while the thread is still starting, and requires that no turn
+// begins: the window between thread and turn is exactly where a run gains
+// write access, so this is the point at which the check most matters.
+test('a stop that lands while the thread is starting still prevents the turn', async () => {
+  await withTempWorkspaceAsync(async (dir) => {
+    await withTempHomeAsync(async () => {
+      const CODEX_AGENT = realCodexAgent(dir);
+      const { thread } = await realCodexRun();
+      let releaseThread;
+      const threadGate = new Promise((res) => { releaseThread = res; });
+      let threadAsked;
+      const askedThread = new Promise((res) => { threadAsked = res; });
+      let turnsStarted = 0;
+      const server = {
+        startThread: async () => { threadAsked(); await threadGate; return thread; },
+        startTurn: () => { turnsStarted += 1; return new EventEmitter(); },
+        interruptTurn: async () => {},
+      };
+      await withFakeCodex(server, async (sched) => {
+        assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true, 'the run started');
+        // PAST THE EARLIER CHECKPOINT, proven rather than assumed: the thread
+        // request has been made, so the first check already answered "go on".
+        await askedThread;
+        const [live] = sched.runningRuns();
+        assert.ok(live, 'the run is reachable while its thread starts');
+        assert.strictEqual(sched.cancelRun(live.id), true, 'and the stop is accepted there');
+        releaseThread();
+        assert.ok(await until(() => sched.routineState[KEY].status !== 'running'), 'the run ended');
+        assert.strictEqual(sched.routineState[KEY].status, 'cancelled', 'recorded as a stop');
+        assert.strictEqual(turnsStarted, 0,
+          'and the turn never started: a thread the stop overtook is abandoned before the work');
       });
     });
   });
@@ -1618,19 +1657,19 @@ test('a stop that could not be sent is retried by the next request, and one that
         assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true, 'the run started');
         const [live] = sched.runningRuns();
 
-        assert.strictEqual(sched.cancelRun(live.id), true, 'the first stop was asked for');
-        assert.strictEqual(attempts.length, 1, 'and reached the signaller');
+        assert.strictEqual(sched.cancelRun(live.id), false, 'the first ask did not go, and says so');
+        assert.strictEqual(attempts.length, 1, 'though it reached the signaller');
         assert.strictEqual(sched.routineState[KEY].status, 'running',
           'the run is still going, because nothing was actually signalled');
 
-        assert.strictEqual(sched.cancelRun(live.id), true, 'the second stop was asked for too');
+        assert.strictEqual(sched.cancelRun(live.id), false, 'the second ask did not go either');
         assert.strictEqual(attempts.length, 2,
           'and reached the signaller again, because the first signal never left');
 
         // Now let one land. After that the guard applies: a signal that did go
         // out is not sent a second time to a process id that may be reused.
         refuse = false;
-        assert.strictEqual(sched.cancelRun(live.id), true, 'the third stop was asked for');
+        assert.strictEqual(sched.cancelRun(live.id), true, 'the third ask went');
         assert.strictEqual(attempts.length, 3, 'and landed');
         assert.strictEqual(sched.cancelRun(live.id), true, 'a fourth request is still answered');
         assert.strictEqual(attempts.length, 3,

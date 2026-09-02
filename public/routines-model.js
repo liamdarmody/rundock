@@ -72,6 +72,24 @@
     'caught-up': { tone: 'ok-quiet', lead: 'Caught up' },
     'missed': { tone: 'neutral', lead: 'Missed' },
     'failed': { tone: 'failed', lead: 'Failed' },
+    // A run somebody deliberately stopped. History, like a missed slot,
+    // because a stop the user chose is neither a success to celebrate nor a
+    // failure to alarm about, and the rail's dot stays down for the same
+    // reason paused is excluded there: the user already decided.
+    'stopped': { tone: 'neutral', lead: 'Stopped' },
+  };
+
+  // Every status word the scheduler can record, named so the walk that reads
+  // the scheduler's own vocabulary can prove this list handles each of them,
+  // and a word added there without a mapping here fails a test rather than
+  // rendering as whatever the time-based reading would have invented.
+  const RUN_STATUS_WORDS = {
+    running: 'in-flight',
+    cancelled: 'stopped',
+    interrupted: 'failed',
+    failed: 'failed',
+    completed: 'time-based',
+    succeeded: 'time-based',
   };
 
   /**
@@ -642,6 +660,9 @@
     const heldBack = input && input.enabled === false;
     if (missedSlot && (!started || missedSlot > started) && !heldBack) return 'missed';
     if (!started) return null;
+    // A DELIBERATE STOP IS ITS OWN OUTCOME, checked before the time-based
+    // reading because a stopped run that started on time is not "Ran".
+    if (statusWord === 'cancelled') return 'stopped';
     if (lastCompletedRunFailed(input)) return 'failed';
     const lastSlot = asDate(input && input.lastSlot);
     // How late the run STARTED, with nothing about how long it then took.
@@ -672,6 +693,8 @@
       text = `Caught up: ran ${timeWords(input.lastStart, now, zone)}, due ${clockWords(input.lastSlot)}`;
     } else if (kind === 'failed') {
       text = `Failed: ${timeWords(input.lastStart, now, zone)}`;
+    } else if (kind === 'stopped') {
+      text = `Stopped ${timeWords(input.lastStart, now, zone)}`;
     } else {
       text = `Ran ${timeWords(input.lastStart, now, zone)}`;
     }
@@ -738,9 +761,21 @@
    *
    * @param {{paused?: boolean, runOn?: any, schedule?: any, scheduleReadable?: boolean}} [input]
    */
+  // The refusal words this row understands, named so the walk that reads the
+  // scheduler's routineRefusal out of its source can prove the two lists are
+  // one: a reason added there without a word here fails a test.
+  const REFUSALS_UNDERSTOOD = ['paused', 'enabled', 'runOn', 'prompt'];
+
   function somethingElseStopsIt(input) {
     if (!input) return false;
-    if (input.paused) return true;
+    // THE TICK'S OWN ANSWER, published beside the roster, is the single
+    // source for the reasons the tick owns. 'enabled' alone does not stop
+    // the offer, because flipping enabled is the thing the offer does; any
+    // other reason, including one this row has never heard of, stops it,
+    // which is the fail-safe direction for a sentence that promises a run.
+    if (input.refusal !== undefined) {
+      if (input.refusal !== null && input.refusal !== 'enabled') return true;
+    } else if (input.paused) return true;
     // ASKED OF THE SCHEDULE ITSELF, NOT OF THE LINE THE ROW WOULD DRAW.
     //
     // This used to lean on scheduleProblem, which deliberately says nothing
@@ -754,7 +789,7 @@
     // the same tick it would have run, so an offer here would promise a run
     // that the press cannot deliver, on a row that is already carrying the
     // thing to fix first.
-    if (!hasPromptToRun(input)) return true;
+    if (input.refusal === undefined && !hasPromptToRun(input)) return true;
     // A ROUTINE NOTHING IS SERVING IS NOT STARTED BY TURNING IT ON, and the
     // offer's whole value is that it says what pressing it does. There is one
     // scheduler and it is somewhere else, so the switch is not what is holding
@@ -763,7 +798,7 @@
     if (!isServed(input)) return true;
     // A roster that did not name a run target says nothing, for the same
     // reason an absent scheduleReadable says nothing: silence is not a fault.
-    if (input.runOn !== undefined && input.runOn !== null) {
+    if (input.refusal === undefined && input.runOn !== undefined && input.runOn !== null) {
       const option = editor.runOnOption(input.runOn);
       if (!option || !option.selectable) return true;
     }
@@ -1131,6 +1166,7 @@
     actionProblem, emptyState, header,
     dayWords, clockWords, zoneWords, timeWords, workspaceWords,
     scheduleWords, routineSentence, sentenceParts,
+    RUN_STATUS_WORDS, REFUSALS_UNDERSTOOD,
     outcomeOf, lastCompletedRunFailed, anyFailure, runStatus, nextRunLabel, enableOffer, scheduleProblem, promptProblem, isServed, workspaceNote, somethingElseStopsIt, orderByNextRun, row, deleteConfirmation,
   };
 }));

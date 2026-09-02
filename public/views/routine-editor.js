@@ -148,7 +148,7 @@
       </div>`;
     }
 
-    let h = `<p class="re-lead">${escText(m.stepLead({ agentName: state.agentName }))}</p>`;
+    let h = `<p class="re-lead">${escText(m.stepLead({ agentName: state.agentName, skills: state.skills }))}</p>`;
     h += '<div class="re-list">';
     for (const option of choice.options) {
       const on = option.key === state.selectedKey;
@@ -525,10 +525,15 @@
     openRoutineEditor({
       agentId: only ? only.id : null,
       agentName: only ? ((rostered && rostered.displayName) || only.name || null) : null,
-      // Scoped to the one skill when the agent came with it. Otherwise every
-      // skill, which is what makes the picker agent-agnostic, with the pressed
-      // one first so the reader is never asked to find it again.
-      skills: only ? [skill] : (skill ? [skill].concat(list.filter(s => s.id !== skill.id)) : list),
+      // SCOPED TO THE PRESSED SKILL EITHER WAY. The reader already chose the
+      // skill by pressing its control; the only open question is which agent,
+      // so the picker offers one row per agent that has this skill and asks
+      // nothing it was already told. Offering every skill again, merely
+      // ordered with the pressed one first, was asking the reader to make
+      // the same choice twice, and the two criteria that appeared to force
+      // that shape are both honoured by this one: the skill stays chosen,
+      // and no agent is guessed on the reader's behalf.
+      skills: skill ? [skill] : list,
       step: only ? 'schedule' : 'pick',
       selectedKey: only ? `${skill.id}:${only.id}` : null,
       originSkillId: skill ? skill.id : null,

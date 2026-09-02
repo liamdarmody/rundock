@@ -139,6 +139,10 @@
   const STEP_LEADS = {
     pick: 'Step 1 of 2. Pick a skill {agent} already has.',
     pickAny: 'Step 1 of 2. Pick a skill any of your agents already has.',
+    // The lead for a picker that already knows the skill and not the agent:
+    // pressing a skill's own control when several agents have it. Asking the
+    // reader to pick a skill there would ask a question they just answered.
+    pickAgent: 'Step 1 of 2. Pick which agent runs {skill}.',
     schedule: 'Step 2 of 2. Say when to run it, in plain terms.',
     empty: 'Routines schedule skills your agents already have. Build one and it will show up here.',
     loading: 'Looking for skills your agents can run.',
@@ -344,8 +348,14 @@
 
   function stepLead(input) {
     const agentName = (input && input.agentName) || null;
-    if (!agentName) return STEP_LEADS.pickAny;
-    return STEP_LEADS.pick.replace('{agent}', agentName);
+    if (agentName) return STEP_LEADS.pick.replace('{agent}', agentName);
+    // One skill, several agents that have it: the skill is settled and the
+    // open question is the agent, so the lead asks that question and no other.
+    const skills = (input && input.skills) || [];
+    if (skills.length === 1 && assignedAgentsOf(skills[0]).length > 1) {
+      return STEP_LEADS.pickAgent.replace('{skill}', skills[0].name || skills[0].id);
+    }
+    return STEP_LEADS.pickAny;
   }
 
   // ===== THE SENTENCE BUILDER =====
