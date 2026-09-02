@@ -155,8 +155,8 @@ const MUTATIONS = [
     '      const hour12 = hour % 12 === 0 ? 12 : hour % 12;',
     '      const hour12 = hour % 12;'],
   [MODEL, 'the lead line names the agent the choice was scoped to',
-    "    return STEP_LEADS.pick.replace('{agent}', agentName);",
-    '    return STEP_LEADS.pickAny;'],
+    "    if (agentName) return STEP_LEADS.pick.replace('{agent}', agentName);",
+    '    if (agentName) return STEP_LEADS.pickAny;'],
 
   // The render. THE DEFECT IN ITS OTHER FORM: a model with the right words and
   // a view that prints the wrong ones.
@@ -268,11 +268,12 @@ const MUTATIONS = [
   [SKILL_DOOR, 'the skill breadcrumb leaves even when the skill has gone',
     '    if (skillId && canSelectSkill(skillId)) { selectSkill(skillId); return; }',
     "    if (skillId && typeof selectSkill === 'function') { selectSkill(skillId); return; }"],
-  // Agent-agnostic, but the reader is not asked to find the skill they
-  // pressed a second time.
-  [SKILL_DOOR, 'the pressed skill is ordered first in the agent-agnostic picker',
-    '      skills: only ? [skill] : (skill ? [skill].concat(list.filter(s => s.id !== skill.id)) : list),',
-    '      skills: only ? [skill] : list,'],
+  // THE ORDERED-FIRST GUARD IS GONE BECAUSE ITS RULE IS. The ambiguous door
+  // no longer offers the full list with the pressed skill first: it is scoped
+  // to the pressed skill outright, and that rule has its own guard in
+  // mutate-routines-truth-guards.js ('the ambiguous door is scoped to the
+  // pressed skill'). A guard kept here would pin the overturned shape and
+  // report its own target as unmutated forever.
   [SKILL_DOOR, 'leaving by that breadcrumb goes back to the skill it names',
     '    if (skillId && canSelectSkill(skillId)) { selectSkill(skillId); return; }\n',
     ''],

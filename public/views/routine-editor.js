@@ -148,7 +148,7 @@
       </div>`;
     }
 
-    let h = `<p class="re-lead">${escText(m.stepLead({ agentName: state.agentName }))}</p>`;
+    let h = `<p class="re-lead">${escText(m.stepLead({ agentName: state.agentName, skills: state.skills }))}</p>`;
     h += '<div class="re-list">';
     for (const option of choice.options) {
       const on = option.key === state.selectedKey;
@@ -490,15 +490,14 @@
    * pressed a control that said "Schedule this skill" and lands on the step
    * that schedules it.
    *
-   * Several agents have it: the editor opens the agent-agnostic picker with
-   * nothing selected, because choosing an agent on the reader's behalf would
-   * be a guess wearing the shape of a decision. They would only discover which
-   * agent they had been given by reading the routine afterwards.
-   *
-   * The pressed skill's rows come FIRST in that picker, one per agent that
-   * could run it. The reader chose the skill by being on its page, so the only
-   * thing left to choose is the agent, and they should never have to find the
-   * skill a second time to do it.
+   * Several agents have it: the editor opens the picker scoped to the
+   * pressed skill, one row per agent that has it, nothing selected. Choosing
+   * an agent on the reader's behalf would be a guess wearing the shape of a
+   * decision; offering every skill again would re-ask the question the press
+   * already answered. So the skill stays chosen and the only choice offered
+   * is which agent. The one exception is the race where the pressed skill
+   * has lost its last agent since the page rendered, which falls back to the
+   * full picker; the reason is recorded at the call site.
    *
    * Either way the breadcrumb goes back to the skill, because that is where
    * the press came from.
@@ -525,10 +524,21 @@
     openRoutineEditor({
       agentId: only ? only.id : null,
       agentName: only ? ((rostered && rostered.displayName) || only.name || null) : null,
-      // Scoped to the one skill when the agent came with it. Otherwise every
-      // skill, which is what makes the picker agent-agnostic, with the pressed
-      // one first so the reader is never asked to find it again.
-      skills: only ? [skill] : (skill ? [skill].concat(list.filter(s => s.id !== skill.id)) : list),
+      // SCOPED TO THE PRESSED SKILL, WHILE THE SKILL CAN STILL BE SCHEDULED.
+      // The reader already chose the skill by pressing its control; the only
+      // open question is which agent, so the picker offers one row per agent
+      // that has this skill and asks nothing it was already told. Offering
+      // every skill again, merely ordered with the pressed one first, was
+      // asking the reader to make the same choice twice.
+      //
+      // THE ASSIGNMENT CHECK IS THE RACE, not a nicety. The skill list is
+      // replaced by any background save or workspace switch, so the control
+      // can be pressed on a skill that has since lost its last agent. Scoped
+      // to that skill alone the picker would have zero rows, and zero rows
+      // renders the build-a-skill offer, in a workspace that has skills. The
+      // full picker is what is true of the workspace at that moment, and it
+      // is what this door showed for that race before it was scoped.
+      skills: (skill && assigned.length) ? [skill] : list,
       step: only ? 'schedule' : 'pick',
       selectedKey: only ? `${skill.id}:${only.id}` : null,
       originSkillId: skill ? skill.id : null,

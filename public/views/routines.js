@@ -283,6 +283,11 @@ function rowHtml(entry, index, withActions) {
     // roster. Passed through untouched: a client that decided this for itself
     // would be a second copy of a grammar that lives beside the tick.
     scheduleReadable: r.scheduleReadable,
+    // THE SCHEDULER'S OWN REFUSAL, published beside the roster by the same
+    // enrichment that stamps scheduleReadable, and passed through untouched
+    // for the same reason: the row's offer promises what the tick would do,
+    // and the tick's own answer is the only copy of that which cannot drift.
+    refusal: r.refusal,
     // WHAT THE ROUTINE SAYS TO DO, passed as the file answered it. The model
     // asks whether there is anything there at all, which the tick's own gate
     // also asks: a routine with nothing to send is refused rather than run,

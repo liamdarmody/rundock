@@ -81,10 +81,10 @@ const DOORS = [
     pressedBy: 'the panel door opens the editor on whatever the panel is scoped to',
   },
   // The fifth door, and the only one that starts from the SKILL rather than
-  // from an agent, a list or a panel. It is scoped only when exactly one agent
-  // has the skill; a skill two agents share opens the agent-agnostic picker
-  // instead, and a skill nobody has offers no door at all, both pressed by
-  // their own tests below.
+  // from an agent, a list or a panel. It lands on the schedule step only when
+  // exactly one agent has the skill; a skill two agents share opens a picker
+  // scoped to that skill, asking only which agent, and a skill nobody has
+  // offers no door at all, both pressed by their own tests below.
   {
     call: 'addRoutineForSkill',
     file: 'views/skills.js',
@@ -410,9 +410,10 @@ describe('the doors, pressed', () => {
 
   // A skill can be assigned to more than one agent. Taking the first is a
   // guess wearing the shape of a decision, so the ambiguous case opens the
-  // agent-agnostic picker that already exists for it and lets the reader say
-  // which agent.
-  test('a skill two agents share opens the agent-agnostic picker rather than guessing', () => {
+  // picker scoped to the pressed skill and lets the reader say which agent.
+  // It keeps what the reader already decided: the skill stays chosen, the
+  // only rows offered are its agents, and none of them is selected for them.
+  test('a skill two agents share keeps the skill and asks only which agent', () => {
     const { doc, w, dom } = shell();
     // The pressed skill is deliberately NOT first in the workspace list, so
     // the ordering assertion below can fail. With it first the assertion would
@@ -428,21 +429,23 @@ describe('the doors, pressed', () => {
 
     press(doc, '[data-skills-action="schedule-skill"]');
 
-    // Not the schedule step: nothing has been decided, so nothing is shown as
-    // decided.
+    // Not the schedule step: the agent has not been decided, so nothing is
+    // shown as decided.
     assert.strictEqual(doc.querySelector('select[data-routine-field="frequency"]'), null,
       'an ambiguous skill must not land on the schedule step, which would mean an agent was chosen');
-    assert.match(editorText(doc), /Pick a skill any of your agents already has/,
-      'the agent-agnostic lead, which is the picker that already exists for this case');
-    // The whole picker is offered and nothing is selected, because choosing an
-    // agent on the reader's behalf would be a guess. What that owes them is
-    // that the skill they pressed is not something they have to find again,
-    // so its rows come first.
+    // The lead asks the one question that is open. The reader chose the skill
+    // by pressing its control; asking them to pick a skill again would ask a
+    // question they just answered.
+    assert.match(editorText(doc), /Pick which agent runs Compile the ops summary/,
+      'the lead names the pressed skill and asks only which agent runs it');
+    // The picker keeps the skill and offers only the agent choice: one row per
+    // agent that has the pressed skill, and no other skill, because every
+    // other skill is a choice the reader already declined by pressing this
+    // one.
     assert.deepStrictEqual(
       [...doc.querySelectorAll('[data-skill-key]')].map(r => r.getAttribute('data-skill-key')),
-      ['ops-summary:piper', 'ops-summary:doc', 'reading-digest:doc'],
-      'the pressed skill\'s rows come first, one per agent that could run it, and every other '
-      + 'skill is still offered because the picker stays agent-agnostic',
+      ['ops-summary:piper', 'ops-summary:doc'],
+      'one row per agent that has the pressed skill, and nothing else on offer',
     );
     assert.strictEqual(doc.querySelector('.re-row.sel'), null,
       'nothing is preselected, because preselecting one of two agents is the guess this avoids');
