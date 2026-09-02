@@ -146,7 +146,7 @@ test('userBubbleHtml renders a bare bubble with no sender line', () => {
 
 // ── module shape ────────────────────────────────────────────────────────────
 
-test('module exports exactly its eight helpers and nothing else', () => {
+test('module exports exactly its nine helpers and nothing else', () => {
   // The surface is enumerated so adding a public helper is a deliberate edit
   // to this test rather than a side effect.
   assert.deepStrictEqual(Object.keys(require('../../public/chat-markup.js')).sort(), [
@@ -156,6 +156,9 @@ test('module exports exactly its eight helpers and nothing else', () => {
     'delegationDividerHtml',
     'msgTimeHtml',
     'permissionResolvedHtml',
+    // The colour judgement, exported so the mutation harness and the payload
+    // tests reach the rule itself rather than only its effect on one builder.
+    'safeColour',
     'thinkingIndicatorHtml',
     'userBubbleHtml',
   ]);

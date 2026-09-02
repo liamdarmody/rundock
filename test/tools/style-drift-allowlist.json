@@ -156,11 +156,18 @@
     }
   },
   "public/styles/views/settings.css": {
-    "why": "Two shadow blacks. There is no elevation scale, so every surface picked its own alpha. Waiting on a shadow scale in tokens.css. The remaining radius is deliberately off the scale: it is the outer half of a concentric pair, with four pixels of padding around an inner at --radius-md, so inner equals outer minus padding and the curves agree. Concentricity beats scale membership, and it is recorded beside the rule and in tokens.css.",
+    "why": "Three literals predate this entry: the mode-toggle's 10px outer radius is the outer half of a concentric pair (inner token radius plus padding, documented in-file), and the two black alpha shadows rgba(0,0,0,0.08) and rgba(0,0,0,0.18) are one-off elevation tints with no shadow token yet. New with the Packages section: the install spinner's 0.8s revolution period, a continuous rotation rather than a UI transition, sitting above the transition duration scale.",
     "allow": {
       "rgba(0,0,0,0.08)": 1,
       "rgba(0,0,0,0.18)": 1,
-      "10px": 1
+      "10px": 1,
+      "0.8s": 1
+    }
+  },
+  "public/styles/views/routine-editor.css": {
+    "why": "One shadow black, written once in the rule .re-select and .re-pill share. The design review pass gave the sentence's two inline fields a raised-chip shadow because a hairline --border alone did not read as a control on --card in both themes: --elevated sits above --card in light mode (elevated is white) and below it in dark mode (elevated sits between surface and card), so a border-only field looked like a lift in one theme and a well in the other with nothing to anchor either reading. Reused the exact value .profile-card and .settings-card already shade a raised card with, rather than adding a fourth near-identical black. Waiting on a shadow scale in tokens.css, same as those two files.",
+    "allow": {
+      "rgba(0,0,0,0.08)": 1
     }
   },
   "public/views/find.js": {

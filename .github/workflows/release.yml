@@ -86,9 +86,59 @@ jobs:
     name: Packaged-app smoke test
     uses: ./.github/workflows/smoke.yml
 
+  # ---------------------------------------------------------------------------
+  # Create the draft release once, before either platform build runs.
+  # electron-builder's own "create if the release is missing" check is not
+  # safe to rely on: the Windows job builds two targets (NSIS installer and
+  # portable exe) in one invocation, and on v0.12.0 both targets' uploads
+  # reached that check in the same instant, both saw nothing there, and both
+  # created a release. The installer landed on one duplicate, its own
+  # blockmap on the other, a release the auto-updater cannot diff against,
+  # not merely a cosmetic double entry.
+  #
+  # Idempotent: a re-run of this job, or a retry after a prior attempt
+  # partially succeeded, finds the release it already made and does nothing
+  # further. Draft releases are not addressable via /releases/tags/<tag> (see
+  # the finalize job below), so the existence check lists and matches on
+  # tag_name instead of trusting a direct lookup.
+  # ---------------------------------------------------------------------------
+  create-release:
+    name: Create the draft release
+    needs: [test, e2e, smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Extract release name and notes from the changelog
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          node scripts/release-notes.js "$VERSION" --out release-info
+
+      - name: Create the draft release if it does not already exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          EXISTING=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
+            --jq ".[] | select(.tag_name==\"${GITHUB_REF_NAME}\") | .id" | head -1)
+          if [ -n "$EXISTING" ]; then
+            echo "Release $EXISTING already exists for $GITHUB_REF_NAME; leaving it as is."
+            exit 0
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --draft \
+            --title "$(cat release-info/release-name.txt)" \
+            --notes-file release-info/release-notes.md
+          echo "Created draft release for $GITHUB_REF_NAME."
+
   macos:
     name: Build macOS (arm64 + x64)
-    needs: [test, e2e, smoke]
+    needs: [test, e2e, smoke, create-release]
     runs-on: macos-latest
     # Declares the protected release environment, which is where the signing
     # secrets now live. They were repository secrets, readable by ANY workflow
@@ -164,7 +214,7 @@ jobs:
   # ---------------------------------------------------------------------------
   windows:
     name: Build Windows (x64)
-    needs: [test, e2e, smoke]
+    needs: [test, e2e, smoke, create-release]
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -205,9 +255,10 @@ jobs:
 
       - name: Build and publish
         # Use bash (available on Windows runners) so version extraction matches macOS.
-        # Passing the same releaseInfo as the macOS job is deliberate: whichever
-        # job reaches the draft release first names it, and identical values make
-        # the order irrelevant.
+        # The create-release job above has already made the draft, so this
+        # releaseInfo is redundant with what is already on it rather than a
+        # race to set it: electron-builder finds the existing release by tag
+        # and uploads into it instead of creating one.
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -221,18 +272,23 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ---------------------------------------------------------------------------
-  # Name and fill the draft release deterministically. electron-builder is also
-  # passed releaseInfo above, but the first live run (v0.11.5) showed it does
-  # not reliably apply it to the draft it attaches artefacts to: the draft
-  # arrived untitled with an empty body and was filled by hand, the exact
-  # manual step this pipeline exists to remove. This job is the single
-  # deterministic writer: after both builds finish, it patches the draft via
-  # the API with the same changelog-derived name and notes. The releaseInfo
-  # flags stay until this step has proven itself at a real tag, then they can
-  # go, so there is one mechanism rather than two.
+  # Name and fill the draft release deterministically. create-release above
+  # already names it once, and electron-builder's releaseInfo flags on each
+  # build job name it again, but the first live run (v0.11.5) showed
+  # electron-builder does not reliably apply releaseInfo to the draft it
+  # attaches artefacts to: the draft arrived untitled with an empty body and
+  # was filled by hand, the exact manual step this pipeline exists to remove.
+  # This job is the single deterministic writer of record: after both builds
+  # finish, it patches the draft via the API with the same changelog-derived
+  # name and notes, so the final state does not depend on any build job
+  # having applied its copy correctly.
+  #
+  # The last step of this job then reads the draft back and asserts it is what
+  # the tag should have produced. Until it existed, a green release workflow
+  # proved only that no step had thrown: the draft itself was never checked.
   # ---------------------------------------------------------------------------
   finalize:
-    name: Name and fill the draft release
+    name: Name, fill, and verify the draft release
     needs: [macos, windows]
     runs-on: ubuntu-latest
     steps:
@@ -254,6 +310,14 @@ jobs:
       - name: Patch the draft release with the name and notes
         # Draft releases are not addressable via /releases/tags/<tag>, so list
         # and match on tag_name instead.
+        #
+        # tag_name is resent here even though it is not changing. GitHub's
+        # release PATCH endpoint drops the tag binding to a generated
+        # "untagged-<hash>" placeholder on any edit that omits it: cutting
+        # 0.11.7 produced a draft with the right name, the right notes and
+        # all nine artefacts, bound to that placeholder rather than the tag,
+        # and 0.12.0 hit the same thing when this step patched name and body
+        # without it. Every future PATCH to this release must carry it.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -264,9 +328,28 @@ jobs:
             exit 1
           fi
           gh api -X PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            -f tag_name="${GITHUB_REF_NAME}" \
             -f name="$(cat release-info/release-name.txt)" \
             -f body="$(cat release-info/release-notes.md)" > /dev/null
           echo "Draft release ${RELEASE_ID} named and filled from the changelog."
+
+      - name: Verify the draft release
+        # Deliberately after the patch above rather than merely after the
+        # builds: the patch is the step most likely to disturb the tag
+        # binding (see its comment), so a check that ran before it would
+        # attest to a state nobody publishes. Kept as a second, independent
+        # line of defence even with tag_name now resent above: this is
+        # exactly the class of defect (an omitted field silently resetting
+        # state) that recurs when someone next edits this step without
+        # reading why the field is there.
+        #
+        # The script re-fetches the release list itself. It does not reuse
+        # RELEASE_ID above, and could not: each run block is a fresh shell.
+        # That is the behaviour wanted anyway, since the question is what
+        # actually landed, not what the patch was aimed at.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/verify-release-draft.js --info-dir release-info
 
   # ---------------------------------------------------------------------------
   # SCAFFOLDED, INACTIVE. Reserved for future Linux support.

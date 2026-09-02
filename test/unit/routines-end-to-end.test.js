@@ -355,6 +355,12 @@ describe('a schedule the scheduler cannot read', () => {
             // Paused AND never turned on. Two reasons not to run, and the row
             // may promise nothing on the strength of either.
             { name: 'Paused and held back', schedule: SCHEDULE, prompt: 'p', paused: true },
+            // A NAME, A SCHEDULE AND NOTHING TO SAY, which is what somebody
+            // writing a routine by hand produces when they stop after the
+            // field they read about first. Written here rather than as a
+            // hand-built row because the claim is that it survives the parser,
+            // the migration and the roster looking exactly like this.
+            { name: 'No prompt', schedule: SCHEDULE, enabled: true },
           ],
         }),
       },
@@ -398,6 +404,37 @@ describe('a schedule the scheduler cannot read', () => {
     });
   });
 
+  // THE ROW FOR A ROUTINE WITH NOTHING TO SAY, out of a real agent file.
+  //
+  // The scheduler refuses such a routine, and a refusal nobody can see is the
+  // half of the defect that outlives the fix: before it, the row promised a
+  // next run and the run it then made handed the agent the word "null"; a
+  // refusal alone would leave the row promising a run that never comes. The
+  // person who can fix it is the person who wrote the file, so the row is
+  // where it has to be said.
+  test('a routine with no prompt reaches the row saying it will not run, and what to add', () => {
+    cronWorkspace((doc) => {
+      const row = rowNamed(doc, 'No prompt');
+      const words = text(row);
+      assert.match(words, /has no prompt/i,
+        `the row says nothing about the missing instruction: ${words}`);
+      assert.match(words, /Run the morning briefing/,
+        'the row does not name what goes in the field it is asking for');
+      // And it does not promise a run, because there is no run to promise.
+      assert.strictEqual(row.querySelector('.next-run'), null);
+      assert.ok(!/Next run/.test(words), `the row still promises a next run: ${words}`);
+      // It is not accused of a schedule fault either: its schedule is one the
+      // scheduler reads perfectly well, and sending its owner to change it
+      // would answer a question nobody asked.
+      assert.ok(!/cannot read this schedule/i.test(words),
+        'the row blames the schedule for a missing prompt');
+      // The contrast in the same list, from the same workspace: a routine
+      // that is merely waiting says none of this.
+      assert.ok(!/has no prompt/i.test(text(rowNamed(doc, 'Not due yet'))),
+        'a routine with an instruction is accused of having none');
+    });
+  });
+
   // A CRON SCHEDULE AND NO `enabled` KEY, which is every pre-existing cron
   // routine after an upgrade: the reader fills an absent key in as false, and
   // nothing ever rewrites a schedule. Both halves of the row have something to
@@ -411,7 +448,7 @@ describe('a schedule the scheduler cannot read', () => {
         'the row stopped naming the fault that has to be fixed first');
       // And it does not also promise that turning it on would start it, which
       // is false while the schedule cannot be read.
-      assert.ok(!/Rundock will start running it/.test(words),
+      assert.ok(!/Rundock starts running it too/.test(words),
         `the row promises a run it cannot make: ${words}`);
       assert.strictEqual(row.querySelector('[data-routines-action="enable"]'), null,
         'the row offers a control whose consequence it cannot state truthfully');
@@ -425,7 +462,7 @@ describe('a schedule the scheduler cannot read', () => {
     cronWorkspace((doc) => {
       const row = rowNamed(doc, 'Held back');
       assert.ok(row.querySelector('.rr-offer-text'), 'the offer row lost its offer');
-      assert.match(text(row), /Rundock will start running it/);
+      assert.match(text(row), /Rundock starts running it too/);
       assert.ok(row.querySelector('[data-routines-action="enable"]'), 'no control to press');
       assert.strictEqual(row.querySelector('.next-run'), null,
         'a routine that will not run advertises when it will');
@@ -438,7 +475,7 @@ describe('a schedule the scheduler cannot read', () => {
       assert.strictEqual(text(row.querySelector('.next-run')), 'Paused');
       assert.strictEqual(row.querySelector('[data-routines-action="enable"]'), null,
         'turning it on would leave it paused, so the offer promises a run it cannot make');
-      assert.ok(!/Rundock will start running it/.test(text(row)));
+      assert.ok(!/Rundock starts running it too/.test(text(row)));
     });
   });
 
@@ -544,6 +581,15 @@ describe('a window whose server has moved to another workspace', () => {
     }
   }
 
+  test('the roster says which workspace each routine was read out of', () => {
+    twoWindows((first, second) => {
+      assert.strictEqual(first.agents.find(a => a.id === 'piper').routines[0].workspace, first.dir,
+        'the routine carries the workspace it was found in');
+      assert.strictEqual(second.agents.find(a => a.id === 'wren').routines[0].workspace, second.dir);
+      assert.notStrictEqual(first.dir, second.dir, 'sanity: two workspaces');
+    });
+  });
+
   // STEP ONE OF THE SEQUENCE. The server is on ws1 and this window was told so.
   // Nothing has moved, so nothing is denied. Step two, the switch itself, is
   // driven through the real dispatch below rather than seeded here.
@@ -557,6 +603,32 @@ describe('a window whose server has moved to another workspace', () => {
       assert.strictEqual(text(doc.querySelector('[data-routines-workspace]')),
         `These are the routines in ${name(first.dir)}. Rundock runs the routines of whichever `
         + 'workspace it has open, so the routines in your other workspaces are not running.');
+      dom.window.close();
+    });
+  });
+
+  // STEP TWO. Another window switched the server to ws2. This window keeps its
+  // own roster and is told only where the scheduler went.
+  test('after the switch, the routines it is still showing stop promising runs', () => {
+    twoWindows((first, second) => {
+      // Seeded as the after-switch state the dispatch test drives for real:
+      // the roster channel still carries this window's own workspace, and only
+      // the serving channel has moved. One argument cannot say both, because
+      // render() seeds the two globals the way one roster message sets them.
+      const { w, doc, dom } = render(first.agents, first.dir);
+      w.servingWorkspacePath = second.dir;
+      w.renderRoutines();
+      const row = rowNamed(doc, 'Piper briefing');
+      assert.strictEqual(row.querySelector('.next-run'), null,
+        'a routine nothing is serving promises a run it is not going to get');
+      assert.strictEqual(text(row.querySelector('.workspace-note')),
+        `Not running. Rundock has moved to ${name(second.dir)} and is running that `
+        + "workspace's routines instead.");
+      // The header says the same thing one level up: these routines, that
+      // workspace, none of it running.
+      assert.strictEqual(text(doc.querySelector('[data-routines-workspace]')),
+        `These are the routines in ${name(first.dir)}. Rundock has moved to ${name(second.dir)} `
+        + "and is running that workspace's routines, so none of these are running.");
       dom.window.close();
     });
   });
@@ -728,6 +800,20 @@ describe('a window whose server has moved to another workspace', () => {
         'the workspace beside the roster is the one the roster was read from');
       assert.ok(message.agents.some(a => a.id === 'piper'),
         'and the rows in it are that workspace\'s rows');
+    });
+  });
+
+  // The two values compared are two copies of ONE server string, which is what
+  // makes a bare equality check safe: no separator style, resolved symlink or
+  // case rule can come between them.
+  test('the value the shell records is the string discovery stamps', () => {
+    twoWindows((first) => {
+      const stamped = first.agents.find(a => a.id === 'piper').routines[0].workspace;
+      // What the server sends beside a roster and on a switch is getWorkspace(),
+      // which is what discovery stamped. Same call, same string.
+      config.setWorkspace(first.dir);
+      assert.strictEqual(stamped, config.getWorkspace(),
+        'the roster stamp and the path the server announces are the same value');
     });
   });
 });

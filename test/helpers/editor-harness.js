@@ -33,6 +33,10 @@ function installGlobals() {
     'cancelAnimationFrame', 'InputEvent', 'KeyboardEvent', 'MouseEvent',
     'CustomEvent', 'Event', 'Range', 'NodeFilter', 'XMLSerializer',
     'ClipboardEvent', 'DragEvent', 'ResizeObserver',
+    // The review sidebar reads its width from localStorage as a bare global,
+    // the way a browser exposes it. Without it the panel cannot be attached in
+    // a test at all, so nothing it renders could be asserted.
+    'localStorage',
   ];
 
   // jsdom lacks a few APIs ProseMirror probes for; provide minimal stubs.

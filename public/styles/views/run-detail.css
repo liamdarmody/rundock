@@ -12,13 +12,27 @@
    "the three tones resolve to three different colours in the stylesheet" in
    test/unit/run-detail-view.test.js. */
 
-.run-detail { max-width: 620px; padding: 32px; }
+/* 720px, shared with .routines-content and .routine-editor: see the comment
+   on .routine-editor in routine-editor.css. This screen's own reason to want
+   the width is the file path under "Files changed": a path several
+   directories deep was wrapping onto three or four lines at 620px with
+   nothing to say where one directory name ended and the next began. */
+.run-detail { max-width: 720px; padding: 32px; }
 
 .rd-title { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
 .rd-name { margin-bottom: 0; }
 .rd-context { margin-bottom: 18px; }
 
-.rd-card { display: flex; flex-direction: column; gap: 6px; }
+/* padding: 16px IS THE FIX, not a restyle. .settings-card's own padding
+   (4px 0) is written for a list of .settings-row children that each carry
+   their own 14px/16px inset, and .rd-card's children never did: the chip
+   used to borrow a bare .settings-row for its inset and the headline,
+   guidance and "Took" line had none, so they sat flush against the card's
+   left and right edges with 4px of breathing room above and below.
+   Uniform padding on the card itself, and no more borrowed .settings-row,
+   gives every line in the box the same inset instead of the chip sitting
+   further in than the sentence below it. */
+.rd-card { display: flex; flex-direction: column; gap: 8px; padding: 16px; }
 
 /* The three lines inside the card, declared rather than borrowed. The mock
    names them status-message, status-guidance and plan-label, and none of those
@@ -26,7 +40,18 @@
    unstyled paragraphs. */
 .rd-headline { font-size: var(--body); color: var(--text-1); line-height: 1.5; margin: 0; }
 .rd-guidance { font-size: var(--caption); color: var(--text-2); line-height: 1.5; margin: 0; }
+/* WHEN THE RUN STARTED. Sits between the chip and the headline: the chip
+   names the outcome, this names the moment, and the headline is the
+   sentence about what happened, which is the order a reader would ask the
+   three questions in. Every outcome carries a started moment (even a run
+   still going, even one nobody saw the end of), so this is not toned as a
+   secondary fact the way .rd-guidance and .rd-took are: it is one of the two
+   things this box exists to say, the other being the outcome itself. */
+.rd-when { font-size: var(--caption); font-weight: 600; color: var(--text-2); margin: 0; }
 .rd-took { font-size: var(--caption); color: var(--text-3); margin: 6px 0 0; }
+/* Only ever drawn on a run that is still going (view.state.stoppable), so it
+   sits last in the card, after the facts, closest to .rd-card's own gap. */
+.rd-stop-row { margin-top: 4px; }
 
 /* The way back. It takes .profile-back's type and colour and resets the button
    chrome underneath, because a control that acts is a button and .profile-back
@@ -53,6 +78,12 @@
    elsewhere in this palette on "needs the user", so this takes the idle token
    and is told apart from the two outcomes by colour and by weight both. */
 .rd-chip.unwitnessed { color: var(--idle); font-weight: 500; }
+/* A run somebody stopped. Not the danger colour: unlike `bad`, this ending
+   was witnessed and asked for, not a failure. Shares the idle token with
+   `unwitnessed` (same visual weight, "not an error") but keeps its own class
+   rather than reusing that one, since a stopped run's ending is fully known
+   and an unwitnessed one's is not: the two must never read as one state. */
+.rd-chip.stopped { color: var(--idle); font-weight: 500; }
 
 .rd-files-label { font-size: var(--caption); font-weight: 600; color: var(--text-2); margin: 18px 0 8px; }
 
@@ -62,8 +93,11 @@
 .rd-file-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .rd-file-name { font-size: var(--body); color: var(--text-1); }
 /* The whole path, quietly, because a name alone cannot say which of two files
-   of that name in two folders this was. */
-.rd-file-path { font-size: var(--caption); color: var(--text-3); word-break: break-all; }
+   of that name in two folders this was. Wraps on the <wbr> the view inserts
+   after each separator, so a long path breaks at a directory boundary rather
+   than mid-word; overflow-wrap: anywhere is the floor under that for the one
+   segment a separator cannot help, a single name longer than the box. */
+.rd-file-path { font-size: var(--caption); color: var(--text-3); overflow-wrap: anywhere; }
 .rd-ic { width: 16px; height: 16px; flex-shrink: 0; color: var(--text-2); }
 .rd-tag { font-size: var(--caption); color: var(--text-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 2px 8px; flex-shrink: 0; }
 

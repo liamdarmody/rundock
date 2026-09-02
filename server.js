@@ -53,6 +53,18 @@ const signals = require('./lib/signals.js');
 const { recordEvent, bumpSkillUsage, normalizeDocsGapTopic } = signals;
 
 const PORT = process.env.PORT || 3000;
+// Tooling-only escape hatch: the marketing screenshot pipeline
+// (scripts/screenshots/serve.mjs) boots this server against a demo workspace
+// whose routines are deliberately seeded as enabled with real run history, so
+// the routines panel and the routine editor have something real to show. A
+// demo workspace has no genuine tick history behind it, so on real wall-clock
+// time those routines read as overdue the moment the process starts, and a
+// capture run long enough for one 60-second tick to land (any full pipeline
+// run) lets the scheduler actually fire one, overwriting the seeded state
+// with whatever a real, unattended run against fake data produces. Set only
+// by that one caller; never set in a real install, so this never changes
+// product behaviour for an actual user.
+const SCHEDULER_DISABLED = process.env.RUNDOCK_DISABLE_SCHEDULER === '1';
 // The address the server answers on, used at the listen() call below.
 //
 // Loopback is a DECISION about the default, not a statement about capability.
@@ -142,7 +154,7 @@ function setWorkspaceRoot(dir) {
   stopScheduler();
   if (dir) {
     loadRoutineState();
-    startScheduler();
+    if (!SCHEDULER_DISABLED) startScheduler();
   }
   // AND EVERY CONNECTED WINDOW IS TOLD WHAT JUST CHANGED, from here for
   // exactly the reason the scheduler's lifecycle is decided here.
@@ -3146,7 +3158,7 @@ function startServer(options = {}) {
         console.log(`  Workspace: ${WORKSPACE}`);
         console.log(`  Agents: ${agents.map(a => a.displayName).join(', ')}`);
         console.log(`  Routines: ${totalRoutines}`);
-        startScheduler();
+        if (!SCHEDULER_DISABLED) startScheduler();
         // Warm the search index off the startup path (reconcile-on-open).
         setImmediate(() => { try { ensureSearchEngine(); } catch (e) { console.warn('[Search] warm-up failed:', e.message); } });
       } else {

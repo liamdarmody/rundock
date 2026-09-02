@@ -22,8 +22,31 @@
   }
 }(typeof self !== 'undefined' ? self : this, function () {
 
+// ATTRIBUTE-POSITION ESCAPER and the colour rule, reached off the global at
+// call time. A skill id is the skill's DIRECTORY NAME and an agent id is the
+// agent file's filename, so both are chosen by anything that can create a
+// file in the workspace, and both were reaching an inline handler. `esc`
+// leaves quotes alone and is right only for element content; see
+// public/agent-colour.js for why a colour is judged rather than escaped.
+function escA(value) {
+  if (typeof escAttr === 'function') return escAttr(value);
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function agentColour(value, fallback) {
+  const safe = fallback === undefined ? 'var(--accent)' : fallback;
+  return typeof RundockAgentColour !== 'undefined'
+    ? RundockAgentColour.safeColour(value, safe) : safe;
+}
+
 function skillsModel() {
   return typeof RundockSkillsModel !== 'undefined' ? RundockSkillsModel : null;
+}
+
+function routineEditorModel() {
+  return typeof RundockRoutineEditorModel !== 'undefined' ? RundockRoutineEditorModel : null;
 }
 
 // Whether the skill list has arrived. NOT the same as it being empty, and the
@@ -147,7 +170,7 @@ function renderSkillsEmpty(loading) {
 function renderSkillsSidebar(list) {
   const sidebar = document.getElementById('skills-sidebar-list');
   sidebar.innerHTML = list.map(s => `
-    <div class="skill-sidebar-item${s.id === currentSkillId ? ' active' : ''}" data-skill="${s.id}" onclick="selectSkill('${s.id}')">
+    <div class="skill-sidebar-item${s.id === currentSkillId ? ' active' : ''}" data-skill="${escA(s.id)}" onclick="selectSkill(this.dataset.skill)">
       <span class="skill-sidebar-name">${esc(s.name)}</span>
     </div>
   `).join('');
@@ -186,8 +209,8 @@ function selectSkill(id) {
       <div class="profile-section-label">Used by</div>
       <div style="display:flex;flex-wrap:wrap;gap:8px;padding-top:4px">`;
     for (const a of s.assignedAgents) {
-      h += `<div class="agent-chip" title="View ${esc(a.name)}'s profile" onclick="switchNav('team');showProfile('${esc(a.id)}')">
-        <div class="avatar sm" style="background:${a.colour}">${a.icon}</div>
+      h += `<div class="agent-chip" title="View ${escA(a.name)}'s profile" data-agent-id="${escA(a.id)}" onclick="switchNav('team');showProfile(this.dataset.agentId)">
+        <div class="avatar sm" style="background:${agentColour(a.colour)}">${esc(a.icon)}</div>
         <div>
           <div class="agent-chip-name">${esc(a.name)}</div>
           <div class="agent-chip-role">${esc(a.role || '')}</div>
@@ -202,7 +225,7 @@ function selectSkill(id) {
       <div class="profile-card-text" style="padding-top:4px">Available to all agents</div>
       <div style="margin-top:8px;font-size:var(--caption);color:var(--text-2);line-height:1.5">
         Want to assign this to a specific agent?
-        ${guide ? `<span style="font-size:var(--caption);font-weight:500;color:var(--accent);cursor:pointer" onclick="startConversation('${guide.id}')" title="Open a conversation with Doc">Talk to Doc</span>.` : ''}
+        ${guide ? `<span style="font-size:var(--caption);font-weight:500;color:var(--accent);cursor:pointer" data-agent-id="${escA(guide.id)}" onclick="startConversation(this.dataset.agentId)" title="Open a conversation with Doc">Talk to Doc</span>.` : ''}
       </div>
     </div></div>`;
   }
@@ -226,24 +249,84 @@ function selectSkill(id) {
   // control: the reader believes the label.
   //
   // The card above already carries the step this reader actually needs, which
-  // is to give the skill an agent, so nothing is lost by leaving this out.
+  // is to give the skill an agent, so nothing is lost by leaving the control
+  // out.
   //
-  // AND SAYING NOTHING HERE ABOUT WHY THE CONTROL IS ABSENT IS ALSO DELIBERATE,
-  // not an oversight to be repaired by adding a sentence: a reader meets this
-  // same gap from the other side in the unassigned-skill messaging, and half an
-  // answer in each place is how one surface ends up saying two different things.
+  // BUT THE SECTION ITSELF STAYS, AND NOW SAYS WHY. Silence here used to be
+  // deliberate, on the reasoning that a reader meets the same gap from the
+  // other side, in the "Used by" card above, so a second answer here risks
+  // the two disagreeing. That reasoning misses the opposite failure: a
+  // reader looking specifically for Schedule, on a page that lists Used by,
+  // Schedule and Instructions, meets it simply missing, with nothing under
+  // that heading to say why. `UNASSIGNED_REASON` is the one sentence both
+  // surfaces use for this, verbatim, so adding it here cannot make this page
+  // say something the routines view's own empty state does not.
+  //
+  // NOT GUARDED ON THE MODEL BEING LOADED, the same way `renderSkillsEmpty`
+  // above reads `skillsModel()` unguarded: index.html loads
+  // routine-editor-model.js long before views/skills.js, so its absence here
+  // would mean the page itself failed to load rather than a state this
+  // function should quietly work around. A guard that swallowed that would
+  // reproduce, for a different cause, the exact silence this card exists to
+  // remove.
   if (s.assignedAgents.length) {
-    h += `<div class="profile-card"><div class="profile-card-section">
-      <div class="profile-section-label">Schedule</div>
-      <div class="profile-card-text" style="padding-bottom:10px">Give this skill a schedule and your agents take it from there.</div>
+    // SAME SHAPE AS THE AGENT PROFILE'S ROUTINES CARD: a prompt to schedule
+    // while nothing is, replaced by the routine itself once one exists,
+    // rather than the button staying up beside a routine it duplicates.
+    // A skill can be scheduled by more than one of its assigned agents, so
+    // this looks across all of them rather than just the first.
+    const roster = typeof agents !== 'undefined' && agents ? agents : [];
+    const routinesModel = typeof RundockRoutinesModel !== 'undefined' ? RundockRoutinesModel : null;
+    const scheduled = [];
+    for (const assigned of s.assignedAgents) {
+      const agent = roster.filter(ag => ag && ag.id === assigned.id)[0];
+      if (!agent || !agent.routines) continue;
+      for (const r of agent.routines) {
+        if (r.skill === s.id) scheduled.push({ agentId: agent.id, routine: r });
+      }
+    }
+    // "ROUTINE", SINGULAR, NAMING THE THING THE BOX HOLDS RATHER THAN THE
+    // FEATURE. Scheduling more than one routine onto the same skill is
+    // possible (a skill can be assigned to several agents, and each can
+    // schedule it), just not something this product promotes, so the
+    // heading assumes the common case: one skill, one routine. It only
+    // pluralises where the box is actually about to list more than one,
+    // which is the one place a fixed "Routine" would be a heading that
+    // disagreed with its own list.
+    const heading = scheduled.length > 1 ? 'Routines' : 'Routine';
+    h += `<div class="profile-card"><div class="profile-card-section"><div class="profile-section-label">${heading}</div>`;
+    if (scheduled.length) {
+      for (const { agentId, routine: r } of scheduled) {
+        const when = (routinesModel && routinesModel.scheduleWords(r.schedule)) || r.schedule;
+        h += `<div class="profile-card-item" style="display:flex;flex-direction:column;gap:3px;cursor:pointer" data-agent-id="${escA(agentId)}" onclick="showRoutinesForAgent(this.dataset.agentId)">
+          <span style="font-weight:600">${esc(r.name)}</span>
+          <span style="font-size:var(--caption);color:var(--text-2)">${esc(when)}</span>
+        </div>`;
+      }
+    } else {
+      h += `<div class="profile-card-text" style="padding-bottom:10px">Give this skill a schedule and your agents take it from there.</div>
       <button class="settings-btn" type="button" data-skills-action="schedule-skill"
-        data-skill-id="${esc(s.id)}" onclick="addRoutineForSkill('${esc(s.id)}')">Schedule this skill</button>
+        data-skill-id="${escA(s.id)}" onclick="addRoutineForSkill(this.dataset.skillId)">Schedule this skill</button>`;
+    }
+    h += `</div></div>`;
+  } else {
+    // Same heading as the assigned branch above: naming the thing this box
+    // is about (a routine) rather than the feature, whether the box holds a
+    // routine, an offer to make one, or the reason it cannot have one yet.
+    h += `<div class="profile-card"><div class="profile-card-section">
+      <div class="profile-section-label">Routine</div>
+      <div class="profile-card-text">${esc(routineEditorModel().UNASSIGNED_REASON)}</div>
     </div></div>`;
   }
 
   // Collapsible instructions card
   if (s.instructions) {
-    const instructionsId = `skill-instructions-${s.id}`;
+    // A CONSTANT ID, not one built from the skill's directory name. The name
+    // was written into the id attribute AND into the getElementById call in
+    // the handler beside it, so a directory called `a').remove();//` was a
+    // string literal in a JavaScript position. Only one skill detail is
+    // rendered at a time, so the id never needed to be unique per skill.
+    const instructionsId = 'skill-instructions';
     h += `<div class="profile-card" style="cursor:pointer" onclick="document.getElementById('${instructionsId}').classList.toggle('hidden')">
       <div class="profile-card-section">
         <div class="profile-section-label">Instructions &#9662;</div>

@@ -28,7 +28,7 @@ Each entry in the `routines:` array is a YAML object with five fields. The parse
 |---|---|---|---|---|---|
 | `name` | string | Rundock-only | Yes | Display name for the routine. Shown in the Routines panel, on the agent profile, and in the scheduler logs. Required: a routine without a `name` is dropped during parse. | `name: Morning briefing` |
 | `schedule` | string | Rundock-only | Yes | When the routine runs. Accepts only the human-readable forms documented below. A schedule in any other form never runs, and the routine's row in the Routines list says so and names the two forms that work. | `schedule: every day at 05:00` |
-| `prompt` | string | Rundock-only | Yes | The instruction sent to the agent when the routine fires. Treated as a single user message: the same text the user would type. | `prompt: Run the morning briefing` |
+| `prompt` | string | Rundock-only | Yes | The instruction sent to the agent when the routine fires. Treated as a single user message: the same text the user would type. A routine with no `prompt`, or one that is blank, is refused when its time comes rather than run, and the routine's row in the Routines list says so and shows no next run. | `prompt: Run the morning briefing` |
 | `description` | string | Rundock-only | No | One-line plain English explanation of the routine, surfaced on the agent profile. Optional: omitting it does not break the routine. | `description: Triage today's tasks, calendar, and content pipeline.` |
 | `enabled` | boolean | Rundock-only | No | Whether the scheduler may run this routine. `true`, `yes` and `on` all mean yes; `false`, `no` and `off` all mean no, in any case and with or without quotes. **An absent key, or a value that is not a boolean in any of those spellings, means not enabled**, so the routine is listed and waits to be turned on. See [Upgrading a workspace that already has routines](#upgrading-a-workspace-that-already-has-routines). The editor writes it explicitly, so a routine created there is live at once. | `enabled: true` |
 
@@ -101,6 +101,8 @@ The scheduler ticks every 60 seconds. On each tick:
 1. Rundock re-discovers all agents (this picks up routine changes without a restart).
 2. For every routine on every agent, the scheduler computes `getNextRun(schedule, lastRun)`.
 3. If the next run time has come due (the current time has passed it), Rundock fires the routine.
+
+A routine that has come due is still refused if its own fields say it should not run: it is paused, it is not enabled, it names a run target this release cannot run, or it has no prompt to send. A refusal is announced in the log once, naming the field that decided, and records no run, so a refused routine keeps whatever history it already had. A routine with no prompt says so on its own row in the Routines list, in the same place and the same tone a schedule nothing can read says so, and neither row shows a next run.
 
 Each routine has a `lastRun` guard. Daily routines do not re-fire once they have run at or after their scheduled hour that calendar day; weekly routines do not re-fire on the same weekday they last ran on. The guard the tick reads is held in memory. It is filled from `.rundock/routine-state.json` in the workspace when Rundock starts and when you switch workspace, and written back in full after every run, so it survives a restart and a routine is not fired twice by one. Nothing on the tick path re-reads that file, which is what the always-on section below is about.
 
@@ -229,7 +231,7 @@ This was established by running it rather than by reading, and it is re-run ever
 npm run transcript:truth -- --capture
 ```
 
-On Claude Code 2.1.240 the hook was consulted 12 times, about `Bash`, `Edit`, `NotebookEdit`, `Read` and `Write`, including the write that then failed. Each payload named the tool about to run and the path of the run's own transcript. (These numbers are read out of the capture by `test/unit/doc-claims.test.js` and asserted against this sentence, so a re-capture that moves them fails rather than leaving the prose stale.) The recorded answer, the matchers, the spawn shape and the tools it was consulted about all live in `scripts/transcript-truth/captured-transcript.json` under `permissionHook`, and `test/unit/session-transcript-capture.test.js` asserts them.
+On Claude Code 2.1.246 the hook was consulted 11 times, about `Edit`, `NotebookEdit`, `Read` and `Write`, including the write that then failed. Each payload named the tool about to run and the path of the run's own transcript. (These numbers are read out of the capture by `test/unit/doc-claims.test.js` and asserted against this sentence, so a re-capture that moves them fails rather than leaving the prose stale.) The recorded answer, the matchers, the spawn shape and the tools it was consulted about all live in `scripts/transcript-truth/captured-transcript.json` under `permissionHook`, and `test/unit/session-transcript-capture.test.js` asserts them.
 
 Why it matters beyond the curiosity: a hook is the only thing that runs *before* a write, so it is the only place that can copy a file's bytes before they are overwritten. Reading a transcript afterwards can say what changed but never what it used to be. Any future feature that needs to undo a routine's work depends on the answer above being yes.
 

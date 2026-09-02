@@ -386,16 +386,133 @@ describe('which empty state, decided mechanically', () => {
     assert.strictEqual(state.action, editor.STEP_LEADS.build);
   });
 
-  // The condition is the same question the picker already answers, so the two
-  // surfaces cannot disagree about whether a workspace has skills.
-  test('the variant is the question skillChoices already answers', () => {
+  const UNASSIGNED = [{ id: 'orphan', name: 'Orphan', assignedAgents: [] }];
+
+  // The condition is the picker's own question, `skillChoices`, and not a new
+  // one written here. Extended to the third shape: `createSkill` alone cannot
+  // tell "no skill exists" from "a skill exists and nobody has it", since both
+  // leave `options` empty, so the branch also reads `onlyUnassignedSkills`,
+  // which the picker computes from the same walk rather than this file
+  // recomputing it as a second rule.
+  test('the variant is the question skillChoices already answers, across all three shapes', () => {
     const editor = require('../../public/routine-editor-model.js');
-    for (const skills of [[], WITH_SKILL, [{ id: 'orphan', name: 'Orphan', assignedAgents: [] }]]) {
-      const offers = editor.skillChoices({ skills }).createSkill;
+    for (const skills of [[], WITH_SKILL, UNASSIGNED]) {
+      const choice = editor.skillChoices({ skills });
       const state = m.emptyState({ skills, guideName: 'Wren' });
-      assert.strictEqual(state.action === 'Build a skill', offers,
-        'the empty state and the picker disagree about whether this workspace has skills');
+      if (choice.onlyUnassignedSkills) {
+        assert.notStrictEqual(state.action, 'Build a skill',
+          'a workspace with an unassigned skill was offered to build the one it already has');
+      } else {
+        assert.strictEqual(state.action === 'Build a skill', choice.createSkill,
+          'the empty state and the picker disagree about whether this workspace has skills');
+      }
     }
+  });
+
+  // The dependency made observable rather than inferred from agreement on
+  // three fixtures: a local rule written here, such as
+  // `skills.length && !options.length`, would agree with `skillChoices` on
+  // every fixture above and still not be reading it. Patching the answer
+  // `skillChoices` gives, on the very module object `routines-model.js`
+  // holds as `editor`, and checking the branch follows the PATCHED answer
+  // rather than recomputing one from the input, is what tells the two apart.
+  test('the branch follows what skillChoices reports rather than a rule computed here', () => {
+    const editor = require('../../public/routine-editor-model.js');
+    const real = editor.skillChoices;
+    try {
+      // A skill list that would otherwise take the locked-copy branch, with
+      // the stub disagreeing: if the answer came from a local recomputation,
+      // this input would still resolve it to false and the stub would go
+      // unread.
+      editor.skillChoices = () => ({
+        options: [{ id: 'stubbed' }], createSkill: false,
+        createSkillLabel: 'stub', emptyLead: 'stub',
+        onlyUnassignedSkills: true,
+      });
+      const state = m.emptyState({ skills: WITH_SKILL, guideName: 'Wren' });
+      assert.match(state.body, /assign your skills to an agent/i,
+        'emptyState did not follow the stubbed answer, so it is not truly reading skillChoices for this');
+    } finally {
+      editor.skillChoices = real;
+    }
+  });
+
+  // Told to assign the skill it has, never to build one it does not need.
+  test('a workspace whose only skill is unassigned is told to assign it, not build one', () => {
+    const editor = require('../../public/routine-editor-model.js');
+    const state = m.emptyState({ skills: UNASSIGNED, guideName: 'Wren' });
+    assert.strictEqual(state.lead, 'No routines yet.');
+    assert.ok(!/build/i.test(state.body), `told to build a skill it already has: ${state.body}`);
+    assert.match(state.body, /assign your skills to an agent/i);
+    assert.notStrictEqual(state.body, editor.STEP_LEADS.empty,
+      'the unassigned workspace was given the no-skills-at-all sentence');
+  });
+
+  // THE MANY CASE, PINNED RATHER THAN ASSUMED. Every other test in this
+  // block drives exactly one unassigned skill, which is the shape "this
+  // skill" and "it" would have read correctly against by accident; a
+  // workspace with two proves the copy holds for a count the singular forms
+  // could not have.
+  const TWO_UNASSIGNED = [
+    { id: 'orphan-one', name: 'Orphan One', assignedAgents: [] },
+    { id: 'orphan-two', name: 'Orphan Two', assignedAgents: [] },
+  ];
+
+  test('two unassigned skills take the same branch as one, and the copy still reads true', () => {
+    const editor = require('../../public/routine-editor-model.js');
+    const choice = editor.skillChoices({ skills: TWO_UNASSIGNED });
+    assert.strictEqual(choice.onlyUnassignedSkills, true);
+
+    const state = m.emptyState({ skills: TWO_UNASSIGNED, guideName: 'Wren' });
+    assert.ok(!/build/i.test(state.body), `told to build skills it already has: ${state.body}`);
+    assert.ok(!/\bthis skill\b/i.test(state.body), `a deictic naming one skill reached a state with two: ${state.body}`);
+    assert.match(state.body, /assign your skills to an agent/i);
+    assert.match(state.body, /they will show up here/i);
+  });
+
+  // The third variant carries the same five slots the other two do, so it
+  // renders through the one box the view already draws every variant with,
+  // rather than a shape the render has to grow a case for.
+  test('the unassigned-skill state carries the same slots as the other two', () => {
+    const shapes = [
+      m.emptyState({ skills: [], guideName: 'Wren' }),
+      m.emptyState({ skills: UNASSIGNED, guideName: 'Wren' }),
+      m.emptyState({ skills: WITH_SKILL, guideName: 'Wren' }),
+    ];
+    for (const shape of shapes.slice(1)) {
+      assert.deepStrictEqual(Object.keys(shape).sort(), Object.keys(shapes[0]).sort());
+    }
+  });
+
+  // Neither a button nor an aside: assigning a skill to an agent is existing
+  // behaviour this state points at, and the aside the other states carry
+  // promises scheduling "right from its own page", which this state's skill
+  // cannot yet do.
+  test('the unassigned-skill state offers no action and no aside', () => {
+    const state = m.emptyState({ skills: UNASSIGNED, guideName: 'Wren' });
+    assert.strictEqual(state.action, null);
+    assert.strictEqual(state.actionKind, null);
+    assert.strictEqual(state.aside, null);
+  });
+
+  // The reason is the exact string the skill's own page states in its
+  // Schedule card for an unassigned skill, quoted here from the one place both
+  // surfaces read it, so a change to one cannot leave the other behind.
+  test('the reason given here is the shared string the skill page also states', () => {
+    const editor = require('../../public/routine-editor-model.js');
+    const state = m.emptyState({ skills: UNASSIGNED, guideName: 'Wren' });
+    assert.ok(state.body.includes(editor.UNASSIGNED_REASON),
+      `the routines view does not carry the reason the skill page states: ${state.body}`);
+  });
+
+  // Neither 'nobody has' nor 'no agent has': the skill's own page, one card
+  // above where this same reason is shown, already describes an unassigned
+  // skill as available to all agents, and a reason phrased as a denial would
+  // contradict that card on the same page.
+  test('the reason given here does not deny any agent has the skill', () => {
+    const state = m.emptyState({ skills: UNASSIGNED, guideName: 'Wren' });
+    assert.ok(!/nobody has/i.test(state.body), `the reason denies any agent has the skill: ${state.body}`);
+    assert.ok(!/no agent has/i.test(state.body), `the reason denies any agent has the skill: ${state.body}`);
   });
 
   test('skills that have not arrived are not a workspace with no skills', () => {
@@ -443,6 +560,7 @@ describe('which empty state, decided mechanically', () => {
       ['routines, skills exist', m.emptyState({ skills: WITH_SKILL, guideName: 'Wren' })],
       ['routines, no skills, guide', m.emptyState({ skills: [], guideName: 'Wren' })],
       ['routines, no skills, no guide', m.emptyState({ skills: [], guideName: null })],
+      ['routines, only skill unassigned', m.emptyState({ skills: UNASSIGNED, guideName: 'Wren' })],
       ['skills, guide', skillsModel.emptyState({ guideName: 'Wren' })],
       ['skills, no guide', skillsModel.emptyState({})],
     ]) {
@@ -874,6 +992,21 @@ describe('a routine nobody has turned on yet', () => {
     assert.strictEqual(o.label, 'Turn on');
   });
 
+  // THE RISK IS NAMED, NOT LEFT FOR THE READER TO INFER. A reader arriving
+  // here most likely already has this job running somewhere else (cron, a
+  // script, a scheduled task), and "Rundock will begin running it" on its own
+  // does not say that pressing Turn on can produce two copies of the same
+  // routine. Confirmed against a real report: a beta user, and the owner's
+  // own VPS, both had routines running outside Rundock by exactly this
+  // mechanism before either noticed.
+  test('the offer names the mechanism and the risk directly, rather than implying it', () => {
+    const o = offer(NOT_ENABLED);
+    assert.match(o.text, /cron job or script/i,
+      'the offer does not name what might already be running this routine');
+    assert.match(o.text, /twice/i,
+      'the offer does not say plainly that turning it on can run this routine twice');
+  });
+
   // The state is only ever reached from the file saying so. A routine that is
   // enabled, and one that says nothing about it at all because it arrived from
   // somewhere that does not carry the field, both make no offer: an offer
@@ -930,7 +1063,10 @@ describe('a routine nobody has turned on yet', () => {
     const text = offerAt(null).text;
     assert.ok(!/shortly after you turn it on/.test(text));
     assert.ok(!/it runs /.test(text), `the offer invented a time: ${text}`);
-    assert.match(text, /Rundock will start running it on this schedule/);
+    assert.match(text, /Rundock starts running it too/);
+    // NAMED, NOT IMPLIED: the exact risk this offer exists to prevent.
+    assert.match(text, /cron job or script/i);
+    assert.match(text, /twice/i);
   });
 
   test('the offer reaches the row', () => {
@@ -1014,6 +1150,81 @@ describe('a routine whose schedule the scheduler cannot read', () => {
   });
 });
 
+// ===== A ROUTINE WITH NOTHING TO SAY =====
+//
+// A routine that declares a schedule and no prompt used to be indistinguishable
+// on this list from one that works. It promised a next run, offered to be
+// turned on, fired on time, and handed its agent the four letters n-u-l-l.
+// The server refuses it now, and this is the half that tells the person who
+// wrote the file why nothing is happening.
+//
+// WHETHER THERE IS A PROMPT IS ASKED HERE RATHER THAN CARRIED, which is the
+// opposite of the schedule fault beside it and for a stated reason: whether a
+// schedule PARSES needs the scheduler's grammar, and a second copy of that
+// grammar on this side would be free to disagree with the tick. Whether a
+// value is text needs no grammar at all, and the prompt is already on the
+// roster, so asking it here adds no second answer to disagree with.
+describe('a routine with no prompt', () => {
+  const problem = (input) => m.promptProblem(input);
+
+  test('the row is told it will not run, and what to add', () => {
+    const p = problem({ prompt: null });
+    assert.ok(p, 'a routine with no prompt raises nothing');
+    assert.match(p.text, /has no prompt/i);
+    // NAMES WHAT TO ADD, BY EXAMPLE, the same rule the schedule fault follows.
+    // A reader who has just been told a field is missing needs to know what
+    // goes in it.
+    assert.match(p.text, /Run the morning briefing/);
+  });
+
+  test('a prompt that is only spaces is the same nothing as no prompt at all', () => {
+    assert.ok(problem({ prompt: '   ' }), 'whitespace was read as an instruction');
+    assert.ok(problem({ prompt: '' }), 'a declared, empty prompt was read as an instruction');
+  });
+
+  test('a routine with an instruction raises nothing', () => {
+    assert.strictEqual(problem({ prompt: 'Run the digest' }), null);
+  });
+
+  // SILENCE IS NOT A FAULT, the same rule `scheduleProblem` follows. A caller
+  // that did not send the field is not describing a routine with nothing to
+  // say, and turning that into a complaint would accuse every row built by a
+  // caller that never carried a prompt.
+  test('a caller that never said raises nothing', () => {
+    assert.strictEqual(problem({ schedule: 'every day at 07:00' }), null);
+    assert.strictEqual(problem({}), null);
+    assert.strictEqual(problem(null), null);
+  });
+
+  // NAMED HERE AS WELL AS SWEPT, for the reason the schedule guard is: the
+  // combination sweep below also fails without this, and a named test says
+  // which property broke rather than leaving a combination to be decoded.
+  test('an instant supplied with no prompt is still not promised', () => {
+    assert.strictEqual(m.nextRunLabel({
+      schedule: 'every day at 07:00', scheduleReadable: true, prompt: null,
+      nextRun: TOMORROWS_SLOT, now: NOW, zone: ZONE,
+    }), null, 'a row promised a run for a routine that will never be started');
+    // The same instant with a prompt is promised, so this is the guard rather
+    // than an instant the model cannot render.
+    assert.ok(m.nextRunLabel({
+      schedule: 'every day at 07:00', scheduleReadable: true, prompt: 'Run it',
+      nextRun: TOMORROWS_SLOT, now: NOW, zone: ZONE,
+    }));
+  });
+
+  test('the problem reaches the row, and the row promises no run', () => {
+    const row = m.row({
+      name: 'Morning briefing', schedule: 'every day at 07:00', scheduleReadable: true,
+      prompt: null, enabled: true, paused: false, nextRun: TOMORROWS_SLOT, now: NOW, zone: ZONE,
+    });
+    assert.ok(row.promptProblem, 'the row drops the problem');
+    assert.strictEqual(row.nextRun, null);
+    // And it is a fault of its own rather than the schedule's, so a reader is
+    // not sent to edit a schedule that is perfectly readable.
+    assert.strictEqual(row.scheduleProblem, null);
+  });
+});
+
 // ===== NO ROW SAYS TWO THINGS THAT CANNOT BOTH BE TRUE =====
 //
 // THE DEFECT THIS BLOCK EXISTS FOR, and the reason it is an enumeration rather
@@ -1027,8 +1238,8 @@ describe('a routine whose schedule the scheduler cannot read', () => {
 // upgrade, since the reader fills an absent `enabled` in as false and nothing
 // ever rewrites a schedule. Such a row has grounds to say both "Rundock cannot
 // read this schedule, so this routine will not run" and "Turn it on and
-// Rundock will start running it on this schedule". The second is false there:
-// turning it on starts nothing, because the schedule is still unreadable.
+// Rundock starts running it too". The second is false there: turning it on
+// starts nothing, because the schedule is still unreadable.
 //
 // THE RULE THAT REPLACES THE SPECIAL CASE. The offer is made only when turning
 // it on is the ONLY thing standing between the routine and running. That is
@@ -1052,6 +1263,10 @@ describe('a row never says two things that cannot both be true', () => {
     ['no schedule at all', { ...held, schedule: null, scheduleReadable: false }],
     ['a schedule that is only spaces', { ...held, schedule: '   ', scheduleReadable: false }],
     ['a run target this release cannot run', { ...held, runOn: 'agent-computer' }],
+    // A block with a name and a schedule and no prompt. The parser keeps any
+    // block that has a name, so this reaches the roster, and the gate refuses
+    // it because there is nothing to send.
+    ['no prompt at all', { ...held, prompt: null }],
   ];
 
   // A ROUTINE THAT WAS NEVER TURNED ON DID NOT MISS ANYTHING.
@@ -1162,6 +1377,10 @@ describe('a row never says two things that cannot both be true', () => {
     // it covered. A routine with no schedule can never run, and the row says
     // nothing about it, so nothing else in the matrix stood in for it.
     ['no schedule at all', { schedule: null, scheduleReadable: false }],
+    // The other half of the same class: a routine that says WHEN and never
+    // says WHAT. It joins the matrix here rather than being paired by hand
+    // with the eight around it.
+    ['no prompt at all', { prompt: null }],
     ['a run target this release cannot run', { runOn: 'agent-computer' }],
     ['a slot that went by', { missedSlot: YESTERDAYS_SLOT }],
     ['a next run', { nextRun: TOMORROWS_SLOT }],
@@ -1181,6 +1400,7 @@ describe('a row never says two things that cannot both be true', () => {
     if (row.nextRun && row.nextRun.text !== 'Paused') promising.push(`next run: ${row.nextRun.text}`);
     if (row.nextRun && row.nextRun.text === 'Paused') denying.push('next run: Paused');
     if (row.scheduleProblem) denying.push(`problem: ${row.scheduleProblem.text}`);
+    if (row.promptProblem) denying.push(`problem: ${row.promptProblem.text}`);
     if (row.workspaceNote) denying.push(`workspace: ${row.workspaceNote.text}`);
     // A RUN STATUS IS DELIBERATELY NEITHER. It reports the past, and the row
     // pairs it with the next run ON PURPOSE, because after a miss or a failure

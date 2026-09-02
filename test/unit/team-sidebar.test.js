@@ -206,11 +206,10 @@ function shell() {
   // The routines panel draws into its own sidebar, which this suite is not
   // about. Stubbed beside the list for the same reason the list is.
   w.renderRoutinesPanel = () => {};
-  // The rail's failure dot, which the same roster message updates. It draws on
-  // the nav rail rather than in the team panel, so what it does is driven
-  // where the rail is drawn, in test/unit/routines-view.test.js. Stubbed here
-  // so the dispatch case this file evals can run at all.
-  w.updateRoutineFailureBadge = () => {};
+  // The run detail screen this suite never opens, so there is nothing for a
+  // roster update to refresh: stubbed so the roster case this file evals can
+  // run at all.
+  w.runDetailRosterUpdated = () => {};
   // Every swept global, stubbed BY THE NAME THE SWEEP LISTS rather than
   // written out here, and only where nothing already answers to it.
   //

@@ -81,16 +81,27 @@ const DOORS = [
     pressedBy: 'the panel door opens the editor on whatever the panel is scoped to',
   },
   // The fifth door, and the only one that starts from the SKILL rather than
-  // from an agent, a list or a panel. It is scoped only when exactly one agent
-  // has the skill; a skill two agents share opens the agent-agnostic picker
-  // instead, and a skill nobody has offers no door at all, both pressed by
-  // their own tests below.
+  // from an agent, a list or a panel. It lands on the schedule step only when
+  // exactly one agent has the skill; a skill two agents share opens a picker
+  // scoped to that skill, asking only which agent, and a skill nobody has
+  // offers no door at all, both pressed by their own tests below.
   {
     call: 'addRoutineForSkill',
     file: 'views/skills.js',
     surface: 'the Schedule this skill control on a skill\'s own page',
     scoped: 'only when exactly one agent has the skill',
     pressedBy: 'the skill door opens the editor at the schedule step for that skill',
+  },
+  // The sixth door, and the only one that opens onto a routine that ALREADY
+  // EXISTS. Every door above starts a routine; this one changes when one runs.
+  // It is scoped by construction rather than by choice: it names the routine it
+  // was pressed on, so the agent comes with it and there is nothing to pick.
+  {
+    call: 'editRoutineSchedule',
+    file: 'views/routines.js',
+    surface: 'the Edit schedule control on a routine row',
+    scoped: 'by the routine it is pressed on',
+    pressedBy: 'the edit door opens the editor on the routine it was pressed on',
   },
 ];
 
@@ -107,7 +118,7 @@ const NOT_PRESSED = [
 
 // Where the client can call into the editor from. Everything the editor
 // exports that OPENS it; the rest of its surface is reached from inside.
-const ENTRY_CALLS = ['addRoutine', 'addRoutineForAgent', 'addRoutineForSkill', 'openRoutineEditor'];
+const ENTRY_CALLS = ['addRoutine', 'addRoutineForAgent', 'addRoutineForSkill', 'editRoutineSchedule', 'openRoutineEditor'];
 
 function clientFiles() {
   const out = [];
@@ -399,9 +410,10 @@ describe('the doors, pressed', () => {
 
   // A skill can be assigned to more than one agent. Taking the first is a
   // guess wearing the shape of a decision, so the ambiguous case opens the
-  // agent-agnostic picker that already exists for it and lets the reader say
-  // which agent.
-  test('a skill two agents share opens the agent-agnostic picker rather than guessing', () => {
+  // picker scoped to the pressed skill and lets the reader say which agent.
+  // It keeps what the reader already decided: the skill stays chosen, the
+  // only rows offered are its agents, and none of them is selected for them.
+  test('a skill two agents share keeps the skill and asks only which agent', () => {
     const { doc, w, dom } = shell();
     // The pressed skill is deliberately NOT first in the workspace list, so
     // the ordering assertion below can fail. With it first the assertion would
@@ -417,21 +429,23 @@ describe('the doors, pressed', () => {
 
     press(doc, '[data-skills-action="schedule-skill"]');
 
-    // Not the schedule step: nothing has been decided, so nothing is shown as
-    // decided.
+    // Not the schedule step: the agent has not been decided, so nothing is
+    // shown as decided.
     assert.strictEqual(doc.querySelector('select[data-routine-field="frequency"]'), null,
       'an ambiguous skill must not land on the schedule step, which would mean an agent was chosen');
-    assert.match(editorText(doc), /Pick a skill any of your agents already has/,
-      'the agent-agnostic lead, which is the picker that already exists for this case');
-    // The whole picker is offered and nothing is selected, because choosing an
-    // agent on the reader's behalf would be a guess. What that owes them is
-    // that the skill they pressed is not something they have to find again,
-    // so its rows come first.
+    // The lead asks the one question that is open. The reader chose the skill
+    // by pressing its control; asking them to pick a skill again would ask a
+    // question they just answered.
+    assert.match(editorText(doc), /Pick which agent runs Compile the ops summary/,
+      'the lead names the pressed skill and asks only which agent runs it');
+    // The picker keeps the skill and offers only the agent choice: one row per
+    // agent that has the pressed skill, and no other skill, because every
+    // other skill is a choice the reader already declined by pressing this
+    // one.
     assert.deepStrictEqual(
       [...doc.querySelectorAll('[data-skill-key]')].map(r => r.getAttribute('data-skill-key')),
-      ['ops-summary:piper', 'ops-summary:doc', 'reading-digest:doc'],
-      'the pressed skill\'s rows come first, one per agent that could run it, and every other '
-      + 'skill is still offered because the picker stays agent-agnostic',
+      ['ops-summary:piper', 'ops-summary:doc'],
+      'one row per agent that has the pressed skill, and nothing else on offer',
     );
     assert.strictEqual(doc.querySelector('.re-row.sel'), null,
       'nothing is preselected, because preselecting one of two agents is the guess this avoids');
@@ -475,6 +489,115 @@ describe('the doors, pressed', () => {
     w.selectSkill('ops-summary');
     assert.ok(doc.querySelector('[data-skills-action="schedule-skill"]'),
       'a skill an agent has still offers the way in');
+    dom.window.close();
+  });
+
+  // The section itself, by its own label, rather than the whole page's text:
+  // a change that dropped the section and appended its reason to the Used by
+  // card instead would still pass a whole-page substring check, which is the
+  // vanished-section state this test exists to catch.
+  //
+  // "Routine" OR "Routines", NOT "Schedule". The design review pass renamed
+  // this heading to name the thing the box holds (a single routine, in the
+  // case every fixture here builds) rather than the feature; it pluralises
+  // only where the box is actually about to list more than one. Matched by
+  // pattern rather than a fixed string so this helper does not have to be
+  // read as endorsing one spelling over the other.
+  function scheduleSection(doc) {
+    const label = Array.from(doc.querySelectorAll('#skill-detail-content .profile-section-label'))
+      .find(el => /^Routines?$/.test(el.textContent.trim()));
+    return label ? label.closest('.profile-card-section') : null;
+  }
+
+  // The control used to vanish with nothing under its own heading. Both
+  // shapes of the skill page are driven here, side by side, so the difference
+  // between them is a diff a reader can check: one carries the control, the
+  // other carries the reason the control is missing, and neither is silent.
+  test('a skill page with no agent states why it cannot be scheduled, unlike a skill page with one', () => {
+    const { doc, w, dom } = shell();
+    w.skills = [
+      { id: 'unclaimed', slug: 'unclaimed', name: 'Nobody has this one', assignedAgents: [] },
+      { id: 'ops-summary', slug: 'ops-summary', name: 'Compile the ops summary',
+        assignedAgents: [{ id: 'piper', name: 'Piper' }] },
+    ];
+    w.selectSkill = w.RundockSkillsView.selectSkill;
+
+    w.selectSkill('unclaimed');
+    const unclaimedSchedule = scheduleSection(doc);
+    assert.ok(unclaimedSchedule, 'no Schedule section on the page for a skill with no agent');
+    assert.ok(unclaimedSchedule.textContent.includes(w.RundockRoutineEditorModel.UNASSIGNED_REASON),
+      `the Schedule section does not say why it cannot be scheduled: ${unclaimedSchedule.textContent}`);
+    assert.strictEqual(unclaimedSchedule.querySelector('[data-skills-action="schedule-skill"]'), null,
+      'a control that cannot lead where its label says is still on the page');
+
+    w.selectSkill('ops-summary');
+    const assignedSchedule = scheduleSection(doc);
+    assert.ok(assignedSchedule, 'no Schedule section on the page for a skill with an agent');
+    assert.ok(assignedSchedule.querySelector('[data-skills-action="schedule-skill"]'),
+      'a skill an agent has lost its way in to schedule it');
+    assert.ok(!assignedSchedule.textContent.includes(w.RundockRoutineEditorModel.UNASSIGNED_REASON),
+      'a skill an agent has carries a reason for an absence that is not true of it');
+    dom.window.close();
+  });
+
+  // SAME SHAPE AS THE AGENT PROFILE'S ROUTINES CARD: once a routine exists
+  // for this skill, the control that offers to make one is redundant and
+  // goes, replaced by the routine itself, the same way the profile page's
+  // Routines card stops offering "Add routine" once the agent has one.
+  test('a skill already scheduled shows the routine instead of the button', () => {
+    const { doc, w, dom } = shell();
+    // The default fixture gives piper a routine with no `skill` field, which
+    // must not match anything; this scopes one to ops-summary specifically.
+    w.agents[0].routines = [
+      { name: 'Existing routine', schedule: 'every day at 08:00', skill: 'unrelated-skill' },
+      { name: 'Compile the ops summary daily', schedule: 'every day at 09:00', skill: 'ops-summary' },
+    ];
+    w.skills = [
+      { id: 'ops-summary', slug: 'ops-summary', name: 'Compile the ops summary',
+        assignedAgents: [{ id: 'piper', name: 'Piper' }] },
+    ];
+    w.selectSkill = w.RundockSkillsView.selectSkill;
+    w.selectSkill('ops-summary');
+
+    const section = scheduleSection(doc);
+    assert.ok(section, 'no Schedule section on the page for a scheduled skill');
+    assert.strictEqual(section.querySelector('[data-skills-action="schedule-skill"]'), null,
+      'the button stayed up beside the routine it duplicates');
+    assert.match(section.textContent, /Compile the ops summary daily/,
+      'the routine that exists for this skill is not shown');
+    assert.doesNotMatch(section.textContent, /Existing routine/,
+      'a routine scheduling a different skill leaked into this one\'s Schedule card');
+
+    // Pressing the routine is wired to the same handler the agent profile's
+    // own routine rows use, scoped to the agent that owns it.
+    const row = section.querySelector('[data-agent-id]');
+    assert.strictEqual(row.getAttribute('onclick'), 'showRoutinesForAgent(this.dataset.agentId)',
+      'the routine row does not use the same destination the profile page\'s routine rows do');
+    assert.strictEqual(row.dataset.agentId, 'piper');
+    dom.window.close();
+  });
+
+  // The Used by card, directly above Schedule on the same page, already says
+  // an unassigned skill is available to all agents. The Schedule card's
+  // reason must not deny that in the same breath: a page that both offers a
+  // skill to every agent and states nobody has it is contradicting itself,
+  // which is exactly what AC-5 forbids, and it does not matter that the
+  // string came from one shared constant if that constant disagrees with
+  // the card sitting above it.
+  test('the Used by card and the Schedule card do not contradict each other on an unassigned skill\'s page', () => {
+    const { doc, w, dom } = shell();
+    // Named to hold no false match for the phrases this test checks are
+    // absent: 'unclaimed' elsewhere in the packet names its skill 'Nobody
+    // has this one', which would make the skill's own display name the
+    // thing this assertion caught rather than any claim the page makes.
+    w.skills = [{ id: 'unclaimed', slug: 'unclaimed', name: 'Orphan skill', assignedAgents: [] }];
+    w.selectSkill = w.RundockSkillsView.selectSkill;
+    w.selectSkill('unclaimed');
+    const page = doc.getElementById('skill-detail-content').textContent;
+
+    assert.match(page, /Available to all agents/, 'sanity: the Used by card renders what this test compares against');
+    assert.ok(!/nobody has/i.test(page), 'the page states nobody has the skill against its own Used by card');
+    assert.ok(!/no agent has/i.test(page), 'the page states no agent has the skill against its own Used by card');
     dom.window.close();
   });
 
@@ -581,7 +704,7 @@ describe('the whole journey, by pressing only', () => {
     choose(doc, w, 'time', '07:00');
     press(doc, '[data-run-on="local"]');
 
-    assert.match(editorText(doc), /Every Monday at 7:00am, run: Compile the ops summary, on this computer\./);
+    assert.match(editorText(doc), /Run Compile the ops summary every Monday at 7:00am, on this computer\./);
     press(doc, '.re-actions .settings-btn-primary');
 
     assert.match(editorText(doc), /London time\. Runs while Rundock is open here\./);
@@ -708,5 +831,136 @@ describe('every control the editor renders resolves to something', () => {
       assert.strictEqual(typeof w[call], 'function', `${call} is not published`);
     }
     dom.window.close();
+  });
+});
+
+// ===== THE DOOR ONTO A ROUTINE THAT ALREADY EXISTS =====
+//
+// Every door above starts a routine. This one changes when an existing one
+// runs, so what it has to carry is not a scope but an IDENTITY: the agent, the
+// name, and which of that agent's routines of that name it is. A door that
+// dropped the last part would open on one routine's times and save over
+// another's, and the reader would have no way to tell from the screen.
+//
+// Pressed rather than called, like every other door here.
+describe('the edit door', () => {
+  test('the edit door opens the editor on the routine it was pressed on', () => {
+    const { doc, w, dom } = shell();
+    w.renderRoutines();
+
+    const control = press(doc, '.routine-row [data-routines-action="edit"]');
+    assert.strictEqual(control.getAttribute('aria-label'), 'Edit schedule',
+      'the control says what it opens, since a pencil on a row could mean renaming it');
+
+    // Step one is not behind this door: the skill was chosen when the routine
+    // was made and is not being chosen again.
+    assert.ok(doc.querySelector('select[data-routine-field="frequency"]'),
+      'the edit door lands on the schedule step, not on the picker');
+    assert.strictEqual(doc.querySelector('[data-skill-key]'), null,
+      'nothing is left to pick, so no picker is drawn');
+
+    // AC-2, read off the rendered controls rather than off internal state: a
+    // select asked to show a value it does not have shows its first one
+    // instead, which is the failure this has to be able to see. The shell's
+    // routine runs at 08:00, which is not the editor's own default.
+    assert.strictEqual(doc.querySelector('select[data-routine-field="frequency"]').value, 'day');
+    assert.strictEqual(doc.querySelector('select[data-routine-field="time"]').value, '08:00');
+    assert.match(editorText(doc), /Existing routine/, 'and it names the routine being changed');
+
+    // And the identity travels all the way to the message, rather than being
+    // asserted off state the reader cannot see.
+    choose(doc, w, 'time', '16:00');
+    press(doc, '.re-actions .settings-btn-primary');
+    press(doc, '[data-routine-editor="save"]');
+    assert.deepStrictEqual(w.sent, [{
+      type: 'set_routine_schedule',
+      agentId: 'piper',
+      name: 'Existing routine',
+      occurrence: 0,
+      schedule: 'every day at 16:00',
+    }]);
+    dom.window.close();
+  });
+
+  // Nothing makes a routine name unique within a file, and the writer counts
+  // namesakes on purpose so a second can be made through this interface. The
+  // row the reader pressed is the routine that moves.
+  test('pressing the second routine of a name edits that one, not the first', () => {
+    const { doc, w, dom } = shell();
+    w.agents = w.agents.map(a => (a.id === 'piper' ? {
+      ...a,
+      routines: [
+        { name: 'Twin', schedule: 'every day at 07:00' },
+        { name: 'Twin', schedule: 'every day at 18:00' },
+      ],
+    } : a));
+    w.renderRoutines();
+
+    // The rows are ordered by next run rather than by file position, so the
+    // one carrying 18:00 is found by what it shows rather than by its index.
+    const rows = [...doc.querySelectorAll('.routine-row')];
+    const second = rows.filter(r => /6:00pm/.test(r.textContent))[0];
+    assert.ok(second, 'sanity: the later of the two namesakes is on the page');
+    second.querySelector('[data-routines-action="edit"]').click();
+
+    assert.strictEqual(doc.querySelector('select[data-routine-field="time"]').value, '18:00',
+      'the editor opened on the times of the row that was pressed');
+    press(doc, '.re-actions .settings-btn-primary');
+    press(doc, '[data-routine-editor="save"]');
+    assert.strictEqual(w.sent.length, 1);
+    assert.strictEqual(w.sent[0].occurrence, 1,
+      'the message names the namesake the reader pointed at');
+    assert.strictEqual(w.sent[0].schedule, 'every day at 18:00');
+    dom.window.close();
+  });
+
+  // A routine whose schedule this editor could not have built is exactly where
+  // the control is worth most: it is a routine that fires nothing, and this is
+  // the way to fix it. The door opens, and the editor accounts for the
+  // difference rather than the row hiding the way in.
+  test('a routine on a schedule the picker cannot show still opens, and says so', () => {
+    const { doc, w, dom } = shell();
+    w.agents = w.agents.map(a => (a.id === 'piper'
+      ? { ...a, routines: [{ name: 'Hand written', schedule: 'every fortnight at 07:00' }] }
+      : a));
+    w.renderRoutines();
+    press(doc, '.routine-row [data-routines-action="edit"]');
+
+    const note = doc.querySelector('[data-routine-editor="stored-schedule"]');
+    assert.ok(note, 'the editor accounts for a schedule its controls cannot show');
+    assert.match(note.textContent, /every fortnight at 07:00/,
+      'and names the stored one rather than describing it');
+
+    // NOTHING IS PRE-FILLED FROM IT, not even the half a pattern would have
+    // recognised. A cadence of "fortnight" and a time of 07:00 split apart
+    // cleanly, and a door that handed those over would put 07:00 on the time
+    // control while the frequency control silently showed its first option: a
+    // schedule the reader never set, wearing the authority of their own.
+    assert.strictEqual(doc.querySelector('select[data-routine-field="time"]').value, '09:00',
+      'the stored time is not one half of a schedule this editor can build, so it is not shown as one');
+    assert.strictEqual(doc.querySelector('select[data-routine-field="frequency"]').value, 'day');
+    dom.window.close();
+  });
+});
+
+// The Schedule card on an unassigned skill's page reads
+// `routineEditorModel().UNASSIGNED_REASON` with no null guard, matching how
+// `renderSkillsEmpty` reads `skillsModel()` elsewhere in the same file: a
+// missing model fails loudly rather than the page quietly keeping stale
+// content, which is what a guarded call would have done instead. The comment
+// beside that call asserts index.html loads routine-editor-model.js before
+// views/skills.js. A comment cannot fail, so this pins the order itself, cut
+// out of the real page the way every shell above cuts its markup: a
+// reordering fails here BY NAME, rather than as an uncaught exception on the
+// one page a reader would meet it, an unassigned skill's own.
+describe('the script order the unguarded model read depends on', () => {
+  test('index.html loads routine-editor-model.js before views/skills.js', () => {
+    const editorModelAt = INDEX_SRC.indexOf('<script src="/routine-editor-model.js">');
+    const skillsViewAt = INDEX_SRC.indexOf('<script src="/views/skills.js">');
+    assert.ok(editorModelAt !== -1, 'index.html no longer loads routine-editor-model.js');
+    assert.ok(skillsViewAt !== -1, 'index.html no longer loads views/skills.js');
+    assert.ok(editorModelAt < skillsViewAt,
+      'views/skills.js now loads before routine-editor-model.js, so its unguarded '
+      + 'routineEditorModel().UNASSIGNED_REASON read on an unassigned skill\'s page will throw');
   });
 });

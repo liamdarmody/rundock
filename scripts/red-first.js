@@ -30,7 +30,15 @@
  *
  * USAGE
  *
- *   node scripts/red-first.js --base main --tests "npm test"
+ *   node scripts/red-first.js --tests "npm test"
+ *
+ * WITH NO --base, which is the invocation to use. The base is worked out from
+ * the refs that cannot have drifted behind this branch's fork point, because a
+ * branch name can: a git worktree does not move the local ref another worktree
+ * has checked out, and reverting against a stale one takes away work that had
+ * already merged and reports its tests as proof of this change. See
+ * resolveBase. Pass --base only to measure against something other than the
+ * trunk, and expect a refusal if it reaches past the fork point.
  *
  * Exit 0 only when discrimination is proven. Every other outcome is non-zero
  * and names itself, because "it failed" cannot distinguish a weak test from a
@@ -52,7 +60,7 @@
  * load the retries were creating.
  */
 
-const { execFileSync, spawn, spawnSync } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -156,6 +164,158 @@ function existsAt(repo, ref, file) {
   }
 }
 
+// The names a repository's trunk can go by, in the order it is asked about
+// them.
+const TRUNK_NAMES = ['main', 'master'];
+
+// The commit a ref names, or null where this repository has no such ref.
+function shaOf(repo, ref) {
+  try {
+    return execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`],
+      { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function remotesOf(repo) {
+  return git(repo, ['remote']).split('\n').map(s => s.trim()).filter(Boolean);
+}
+
+/**
+ * The ref naming the trunk on one remote, or null if that remote has none.
+ *
+ * `<remote>/HEAD` is the remote's own answer to which branch is its trunk, so
+ * it is asked first and the guessing below only runs where the repository has
+ * never been told.
+ */
+function remoteTrunk(repo, remote) {
+  let head = null;
+  try {
+    head = execFileSync('git', ['symbolic-ref', '--quiet', `refs/remotes/${remote}/HEAD`],
+      { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch (e) {
+    head = null;
+  }
+  if (head) return head.replace(/^refs\/remotes\//, '');
+  for (const name of TRUNK_NAMES) {
+    if (shaOf(repo, `${remote}/${name}`)) return `${remote}/${name}`;
+  }
+  return null;
+}
+
+/**
+ * Which ref this run reverts against, or a refusal saying why there is none.
+ *
+ * @returns {{ok: true, ref: string}|{ok: false, reason: string}}
+ *
+ * WHY THE DEFAULT IS NOT `main`. Branches here are built in git worktrees cut
+ * from the published trunk, and a worktree does not move the local branch ref
+ * that another worktree has checked out. The local `main` in one checkout
+ * therefore sits wherever its owner last left it, which can be behind the
+ * commit this branch was actually cut from. Reverting against it takes away
+ * work that had already merged, that work's tests go red, and the run reports
+ * PROVEN for a change that proved nothing. Measured, not imagined: a three-file
+ * change with no test of its own reported PROVEN on two tests belonging to
+ * somebody else's merge, and the verdict line, the exit code and the record
+ * were indistinguishable from a genuine pass.
+ *
+ * A remote-tracking ref cannot drift that way. Nothing local moves it, and it
+ * only ever changes when the repository is told what the remote holds.
+ *
+ * REFUSING RATHER THAN FALLING BACK. Where no ref can be shown not to have
+ * drifted, this refuses and names the flag rather than guessing. Naming the
+ * base costs one flag; a verdict measured against the wrong tree cannot be
+ * recovered by reading the output, which is the whole of the defect above.
+ *
+ * A repository with no remote at all is the exception, and it is not a
+ * loophole: there is nothing for its local trunk to drift against, and
+ * refusing there would take the tool away from every checkout without a remote,
+ * including the throwaway ones its own tests build.
+ */
+function resolveBase(repo, requested) {
+  if (requested) return { ok: true, ref: requested };
+
+  const remotes = remotesOf(repo);
+  const trunks = [];
+  for (const remote of remotes) {
+    const trunk = remoteTrunk(repo, remote);
+    if (trunk) trunks.push(trunk);
+  }
+  // origin first, because a repository that has one and something else is
+  // naming its own default by having it; otherwise the only trunk there is.
+  const chosen = trunks.find(t => t.startsWith('origin/'))
+    || (trunks.length === 1 ? trunks[0] : null);
+  if (chosen) return { ok: true, ref: chosen };
+
+  if (remotes.length) {
+    return { ok: false, reason: 'there is no single remote-tracking trunk to measure '
+      + `against (remotes: ${remotes.join(', ')}; trunks found: ${trunks.join(', ') || 'none'}). `
+      + 'Only a remote-tracking ref can be shown not to have drifted behind the point '
+      + 'this branch was cut from, so name the one you mean with --base <remote>/<branch>.' };
+  }
+
+  const local = TRUNK_NAMES.filter(n => shaOf(repo, `refs/heads/${n}`));
+  if (local.length === 1) return { ok: true, ref: local[0] };
+  return { ok: false, reason: 'this repository has no remote, and no single local '
+    + `${TRUNK_NAMES.join(' or ')} branch to fall back to (found: ${local.join(', ') || 'none'}). `
+    + 'Name the base with --base.' };
+}
+
+// Is `older` reachable from `newer`? Exit status is the whole answer, so
+// nothing is parsed.
+function isAncestor(repo, older, newer) {
+  try {
+    execFileSync('git', ['merge-base', '--is-ancestor', older, newer],
+      { cwd: repo, stdio: 'ignore' });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * The narrowest point this branch could have been cut from, or null.
+ *
+ * @returns {{ref: string, sha: string}|null}
+ *
+ * WHY MORE THAN ONE REF IS ASKED. The base decides how far back the revert
+ * reaches, and a base that reaches past the fork point takes away work that had
+ * already merged along with the change under test. The fork point cannot be
+ * read off one ref: it is the NEWEST of the merge bases the trunk refs offer,
+ * because a ref that has fallen behind can only ever name an older one.
+ *
+ * A ref that already contains HEAD is left out. Its merge base IS HEAD, the
+ * diff against it is empty, and taking that for the fork point would make every
+ * file in the change look like a file the change does not touch. This branch's
+ * own pushed ref is exactly such a ref, so only trunks are asked and the check
+ * is made anyway.
+ *
+ * Where the candidates cannot be ordered against each other there is no single
+ * answer and none is offered. The caller then measures against the base it was
+ * given, which is what every run did before this existed.
+ */
+function forkPoint(repo, base) {
+  const head = shaOf(repo, 'HEAD');
+  const refs = new Set([base]);
+  for (const remote of remotesOf(repo)) {
+    const trunk = remoteTrunk(repo, remote);
+    if (trunk) refs.add(trunk);
+  }
+  for (const name of TRUNK_NAMES) {
+    if (shaOf(repo, `refs/heads/${name}`)) refs.add(name);
+  }
+  const points = [];
+  for (const ref of refs) {
+    let sha = null;
+    try { sha = git(repo, ['merge-base', ref, 'HEAD']); } catch (e) { continue; }
+    if (sha === head) continue;
+    points.push({ ref, sha });
+  }
+  return points.find(p => points.every(q => q.sha === p.sha || isAncestor(repo, q.sha, p.sha)))
+    || null;
+}
+
 /**
  * Make `files` look exactly as they do in `ref`, in both the index and the
  * working tree.
@@ -183,141 +343,11 @@ function restoreTo(repo, ref, files) {
   }
 }
 
-// How long a process group started here gets to end on its own before it is
-// ended outright. Short on purpose. The politeness is worth something, since a
-// test runner given the chance will close its reporters and flush its output,
-// but the group being waited on is only ever one this run started, and nothing
-// this tool spawns has a restore step to skip. The cost of waiting longer is
-// paid by a developer watching the tool refuse to exit.
-const END_GRACE_MS = 500;
-const POLL_MS = 50;
-
-// A pause that blocks rather than yields.
-//
-// It has to block, because the last place the ending below runs is an 'exit'
-// listener. By then the event loop has finished and a timer would never fire,
-// so anything asynchronous there is the same as no wait at all.
-function pause(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-/**
- * Does this target still exist?
- *
- * A NEGATIVE number asks about a whole process group, a positive one about a
- * single process; the rule is the same for both, which is why there is one
- * function. Signal 0 asks the kernel without sending anything, and EPERM is a
- * yes: the target is there and this process may not signal it, which is a
- * different answer from the target being gone.
- *
- * EXISTING IS NOT THE SAME AS RUNNING, and the difference is the whole of the
- * defect below this line. See groupRunning.
- */
-function exists(target) {
-  try { process.kill(target, 0); return true; } catch (e) { return e.code === 'EPERM'; }
-}
-
-// The process state that means "already exited, still listed". A process whose
-// parent has not collected it keeps its entry in the table, and its process
-// group with it. Every other state is a process that is still on the machine.
-const EXITED_STATE = 'Z';
-
-/**
- * The members of a process group, as {pid, state}, or null if this machine will
- * not say.
- *
- * Spawning is allowed here even from a signal or 'exit' listener because it is
- * synchronous, which is also why it is asked only when the cheap question above
- * has already answered "something is there".
- *
- * The whole table is listed and filtered here rather than asked for by group,
- * because the flag that selects a process group is not the same one on every
- * platform and picking the wrong one silently selects by something else.
- */
-function psGroupMembers(pgid) {
-  const out = spawnSync('ps', ['-e', '-o', 'pgid=,pid=,stat='],
-    { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] });
-  if (out.error || typeof out.stdout !== 'string') return null;
-  if (out.status !== 0 && !out.stdout.trim()) return null;
-  const members = [];
-  for (const line of out.stdout.split('\n')) {
-    const parts = line.trim().split(/\s+/);
-    if (parts.length < 3) continue;
-    if (Number(parts[0]) !== pgid) continue;
-    members.push({ pid: Number(parts[1]), state: parts[2] });
-  }
-  return members;
-}
-
-/**
- * Is anything in this process group still RUNNING, as opposed to merely listed?
- *
- * @returns {boolean|null} true running, false gone, null this machine will not say
- *
- * THE DISTINCTION IS THE DEFECT, and it is a platform difference that a macOS
- * measurement cannot show. When this process signals its own direct child and
- * then waits, the child dies at once but stays in the table until this process
- * collects it, which it cannot do while the event loop is blocked in the wait.
- * On Linux that corpse is still a member of its process group, so asking the
- * kernel whether the group exists keeps answering yes for the entire grace,
- * the group is then SIGKILLed for no reason, the ending reports that it
- * survived, and an alarm meant for a genuine leak fires on every interrupt.
- * macOS filters exited members out of the same question, so none of it shows
- * there. Continuous integration runs on Linux.
- *
- * So the group is asked about by its members and their states, and a group
- * whose remaining members have all exited is gone.
- *
- * The reader is a parameter so the decision can be driven on any machine,
- * including one whose sandbox blocks spawning, rather than only on the platform
- * that happens to produce corpses.
- */
-function groupRunning(pgid, readMembers = psGroupMembers) {
-  // Cheap first, and on macOS it is usually the only question asked.
-  if (!exists(-pgid)) return false;
-  const members = readMembers(pgid);
-  if (members === null) return null;
-  return members.some(m => !String(m.state).startsWith(EXITED_STATE));
-}
-
-/**
- * End one process group, and say what became of it.
- *
- * @returns {'gone'|'running'|'unknown'}
- *
- * A NEGATIVE pid signals the whole group, which is the point rather than a
- * detail. The test command is spawned detached, so it heads its own group, and
- * a package runner starts children inside that group; ending the direct child
- * alone leaves those children running, which is how a check that had already
- * printed its conclusion kept a full suite on the machine.
- *
- * Ending a group BY NUMBER is also what keeps the remedy from becoming the next
- * defect. The obvious way to clear leftovers is to match command lines across
- * the machine and kill what matches, and that reaches processes this tool never
- * started: a suite in another checkout, or a mutation harness partway through
- * rewriting a file it restores in a `finally` that a killed process never runs.
- * A group id names processes by where they came from rather than by what they
- * look like, so nothing outside this run can be caught by it however similar it
- * looks.
- *
- * SIGTERM first and SIGKILL after the grace, because a child that ignores
- * SIGTERM is the only case where anything but the escalation keeps a suite from
- * outliving this process, and the criterion it answers to is unconditional.
- */
-function endGroup(pgid) {
-  if (groupRunning(pgid) === false) return 'gone';
-  try { process.kill(-pgid, 'SIGTERM'); } catch (e) { /* gone since the check */ }
-  const deadline = Date.now() + END_GRACE_MS;
-  while (Date.now() < deadline) {
-    if (groupRunning(pgid) === false) return 'gone';
-    pause(POLL_MS);
-  }
-  try { process.kill(-pgid, 'SIGKILL'); } catch (e) { /* gone since the check */ }
-  pause(POLL_MS);
-  const after = groupRunning(pgid);
-  if (after === false) return 'gone';
-  return after === null ? 'unknown' : 'running';
-}
+// The process-group lifecycle lives in scripts/lib/process-group.js, because
+// the pre-commit gate has the same subtree to end and got it wrong in the same
+// three ways. `exists` and `groupRunning` are used below; `groupRunning` is
+// re-exported because this tool's own orphan tests drive it directly.
+const { exists, groupRunning, endGroup } = require('./lib/process-group.js');
 
 /**
  * Where a run in progress is recorded, so the next start can see it.
@@ -416,15 +446,23 @@ function claimRun(repo, tests) {
 
 /**
  * @returns {{outcome: 'proven'|'not-discriminating'|'inconclusive'|'not-provable'|'refused',
- *            reason: string, passedWithChange: boolean|null,
+ *            reason: string, base: string|null, passedWithChange: boolean|null,
  *            failedWithoutChange: boolean|null, testsPassedWithChange: number|null,
  *            testsFailedWithoutChange: number|null, namesFailedWithoutChange: string[],
  *            source: string[], tests: string[], limitation: string}}
+ *
+ * `base` defaults to null rather than to a branch name, which means "work out
+ * which ref cannot have drifted". See resolveBase for why a literal default was
+ * the wrong one.
  */
-async function redFirst({ repo, base = 'main', tests, log = () => {}, runner = null,
+async function redFirst({ repo, base = null, tests, log = () => {}, runner = null,
   groupEnder = endGroup }) {
+  // The ref this run settled on, once it has. Held out here rather than passed
+  // to each result, so no exit can report an outcome without saying what it was
+  // measured against: that omission is how the incident stayed invisible.
+  let baseRef = null;
   const result = (outcome, reason, extra = {}) => ({
-    outcome, reason, passedWithChange: null, failedWithoutChange: null,
+    outcome, reason, base: baseRef, passedWithChange: null, failedWithoutChange: null,
     testsPassedWithChange: null, testsFailedWithoutChange: null, namesFailedWithoutChange: [],
     source: [], tests: [], limitation: LIMITATION, ...extra,
   });
@@ -661,7 +699,15 @@ async function redFirst({ repo, base = 'main', tests, log = () => {}, runner = n
         + 'rewrites tracked files; commit or stash first');
     }
 
-    const mergeBase = git(repo, ['merge-base', base, 'HEAD']);
+    const resolved = resolveBase(repo, base);
+    if (!resolved.ok) return result('refused', resolved.reason);
+    baseRef = resolved.ref;
+    // Printed, not merely returned. The incident this guards against was
+    // readable only from a file count inside the record, and a run whose base
+    // is not on screen cannot be checked by the person reading the verdict.
+    log(`measuring against ${baseRef}`);
+
+    const mergeBase = git(repo, ['merge-base', baseRef, 'HEAD']);
     // --no-renames, and it is not a detail. With rename detection on, a renamed
     // file is reported once, under its NEW path. restoreTo then asks whether
     // that path exists at the base, finds it does not, and deletes it. The
@@ -674,7 +720,37 @@ async function redFirst({ repo, base = 'main', tests, log = () => {}, runner = n
     const testFiles = changed.filter(isTest);
     sourceFiles = changed.filter(f => !isTest(f));
 
-    if (!changed.length) return result('not-provable', `nothing changed against ${base}`);
+    if (!changed.length) return result('not-provable', `nothing changed against ${baseRef}`);
+
+    // A REVERT THAT REACHES PAST THE FORK POINT IS REFUSED, NOT ANNOTATED.
+    //
+    // Everything below this line reads a verdict off a suite that was run
+    // against a reverted tree, and a tree reverted further back than this
+    // branch starts is somebody else's tree as much as it is this one's. The
+    // tests that then go red can be theirs, and no outcome computed from them
+    // says anything about this change. That is not a caveat to attach to a
+    // PROVEN; it is a reason there is nothing to report.
+    //
+    // Refused whether or not extra files are involved. The same files taken
+    // back further than the fork point carry the earlier work's content too, so
+    // a check made on the file list alone would let exactly that case through.
+    // The list is still named, because the mismatch it describes was present in
+    // the incident, as a file count, and unread.
+    const fork = forkPoint(repo, baseRef);
+    if (fork && fork.sha !== mergeBase) {
+      const own = new Set(git(repo, ['diff', '--no-renames', '--name-only', fork.sha, 'HEAD'])
+        .split('\n').filter(Boolean));
+      const beyond = changed.filter(f => !own.has(f));
+      const extra = git(repo, ['rev-list', '--count', `${mergeBase}..${fork.sha}`]);
+      return result('refused', `${baseRef} sits ${extra} commits before the point this `
+        + 'branch was cut from, so reverting against it takes away work that had already '
+        + "merged and can report that work's tests as proof of this change. Reverted but "
+        + `not part of this change (${beyond.length}): ${beyond.slice(0, 10).join(', ') || 'none'}. `
+        + `Measure against ${fork.ref}, which is where this branch actually starts, or `
+        + 'leave --base off and it is chosen for you.',
+      { source: sourceFiles, tests: testFiles });
+    }
+
     if (!testFiles.length) {
       return result('not-provable', 'the change adds no tests, so there is nothing '
         + 'to prove; that is its own finding', { source: sourceFiles, tests: [] });
@@ -761,6 +837,10 @@ function recordOutcome(repo, outcome) {
   record.redFirst = {
     outcome: outcome.outcome,
     reason: outcome.reason,
+    // What it was measured against. A verdict without its base cannot be
+    // checked at all: the record that carried the false PROVEN named counts and
+    // test names, and every one of them was true of a different branch's work.
+    base: outcome.base,
     // AC-6 names test counts. File counts are a different quantity and were
     // written here first, which is the proxy-for-the-property fault this whole
     // check exists to catch, committed inside the check itself.
@@ -786,7 +866,10 @@ async function main() {
   const repo = path.resolve(arg('repo', process.cwd()));
   const outcome = await redFirst({
     repo,
-    base: arg('base', 'main'),
+    // No literal default. Left off, the base is worked out from the refs that
+    // cannot have drifted behind this branch's fork point, which is what a
+    // worktree needs and what a branch name cannot promise.
+    base: arg('base', null),
     tests: arg('tests', 'npm test'),
     log: (m) => console.log(`[red-first] ${m}`),
   });

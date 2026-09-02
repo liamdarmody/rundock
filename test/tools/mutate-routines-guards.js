@@ -46,6 +46,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
+const { beginMutationRun } = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 
@@ -162,6 +163,20 @@ const VIEW_SCOPE = { src: path.join(ROOT, 'public', 'views', 'routines.js'), sui
 // The handlers behind the row's two controls, and the data model they write
 // through.
 const HANDLER = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/unit/routine-actions.test.js' };
+// The way into the editor from a routine row. It lives in the editor's file and
+// is watched by the file that PRESSES it, because an entry point is tested by
+// the surface a user touches: aimed at the list's own suite these mutations
+// would report a guard nobody holds.
+const EDIT_DOOR = { src: path.join(ROOT, 'public', 'views', 'routine-editor.js'), suite: 'test/unit/routine-editor-doors.test.js' };
+// The ROW's half of that door, watched by the same file for the same reason:
+// what the row hands over is only observable by pressing it and reading what
+// the editor then sends.
+const EDIT_DOOR_ROW = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/routine-editor-doors.test.js' };
+// The double-fire guard itself, watched by the file that drives a schedule edit
+// past it. The edit path is forbidden from touching run state, so what those
+// tests establish is what the EXISTING guard does across an edit; mutating it
+// here is what proves they are watching the guard rather than restating it.
+const SCHEDULER_EDIT = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/routine-edit-duplicate-run.test.js' };
 // WHERE A ROUTINE RUNS, WATCHED AT THE RENDERED SURFACE AND NOWHERE ELSE.
 //
 // The rule is that a routine in a workspace this window does not have open is
@@ -305,9 +320,13 @@ const MUTATIONS = [
   // ONE ROW, because the guard lives in one place: both controls delegate to
   // one send path. A control added later that clears the refusal itself, rather
   // than through that path, needs a row of its own.
+  // ANCHORED ON THE FUNCTION IT BELONGS TO. The three lines now open two
+  // functions, the shared send path and the door onto the editor, and String
+  // replace takes the first: unanchored, this would break whichever came first
+  // and report on whatever that turned red. The guard itself is unchanged.
   [VIEW_REPLY, 'a control the reader presses clears the last refusal',
-    '  const entry = allRoutines()[index];\n  pendingProblem = null;\n  if (!entry',
-    '  const entry = allRoutines()[index];\n  if (!entry'],
+    "  const entry = allRoutines()[index];\n  pendingProblem = null;\n  if (!entry || typeof ws === 'undefined'",
+    "  const entry = allRoutines()[index];\n  if (!entry || typeof ws === 'undefined'"],
   [MODEL, 'a refusal says nothing was changed',
     "  const ACTION_PROBLEM = 'That routine could not be changed. Nothing has been altered.';",
     "  const ACTION_PROBLEM = 'That routine could not be changed.';"],
@@ -372,7 +391,7 @@ const MUTATIONS = [
 
   // Where a row goes, watched by the file that presses the route.
   [PROFILE_ROUTE, 'a routine row carries the agent whose profile it is on',
-    'onclick="showRoutinesForAgent(\'${esc(a.id)}\')"',
+    'onclick="showRoutinesForAgent(this.dataset.agentId)"',
     'onclick="showRoutinesForAgent(null)"'],
   [VIEW_SCOPE, 'the list is filtered to the agent it was opened for',
     '  if (typeof setRoutinesScope === \'function\') setRoutinesScope(agentId);',
@@ -426,8 +445,8 @@ const MUTATIONS = [
 
   // ===== WHO DRAWS THIS LIST, AND HOW A READER ARRIVES AT IT =====
   [APP, 'the arriving roster redraws the list',
-    'renderRoutinesPanel(); renderRoutines(); updateRoutineFailureBadge();',
-    'renderRoutinesPanel(); updateRoutineFailureBadge();'],
+    'renderRoutinesPanel(); renderRoutines(); renderConvoList();',
+    'renderRoutinesPanel(); renderConvoList();'],
   [APP, 'the rail entry draws something into the view it shows',
     "  else if(nav==='routines') { showRoutinesForAgent(null); }",
     "  else if(nav==='routines') { }"],
@@ -466,9 +485,67 @@ const MUTATIONS = [
   [HANDLER, 'the delete tells the writer which block',
     '  const next = removeRoutineBlock(before, found.name, found.occurrence);',
     '  const next = removeRoutineBlock(before, found.name);'],
-  [HANDLER, 'a routine flag change tells the writer which block',
-    '  const next = updateRoutineBlock(before, found.name, { [field]: value }, found.occurrence);',
-    '  const next = updateRoutineBlock(before, found.name, { [field]: value });'],
+  // The write moved into the one function both the row's controls and the
+  // schedule edit go through, so the guard text moved with it. Unchanged
+  // otherwise: dropping the occurrence still makes every control act on the
+  // first routine of its name whatever the reader pointed at.
+  [HANDLER, 'a routine field change tells the writer which block',
+    '    next = updateRoutineBlock(before, found.name, { [field]: value }, found.occurrence);',
+    '    next = updateRoutineBlock(before, found.name, { [field]: value });'],
+
+  // ===== THE GUARD A SCHEDULE EDIT HAS TO SURVIVE =====
+  //
+  // A routine keeps its run stamp when its schedule moves, because the state is
+  // keyed by identity. Each of these breaks one half of the comparison that
+  // then decides whether it runs again, runs twice, or never runs.
+  [SCHEDULER_EDIT, 'the daily suppression compares the hour, not just the day',
+    '      if (lastRun.toDateString() === now.toDateString() && lastRun.getHours() >= parsed.hour) return null;',
+    '      if (lastRun.toDateString() === now.toDateString()) return null;'],
+  [SCHEDULER_EDIT, 'the daily suppression compares the day, not just the hour',
+    '      if (lastRun.toDateString() === now.toDateString() && lastRun.getHours() >= parsed.hour) return null;',
+    '      if (lastRun.getHours() >= parsed.hour) return null;'],
+  [SCHEDULER_EDIT, 'a weekly routine that already ran on its day is not run again',
+    '    if (daysSinceLastRun < 1 && lastRun.getDay() === parsed.day) return null;',
+    '    if (false) return null;'],
+
+  // ===== THE THIRD CONTROL ON THE ROW =====
+  //
+  // A routine's schedule could only be changed by deleting the routine and
+  // making a new one, so the control's absence is the defect these put back.
+  [VIEW, 'a row offers a way to change when it runs',
+    "    actions += iconButton('edit', 'Edit schedule', ICONS.pencil, `routinesEditSchedule(${index})`, false);\n",
+    ''],
+  [VIEW, 'the edit control says what it opens',
+    "    actions += iconButton('edit', 'Edit schedule', ICONS.pencil, `routinesEditSchedule(${index})`, false);",
+    "    actions += iconButton('edit', '', ICONS.pencil, `routinesEditSchedule(${index})`, false);"],
+  // Changing when a routine runs is not destructive and must not be dressed as
+  // it. The danger flag reads as the delete control's tone.
+  [VIEW, 'the edit control is not dressed as a destructive one',
+    "    actions += iconButton('edit', 'Edit schedule', ICONS.pencil, `routinesEditSchedule(${index})`, false);\n"
+    + "    actions += iconButton('delete'",
+    "    actions += iconButton('edit', 'Edit schedule', ICONS.pencil, `routinesEditSchedule(${index})`, true);\n"
+    + "    actions += iconButton('delete'"],
+  [EDIT_DOOR_ROW, 'the edit door says which routine of its name it means',
+    '  editRoutineSchedule(entry.agent.id, entry.routine.name, entry.occurrence);',
+    '  editRoutineSchedule(entry.agent.id, entry.routine.name, 0);'],
+  [VIEW, 'opening the editor clears the refusal the last action left',
+    '  const entry = allRoutines()[index];\n  pendingProblem = null;\n  if (!entry || typeof editRoutineSchedule',
+    '  const entry = allRoutines()[index];\n  if (!entry || typeof editRoutineSchedule'],
+  // The door itself, watched by the file that enumerates every way into the
+  // editor rather than by the file that draws the row.
+  [EDIT_DOOR, 'the edit door opens on the routine it was handed, not on the first of its name',
+    '    const routine = (agent.routines || []).filter(r => r && r.name === name)[occurrence] || null;',
+    '    const routine = (agent.routines || []).filter(r => r && r.name === name)[0] || null;'],
+  [EDIT_DOOR, 'the edit door pre-fills from the routine it opened on',
+    '      frequency: parsed ? parsed.frequency : null,\n      time: parsed ? parsed.time : null,',
+    '      frequency: null,\n      time: null,'],
+  [EDIT_DOOR, 'a stored schedule is looked up rather than split apart',
+    '    const parsed = model().readSchedule(routine.schedule);',
+    "    const p = /^every ([a-z]+) at (\\d{2}:\\d{2})$/.exec(String(routine.schedule).toLowerCase());\n"
+    + '    const parsed = p ? { frequency: p[1], time: p[2] } : null;'],
+  [EDIT_DOOR, 'the editor opens on the step an edit has, not on the picker',
+    "      step: 'schedule',\n      agentId: agent.id,",
+    "      step: 'pick',\n      agentId: agent.id,"],
 
   // ===== THE THREE TONES, AS THE PAGE RESOLVES THEM =====
   [STYLES, 'a late run keeps the success colour, and no state is amber',
@@ -711,8 +788,8 @@ const MUTATIONS = [
     '  if (!row.status && nextRun) meta += `${sep}${nextRun}`;',
     ''],
   [VIEW, 'the second line appears only once there is something to say',
-    '  if (row.status) {',
-    '  if (true) {'],
+    '  } else if (row.status) {',
+    '  } else if (true) {'],
   [VIEW, 'a paused row offers resume rather than pause again',
     "    actions += r.paused\n      ? iconButton('resume', 'Resume', ICONS.play, `routinesSetPaused(${index}, false)`, false)\n      : iconButton('pause', 'Pause', ICONS.pause, `routinesSetPaused(${index}, true)`, false);",
     "    actions += iconButton('pause', 'Pause', ICONS.pause, `routinesSetPaused(${index}, true)`, false);"],
@@ -927,8 +1004,8 @@ const MUTATIONS = [
     '    + `<div class="profile-avatar skill-avatar">${CLOCK_SVG}</div>`',
     '    + \'<div class="profile-avatar skill-avatar"></div>\''],
   [VIEW, 'the lead sentence is under the title rather than dropped with the paragraph it left',
-    '    + (subtitle ? `<div class="routines-subtitle">${esc(subtitle)}</div>` : \'\')',
-    "    + ''"],
+    '      + (subtitle ? `<div class="routines-subtitle">${esc(subtitle)}</div>` : \'\')',
+    "      + ''"],
   [VIEW, 'the empty pane takes its own state line rather than the sentence about a full list',
     '  let h = headerHtml(null)',
     '  let h = listHeaderHtml()'],
@@ -936,44 +1013,21 @@ const MUTATIONS = [
     "      subtitle: agentName ? LEAD.scopedLead.replace('{agent}', () => agentName) : LEAD.lead,",
     '      subtitle: LEAD.lead,'],
   [STYLES, 'the subtitle takes the body size rather than restating the title',
-    '.routines-subtitle { font-size: var(--body); color: var(--text-2); }',
-    '.routines-subtitle { font-size: var(--title); color: var(--text-2); }'],
-  // ===== THE FAILURE DOT =====
-  // The three-tone ruling reaching the chrome. A dot that rises on a missed
-  // slot teaches its reader to ignore the dot, which is what the ruling was
-  // settled to prevent, so the rule and each half of the wiring are watched.
-  [APP_OPENER, 'the dot is raised on a failure rather than on anything that ran',
-    '  if (RundockRoutinesModel.anyFailure(facts)) {',
-    '  if (facts.length) {'],
-  // The removal branch, named with enough of its own function around it to be
-  // unique: the two badges above this one end in the same three lines, and a
-  // guard that matched all three would break whichever came first and report
-  // on whatever that turned red.
-  [APP_OPENER, 'the dot is taken away again once nothing is failing',
-    "      badge.className = 'nav-badge-failed';\n      navBtn.appendChild(badge);\n    }\n  } else {\n    if (badge) badge.remove();\n  }",
-    "      badge.className = 'nav-badge-failed';\n      navBtn.appendChild(badge);\n    }\n  } else {\n  }"],
-  [APP_OPENER, 'every agent on the roster is looked at, not only the first',
-    '  for (const agent of agents || []) {',
-    '  for (const agent of (agents || []).slice(0, 1)) {'],
-  [APP_OPENER, 'the roster broadcast is what updates the rail',
-    ' updateRoutineFailureBadge();',
-    ''],
-  [APP_OPENER, 'the outcome is read from the run state the row reads',
-    '        lastRunStatus: routine.state ? routine.state.status : null,',
-    '        lastRunStatus: null,'],
+    '.routines-subtitle { font-size: var(--body); color: var(--text-2); line-height: 1.5; margin-top: 2px; }',
+    '.routines-subtitle { font-size: var(--title); color: var(--text-2); line-height: 1.5; margin-top: 2px; }'],
+  // ===== THE FAILURE QUESTION (RundockRoutinesModel.anyFailure) =====
+  // The nav-rail dot this model function used to drive (app.js,
+  // updateRoutineFailureBadge) was removed 2026-08-27: it read as distracting
+  // in practice. The model function itself stays, tested, in case a quieter
+  // signal for this replaces it later, so its own correctness is still worth
+  // guarding even with nothing in the UI consuming it today.
   [MODEL, 'only a real failure counts as a failure',
     '    return routines.some(routine => !(routine && routine.paused) && lastCompletedRunFailed(routine));',
     '    return routines.length > 0;'],
-  [SIDEBAR_CSS, 'the dot takes the danger token rather than the amber one beside it',
-    '.nav-badge-failed { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--danger); border-radius: var(--radius-circle); pointer-events: none; }',
-    '.nav-badge-failed { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--attention); border-radius: var(--radius-circle); pointer-events: none; }'],
   // ===== THE PAUSE CLAUSE AND THE FAILURE QUESTION =====
   [MODEL, 'a paused routine is excluded before the failure question is asked',
     '    return routines.some(routine => !(routine && routine.paused) && lastCompletedRunFailed(routine));',
     '    return routines.some(routine => lastCompletedRunFailed(routine));'],
-  [APP_OPENER, 'the rail is told whether a routine is paused',
-    '        paused: !!routine.paused,',
-    ''],
   // The rail asks about the last completed run and the row asks what happened
   // most recently. Collapsing the rail back onto the row's answer lets an
   // ordinary missed slot hide the only alarming state in the product.
@@ -1026,9 +1080,12 @@ const MUTATIONS = [
   [MODEL_WORKSPACE, 'two workspaces of the same name are told apart',
     '    while (say(a, depth) === say(b, depth) && (depth < a.length || depth < b.length)) depth++;',
     ''],
+  [DISCOVERY_WORKSPACE, 'the roster carries the workspace a routine was read out of',
+    '        r.workspace = ws;\n',
+    ''],
   [VIEW_WORKSPACE, 'the row is told which workspace the server is serving',
-    '    workspace: routinesRosterWorkspace(),\n    servingWorkspace: routinesServingWorkspace(),\n    now: routinesClock(),',
-    '    workspace: routinesRosterWorkspace(),\n    now: routinesClock(),'],
+    '    workspace: r.workspace,\n    servingWorkspace: routinesServingWorkspace(),\n    now: routinesClock(),',
+    '    workspace: r.workspace,\n    now: routinesClock(),'],
   // The header used to name the path the window remembered, directly above a
   // list of rows that had come from somewhere else.
   [VIEW_WORKSPACE, 'the header reads the roster it heads rather than the served workspace',
@@ -1110,9 +1167,11 @@ function run() {
     PANEL_PRESS, APP_DISPATCH, VIEW_CONFIRM, APP_WORKSPACE, EDITOR_NAV,
     TEAM_PANEL, INDEX_SWEEP, PROFILE_BOXES, PROFILE_ROUTE,
     GUIDE_COPY_MOD, TEAM_COPY, PROFILE_COPY, TEAM_DOOR, SIDEBAR_CSS,
-    MODEL_WORKSPACE, VIEW_WORKSPACE, DISCOVERY_WORKSPACE, APP_E2E, ROOT_SERVER];
+    MODEL_WORKSPACE, VIEW_WORKSPACE, DISCOVERY_WORKSPACE, APP_E2E, ROOT_SERVER,
+    EDIT_DOOR, EDIT_DOOR_ROW, SCHEDULER_EDIT];
+  const session = beginMutationRun({ files: targets.map((target) => target.src) });
   const originals = new Map();
-  for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));
+  for (const target of targets) originals.set(target, session.original(target.src));
   const results = [];
   try {
     for (const [target, label, guard, without] of MUTATIONS) {
@@ -1135,7 +1194,7 @@ function run() {
       fs.writeFileSync(target.src, original);
     }
   } finally {
-    for (const [target, original] of originals) fs.writeFileSync(target.src, original);
+    session.finish();
   }
   return results;
 }

@@ -51,6 +51,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
+const { beginMutationRun } = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 
@@ -175,8 +176,8 @@ const MUTATIONS = [
     "reason: unknownWords(record ? record.filesReason : 'no-record') };",
     'reason: FILES_UNKNOWN_FALLBACK };'],
   [VIEW, 'the chip carries its tone, so the states are told apart at a glance',
-    '`<div class="settings-row"><span class="rd-chip ${escText(view.state.tone)}" data-run-detail="chip">`',
-    '`<div class="settings-row"><span class="rd-chip" data-run-detail="chip">`'],
+    '`<span class="rd-chip ${escText(view.state.tone)}" data-run-detail="chip">`',
+    '`<span class="rd-chip" data-run-detail="chip">`'],
 
   // ===== WHAT THE RUN CHANGED =====
   // AC-8 REACHES THE FILE LIST'S HEADING TOO. An interrupted run can carry a
@@ -259,8 +260,9 @@ function redTests(suite) {
 
 function run() {
   const targets = [MODEL, MODEL_VIEW, VIEW, VIEW_DOORS, STYLES, HANDLER, READER, WRITER, REASONS, ROUTINES_VIEW, ROW_JOIN, APP];
+  const session = beginMutationRun({ files: targets.map((target) => target.src) });
   const originals = new Map();
-  for (const target of targets) originals.set(target, fs.readFileSync(target.src, 'utf8'));
+  for (const target of targets) originals.set(target, session.original(target.src));
   const results = [];
   try {
     for (const [target, label, guard, without] of MUTATIONS) {
@@ -284,7 +286,7 @@ function run() {
       fs.writeFileSync(target.src, original);
     }
   } finally {
-    for (const target of targets) fs.writeFileSync(target.src, originals.get(target));
+    session.finish();
   }
   return results;
 }

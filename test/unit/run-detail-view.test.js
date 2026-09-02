@@ -33,7 +33,7 @@ const CSS_SRC = read('public', 'styles', 'views', 'run-detail.css');
 // Every status a record can carry. `interrupted` is here deliberately: it is
 // written in exactly one place, by the startup close, and it is the token a
 // screen is most likely to leak because nothing else in the product renders it.
-const STATUSES = ['running', 'succeeded', 'failed', 'interrupted'];
+const STATUSES = ['running', 'succeeded', 'failed', 'cancelled', 'interrupted'];
 
 const NOW = new Date(2026, 7, 24, 9, 0);
 
@@ -194,7 +194,7 @@ describe('no raw status word reaches the page', () => {
   });
 
   test('a status this version has never seen is described rather than printed', () => {
-    for (const odd of ['cancelled', 'queued']) {
+    for (const odd of ['queued', 'aborted']) {
       const { doc, dom } = draw(record({ status: odd }));
       assert.ok(!new RegExp(odd, 'i').test(pageText(doc)),
         `an unrecognised status reached the page as "${odd}"`);
@@ -246,6 +246,39 @@ describe('no raw status word reaches the page', () => {
       'a run whose ending never ran is painted as a failure, which is a claim nobody witnessed');
     assert.notStrictEqual(ok, unwitnessed);
     dom.window.close();
+  });
+
+  // `stopped` shares its colour with `unwitnessed` deliberately (same visual
+  // weight: "not an error"), so it is not asserted different here the way the
+  // three above are from each other. What has to hold is that it resolves to
+  // something at all, and that the CHIP TEXT, not colour, is what tells a
+  // stopped run apart from one nobody witnessed the ending of. See
+  // run-detail-model.test.js's "a run somebody stopped is not read as a
+  // failure" for the wording half of that guarantee.
+  test('a stopped run resolves to a real colour, told apart from unwitnessed by its class and its words', () => {
+    const stopped = draw(record({ status: 'cancelled' }));
+    const unwitnessed = draw(record({ status: 'interrupted', endedAt: null, durationMs: null }));
+    const chip = (doc) => doc.querySelector('[data-run-detail="chip"]');
+    assert.ok(chip(stopped.doc), 'a cancelled run drew no chip at all');
+    // TOLD APART BY CLASS, NOT ONLY BY TEXT. A record whose status this
+    // version does not recognise (see 'whether a run can be stopped' in
+    // run-detail-model.test.js) also draws a chip, with different words but
+    // the SAME tone class ('unwitnessed') a cancelled run would fall back to
+    // if the 'cancelled' entry were ever removed from RUN_STATES. A page-text
+    // comparison against interrupted alone would stay green through that
+    // deletion, because "Not recognised" still differs from interrupted's own
+    // words; asserting the class directly is what actually pins the
+    // recognised, named 'stopped' tone rather than a fallback that happens to
+    // read differently today.
+    assert.ok(chip(stopped.doc).classList.contains('stopped'),
+      `the stopped chip's class is "${chip(stopped.doc).className}", not the recognised "stopped" tone`);
+    assert.ok(!chip(stopped.doc).classList.contains('unwitnessed'),
+      'a stopped run drew the same tone class the unrecognised-status fallback uses');
+    const colour = stopped.dom.window.getComputedStyle(chip(stopped.doc)).color;
+    assert.ok(colour && colour !== 'rgba(0, 0, 0, 0)', 'the stopped chip resolves to no colour');
+    assert.notStrictEqual(pageText(stopped.doc), pageText(unwitnessed.doc));
+    stopped.dom.window.close();
+    unwitnessed.dom.window.close();
   });
 
   test('a failed run carries the reason it gave', () => {
@@ -314,5 +347,149 @@ describe('an answer that arrives late lands where it was asked for', () => {
     assert.ok(!/Something Else/.test(pageText(doc)),
       'a reply for a routine the reader is not looking at was drawn on this screen');
     dom.window.close();
+  });
+});
+
+describe('stopping the run on screen', () => {
+  test('a run still going offers to stop, and nothing else does', () => {
+    for (const status of STATUSES) {
+      const { doc, dom } = draw(record({ status, endedAt: status === 'running' ? null : undefined, durationMs: status === 'running' ? null : undefined }));
+      const btn = doc.querySelector('[data-run-detail="stop"]');
+      if (status === 'running') assert.ok(btn, 'a run still going offers no way to stop it');
+      else assert.strictEqual(btn, null, `a ${status} run, which has already ended, still offers to stop it`);
+      dom.window.close();
+    }
+  });
+
+  test('the rendered control is actually wired to runDetailStop, not just present', () => {
+    // EVERY OTHER TEST IN THIS DESCRIBE BLOCK CALLS w.runDetailStop() DIRECTLY,
+    // which proves the function's own behaviour but nothing about the button
+    // in the document: a Stop button whose onclick was dropped, or misnamed,
+    // would still be found by every `[data-run-detail="stop"]` query above
+    // and pass every one of them. Pinned the same way the routines row's own
+    // "View run" onclick already is, in routines-view.test.js.
+    const { doc, dom } = draw(record({ status: 'running', endedAt: null, durationMs: null }));
+    const btn = doc.querySelector('[data-run-detail="stop"]');
+    assert.strictEqual(btn.getAttribute('onclick'), 'runDetailStop()',
+      'the rendered Stop control is not wired to runDetailStop, so pressing it in a real browser would do nothing');
+    dom.window.close();
+  });
+
+  test('pressing it sends the run\'s own agent and routine, and reads as asked-for immediately', () => {
+    const { w, doc, dom } = draw(record({ status: 'running', endedAt: null, durationMs: null }), { agentId: 'dev', routine: 'Nightly build check' });
+    w.runDetailStop();
+    assert.deepStrictEqual(w.sent.at(-1), { type: 'cancel_routine_run', agentId: 'dev', routine: 'Nightly build check' });
+    // OPTIMISTIC: the page says "asked for" before any reply, because a click
+    // that visibly does nothing until a round trip completes reads as a
+    // control that did not work.
+    assert.match(pageText(doc), /stopping/i);
+    dom.window.close();
+  });
+
+  test('a second press before the reply sends nothing a second time', () => {
+    const { w } = draw(record({ status: 'running', endedAt: null, durationMs: null }));
+    w.runDetailStop();
+    w.runDetailStop();
+    assert.strictEqual(w.sent.filter(m => m.type === 'cancel_routine_run').length, 1,
+      'pressing Stop twice before any reply sent the signal twice');
+  });
+
+  test('stopped:true changes nothing on screen: the record, not the reply, is what moves the page off "still going"', () => {
+    const { w, doc, dom } = draw(record({ status: 'running', endedAt: null, durationMs: null }), { agentId: 'dev', routine: 'Nightly build check' });
+    w.runDetailStop();
+    const before = pageText(doc);
+    w.stopRequestArrived({ type: 'routine_run_stop_requested', agentId: 'dev', routine: 'Nightly build check', stopped: true });
+    assert.strictEqual(pageText(doc), before);
+    dom.window.close();
+  });
+
+  test('stopped:false (nothing was running under that name) asks what the record actually says now', () => {
+    const { w, doc, dom } = draw(record({ status: 'running', endedAt: null, durationMs: null }), { agentId: 'dev', routine: 'Nightly build check' });
+    w.runDetailStop();
+    w.sent.length = 0;
+    w.stopRequestArrived({ type: 'routine_run_stop_requested', agentId: 'dev', routine: 'Nightly build check', stopped: false });
+    assert.deepStrictEqual(w.sent.at(-1), { type: 'get_run', agentId: 'dev', routine: 'Nightly build check' });
+    dom.window.close();
+  });
+
+  test('a stop reply for a routine the reader has since left is ignored, same as a late run record', () => {
+    // ASSERTED ON WHAT stopRequestArrived ACTUALLY DOES, not on rendered
+    // text. stopRequestArrived never re-renders on the guard's early return,
+    // so a page-text comparison alone would stay green even with the
+    // reply.agentId/reply.routine equality guard deleted: a mismatched reply
+    // that wrongly cleared stopRequested and sent get_run would leave the
+    // page showing the same words (still "Stopping…", nothing drawn from the
+    // mismatched routine) while the pending-stop state and the wire were both
+    // wrong underneath it.
+    const { w, doc, dom } = draw(record({ status: 'running', endedAt: null, durationMs: null }), { agentId: 'dev', routine: 'Nightly build check' });
+    w.runDetailStop();
+    w.sent.length = 0;
+    w.stopRequestArrived({ type: 'routine_run_stop_requested', agentId: 'dev', routine: 'Some Other Routine', stopped: false });
+    assert.deepStrictEqual(w.sent, [], 'a reply naming a different routine was acted on: something was sent for it');
+    assert.strictEqual(doc.querySelector('[data-run-detail="stop"]').disabled, true,
+      'a reply naming a different routine cleared this screen\'s own pending stop');
+    dom.window.close();
+  });
+
+  test('a stop reply naming a different agent, even for the same routine name, is ignored the same way', () => {
+    const { w, doc, dom } = draw(record({ status: 'running', endedAt: null, durationMs: null }), { agentId: 'dev', routine: 'Nightly build check' });
+    w.runDetailStop();
+    w.sent.length = 0;
+    w.stopRequestArrived({ type: 'routine_run_stop_requested', agentId: 'cos', routine: 'Nightly build check', stopped: false });
+    assert.deepStrictEqual(w.sent, [], 'a reply naming a namesake routine on a different agent was acted on: something was sent for it');
+    assert.strictEqual(doc.querySelector('[data-run-detail="stop"]').disabled, true,
+      'a reply naming a namesake routine on a different agent cleared this screen\'s own pending stop');
+    dom.window.close();
+  });
+
+  test('a record showing the run has actually ended clears "Stopping…"', () => {
+    const { w, doc, dom } = draw(record({ status: 'running', endedAt: null, durationMs: null }), { agentId: 'dev', routine: 'Nightly build check' });
+    w.runDetailStop();
+    assert.match(pageText(doc), /stopping/i);
+    w.runArrived({ type: 'run', agentId: 'dev', routine: 'Nightly build check', run: record({ status: 'cancelled', agent: 'dev', routine: 'Nightly build check' }) });
+    assert.doesNotMatch(pageText(doc), /stopping/i);
+    dom.window.close();
+  });
+
+  test('a record that still says the run is going does not clear "Stopping…", so a second press cannot fire', () => {
+    // THE RACE THIS PINS. runDetailRosterUpdated asks for a fresh record on
+    // every roster broadcast while this screen is open on a running run, and
+    // a roster broadcast fires on far more than THIS run ending: any agent's
+    // routine starting or ending sends the same message. A reply that lands
+    // mid-stop, for a reason that has nothing to do with the run this screen
+    // is showing, must not be read as "the stop did nothing": cancelRun only
+    // sends the signal, and the ending arrives later on its own clock.
+    const { w, doc, dom } = draw(record({ status: 'running', endedAt: null, durationMs: null }), { agentId: 'dev', routine: 'Nightly build check' });
+    w.runDetailStop();
+    assert.match(pageText(doc), /stopping/i);
+    w.runArrived({
+      type: 'run', agentId: 'dev', routine: 'Nightly build check',
+      run: record({ status: 'running', endedAt: null, durationMs: null, agent: 'dev', routine: 'Nightly build check' }),
+    });
+    assert.match(pageText(doc), /stopping/i,
+      'a record that still says the run is going cleared the pending stop, which reopens the Stop control for a second press');
+    assert.strictEqual(doc.querySelector('[data-run-detail="stop"]').disabled, true,
+      'the Stop control is pressable again while a stop is still in flight for this exact run');
+    dom.window.close();
+  });
+
+  test('a roster update refreshes an open screen only while its run is still going', () => {
+    const { w } = draw(record({ status: 'running', endedAt: null, durationMs: null }), { agentId: 'dev', routine: 'Nightly build check' });
+    w.sent.length = 0;
+    w.runDetailRosterUpdated();
+    assert.deepStrictEqual(w.sent, [{ type: 'get_run', agentId: 'dev', routine: 'Nightly build check' }]);
+  });
+
+  test('a roster update does nothing to a screen already showing a settled run', () => {
+    const { w } = draw(record({ status: 'succeeded' }));
+    w.sent.length = 0;
+    w.runDetailRosterUpdated();
+    assert.deepStrictEqual(w.sent, [], 'a roster update re-asked for a run that has already ended');
+  });
+
+  test('a roster update does nothing before any screen has been opened', () => {
+    const { w } = shell();
+    w.runDetailRosterUpdated();
+    assert.deepStrictEqual(w.sent, []);
   });
 });

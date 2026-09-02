@@ -15,14 +15,33 @@
    ordinary case: an interface that turns amber every time the machine was shut
    overnight teaches its user to stop trusting amber. */
 
-.routines-content { max-width: 640px; padding: 32px; }
+/* 720px, shared with .routine-editor and .run-detail: see the comment on
+   .routine-editor in routine-editor.css for why these three panels take one
+   width rather than the settings scale's 560px. This one used to sit at
+   640px on its own, which was already closer to that width than to
+   settings' than the other two were; brought level so the sentence a routine
+   reads as does not wrap differently depending on which of the three screens
+   it is read from. */
+.routines-content { max-width: 720px; padding: 32px; }
+/* The block beneath the header carrying the scoped sentence and the
+   workspace line. It used to live inside .profile-header's own text column,
+   beside the icon, where a two-line fact (scope plus workspace) read as the
+   icon shrinking rather than the text running long: the column had no width
+   of its own to wrap against, and even at its true width a name plus two
+   lines of prose was still heavier than the 56px circle beside it. Moved
+   below the header instead, spanning the panel's own width, the same split
+   views/skills.js's selectSkill() already draws between .profile-header and
+   .profile-desc. That also means Routines' icon now falls back to the same
+   centred 56px .profile-header Skills and Profile use, so no width or
+   sizing override is needed here any more. */
+.routines-header-desc { margin-bottom: 24px; }
 /* The list header's subtitle: the scoped sentence above the populated list. */
-.routines-subtitle { font-size: var(--body); color: var(--text-2); }
+.routines-subtitle { font-size: var(--body); color: var(--text-2); line-height: 1.5; margin-top: 2px; }
 /* Which workspace the listed routines came from, and what that means for the
    routines in the others, or where Rundock has gone if it is no longer serving
    this one. A quieter line than the subtitle above it: it is a standing fact
    about the list rather than a description of what the list contains. */
-.routines-workspace { font-size: var(--caption); color: var(--text-2); margin-top: 2px; }
+.routines-workspace { font-size: var(--caption); color: var(--text-2); margin-top: 4px; }
 
 /* The list */
 .routine-table { display: flex; flex-direction: column; gap: 10px; }
@@ -57,6 +76,10 @@
 .run-status.ok-quiet { font-weight: 500; color: var(--success); }
 .run-status.neutral { font-weight: 500; color: var(--idle); }
 .run-status.failed { font-weight: 600; color: var(--danger); }
+/* A run in progress. Not one of the model's four tones (outcomeOf never
+   returns while lastRunStatus is 'running'): this is the row's own "Still
+   going" line, styled to match run-detail's .rd-chip.live on the same token. */
+.run-status.live { font-weight: 500; color: var(--working); }
 
 .next-run { font-size: var(--caption); font-weight: 600; color: var(--success); }
 .next-run.paused-label { color: var(--text-3); font-weight: 500; }
@@ -95,12 +118,29 @@
 .rr-view-run { font-size: var(--caption); font-weight: 500; color: var(--text-2); background: none; border: 0; padding: 0; font-family: inherit; cursor: pointer; transition: color var(--duration-base) ease; }
 .rr-view-run:hover { color: var(--accent); }
 
-/* A schedule nothing here can read. THE DANGER TOKEN, and it is the one place
-   on this row that earns it: every other state is either history or a promise,
-   and this is a routine that will never run until somebody edits the file. The
-   four outcomes keep their own tones, so a failed run and an unreadable
-   schedule are told apart by their words rather than by colour alone. */
-.schedule-problem { font-size: var(--caption); font-weight: 600; color: var(--danger); }
+/* A schedule nothing here can read, and a routine with no instruction to send.
+   THE DANGER TOKEN, and these are the one thing on this row that earns it:
+   every other state is either history or a promise, and these are routines
+   that will never run until somebody edits the file. The four outcomes keep
+   their own tones, so a failed run and a fault in the routine are told apart
+   by their words rather than by colour alone.
+
+   ONE RULE FOR BOTH, because they are one kind of thing to a reader and giving
+   them separate declarations is how two faults meant to read alike drift into
+   reading differently. They keep separate NAMES because a row can carry both
+   at once and each names a different thing to fix. */
+.schedule-problem, .prompt-problem { font-size: var(--caption); font-weight: 600; color: var(--danger); }
+
+/* The row for a routine the scheduler has moved away from.
+
+   IDLE GREY AND NOT THE DANGER COLOUR, which is the three-tone ruling applied
+   to a fifth thing a row can say. Nothing is wrong with the routine: Rundock
+   is elsewhere, which is the same class of fact as a slot that passed while
+   the machine was shut, and dressing it as an error would teach a reader with
+   several workspaces to ignore the colour that means something. It is a NOTE
+   and not a problem, which is why it shares neither the name nor the tone of
+   the schedule fault above it. */
+.workspace-note { font-size: var(--caption); font-weight: 500; color: var(--idle); }
 
 /* The row for a routine the scheduler has moved away from.
 

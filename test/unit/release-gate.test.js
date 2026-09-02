@@ -25,7 +25,7 @@ const {
   changelogReady,
   GATE_FILE_NAME,
 } = require('../../scripts/release-gate.js');
-const { requireGatePass, publishRelease, ghApiArgs } = require('../../scripts/release.js');
+const { requireGatePass, publishRelease, ghApiArgs, hasPublishConfirmation } = require('../../scripts/release.js');
 
 let root;
 beforeEach(() => {
@@ -284,6 +284,40 @@ describe('publish binds the tag before flipping the draft flag', () => {
     const result = publishRelease('0.11.7', { api });
     assert.strictEqual(result.tag, 'v0.11.7');
     assert.ok(api.calls.some(c => c.method === 'PATCH' && c.body && c.body.draft === false));
+  });
+});
+
+describe('publish refuses to run without a fresh, version-matched confirmation', () => {
+  // Ratchet-Log "A split command is not a control", 2026-08-27: publish and
+  // tag were already separate commands specifically so a human decides when
+  // the last one runs, and nothing but that naming convention stopped it
+  // running unprompted. This is not a security boundary, since anyone who can
+  // run the script can also type the flag: it is a friction boundary. The
+  // command `tag` prints for its own next step deliberately does not
+  // include a working --confirm, so nothing can be run by copying the
+  // previous step's own output, and the flag itself only satisfies for the
+  // exact version it names.
+
+  test('no --confirm flag at all: refused', () => {
+    assert.strictEqual(hasPublishConfirmation(['publish', '0.12.0'], '0.12.0'), false);
+  });
+
+  test('--confirm present with no value following it: refused', () => {
+    assert.strictEqual(hasPublishConfirmation(['publish', '0.12.0', '--confirm'], '0.12.0'), false);
+  });
+
+  test('--confirm for a different version: refused, even though the flag is present', () => {
+    // Guards against a stale confirmation typed for an earlier release being
+    // reused by copying an old command rather than deciding about this one.
+    assert.strictEqual(hasPublishConfirmation(['publish', '0.12.0', '--confirm', '0.11.8'], '0.12.0'), false);
+  });
+
+  test('--confirm matching the version exactly: allowed', () => {
+    assert.strictEqual(hasPublishConfirmation(['publish', '0.12.0', '--confirm', '0.12.0'], '0.12.0'), true);
+  });
+
+  test('a prefix match is not a match: "0.12.0" must not satisfy "0.12.00" or vice versa', () => {
+    assert.strictEqual(hasPublishConfirmation(['publish', '0.12.00', '--confirm', '0.12.0'], '0.12.00'), false);
   });
 });
 

@@ -116,7 +116,7 @@ jobs:
   # Guard mutation: each of the renderer's escaping guards is removed in turn and
   # the renderer's suite must go red for it. A guard no test notices is not
   # guarded, and two of these were exactly that when the check was first run, so
-  # this holds the evidence table in .review/ to something machine-checked
+  # this holds the evidence table in docs/evidence/ to something machine-checked
   # instead of transcribed. Not part of `npm test`: it runs that suite once per
   # guard, which is too slow to pay on every run and cheap to pay once per push.
   mutation:

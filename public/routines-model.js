@@ -72,6 +72,24 @@
     'caught-up': { tone: 'ok-quiet', lead: 'Caught up' },
     'missed': { tone: 'neutral', lead: 'Missed' },
     'failed': { tone: 'failed', lead: 'Failed' },
+    // A run somebody deliberately stopped. History, like a missed slot,
+    // because a stop the user chose is neither a success to celebrate nor a
+    // failure to alarm about, and the rail's dot stays down for the same
+    // reason paused is excluded there: the user already decided.
+    'stopped': { tone: 'neutral', lead: 'Stopped' },
+  };
+
+  // Every status word the scheduler can record, named so the walk that reads
+  // the scheduler's own vocabulary can prove this list handles each of them,
+  // and a word added there without a mapping here fails a test rather than
+  // rendering as whatever the time-based reading would have invented.
+  const RUN_STATUS_WORDS = {
+    running: 'in-flight',
+    cancelled: 'stopped',
+    interrupted: 'failed',
+    failed: 'failed',
+    completed: 'time-based',
+    succeeded: 'time-based',
   };
 
   /**
@@ -84,14 +102,25 @@
    * person meets first.
    *
    * AND WHY THE SENTENCE SAYS WHAT IT SAYS. The reader arriving here already
-   * has the job running somewhere else. "Turn on" alone reads as tidying a
-   * switch, and the thing they have to know before pressing it is that Rundock
-   * will begin running the routine ITSELF, on top of whatever is running it
-   * today. That is the sentence that stops a morning briefing going out twice.
+   * has the job running somewhere else: a beta user with routines already
+   * running on her own machine, and the owner's own VPS, are both this exact
+   * case, discovered outside cron specifically as well as inside it. "Turn
+   * on" alone reads as tidying a switch, and the thing they have to know
+   * before pressing it is that Rundock will begin running the routine
+   * ITSELF, on top of whatever is running it today.
+   *
+   * NAMED DIRECTLY RATHER THAN IMPLIED. An earlier version of this sentence
+   * said only that Rundock would start running it, trusting the reader to
+   * work out for themselves that this could mean two copies. That is exactly
+   * the inference the sentence exists so nobody has to make under pressure at
+   * 7am: it now says "cron job or script" and "twice" in as many words,
+   * because a risk implied is a risk half the readers of this row will miss.
    */
   const NOT_ENABLED = {
     lead: 'Not running.',
-    body: 'Turn it on and Rundock will start running it on this schedule.',
+    body: 'Turn it on and Rundock starts running it too. If a cron job or '
+      + 'script already runs this routine, turning it on here runs it '
+      + 'twice, until you turn the other one off.',
     // WHEN THE FIRST RUN LANDS, said only where it is true.
     //
     // This reader most needs to know that a slot already gone today is caught
@@ -130,6 +159,31 @@
   const SCHEDULE_PROBLEM = {
     lead: 'Rundock cannot read this schedule, so this routine will not run.',
     body: 'Change it to say every day at 07:00, or a weekday, like every Monday at 07:00.',
+  };
+
+  /**
+   * What a row says when a routine has no instruction to send.
+   *
+   * THE SILENCE THIS ENDS. A routine that declares a schedule and no prompt
+   * was, on this list, indistinguishable from one that works: it named a next
+   * run, it offered to be turned on, and when its slot came the absent value
+   * was coerced on its way to the agent, which then worked unattended on the
+   * four letters n-u-l-l and recorded a completed run. Every surface said the
+   * routine was healthy. The gate refuses it now, and a refusal nobody can see
+   * would leave the row promising a run that never comes, which is the same
+   * silence wearing a different face.
+   *
+   * IT NAMES WHAT TO ADD, BY EXAMPLE, the same rule the schedule fault
+   * follows. "No prompt" is a field name, and a reader who has just been told
+   * a field is missing needs to know what goes in it.
+   *
+   * ITS OWN FAULT AND NOT THE SCHEDULE'S. A routine like this usually has a
+   * schedule the scheduler reads perfectly well, so the line beside it stays
+   * quiet and nobody is sent to edit a schedule that is right.
+   */
+  const PROMPT_PROBLEM = {
+    lead: 'This routine has no prompt, so it will not run.',
+    body: 'Add one: the instruction its agent is sent when it fires, like Run the morning briefing.',
   };
 
   /**
@@ -284,6 +338,17 @@
     aside: 'Looking at a skill you already trust? You can also schedule it right from its own page.',
   };
 
+  // The next step appended to `editor.UNASSIGNED_REASON` for the
+  // only-unassigned-skills variant, named here rather than written inline in
+  // the branch that uses it, the same way every other shipped line on this
+  // pane lives in `EMPTY` above rather than in `emptyState`'s return.
+  //
+  // NO SINGULAR PRONOUN, for the reason `UNASSIGNED_REASON` itself carries
+  // none: this pane names no particular skill and can hold this state with
+  // any number of unassigned skills, so "assign it" would point at nothing
+  // with one and be wrong with more than one.
+  const UNASSIGNED_NEXT_STEP = 'Assign your skills to an agent and they will show up here.';
+
   /**
    * WHICH empty state, decided mechanically rather than by taste.
    *
@@ -310,6 +375,15 @@
    * skills. A skill no agent is assigned cannot be scheduled and therefore
    * does not count, which the picker already decides and this inherits.
    *
+   * A THIRD VARIANT, FOR THE CASE THE CHAIN LEAVES OUT. "No skill exists" and
+   * "a skill exists and nobody has it" both leave the picker's `options` at
+   * zero, and until this pass both took the create-a-skill branch, which told
+   * the second workspace to build the skill it already had. `skillChoices`
+   * already knows the difference, having walked both `skills` and `options`
+   * to answer its own question, so it reports it as `onlyUnassignedSkills`
+   * rather than making this file recompute it as a second rule that could
+   * disagree with the picker's own.
+   *
    * AND IT WAITS. "Skills have not arrived yet" and "there are no skills" are
    * different states and only one of them is an offer. Without the wait, a
    * workspace that does have skills is told to build one for a beat on every
@@ -327,6 +401,29 @@
       return { lead: EMPTY.lead, body: editor.STEP_LEADS.loading, action: null, actionKind: null, aside: null };
     }
     const choice = editor.skillChoices({ skills: (input && input.skills) || [] });
+    // CHECKED BEFORE `createSkill`, because `createSkill` is also true here
+    // and would otherwise win the branch first.
+    if (choice.onlyUnassignedSkills) {
+      return {
+        lead: EMPTY.lead,
+        // THE MECHANISM IS THE SKILL PAGE'S OWN SENTENCE, not a second one
+        // written here: `editor.UNASSIGNED_REASON` is the exact string the
+        // skill's own page states in its Schedule card when that skill has
+        // no agent, so the two surfaces cannot end up disagreeing about why.
+        // `UNASSIGNED_NEXT_STEP`, declared above with the rest of this
+        // pane's shipped copy, is the sentence appended to it.
+        body: `${editor.UNASSIGNED_REASON} ${UNASSIGNED_NEXT_STEP}`,
+        // NEITHER A BUTTON NOR AN ASIDE. Assigning a skill to an agent is
+        // existing behaviour this state points at, not a control this pane
+        // grows. And the aside the other states carry promises scheduling
+        // "right from its own page", which is exactly the thing that page
+        // withholds while the skill has no agent; offering it here would
+        // have this state contradict the one it is naming.
+        action: null,
+        actionKind: null,
+        aside: null,
+      };
+    }
     if (choice.createSkill) {
       // THE ACTION GOES WITH THE AGENT THAT FULFILS IT, AND THE NEXT STEP DOES
       // NOT. Dropping the button on its own would leave a line instructing an
@@ -578,6 +675,9 @@
     const heldBack = input && input.enabled === false;
     if (missedSlot && (!started || missedSlot > started) && !heldBack) return 'missed';
     if (!started) return null;
+    // A DELIBERATE STOP IS ITS OWN OUTCOME, checked before the time-based
+    // reading because a stopped run that started on time is not "Ran".
+    if (statusWord === 'cancelled') return 'stopped';
     if (lastCompletedRunFailed(input)) return 'failed';
     const lastSlot = asDate(input && input.lastSlot);
     // How late the run STARTED, with nothing about how long it then took.
@@ -608,6 +708,8 @@
       text = `Caught up: ran ${timeWords(input.lastStart, now, zone)}, due ${clockWords(input.lastSlot)}`;
     } else if (kind === 'failed') {
       text = `Failed: ${timeWords(input.lastStart, now, zone)}`;
+    } else if (kind === 'stopped') {
+      text = `Stopped ${timeWords(input.lastStart, now, zone)}`;
     } else {
       text = `Ran ${timeWords(input.lastStart, now, zone)}`;
     }
@@ -649,11 +751,16 @@
    *
    * The first is what the scheduler's own gate would refuse, and that half
    * MIRRORS `routineRefusal` IN lib/scheduler.js: it refuses for paused, then
-   * enabled, then an unsupported run target, and getNextRun refuses a schedule
-   * it cannot parse. A row that offers to turn a routine on is claiming every
-   * one of those would let it through, so those two lists have to be found
-   * together. `enabled` is deliberately absent from this one: it answers what
-   * would stop the routine BESIDES the switch the offer is about.
+   * an unsupported run target, then a routine with no prompt to send, then
+   * the switch, and getNextRun refuses a schedule it cannot parse. A row that
+   * offers to turn a routine on is claiming every one of those would let it
+   * through, so those two lists have to be found together. `enabled` is
+   * deliberately the word this consumer ignores: it answers what would stop
+   * the routine BESIDES the switch the offer is about, and the scheduler
+   * reports the switch LAST for exactly this reader, so 'enabled' arriving
+   * here means the switch is the only thing in the way and the offer's
+   * sentence is true. Reported first, it shadowed a missing prompt or an
+   * unsupported target and the offer promised a run the tick would refuse.
    *
    * The second is whether any scheduler would look at this routine at all,
    * which is the workspace check below. It has no counterpart in
@@ -673,9 +780,21 @@
    *
    * @param {{paused?: boolean, runOn?: any, schedule?: any, scheduleReadable?: boolean}} [input]
    */
+  // The refusal words this row understands, named so the walk that reads the
+  // scheduler's routineRefusal out of its source can prove the two lists are
+  // one: a reason added there without a word here fails a test.
+  const REFUSALS_UNDERSTOOD = ['paused', 'enabled', 'runOn', 'prompt'];
+
   function somethingElseStopsIt(input) {
     if (!input) return false;
-    if (input.paused) return true;
+    // THE TICK'S OWN ANSWER, published beside the roster, is the single
+    // source for the reasons the tick owns. 'enabled' alone does not stop
+    // the offer, because flipping enabled is the thing the offer does; any
+    // other reason, including one this row has never heard of, stops it,
+    // which is the fail-safe direction for a sentence that promises a run.
+    if (input.refusal !== undefined) {
+      if (input.refusal !== null && input.refusal !== 'enabled') return true;
+    } else if (input.paused) return true;
     // ASKED OF THE SCHEDULE ITSELF, NOT OF THE LINE THE ROW WOULD DRAW.
     //
     // This used to lean on scheduleProblem, which deliberately says nothing
@@ -685,6 +804,11 @@
     // wrong one for what would RUN: a routine with no schedule can never run,
     // so leaning on the wording let the offer promise a run there.
     if (!canProduceARun(input)) return true;
+    // AND NEITHER IS A ROUTINE WITH NOTHING TO SEND. The gate refuses it on
+    // the same tick it would have run, so an offer here would promise a run
+    // that the press cannot deliver, on a row that is already carrying the
+    // thing to fix first.
+    if (input.refusal === undefined && !hasPromptToRun(input)) return true;
     // A ROUTINE NOTHING IS SERVING IS NOT STARTED BY TURNING IT ON, and the
     // offer's whole value is that it says what pressing it does. There is one
     // scheduler and it is somewhere else, so the switch is not what is holding
@@ -693,7 +817,7 @@
     if (!isServed(input)) return true;
     // A roster that did not name a run target says nothing, for the same
     // reason an absent scheduleReadable says nothing: silence is not a fault.
-    if (input.runOn !== undefined && input.runOn !== null) {
+    if (input.refusal === undefined && input.runOn !== undefined && input.runOn !== null) {
       const option = editor.runOnOption(input.runOn);
       if (!option || !option.selectable) return true;
     }
@@ -740,6 +864,46 @@
     const schedule = input.schedule;
     if (typeof schedule !== 'string' || !schedule.trim()) return null;
     return { text: `${SCHEDULE_PROBLEM.lead} ${SCHEDULE_PROBLEM.body}` };
+  }
+
+  /**
+   * Whether this routine has an instruction to send.
+   *
+   * MIRRORS `hasRunnablePrompt` IN lib/agents/routines.js, which is what the
+   * tick's refusal gate reads. The two have to agree, and this one is asked
+   * here rather than carried on the roster for a reason worth stating, because
+   * it is the opposite of the choice `scheduleReadable` makes two functions
+   * up: whether a schedule PARSES needs the scheduler's grammar, and a second
+   * copy of that grammar on this side would be free to disagree with the tick
+   * about which routines can ever run. Whether a value is text needs no
+   * grammar, the prompt is already on the roster, and asking a question with
+   * one answer produces no second answer to disagree with.
+   *
+   * A BLANK PROMPT IS THE SAME NOTHING AS AN ABSENT ONE, exactly as the data
+   * model has it: a prompt of spaces is not an instruction, and a run spent on
+   * one is a run spent asking an agent to act on whitespace.
+   *
+   * SILENCE IS NOT A FAULT, which is the rule every new row field follows
+   * here. A caller that did not send the field at all is not describing a
+   * routine with nothing to say, and reading that as one would accuse every
+   * row built without a prompt.
+   *
+   * @param {{prompt?: any}} [input]
+   */
+  function hasPromptToRun(input) {
+    const prompt = input ? input.prompt : undefined;
+    if (prompt === undefined) return true;
+    return typeof prompt === 'string' && prompt.trim() !== '';
+  }
+
+  /**
+   * Whether the row must say this routine has nothing to say, and what to add.
+   *
+   * @param {{prompt?: any}} [input]
+   */
+  function promptProblem(input) {
+    if (hasPromptToRun(input)) return null;
+    return { text: `${PROMPT_PROBLEM.lead} ${PROMPT_PROBLEM.body}` };
   }
 
   /**
@@ -933,6 +1097,13 @@
     // fails without this line. A time against a routine that will never fire
     // is the same false promise the offer is withheld for.
     if (input && input.scheduleReadable === false) return null;
+    // NOR DOES A ROUTINE WITH NO PROMPT. The instant is real here in a way it
+    // is not above: the schedule parses, so the server computes a next run and
+    // sends it, and the gate then refuses the routine when that instant
+    // arrives. Rendering it would put "Next run: tomorrow, 7:00am" on a row
+    // that will never run, which is the exact reassurance the reader came for.
+    // The fault line takes its place.
+    if (!hasPromptToRun(input)) return null;
     // NOR DOES A ROUTINE THE SCHEDULER HAS MOVED AWAY FROM. The instant is
     // real: it is computed from the schedule alone, so a routine read out of
     // any workspace arrives carrying its next slot. Drawing it here would put
@@ -1022,6 +1193,11 @@
       // The one thing on a row that is neither history nor a promise: a fault
       // in the routine itself, which only the person who wrote the file can fix.
       scheduleProblem: scheduleProblem(input),
+      // The second of the two, and a fault of the same kind: a routine that
+      // says when it runs and never says what to do. Its own line rather than
+      // a second wording of the schedule fault, because a routine with no
+      // prompt usually has a schedule that is perfectly readable.
+      promptProblem: promptProblem(input),
       // Where Rundock has gone, said only when it has gone somewhere. Nothing
       // about the routine is wrong, which is why this is a note of its own
       // rather than a second kind of schedule fault.
@@ -1053,10 +1229,11 @@
   }
 
   return {
-    OUTCOMES, LEAD, EMPTY, ACTION_PROBLEM, NOT_ENABLED, SCHEDULE_PROBLEM, NOT_SERVED, CATCH_UP_AFTER_MS,
+    OUTCOMES, LEAD, EMPTY, ACTION_PROBLEM, NOT_ENABLED, SCHEDULE_PROBLEM, PROMPT_PROBLEM, NOT_SERVED, CATCH_UP_AFTER_MS,
     actionProblem, emptyState, header,
     dayWords, clockWords, zoneWords, timeWords, workspaceWords, workspaceNames,
     scheduleWords, routineSentence, sentenceParts,
-    outcomeOf, lastCompletedRunFailed, anyFailure, runStatus, nextRunLabel, enableOffer, scheduleProblem, isServed, workspaceNote, somethingElseStopsIt, orderByNextRun, row, deleteConfirmation,
+    RUN_STATUS_WORDS, REFUSALS_UNDERSTOOD,
+    outcomeOf, lastCompletedRunFailed, anyFailure, runStatus, nextRunLabel, enableOffer, scheduleProblem, promptProblem, isServed, workspaceNote, somethingElseStopsIt, orderByNextRun, row, deleteConfirmation,
   };
 }));

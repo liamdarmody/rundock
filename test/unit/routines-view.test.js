@@ -433,7 +433,12 @@ describe('the rail is a map of places, always the same size', () => {
     const row = doc.querySelector('.skill-sidebar-item[data-skill="ops"]');
     assert.ok(row, 'sanity: the sidebar lists the skill');
     row.click();
-    const card = doc.getElementById('skill-instructions-ops');
+    // The id is a constant rather than `skill-instructions-${s.id}`. A skill id
+    // is its directory name, and it was being written into this id attribute
+    // AND into the getElementById call in the handler beside it, which put a
+    // name an agent chooses inside a JavaScript string. Only one skill detail
+    // is drawn at a time, so it never needed to vary.
+    const card = doc.getElementById('skill-instructions');
     assert.ok(card, 'sanity: the detail pane draws the collapsible instructions card');
     assert.ok(card.classList.contains('hidden'), 'sanity: that card starts collapsed');
     card.parentElement.parentElement.click();
@@ -444,7 +449,7 @@ describe('the rail is a map of places, always the same size', () => {
 
     assert.strictEqual(doc.getElementById('skill-detail-content').firstElementChild, drawn,
       'pressing the entry rebuilt a pane that already had something in it');
-    const after = doc.getElementById('skill-instructions-ops');
+    const after = doc.getElementById('skill-instructions');
     assert.ok(after && !after.classList.contains('hidden'),
       'pressing the entry collapsed a card the reader had opened');
     dom.window.close();
@@ -611,6 +616,72 @@ describe('the four rows', () => {
   });
 });
 
+// Before this, a routine's row went blank for exactly as long as it was
+// running: outcomeOf (routines-model.js) deliberately answers null while
+// lastRunStatus is 'running', because the three-tone ruling is about runs
+// that have ENDED, and one still going has not. That withholding is right for
+// the model; the row still has to say something, which is what this block
+// tests. See routines.js's own comment at the `r.state.status === 'running'`
+// branch for the fuller reasoning.
+describe('a run still going', () => {
+  const RUNNING = routine('Nightly build check', {
+    state: { status: 'running' }, lastStart: iso(TODAYS_SLOT), nextRun: iso(TOMORROWS_SLOT),
+  });
+
+  test('the row says so, in its own tone, rather than going blank', () => {
+    const { doc, w, dom } = shell([RUNNING]);
+    w.renderRoutines();
+    const row = rowNamed(doc, 'Nightly build check');
+    const status = row.querySelector('.rr-run-line .run-status');
+    assert.ok(status, 'a running routine\'s row carries no status line at all');
+    assert.strictEqual(text(status), 'Still going');
+    assert.strictEqual(status.className, 'run-status live');
+    dom.window.close();
+  });
+
+  test('it offers a way to reach the run, unlike a routine that has never run', () => {
+    const { doc, w, dom } = shell([RUNNING]);
+    w.renderRoutines();
+    const link = rowNamed(doc, 'Nightly build check').querySelector('.rr-view-run');
+    assert.ok(link, 'a running routine\'s row offers no way to reach the run in progress');
+    assert.strictEqual(text(link), 'View run');
+    assert.strictEqual(link.getAttribute('onclick'), 'routinesViewLastRun(0)');
+  });
+
+  test('this line is not also drawn as a three-tone outcome', () => {
+    const { doc, w, dom } = shell([RUNNING]);
+    w.renderRoutines();
+    const row = rowNamed(doc, 'Nightly build check');
+    assert.strictEqual(row.querySelectorAll('.rr-run-line').length, 1,
+      'a running routine\'s row carries both "Still going" and a three-tone verdict at once');
+    dom.window.close();
+  });
+
+  test('the confirmation surface withholds it, the same as every other row control', () => {
+    // withActions:false is how the delete confirmation draws a row: a
+    // question, not a list, per the comment beside every control this
+    // gating already covers (Pause, Edit, Delete, View last run).
+    const { doc, w, dom } = shell([RUNNING]);
+    w.renderRoutines();
+    press(doc, '.rr-actions [data-routines-action="delete"]');
+    const row = doc.querySelector('.routine-table .routine-row');
+    assert.ok(row, 'the delete confirmation lost the row it is asking about');
+    assert.strictEqual(row.querySelector('.rr-view-run'), null,
+      'View run was drawn on the delete confirmation, which is a question and not a list');
+    dom.window.close();
+  });
+
+  test('the four-tone rows are unaffected: this is a fifth case, not a change to the others', () => {
+    const { doc, w, dom } = shell();
+    w.renderRoutines();
+    assert.strictEqual(rows(doc).length, 4);
+    for (const name of ['Ran on time', 'Caught up', 'Missed', 'Failed']) {
+      assert.notStrictEqual(text(rowNamed(doc, name).querySelector('.run-status')), 'Still going');
+    }
+    dom.window.close();
+  });
+});
+
 describe('the ruling, against what the page resolves', () => {
   // WHY THIS READS THE PAGE AND NOT A TABLE. An earlier version of this card
   // declared colour and weight per tone in the model and asserted on that.
@@ -767,20 +838,6 @@ describe('the empty state, where no skill exists', () => {
     dom.window.close();
   });
 
-  // The variant is chosen by the same question the picker answers, so the two
-  // surfaces cannot disagree about whether a workspace has skills. A skill
-  // nothing is assigned to cannot be scheduled, so it is not a skill this
-  // question counts.
-  test('an unassigned skill is not a skill this view can offer to schedule', () => {
-    const { doc, w, dom } = shell([], { skills: [{ id: 'sk', name: 'Orphan', assignedAgents: [] }], guide: true });
-    w.renderRoutines();
-    const page = text(doc.getElementById('routines-content'));
-    assert.match(page, /Routines schedule skills your agents already have\./);
-    assert.ok(!page.includes('Pick a tested skill'),
-      'the picker would open on nothing, so the offer to pick is false');
-    dom.window.close();
-  });
-
   // WITH NO GUIDE THE BUTTON GOES AND THE LINE MUST NOT BE LEFT INSTRUCTING AN
   // ACTION WITH NOTHING TO PRESS. "Build one and it will show up here" with no
   // Build a skill beside it is a dead end, so the same agent-independent
@@ -809,6 +866,140 @@ describe('the empty state, where no skill exists', () => {
       'the no-guide sentence reached a workspace that has a guide');
     assert.ok(!/Wren|Doc/.test(page), 'this state names no agent in either variant');
     dom.window.close();
+  });
+});
+
+// Until this pass, a workspace whose only skill belonged to nobody took the
+// exact branch above: told to build the skill it already had. `an unassigned
+// skill is not a skill this view can offer to schedule`, in the describe
+// block above, used to pin that as correct; it was half right. Not offering
+// it to schedule IS correct, and stays correct here. Saying so with the
+// no-skills-at-all sentence was the defect.
+describe('the empty state, where the only skill is unassigned', () => {
+  function unassignedShell(opts = {}) {
+    return shell([], { skills: [{ id: 'sk', name: 'Orphan', assignedAgents: [] }], guide: true, ...opts });
+  }
+
+  // Told to assign the skill it has, not to build one.
+  test('a workspace whose only skill is unassigned is told to assign it, not build one', () => {
+    const { doc, w, dom } = unassignedShell();
+    w.renderRoutines();
+    const page = text(doc.getElementById('routines-content'));
+    assert.match(page, /No routines yet\./);
+    assert.ok(!page.includes('Build a skill'), 'a skill this workspace already has was offered as one to build');
+    assert.ok(!page.includes('Routines schedule skills your agents already have'),
+      'the no-skills-at-all sentence reached a workspace that has one');
+    assert.match(page, /assign your skills to an agent/i, 'the reader is not told what to do about the skill it has');
+    dom.window.close();
+  });
+
+  // Still not offered to pick, which is the one thing this state shares with
+  // the no-skills-at-all branch and the part of the old test that was right.
+  test('the picker is still not offered: a skill nothing is assigned to cannot be scheduled', () => {
+    const { doc, w, dom } = unassignedShell();
+    w.renderRoutines();
+    const page = text(doc.getElementById('routines-content'));
+    assert.ok(!page.includes('Pick a tested skill'), 'the picker would open on nothing, so the offer to pick is false');
+    dom.window.close();
+  });
+
+  // THE MANY CASE, RENDERED. A single unassigned skill is the shape every
+  // other test in this block drives, which is also the one shape a deictic
+  // reads correctly against by accident. Two on the page at once is what
+  // proves the rendered copy holds for a count "this skill" or "it" could
+  // not have named.
+  test('two unassigned skills render the same branch, with copy that names neither', () => {
+    const { doc, w, dom } = unassignedShell({
+      skills: [
+        { id: 'orphan-one', name: 'Orphan One', assignedAgents: [] },
+        { id: 'orphan-two', name: 'Orphan Two', assignedAgents: [] },
+      ],
+    });
+    w.renderRoutines();
+    const page = text(doc.getElementById('routines-content'));
+    assert.match(page, /No routines yet\./);
+    assert.ok(!page.includes('Build a skill'), 'two skills this workspace already has were offered as ones to build');
+    assert.ok(!page.includes('Pick a tested skill'), 'the picker would open on nothing, so the offer to pick is false');
+    assert.ok(!/\bthis skill\b/i.test(page), `a deictic naming one skill reached a page with two: ${page}`);
+    assert.match(page, /assign your skills to an agent/i);
+    dom.window.close();
+  });
+
+  // No new box, no new button styling: the state renders through the exact
+  // markup the other two variants share.
+  test('the state renders through the same box as the other two variants, with no button', () => {
+    const { doc, w, dom } = unassignedShell();
+    w.renderRoutines();
+    const box = doc.querySelector('#routines-content .routines-empty-card');
+    assert.ok(box, 'the unassigned-skill state carries no box, so it does not conform to the pane pattern');
+    const stateLine = box.querySelector('.routines-empty-state');
+    assert.ok(stateLine, 'the state line is not on the page');
+    assert.strictEqual(text(stateLine), 'No routines yet.');
+    assert.strictEqual(doc.querySelectorAll('#routines-content button').length, 0,
+      'assigning a skill to an agent is existing behaviour this state points at, not a control it grows');
+    assert.strictEqual(doc.querySelectorAll('.routines-empty-aside').length, 0,
+      'the aside promises scheduling from the skill\'s own page, which this state\'s skill cannot yet do');
+    dom.window.close();
+  });
+
+  // Both surfaces rendered from the same workspace and quoted together,
+  // which is the AC-5 evidence itself rather than each compared separately
+  // to the constant they share: sharing one string proves the two calls
+  // emit the same text, not that the text is true on both pages at once.
+  test('the routines view and the skill\'s own page state the same reason, both rendered', () => {
+    const { doc, w, dom } = unassignedShell();
+    w.renderRoutines();
+    const routinesPage = text(doc.getElementById('routines-content'));
+
+    w.currentSkillId = null;
+    w.RundockSkillsView.selectSkill('sk');
+    const skillPage = text(doc.getElementById('skill-detail-content'));
+
+    const reason = w.RundockRoutineEditorModel.UNASSIGNED_REASON;
+    assert.ok(routinesPage.includes(reason),
+      `the routines view does not carry the shared reason: ${routinesPage}`);
+    assert.ok(skillPage.includes(reason),
+      `the skill's own page does not carry the shared reason: ${skillPage}`);
+    dom.window.close();
+  });
+
+  // All three shapes discovery can answer, driven through the one view and
+  // printed together so the difference between them is a diff a reader can
+  // check rather than three separate claims to take on trust.
+  test('all three shapes discovery can answer, side by side', () => {
+    const noSkills = shell([], { skills: [], guide: true });
+    noSkills.w.renderRoutines();
+    const noneText = text(noSkills.doc.getElementById('routines-content'));
+
+    const unassigned = unassignedShell();
+    unassigned.w.renderRoutines();
+    const unassignedText = text(unassigned.doc.getElementById('routines-content'));
+
+    const assigned = shell([], {
+      skills: [{ id: 'sk', name: 'Compile the ops summary', assignedAgents: [{ id: 'piper', name: 'Piper' }] }],
+      guide: true,
+    });
+    assigned.w.renderRoutines();
+    const assignedText = text(assigned.doc.getElementById('routines-content'));
+
+    // No shape is any other shape's text, and each carries the one line that
+    // is true of it and false of the other two.
+    assert.notStrictEqual(noneText, unassignedText);
+    assert.notStrictEqual(unassignedText, assignedText);
+    assert.notStrictEqual(noneText, assignedText);
+    assert.match(noneText, /Routines schedule skills your agents already have\./);
+    assert.ok(!unassignedText.includes('Routines schedule skills your agents already have'));
+    assert.ok(!assignedText.includes('Routines schedule skills your agents already have'));
+    assert.match(unassignedText, /assign your skills to an agent/i);
+    assert.ok(!noneText.match(/assign your skills to an agent/i));
+    assert.ok(!assignedText.match(/assign your skills to an agent/i));
+    assert.match(assignedText, /Pick a tested skill and give it a schedule\./);
+    assert.ok(!noneText.includes('Pick a tested skill'));
+    assert.ok(!unassignedText.includes('Pick a tested skill'));
+
+    noSkills.dom.window.close();
+    unassigned.dom.window.close();
+    assigned.dom.window.close();
   });
 });
 
@@ -843,6 +1034,79 @@ describe('the variant does not flash', () => {
     const page = text(doc.getElementById('routines-content'));
     assert.match(page, /Pick a tested skill and give it a schedule\./);
     assert.ok(!page.includes('Looking for skills'), 'the wait outlived the reply');
+    dom.window.close();
+  });
+});
+
+// ===== THE THIRD CONTROL ON THE ROW =====
+//
+// The other two ask the server for a change the reader has already decided.
+// This one opens a screen where they decide, so what it is judged on is that it
+// is there, that it is distinct from the other two, and that it hands over the
+// identity of the routine it was pressed on. Where it LEADS is pressed by the
+// door enumeration, which drives the real editor.
+describe('a row offers a way to change when it runs', () => {
+  test('every row carries an edit control, distinct from pause and delete', () => {
+    const { doc, w, dom } = shell();
+    w.renderRoutines();
+    for (const row of rows(doc)) {
+      const edit = row.querySelector('[data-routines-action="edit"]');
+      assert.ok(edit, 'a routine that cannot be rescheduled can only be deleted and remade');
+      assert.strictEqual(edit.getAttribute('aria-label'), 'Edit schedule',
+        'a pencil on a row could mean renaming it, so the control says what it opens');
+      // Distinct controls, not one control doing two things.
+      assert.notStrictEqual(edit, row.querySelector('[data-routines-action="delete"]'));
+      assert.ok(!edit.classList.contains('danger'),
+        'changing when a routine runs is not a destructive act and is not dressed as one');
+    }
+    dom.window.close();
+  });
+
+  // A paused routine is still a routine, and its schedule is exactly what
+  // somebody pausing it may be about to change.
+  test('a paused row offers it too', () => {
+    const { doc, w, dom } = shell([routine('Paused one', { paused: true })]);
+    w.renderRoutines();
+    assert.ok(doc.querySelector('[data-routines-action="edit"]'));
+    dom.window.close();
+  });
+
+  // The confirmation draws a row to say which routine is about to go. It offers
+  // nothing, and this is an offer.
+  test('the row in the delete confirmation offers no way to edit it', () => {
+    const { doc, w, dom } = shell();
+    w.renderRoutines();
+    press(doc, '.routine-row [data-routines-action="delete"]');
+    assert.ok(doc.querySelector('.confirm-card'), 'sanity: the confirmation is on screen');
+    assert.strictEqual(
+      doc.querySelector('.routines-confirm-subject [data-routines-action="edit"]'), null);
+    dom.window.close();
+  });
+
+  // It opens a screen rather than asking for a change, so nothing goes to the
+  // server when it is pressed. A control here that sent something would be a
+  // change the reader never confirmed.
+  test('pressing it asks the server for nothing', () => {
+    const { doc, w, dom } = shell();
+    w.renderRoutines();
+    // The editor is not loaded in this shell, so the door resolves to nothing
+    // and the press is inert. What is being checked is that the row itself
+    // sends no message, which holds either way.
+    press(doc, '.routine-row [data-routines-action="edit"]');
+    assert.deepStrictEqual(w.sent, []);
+    dom.window.close();
+  });
+
+  // The refusal from the last action belongs to the list it was raised on, and
+  // this is a reader leaving that list.
+  test('pressing it clears the refusal the last action left', () => {
+    const { doc, w, dom } = shell();
+    w.renderRoutines();
+    w.routinesActionFailed({ type: 'routine_action_error', message: 'That routine could not be changed.' });
+    assert.ok(doc.querySelector('[data-routines-problem]'), 'sanity: the refusal is on the page');
+    press(doc, '.routine-row [data-routines-action="edit"]');
+    w.renderRoutines();
+    assert.strictEqual(doc.querySelector('[data-routines-problem]'), null);
     dom.window.close();
   });
 });
@@ -1268,6 +1532,12 @@ describe('the header is the skills view\'s header', () => {
 
   const routinesHeader = (doc) => doc.querySelector('#routines-content .profile-header');
   const skillsHeader = (doc) => doc.querySelector('#skill-detail-content .profile-header');
+  // THE SUBTITLE IS READ OFF THE PANE, NOT OFF THE HEADER. It sits in
+  // .routines-header-desc, a sibling of .profile-header rather than a child
+  // of it, which is the fix this file's own header test below asserts. A
+  // helper reading it through routinesHeader(doc) would always find nothing
+  // and every test using it would be testing the wrong element.
+  const routinesSubtitle = (doc) => doc.querySelector('#routines-content .routines-subtitle');
 
   // AC-C1. The same component, and it is asserted as the same ELEMENTS rather
   // than as a class name that happens to appear in both files.
@@ -1338,8 +1608,8 @@ describe('the header is the skills view\'s header', () => {
   // unscoped sentence, and it is the locked one.
   test('the subtitle under the title is the locked sentence', () => {
     const { doc, dom } = styled();
-    const subtitle = routinesHeader(doc).querySelector('.routines-subtitle');
-    assert.ok(subtitle, 'the lead sentence did not move into the header');
+    const subtitle = routinesSubtitle(doc);
+    assert.ok(subtitle, 'the lead sentence did not render beneath the header');
     assert.strictEqual(text(subtitle),
       'Every scheduled skill across your team, and when it runs next.');
     dom.window.close();
@@ -1354,7 +1624,7 @@ describe('the header is the skills view\'s header', () => {
       assert.ok(el, 'an element this compares is not on the page');
       return dom.window.getComputedStyle(el).fontSize;
     };
-    const subtitle = size(routinesHeader(doc).querySelector('.routines-subtitle'));
+    const subtitle = size(routinesSubtitle(doc));
     assert.notStrictEqual(subtitle, size(routinesHeader(doc).querySelector('.profile-name')),
       'the subtitle is set at the title size, which is a type size this card was not asked to move');
     dom.window.close();
@@ -1377,20 +1647,20 @@ describe('the header is the skills view\'s header', () => {
       routines: [routine('Wren nightly', { nextRun: iso(TOMORROWS_SLOT) })],
     });
     w.renderRoutines();
-    assert.strictEqual(text(routinesHeader(doc).querySelector('.routines-subtitle')),
+    assert.strictEqual(text(routinesSubtitle(doc)),
       'Every scheduled skill across your team, and when it runs next.',
       'sanity: unscoped, the page carries the locked sentence');
 
     w.setNavState = () => {};
     w.showRoutinesForAgent('piper');
-    assert.strictEqual(text(routinesHeader(doc).querySelector('.routines-subtitle')),
+    assert.strictEqual(text(routinesSubtitle(doc)),
       'Every scheduled skill Piper runs, and when it runs next.',
       'the list is filtered to one agent and the sentence above it still says the whole team');
 
     // And leaving the scope puts the general sentence back, so a filtered
     // sentence cannot outlive the filter.
     w.showRoutinesForAgent(null);
-    assert.strictEqual(text(routinesHeader(doc).querySelector('.routines-subtitle')),
+    assert.strictEqual(text(routinesSubtitle(doc)),
       'Every scheduled skill across your team, and when it runs next.');
     dom.window.close();
   });
@@ -1403,18 +1673,31 @@ describe('the header is the skills view\'s header', () => {
     });
     w.setNavState = () => {};
     w.showRoutinesForAgent('nobody');
-    assert.strictEqual(text(routinesHeader(doc).querySelector('.routines-subtitle')),
+    assert.strictEqual(text(routinesSubtitle(doc)),
       'Every scheduled skill across your team, and when it runs next.',
       'a true general sentence beats a specific one with a hole in it');
     dom.window.close();
   });
 
-  test('the sentence is in the header rather than in a paragraph below it', () => {
+  // The subtitle no longer nests inside .profile-header: it moved to a
+  // sibling block below the header, matching the split views/skills.js draws
+  // between .profile-header and .profile-desc, so the icon is no longer
+  // dwarfed by a two-line text column beside it. What this test still has to
+  // rule out is the ORIGINAL defect, a lead sentence loose in the pane as its
+  // own settings-style paragraph, disconnected from the header rather than
+  // sitting immediately beneath it.
+  test('the sentence sits directly beneath the header, not loose in the pane', () => {
     const { doc, dom } = styled();
     const pane = doc.getElementById('routines-content');
     assert.strictEqual(pane.querySelector('.settings-section-title'), null,
       'the settings heading is still on a view that lists things');
-    assert.ok(routinesHeader(doc).contains(pane.querySelector('.routines-subtitle')));
+    const header = routinesHeader(doc);
+    const desc = pane.querySelector('.routines-header-desc');
+    assert.ok(desc, 'the subtitle block did not render next to the header');
+    assert.ok(desc.contains(pane.querySelector('.routines-subtitle')),
+      'the subtitle is not inside the block that follows the header');
+    assert.strictEqual(header.nextElementSibling, desc,
+      'the subtitle block is not the header\'s immediate sibling');
     dom.window.close();
   });
 
@@ -1423,13 +1706,23 @@ describe('the header is the skills view\'s header', () => {
   // nothing left to say about the state of the list.
   test('the empty pane carries the same header, with the title alone', () => {
     const { doc, dom } = styled([], { skills: [] });
+    const pane = doc.getElementById('routines-content');
     const header = routinesHeader(doc);
     assert.ok(header, 'the empty pane lost the header');
     assert.ok(header.querySelector('.profile-avatar.skill-avatar svg'));
     assert.strictEqual(text(header.querySelector('.profile-name')), 'Routines');
-    assert.strictEqual(header.querySelector('.routines-subtitle'), null,
+    // CHECKED ACROSS THE WHOLE PANE, NOT ONLY INSIDE THE HEADER. The subtitle
+    // now renders as a sibling of .profile-header rather than a child of it
+    // (see the header-restructure tests above), so a header-scoped query
+    // would find no subtitle whether emptyHtml() correctly withholds it or
+    // wrongly draws it: the guard this asserts against is emptyHtml() calling
+    // listHeaderHtml() by mistake, which draws the subtitle beside the
+    // header, not inside it.
+    assert.strictEqual(pane.querySelector('.routines-subtitle'), null,
       'the state line is still the header\'s subtitle, so the pane reads as a sentence above a '
       + 'card rather than as a member of it');
+    assert.strictEqual(pane.querySelector('.routines-header-desc'), null,
+      'the empty pane drew the list header\'s description block rather than the title alone');
     dom.window.close();
   });
 
@@ -1518,312 +1811,6 @@ describe('the header is the skills view\'s header', () => {
   });
 });
 
-describe('the rail says when a routine has failed', () => {
-  // The chrome's own stylesheet, loaded into the document so what the dot
-  // LOOKS like is read off the element the page emits rather than off a token
-  // name written beside it. The routines view's tone proof was once made
-  // against a table nothing rendered, and giving a state the wrong colour in
-  // CSS moved the page and moved no test.
-  const SIDEBAR_CSS = read('public', 'styles', 'components', 'sidebar.css');
-
-  const ran = (name) => routine(name, {
-    state: { status: 'completed', duration: 3 }, lastStart: iso(new Date(2026, 7, 20, 7, 0, 12)),
-    lastSlot: iso(TODAYS_SLOT), nextRun: iso(TOMORROWS_SLOT),
-  });
-  const failed = (name) => routine(name, {
-    state: { status: 'failed', duration: 0 }, lastStart: iso(TODAYS_SLOT),
-    lastSlot: iso(TODAYS_SLOT), nextRun: iso(TOMORROWS_SLOT),
-  });
-  const interrupted = (name) => routine(name, {
-    state: { status: 'interrupted', duration: 0 }, lastStart: iso(TODAYS_SLOT),
-    lastSlot: iso(TODAYS_SLOT), nextRun: iso(TOMORROWS_SLOT),
-  });
-  const missed = (name) => routine(name, {
-    state: { status: 'completed', duration: 3 }, lastStart: iso(new Date(2026, 7, 18, 7, 0)),
-    lastSlot: iso(new Date(2026, 7, 18, 7, 0)), missedSlot: iso(YESTERDAYS_SLOT),
-    nextRun: iso(TODAYS_SLOT),
-  });
-  const caughtUp = (name) => routine(name, {
-    state: { status: 'completed', duration: 3 }, lastStart: iso(new Date(2026, 7, 20, 9, 14)),
-    lastSlot: iso(TODAYS_SLOT), nextRun: iso(TOMORROWS_SLOT),
-  });
-  const paused = (name) => routine(name, { paused: true, nextRun: iso(TOMORROWS_SLOT) });
-  // A paused routine whose last run FAILED. This is the fixture the pause
-  // clause needs: a paused routine with no run history is indistinguishable
-  // from one that has never run, so it passes whether or not pause is read.
-  const pausedAfterFailure = (name) => routine(name, {
-    state: { status: 'failed', duration: 0 }, lastStart: iso(TODAYS_SLOT),
-    lastSlot: iso(TODAYS_SLOT), paused: true, nextRun: iso(TOMORROWS_SLOT),
-  });
-  const inFlight = (name) => routine(name, {
-    state: { status: 'running' }, lastStart: iso(TODAYS_SLOT),
-    lastSlot: iso(TODAYS_SLOT), nextRun: iso(TOMORROWS_SLOT),
-  });
-
-  // The rail as index.html ships it, with the chrome stylesheet in the
-  // document and the real updater cut out of app.js and run against it.
-  function railShell(routines) {
-    const dom = new JSDOM('<!doctype html><html><head><style>' + TOKENS_CSS + SIDEBAR_CSS
-      + '</style></head><body>' + pageParts() + '</body></html>', { runScripts: 'dangerously' });
-    const w = dom.window;
-    w.eval(EDITOR_MODEL_SRC);
-    w.eval(SKILLS_MODEL_SRC);
-    w.eval(MODEL_SRC);
-    w.agents = [{ id: 'piper', displayName: 'Piper', status: 'onTeam', routines }];
-    w.eval('function updateRoutineFailureBadge() {'
-      + appPiece(/function updateRoutineFailureBadge\(\) \{([\s\S]*?)\n\}/, 'the routines failure badge')
-      + '\n}');
-    return { w, doc: w.document, dom };
-  }
-
-  const dot = (doc) => doc.querySelector('.nav-item[data-nav="routines"] .nav-badge-failed');
-
-  // What a rendered element is filled with, as the page resolves it. The
-  // chrome declares its badges with the `background` shorthand, so that is the
-  // property asked for: the longhand a shorthand carrying a custom property
-  // never reaches answers with a transparent default and would make every
-  // comparison below pass against a badge with no colour at all.
-  function fill(dom, el) {
-    const value = dom.window.getComputedStyle(el).getPropertyValue('background');
-    assert.ok(value && value !== 'rgba(0, 0, 0, 0)',
-      'the element resolves to no fill, so nothing here is measuring a colour');
-    return value;
-  }
-
-  // AC-D1.
-  test('a failed most recent completed run raises the dot', () => {
-    const { w, doc, dom } = railShell([failed('Nightly report')]);
-    w.updateRoutineFailureBadge();
-    assert.ok(dot(doc), 'a routine failed overnight and the rail says nothing');
-    dom.window.close();
-  });
-
-  test('a run the process died inside raises it too', () => {
-    const { w, doc, dom } = railShell([interrupted('Nightly report')]);
-    w.updateRoutineFailureBadge();
-    assert.ok(dot(doc), 'a run that did not finish is not a run that succeeded');
-    dom.window.close();
-  });
-
-  // AC-D2, and it is the whole reason this card exists. Each of the four
-  // asserted on its own, because "none of these four raises it" asserted as
-  // one is a single failure that could be any of them.
-  test('a missed slot does not raise the dot', () => {
-    const { w, doc, dom } = railShell([missed('Nightly report')]);
-    w.updateRoutineFailureBadge();
-    assert.strictEqual(dot(doc), null,
-      'a dot that rises on a missed slot teaches its reader to ignore the dot');
-    dom.window.close();
-  });
-
-  test('a catch-up does not raise the dot', () => {
-    const { w, doc, dom } = railShell([caughtUp('Nightly report')]);
-    w.updateRoutineFailureBadge();
-    assert.strictEqual(dot(doc), null, 'a late run is a success');
-    dom.window.close();
-  });
-
-  // THE PAUSE CLAUSE, DRIVEN SO THAT THE PAUSE IS THE ONLY THING BETWEEN THE
-  // ROUTINE AND A DOT. A paused routine with no run history proves nothing:
-  // the never-run branch answers it either way. This fixture raises the dot
-  // the moment the paused flag stops being read.
-  test('a paused routine does not raise the dot', () => {
-    const { w, doc, dom } = railShell([pausedAfterFailure('Nightly report')]);
-    w.updateRoutineFailureBadge();
-    assert.strictEqual(dot(doc), null,
-      'a paused routine can never succeed again, so a dot it raised could never be cleared');
-    dom.window.close();
-  });
-
-  test('the same routine unpaused does raise it, so the pause is what decides', () => {
-    const { w, doc, dom } = railShell([failed('Nightly report')]);
-    w.updateRoutineFailureBadge();
-    assert.ok(dot(doc), 'sanity: without the pause this fixture raises the dot');
-    dom.window.close();
-  });
-
-  // The never-run case is kept, as its own case rather than as the one that
-  // discharges the pause clause.
-  test('a paused routine that has never run does not raise the dot either', () => {
-    const { w, doc, dom } = railShell([paused('Nightly report')]);
-    w.updateRoutineFailureBadge();
-    assert.strictEqual(dot(doc), null);
-    dom.window.close();
-  });
-
-  // AC-D3 has no way to fire for a paused routine, which is exactly why pause
-  // has to clear the dot rather than merely not raise it: a dot left up by a
-  // paused routine would sit there until it was resumed or deleted.
-  test('pausing a failed routine clears the dot in the same page', () => {
-    const { w, doc, dom } = railShell([failed('Nightly report')]);
-    w.updateRoutineFailureBadge();
-    assert.ok(dot(doc), 'sanity: the failure raised it');
-    w.agents[0].routines = [pausedAfterFailure('Nightly report')];
-    w.updateRoutineFailureBadge();
-    assert.strictEqual(dot(doc), null,
-      'the user paused the routine and the rail is still alarming about it');
-    dom.window.close();
-  });
-
-  // AC-D1 read literally, at the rail. A failure and then a night with the
-  // machine shut is still a failure nobody has seen.
-  test('a slot missed after a failure does not mask the failure on the rail', () => {
-    const { w, doc, dom } = railShell([routine('Nightly report', {
-      state: { status: 'failed', duration: 0 },
-      lastStart: iso(new Date(2026, 7, 19, 7, 0)), lastSlot: iso(new Date(2026, 7, 19, 7, 0)),
-      missedSlot: iso(YESTERDAYS_SLOT), nextRun: iso(TODAYS_SLOT),
-    })]);
-    w.updateRoutineFailureBadge();
-    assert.ok(dot(doc), 'a missed slot hid a failed run behind the most ordinary event there is');
-    dom.window.close();
-  });
-
-  test('a run still in flight does not raise the dot', () => {
-    const { w, doc, dom } = railShell([inFlight('Nightly report')]);
-    w.updateRoutineFailureBadge();
-    assert.strictEqual(dot(doc), null,
-      'a run that has not finished has no outcome to report yet');
-    dom.window.close();
-  });
-
-  test('a routine that has never run does not raise the dot', () => {
-    const { w, doc, dom } = railShell([routine('Never run', { nextRun: iso(TOMORROWS_SLOT) })]);
-    w.updateRoutineFailureBadge();
-    assert.strictEqual(dot(doc), null);
-    dom.window.close();
-  });
-
-  test('a workspace with no routines at all does not raise the dot', () => {
-    const { w, doc, dom } = railShell([]);
-    w.updateRoutineFailureBadge();
-    assert.strictEqual(dot(doc), null);
-    dom.window.close();
-  });
-
-  // AC-D3, without a reload: the same document, a second roster.
-  test('the dot clears when that routine next succeeds, in the same page', () => {
-    const { w, doc, dom } = railShell([failed('Nightly report')]);
-    w.updateRoutineFailureBadge();
-    assert.ok(dot(doc), 'sanity: the failure raised it');
-    w.agents[0].routines = [ran('Nightly report')];
-    w.updateRoutineFailureBadge();
-    assert.strictEqual(dot(doc), null, 'the routine recovered and the rail is still alarming');
-    dom.window.close();
-  });
-
-  test('the dot is not drawn twice when the failure is still there', () => {
-    const { w, doc, dom } = railShell([failed('Nightly report')]);
-    w.updateRoutineFailureBadge();
-    w.updateRoutineFailureBadge();
-    assert.strictEqual(doc.querySelectorAll('.nav-item[data-nav="routines"] .nav-badge-failed').length, 1);
-    dom.window.close();
-  });
-
-  // AC-D5. One failure among many raises it, and somebody else's success is
-  // not that routine's recovery.
-  test('one failure among several routines raises the dot', () => {
-    const { w, doc, dom } = railShell([ran('First'), missed('Second'), failed('Third'), caughtUp('Fourth')]);
-    w.updateRoutineFailureBadge();
-    assert.ok(dot(doc), 'a failure was lost among the routines that are fine');
-    dom.window.close();
-  });
-
-  test('another routine succeeding does not clear a failure', () => {
-    const { w, doc, dom } = railShell([failed('First'), routine('Second', { nextRun: iso(TOMORROWS_SLOT) })]);
-    w.updateRoutineFailureBadge();
-    assert.ok(dot(doc));
-    w.agents[0].routines = [failed('First'), ran('Second')];
-    w.updateRoutineFailureBadge();
-    assert.ok(dot(doc), 'one routine recovering cleared another routine\'s failure');
-    dom.window.close();
-  });
-
-  test('a failure on any agent raises it, not only the first', () => {
-    const { w, doc, dom } = railShell([ran('First')]);
-    w.agents.push({ id: 'wren', displayName: 'Wren', status: 'onTeam', routines: [failed('Second')] });
-    w.updateRoutineFailureBadge();
-    assert.ok(dot(doc), 'only the first agent\'s routines were looked at');
-    dom.window.close();
-  });
-
-  // AC-D4, PROVEN AGAINST WHAT THE PAGE RESOLVES. The dot's colour is read off
-  // the element the updater appended, with the shipped stylesheet in the
-  // document, and compared with the badge that already exists beside it. A
-  // rule added later that overrides either one changes this answer, which is
-  // the property a search of the stylesheet would not have.
-  test('the dot resolves to the danger token, not the attention token', () => {
-    const { w, doc, dom } = railShell([failed('Nightly report')]);
-    w.updateRoutineFailureBadge();
-    const failure = fill(dom, dot(doc));
-
-    // The unread badge, drawn onto the same page by the same chrome, so this
-    // is two rendered elements compared rather than one string matched.
-    const unreadBadge = doc.createElement('span');
-    unreadBadge.className = 'nav-badge';
-    doc.querySelector('.nav-item[data-nav="conversations"]').appendChild(unreadBadge);
-    const attention = fill(dom, unreadBadge);
-
-    assert.strictEqual(failure, 'var(--danger)', 'the dot does not resolve to the danger token');
-    assert.strictEqual(attention, 'var(--attention)', 'sanity: the unread badge is still amber');
-    assert.notStrictEqual(failure, attention,
-      'amber is spent on needs the user rather than on an error, and a failure is an error');
-    dom.window.close();
-  });
-
-  // Without this, "the dot is not the attention token" would still hold if the
-  // two tokens happened to carry the same colour.
-  test('the two tokens are different colours', () => {
-    const value = (token) => {
-      const m = new RegExp(`--${token}:\\s*([^;]+);`).exec(TOKENS_CSS);
-      assert.ok(m, `--${token} is declared nowhere`);
-      return m[1].trim();
-    };
-    assert.notStrictEqual(value('danger'), value('attention'),
-      'the danger and attention tokens carry the same colour, so the dot says nothing new');
-  });
-
-  // AND IT IS RAISED BY THE SURFACE THAT CARRIES IT, not by a call in a test.
-  // The roster broadcast is the only thing that tells the client a run
-  // finished, so it is the message that has to update the rail. Cut out of
-  // app.js and run, so deleting the call fails here rather than leaving the
-  // suite green while the dot never appears in the product.
-  //
-  // THE SERVER HALF IS NOT ASSUMED. broadcastRoutineUpdate in lib/scheduler.js
-  // sends `{type: 'agents'}` to every connected client from recordOutcome,
-  // which is where both endings of a run land, and that is driven rather than
-  // described in "a run reaching an outcome sends the roster to connected
-  // clients" in test/unit/scheduler-lib.test.js. Without it, everything below
-  // would prove the dot updates on a roster and prove nothing about whether a
-  // roster ever arrives.
-  test('the roster arriving from the server raises and clears the dot', () => {
-    const { w, doc, dom } = railShell([]);
-    const body = appPiece(/case 'agents':([\s\S]*?)\bbreak;/, 'the roster case of the client dispatch');
-    for (const name of ['renderAgentList', 'renderOrgChart', 'renderConvoList', 'renderRoutines',
-      'renderRoutinesPanel']) {
-      w[name] = () => {};
-    }
-    // Also called by the roster case: the workspace the roster was read from.
-    // Nothing on the rail reads it, so it is stubbed here and driven where it
-    // matters, in test/unit/routines-end-to-end.test.js.
-    w.setRosterWorkspace = () => {};
-    w.d = { type: 'agents', agents: [{ id: 'piper', displayName: 'Piper', status: 'onTeam', routines: [failed('Nightly report')] }] };
-    w.eval(`(function () {${body}\n})()`);
-    assert.ok(dot(doc), 'a roster carrying a failure arrived and the rail says nothing');
-
-    w.d = { type: 'agents', agents: [{ id: 'piper', displayName: 'Piper', status: 'onTeam', routines: [ran('Nightly report')] }] };
-    w.eval(`(function () {${body}\n})()`);
-    assert.strictEqual(dot(doc), null, 'the recovery arrived and the rail is still alarming');
-    dom.window.close();
-  });
-
-  // The badge belongs to the chrome. The view must not reach into the rail,
-  // which is the rule the withdrawn presence gate left behind.
-  test('the view does not reach into the rail to draw it', () => {
-    assert.ok(!/nav-badge-failed/.test(VIEW_SRC),
-      'the routines view draws the rail badge, which is the rail rule coming back by hand');
-  });
-});
-
 // ===== THE ROW FOR A ROUTINE NOBODY HAS TURNED ON =====
 //
 // After an upgrade these are the rows a person meets, so what they say is the
@@ -1832,14 +1819,20 @@ describe('the rail says when a routine has failed', () => {
 describe('a routine the upgrade held back', () => {
   const HELD = [routine('Held back', { enabled: false, nextRun: iso(TOMORROWS_SLOT) })];
 
-  test('the row offers to turn it on and says Rundock will start running it', () => {
+  test('the row offers to turn it on and names the duplicate-run risk directly', () => {
     const { doc, w, dom } = shell(HELD);
     w.renderRoutines();
     const row = rowNamed(doc, 'Held back');
     const words = text(row);
     assert.match(words, /Not running/, 'the row does not say it is not running');
-    assert.match(words, /Rundock will start running it/,
+    assert.match(words, /Rundock starts running it too/,
       'the row does not say what turning it on does');
+    // NAMED ON THE RENDERED ROW, not only in the model: a reader here is the
+    // one most likely to already have this job running outside Rundock.
+    assert.match(words, /cron job or script/i,
+      'the row does not name what might already be running this routine');
+    assert.match(words, /twice/i,
+      'the row does not say plainly that turning it on can run this routine twice');
     // And it does not promise a run it will not make.
     assert.strictEqual(row.querySelector('.next-run'), null,
       'a routine that will not run still advertises a next run');
@@ -1875,6 +1868,54 @@ describe('a routine the upgrade held back', () => {
       type: 'set_routine_enabled', agentId: 'piper', name: 'Compile the ops summary',
       occurrence: 1, enabled: true,
     }]);
+    dom.window.close();
+  });
+
+  // A ROUTINE WITH NOTHING TO SAY, on the page rather than in the model.
+  //
+  // The row is the only place the person who wrote the file finds out why the
+  // routine never runs: the refusal itself happens on a tick nobody watches.
+  // So this presses the rendered page for the words, and for the promise the
+  // row must no longer make.
+  test('a routine with no prompt says so on the row, and promises no run', () => {
+    const { doc, w, dom } = shell([
+      routine('Morning briefing', { prompt: null, nextRun: iso(TOMORROWS_SLOT) }),
+    ]);
+    w.renderRoutines();
+    const row = rows(doc)[0];
+    const fault = row.querySelector('.prompt-problem');
+    assert.ok(fault, 'the row carries no mark of a routine that cannot run');
+    assert.match(text(fault), /has no prompt/i);
+    assert.match(text(fault), /Run the morning briefing/, 'the row does not name what to add');
+    assert.strictEqual(row.querySelector('.next-run'), null,
+      'a routine that will not run advertises when it will');
+    dom.window.close();
+  });
+
+  // THE TONE IS THE SCHEDULE FAULT'S, read off the page rather than off a
+  // table beside it. Both are faults in the routine that only the person who
+  // wrote the file can fix, and both take the one tone this row spends on
+  // that. Asserted as an equality between two spans in one document, with the
+  // value required to be a real one, so a stylesheet that resolved neither
+  // cannot pass this by resolving both to nothing.
+  test('the prompt fault is drawn in the same tone as the schedule fault', () => {
+    const { doc, w, dom } = shell([
+      routine('Cron briefing', { schedule: '0 7 * * *', scheduleReadable: false }),
+      routine('Morning briefing', { prompt: null, nextRun: iso(TOMORROWS_SLOT) }),
+    ]);
+    w.renderRoutines();
+    const style = (sel) => {
+      const el = doc.querySelector(sel);
+      assert.ok(el, `nothing on the page matches ${sel}`);
+      const s = dom.window.getComputedStyle(el);
+      return { colour: s.color, weight: s.fontWeight };
+    };
+    const schedule = style('.schedule-problem');
+    const prompt = style('.prompt-problem');
+    assert.ok(schedule.colour && schedule.weight,
+      'the schedule fault resolves to nothing, so an equality with it says nothing');
+    assert.deepStrictEqual(prompt, schedule,
+      'the two faults a row can carry are drawn differently, so one of them reads as something else');
     dom.window.close();
   });
 
