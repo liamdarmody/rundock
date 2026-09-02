@@ -87,6 +87,29 @@ test('cancel from the offer writes nothing at all', async ({ page }) => {
   expect(await fileExists(page, '.claude/agents/cancel-scribe.md')).toBe(false);
 });
 
+test('with the socket closed, nothing is sent and the flow stays usable', async ({ page }) => {
+  await boot(page);
+  const source = await seedPackage(page, 'pkg-offline', [['.claude/agents/offline-scribe.md', AGENT]]);
+  await openPackages(page);
+  await page.fill('#packages-source-path', source);
+  await page.evaluate(() => ws.close());
+  await page.getByRole('button', { name: 'Read it' }).click();
+  await expect(page.locator('.packages-field-error')).toContainText('Not connected: nothing was sent');
+  await expect(page.locator('#packages-source-path')).toBeEnabled();
+  expect(await fileExists(page, '.claude/agents/offline-scribe.md')).toBe(false);
+});
+
+test('a refusal from the real server renders the failure card, not a spinner', async ({ page }) => {
+  await boot(page);
+  const source = await seedPackage(page, 'pkg-refused', [['.claude/skills/Bad Name/SKILL.md', 'x']]);
+  await openPackages(page);
+  await page.fill('#packages-source-path', source);
+  await page.getByRole('button', { name: 'Read it' }).click();
+  const failed = page.locator('.packages-failed');
+  await expect(failed.locator('.packages-headline')).toHaveText("That didn't work");
+  await expect(failed.locator('.packages-body')).toContainText('not a canonical skill name');
+});
+
 test('a collision disables confirm and says each item needs its own decision', async ({ page }) => {
   await boot(page);
   await seedPackage(page, '.claude/skills/collide-writer', [['SKILL.md', 'existing']]);

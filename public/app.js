@@ -218,6 +218,7 @@ function handle(d) {
     case 'package_import_plan': packagesPlanArrived(d); break;
     case 'package_import_result': packagesApplyArrived(d); break;
     case 'package_import_error': packagesErrorArrived(d); break;
+    case 'package_import_plan': case 'package_import_result': case 'package_import_error': packagesReplyArrived(d); break;
     case 'workspaces': handleWorkspaces(d); break;
     case 'workspace_set':
       // Start the clock on the renderer's share of opening a workspace. The

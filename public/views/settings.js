@@ -28,8 +28,22 @@
 let packagesInstall = (typeof RundockPackagesInstallModel !== 'undefined') ? RundockPackagesInstallModel.initial() : null;
 
 function packagesApplyTransition(out) {
+  // A transition that wants to send only takes effect if the message was
+  // actually handed to an open socket; otherwise the flow stays usable and
+  // says plainly that nothing went out.
+  if (out.send) {
+    if (!(ws && ws.readyState === WebSocket.OPEN)) {
+      packagesInstall = {
+        ...RundockPackagesInstallModel.initial(),
+        sourcePath: (packagesInstall && packagesInstall.sourcePath) || '',
+        fieldError: 'Not connected: nothing was sent. Try again once the connection returns.',
+      };
+      renderSettingsSection('packages');
+      return;
+    }
+    ws.send(JSON.stringify(out.send));
+  }
   packagesInstall = out.state;
-  if (out.send && ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(out.send));
   renderSettingsSection('packages');
 }
 
@@ -42,11 +56,7 @@ function packagesCancel() { packagesApplyTransition(RundockPackagesInstallModel.
 function packagesConfirm() { packagesApplyTransition(RundockPackagesInstallModel.confirm(packagesInstall)); }
 function packagesRetry() { packagesApplyTransition(RundockPackagesInstallModel.retry(packagesInstall)); }
 
-function packagesPlanArrived(msg) { packagesApplyTransition(RundockPackagesInstallModel.planReply(packagesInstall, msg)); }
-function packagesApplyArrived(msg) { packagesApplyTransition(RundockPackagesInstallModel.applyReply(packagesInstall, msg)); }
-function packagesErrorArrived(msg) {
-  if (msg.operation === 'plan') packagesPlanArrived(msg); else packagesApplyArrived(msg);
-}
+function packagesReplyArrived(msg) { packagesApplyTransition(RundockPackagesInstallModel.reply(packagesInstall, msg)); }
 
 function packagesSectionHtml() {
   const m = RundockPackagesInstallModel;
@@ -242,5 +252,5 @@ function changeWorkspace() {
 
 return { showSettingsSection, renderSettingsSection, setWorkspaceMode, runtimeRowHtml, runtimesCardHtml, renderRuntimesCard, changeWorkspace,
   packagesSubmit, packagesCancel, packagesConfirm, packagesRetry,
-  packagesPlanArrived, packagesApplyArrived, packagesErrorArrived };
+  packagesReplyArrived };
 }));

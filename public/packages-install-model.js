@@ -42,10 +42,20 @@
     };
   }
 
+  // The one reply entry: the model's own phase decides which handler runs,
+  // so no routing ever depends on a wire field the model has not verified.
+  function reply(state, msg) {
+    if (state.phase === 'classifying') return planReply(state, msg);
+    if (state.phase === 'applying') return applyReply(state, msg);
+    return { state };
+  }
+
   function planReply(state, msg) {
     if (state.phase !== 'classifying') return { state };
     if (msg.type === 'package_import_error') {
-      if (/no agents and no skills/.test(msg.message || '')) {
+      // Classified by code, never by message prose: the wording belongs to
+      // the producer and may change without ceremony.
+      if (msg.code === 'empty-package') {
         return { state: { phase: 'nothing-usable', sourcePath: state.sourcePath } };
       }
       return { state: { phase: 'failed', sourcePath: state.sourcePath, message: msg.message || 'The package could not be read.' } };
@@ -87,17 +97,18 @@
     return { state: initial() };
   }
 
-  // The all-add approval. For a decision set with no skips this is
-  // byte-identical to lib/packages/import-plan.js decide(plan, allAdd),
-  // which the focused unit suite pins with a deep equality against the real
-  // function, so this cannot drift from the one true decision contract.
+  // The approval is built by THE decision contract itself: the shared
+  // decide from packages-decide.js, loaded by script tag in the browser and
+  // required here under Node, with every item decided add.
+  function sharedDecide() {
+    if (typeof module === 'object' && module.exports) return require('./packages-decide.js').decide;
+    return RundockPackagesDecide.decide;
+  }
+
   function allAddApproval(plan) {
-    return {
-      schema: plan.schema,
-      source: plan.source,
-      manifest: plan.manifest,
-      items: plan.items.map((item) => ({ ...item, decision: 'add' })),
-    };
+    const decisions = {};
+    for (const item of plan.items) decisions[item.id] = 'add';
+    return sharedDecide()(plan, decisions);
   }
 
   function confirm(state) {
@@ -158,5 +169,5 @@
     return submit(initial(), state.sourcePath);
   }
 
-  return { initial, submit, planReply, offerCopy, cancel, confirm, applyReply, doneCopy, retry, allAddApproval };
+  return { initial, submit, reply, planReply, offerCopy, cancel, confirm, applyReply, doneCopy, retry, allAddApproval };
 }));

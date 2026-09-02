@@ -27,6 +27,12 @@ const PLAN = {
   src: path.join(ROOT, 'lib', 'packages', 'import-plan.js'),
   suite: 'test/unit/package-import-plan-v2.test.js',
 };
+// The decision contract's own home since it was shared with the browser; the
+// plan suite still owns its evidence, so the mutation follows the code.
+const DECIDE = {
+  src: path.join(ROOT, 'public', 'packages-decide.js'),
+  suite: 'test/unit/package-import-plan-v2.test.js',
+};
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -37,7 +43,7 @@ const MUTATIONS = [
     "  return entries.sort((a, b) => (a.id < b.id ? -1 : 1));",
     '  return entries;'],
   [PLAN, 'an empty package is a refusal, not an empty plan',
-    "  if (entries.length === 0) refuse('the package contains no agents and no skills');\n",
+    "  if (entries.length === 0) refuse('the package contains no agents and no skills', 'empty-package');\n",
     ''],
   [PLAN, 'the approved digest comes from the provenance-transformed bytes',
     "      const approvedText = withProvenance(sourceAgentText(itemPath(sourceRoot, 'agent', slug)), source.id);",
@@ -45,7 +51,7 @@ const MUTATIONS = [
   [PLAN, 'the collision fact is derived from the live destination',
     '    const collision = plannedDigest !== ABSENT_DIGEST;',
     '    const collision = false;'],
-  [PLAN, "a skipped agent's default state collapses onto the planned one",
+  [DECIDE, "a skipped agent's default state collapses onto the planned one",
     '          approvedDefault: skip ? item.agent.plannedDefault : item.agent.approvedDefault,',
     '          approvedDefault: item.agent.approvedDefault,'],
   [PLAN, 'a non-slug agent name is refused, never silently dropped',
@@ -93,7 +99,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [PLAN];
+  const targets = [PLAN, DECIDE];
   const session = beginMutationRun({ files: targets.map((target) => target.src) });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));

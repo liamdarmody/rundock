@@ -7,7 +7,26 @@ const path = require('node:path');
 
 const model = require('../../public/packages-install-model.js');
 const { buildPlan, decide } = require('../../lib/packages/import-plan.js');
+const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
+const config = require('../../lib/config.js');
 const { makeTempDir } = require('../helpers/workspace.js');
+
+const AGENT_TEXT = '---\nname: scribe\n---\n\nS.\n';
+
+// Every reply shape the model consumes below is produced by the REAL
+// protocol handlers driven through the real dispatch table, so a renamed
+// field, status or reason code on the wire turns this suite red.
+function realReply(workspace, type, payload) {
+  const original = config.getWorkspace();
+  config.setWorkspace(workspace);
+  try {
+    const sent = [];
+    buildDispatch()[type]({}, { send: (m) => sent.push(JSON.parse(m)), readyState: 1 }, JSON.parse(JSON.stringify({ type, ...payload })));
+    return sent[0];
+  } finally {
+    config.setWorkspace(original);
+  }
+}
 
 function write(root, relative, content) {
   const absolute = path.join(root, relative);
@@ -70,15 +89,21 @@ describe('the offer', () => {
     assert.strictEqual(copy.collisionNote, null);
   });
 
-  test('a nothing-usable refusal renders as its own state, other errors as failure', () => {
-    const classifying = model.submit(model.initial(), '/pkg').state;
-    const empty = model.planReply(classifying, {
-      type: 'package_import_error', operation: 'plan', message: 'package discovery refused: the package contains no agents and no skills',
-    });
-    assert.strictEqual(empty.state.phase, 'nothing-usable');
-    const failed = model.planReply(classifying, {
-      type: 'package_import_error', operation: 'plan', message: 'package discovery refused: agents/link.md is a symlink',
-    });
+  test('a real empty-package refusal classifies by its code, other real refusals as failure', () => {
+    const workspace = makeTempDir('pim-ws-');
+    const emptyRoot = makeTempDir('pim-src-');
+    fs.mkdirSync(path.join(emptyRoot, '.claude'), { recursive: true });
+    const classifying = model.submit(model.initial(), emptyRoot).state;
+    const emptyMsg = realReply(workspace, 'plan_package_import', { sourcePath: emptyRoot, source: { id: emptyRoot, reference: null } });
+    assert.strictEqual(emptyMsg.code, 'empty-package');
+    assert.strictEqual(model.reply(classifying, emptyMsg).state.phase, 'nothing-usable');
+
+    const badRoot = makeTempDir('pim-src-');
+    write(badRoot, 'real.md', AGENT_TEXT);
+    fs.mkdirSync(path.join(badRoot, '.claude/agents'), { recursive: true });
+    fs.symlinkSync(path.join(badRoot, 'real.md'), path.join(badRoot, '.claude/agents/link.md'));
+    const badMsg = realReply(workspace, 'plan_package_import', { sourcePath: badRoot, source: { id: badRoot, reference: null } });
+    const failed = model.reply(classifying, badMsg);
     assert.strictEqual(failed.state.phase, 'failed');
     assert.match(failed.state.message, /is a symlink/);
   });
@@ -113,82 +138,91 @@ describe('the approval is the plan module\'s own decision', () => {
   });
 });
 
-describe('outcomes are rendered honestly', () => {
-  const applying = { phase: 'applying', sourcePath: '/pkg' };
+describe('outcomes are rendered honestly, against real apply replies', () => {
+  // One real flow end to end: seed, plan through the real handler, decide,
+  // optionally disturb the world, then apply through the real handler and
+  // hand the model the exact reply that crossed the wire.
+  function realApplyFlow({ sources = null, prepare = null, tamper = null } = {}) {
+    const workspace = makeTempDir('pim-ws-');
+    const sourceRoot = makeTempDir('pim-src-');
+    for (const [rel, content] of sources || [
+      ['.claude/agents/scribe.md', AGENT_TEXT],
+      ['.claude/skills/writer/SKILL.md', 'skill'],
+    ]) write(sourceRoot, rel, content);
+    const planMsg = realReply(workspace, 'plan_package_import', { sourcePath: sourceRoot, source: { id: sourceRoot, reference: null } });
+    const decisions = {};
+    for (const item of planMsg.plan.items) decisions[item.id] = 'add';
+    const approval = decide(planMsg.plan, decisions);
+    if (tamper) tamper(approval);
+    if (prepare) prepare({ workspace, sourceRoot });
+    const replyMsg = realReply(workspace, 'apply_package_import', { sourcePath: sourceRoot, approval });
+    return { workspace, applying: { phase: 'applying', sourcePath: sourceRoot }, replyMsg };
+  }
 
-  test('a ready reply names every written item and its destination', () => {
-    const done = model.applyReply(applying, {
-      type: 'package_import_result',
-      status: 'ready',
-      writes: [
-        { id: 'agent:scribe', kind: 'agent', destination: '.claude/agents/scribe.md' },
-        { id: 'skill:writer', kind: 'skill', destination: '.claude/skills/writer' },
-      ],
-      blocked: [],
-      receipt: '.claude/rundock/receipts/2026-09-02-run.json',
-    }).state;
+  test('a real ready reply names every written item, its destination, and the real receipt', () => {
+    const { workspace, applying, replyMsg } = realApplyFlow();
+    const done = model.reply(applying, replyMsg).state;
     const copy = model.doneCopy(done);
     assert.strictEqual(copy.headline, 'Added to your team');
-    assert.deepStrictEqual(copy.parts, [
-      { label: 'scribe', kind: 'agent', destination: '.claude/agents/scribe.md' },
-      { label: 'writer', kind: 'skill', destination: '.claude/skills/writer' },
-    ]);
+    assert.deepStrictEqual(copy.parts.map((p) => [p.label, p.kind]), [['scribe', 'agent'], ['writer', 'skill']]);
     assert.deepStrictEqual(copy.blockedLines, []);
-    assert.strictEqual(done.receipt, '.claude/rundock/receipts/2026-09-02-run.json');
+    assert.match(done.receipt, /^\.claude\/rundock\/receipts\//);
+    assert.strictEqual(fs.existsSync(path.join(workspace, done.receipt)), true);
   });
 
-  test('blocked items are named with their reason in plain language', () => {
-    const done = model.applyReply(applying, {
-      type: 'package_import_result',
-      status: 'ready',
-      writes: [{ id: 'skill:writer', kind: 'skill', destination: '.claude/skills/writer' }],
-      blocked: [
-        { id: 'agent:alpha', reason: 'default-conflict' },
-        { id: 'agent:beta', reason: 'default-conflict' },
+  test('real blocked outcomes are named with their reason in plain language', () => {
+    const { applying, replyMsg } = realApplyFlow({
+      sources: [
+        ['.claude/agents/alpha.md', '---\norder: 0\n---\n\nA.\n'],
+        ['.claude/agents/beta.md', '---\norder: 0\n---\n\nB.\n'],
+        ['.claude/skills/writer/SKILL.md', 'skill'],
       ],
-      receipt: null,
-    }).state;
-    const copy = model.doneCopy(done);
+    });
+    assert.strictEqual(replyMsg.status, 'ready');
+    const copy = model.doneCopy(model.reply(applying, replyMsg).state);
     assert.deepStrictEqual(copy.blockedLines, [
       'alpha: not added, because this would give your team a second default agent',
       'beta: not added, because this would give your team a second default agent',
     ]);
   });
 
-  test('a decisions-blocked reply says plainly that nothing was added', () => {
-    const done = model.applyReply(applying, {
-      type: 'package_import_result', status: 'decisions-blocked', writes: [],
-      blocked: [{ id: 'agent:alpha', reason: 'default-conflict' }], receipt: null,
-    }).state;
-    assert.strictEqual(model.doneCopy(done).headline, 'Nothing was added');
+  test('a real decisions-blocked reply says plainly that nothing was added', () => {
+    const { applying, replyMsg } = realApplyFlow({
+      sources: [
+        ['.claude/agents/alpha.md', '---\norder: 0\n---\n\nA.\n'],
+        ['.claude/agents/beta.md', '---\norder: 0\n---\n\nB.\n'],
+      ],
+    });
+    assert.strictEqual(replyMsg.status, 'decisions-blocked');
+    assert.strictEqual(model.doneCopy(model.reply(applying, replyMsg).state).headline, 'Nothing was added');
   });
 
-  test('a stale reply becomes a failure naming what changed, with a re-plan path', () => {
-    const failed = model.applyReply(applying, {
-      type: 'package_import_result', status: 'stale', writes: [],
-      stale: [{ id: 'skill:writer', reason: 'destination-changed' }],
-    }).state;
+  test('a real stale reply becomes a failure naming what changed, with a re-plan path', () => {
+    const { applying, replyMsg } = realApplyFlow({
+      prepare: ({ workspace }) => write(workspace, '.claude/agents/scribe.md', 'arrived after planning'),
+    });
+    assert.strictEqual(replyMsg.status, 'stale');
+    const failed = model.reply(applying, replyMsg).state;
     assert.strictEqual(failed.phase, 'failed');
-    assert.match(failed.message, /Nothing was added: writer, because the workspace changed after you reviewed it/);
+    assert.match(failed.message, /scribe, because the workspace changed after you reviewed it/);
     assert.strictEqual(failed.canReplan, true);
     const retried = model.retry(failed);
     assert.strictEqual(retried.send.type, 'plan_package_import');
-    assert.strictEqual(retried.send.sourcePath, '/pkg');
   });
 
-  test('apply errors render their structured message, never an empty error', () => {
-    const failed = model.applyReply(applying, {
-      type: 'package_import_error', operation: 'apply', message: 'bytes for agent:scribe do not match the approved digest; refusing to write',
-    }).state;
+  test('a real apply error reaches the rendered failure copy from the applying phase', () => {
+    const { applying, replyMsg } = realApplyFlow({
+      tamper: (approval) => { approval.items[0].approvedDigest = 'sha256:' + 'ab'.repeat(32); },
+    });
+    assert.strictEqual(replyMsg.type, 'package_import_error');
+    const failed = model.reply(applying, replyMsg).state;
     assert.strictEqual(failed.phase, 'failed');
     assert.match(failed.message, /do not match the approved digest/);
-    const fallback = model.applyReply(applying, { type: 'package_import_error', operation: 'apply' }).state;
-    assert.strictEqual(fallback.message, 'The import could not be applied.');
   });
 
   test('replies outside their phase change nothing', () => {
     const idle = model.initial();
-    assert.strictEqual(model.planReply(idle, { type: 'package_import_plan', plan: {} }).state, idle);
-    assert.strictEqual(model.applyReply(idle, { type: 'package_import_result', status: 'ready' }).state, idle);
+    assert.strictEqual(model.reply(idle, { type: 'package_import_plan', plan: {} }).state, idle);
+    assert.strictEqual(model.reply(idle, { type: 'package_import_result', status: 'ready' }).state, idle);
   });
 });

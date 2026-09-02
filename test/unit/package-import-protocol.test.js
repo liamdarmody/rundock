@@ -137,6 +137,10 @@ describe('the protocol boundary', () => {
       assert.strictEqual(reply.operation, 'plan');
       assert.match(reply.message, message);
       assert.doesNotMatch(reply.message, /\n\s+at /); // a message, not a stack trace
+      // The code field is always present: a string when the producer attached
+      // one, null otherwise, so clients never classify from message prose.
+      assert.ok(reply.code === null || typeof reply.code === 'string');
+      assert.notStrictEqual(reply.code, undefined);
       assert.deepStrictEqual(tree(workspace), before);
     });
   }
