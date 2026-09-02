@@ -75,18 +75,39 @@ test('plan, confirm and apply land the package with its receipt', async ({ page 
   expect(await fileExists(page, receipt)).toBe(true);
 });
 
-test('cancel from the offer writes nothing at all', async ({ page }) => {
+// The complete .claude subtree as one comparable value, read directly.
+function claudeTree(workspace) {
+  const result = [];
+  const walk = (dir) => {
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      const absolute = path.join(dir, entry.name);
+      const rel = path.relative(workspace, absolute).split(path.sep).join('/');
+      if (entry.isDirectory()) { result.push(`${rel}/`); walk(absolute); }
+      else result.push(`${rel}:${fs.readFileSync(absolute).toString('base64')}`);
+    }
+  };
+  walk(path.join(workspace, '.claude'));
+  return result;
+}
+
+test('cancel leaves the workspace byte-identical', async ({ page }) => {
   await boot(page);
+  const workspace = await page.evaluate(() => currentWorkspacePath);
   const source = await seedPackage(page, 'pkg-cancel', [
     ['.claude/agents/cancel-scribe.md', AGENT],
   ]);
   await openPackages(page);
+  const before = claudeTree(workspace);
   await page.fill('#packages-source-path', source);
   await page.getByRole('button', { name: 'Read it' }).click();
   await expect(page.locator('.packages-confirm-card')).toBeVisible();
   await page.getByRole('button', { name: 'Cancel' }).click();
   await expect(page.locator('#packages-source-path')).toBeVisible();
-  expect(await fileExists(page, '.claude/agents/cancel-scribe.md')).toBe(false);
+  // Every path and every byte under .claude, unchanged: a receipt, a journal,
+  // an empty destination directory or a touched file all fail here.
+  expect(claudeTree(workspace)).toEqual(before);
 });
 
 test('with the socket closed, nothing is sent and the flow stays usable', async ({ page }) => {
@@ -121,6 +142,20 @@ test('switching workspace returns the flow to idle, discarding the previous plan
   // Hand the server back to the original workspace for the tests that follow.
   await page.evaluate((dir) => ws.send(JSON.stringify({ type: 'set_workspace', path: dir })), original);
   await expect.poll(() => page.evaluate(() => currentWorkspacePath)).toBe(original);
+});
+
+test('a connection lost mid-wait ends the wait and re-enables the flow', async ({ page }) => {
+  await boot(page);
+  const source = await seedPackage(page, 'pkg-midwait', [['.claude/agents/midwait-scribe.md', AGENT]]);
+  await openPackages(page);
+  await page.fill('#packages-source-path', source);
+  // Send for real, then cut the socket before handling any reply.
+  await page.evaluate(() => { ws.onmessage = null; });
+  await page.getByRole('button', { name: 'Read it' }).click();
+  await page.evaluate(() => ws.close());
+  const failed = page.locator('.packages-failed');
+  await expect(failed.locator('.packages-body')).toContainText('connection dropped before an answer arrived');
+  await expect(failed.getByRole('button', { name: 'Review the package again' })).toBeVisible();
 });
 
 test('with the socket closed at confirm, nothing is applied and the flow stays usable', async ({ page }) => {

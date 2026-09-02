@@ -242,6 +242,7 @@ const MANIFEST = {
     "changeWorkspace",
     "packagesCancel",
     "packagesConfirm",
+    "packagesConnectionLost",
     "packagesReplyArrived",
     "packagesRetry",
     "packagesSubmit",

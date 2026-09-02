@@ -164,10 +164,24 @@
     };
   }
 
+  // A dropped connection ends any wait: for a lost plan the person just
+  // reads again; for a lost apply the truth is unknown, because the write
+  // may or may not have landed, so the copy claims neither and points at
+  // where the answer actually lives.
+  function connectionLost(state) {
+    if (state.phase === 'classifying') {
+      return { state: { phase: 'failed', sourcePath: state.sourcePath, message: 'The connection dropped before an answer arrived. Nothing was added. Read the package again to continue.', canReplan: true } };
+    }
+    if (state.phase === 'applying') {
+      return { state: { phase: 'failed', sourcePath: state.sourcePath, message: 'The connection dropped while adding. The import may or may not have completed: check your team and the receipts in .claude/rundock/receipts to see what arrived, then read the package again if it did not.', canReplan: true } };
+    }
+    return { state };
+  }
+
   function retry(state) {
     if (!state.sourcePath) return { state: initial() };
     return submit(initial(), state.sourcePath);
   }
 
-  return { initial, submit, reply, planReply, offerCopy, cancel, confirm, applyReply, doneCopy, retry, allAddApproval };
+  return { initial, submit, reply, planReply, offerCopy, cancel, confirm, applyReply, doneCopy, retry, connectionLost, allAddApproval };
 }));

@@ -205,7 +205,7 @@ function connect() {
   ws = new WebSocket(`${p}//${location.host}`);
   ws.onopen = () => { setConn('connected'); ws.send(JSON.stringify({type:'get_workspaces'})); };
   ws.onmessage = e => handle(JSON.parse(e.data));
-  ws.onclose = () => { setConn('disconnected'); setTimeout(connect, 2000); };
+  ws.onclose = () => { setConn('disconnected'); packagesConnectionLost(); setTimeout(connect, 2000); };
   ws.onerror = () => {}; // Prevent unhandled error; onclose fires next
 }
 function setConn(s) { const b=document.getElementById('connection-bar'); b.className=`connection-bar ${s}`; b.textContent=s==='connected'?'Connected':s==='disconnected'?'Disconnected. Reconnecting...':'Connecting...'; if(s==='connected')setTimeout(()=>b.style.display='none',2000); else b.style.display='block'; }

@@ -27,6 +27,20 @@
 // replies. The model decides what, if anything, is sent.
 let packagesInstall = (typeof RundockPackagesInstallModel !== 'undefined') ? RundockPackagesInstallModel.initial() : null;
 
+// One guard for every packages render path: markup goes into the settings
+// pane only when the pane is showing and Packages is the displayed section;
+// otherwise the model state updates silently and the section is right the
+// next time it opens.
+function packagesSectionVisible() {
+  if (typeof currentView === 'undefined' || currentView !== 'settings') return false;
+  const active = document.querySelector('.settings-nav-item.active');
+  return !!active && active.dataset.settings === 'packages';
+}
+
+function packagesRenderIfVisible() {
+  if (packagesSectionVisible()) renderSettingsSection('packages');
+}
+
 function packagesApplyTransition(out) {
   // A transition that wants to send only takes effect if the message was
   // actually handed to an open socket; otherwise the flow stays usable and
@@ -38,13 +52,13 @@ function packagesApplyTransition(out) {
         sourcePath: (packagesInstall && packagesInstall.sourcePath) || '',
         fieldError: 'Not connected: nothing was sent. Try again once the connection returns.',
       };
-      renderSettingsSection('packages');
+      packagesRenderIfVisible();
       return;
     }
     ws.send(JSON.stringify(out.send));
   }
   packagesInstall = out.state;
-  renderSettingsSection('packages');
+  packagesRenderIfVisible();
 }
 
 function packagesSubmit() {
@@ -63,7 +77,16 @@ function packagesReplyArrived(msg) { packagesApplyTransition(RundockPackagesInst
 // one workspace, so a change of workspace returns the flow to idle.
 function packagesWorkspaceChanged() {
   packagesInstall = RundockPackagesInstallModel.initial();
-  if (typeof currentView !== 'undefined' && currentView === 'settings') renderSettingsSection('packages');
+  packagesRenderIfVisible();
+}
+
+// A dropped connection ends any wait this flow is in; the model owns the
+// words for each phase, including the honest uncertainty of a lost apply.
+function packagesConnectionLost() {
+  const out = RundockPackagesInstallModel.connectionLost(packagesInstall);
+  // Identity means no wait was in progress: repainting here would wipe a
+  // half-typed path for nothing.
+  if (out.state !== packagesInstall) packagesApplyTransition(out);
 }
 
 function packagesSectionHtml() {
@@ -260,5 +283,5 @@ function changeWorkspace() {
 
 return { showSettingsSection, renderSettingsSection, setWorkspaceMode, runtimeRowHtml, runtimesCardHtml, renderRuntimesCard, changeWorkspace,
   packagesSubmit, packagesCancel, packagesConfirm, packagesRetry,
-  packagesReplyArrived, packagesWorkspaceChanged };
+  packagesReplyArrived, packagesWorkspaceChanged, packagesConnectionLost };
 }));

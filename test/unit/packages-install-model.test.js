@@ -241,6 +241,23 @@ describe('outcomes are rendered honestly, against real apply replies', () => {
     assert.match(failed.message, /do not match the approved digest/);
   });
 
+  test('a dropped connection ends either wait honestly, and touches nothing else', () => {
+    const classifying = { phase: 'classifying', sourcePath: '/pkg' };
+    const lostPlan = model.connectionLost(classifying).state;
+    assert.strictEqual(lostPlan.phase, 'failed');
+    assert.match(lostPlan.message, /connection dropped before an answer arrived/);
+    assert.strictEqual(lostPlan.canReplan, true);
+    const lostApply = model.connectionLost({ phase: 'applying', sourcePath: '/pkg' }).state;
+    assert.strictEqual(lostApply.phase, 'failed');
+    // Neither success nor failure is claimed for a write that may have landed.
+    assert.match(lostApply.message, /may or may not have completed/);
+    assert.match(lostApply.message, /receipts/);
+    assert.strictEqual(lostApply.canReplan, true);
+    for (const state of [model.initial(), { phase: 'offer', sourcePath: '/p', collisions: [] }]) {
+      assert.strictEqual(model.connectionLost(state).state, state);
+    }
+  });
+
   test('replies outside their phase change nothing', () => {
     const idle = model.initial();
     assert.strictEqual(model.reply(idle, { type: 'package_import_plan', plan: {} }).state, idle);
