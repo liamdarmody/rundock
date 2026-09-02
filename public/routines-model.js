@@ -736,12 +736,16 @@
    *
    * The first is what the scheduler's own gate would refuse, and that half
    * MIRRORS `routineRefusal` IN lib/scheduler.js: it refuses for paused, then
-   * enabled, then an unsupported run target, then a routine with no prompt to
-   * send, and getNextRun refuses a schedule it cannot parse. A row that offers
-   * to turn a routine on is claiming every
-   * one of those would let it through, so those two lists have to be found
-   * together. `enabled` is deliberately absent from this one: it answers what
-   * would stop the routine BESIDES the switch the offer is about.
+   * an unsupported run target, then a routine with no prompt to send, then
+   * the switch, and getNextRun refuses a schedule it cannot parse. A row that
+   * offers to turn a routine on is claiming every one of those would let it
+   * through, so those two lists have to be found together. `enabled` is
+   * deliberately the word this consumer ignores: it answers what would stop
+   * the routine BESIDES the switch the offer is about, and the scheduler
+   * reports the switch LAST for exactly this reader, so 'enabled' arriving
+   * here means the switch is the only thing in the way and the offer's
+   * sentence is true. Reported first, it shadowed a missing prompt or an
+   * unsupported target and the offer promised a run the tick would refuse.
    *
    * The second is whether any scheduler would look at this routine at all,
    * which is the workspace check below. It has no counterpart in

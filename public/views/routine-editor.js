@@ -525,15 +525,21 @@
     openRoutineEditor({
       agentId: only ? only.id : null,
       agentName: only ? ((rostered && rostered.displayName) || only.name || null) : null,
-      // SCOPED TO THE PRESSED SKILL EITHER WAY. The reader already chose the
-      // skill by pressing its control; the only open question is which agent,
-      // so the picker offers one row per agent that has this skill and asks
-      // nothing it was already told. Offering every skill again, merely
-      // ordered with the pressed one first, was asking the reader to make
-      // the same choice twice, and the two criteria that appeared to force
-      // that shape are both honoured by this one: the skill stays chosen,
-      // and no agent is guessed on the reader's behalf.
-      skills: skill ? [skill] : list,
+      // SCOPED TO THE PRESSED SKILL, WHILE THE SKILL CAN STILL BE SCHEDULED.
+      // The reader already chose the skill by pressing its control; the only
+      // open question is which agent, so the picker offers one row per agent
+      // that has this skill and asks nothing it was already told. Offering
+      // every skill again, merely ordered with the pressed one first, was
+      // asking the reader to make the same choice twice.
+      //
+      // THE ASSIGNMENT CHECK IS THE RACE, not a nicety. The skill list is
+      // replaced by any background save or workspace switch, so the control
+      // can be pressed on a skill that has since lost its last agent. Scoped
+      // to that skill alone the picker would have zero rows, and zero rows
+      // renders the build-a-skill offer, in a workspace that has skills. The
+      // full picker is what is true of the workspace at that moment, and it
+      // is what this door showed for that race before it was scoped.
+      skills: (skill && assigned.length) ? [skill] : list,
       step: only ? 'schedule' : 'pick',
       selectedKey: only ? `${skill.id}:${only.id}` : null,
       originSkillId: skill ? skill.id : null,

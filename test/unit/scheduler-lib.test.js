@@ -1727,6 +1727,14 @@ test('a stop whose request is refused lets nothing escape, and the run still end
 
         sub.emit('event', run.done);
         assert.ok(await until(() => sched.routineState[KEY].status !== 'running'), 'the turn then ended');
+        // ENDED AS WHAT IT REALLY WAS. Both stops were refused, so no stop
+        // was ever delivered to this run, and the rejection handler must have
+        // cleared the cancelled flag both times: a record reading 'cancelled'
+        // here would tell the user a stop worked that they were just told did
+        // not, which is the precise falsehood the delivered-not-requested
+        // rule exists to remove.
+        assert.strictEqual(sched.routineState[KEY].status, 'completed',
+          'a run whose every stop was refused ends as the ending it really had, never as a stop');
         assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true, 'and released the routine');
         await endedAfter(sched, async () => {
           await until(() => sub.listenerCount('event') > 1);

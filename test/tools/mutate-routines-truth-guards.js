@@ -45,6 +45,17 @@ const SCHEDULER = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/un
 const DOOR = { src: path.join(ROOT, 'public', 'views', 'routine-editor.js'), suite: 'test/unit/routine-editor-doors.test.js' };
 // The editor model's half of the same rule, watched at the model seam.
 const EDITOR_MODEL = { src: path.join(ROOT, 'public', 'routine-editor-model.js'), suite: 'test/unit/routines-truth.test.js' };
+// The roster enrichment, watched by the walk that runs real discovery over a
+// real workspace, because the single-source claim is a claim about what the
+// roster actually carries.
+const DISCOVERY = { src: path.join(ROOT, 'lib', 'agents', 'discovery.js'), suite: 'test/unit/routines-truth.test.js' };
+// The view's pass-through of that field, watched by the rendered-row probe
+// that drives a refusal word the model has no private check for.
+const VIEW = { src: path.join(ROOT, 'public', 'views', 'routines.js'), suite: 'test/unit/routines-truth.test.js' };
+// The scheduler again, but watched by the truth walks rather than by the run
+// suite: the vocabulary and refusal declarations are read against their own
+// writers there.
+const SCHEDULER_DECL = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/routines-truth.test.js' };
 
 const MUTATIONS = [
   // ===== A STOPPED RUN IS NEVER REPORTED AS A SUCCESS =====
@@ -101,13 +112,47 @@ const MUTATIONS = [
   // first, which re-asks a question the reader answered by pressing the
   // control. The door test's row enumeration is what has to notice.
   [DOOR, 'the ambiguous door is scoped to the pressed skill',
-    '      skills: skill ? [skill] : list,',
+    '      skills: (skill && assigned.length) ? [skill] : list,',
     "      skills: skill ? [skill].concat(list.filter(s => s.id !== skill.id)) : list,"],
   // Remove the scoped lead and the picker asks the reader to pick a skill
   // while offering only agents, which is the small lie the lead exists not to
   // tell.
   [EDITOR_MODEL, 'the scoped picker\'s lead asks only which agent',
     "    if (skills.length === 1 && assignedAgentsOf(skills[0]).length > 1) {\n      return STEP_LEADS.pickAgent.replace('{skill}', skills[0].name || skills[0].id);\n    }",
+    ''],
+
+  // ===== THE PUBLISHED REFUSAL REACHES THE ROW ON THE LIVE PATH =====
+  // Report the switch first again and every switched-off routine publishes
+  // 'enabled', the one word the offer ignores, whatever else is wrong with
+  // it: the shadowing this ordering exists to remove.
+  [SCHEDULER_DECL, 'the switch is reported last, so it never shadows the real fault',
+    "  if (routine.paused) return 'paused';\n  if (!isRunOnSupported(routine.runOn)) return 'runOn';\n  if (!hasRunnablePrompt(routine)) return 'prompt';\n  if (!routine.enabled) return 'enabled';",
+    "  if (routine.paused) return 'paused';\n  if (!routine.enabled) return 'enabled';\n  if (!isRunOnSupported(routine.runOn)) return 'runOn';\n  if (!hasRunnablePrompt(routine)) return 'prompt';"],
+  // Delete the enrichment and the roster stops carrying the tick's answer;
+  // the model's fallback quietly absorbs the loss everywhere except the walk
+  // that runs real discovery and reads the field itself.
+  [DISCOVERY, 'the roster carries the tick\'s own refusal',
+    '        r.refusal = routineRefusal(r);\n',
+    ''],
+  // Delete the pass-through and the model reverts to its private copy of the
+  // reasons; only the rendered-row probe with a word that copy has never
+  // heard can tell the difference.
+  [VIEW, 'the view hands the published refusal to the model',
+    '    refusal: r.refusal,\n',
+    ''],
+
+  // ===== THE DECLARED VOCABULARY IS THE WRITTEN ONE =====
+  // Change a writer's word without teaching the declaration and the walk
+  // that reads the writers' own source must fail naming it.
+  [SCHEDULER_DECL, 'a writer cannot gain a status word the declaration does not carry',
+    "        status: 'interrupted',",
+    "        status: 'stalled',"],
+
+  // ===== A REFUSED STOP CLEARS THE CANCELLED FLAG =====
+  // Delete the clearing and a codex run whose interrupt was refused ends
+  // recorded as cancelled: a stop the user was wrongly told worked.
+  [SCHEDULER, 'a stop that comes back refused is not recorded as delivered',
+    '        run.cancelled = false;\n',
     ''],
 ];
 
@@ -140,8 +185,10 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [MODEL, SCHEDULER, DOOR, EDITOR_MODEL];
-  const session = beginMutationRun({ files: targets.map((target) => target.src) });
+  const targets = [MODEL, SCHEDULER, DOOR, EDITOR_MODEL, DISCOVERY, VIEW, SCHEDULER_DECL];
+  // Two targets share lib/scheduler.js (watched by different suites), so the
+  // session is opened on the deduplicated file list.
+  const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));
   const results = [];
