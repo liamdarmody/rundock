@@ -483,3 +483,53 @@ describe('a scope row is visibly not a roster row', () => {
       'selected and hover are the same fill, so selected reads as hovered');
   });
 });
+
+// ===========================================================================
+// THE SURFACES THAT DO NOT ASK WHETHER A ROUTINE IS BEING SERVED
+// ===========================================================================
+//
+// The routines list drops a routine's next run when the scheduler has moved
+// away from its workspace, because a next run is a PROMISE and that promise
+// would be false. Two other surfaces show routines and neither makes that
+// promise, so neither consults the serving workspace:
+//
+//   the sidebar scope panel, which counts how many routines an agent OWNS
+//   the agent profile's routines card, which shows the schedule AS WRITTEN
+//
+// Both state a fact about the file rather than a claim about what will happen,
+// and both stay true whichever workspace the server is serving. This is
+// asserted rather than left implicit, because "these surfaces deliberately do
+// not check" and "somebody forgot to make these surfaces check" look identical
+// in a diff, and only one of them is a decision.
+describe('which surfaces ask whether a routine is being served', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const ROOT_DIR = path.join(__dirname, '..', '..');
+  const src = (...parts) => fs.readFileSync(path.join(ROOT_DIR, ...parts), 'utf-8');
+
+  test('the routines list asks, because it promises a next run', () => {
+    assert.match(src('public', 'views', 'routines.js'), /routinesServingWorkspace\(\)/,
+      'the surface that promises a run must know whether anything will make it');
+  });
+
+  test('the scope panel does not ask, because a count is not a promise', () => {
+    // A count answers how many routines an agent has. That is the same number
+    // whichever workspace the server is serving, so a panel that dropped or
+    // qualified it would be answering a question nobody asked.
+    for (const file of [['public', 'routines-scope-model.js'], ['public', 'views', 'routines-panel.js']]) {
+      assert.doesNotMatch(src(...file), /serving/i,
+        `${file.join('/')} consults the serving workspace, so say what it promises`);
+    }
+  });
+
+  test('the profile card does not ask, because it shows the schedule as written', () => {
+    // The profile shows `scheduleWords(r.schedule)`, which is the routine's own
+    // sentence out of its own file: "Every day at 7:00am". It never says when
+    // the routine will next run, so there is no promise to withdraw.
+    const profile = src('public', 'views', 'profile.js');
+    assert.match(profile, /scheduleWords\(r\.schedule\)/,
+      'the profile states the schedule as written');
+    assert.doesNotMatch(profile, /nextRun|serving/i,
+      'and makes no claim about when the routine next runs, which is what would need qualifying');
+  });
+});

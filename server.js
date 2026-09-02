@@ -144,6 +144,46 @@ function setWorkspaceRoot(dir) {
     loadRoutineState();
     startScheduler();
   }
+  // AND EVERY CONNECTED WINDOW IS TOLD WHAT JUST CHANGED, from here for
+  // exactly the reason the scheduler's lifecycle is decided here.
+  //
+  // There is one scheduler and it serves one workspace, but there can be
+  // several windows on one server: a browser on the laptop and one on the
+  // phone, which is the setup the always-on documentation recommends. Only the
+  // socket that asked for a switch used to learn about it, so every other
+  // window went on drawing a next-run time against routines that had stopped
+  // being served, and nothing on those screens said so.
+  //
+  // ANNOUNCED WHERE THE CHANGE HAPPENS, NOT WHERE IT WAS REQUESTED. Sent from
+  // the open handler instead, it described a root the server was not always
+  // serving: the open path can throw after the announce and roll the root back,
+  // which left every window believing the new workspace was being served while
+  // the scheduler had returned to the old one. That is the same inversion this
+  // notice exists to prevent, arriving on the failure path with nothing to
+  // correct it. Here there is no gap to reason about, because this line runs
+  // after the root has already changed and the scheduler has already been
+  // pointed at it: the rollback is itself a call to this function, so it
+  // retracts the notice without anything having to remember to.
+  //
+  // The other paths named above get it for the same reason: creating a
+  // workspace, and clearing the pointer to one that has gone, which announces
+  // no workspace at all rather than leaving windows describing a workspace
+  // nothing is serving.
+  announceServingWorkspace(dir);
+}
+
+/**
+ * Tell every connected window which workspace the scheduler is now serving, or
+ * that it is serving none.
+ *
+ * `null` is a statement and not a silence: a window that has never been told
+ * makes no claim about whether its routines are being served, while one told
+ * `null` knows they are not. The client keeps those apart, so clearing the
+ * pointer to a workspace that has gone stops routines promising runs rather
+ * than leaving them looking exactly as they did.
+ */
+function announceServingWorkspace(dir) {
+  safeSend(JSON.stringify({ type: 'serving_workspace', path: dir || null }));
 }
 
 // Workspace boundary check. A bare `startsWith(resolve(WORKSPACE))`

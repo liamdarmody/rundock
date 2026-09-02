@@ -134,8 +134,11 @@
     return h;
   }
 
-  function runOnField(m) {
-    const field = m.runOnField();
+  // Takes the field itself rather than the model, so the schedule step hands
+  // over the one the step object carries and the ready step hands over the
+  // model's. Two callers, one field, no chance of drawing a different one from
+  // the one the step was assembled with.
+  function runOnField(field) {
     let h = `<div class="re-field" data-routine-editor="run-on-field">
       <p class="re-field-label">${escText(field.label)}</p>
       <div class="re-list">`;
@@ -164,29 +167,34 @@
   }
 
   function scheduleStep(m, option) {
+    // THE WHOLE STEP FROM ONE OBJECT, which is what makes the aggregate worth
+    // its cost: a piece that is not on it cannot be drawn here, and a piece
+    // that is on it and not drawn is visible as an unread field rather than as
+    // a sentence quietly missing from a screen.
+    const step = m.scheduleStepFields();
     const sentence = m.previewSentence({
       frequency: state.frequency, time: state.time, skillName: option && option.name, runOn: state.runOn,
     });
     const zone = m.timezoneCaption({ zone: state.zone, agentName: state.agentName });
 
-    let h = `<p class="re-lead">${escText(m.STEP_LEADS.schedule)}</p>`;
+    let h = `<p class="re-lead">${escText(step.lead)}</p>`;
     h += '<div class="re-sentence"><span class="re-word">Every</span>';
     h += `<select class="re-select" data-routine-field="frequency"
       onchange="routineEditorSetField('frequency', this.value)">`;
-    for (const f of m.FREQUENCIES) {
+    for (const f of step.frequencies) {
       h += `<option value="${escText(f.value)}"${f.value === state.frequency ? ' selected' : ''}>${escText(f.label)}</option>`;
     }
     h += '</select><span class="re-word">at</span>';
     h += `<select class="re-select" data-routine-field="time"
       onchange="routineEditorSetField('time', this.value)">`;
-    for (const t of m.times()) {
+    for (const t of step.times) {
       h += `<option value="${escText(t.value)}"${t.value === state.time ? ' selected' : ''}>${escText(t.label)}</option>`;
     }
     h += '</select><span class="re-word">, run:</span>';
     h += `<span class="re-pill">${escText(option ? option.name : '')}</span></div>`;
 
     if (sentence) h += `<p class="re-preview" data-routine-editor="sentence">${escText(sentence)}</p>`;
-    h += runOnField(m);
+    h += runOnField(step.runOn);
     if (zone) h += `<p class="re-caption">${escText(zone)}</p>`;
     // WHERE THE ROUTINE BEING MADE WILL ACTUALLY RUN, on the step that decides
     // when it runs. Every route into this editor passes through this step, so
@@ -194,12 +202,7 @@
     // belongs to and what happens while they are in another one. Beside the
     // run-on caveat rather than folded into it: that one is about a workspace
     // open on several computers, this one is about several workspaces on one.
-    //
-    // READ OFF THE STEP rather than off a bare constant, the same way the
-    // run-on caveat is read off its field: a sentence the model hands back as
-    // part of the step cannot be left out of a render of that step without the
-    // omission being visible here.
-    h += `<p class="re-caveat" data-routine-editor="workspace-caveat">${escText(m.scheduleStepFields().workspaceCaveat)}</p>`;
+    h += `<p class="re-caveat" data-routine-editor="workspace-caveat">${escText(step.workspaceCaveat)}</p>`;
     h += `<div class="re-actions">
       <button class="settings-btn-primary" type="button" ${sentence ? '' : 'disabled'}
         onclick="routineEditorStep('ready')">Continue</button>

@@ -66,6 +66,16 @@ const RENDERERS = [
     surface: 'the roster arriving from the server',
     pressedBy: 'the roster arriving from the server draws the list',
   },
+  {
+    file: 'app.js',
+    line: "case 'serving_workspace':",
+    surface: 'another window moving the server to a different workspace',
+    // Pressed in the end-to-end file rather than here, because what this
+    // redraw is FOR is a row that stops promising a run, and that is a claim
+    // about rendered output out of a real roster. Here it would prove only
+    // that something was called.
+    pressedBy: 'the switch notice arriving from another window draws the list',
+  },
   // THE RAIL NO LONGER DRAWS THIS LIST ITSELF and neither does the profile.
   // Both arrive through one destination function, which is where the drawing
   // moved to. Two routes into one section with two copies of the same three
@@ -439,9 +449,10 @@ describe('the ways this list gets drawn, pressed', () => {
     // The roster case also records the workspace the roster was read from,
     // which the routines list compares every row against. Stubbed here so the
     // case can run at all; what it actually records is driven against the real
-    // shell's own writer in "the writer in the real shell is the global the
-    // rendered page reads" in test/unit/routines-end-to-end.test.js.
-    w.setServingWorkspace = () => {};
+    // shell's own dispatch in "the switch notice redraws the list" and "the
+    // roster message the handler emits names the workspace it was read from"
+    // in test/unit/routines-end-to-end.test.js.
+    w.setRosterWorkspace = () => {};
     w.d = { type: 'agents', agents: w.agents, workspace: '/w/open' };
     w.eval(`(function () {${body}\n})()`);
     assert.strictEqual(w.drawn, 1, 'a roster arrived and the routines list was not redrawn');
@@ -460,6 +471,33 @@ describe('the ways this list gets drawn, pressed', () => {
   // to redraw it. Without this call the pane sits on its waiting line until
   // the next roster broadcast, which on a workspace with no routines is the
   // rest of the session.
+  // THE ONLY MESSAGE A WINDOW THAT DID NOT ASK FOR THE SWITCH RECEIVES.
+  //
+  // It used to record the workspace and draw nothing, so a window sitting on
+  // this list kept every next-run time and every Turn on control until some
+  // unrelated event happened to redraw it, and the roster that eventually
+  // arrived carried the other workspace's rows, so the moved state could go
+  // unseen entirely.
+  //
+  // WHAT THIS FILE CHECKS IS THAT THE LIST IS DRAWN AT ALL, which is what it
+  // exists for. What the redraw then puts on the page is a claim about
+  // rendered output from a real roster, and it is pressed in
+  // test/unit/routines-end-to-end.test.js.
+  test('the switch notice arriving from another window draws the list', () => {
+    const { w, dom } = shell();
+    const body = appPiece(/case 'serving_workspace': ([\s\S]*?) break;/,
+      'the dispatch case for the serving-workspace notice');
+    w.drawn = 0;
+    const realRender = w.renderRoutines;
+    w.renderRoutines = () => { w.drawn++; realRender(); };
+    w.setServingWorkspace = () => {};
+    w.d = { type: 'serving_workspace', path: '/w/elsewhere' };
+    w.eval(`(function () {${body}\n})()`);
+    assert.strictEqual(w.drawn, 1,
+      'the server moved to another workspace and this list was not redrawn');
+    dom.window.close();
+  });
+
   test('the skill list arriving redraws the list that asks about skills', () => {
     const { w, doc, dom } = shell({ routines: [] });
     w.skills = [];
@@ -956,7 +994,7 @@ describe('one mount, one renderer', () => {
     // The workspace the roster was read from, recorded by the same case. This
     // panel draws no row that reads it; it is driven where it is read, in
     // test/unit/routines-end-to-end.test.js.
-    w.setServingWorkspace = () => {};
+    w.setRosterWorkspace = () => {};
     const body = appPiece(/case 'agents':([\s\S]*?)\bbreak;/, 'the roster case of the client dispatch');
     w.d = { type: 'agents', agents: w.agents, workspace: '/w/open' };
     w.eval(`(function () {${body}\n})()`);
@@ -990,7 +1028,7 @@ describe('one mount, one renderer', () => {
     w.eval(`function setNavState(nav) {${appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState')}\n}`);
     w.setNavState('routines');
     // The workspace the roster was read from, recorded by the same case.
-    w.setServingWorkspace = () => {};
+    w.setRosterWorkspace = () => {};
     const body = appPiece(/case 'agents':([\s\S]*?)\bbreak;/, 'the roster case of the client dispatch');
     w.d = { type: 'agents', agents: w.agents };
     w.eval(`(function () {${body}\n})()`);

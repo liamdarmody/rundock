@@ -717,10 +717,6 @@ test('the workspace switch does not release a run that is still going', async ()
         },
         agents: { armAgentsDirWatcher: noop, invalidateAgentCache: noop },
         store: { clearSearchFailure: noop, ensureSearchEngine: noop },
-      broadcast: noop,
-        // The switch tells every connected client where the scheduler went, so
-        // a window that did not ask stops promising runs it will not get.
-        broadcast: noop,
       };
       // WHAT PROVES THE SWITCH'S RESETS RAN, planted before the switch and
       // read after it.
@@ -939,8 +935,6 @@ function openWorkspace(sched, dir, config) {
     },
     agents: { armAgentsDirWatcher: noop, invalidateAgentCache: noop },
     store: { clearSearchFailure: noop, ensureSearchEngine: noop },
-    // The switch announces where the scheduler went to every connected client.
-    broadcast: noop,
   };
   freshWorkspaceHandlers(sched).handleSetWorkspace(ctx, ws, { type: 'set_workspace', path: dir });
   assert.ok(sent.some(m => m.type === 'workspace_set'),
@@ -2374,7 +2368,6 @@ test('a workspace switch replaces the slot records the way it replaces the run s
       },
       agents: { armAgentsDirWatcher: noop, invalidateAgentCache: noop },
       store: { clearSearchFailure: noop, ensureSearchEngine: noop },
-      broadcast: noop,
     };
     const sent = [];
     freshWorkspaceHandlers(sched).handleSetWorkspace(ctx, { send: (raw) => sent.push(JSON.parse(raw)) },
@@ -2921,4 +2914,37 @@ test('two instances on one workspace both fire the routine, sharing one state fi
     claude.wireClaudeRuntimeDeps(prevClaudeDeps);
     temp.leave();
   }
+});
+
+// THE ROSTER THE SCHEDULER BROADCASTS CARRIES THE WORKSPACE IT WAS READ FROM.
+//
+// This is the one roster message that reaches windows which did not ask for
+// it: it goes out whenever a routine's state changes, to every connected
+// client. A window opened on another workspace is handed these rows, and the
+// workspace beside them is the only thing that lets it tell whether what it is
+// drawing is what the scheduler is serving.
+//
+// DRIVEN THROUGH A CAPTURING CLIENT rather than asserted off the builder,
+// because the guarantee is about what reaches a socket. The client reads an
+// absent workspace as silence rather than as a fault, so dropping the field
+// here would turn the check off in every window with nothing going red
+// anywhere else.
+test('the roster the scheduler broadcasts names the workspace it was read from', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    const child = new EventEmitter();
+    const received = [];
+    await withFakeSpawn(() => child, async (sched) => {
+      sched.wireSchedulerDeps({
+        getWssClients: () => [{ readyState: 1, send: (raw) => received.push(JSON.parse(raw)) }],
+      });
+      sched.executeRoutine(AGENT, ROUTINE, KEY);
+      await endedAfter(sched, async () => { child.emit('close', 0); });
+    });
+    const rosters = received.filter(m => m.type === 'agents');
+    assert.ok(rosters.length, 'a run start and its outcome each broadcast the roster');
+    for (const roster of rosters) {
+      assert.strictEqual(roster.workspace, ws,
+        'the workspace the roster was read from travels with it to every window');
+    }
+  });
 });

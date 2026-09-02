@@ -286,8 +286,8 @@ const MUTATIONS = [
   // first, so this mutation silently broke a different one and nothing turned
   // red. It carries its neighbour now, which makes it unique to this handler.
   [HANDLER, 'the roster is invalidated before it is rebroadcast',
-    "  ws.send(JSON.stringify(message));\n  ctx.agents.invalidateAgentCache();\n  ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents(), workspace: getWorkspace() }));",
-    "  ws.send(JSON.stringify(message));\n  ws.send(JSON.stringify({ type: 'agents', agents: discoverAgents(), workspace: getWorkspace() }));"],
+    "  ws.send(JSON.stringify(message));\n  ctx.agents.invalidateAgentCache();\n  ws.send(JSON.stringify(rosterMessage()));",
+    "  ws.send(JSON.stringify(message));\n  ws.send(JSON.stringify(rosterMessage()));"],
   [HANDLER, 'a refusal from the data model is reported rather than swallowed',
     "    fail(e && e.message ? e.message : 'That routine could not be written.');\n    return;",
     '    return;'],
@@ -357,7 +357,7 @@ const MUTATIONS = [
   // the constant on its own can be rendered on a help page and nowhere else
   // with the model's tests all green.
   [VIEW, 'the schedule step says which workspace this routine will run in',
-    '    h += `<p class="re-caveat" data-routine-editor="workspace-caveat">${escText(m.scheduleStepFields().workspaceCaveat)}</p>`;\n',
+    '    h += `<p class="re-caveat" data-routine-editor="workspace-caveat">${escText(step.workspaceCaveat)}</p>`;\n',
     ''],
   [MODEL_STEP, 'the step carries the caveat, so a render of the step cannot drop it',
     '      workspaceCaveat: WORKSPACE_CAVEAT,\n',
