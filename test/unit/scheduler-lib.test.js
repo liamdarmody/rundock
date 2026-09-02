@@ -1597,6 +1597,19 @@ test('a codex run stopped before its turn exists never starts one', async () => 
             'no turn start ever reached the app server');
           assert.deepStrictEqual(wire.filter(e => e.method === 'turn/interrupt'), [],
             'and nothing needed interrupting, because nothing was started');
+          // BOTH STORES, AND THE HOLD, because this ending leaves through its
+          // own early return rather than through the path every other ending
+          // takes: the record write and the release are exactly what that
+          // return could silently skip. The record is read off the disk, as
+          // a restarted process would meet it.
+          assert.strictEqual(runRecords(dir)[0].status, 'cancelled', 'in the record too');
+          assert.strictEqual(sched.executeRoutine(CODEX_AGENT, HANGING_ROUTINE, KEY), true,
+            'and the routine was released');
+          await endedAfter(sched, async () => {
+            const [next] = sched.runningRuns();
+            assert.ok(next, 'the second run is reachable, which is what ends it');
+            sched.cancelRun(next.id);
+          });
         });
       });
     });
@@ -1617,11 +1630,16 @@ test('a stop that lands while the thread is starting still prevents the turn', a
       const { thread } = await realCodexRun();
       let releaseThread;
       const threadGate = new Promise((res) => { releaseThread = res; });
+      let releaseThread2;
+      const threadGate2 = new Promise((res) => { releaseThread2 = res; });
+      const gates = [threadGate, threadGate2];
       let threadAsked;
       const askedThread = new Promise((res) => { threadAsked = res; });
       let turnsStarted = 0;
       const server = {
-        startThread: async () => { threadAsked(); await threadGate; return thread; },
+        // Each start waits on its own gate, so the release test's second run
+        // is not held behind the first run's already-opened gate.
+        startThread: async () => { threadAsked(); await (gates.shift() || null); return thread; },
         startTurn: () => { turnsStarted += 1; return new EventEmitter(); },
         interruptTurn: async () => {},
       };
@@ -1638,6 +1656,17 @@ test('a stop that lands while the thread is starting still prevents the turn', a
         assert.strictEqual(sched.routineState[KEY].status, 'cancelled', 'recorded as a stop');
         assert.strictEqual(turnsStarted, 0,
           'and the turn never started: a thread the stop overtook is abandoned before the work');
+        // BOTH STORES, AND THE HOLD, for this checkpoint's own early return:
+        // a test on the other checkpoint says nothing about this exit.
+        assert.strictEqual(runRecords(dir)[0].status, 'cancelled', 'in the record too');
+        releaseThread2();
+        assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true,
+          'and the routine was released');
+        await endedAfter(sched, async () => {
+          const [next] = sched.runningRuns();
+          assert.ok(next, 'the second run is reachable, which is what ends it');
+          sched.cancelRun(next.id);
+        });
       });
     });
   });

@@ -490,15 +490,14 @@
    * pressed a control that said "Schedule this skill" and lands on the step
    * that schedules it.
    *
-   * Several agents have it: the editor opens the agent-agnostic picker with
-   * nothing selected, because choosing an agent on the reader's behalf would
-   * be a guess wearing the shape of a decision. They would only discover which
-   * agent they had been given by reading the routine afterwards.
-   *
-   * The pressed skill's rows come FIRST in that picker, one per agent that
-   * could run it. The reader chose the skill by being on its page, so the only
-   * thing left to choose is the agent, and they should never have to find the
-   * skill a second time to do it.
+   * Several agents have it: the editor opens the picker scoped to the
+   * pressed skill, one row per agent that has it, nothing selected. Choosing
+   * an agent on the reader's behalf would be a guess wearing the shape of a
+   * decision; offering every skill again would re-ask the question the press
+   * already answered. So the skill stays chosen and the only choice offered
+   * is which agent. The one exception is the race where the pressed skill
+   * has lost its last agent since the page rendered, which falls back to the
+   * full picker; the reason is recorded at the call site.
    *
    * Either way the breadcrumb goes back to the skill, because that is where
    * the press came from.
