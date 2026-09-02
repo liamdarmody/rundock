@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 'use strict';
-// Take the plan construction's guards apart one at a time and report which
-// tests notice. A plan that quietly offers less than the package holds, or
-// promises digests derived differently from how apply verifies them, is how
-// content escapes review; each of those refusals is proven by breaking it.
+// Take the install flow model's guards apart one at a time and report which
+// tests notice. Nothing-silent and collisions-fail-closed are promises about
+// what is NOT sent, which is exactly the kind of promise a green suite can
+// quietly stop checking.
 //
-//   node test/tools/mutate-import-plan-guards.js            # report
-//   node test/tools/mutate-import-plan-guards.js --markdown # as a table
+//   node test/tools/mutate-install-flow-guards.js            # report
+//   node test/tools/mutate-install-flow-guards.js --markdown # as a table
 //
-// The harness is the same shape as mutate-import-apply-guards.js and is
+// The harness is the same shape as mutate-import-plan-guards.js and is
 // deliberately a second copy rather than a shared module, for the reason
 // stated there: pulling them together means editing an instrument already in
 // the gate, and mixing that refactor into a change is how a gate quietly
@@ -23,50 +23,40 @@ const { beginMutationRun } = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 
-const PLAN = {
-  src: path.join(ROOT, 'lib', 'packages', 'import-plan.js'),
-  suite: 'test/unit/package-import-plan-v2.test.js',
-};
-// The decision contract's own home since it was shared with the browser; the
-// plan suite still owns its evidence, so the mutation follows the code.
-const DECIDE = {
-  src: path.join(ROOT, 'public', 'packages-decide.js'),
-  suite: 'test/unit/package-import-plan-v2.test.js',
+const MODEL = {
+  src: path.join(ROOT, 'public', 'packages-install-model.js'),
+  suite: 'test/unit/packages-install-model.test.js',
 };
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
-  [PLAN, 'the manifest sort cannot be inverted',
-    "  return entries.sort((a, b) => (a.id < b.id ? -1 : 1));",
-    "  return entries.sort((a, b) => (a.id < b.id ? 1 : -1));"],
-  [PLAN, 'the manifest sort cannot be removed outright',
-    "  return entries.sort((a, b) => (a.id < b.id ? -1 : 1));",
-    '  return entries;'],
-  [PLAN, 'an empty package is a refusal, not an empty plan',
-    "  if (entries.length === 0) refuse('the package contains no agents and no skills', 'empty-package');\n",
+  [MODEL, 'a colliding plan can never produce an apply message',
+    '    if (state.collisions.length > 0) return { state };\n',
     ''],
-  [PLAN, 'the approved digest comes from the provenance-transformed bytes',
-    "        approvedText = withProvenance(sourceAgentText(itemPath(sourceRoot, 'agent', slug)), source.id);",
-    "        approvedText = sourceAgentText(itemPath(sourceRoot, 'agent', slug));"],
-  [PLAN, 'the collision fact is derived from the live destination',
-    '    const collision = plannedDigest !== ABSENT_DIGEST;',
-    '    const collision = false;'],
-  [DECIDE, "a skipped agent's default state collapses onto the planned one",
-    '          approvedDefault: skip ? item.agent.plannedDefault : item.agent.approvedDefault,',
-    '          approvedDefault: item.agent.approvedDefault,'],
-  [PLAN, 'a non-slug agent name is refused, never silently dropped',
-    "    if (!entry.name.endsWith('.md') || !SLUG.test(entry.name.slice(0, -3))) {\n"
-    + "      refuse(`agents/${entry.name} is not a canonical agent file name`);\n"
-    + '    }\n',
-    "    if (!entry.name.endsWith('.md')) continue;\n"],
+  [MODEL, 'cancel sends nothing at all',
+    '  function cancel() {\n    return { state: initial() };\n  }',
+    "  function cancel() {\n    return { state: initial(), send: { type: 'apply_package_import' } };\n  }"],
+  [MODEL, 'the approval comes through the shared decide module, not a local copy',
+    '    return sharedDecide()(plan, decisions);',
+    '    return { schema: plan.schema, source: plan.source, manifest: plan.manifest, items: plan.items.map((item) => ({ ...item, decision: decisions[item.id] })) };'],
+  [MODEL, 'every item is decided add before the shared decide runs',
+    "    for (const item of plan.items) decisions[item.id] = 'add';\n",
+    ''],
+  [MODEL, 'the nothing-usable state is classified by its code, never by prose',
+    "      if (msg.code === 'empty-package') {",
+    '      if (false) {'],
+  [MODEL, 'blocked items are rendered, not dropped',
+    '      blockedLines: state.blocked.map((b) => `${b.slug}: not added, because ${b.reason}`),',
+    '      blockedLines: [],'],
 ];
 
 // Guards deliberately NOT mutated, each with the reason.
 const NOT_MUTATED = [
   {
-    what: 'the duplicate-id case in the manifest',
-    why: 'manifest ids derive from unique directory entries, so no input can produce a duplicate '
-      + 'and no check exists to mutate; recorded in criteria amendment A1 rather than as a green row.',
+    what: 'the view rendering in views/settings.js',
+    why: 'the browser spec pins the rendered states against the real server, and mutating a file '
+      + 'the slow e2e suite watches would make this harness minutes-long for guards the model '
+      + 'already proves; the model is where every decision this flow makes lives.',
   },
 ];
 
@@ -99,7 +89,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [PLAN, DECIDE];
+  const targets = [MODEL];
   const session = beginMutationRun({ files: targets.map((target) => target.src) });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));

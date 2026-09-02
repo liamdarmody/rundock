@@ -205,7 +205,7 @@ function connect() {
   ws = new WebSocket(`${p}//${location.host}`);
   ws.onopen = () => { setConn('connected'); ws.send(JSON.stringify({type:'get_workspaces'})); };
   ws.onmessage = e => handle(JSON.parse(e.data));
-  ws.onclose = () => { setConn('disconnected'); setTimeout(connect, 2000); };
+  ws.onclose = () => { setConn('disconnected'); packagesConnectionLost(); setTimeout(connect, 2000); };
   ws.onerror = () => {}; // Prevent unhandled error; onclose fires next
 }
 function setConn(s) { const b=document.getElementById('connection-bar'); b.className=`connection-bar ${s}`; b.textContent=s==='connected'?'Connected':s==='disconnected'?'Disconnected. Reconnecting...':'Connecting...'; if(s==='connected')setTimeout(()=>b.style.display='none',2000); else b.style.display='block'; }
@@ -215,6 +215,7 @@ function setConn(s) { const b=document.getElementById('connection-bar'); b.class
 function handle(d) {
   const convoId = d._conversationId;
   switch(d.type) {
+    case 'package_import_plan': case 'package_import_result': case 'package_import_error': packagesReplyArrived(d); break;
     case 'workspaces': handleWorkspaces(d); break;
     case 'workspace_set':
       // Start the clock on the renderer's share of opening a workspace. The
@@ -1484,6 +1485,9 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   ws.send(JSON.stringify({ type: 'get_runtime_status' }));
   skillsLoaded = false;
   currentSkillId = null;
+  // A package plan describes one workspace's collision facts and defaults;
+  // a different workspace returns the install flow to idle.
+  if (!isSameWorkspace) packagesWorkspaceChanged();
 
   if (isSameWorkspace && currentView !== 'workspace') {
     // Reconnect to same workspace: keep in-memory conversations and active view intact.
