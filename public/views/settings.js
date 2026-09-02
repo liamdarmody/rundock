@@ -21,6 +21,88 @@
   }
 }(typeof self !== 'undefined' ? self : this, function () {
 
+// ---- Packages install flow (lane: PL2 hosting section, PL4 states) ----
+// All flow logic lives in RundockPackagesInstallModel; this file only renders
+// the model's state and forwards the person's actions and the server's
+// replies. The model decides what, if anything, is sent.
+let packagesInstall = (typeof RundockPackagesInstallModel !== 'undefined') ? RundockPackagesInstallModel.initial() : null;
+
+function packagesApplyTransition(out) {
+  packagesInstall = out.state;
+  if (out.send && ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(out.send));
+  renderSettingsSection('packages');
+}
+
+function packagesSubmit() {
+  const field = document.getElementById('packages-source-path');
+  packagesApplyTransition(RundockPackagesInstallModel.submit(packagesInstall, field ? field.value : ''));
+}
+
+function packagesCancel() { packagesApplyTransition(RundockPackagesInstallModel.cancel(packagesInstall)); }
+function packagesConfirm() { packagesApplyTransition(RundockPackagesInstallModel.confirm(packagesInstall)); }
+function packagesRetry() { packagesApplyTransition(RundockPackagesInstallModel.retry(packagesInstall)); }
+
+function packagesPlanArrived(msg) { packagesApplyTransition(RundockPackagesInstallModel.planReply(packagesInstall, msg)); }
+function packagesApplyArrived(msg) { packagesApplyTransition(RundockPackagesInstallModel.applyReply(packagesInstall, msg)); }
+function packagesErrorArrived(msg) {
+  if (msg.operation === 'plan') packagesPlanArrived(msg); else packagesApplyArrived(msg);
+}
+
+function packagesSectionHtml() {
+  const m = RundockPackagesInstallModel;
+  const st = packagesInstall;
+  const field = `<div class="settings-card">
+      <div class="packages-field-label">Add a package from a folder</div>
+      <div class="packages-field-row">
+        <input id="packages-source-path" class="packages-input" type="text" placeholder="Path to a folder of agents and skills"
+          value="${escAttr(st.sourcePath || '')}" ${st.phase === 'idle' ? '' : 'disabled'}>
+        <button class="settings-btn" onclick="packagesSubmit()" ${st.phase === 'idle' ? '' : 'disabled'}>Read it</button>
+      </div>
+      ${st.fieldError ? `<div class="packages-field-error">${esc(st.fieldError)}</div>` : ''}
+    </div>`;
+  let stateHtml = '';
+  if (st.phase === 'classifying') {
+    stateHtml = `<div class="settings-card packages-state"><div class="packages-spinner"></div>Reading the package…</div>`;
+  } else if (st.phase === 'offer') {
+    const copy = m.offerCopy(st);
+    stateHtml = `<div class="settings-card packages-confirm-card">
+        <div class="packages-headline">${esc(copy.headline)}</div>
+        <div class="packages-body">${esc(copy.body)}</div>
+        ${copy.collisionNote ? `<div class="packages-collision-note">${esc(copy.collisionNote)}</div>` : ''}
+        <div class="packages-actions">
+          <button class="settings-btn packages-confirm" onclick="packagesConfirm()" ${copy.confirmDisabled ? 'disabled' : ''}>${esc(copy.confirmLabel)}</button>
+          <button class="settings-btn packages-cancel" onclick="packagesCancel()">${esc(copy.cancelLabel)}</button>
+        </div>
+      </div>`;
+  } else if (st.phase === 'applying') {
+    stateHtml = `<div class="settings-card packages-state"><div class="packages-spinner"></div>Adding to your team…</div>`;
+  } else if (st.phase === 'nothing-usable') {
+    stateHtml = `<div class="settings-card packages-state">
+        <div class="packages-headline">Nothing usable in that folder</div>
+        <div class="packages-body">Rundock looked for agents and skills and found neither.</div>
+        <div class="packages-actions"><button class="settings-btn" onclick="packagesCancel()">Back</button></div>
+      </div>`;
+  } else if (st.phase === 'failed') {
+    stateHtml = `<div class="settings-card packages-state packages-failed">
+        <div class="packages-headline">That didn't work</div>
+        <div class="packages-body">${esc(st.message)}</div>
+        <div class="packages-actions">
+          ${st.canReplan ? `<button class="settings-btn" onclick="packagesRetry()">Review the package again</button>` : ''}
+          <button class="settings-btn" onclick="packagesCancel()">Back</button>
+        </div>
+      </div>`;
+  } else if (st.phase === 'done') {
+    const copy = m.doneCopy(st);
+    stateHtml = `<div class="settings-card packages-success-card" data-receipt="${escAttr(st.receipt || '')}">
+        <div class="packages-headline">${esc(copy.headline)}</div>
+        ${copy.parts.map((p) => `<div class="packages-part"><span class="packages-part-label">${esc(p.label)}</span><span class="packages-part-dest">${esc(p.destination)}</span></div>`).join('')}
+        ${copy.blockedLines.map((line) => `<div class="packages-blocked-line">${esc(line)}</div>`).join('')}
+        <div class="packages-actions"><button class="settings-btn" onclick="packagesCancel()">Done</button></div>
+      </div>`;
+  }
+  return `<div class="settings-section-title">Packages</div>${field}${stateHtml}`;
+}
+
 function showSettingsSection(section) {
   document.querySelectorAll('.settings-nav-item').forEach(el => el.classList.remove('active'));
   document.querySelector(`.settings-nav-item[data-settings="${section}"]`)?.classList.add('active');
@@ -29,7 +111,9 @@ function showSettingsSection(section) {
 
 function renderSettingsSection(section) {
   const el = document.getElementById('settings-content');
-  if (section === 'workspace') {
+  if (section === 'packages') {
+    el.innerHTML = packagesSectionHtml();
+  } else if (section === 'workspace') {
     const agentCount = agents.filter(a => a.status === 'onTeam').length;
     const skillCount = skills.length;
     const isCode = workspaceMode === 'code';
@@ -156,5 +240,7 @@ function changeWorkspace() {
   ws.send(JSON.stringify({ type: 'list_workspaces' }));
 }
 
-return { showSettingsSection, renderSettingsSection, setWorkspaceMode, runtimeRowHtml, runtimesCardHtml, renderRuntimesCard, changeWorkspace };
+return { showSettingsSection, renderSettingsSection, setWorkspaceMode, runtimeRowHtml, runtimesCardHtml, renderRuntimesCard, changeWorkspace,
+  packagesSubmit, packagesCancel, packagesConfirm, packagesRetry,
+  packagesPlanArrived, packagesApplyArrived, packagesErrorArrived };
 }));

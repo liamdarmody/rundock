@@ -215,6 +215,9 @@ function setConn(s) { const b=document.getElementById('connection-bar'); b.class
 function handle(d) {
   const convoId = d._conversationId;
   switch(d.type) {
+    case 'package_import_plan': packagesPlanArrived(d); break;
+    case 'package_import_result': packagesApplyArrived(d); break;
+    case 'package_import_error': packagesErrorArrived(d); break;
     case 'workspaces': handleWorkspaces(d); break;
     case 'workspace_set':
       // Start the clock on the renderer's share of opening a workspace. The

@@ -240,6 +240,13 @@ const MANIFEST = {
   ],
   "settings.js": [
     "changeWorkspace",
+    "packagesApplyArrived",
+    "packagesCancel",
+    "packagesConfirm",
+    "packagesErrorArrived",
+    "packagesPlanArrived",
+    "packagesRetry",
+    "packagesSubmit",
     "renderRuntimesCard",
     "renderSettingsSection",
     "runtimeRowHtml",

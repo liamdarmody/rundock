@@ -211,6 +211,7 @@ const TABLE = {
     ['b', 'attr-escaper', 'the run detail, loaded state'],
   ],
   'views/settings.js': [
+    ['b', 'attr-escaper', 'the packages section: model copy and outcomes through esc(), the field value through escAttr()'],
     ['b', 'attr-escaper', 'the workspace card'],
     ['a', 'staticMarkup', 'the appearance card'],
     ['a', 'appValues', 'the about card: the app version from package.json'],
