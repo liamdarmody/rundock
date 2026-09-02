@@ -245,6 +245,7 @@ const MANIFEST = {
     "packagesReplyArrived",
     "packagesRetry",
     "packagesSubmit",
+    "packagesWorkspaceChanged",
     "renderRuntimesCard",
     "renderSettingsSection",
     "runtimeRowHtml",

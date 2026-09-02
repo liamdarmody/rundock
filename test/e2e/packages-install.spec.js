@@ -66,6 +66,8 @@ test('plan, confirm and apply land the package with its receipt', async ({ page 
   await card.getByRole('button', { name: 'Add to my team' }).click();
   await expect(page.locator('.packages-success-card .packages-headline')).toHaveText('Added to your team');
   await expect(page.locator('.packages-part')).toHaveCount(2);
+  await expect(page.locator('.packages-part-dest').nth(0)).toHaveText('.claude/agents/happy-scribe.md');
+  await expect(page.locator('.packages-part-dest').nth(1)).toHaveText('.claude/skills/happy-writer');
   expect(await fileExists(page, '.claude/agents/happy-scribe.md')).toBe(true);
   expect(await fileExists(page, '.claude/skills/happy-writer/SKILL.md')).toBe(true);
   const receipt = await page.locator('.packages-success-card').getAttribute('data-receipt');
@@ -97,6 +99,28 @@ test('with the socket closed, nothing is sent and the flow stays usable', async 
   await expect(page.locator('.packages-field-error')).toContainText('Not connected: nothing was sent');
   await expect(page.locator('#packages-source-path')).toBeEnabled();
   expect(await fileExists(page, '.claude/agents/offline-scribe.md')).toBe(false);
+});
+
+test('switching workspace returns the flow to idle, discarding the previous plan', async ({ page }) => {
+  await boot(page);
+  const source = await seedPackage(page, 'pkg-switch', [['.claude/agents/switch-scribe.md', AGENT]]);
+  await openPackages(page);
+  await page.fill('#packages-source-path', source);
+  await page.getByRole('button', { name: 'Read it' }).click();
+  await expect(page.locator('.packages-confirm-card')).toBeVisible();
+  // A second workspace, made real on disk, opened through the real path.
+  const original = await page.evaluate(() => currentWorkspacePath);
+  const other = original + '-b';
+  fs.mkdirSync(other, { recursive: true });
+  await page.evaluate((dir) => ws.send(JSON.stringify({ type: 'set_workspace', path: dir })), other);
+  await expect.poll(() => page.evaluate(() => currentWorkspacePath)).toBe(other);
+  await openPackages(page);
+  await expect(page.locator('#packages-source-path')).toBeVisible();
+  await expect(page.locator('#packages-source-path')).toHaveValue('');
+  await expect(page.locator('.packages-confirm-card')).toHaveCount(0);
+  // Hand the server back to the original workspace for the tests that follow.
+  await page.evaluate((dir) => ws.send(JSON.stringify({ type: 'set_workspace', path: dir })), original);
+  await expect.poll(() => page.evaluate(() => currentWorkspacePath)).toBe(original);
 });
 
 test('with the socket closed at confirm, nothing is applied and the flow stays usable', async ({ page }) => {

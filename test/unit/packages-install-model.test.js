@@ -179,7 +179,13 @@ describe('outcomes are rendered honestly, against real apply replies', () => {
     const done = model.reply(applying, replyMsg).state;
     const copy = model.doneCopy(done);
     assert.strictEqual(copy.headline, 'Added to your team');
-    assert.deepStrictEqual(copy.parts.map((p) => [p.label, p.kind]), [['scribe', 'agent'], ['writer', 'skill']]);
+    // Destinations come from the handler-produced writes, not restated by
+    // hand: dropping or emptying them turns this red.
+    assert.deepStrictEqual(copy.parts, replyMsg.writes.map((w) => ({
+      label: w.id.split(':')[1], kind: w.kind, destination: w.destination,
+    })));
+    assert.deepStrictEqual(copy.parts.map((p) => p.destination),
+      ['.claude/agents/scribe.md', '.claude/skills/writer']);
     assert.deepStrictEqual(copy.blockedLines, []);
     assert.match(done.receipt, /^\.claude\/rundock\/receipts\//);
     assert.strictEqual(fs.existsSync(path.join(workspace, done.receipt)), true);

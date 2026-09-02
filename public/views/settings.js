@@ -58,6 +58,14 @@ function packagesRetry() { packagesApplyTransition(RundockPackagesInstallModel.r
 
 function packagesReplyArrived(msg) { packagesApplyTransition(RundockPackagesInstallModel.reply(packagesInstall, msg)); }
 
+// Per-workspace state must not outlive the workspace it was built from: a
+// plan's collision facts, planned digests and default readings all describe
+// one workspace, so a change of workspace returns the flow to idle.
+function packagesWorkspaceChanged() {
+  packagesInstall = RundockPackagesInstallModel.initial();
+  if (typeof currentView !== 'undefined' && currentView === 'settings') renderSettingsSection('packages');
+}
+
 function packagesSectionHtml() {
   const m = RundockPackagesInstallModel;
   const st = packagesInstall;
@@ -252,5 +260,5 @@ function changeWorkspace() {
 
 return { showSettingsSection, renderSettingsSection, setWorkspaceMode, runtimeRowHtml, runtimesCardHtml, renderRuntimesCard, changeWorkspace,
   packagesSubmit, packagesCancel, packagesConfirm, packagesRetry,
-  packagesReplyArrived };
+  packagesReplyArrived, packagesWorkspaceChanged };
 }));

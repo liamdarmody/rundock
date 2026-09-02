@@ -118,29 +118,36 @@ describe('the protocol boundary', () => {
   // [name, build(sourceRoot), message]: every discovery refusal class the
   // plan path can raise, each surfacing as a structured error.
   const PLAN_REFUSALS = [
-    ['a non-canonical skill name', (root) => write(root, '.claude/skills/Bad Name/SKILL.md', 'x'), /not a canonical skill name/],
-    ['a non-canonical agent name', (root) => write(root, '.claude/agents/Not A Slug.md', AGENT_TEXT), /not a canonical agent file name/],
+    ['a non-canonical skill name', (root) => write(root, '.claude/skills/Bad Name/SKILL.md', 'x'), /not a canonical skill name/, 'package-refused'],
+    ['a non-canonical agent name', (root) => write(root, '.claude/agents/Not A Slug.md', AGENT_TEXT), /not a canonical agent file name/, 'package-refused'],
     ['a symlink in the source', (root) => {
       write(root, 'real.md', AGENT_TEXT);
       fs.symlinkSync(path.join(root, 'real.md'), path.join(root, '.claude/agents/link.md'));
-    }, /is a symlink/],
-    ['unterminated agent frontmatter', (root) => write(root, '.claude/agents/broken.md', '---\nname: broken\n'), /never closes/],
+    }, /is a symlink/, 'package-refused'],
+    ['unterminated agent frontmatter', (root) => write(root, '.claude/agents/broken.md', '---\nname: broken\n'), /never closes/, 'package-refused'],
+    // Returns its own root: emptiness cannot be added to a populated source.
+    ['an empty package', () => {
+      const empty = makeTempDir('proto-empty-');
+      fs.mkdirSync(path.join(empty, '.claude'), { recursive: true });
+      return { probeRoot: empty };
+    }, /no agents and no skills/, 'empty-package'],
   ];
 
-  for (const [name, build, message] of PLAN_REFUSALS) {
+  for (const [name, build, message, code] of PLAN_REFUSALS) {
     test(`${name} surfaces as a structured plan error with the workspace unchanged`, () => {
       const { workspace, sourceRoot } = fixture();
-      build(sourceRoot);
+      const returned = build(sourceRoot);
+      const probe = returned && returned.probeRoot ? returned.probeRoot : sourceRoot;
       const before = tree(workspace);
-      const reply = dispatchJson('plan_package_import', { sourcePath: sourceRoot, source: SOURCE });
+      const reply = dispatchJson('plan_package_import', { sourcePath: probe, source: SOURCE });
       assert.strictEqual(reply.type, 'package_import_error');
       assert.strictEqual(reply.operation, 'plan');
       assert.match(reply.message, message);
       assert.doesNotMatch(reply.message, /\n\s+at /); // a message, not a stack trace
-      // The code field is always present: a string when the producer attached
-      // one, null otherwise, so clients never classify from message prose.
-      assert.ok(reply.code === null || typeof reply.code === 'string');
-      assert.notStrictEqual(reply.code, undefined);
+      // The concrete code each real refusal carries, so clients classify
+      // from it and never from message prose; red if refuse() stops
+      // attaching codes, the default is renamed, or fail() drops the field.
+      assert.strictEqual(reply.code, code);
       assert.deepStrictEqual(tree(workspace), before);
     });
   }
