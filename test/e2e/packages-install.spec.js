@@ -99,6 +99,20 @@ test('with the socket closed, nothing is sent and the flow stays usable', async 
   expect(await fileExists(page, '.claude/agents/offline-scribe.md')).toBe(false);
 });
 
+test('with the socket closed at confirm, nothing is applied and the flow stays usable', async ({ page }) => {
+  await boot(page);
+  const source = await seedPackage(page, 'pkg-offline-confirm', [['.claude/agents/offline-confirm-scribe.md', AGENT]]);
+  await openPackages(page);
+  await page.fill('#packages-source-path', source);
+  await page.getByRole('button', { name: 'Read it' }).click();
+  await expect(page.locator('.packages-confirm-card')).toBeVisible();
+  await page.evaluate(() => ws.close());
+  await page.locator('.packages-confirm-card').getByRole('button', { name: 'Add to my team' }).click();
+  await expect(page.locator('.packages-field-error')).toContainText('Not connected: nothing was sent');
+  await expect(page.locator('#packages-source-path')).toBeEnabled();
+  expect(await fileExists(page, '.claude/agents/offline-confirm-scribe.md')).toBe(false);
+});
+
 test('a refusal from the real server renders the failure card, not a spinner', async ({ page }) => {
   await boot(page);
   const source = await seedPackage(page, 'pkg-refused', [['.claude/skills/Bad Name/SKILL.md', 'x']]);

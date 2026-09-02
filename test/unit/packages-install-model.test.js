@@ -35,20 +35,22 @@ function write(root, relative, content) {
   return absolute;
 }
 
-// A real plan from the real plan module, so every fixture the model consumes
-// carries the exact shape the wire will.
-function realPlan({ withCollision = false } = {}) {
+// A real plan REPLY from the real handler through the real dispatch table,
+// entering the model through its single reply entry, so a renamed reply type
+// or envelope field turns this suite red.
+function realPlanMsg({ withCollision = false } = {}) {
   const workspace = makeTempDir('pim-ws-');
   const sourceRoot = makeTempDir('pim-src-');
   write(sourceRoot, '.claude/agents/scribe.md', '---\nname: scribe\n---\n\nS.\n');
   write(sourceRoot, '.claude/skills/writer/SKILL.md', 'skill');
   if (withCollision) write(workspace, '.claude/skills/writer/SKILL.md', 'existing');
-  return buildPlan(workspace, sourceRoot, { id: sourceRoot, reference: null });
+  const planMsg = realReply(workspace, 'plan_package_import', { sourcePath: sourceRoot, source: { id: sourceRoot, reference: null } });
+  return { workspace, sourceRoot, planMsg };
 }
 
-function offered(plan) {
+function offered(planMsg) {
   const submitted = model.submit(model.initial(), '/tmp/somewhere');
-  return model.planReply(submitted.state, { type: 'package_import_plan', plan }).state;
+  return model.reply(submitted.state, planMsg).state;
 }
 
 describe('nothing is silent', () => {
@@ -64,7 +66,7 @@ describe('nothing is silent', () => {
   });
 
   test('cancel sends nothing and returns to idle', () => {
-    const state = offered(realPlan());
+    const state = offered(realPlanMsg().planMsg);
     const out = model.cancel(state);
     assert.strictEqual(out.send, undefined);
     assert.deepStrictEqual(out.state, model.initial());
@@ -79,7 +81,7 @@ describe('nothing is silent', () => {
 
 describe('the offer', () => {
   test('states counts and the not-sandboxed sentence on the plain confirm card', () => {
-    const copy = model.offerCopy(offered(realPlan()));
+    const copy = model.offerCopy(offered(realPlanMsg().planMsg));
     assert.strictEqual(copy.headline, "This isn't a Rundock package");
     assert.match(copy.body, /^Rundock found 1 agent and 1 skill built for Claude Code\. /);
     assert.match(copy.body, /They're not sandboxed: once added they act with the same access your own agents have\./);
@@ -111,7 +113,7 @@ describe('the offer', () => {
 
 describe('collisions fail closed', () => {
   test('any colliding item disables confirm and names itself, and confirm can never send', () => {
-    const state = offered(realPlan({ withCollision: true }));
+    const state = offered(realPlanMsg({ withCollision: true }).planMsg);
     const copy = model.offerCopy(state);
     assert.strictEqual(copy.confirmDisabled, true);
     assert.match(copy.collisionNote, /writer/);
@@ -126,14 +128,27 @@ describe('collisions fail closed', () => {
 });
 
 describe('the approval is the plan module\'s own decision', () => {
-  test('confirm sends decide(plan, all-add) byte for byte', () => {
-    const plan = realPlan();
-    const state = offered(plan);
-    const out = model.confirm(state);
+  test('confirm sends decide(plan, all-add) byte for byte, through the shared module itself', () => {
+    const { planMsg } = realPlanMsg();
+    const state = offered(planMsg);
+    // The shared module is a require-cache singleton, so tagging its export
+    // proves the model's call goes THROUGH it: a faithful local copy of the
+    // construction produces equal bytes but no tag, and turns this red.
+    const shared = require('../../public/packages-decide.js');
+    const realDecide = shared.decide;
+    shared.decide = (p, d) => ({ ...realDecide(p, d), viaSharedDecide: true });
+    let out;
+    try {
+      out = model.confirm(state);
+    } finally {
+      shared.decide = realDecide;
+    }
     assert.strictEqual(out.send.type, 'apply_package_import');
+    assert.strictEqual(out.send.approval.viaSharedDecide, true);
     const allAdd = {};
-    for (const item of plan.items) allAdd[item.id] = 'add';
-    assert.deepStrictEqual(out.send.approval, decide(plan, allAdd));
+    for (const item of planMsg.plan.items) allAdd[item.id] = 'add';
+    const { viaSharedDecide, ...approval } = out.send.approval;
+    assert.deepStrictEqual(approval, decide(planMsg.plan, allAdd));
     assert.strictEqual(out.state.phase, 'applying');
   });
 });
