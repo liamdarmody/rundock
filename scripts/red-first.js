@@ -523,12 +523,64 @@ function claimRun(repo, tests) {
     }
     const liveBy = liveRunKind(held);
     if (liveBy) return { ok: false, file, live: { ...held, file, liveBy } };
-    // Stale. Renamed aside rather than unlinked, so that two contenders who
-    // both judged it stale do not both clear the way for a third.
-    try { fs.renameSync(file, `${file}.stale.${process.pid}`); } catch (e) { /* someone got there first */ }
-    try { fs.unlinkSync(`${file}.stale.${process.pid}`); } catch (e) { /* already gone */ }
+    if (!retireStaleRecord(file, held)) continue;
   }
   return { ok: false, file, unclaimable: true };
+}
+
+/**
+ * Retire one stale run record, and never anything else.
+ *
+ * A BARE RENAME ON THE PATH IS THE RACE, not the remedy, and the first
+ * version of this used one. Two contenders can both read a stale record and
+ * both judge it stale; the first renames it aside, claims the freed name and
+ * is by then a legitimate live run, and the second's rename then moves the
+ * FIRST'S fresh claim aside and frees the name for a third. Two runs against
+ * one working tree, each reverting source under the other, is the exact state
+ * the exclusive claim exists to prevent, delivered by the code meant to keep
+ * it.
+ *
+ * So the record is re-read immediately before the rename and must still be
+ * the one that was judged: same pid, same startedAt. Then what the rename
+ * actually moved is read back and checked AGAIN, because a claim can land in
+ * the gap between the re-read and the rename; a mismatch there is restored to
+ * the path it was taken from before anything else happens. Only a record that
+ * matched on both sides of the rename is unlinked. The window between checks
+ * is microseconds where the bare rename's was the whole judgement, and the
+ * restore closes even that unless a third contender claims the name inside
+ * it, in which case the displaced record is left beside the path under the
+ * aside name and said out loud rather than deleted: a loud leftover file is
+ * recoverable, a silently deleted live claim is not.
+ *
+ * @returns {boolean} true when the way is clear to try the claim again;
+ *   false when the record at the path is no longer the judged one, in which
+ *   case the caller treats it as a fresh holder and loops.
+ */
+function retireStaleRecord(file, judged) {
+  const sameRecord = (a, b) => !!a && !!b && a.pid === b.pid && a.startedAt === b.startedAt;
+  if (!sameRecord(readRunRecord(file), judged)) return false;
+  const aside = `${file}.stale.${process.pid}`;
+  try { fs.renameSync(file, aside); } catch (e) { return false; /* someone got there first */ }
+  const moved = readRunRecord(aside);
+  if (sameRecord(moved, judged)) {
+    try { fs.unlinkSync(aside); } catch (e) { /* already gone */ }
+    return true;
+  }
+  // The rename caught a claim that landed in the gap. Put it back untouched,
+  // BY LINK AND NOT BY RENAME: a rename replaces whatever is at the target,
+  // so restoring over a third contender's even-newer claim would delete it,
+  // which is the same fault one layer down. A link refuses when the name is
+  // taken, and a refusal leaves the displaced record beside the path under
+  // the aside name, said out loud rather than deleted: a loud leftover file
+  // is recoverable, a silently deleted live claim is not.
+  try {
+    fs.linkSync(aside, file);
+    fs.unlinkSync(aside);
+  } catch (e) {
+    console.error(`[red-first] a live run record was displaced to ${aside} and could not be `
+      + 'restored; it has been left there rather than deleted. Inspect it before starting again.');
+  }
+  return false;
 }
 
 /**

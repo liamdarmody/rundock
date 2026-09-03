@@ -1059,6 +1059,59 @@ describe('two starts at once against one repository', () => {
   });
 });
 
+describe('two starts against a repository whose record is stale', () => {
+  // The retirement race, driven at the only speed that finds it. A record
+  // whose run and suite have both ended must be cleared, and the clearing is
+  // the one destructive step on the claim path: done as a bare rename it
+  // moves whatever is at the path at that instant, so of two contenders who
+  // both judged the record stale, the loser's rename could displace the
+  // winner's fresh claim and free the name for a third. Both contenders
+  // start here at once against a record that is already stale on disk, and
+  // exactly one of them may end up running.
+  test('AC-5: a stale record is retired by exactly one of two simultaneous starts', async (t) => {
+    const dir = repo();
+    const fileA = scratch('staleRaceA');
+    const fileB = scratch('staleRaceB');
+    try {
+      const gone = await deadGroup();
+      fs.writeFileSync(runRecordPath(dir), JSON.stringify({
+        pid: gone, group: gone, tests: 'npm test', repo: dir,
+        startedAt: new Date().toISOString(),
+      }, null, 2) + '\n');
+
+      const start = (file) => new Promise((resolve) => {
+        const kid = spawn(process.execPath,
+          [SCRIPT, '--repo', dir, '--base', 'main',
+            '--tests', packageRunnerLeaving(file, { tail: 'sleep 3' })],
+          { stdio: ['ignore', 'pipe', 'pipe'] });
+        let out = '';
+        kid.stdout.on('data', (b) => { out += b.toString(); });
+        kid.stderr.on('data', (b) => { out += b.toString(); });
+        kid.on('exit', (code) => resolve({ code, out }));
+      });
+
+      const [a, b] = await Promise.all([start(fileA), start(fileB)]);
+      t.diagnostic(`first said:  ${a.out.trim().split('\n').pop()}`);
+      t.diagnostic(`second said: ${b.out.trim().split('\n').pop()}`);
+
+      const concluded = [a, b].filter(x => /\[red-first\] (PROVEN|NOT-DISCRIMINATING|INCONCLUSIVE)/.test(x.out));
+      assert.strictEqual(concluded.length, 1,
+        `exactly one start may run against the tree, however the stale record was cleared\n${a.out}\n---\n${b.out}`);
+      const refused = [a, b].filter(x => /REFUSED/.test(x.out));
+      assert.strictEqual(refused.length, 1,
+        `and the other must be refused rather than waved through or wedged\n${a.out}\n---\n${b.out}`);
+
+      const pids = pidsIn(fileA).concat(pidsIn(fileB));
+      assert.deepStrictEqual(pids.filter(running), [],
+        `neither start may leave a suite behind: ${pids.filter(running).join(', ')}`);
+      assert.strictEqual(fs.existsSync(runRecordPath(dir)), false,
+        'the claim is given back once both have finished, stale record and all');
+    } finally {
+      teardown({ dir, pidFiles: [fileA, fileB] });
+    }
+  });
+});
+
 describe('cleanup reaches what this tool started, and stops there', () => {
   test('AC-8: a suite this tool did not start is left alone, and is still working afterwards', async (t) => {
     // The remedy that suggests itself for the leak above is a pattern kill

@@ -173,16 +173,21 @@ function groupRunning(pgid, readMembers = psGroupMembers) {
  * from outliving its caller, and the criterion it answers to is unconditional.
  */
 function endGroup(pgid, { graceMs = END_GRACE_MS, readMembers = psGroupMembers } = {}) {
-  // Throttled so the expensive read cannot be made on every turn of the loop.
-  let nextTable = 0;
-  const state = () => {
-    if (!exists(-pgid)) return false;
-    if (Date.now() < nextTable) return true;
-    nextTable = Date.now() + TABLE_POLL_MS;
-    const members = readMembers(pgid);
-    if (members === null) return null;
-    return members.some(m => !String(m.state).startsWith(EXITED_STATE));
+  // THE TABLE READ IS REINED, THE DECISION IS NOT. What a group's members
+  // mean is groupRunning's question and exists in this file exactly once;
+  // this wrapper only decides how often the expensive table read is made,
+  // reusing the last answer for TABLE_POLL_MS between reads. The exited
+  // member rule has been got wrong twice already, which is precisely why a
+  // second copy of it four lines from the first is not allowed to exist.
+  let lastReadAt = -Infinity;
+  let lastMembers;
+  const reined = (asked) => {
+    if (Date.now() - lastReadAt < TABLE_POLL_MS) return lastMembers;
+    lastReadAt = Date.now();
+    lastMembers = readMembers(asked);
+    return lastMembers;
   };
+  const state = () => groupRunning(pgid, reined);
 
   if (state() === false) return 'gone';
   try { process.kill(-pgid, 'SIGTERM'); } catch (e) { /* gone since the check */ }
@@ -193,7 +198,9 @@ function endGroup(pgid, { graceMs = END_GRACE_MS, readMembers = psGroupMembers }
   }
   try { process.kill(-pgid, 'SIGKILL'); } catch (e) { /* gone since the check */ }
   pause(POLL_MS);
-  nextTable = 0;
+  // The verdict read is never served from the cache: what is reported after
+  // the escalation has to describe the table as it is now.
+  lastReadAt = -Infinity;
   const after = state();
   if (after === false) return 'gone';
   return after === null ? 'unknown' : 'running';
