@@ -42,7 +42,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawn, spawnSync } = require('node:child_process');
 
-const { redFirst, runRecordPath, groupRunning, endGroup } = require('../../scripts/red-first.js');
+const { redFirst, runRecordPath, retireStaleRecord, groupRunning, endGroup } = require('../../scripts/red-first.js');
 
 const SCRIPT = path.join(__dirname, '..', '..', 'scripts', 'red-first.js');
 
@@ -1108,6 +1108,98 @@ describe('two starts against a repository whose record is stale', () => {
         'the claim is given back once both have finished, stale record and all');
     } finally {
       teardown({ dir, pidFiles: [fileA, fileB] });
+    }
+  });
+});
+
+describe('retiring a stale record, driven at the decision rather than by timing', () => {
+  // The race test above finds the defect when the interleaving cooperates;
+  // these three drive each outcome of the guard deterministically, by
+  // interposing on the rename the way a rival claim would. The failure this
+  // guard exists to prevent is a silently deleted live claim, which is two
+  // runs reverting one working tree, so each outcome is pinned rather than
+  // hoped for.
+  const recordShape = (pid, note) => ({
+    pid, group: pid, tests: 'npm test', repo: '/nowhere', note,
+    startedAt: new Date(2026, 8, 3, 7, 0, pid % 60).toISOString(),
+  });
+  const write = (file, record) => fs.writeFileSync(file, JSON.stringify(record, null, 2) + '\n');
+
+  test('a claim that lands in the rename gap is restored byte for byte, and nothing is deleted', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'retire-'));
+    const file = path.join(dir, 'record.json');
+    const judged = recordShape(1111, 'stale');
+    const rival = recordShape(2222, 'rival');
+    try {
+      write(file, judged);
+      const ops = {
+        ...fs,
+        // The rival's claim lands in the gap: what the rename moves aside is
+        // no longer the record that was judged.
+        renameSync: (from, to) => { write(from, rival); fs.renameSync(from, to); },
+      };
+      const cleared = retireStaleRecord(file, judged, ops);
+      assert.strictEqual(cleared, false, 'the caller must treat the path as freshly held and loop');
+      assert.strictEqual(fs.readFileSync(file, 'utf8'), JSON.stringify(rival, null, 2) + '\n',
+        'the displaced claim is back at the path, byte for byte');
+      assert.deepStrictEqual(fs.readdirSync(dir), ['record.json'],
+        'and no aside file is left behind, because the restore succeeded');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a restore the path refuses leaves both claims intact and says so out loud', (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'retire-'));
+    const file = path.join(dir, 'record.json');
+    const judged = recordShape(1111, 'stale');
+    const rival = recordShape(2222, 'rival');
+    const third = recordShape(3333, 'third');
+    const said = [];
+    const originalError = console.error;
+    console.error = (line) => said.push(String(line));
+    try {
+      write(file, judged);
+      const ops = {
+        ...fs,
+        // The rival lands in the gap AND a third claim takes the freed name
+        // before the restore, which is the one interleaving a restore by
+        // rename would silently destroy.
+        renameSync: (from, to) => { write(from, rival); fs.renameSync(from, to); write(from, third); },
+      };
+      const cleared = retireStaleRecord(file, judged, ops);
+      assert.strictEqual(cleared, false);
+      assert.strictEqual(fs.readFileSync(file, 'utf8'), JSON.stringify(third, null, 2) + '\n',
+        'the third claim at the path is untouched: a restore must refuse, never replace');
+      const aside = fs.readdirSync(dir).filter(n => n !== 'record.json');
+      assert.strictEqual(aside.length, 1, 'the displaced claim still exists under its aside name');
+      assert.strictEqual(fs.readFileSync(path.join(dir, aside[0]), 'utf8'),
+        JSON.stringify(rival, null, 2) + '\n', 'and it is the displaced record, not a copy of anything else');
+      assert.ok(said.some(line => line.includes(path.join(dir, aside[0]))),
+        'the leftover is announced by its path, because a loud leftover is recoverable and a silent deletion is not');
+    } finally {
+      console.error = originalError;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a record that no longer matches the judgement is never unlinked', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'retire-'));
+    const file = path.join(dir, 'record.json');
+    const judged = recordShape(1111, 'stale');
+    const rival = recordShape(2222, 'rival');
+    try {
+      // The rival is already at the path before the retirement begins, so the
+      // first re-read must refuse without moving or deleting anything at all.
+      write(file, rival);
+      const forbidden = () => { throw new Error('nothing may be moved or deleted for a record that failed the identity check'); };
+      const cleared = retireStaleRecord(file, judged,
+        { ...fs, renameSync: forbidden, unlinkSync: forbidden, linkSync: forbidden });
+      assert.strictEqual(cleared, false);
+      assert.strictEqual(fs.readFileSync(file, 'utf8'), JSON.stringify(rival, null, 2) + '\n',
+        'the fresh holder is exactly where it was');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });

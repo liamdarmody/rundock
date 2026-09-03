@@ -555,15 +555,21 @@ function claimRun(repo, tests) {
  * @returns {boolean} true when the way is clear to try the claim again;
  *   false when the record at the path is no longer the judged one, in which
  *   case the caller treats it as a fresh holder and loops.
+ *
+ * THE FILE OPERATIONS ARE A PARAMETER, and only so the race can be driven.
+ * The mismatch this guard exists for lives in a microsecond window between
+ * the re-read and the rename; a test that can interpose on the rename can
+ * put a rival claim there deterministically, where a timing test could only
+ * hope to. Production callers pass nothing and get fs.
  */
-function retireStaleRecord(file, judged) {
+function retireStaleRecord(file, judged, ops = fs) {
   const sameRecord = (a, b) => !!a && !!b && a.pid === b.pid && a.startedAt === b.startedAt;
   if (!sameRecord(readRunRecord(file), judged)) return false;
   const aside = `${file}.stale.${process.pid}`;
-  try { fs.renameSync(file, aside); } catch (e) { return false; /* someone got there first */ }
+  try { ops.renameSync(file, aside); } catch (e) { return false; /* someone got there first */ }
   const moved = readRunRecord(aside);
   if (sameRecord(moved, judged)) {
-    try { fs.unlinkSync(aside); } catch (e) { /* already gone */ }
+    try { ops.unlinkSync(aside); } catch (e) { /* already gone */ }
     return true;
   }
   // The rename caught a claim that landed in the gap. Put it back untouched,
@@ -574,8 +580,8 @@ function retireStaleRecord(file, judged) {
   // the aside name, said out loud rather than deleted: a loud leftover file
   // is recoverable, a silently deleted live claim is not.
   try {
-    fs.linkSync(aside, file);
-    fs.unlinkSync(aside);
+    ops.linkSync(aside, file);
+    ops.unlinkSync(aside);
   } catch (e) {
     console.error(`[red-first] a live run record was displaced to ${aside} and could not be `
       + 'restored; it has been left there rather than deleted. Inspect it before starting again.');
@@ -1059,4 +1065,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { redFirst, recordOutcome, restoreTo, isTest, namesFrom, runRecordPath, groupRunning, endGroup, TEST_DIRS, TEST_FILENAME_MARKERS, NAME_LIMIT, LIMITATION };
+module.exports = { redFirst, recordOutcome, restoreTo, isTest, namesFrom, runRecordPath, retireStaleRecord, groupRunning, endGroup, TEST_DIRS, TEST_FILENAME_MARKERS, NAME_LIMIT, LIMITATION };
