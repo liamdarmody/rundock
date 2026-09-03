@@ -130,8 +130,11 @@ async function initTiptapEditor(path, content) {
     // Frontmatter wikilinks that match no file render visibly dead.
     resolveWikilink: (target) => {
       if (!cachedFileTree) return true; // tree not loaded yet: never false-flag
-      const base = String(target).split('#')[0].trim();
-      return !!findFileInTree(cachedFileTree, base.endsWith('.md') ? base : base + '.md');
+      // Through the shared search-name rule, which also fixes a drift this
+      // check had grown: it appended .md to anything not already ending .md,
+      // so a frontmatter [[chart.png]] was tested as chart.png.md and
+      // rendered dead while clicking it worked.
+      return !!findFileInTree(cachedFileTree, wikilinkSearchName(target));
     },
     // Review identity: workspace profile name -> 'me' fallback; the agent
     // roster lets review attribution render known agents as agent chips.
@@ -348,6 +351,9 @@ let renderedWorkspace = null;
 // used to shadow it existed only to survive the rebuild that no longer
 // happens.
 function renderFileTree(tree) {
+  // A changed tree can change what any link resolves to, so the cached link
+  // list is stale the moment a new tree is drawn.
+  invalidateWorkspaceLinks();
   const c = document.getElementById('file-tree');
   const next = tree || [];
 
@@ -759,6 +765,7 @@ function renderEditorContent() {
     }
     previewEl.className = 'editor-content formatted';
     previewEl.innerHTML = formatMdFull(fileBody);
+    renderFileConnections(previewEl);
   } else {
     destroyActiveFileViewer();
     previewEl.classList.add('hidden');
@@ -768,6 +775,79 @@ function renderEditorContent() {
     textareaEl.focus();
   }
 }
+
+// The connections list: what links here, what this links to. A LIST, not a
+// canvas, drawn under the rendered file from the same resolver every click
+// goes through. Built with createElement throughout: nothing here may
+// interpolate file names into markup.
+function renderFileConnections(previewEl) {
+  const host = previewEl.parentElement;
+  if (!host) return;
+  let section = document.getElementById('file-connections');
+  if (section) section.remove();
+  if (!currentFilePath) return;
+  section = document.createElement('div');
+  section.id = 'file-connections';
+  section.className = 'file-connections';
+  host.appendChild(section);
+  const forFile = currentFilePath;
+  fetchWorkspaceLinks().then((data) => {
+    // The reader may have moved on while the fetch was out.
+    if (currentFilePath !== forFile || !document.getElementById('file-connections')) return;
+    drawFileConnections(section, forFile, data);
+  }).catch(() => {
+    // Links unavailable is a statement, not a blank: say why the list is
+    // not here rather than leaving a heading over nothing.
+    drawFileConnections(section, forFile, null);
+  });
+}
+
+function drawFileConnections(section, filePath, data) {
+  while (section.firstChild) section.removeChild(section.firstChild);
+  const heading = document.createElement('div');
+  heading.className = 'file-connections-heading';
+  heading.textContent = 'Connections';
+  section.appendChild(heading);
+  const note = (text) => {
+    const p = document.createElement('div');
+    p.className = 'file-connections-empty';
+    p.textContent = text;
+    section.appendChild(p);
+  };
+  if (!data) { note('Connections are unavailable: the link index could not be read.'); return; }
+  if (data.indexed === false) { note('Connections need the search index, which this runtime does not have.'); return; }
+  const { outgoing, incoming } = fileConnections(filePath, data.links, cachedFileTree || []);
+  const group = (label, rows, pathOf) => {
+    const title = document.createElement('div');
+    title.className = 'file-connections-group';
+    title.textContent = label;
+    section.appendChild(title);
+    if (!rows.length) { note('None.'); return; }
+    for (const row of rows) {
+      const target = pathOf(row);
+      const a = document.createElement('a');
+      a.className = 'file-connections-row';
+      a.textContent = target;
+      a.addEventListener('click', () => openWorkspaceFilePath(target));
+      section.appendChild(a);
+    }
+  };
+  group('Links to', outgoing, (r) => r.resolved);
+  group('Linked from', incoming, (r) => r.src);
+}
+
+let _workspaceLinksCache = null;
+function fetchWorkspaceLinks() {
+  // One fetch per file open, not per keystroke: the cache is dropped whenever
+  // the file tree changes, which is also when an answer could change.
+  if (_workspaceLinksCache) return _workspaceLinksCache;
+  _workspaceLinksCache = fetch('/api/graph').then((r) => {
+    if (!r.ok) throw new Error('links unavailable');
+    return r.json();
+  }).catch((e) => { _workspaceLinksCache = null; throw e; });
+  return _workspaceLinksCache;
+}
+function invalidateWorkspaceLinks() { _workspaceLinksCache = null; }
 
 function setEditorMode(mode) {
   if (mode !== editorMode && findState.open) closeFindBar(); // find backend differs per mode
@@ -791,12 +871,11 @@ function getFileContentForSave() {
 
 // Wikilink navigation
 function openWikilink(name) {
-  const baseName = name.split('#')[0].trim();
   // Agents reference their outputs by wikilink: [[chart.png]] or
   // [[report.pdf]] must open the real file through the registry, not chase
-  // a phantom chart.png.md. Only extensionless targets get the .md default.
-  const hasViewableExt = /\.(md|mdx|txt|json|html?|svg|png|jpe?g|gif|webp|pdf)$/i.test(baseName);
-  const searchName = hasViewableExt ? baseName : baseName + '.md';
+  // a phantom chart.png.md. Only extensionless targets get the .md default,
+  // decided in wikilinkSearchName so every resolving surface agrees.
+  const searchName = wikilinkSearchName(name);
   editorReturnView = 'editor';
 
   // Push current file onto history so back button returns to it
@@ -862,27 +941,93 @@ function highlightFileInSidebar(filePath) {
   if (target.scrollIntoView) target.scrollIntoView({ block: 'nearest' });
 }
 
+// THE ONE RESOLVER, and the precedence is the point.
+//
+// The first version of this applied its rules PER FILE while walking the
+// tree, so a basename match on an earlier file returned before an exact path
+// match on a later file was ever considered. Since a file whose full path
+// equals the search string also has a matching basename by definition, exact
+// path matching could only ever fire when the first basename match in tree
+// order happened to also be the exact path: it was effectively unreachable,
+// and a fully qualified link could open a different file of the same name in
+// whichever folder sorted first. Renaming an unrelated folder changed where
+// links went.
+//
+// So the rules are now applied ACROSS the whole tree, in order:
+//   1. Exact path match (case-insensitive). A full path names one file; if it
+//      is present, nothing else may win.
+//   2. Basename match, tied by SHORTEST PATH first and TREE ORDER second. A
+//      bare [[Notes]] most plausibly means the least-nested Notes; between
+//      equals, the tree's own order decides, which is the one deterministic
+//      answer the previous behavior gave that was worth keeping.
+//
+// The old third rule (basename with the first '.md' occurrence stripped and
+// re-appended) is gone: for every ordinary name it was identical to rule 2,
+// and for a name carrying '.md' mid-string it could match a file the link
+// never named. Nothing may match under a rule a reader cannot predict.
 function findFileInTree(items, searchName) {
-  // Normalise search: could be "filename.md" or "path/to/filename.md"
-  const searchLower = searchName.toLowerCase();
-  const searchBase = searchName.split('/').pop().toLowerCase();
+  const searchLower = String(searchName).toLowerCase();
+  const searchBase = searchLower.split('/').pop();
+  let best = null;
+  let order = 0;
+  (function walk(list) {
+    for (const item of list) {
+      if (item.type === 'file') {
+        const at = order++;
+        if (item.path.toLowerCase() === searchLower) {
+          if (!best || !best.exact) best = { path: item.path, exact: true };
+        } else if (!(best && best.exact) && item.name.toLowerCase() === searchBase) {
+          const depth = item.path.split('/').length;
+          if (!best || depth < best.depth || (depth === best.depth && at < best.at)) {
+            best = { path: item.path, exact: false, depth, at };
+          }
+        }
+      } else if (item.type === 'folder' && item.children) {
+        walk(item.children);
+      }
+    }
+  })(items);
+  return best ? best.path : null;
+}
 
-  for (const item of items) {
-    if (item.type === 'file') {
-      const itemPath = item.path.toLowerCase();
-      const itemName = item.name.toLowerCase();
-      // Exact path match
-      if (itemPath === searchLower) return item.path;
-      // Exact name match
-      if (itemName === searchBase) return item.path;
-      // Name without .md match
-      if (itemName === searchBase.replace('.md', '') + '.md') return item.path;
-    } else if (item.type === 'folder' && item.children) {
-      const found = findFileInTree(item.children, searchName);
-      if (found) return found;
+// The search string a link target becomes, in one place: the #anchor dropped
+// (it is parsed and never used to scroll), and .md appended unless the target
+// already names an extension the app can view. Every surface that resolves a
+// link builds its search string here, so no two surfaces can disagree about
+// what a target means before resolution even starts.
+const VIEWABLE_LINK_EXT_RE = /\.(md|mdx|txt|json|html?|svg|png|jpe?g|gif|webp|pdf)$/i;
+function wikilinkSearchName(target) {
+  const baseName = String(target).split('#')[0].trim();
+  return VIEWABLE_LINK_EXT_RE.test(baseName) ? baseName : baseName + '.md';
+}
+
+/**
+ * What links here, and what this links to, as data the view can draw.
+ *
+ * Pure, so the whole answer is testable without a browser. `links` is the
+ * as-written link list (source path, raw target); resolution happens here,
+ * through the same findFileInTree every click goes through, so the list and
+ * the click can never name different files. Embeds are excluded: they render
+ * a file inside another rather than linking to it.
+ */
+function fileConnections(filePath, links, tree) {
+  const outgoing = [];
+  const incoming = [];
+  const seenOut = new Set();
+  const seenIn = new Set();
+  for (const link of links || []) {
+    if (link.kind === 'embed') continue;
+    const resolved = findFileInTree(tree || [], wikilinkSearchName(link.target));
+    if (link.src === filePath && resolved && resolved !== filePath && !seenOut.has(resolved)) {
+      seenOut.add(resolved);
+      outgoing.push({ target: link.target, resolved });
+    }
+    if (resolved === filePath && link.src !== filePath && !seenIn.has(link.src)) {
+      seenIn.add(link.src);
+      incoming.push({ src: link.src });
     }
   }
-  return null;
+  return { outgoing, incoming };
 }
 
 
@@ -946,7 +1091,8 @@ return {
   openBoardFile, openMarkdownFile, openLegacyTextFile,
   openBinaryOrUnsupportedFile, renderEditorContent, setEditorMode,
   getFileContentForSave, openWikilink, openWorkspaceFilePath,
-  highlightFileInSidebar, findFileInTree, updateEditorBackButton,
+  highlightFileInSidebar, findFileInTree, wikilinkSearchName, fileConnections,
+  renderFileConnections, drawFileConnections, invalidateWorkspaceLinks, updateEditorBackButton,
   openSkillFile, editorGoBack,
 };
 }));

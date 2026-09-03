@@ -29,10 +29,11 @@
 
 const fs = require('fs');
 const path = require('path');
+const { extractLinks } = require('./lib/links.js');
 
 // Bumping this rebuilds every index on next open. That is the whole migration
 // story: rebuild, never migrate.
-const SCHEMA_VERSION = 3; // 3: HTML/SVG artifact content + frontmatter values in file indexing
+const SCHEMA_VERSION = 4; // 4: links table; 3: HTML/SVG artifact content + frontmatter values in file indexing
 
 const MAX_QUERY_LENGTH = 256;
 const MAX_QUERY_TOKENS = 12;
@@ -323,6 +324,26 @@ CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
   INSERT INTO messages_fts(messages_fts, rowid, text) VALUES ('delete', old.id, old.text);
 END;
 
+-- Links: what a file SAYS it points at, never what that resolves to. Which
+-- file [[Roadmap]] means depends on every other file in the workspace, so a
+-- resolved path stored here would go stale whenever an unrelated file is
+-- added or a folder renamed; resolution happens at read time against the
+-- current tree, and this table holds the part that genuinely belongs to the
+-- source file.
+--
+-- Embeds are stored with kind 'embed' rather than dropped, so excluding them
+-- from any consumer stays a read-time filter rather than something baked into
+-- the index and expensive to revisit.
+--
+-- No foreign key to files(path) on purpose: a link whose target does not
+-- exist is exactly the thing worth being able to count.
+CREATE TABLE IF NOT EXISTS links (
+  src_path TEXT NOT NULL,
+  target TEXT NOT NULL,
+  kind TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS links_src ON links(src_path);
+
 CREATE TABLE IF NOT EXISTS session_marks (
   session_id TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL,
@@ -523,7 +544,15 @@ class SearchIndex {
     // conversations side gets the same treatment per session delta). A
     // failure rolls the pass back; the next reconcile simply retries.
     const upsert = this._prepareFileUpsert();
-    const del = this.db.prepare('DELETE FROM files WHERE path = ?');
+    const delFileRow = this.db.prepare('DELETE FROM files WHERE path = ?');
+    const delLinkRows = this.db.prepare('DELETE FROM links WHERE src_path = ?');
+    // Both tables, always. A file's row and its links are one fact about one
+    // path, and dropping the row while leaving the links behind leaves edges
+    // pointing out of a file that no longer exists. There are two removal
+    // sites below (grew past the cap, vanished from disk) and a first version
+    // of this missed the second one, so it is a function rather than a line
+    // to copy.
+    const del = (rel) => { delFileRow.run(rel); delLinkRows.run(rel); };
     // Counters advance as work happens; the durable pair is snapshotted on
     // every commit, so an interrupted pass reports what actually survived
     // rather than what it attempted.
@@ -539,7 +568,7 @@ class SearchIndex {
         if (st.size > MAX_FILE_BYTES) {
           // A file that grew past the cap must not keep its stale row
           // searchable forever; drop it (no-op when it was never indexed).
-          if (prev) { batch.enter(); del.run(rel); removed++; if (batch.note(0)) yield; }
+          if (prev) { batch.enter(); del(rel); removed++; if (batch.note(0)) yield; }
           continue;
         }
         batch.enter();
@@ -551,7 +580,7 @@ class SearchIndex {
       }
       // Anything left in `known` no longer exists on disk.
       for (const rel of known.keys()) {
-        batch.enter(); del.run(rel); removed++;
+        batch.enter(); del(rel); removed++;
         if (batch.note(0)) yield;
       }
       batch.finish();
@@ -626,6 +655,27 @@ class SearchIndex {
 
   removeFile(relPath) {
     this.db.prepare('DELETE FROM files WHERE path = ?').run(relPath);
+    this.db.prepare('DELETE FROM links WHERE src_path = ?').run(relPath);
+  }
+
+  /**
+   * Every link in the workspace, as written. Resolution is the caller's job:
+   * see the note on the links table for why it is not done here.
+   */
+  allLinks() {
+    return this.db.prepare('SELECT src_path, target, kind FROM links').all()
+      .map(r => ({ src: r.src_path, target: r.target, kind: r.kind }));
+  }
+
+  _indexLinks(rel, rawContent) {
+    // Replace rather than merge: a file's links are whatever it says right
+    // now, so a re-index of one file must not leave yesterday's edges behind.
+    this._delLinks = this._delLinks || this.db.prepare('DELETE FROM links WHERE src_path = ?');
+    this._insLink = this._insLink || this.db.prepare('INSERT INTO links (src_path, target, kind) VALUES (?, ?, ?)');
+    this._delLinks.run(rel);
+    for (const link of extractLinks(rawContent)) {
+      this._insLink.run(rel, link.target, link.kind);
+    }
   }
 
   /** Most recently modified files (the palette's empty-query state). */
@@ -652,6 +702,11 @@ class SearchIndex {
   _indexFile(rootDir, rel, st, upsert = null) {
     let content;
     try { content = fs.readFileSync(path.join(rootDir, rel), 'utf-8'); } catch (e) { return; }
+    // Links come off the RAW content, before frontmatter is stripped below:
+    // the editor renders wikilinks inside frontmatter, so they are links.
+    // This rides the read this function already performs rather than adding
+    // a second walk.
+    this._indexLinks(rel, content);
     const ext = path.extname(rel).toLowerCase();
     const title = path.basename(rel, path.extname(rel));
     const tags = parseFrontmatterTags(content);
