@@ -123,10 +123,16 @@ describe('handler seams (stub ctx, capture ws)', () => {
   // on drawing a next-run time against routines the scheduler had stopped
   // serving. Nothing on those screens was true and nothing on them said so.
   //
-  // ASSERTED AGAINST THE BROADCAST AND NOT AGAINST THE ASKING SOCKET, because
-  // the asking socket was always told. The whole content of this is that the
-  // message goes somewhere else as well.
-  test('set_workspace tells every connected client which workspace is now served', () => {
+  // ASSERTED AS AN ABSENCE, DELIBERATELY. The notice originates in exactly
+  // one place, the server's own root setter, and 'changing the root tells
+  // every connected window which workspace it is' below drives that place
+  // against real connected clients. What this one pins is the other half of
+  // the single-source rule: the handler adds no copy of its own. The ctx here
+  // stubs the root setter with one that announces nothing, so any notice on
+  // the broadcast is one the handler itself sent, and the first version of
+  // this change did exactly that: two senders, two transports, and a failure
+  // path where the early copy described a root the server had rolled back.
+  test('set_workspace announces through the root setter alone, never from the handler', () => {
     const table = buildDispatch();
     const original = config.getWorkspace();
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-handlers-'));
@@ -151,10 +157,9 @@ describe('handler seams (stub ctx, capture ws)', () => {
         'sanity: the open path ran to the end rather than into the rollback');
 
       const notices = broadcast.filter(m => m.type === 'serving_workspace');
-      assert.strictEqual(notices.length, 1, 'exactly one notice, to everybody');
-      assert.strictEqual(notices[0].path, config.getWorkspace(),
-        "the notice carries the server's own root, which is the string discovery stamps on routines");
-      assert.strictEqual(notices[0].path, dir);
+      assert.strictEqual(notices.length, 0,
+        'the handler sent a serving-workspace notice of its own: the root setter is the one announcer, '
+        + 'and a second sender is a second thing that can disagree with it on the failure path');
 
       // The roster the asking socket receives carries the same value, so a
       // window comparing rows against it is comparing two copies of one
@@ -470,9 +475,12 @@ describe('the serving-workspace notice', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'serving-'));
     try {
       listening(() => {
+        const before = notices().length;
         root.setWorkspace(dir);
         assert.strictEqual(lastNotice() && lastNotice().path, dir,
           'a window that did not ask for the switch is told where the scheduler went');
+        assert.strictEqual(notices().length, before + 1,
+          'and exactly once per change: this is the composed wiring, so a second notice here is a second sender');
       });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

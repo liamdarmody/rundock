@@ -718,6 +718,13 @@ describe('a window whose server has moved to another workspace', () => {
       assert.strictEqual(rowNamed(doc, 'Piper briefing').querySelector('.next-run'), null);
       assert.strictEqual(text(rowNamed(doc, 'Piper briefing').querySelector('.workspace-note')),
         'Not running. Rundock has no workspace open, so nothing is running.');
+      // The header moves with the rows here too: a heading still reading
+      // 'These are the routines in X' with no closed sentence would describe
+      // rows the paragraph under it just denied.
+      assert.strictEqual(text(doc.querySelector('[data-routines-workspace]')),
+        `These are the routines in ${name(first.dir)}. Rundock has no workspace open, `
+        + 'so none of these are running.',
+        'the closed-state header names the roster workspace and says why nothing under it runs');
       dom.window.close();
     });
   });
@@ -767,6 +774,44 @@ describe('a window whose server has moved to another workspace', () => {
         'a window that has heard nothing keeps its promise, because it has nothing truthful to deny');
       assert.strictEqual(row.querySelector('.workspace-note'), null,
         'and draws no moved note, because nothing has been said to have moved');
+      dom.window.close();
+    });
+  });
+
+  // THE ROSTER HALF'S REAL WRITER, driven rather than matched. Every other
+  // test here hand-seeds the roster-workspace global, and the view reads it
+  // through typeof, so a shell writer that assigned any other name would read
+  // as no roster workspace, the header line would vanish, and a source regex
+  // would stay green. So the shell's own writer and the shell's own roster
+  // case are cut out and run in a page that supplies neither global, and the
+  // rendered header is what has to know the workspace afterwards.
+  test('the roster case\'s own writer is what puts the workspace on the header', () => {
+    twoWindows((first) => {
+      const { w, doc, dom } = render(first.agents, first.dir);
+      w.eval('delete window.rosterWorkspacePath; delete window.servingWorkspacePath;');
+      w.renderRoutines();
+      assert.strictEqual(doc.querySelector('[data-routines-workspace]'), null,
+        'sanity: with no global written, the header has no workspace to name');
+
+      // The real writer pair and the real dispatch case, with the renderers
+      // this list does not own stubbed and the one it does own left real.
+      w.eval(appPiece(APP_SRC, /(function setServingWorkspace\(path\) \{[\s\S]*?\n\})/,
+        'the writer for the serving workspace'));
+      w.eval(appPiece(APP_SRC, /(function setRosterWorkspace\(path\) \{[\s\S]*?\n\})/,
+        'the writer for the roster workspace'));
+      for (const stub of ['renderAgentList', 'renderOrgChart', 'renderRoutinesPanel',
+        'renderConvoList', 'runDetailRosterUpdated']) {
+        w.eval(`window.${stub} = () => {};`);
+      }
+      const body = appPiece(APP_SRC, /case 'agents': ([\s\S]*?) break;/,
+        'the roster case of the client dispatch');
+      w.d = { type: 'agents', agents: first.agents, workspace: first.dir };
+      w.eval(`(function (d) {${body}\n})(window.d)`);
+
+      assert.strictEqual(text(doc.querySelector('[data-routines-workspace]')),
+        `These are the routines in ${name(first.dir)}. Rundock runs the routines of whichever `
+        + 'workspace it has open, so the routines in your other workspaces are not running.',
+        'the workspace beside the roster reached the header through the writer the case really calls');
       dom.window.close();
     });
   });

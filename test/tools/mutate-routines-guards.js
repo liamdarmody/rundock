@@ -1103,6 +1103,12 @@ const MUTATIONS = [
   // THE REDRAW. The notice is the only message a window that did not ask for
   // the switch receives; recording it and drawing nothing leaves every row
   // promising a run until an unrelated event happens to redraw.
+  [MODEL_WORKSPACE, 'the closed state has its own header sentence',
+    "    } else if (workspaceName) {\n      // Not served and nowhere to name: the server has no workspace open.\n      workspaceLine = LEAD.closedLine.replace('{workspace}', () => workspaceName);\n    }",
+    '    }'],
+  [APP_E2E, 'the roster writer assigns the global the view reads',
+    '  rosterWorkspacePath = path;',
+    '  rosterWorkspaceRecorded = path;'],
   [APP_E2E, 'the switch notice redraws the list it changes the meaning of',
     "    case 'serving_workspace': setServingWorkspace(d.path); renderRoutines(); break;",
     "    case 'serving_workspace': setServingWorkspace(d.path); break;"],

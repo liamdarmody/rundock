@@ -181,6 +181,14 @@ function setWorkspaceRoot(dir) {
   // workspace, and clearing the pointer to one that has gone, which announces
   // no workspace at all rather than leaving windows describing a workspace
   // nothing is serving.
+  //
+  // AND THIS IS THE ONLY PLACE THE NOTICE ORIGINATES. The open handler used
+  // to send its own copy, early, so windows stopped promising runs before the
+  // slow steps; the root changes at the top of that path, so announcing here
+  // is earlier still, and a second sender is only a second thing that can
+  // disagree with the first. A handler that grew its own announce again would
+  // put the failure-path inversion back: told before the work, retracted by
+  // nobody when the work throws.
   announceServingWorkspace(dir);
 }
 
