@@ -183,5 +183,111 @@
     return submit(initial(), state.sourcePath);
   }
 
-  return { initial, submit, reply, planReply, offerCopy, cancel, confirm, applyReply, doneCopy, retry, connectionLost, allAddApproval };
+  // ---- The extension install flow: URL and pin in, trust step, one answer.
+  //
+  // Same discipline as the pack flow above: every transition returns
+  // { state, send }, send exists only when the person explicitly asked for
+  // something, and the trust step's words live here where a suite can hold
+  // them. Decline DOES send, unlike the pack flow's cancel, because the
+  // server is holding an acquired snapshot for this offer and "no" has to
+  // reach the thing that can discard it; it still installs nothing.
+
+  function extInitial() {
+    return { phase: 'ext-idle', url: '', reference: '', fieldError: null };
+  }
+
+  function extSubmit(state, rawUrl, rawReference) {
+    const url = String(rawUrl || '').trim();
+    const reference = String(rawReference || '').trim();
+    if (!url || !reference) {
+      return { state: { ...extInitial(), url, reference,
+        fieldError: 'Enter the repository URL and the exact tag, release or commit to install.' } };
+    }
+    return {
+      state: { phase: 'ext-acquiring', url, reference },
+      send: { type: 'plan_extension_install', url, reference },
+    };
+  }
+
+  function extReply(state, msg) {
+    if (state.phase === 'ext-acquiring') {
+      if (msg.type === 'extension_install_error') {
+        return { state: { phase: 'ext-failed', url: state.url, reference: state.reference,
+          message: msg.message || 'The extension could not be read.' } };
+      }
+      if (msg.type === 'extension_install_plan') {
+        return { state: { phase: 'ext-trust', url: state.url, reference: state.reference,
+          token: msg.token, manifest: msg.manifest, facts: msg.facts, replaces: msg.replaces || null } };
+      }
+      return { state };
+    }
+    if (state.phase === 'ext-installing') {
+      if (msg.type === 'extension_install_error') {
+        return { state: { phase: 'ext-failed', url: state.url, reference: state.reference,
+          message: msg.message || 'The extension could not be installed.' } };
+      }
+      if (msg.type === 'extension_install_result') {
+        return { state: { phase: 'ext-done', record: msg.record } };
+      }
+      return { state };
+    }
+    return { state };
+  }
+
+  function extCount(n, word) { return count(n, word); }
+
+  // The consent screen's whole text. The boundary it describes only covers
+  // half the package, and the copy says which half: the view is sandboxed,
+  // the agents and skills are not, and they are the larger part of what a
+  // person is trusting. The facts line says the list was read from the
+  // package, because derived facts beat declared intentions and the reader
+  // should know which kind these are.
+  function extTrustCopy(state) {
+    const f = state.facts;
+    const contentLine = (f.agents || f.skills)
+      ? `It also adds ${extCount(f.agents, 'agent')} and ${extCount(f.skills, 'skill')}. They are not sandboxed: once added they act with the same access your own agents have. They are the larger part of what you are trusting here. `
+      : 'It adds no agents and no skills. ';
+    return {
+      headline: `Install ${state.manifest.name} ${state.manifest.version}?`,
+      factsLead: 'Read from the package itself, not from its author:',
+      body: `This extension ships a view that runs sandboxed, in an isolated frame that cannot reach your files, your conversations or your permissions. ${contentLine}`
+        + 'Rundock does not review extensions; what you install is your choice.',
+      files: f.files,
+      matchLine: `It asks to render files matching: ${f.match}`,
+      replacesLine: state.replaces
+        ? `This replaces the installed ${state.replaces.version} (pinned at ${state.replaces.reference}).`
+        : null,
+      sourceLine: `From ${state.url} at ${state.reference}.`,
+      confirmLabel: 'Install it',
+      declineLabel: 'No, remove what was fetched',
+    };
+  }
+
+  function extConfirm(state) {
+    if (state.phase !== 'ext-trust') return { state };
+    return {
+      state: { phase: 'ext-installing', url: state.url, reference: state.reference },
+      send: { type: 'confirm_extension_install', token: state.token },
+    };
+  }
+
+  function extDecline(state) {
+    if (state.phase !== 'ext-trust') return { state };
+    return { state: extInitial(), send: { type: 'decline_extension_install', token: state.token } };
+  }
+
+  function extConnectionLost(state) {
+    if (state.phase === 'ext-acquiring' || state.phase === 'ext-trust') {
+      return { state: { phase: 'ext-failed', url: state.url, reference: state.reference,
+        message: 'The connection dropped. Nothing was installed. Read the extension again to continue.' } };
+    }
+    if (state.phase === 'ext-installing') {
+      return { state: { phase: 'ext-failed', url: state.url, reference: state.reference,
+        message: 'The connection dropped while installing. Check Settings for whether it arrived, then read the extension again if it did not.' } };
+    }
+    return { state };
+  }
+
+  return { initial, submit, reply, planReply, offerCopy, cancel, confirm, applyReply, doneCopy, retry, connectionLost, allAddApproval,
+    extInitial, extSubmit, extReply, extTrustCopy, extConfirm, extDecline, extConnectionLost };
 }));

@@ -216,6 +216,7 @@ function handle(d) {
   const convoId = d._conversationId;
   switch(d.type) {
     case 'package_import_plan': case 'package_import_result': case 'package_import_error': packagesReplyArrived(d); break;
+    case 'extension_install_plan': case 'extension_install_result': case 'extension_install_declined': case 'extension_install_error': extensionReplyArrived(d); break;
     case 'workspaces': handleWorkspaces(d); break;
     case 'workspace_set':
       // Start the clock on the renderer's share of opening a workspace. The
