@@ -18,6 +18,10 @@ const SCAFFOLD = path.join(__dirname, '..', '..', 'scaffold');
 
 describe('scaffolded platform files', () => {
   test('every referenced rundock-* skill exists in the scaffold', () => {
+    // A prohibition scan passes on an empty result, so the pattern proves it
+    // can still find a reference before the absence of failures is believed.
+    const specimen = [...'see `rundock-example-skill` for the shape'.matchAll(/`(rundock-[a-z][a-z-]*)`/g)];
+    assert.strictEqual(specimen.length, 1, 'the skill-reference pattern no longer matches its own specimen');
     const files = fs.readdirSync(SCAFFOLD).filter((f) => f.endsWith('.md'));
     const shipped = new Set(files.map((f) => f.replace(/\.md$/, '')));
     const failures = [];
