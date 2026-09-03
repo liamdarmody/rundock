@@ -128,11 +128,16 @@ const PLUS_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" s
  * the handler reads it back, which is the shape that does not care.
  */
 function scopeRowHtml(row, mark) {
-  return `<div class="scope-item${row.active ? ' active' : ''}" data-scope="${escA(row.id)}"`
-    + ` role="button" tabindex="0" onclick="setRoutinesScope(this.dataset.scope)">`
+  // A REAL BUTTON, not a div wearing role="button". The div answered clicks
+  // and nothing else: Enter and Space did nothing, which is a control a
+  // keyboard user can reach and cannot press. A button element brings both
+  // keys, the role, and the tab stop for free, so the role and tabindex
+  // attributes leave with the div rather than being carried as costume.
+  return `<button type="button" class="scope-item${row.active ? ' active' : ''}" data-scope="${escA(row.id)}"`
+    + ` onclick="setRoutinesScope(this.dataset.scope)">`
     + mark
     + `<span class="scope-name">${esc(row.name)}</span>`
-    + `<span class="scope-count">${row.count}</span></div>`;
+    + `<span class="scope-count">${row.count}</span></button>`;
 }
 
 function panelHtml() {

@@ -93,6 +93,13 @@ const TABLE = {
     ['a', 'iconConst', 'the copy button, restored to the copy glyph'],
   ],
   'editor/nodes/callout.js': [
+    // The body's markdown container. The only value in the assignment is the
+    // shared renderer's whole output: external text (a workspace file an
+    // agent may have written unattended) goes through the same boundary the
+    // chat stream trusts, and the pipeline-less fallback path builds text
+    // nodes and never reaches this assignment, so every interpolation that
+    // can occur here is the renderer's.
+    ['a', 'renderer', 'the callout body, markdown rendered'],
     ['a', 'cleared', 'the callout title bar, emptied before rebuild'],
     ['a', 'iconConst', 'the edit button glyph'],
     ['a', 'cleared', 'the callout title bar, emptied on the plain path'],

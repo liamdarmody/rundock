@@ -29,10 +29,11 @@ const ALLOWED = {
   updateUnreadBadge: 'retention 5: application shell',
   initSidebarResize: 'retention 5: application shell',
   applyTheme: 'retention 5: application shell',
-  // Not a retention and not rendering: esc builds a detached node purely to
-  // escape text and never attaches it. It shows up in any createElement scan
-  // and has wasted time in two previous passes, so it is named here.
-  esc: 'not rendering: detached node used to escape text',
+  // esc used to be named here as a non-retention: it built a detached node
+  // purely to escape text, so every createElement scan found it. The escaper
+  // is pure string replacement now (the quote-escaping fix), touches no DOM,
+  // and needs no entry; this note remains so the next scan archaeology does
+  // not re-litigate why it is absent.
 };
 
 const DOM_WRITE = /\.innerHTML\s*=|createElement\(|insertAdjacentHTML|\.appendChild\(/;

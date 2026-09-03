@@ -196,7 +196,12 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 /* Foldable callouts (+ open, - closed): native details/summary, disclosure caret on the header. */
 .tiptap-editor .ProseMirror .callout details.callout-fold > summary { cursor: pointer; list-style: none; }
 .tiptap-editor .ProseMirror .callout details.callout-fold > summary::-webkit-details-marker { display: none; }
-.tiptap-editor .ProseMirror .callout details.callout-fold > summary.callout-header::before { content: '\25B8'; color: var(--callout-color); font-size: var(--org-role); line-height: 1; transition: transform var(--duration-base) ease; }
+/* THE DISCLOSURE CONTROL IS DESIGNED, NOT DEFAULTED. The caret sits in its
+   own fixed box at the title scale, centred, with a hover affordance on the
+   header, so it reads as a control rather than as the browser's leftover
+   marker. Both themes get it through the callout's own colour token. */
+.tiptap-editor .ProseMirror .callout details.callout-fold > summary.callout-header::before { content: '\25B8'; color: var(--callout-color); font-size: var(--title); line-height: 1; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex: none; transition: transform var(--duration-base) ease; }
+.tiptap-editor .ProseMirror .callout details.callout-fold > summary.callout-header:hover::before { transform: scale(1.15); }
 .tiptap-editor .ProseMirror .callout details.callout-fold[open] > summary.callout-header::before { content: '\25BE'; }
 .tiptap-editor .ProseMirror .callout details.callout-fold > summary.callout-header { margin-bottom: 0; }
 .tiptap-editor .ProseMirror .callout details.callout-fold[open] > summary.callout-header { margin-bottom: 6px; }
@@ -217,3 +222,10 @@ textarea.editor-content { resize: none; border: none; background: transparent; w
 .tiptap-editor .ProseMirror .callout-edit.callout-edit-invalid { border-color: var(--danger); box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 30%, transparent); }
 .tiptap-editor .ProseMirror .callout-edit.callout-edit-shaking { animation: callout-edit-shake 0.3s ease; }
 @keyframes callout-edit-shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-3px); } 75% { transform: translateX(3px); } }
+
+/* Markdown rendered inside a callout body: same rhythm as callout-line text,
+   lists indented like the reading surface, first and last children flush. */
+.callout .callout-md { font-size: var(--body); line-height: 1.6; }
+.callout .callout-md p { margin: 0 0 6px; }
+.callout .callout-md p:last-child { margin-bottom: 0; }
+.callout .callout-md ul, .callout .callout-md ol { margin: 0 0 6px; padding-left: 20px; }

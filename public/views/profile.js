@@ -168,9 +168,16 @@ function showProfile(agentId) {
     h+=`</div></div>`;
   }
   // Instructions card (collapsible)
+  //
+  // Rendered through the shared markdown pipeline rather than dumped as
+  // escaped plain text, so the one place instructions were hardest to read
+  // reads like the file viewer. Same pipeline, same escaping-at-lex-time
+  // safety story; read-only, editing stays where it is. In a shell without
+  // the pipeline the text falls back to escaped plain text, which is the
+  // safe direction: unrendered, never unescaped.
   if(a.instructions) h+=`<div class="profile-card" style="cursor:pointer" onclick="document.getElementById('agent-instructions').classList.toggle('hidden')">
     <div class="profile-card-section"><div class="profile-section-label">Instructions ▾</div>
-    <div id="agent-instructions" class="hidden"><div style="font-size:var(--caption);line-height:1.6;white-space:pre-wrap;color:var(--text-2);padding-top:8px">${esc(a.instructions)}</div></div>
+    <div id="agent-instructions" class="hidden"><div class="instructions-md">${typeof renderInstructionsMd === 'function' ? renderInstructionsMd(a.instructions) : esc(a.instructions)}</div></div>
     </div></div>`;
   // Existing conversations (rendered last so the page reads as a profile first,
   // conversation index second; preserves the hide-when-empty guard).

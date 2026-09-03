@@ -331,7 +331,7 @@ function selectSkill(id) {
       <div class="profile-card-section">
         <div class="profile-section-label">Instructions &#9662;</div>
         <div id="${instructionsId}" class="hidden">
-          <div style="font-size:var(--caption);line-height:1.6;white-space:pre-wrap;color:var(--text-2);padding-top:8px">${esc(s.instructions)}</div>
+          <div class="instructions-md">${typeof renderInstructionsMd === 'function' ? renderInstructionsMd(s.instructions) : esc(s.instructions)}</div>
         </div>
       </div>
     </div>`;

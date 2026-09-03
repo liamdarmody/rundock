@@ -25,6 +25,16 @@ what you read and what runs. The cost is that the client cannot use ES modules,
 `import`, JSX or TypeScript syntax. Everything below follows from paying that
 cost.
 
+One more cost of no build step is that every stylesheet shares one global
+cascade, so any file can restyle any element, including the layout of a view it
+has nothing to do with. The convention that contains this: a view container's
+`#view-<name>` selector belongs in that view's own stylesheet under
+`public/styles/views/`, and a rule for it anywhere else must be declared in
+`test/tools/style-drift-allowlist.json` under `viewOverrides`, with a reason.
+`npm run lint:styles` enforces this and names the offending file and selector,
+so a stylesheet quietly laying another view out sideways fails the gate instead
+of shipping.
+
 ## How a module is found and loaded
 
 Every client script is a classic `<script src>` tag in `public/index.html`, in

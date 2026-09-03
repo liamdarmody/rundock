@@ -44,8 +44,8 @@ describe('the innerHTML inventory', () => {
 
   test('the counts the audit quotes are the counts the tree has', () => {
     const t = totals(classify().rows);
-    assert.strictEqual(t.total, 108, 'first-party assignments under public/');
-    assert.strictEqual(t.byGroup.a, 78, 'group (a): closed with a stated reason');
+    assert.strictEqual(t.total, 109, 'first-party assignments under public/');
+    assert.strictEqual(t.byGroup.a, 79, 'group (a): closed with a stated reason');
     assert.strictEqual(t.byGroup.b, 30, 'group (b): fixed');
     assert.strictEqual(t.byGroup.a + t.byGroup.b, t.total, 'every site is in exactly one group');
   });

@@ -177,7 +177,15 @@ function updateUnreadBadge() {
 // model function this used to ask) stays in routines-model.js, tested, in
 // case a quieter signal for this replaces it later.
 
-function esc(t){const d=document.createElement('div');d.textContent=t;return d.innerHTML;}
+// Escapes QUOTES AS WELL, decided once for every view that shares this
+// helper. The DOM-based version escaped only &, < and >, so a value placed in
+// an attribute position could close the attribute and open new ones, and the
+// same near-miss pattern sat in the skills, team, routines and panel views,
+// each one a guess for the next reader about which positions were safe. One
+// escaper, safe in both positions, ends the guessing; escAttr below stays as
+// the attribute-position name and now simply agrees with it. null and
+// undefined render as nothing, because nothing is what they have to say.
+function esc(t){return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 function escAttr(t){return t.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function stripMd(t){return t.replace(/\*\*(.*?)\*\*/g,'$1').replace(/\*(.*?)\*/g,'$1').replace(/~~(.*?)~~/g,'$1').replace(/`([^`]+)`/g,'$1').replace(/^#+\s/gm,'').replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g,'$2').replace(/\[\[([^\]]+)\]\]/g,'$1').replace(/==(.*?)==/g,'$1');}
 // Marker scanning/stripping logic lives in markers.js (unit-tested; loaded
@@ -1286,6 +1294,14 @@ function renderMarkdown(text, options = {}) { return RundockRenderer.renderMarkd
 // Alias for backward compatibility
 function formatMd(text) { return renderMarkdown(text); }
 function formatMdFull(text) { return renderMarkdown(text, { callouts: true }); }
+// Instructions on agent profiles and skill pages, rendered through the same
+// pipeline the file viewer uses, with the same escaping-at-lex-time safety.
+// The fallback is escaped plain text for a shell without the renderer: the
+// safe direction is unrendered, never unescaped.
+function renderInstructionsMd(text) {
+  if (typeof renderMarkdown === 'function') return renderMarkdown(String(text == null ? '' : text));
+  return esc(text);
+}
 
 // ===== 13. SKILLS =====
 // View functions live in views/skills.js (RundockSkillsView, republished on

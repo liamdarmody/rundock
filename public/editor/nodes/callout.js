@@ -51,6 +51,10 @@ function bodyLineToRaw(line) {
 // renderHTML describes, so display and editing share one structure.
 function specToDom(doc, spec) {
   if (typeof spec === 'string') return doc.createTextNode(spec);
+  // A real DOM node in a spec passes through as itself: the markdown body
+  // builds one so its innerHTML survives, and a node born in another document
+  // is imported rather than adopted so the source document is never mutated.
+  if (spec && spec.nodeType) return spec.ownerDocument === doc ? spec : doc.importNode(spec, true);
   const [tag, attrs, ...children] = spec;
   const el = doc.createElement(tag);
   let rest = children;
@@ -220,19 +224,47 @@ function calloutChildrenSpec({ type, fold, title, body }) {
   if (title) headerChildren.push(['span', { class: 'callout-title' }, title]);
 
   const bodyChildren = [];
+  // Non-callout lines are gathered into RUNS and each run renders through the
+  // shared markdown pipeline, so bold, italics and lists inside a callout
+  // read as they do everywhere else instead of as their own syntax. The
+  // pipeline is reached off the shell's global, the way every surface reaches
+  // it, with callouts disabled for the run because nesting is already handled
+  // by the segment recursion around it. A shell without the pipeline falls
+  // back to the plain per-line rendering: the safe direction is unrendered,
+  // never unescaped, and the pipeline's own escaping is the sanitising story
+  // wherever it is present.
+  const pipeline = (typeof window !== 'undefined' && typeof window.renderMarkdown === 'function')
+    ? window.renderMarkdown : null;
+  const flushRun = (run) => {
+    if (!run.length) return;
+    const text = run.join('\n');
+    if (pipeline && text.trim().length > 0) {
+      const el = (typeof document !== 'undefined' ? document : window.document).createElement('div');
+      el.className = 'callout-md';
+      el.innerHTML = pipeline(text, { callouts: false });
+      bodyChildren.push(el);
+    } else {
+      for (const line of run) {
+        if (line.trim().length === 0) bodyChildren.push(['div', { class: 'callout-line empty' }, ' ']);
+        else bodyChildren.push(['div', { class: 'callout-line' }, line]);
+      }
+    }
+    run.length = 0;
+  };
+  const run = [];
   for (const seg of parseCalloutBody(body)) {
     if (seg.kind === 'callout') {
+      flushRun(run);
       bodyChildren.push([
         'div',
         { class: `callout callout-${seg.type} callout-nested` },
         ...calloutChildrenSpec(seg),
       ]);
-    } else if (seg.text.trim().length === 0) {
-      bodyChildren.push(['div', { class: 'callout-line empty' }, ' ']);
     } else {
-      bodyChildren.push(['div', { class: 'callout-line' }, seg.text]);
+      run.push(seg.text);
     }
   }
+  flushRun(run);
   const hasBody = body.length > 0;
 
   if (fold) {

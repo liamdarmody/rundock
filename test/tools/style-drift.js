@@ -56,6 +56,47 @@ function surfaces() {
   return out.sort();
 }
 
+// ── layout ownership ─────────────────────────────────────────────────────────
+//
+// THE RULE, IN ONE SENTENCE: a view container's selector (#view-<name>) may
+// only appear in that view's own stylesheet, public/styles/views/<name>.css;
+// any cross-file override must be declared in the allowlist with a reason.
+//
+// Why it exists: one line in a stylesheet linked from index.html
+// (#view-chat { flex-direction: row; }) laid the whole chat view out
+// sideways, because every stylesheet shares one global cascade by the
+// no-build-step decision, and an ID selector beats the base layout every
+// view depends on. Nothing else in the gate had anything to say about it:
+// the literal scan asks a different question. This scan asks the ownership
+// one, over the stylesheet surfaces only (css files and the editor's style
+// module), because a #view- string in a view's JS is a selection, not a rule.
+const VIEW_ID = /#view-([a-z-]+)/g;
+
+function layoutFindings(rel, src) {
+  const out = [];
+  const clean = stripComments(src);
+  const lines = clean.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    let m;
+    VIEW_ID.lastIndex = 0;
+    while ((m = VIEW_ID.exec(lines[i]))) {
+      const owner = `public/styles/views/${m[1]}.css`;
+      if (rel !== owner) out.push({ file: rel, line: i + 1, selector: m[0], owner });
+    }
+  }
+  return out;
+}
+
+function layoutScan() {
+  const out = [];
+  for (const rel of surfaces()) {
+    if (!rel.endsWith('.css') && rel !== 'public/editor/styles.js') continue;
+    const src = fs.readFileSync(path.join(ROOT, rel), 'utf8');
+    out.push(...layoutFindings(rel, src));
+  }
+  return out;
+}
+
 // ── detectors ────────────────────────────────────────────────────────────────
 
 // A hex colour, but NOT an HTML numeric character reference. `&#8593;` is an
@@ -179,6 +220,8 @@ function main() {
   // A stale allowlist is drift of its own: an entry describing a literal that
   // no longer exists reads as an unpaid debt and hides that it was paid.
   for (const [file, entry] of Object.entries(allow)) {
+    // viewOverrides is the layout-ownership section below, not a file entry.
+    if (file === 'viewOverrides') continue;
     const actual = counts(byFile)[file] || {};
     for (const [lit, cap] of Object.entries(entry.allow)) {
       if (actual[lit] === undefined) {
@@ -186,6 +229,25 @@ function main() {
       } else if (actual[lit] < cap) {
         errors.push(`${file}: allowlist allows ${cap} of ${lit} but only ${actual[lit]} remain. Lower it to ${actual[lit]}.`);
       }
+    }
+  }
+
+  // Layout ownership, judged against its own allowlist section. An entry is
+  // {file, selector, reason}; a finding without one names the offender, and a
+  // stale entry is drift of its own, same as the literal allowlist above.
+  const ownership = layoutScan();
+  const declared = allow.viewOverrides || [];
+  for (const f of ownership) {
+    const entry = declared.find(d => d.file === f.file && d.selector === f.selector);
+    if (!entry) {
+      errors.push(`${f.file}:${f.line}: ${f.selector} is owned by ${f.owner} and may not be `
+        + 'restyled from here. Move the rule into the owning stylesheet, or declare the '
+        + 'override in style-drift-allowlist.json under viewOverrides with a reason.');
+    }
+  }
+  for (const d of declared) {
+    if (!ownership.some(f => f.file === d.file && f.selector === d.selector)) {
+      errors.push(`${d.file}: viewOverrides still lists ${d.selector}, which is no longer written. Remove it.`);
     }
   }
 
@@ -201,4 +263,4 @@ function main() {
 }
 
 if (require.main === module) process.exit(main());
-module.exports = { scan, counts, findings, surfaces, stripComments };
+module.exports = { scan, counts, findings, surfaces, stripComments, layoutFindings, layoutScan };

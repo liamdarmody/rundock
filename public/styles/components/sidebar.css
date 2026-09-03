@@ -47,7 +47,10 @@
    differences, both visible before you read the header, because the complaint
    this panel answers is that the two sidebars looked the same. */
 .routines-scope-list { padding: 8px; display: flex; flex-direction: column; gap: 2px; }
-.scope-item { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: var(--radius-lg); cursor: pointer; color: var(--text-1); transition: background var(--duration-base) ease; }
+/* The row is a button element, so the browser's button chrome is reset here:
+   full width, inherited font, no border or background of its own. The rest of
+   the row's look is unchanged from when it was a div. */
+.scope-item { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: var(--radius-lg); cursor: pointer; color: var(--text-1); transition: background var(--duration-base) ease; width: 100%; border: 0; background: none; font-family: inherit; font-size: inherit; text-align: left; }
 .scope-item:hover { background: var(--elevated); }
 .scope-item.active { background: var(--accent-glow); }
 .scope-item.active .scope-name { color: var(--accent); font-weight: 600; }
