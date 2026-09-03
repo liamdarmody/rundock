@@ -210,9 +210,18 @@
    */
   const NOT_SERVED = {
     lead: 'Not running.',
-    // The name is a slot and never a concatenation, the same rule the leads
-    // below follow: the whole sentence is in this object.
-    body: 'Rundock has moved to {workspace} and is running that workspace\'s routines instead.',
+    // ONE SLOT VOCABULARY ACROSS EVERY TEMPLATE IN THIS FILE: `{workspace}` is
+    // always the workspace the routine belongs to and `{serving}` is always
+    // the workspace the scheduler is serving. This body names only the second,
+    // because which workspace these routines belong to is one fact about the
+    // whole list and the header carries it, but a slot that meant the routine's
+    // workspace here and the destination in the header would be the drift the
+    // "slot, never concatenation" rule exists to prevent.
+    body: "Rundock has moved to {serving} and is running that workspace's routines instead.",
+    // AND WHEN THERE IS NOWHERE TO NAME. A workspace whose folder has gone
+    // leaves the server serving nothing at all, and a row that stayed silent
+    // then would promise a run that nothing is going to make.
+    nowhere: 'Rundock has no workspace open, so nothing is running.',
   };
 
   const LEAD = {
@@ -234,7 +243,9 @@
     // AND WHEN THE SCHEDULER HAS MOVED ON. The rows below are real routines in
     // a real workspace and none of them is going to fire, so the line that
     // would otherwise reassure the reader is replaced rather than joined.
-    movedLine: 'These are the routines in {workspace}. Rundock has moved to {serving} and is running that workspace\'s routines, so none of these are running.',
+    movedLine: "These are the routines in {workspace}. Rundock has moved to {serving} and is running that workspace's routines, so none of these are running.",
+    // And when it has nowhere to move to, which is a workspace that has gone.
+    closedLine: 'These are the routines in {workspace}. Rundock has no workspace open, so none of these are running.',
     // SCOPED TO ONE AGENT, THE SENTENCE SAYS SO. A filtered list under an
     // unfiltered sentence reads as a list that has lost rows, which is the one
     // reading a header must never invite.
@@ -273,8 +284,9 @@
     // those rows, which is decided by the same comparison every row below
     // makes, so the header and the list cannot disagree about whether anything
     // here is running.
-    const workspaceName = workspaceWords(input && input.workspace);
-    const servingName = workspaceWords(input && input.servingWorkspace);
+    const named = workspaceNames(input && input.workspace, input && input.servingWorkspace);
+    const workspaceName = named.mine;
+    const servingName = named.serving;
     let workspaceLine = null;
     if (workspaceName && isServed(input)) {
       workspaceLine = LEAD.workspaceLine.replace('{workspace}', () => workspaceName);
@@ -282,6 +294,9 @@
       workspaceLine = LEAD.movedLine
         .replace('{workspace}', () => workspaceName)
         .replace('{serving}', () => servingName);
+    } else if (workspaceName) {
+      // Not served and nowhere to name: the server has no workspace open.
+      workspaceLine = LEAD.closedLine.replace('{workspace}', () => workspaceName);
     }
     return {
       title: LEAD.title,
@@ -900,9 +915,45 @@
    * trailing separator names the folder rather than nothing.
    */
   function workspaceWords(dir) {
-    if (!dir || typeof dir !== 'string') return null;
-    const parts = dir.split(/[\\/]+/).filter(Boolean);
+    const parts = workspaceSegments(dir);
     return parts.length ? parts[parts.length - 1] : null;
+  }
+
+  /**
+   * The two workspaces as names a person could tell apart.
+   *
+   * WHY THE LAST SEGMENT IS NOT ALWAYS ENOUGH. Two workspaces can be called the
+   * same thing: `~/Work/Notes` and `~/Personal/Notes` both reduce to "Notes",
+   * and a header reading "These are the routines in Notes. Rundock has moved to
+   * Notes" names one workspace twice while the reader's whole problem is
+   * telling those two apart. That is worse than the silence this replaced,
+   * because it reads as a bug in the product rather than as a fact about it.
+   *
+   * So when both reduce to the same words, each grows by one segment at a time
+   * until they differ or there is nothing left to add. Only as far as it has
+   * to: a reader with no collision keeps the short name.
+   *
+   * @param {any} mine the workspace the listed routines were read from
+   * @param {any} serving the workspace the scheduler is serving
+   */
+  function workspaceNames(mine, serving) {
+    const a = workspaceSegments(mine);
+    const b = workspaceSegments(serving);
+    // Nothing to tell apart: one of them is absent, or they are the same
+    // workspace. Growing a name against itself walks to the whole path and
+    // hands the reader a file path where a name would do.
+    if (!a.length || !b.length || mine === serving) {
+      return { mine: workspaceWords(mine), serving: workspaceWords(serving) };
+    }
+    let depth = 1;
+    const say = (parts, n) => parts.slice(Math.max(0, parts.length - n)).join('/');
+    while (say(a, depth) === say(b, depth) && (depth < a.length || depth < b.length)) depth++;
+    return { mine: say(a, depth), serving: say(b, depth) };
+  }
+
+  function workspaceSegments(dir) {
+    if (!dir || typeof dir !== 'string') return [];
+    return dir.split(/[\\/]+/).filter(Boolean);
   }
 
   /**
@@ -932,8 +983,18 @@
    */
   function isServed(input) {
     const mine = input && input.workspace;
-    const serving = input && input.servingWorkspace;
     if (typeof mine !== 'string' || !mine) return true;
+    const serving = input ? input.servingWorkspace : undefined;
+    // NEVER TOLD. Silence is not a disagreement, the same rule
+    // `scheduleReadable` follows: a caller that did not say what is being
+    // served has not said this routine is dormant, and accusing every row on a
+    // roster that predates the field would be a complaint invented out of a
+    // missing key.
+    if (serving === undefined) return true;
+    // TOLD THAT NOTHING IS. A workspace whose folder has gone leaves the
+    // server serving none, and these routines are as dormant as they would be
+    // if it had moved somewhere else.
+    if (serving === null) return false;
     if (typeof serving !== 'string' || !serving) return true;
     return mine === serving;
   }
@@ -956,9 +1017,11 @@
    */
   function workspaceNote(input) {
     if (isServed(input)) return null;
-    const serving = workspaceWords(input.servingWorkspace);
-    if (!serving) return null;
-    return { text: `${NOT_SERVED.lead} ${NOT_SERVED.body.replace('{workspace}', () => serving)}` };
+    const serving = workspaceNames(input.workspace, input.servingWorkspace).serving;
+    const body = serving
+      ? NOT_SERVED.body.replace('{serving}', () => serving)
+      : NOT_SERVED.nowhere;
+    return { text: `${NOT_SERVED.lead} ${body}` };
   }
 
   /**
@@ -1168,7 +1231,7 @@
   return {
     OUTCOMES, LEAD, EMPTY, ACTION_PROBLEM, NOT_ENABLED, SCHEDULE_PROBLEM, PROMPT_PROBLEM, NOT_SERVED, CATCH_UP_AFTER_MS,
     actionProblem, emptyState, header,
-    dayWords, clockWords, zoneWords, timeWords, workspaceWords,
+    dayWords, clockWords, zoneWords, timeWords, workspaceWords, workspaceNames,
     scheduleWords, routineSentence, sentenceParts,
     RUN_STATUS_WORDS, REFUSALS_UNDERSTOOD,
     outcomeOf, lastCompletedRunFailed, anyFailure, runStatus, nextRunLabel, enableOffer, scheduleProblem, promptProblem, isServed, workspaceNote, somethingElseStopsIt, orderByNextRun, row, deleteConfirmation,

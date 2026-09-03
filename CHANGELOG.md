@@ -14,6 +14,10 @@ You can now stop a routine that's already running, instead of quitting Rundock t
 
 - **Stop a routine that's already running:** previously the only way to stop a misbehaving routine was quitting Rundock entirely. A run in progress now shows "Still going" on its row, with a way to open it for the first time while it's still running, and its own screen carries a Stop control that reaches the run directly, including in the brief window before its process has actually started. Its record shows it was stopped, with a real duration, since the ending was witnessed.
 
+### Fixed
+
+- **A window that did not ask to switch workspace now finds out at once:** moving the server to another workspace told the window that asked and nobody else, so every other window kept showing next-run times for routines that were no longer going to fire, until something unrelated happened to redraw the list. The notice now redraws the routines list the moment it arrives, a switch that fails retracts its own announcement so no window is left describing a workspace the server is not serving, and two workspaces that share a name are told apart by as much of their paths as it takes.
+
 ## 0.12.0: Routine Editor & Reliability (2026-08-27)
 
 You can now schedule a skill to run on a cadence through a form, and change that schedule later without deleting and recreating it. This release also closes two real risks: agent-controlled content can no longer inject executable markup into the interface, and MCP credentials can be kept out of the file your team shares.

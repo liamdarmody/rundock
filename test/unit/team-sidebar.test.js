@@ -234,7 +234,7 @@ function deliverRoster(w) {
   // routines list compares each row against. Nothing in this panel reads it,
   // so it is stubbed here and driven where it is read, in
   // test/unit/routines-end-to-end.test.js.
-  if (typeof w.setServingWorkspace !== 'function') w.setServingWorkspace = () => {};
+  if (typeof w.setRosterWorkspace !== 'function') w.setRosterWorkspace = () => {};
   w.d = { type: 'agents', agents: w.agents, workspace: '/w/open' };
   w.eval(`(function () {${body}\n})()`);
 }

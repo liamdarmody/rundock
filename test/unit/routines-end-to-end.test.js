@@ -30,7 +30,7 @@ const { JSDOM } = require('jsdom');
 const ROOT = path.join(__dirname, '..', '..');
 const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf-8');
 const { agentFile, makeWorkspace, cleanup } = require('../helpers/workspace.js');
-const { invalidateAgentCache, discoverAgents } = require('../../lib/agents/discovery.js');
+const { invalidateAgentCache, discoverAgents, rosterMessage } = require('../../lib/agents/discovery.js');
 const sched = require('../../lib/scheduler.js');
 const config = require('../../lib/config.js');
 
@@ -123,11 +123,12 @@ const ROUTINES_CSS = read('public', 'styles', 'views', 'routines.css');
 /**
  * The client shell, handed exactly what the server sent.
  *
- * `servingWorkspace` is the path the SERVER says its scheduler is serving,
- * which is what a row compares its own workspace against. Defaulted to the
- * workspace the roster was taken from, which is what the server sends beside
- * a roster, so every test written before this field existed renders as it
- * always did.
+ * The two globals the shell records off a roster message are seeded here the
+ * way that message sets them: the workspace the roster was read from, and the
+ * workspace the server said it was serving when it sent it. They are the same
+ * value at that moment, which is why one argument sets both; they part company
+ * only when a switch is announced afterwards, and the test that drives that
+ * runs the real dispatch rather than setting anything.
  */
 function render(agents, servingWorkspace) {
   const dom = new JSDOM('<!doctype html><html><head><style>' + ROUTINES_CSS + '</style></head><body>'
@@ -140,7 +141,9 @@ function render(agents, servingWorkspace) {
   w.eval(MODEL_SRC);
   w.eval(VIEW_SRC);
   w.agents = agents;
-  w.servingWorkspacePath = servingWorkspace !== undefined ? servingWorkspace : config.getWorkspace();
+  const roster = servingWorkspace !== undefined ? servingWorkspace : config.getWorkspace();
+  w.rosterWorkspacePath = roster;
+  w.servingWorkspacePath = roster;
   w.esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   w.ws = { send: () => {} };
   w.routinesNow = () => NOW;
@@ -588,7 +591,8 @@ describe('a window whose server has moved to another workspace', () => {
   });
 
   // STEP ONE OF THE SEQUENCE. The server is on ws1 and this window was told so.
-  // Nothing has moved, so nothing is denied.
+  // Nothing has moved, so nothing is denied. Step two, the switch itself, is
+  // driven through the real dispatch below rather than seeded here.
   test('before the switch, the window shows its routines running', () => {
     twoWindows((first) => {
       const { doc, dom } = render(first.agents, first.dir);
@@ -607,7 +611,13 @@ describe('a window whose server has moved to another workspace', () => {
   // own roster and is told only where the scheduler went.
   test('after the switch, the routines it is still showing stop promising runs', () => {
     twoWindows((first, second) => {
-      const { doc, dom } = render(first.agents, second.dir);
+      // Seeded as the after-switch state the dispatch test drives for real:
+      // the roster channel still carries this window's own workspace, and only
+      // the serving channel has moved. One argument cannot say both, because
+      // render() seeds the two globals the way one roster message sets them.
+      const { w, doc, dom } = render(first.agents, first.dir);
+      w.servingWorkspacePath = second.dir;
+      w.renderRoutines();
       const row = rowNamed(doc, 'Piper briefing');
       assert.strictEqual(row.querySelector('.next-run'), null,
         'a routine nothing is serving promises a run it is not going to get');
@@ -648,41 +658,160 @@ describe('a window whose server has moved to another workspace', () => {
     });
   });
 
-  // THE NAME THE VIEW READS IS THE NAME THE SHELL WRITES.
+  // THE NOTICE, DRIVEN THROUGH THE SHELL'S OWN DISPATCH, WITH NO RENDER OF OURS.
   //
-  // Every surface this adds hangs off one global. The view reads it through
-  // typeof, so a wrong name is not an error: it reads as "nothing has moved"
-  // and the page renders exactly as it did before, with this whole file green
-  // and every mutation green with it. A stand-in for a global is worth nothing
-  // unless something checks it against the real one.
+  // This is the only message a window that did not ask for the switch ever
+  // receives, and everything this card claims for that window depends on what
+  // the shell does when it arrives. An earlier version of this test called
+  // renderRoutines() itself after writing the value, which stood in for a
+  // redraw the dispatch did not make: the rows kept their next-run times in the
+  // product and the test went green anyway.
   //
-  // So the shell's OWN writer is cut out of app.js and run, and the page is
-  // then rendered and read. app.js is not in strict mode, so the assignment
-  // inside that function creates the global under whatever name app.js uses;
-  // nothing here supplies the name. If the shell and the view ever name two
-  // different globals, the page below renders as though nothing had moved and
-  // these assertions fail.
-  test('the writer in the real shell is the global the rendered page reads', () => {
+  // So the case body is cut out of app.js and run, exactly as the doors suite
+  // runs the roster case, and the page is read afterwards. NOTHING BETWEEN THE
+  // TWO IS THIS FILE'S: no assignment to the global, no render call. If the
+  // case records the path and draws nothing, the row below still carries the
+  // next run it was mounted with and this fails.
+  test('the switch notice redraws the list, without anything here redrawing it', () => {
     twoWindows((first, second) => {
-      // Rendered first with the server still on this window's own workspace,
-      // so the row starts LIVE. Everything below is a transition away from
-      // that, which is what makes a wrong name observable: a shell writing a
-      // global the view does not read leaves this row exactly as it is here.
+      // Mounted live: the server is on this window's own workspace and the row
+      // promises a run. Every assertion below is a change away from this.
       const { w, doc, dom } = render(first.agents, first.dir);
-      assert.ok(rowNamed(doc, 'Piper briefing').querySelector('.next-run'),
-        'sanity: the row promises a run before the server moves');
+      const before = rowNamed(doc, 'Piper briefing');
+      assert.ok(before.querySelector('.next-run'), 'sanity: the row promises a run before the notice');
+      assert.strictEqual(before.querySelector('.workspace-note'), null);
 
-      const writer = appPiece(APP_SRC, /(function setServingWorkspace\(path\) \{[\s\S]*?\n\})/,
-        'the writer for the serving workspace');
-      w.eval(writer);
-      w.eval(`setServingWorkspace(${JSON.stringify(second.dir)})`);
-      w.renderRoutines();
+      // The shell's own recorder, and then the shell's own dispatch case.
+      w.eval(appPiece(APP_SRC, /(function setServingWorkspace\(path\) \{[\s\S]*?\n\})/,
+        'the writer for the serving workspace'));
+      const body = appPiece(APP_SRC, /case 'serving_workspace': ([\s\S]*?) break;/,
+        'the dispatch case for the serving-workspace notice');
+      w.eval(`(function (d) {${body}})({ type: 'serving_workspace', path: ${JSON.stringify(second.dir)} })`);
 
-      assert.strictEqual(rowNamed(doc, 'Piper briefing').querySelector('.next-run'), null,
-        'the page did not move, so the shell writes a global the view does not read');
-      assert.strictEqual(text(rowNamed(doc, 'Piper briefing').querySelector('.workspace-note')),
+      const after = rowNamed(doc, 'Piper briefing');
+      assert.strictEqual(after.querySelector('.next-run'), null,
+        'the notice arrived and the row is still promising a run, so nothing redrew it');
+      assert.strictEqual(text(after.querySelector('.workspace-note')),
         `Not running. Rundock has moved to ${name(second.dir)} and is running that `
         + "workspace's routines instead.");
+      assert.strictEqual(text(doc.querySelector('[data-routines-workspace]')),
+        `These are the routines in ${name(first.dir)}. Rundock has moved to ${name(second.dir)} `
+        + "and is running that workspace's routines, so none of these are running.",
+        'the header is drawn by the same redraw, so it moves with the rows or not at all');
+      dom.window.close();
+    });
+  });
+
+  // The same walk for a workspace that has gone: the server serves nothing,
+  // and a row that stayed silent would promise a run nothing can make.
+  test('a notice carrying no workspace stops the rows too', () => {
+    twoWindows((first) => {
+      const { w, doc, dom } = render(first.agents, first.dir);
+      assert.ok(rowNamed(doc, 'Piper briefing').querySelector('.next-run'), 'sanity: promising a run');
+
+      w.eval(appPiece(APP_SRC, /(function setServingWorkspace\(path\) \{[\s\S]*?\n\})/,
+        'the writer for the serving workspace'));
+      const body = appPiece(APP_SRC, /case 'serving_workspace': ([\s\S]*?) break;/,
+        'the dispatch case for the serving-workspace notice');
+      w.eval(`(function (d) {${body}})({ type: 'serving_workspace', path: null })`);
+
+      assert.strictEqual(rowNamed(doc, 'Piper briefing').querySelector('.next-run'), null);
+      assert.strictEqual(text(rowNamed(doc, 'Piper briefing').querySelector('.workspace-note')),
+        'Not running. Rundock has no workspace open, so nothing is running.');
+      // The header moves with the rows here too: a heading still reading
+      // 'These are the routines in X' with no closed sentence would describe
+      // rows the paragraph under it just denied.
+      assert.strictEqual(text(doc.querySelector('[data-routines-workspace]')),
+        `These are the routines in ${name(first.dir)}. Rundock has no workspace open, `
+        + 'so none of these are running.',
+        'the closed-state header names the roster workspace and says why nothing under it runs');
+      dom.window.close();
+    });
+  });
+
+  // Two workspaces sharing a name are the case the short name lies about: a
+  // note saying "moved to Vault" under a header saying "the routines in
+  // Vault" reads as the product contradicting itself. The names grow one
+  // segment at a time until they differ, and only as far as they have to.
+  test('two workspaces of the same name are told apart, one segment at a time', () => {
+    twoWindows((first) => {
+      const { w, doc, dom } = render(first.agents, first.dir);
+      w.eval(appPiece(APP_SRC, /(function setServingWorkspace\(path\) \{[\s\S]*?\n\})/,
+        'the writer for the serving workspace'));
+      const body = appPiece(APP_SRC, /case 'serving_workspace': ([\s\S]*?) break;/,
+        'the dispatch case for the serving-workspace notice');
+      // A different path with the SAME final segment, which is what two vaults
+      // named alike actually produce.
+      const twin = `/somewhere/else/${name(first.dir)}`;
+      w.eval(`(function (d) {${body}})({ type: 'serving_workspace', path: ${JSON.stringify(twin)} })`);
+
+      const mineDeep = first.dir.split('/').filter(Boolean).slice(-2).join('/');
+      assert.strictEqual(text(rowNamed(doc, 'Piper briefing').querySelector('.workspace-note')),
+        `Not running. Rundock has moved to else/${name(first.dir)} and is running that `
+        + "workspace's routines instead.",
+        'the moved-to name deepens past the shared basename, so the sentence stops naming this workspace');
+      assert.strictEqual(text(doc.querySelector('[data-routines-workspace]')),
+        `These are the routines in ${mineDeep}. Rundock has moved to else/${name(first.dir)} `
+        + "and is running that workspace's routines, so none of these are running.",
+        'and the header deepens both names the same way, so the two are legible as different places');
+      dom.window.close();
+    });
+  });
+
+  // A window that has never been told is not one that was told nothing. The
+  // first makes no claim about whether its routines are served; the second
+  // stops them. Flattening undefined into null would turn every window whose
+  // notice has not arrived yet into one whose workspace has gone.
+  test('a window never told the serving workspace keeps its rows promising', () => {
+    twoWindows((first) => {
+      const { w, doc, dom } = render(first.agents, first.dir);
+      // The shell before any notice: the global does not exist at all, which
+      // is the state every window is in between load and its first message.
+      w.eval('delete window.servingWorkspacePath;');
+      w.renderRoutines();
+      const row = rowNamed(doc, 'Piper briefing');
+      assert.ok(row.querySelector('.next-run'),
+        'a window that has heard nothing keeps its promise, because it has nothing truthful to deny');
+      assert.strictEqual(row.querySelector('.workspace-note'), null,
+        'and draws no moved note, because nothing has been said to have moved');
+      dom.window.close();
+    });
+  });
+
+  // THE ROSTER HALF'S REAL WRITER, driven rather than matched. Every other
+  // test here hand-seeds the roster-workspace global, and the view reads it
+  // through typeof, so a shell writer that assigned any other name would read
+  // as no roster workspace, the header line would vanish, and a source regex
+  // would stay green. So the shell's own writer and the shell's own roster
+  // case are cut out and run in a page that supplies neither global, and the
+  // rendered header is what has to know the workspace afterwards.
+  test('the roster case\'s own writer is what puts the workspace on the header', () => {
+    twoWindows((first) => {
+      const { w, doc, dom } = render(first.agents, first.dir);
+      w.eval('delete window.rosterWorkspacePath; delete window.servingWorkspacePath;');
+      w.renderRoutines();
+      assert.strictEqual(doc.querySelector('[data-routines-workspace]'), null,
+        'sanity: with no global written, the header has no workspace to name');
+
+      // The real writer pair and the real dispatch case, with the renderers
+      // this list does not own stubbed and the one it does own left real.
+      w.eval(appPiece(APP_SRC, /(function setServingWorkspace\(path\) \{[\s\S]*?\n\})/,
+        'the writer for the serving workspace'));
+      w.eval(appPiece(APP_SRC, /(function setRosterWorkspace\(path\) \{[\s\S]*?\n\})/,
+        'the writer for the roster workspace'));
+      for (const stub of ['renderAgentList', 'renderOrgChart', 'renderRoutinesPanel',
+        'renderConvoList', 'runDetailRosterUpdated']) {
+        w.eval(`window.${stub} = () => {};`);
+      }
+      const body = appPiece(APP_SRC, /case 'agents': ([\s\S]*?) break;/,
+        'the roster case of the client dispatch');
+      w.d = { type: 'agents', agents: first.agents, workspace: first.dir };
+      w.eval(`(function (d) {${body}\n})(window.d)`);
+
+      assert.strictEqual(text(doc.querySelector('[data-routines-workspace]')),
+        `These are the routines in ${name(first.dir)}. Rundock runs the routines of whichever `
+        + 'workspace it has open, so the routines in your other workspaces are not running.',
+        'the workspace beside the roster reached the header through the writer the case really calls');
       dom.window.close();
     });
   });
@@ -690,10 +819,10 @@ describe('a window whose server has moved to another workspace', () => {
   // The two places the shell is told, checked against the shell's one writer,
   // so a case that recorded the value some other way would show up here.
   test('the shell records the serving workspace from the server and from nowhere else', () => {
-    assert.match(APP_SRC, /case 'serving_workspace': setServingWorkspace\(d\.path\);/,
-      'the switch notice is recorded through the one writer');
-    assert.match(APP_SRC, /case 'agents':[^\n]*setServingWorkspace\(d\.workspace\)/,
-      'and so is the workspace that travels beside a roster');
+    assert.match(APP_SRC, /case 'serving_workspace': setServingWorkspace\(d\.path\); renderRoutines\(\);/,
+      'the switch notice is recorded through the one writer and then drawn');
+    assert.match(APP_SRC, /case 'agents':[^\n]*setRosterWorkspace\(d\.workspace\)/,
+      'and the workspace that travels beside a roster is recorded with the roster');
     // Written only from server-supplied values. A call taking the path this
     // window remembers opening is the inversion this whole change removes.
     const calls = APP_SRC.match(/setServingWorkspace\(([^)]*)\)/g) || [];
@@ -702,6 +831,21 @@ describe('a window whose server has moved to another workspace', () => {
       assert.doesNotMatch(call, /currentWorkspacePath/,
         `${call} records what this window remembers rather than what the server said`);
     }
+  });
+
+  // The roster and the workspace beside it are one message, so the value the
+  // shell records off it cannot describe a different workspace from the rows.
+  test('the roster message the handler emits names the workspace it was read from', () => {
+    twoWindows((first) => {
+      config.setWorkspace(first.dir);
+      invalidateAgentCache();
+      const message = rosterMessage();
+      assert.strictEqual(message.type, 'agents');
+      assert.strictEqual(message.workspace, first.dir,
+        'the workspace beside the roster is the one the roster was read from');
+      assert.ok(message.agents.some(a => a.id === 'piper'),
+        'and the rows in it are that workspace\'s rows');
+    });
   });
 
   // The two values compared are two copies of ONE server string, which is what

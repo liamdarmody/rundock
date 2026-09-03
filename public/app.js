@@ -56,7 +56,7 @@ const persist = (() => {
 const sunIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`;
 const moonIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
 
-let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false, currentWorkspacePath=null, servingWorkspacePath=null, workspaceAnalysis=null, workspaceIsEmpty=false, workspaceMode='knowledge', setupComplete=true, conversationsLoaded=false, activeSidebarPill='all', convoLists=[];
+let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false, currentWorkspacePath=null, servingWorkspacePath, rosterWorkspacePath, workspaceAnalysis=null, workspaceIsEmpty=false, workspaceMode='knowledge', setupComplete=true, conversationsLoaded=false, activeSidebarPill='all', convoLists=[];
 let runtimeStatus = null; // { defaultRuntime, claude: {installed, authenticated, version}, codex: {...} }
 const agentLastActivity = {}; // { agentId: { time: Date, label: string } }
 // Per-conversation state: { convoId: { isProcessing, currentStreamingMsg, latestText } }
@@ -231,7 +231,13 @@ function handle(d) {
     // running for. This arrives on every switch, including switches this
     // window did not ask for, and it carries the path only: the reader stays
     // where they were and the routines list stops promising runs.
-    case 'serving_workspace': setServingWorkspace(d.path); break;
+    // RECORDED AND THEN DRAWN, because a value nothing redraws changes
+    // nothing a reader can see. This is the ONLY message a window that did not
+    // ask for the switch receives, so if it does not redraw here the routines
+    // list goes on promising runs until some unrelated event happens to
+    // redraw it, and the roster that eventually arrives carries the other
+    // workspace's rows, so the moved state may never appear at all.
+    case 'serving_workspace': setServingWorkspace(d.path); renderRoutines(); break;
     case 'folder_picked': if (d.path) selectWorkspace(d.path); break;
     case 'workspace_error': {
       const errEl = document.getElementById('workspace-error');
@@ -259,7 +265,7 @@ function handle(d) {
     // THE WORKSPACE THE ROSTER WAS READ FROM ARRIVES WITH IT, on the same
     // message, so the routines list can never compare rows against a workspace
     // value that moved after they did. Assigned before anything draws.
-    case 'agents': agents=d.agents; setServingWorkspace(d.workspace); renderAgentList(); renderOrgChart(); renderRoutinesPanel(); renderRoutines(); renderConvoList(); runDetailRosterUpdated(); break;
+    case 'agents': agents=d.agents; setRosterWorkspace(d.workspace); renderAgentList(); renderOrgChart(); renderRoutinesPanel(); renderRoutines(); renderConvoList(); runDetailRosterUpdated(); break;
     // renderRoutines as well as renderSkills: the routines empty state asks
     // whether the workspace has a skill, so the reply that answers that
     // question is the reply that has to redraw it. Without this the list sits
@@ -1437,26 +1443,48 @@ function resetSidebarForWorkspace() {
 }
 
 /**
- * Record which workspace the server's scheduler is serving.
+ * Record which workspace the server's scheduler is serving, or that it is
+ * serving none.
  *
- * THE ONLY WRITER OF THIS VALUE, and every caller hands it a string the SERVER
- * produced from its own `getWorkspace()`: the path on a serving_workspace
- * notice, the workspace beside a roster, and the path the server confirms a
- * workspace_set with. That is the same string discovery stamps on every
- * routine, so the routines list compares two copies of one value rather than
- * two paths that were spelled independently and might differ by a separator or
- * a resolved symlink.
+ * THREE STATES, NOT TWO, AND THE THIRD IS WHY THIS IS A FUNCTION. Never having
+ * been told is not the same as having been told nothing is served. A window
+ * that has heard nothing makes no claim about its routines; a window told the
+ * server has no workspace open knows they are not running. Left as one falsy
+ * value the second would read as the first, and a workspace whose folder has
+ * gone would leave every row promising a run that nothing is going to make.
+ *
+ * So `undefined` means not told, which is what the global holds until a server
+ * says otherwise, and `null` means told that nothing is being served.
+ *
+ * EVERY CALLER HANDS IT A STRING THE SERVER PRODUCED from its own
+ * `getWorkspace()`, which is the same value that travels beside a roster, so
+ * the routines list compares two copies of one string rather than two paths
+ * spelled independently on two sides.
  *
  * NEVER SET FROM `currentWorkspacePath`, which is what this window asked to
  * open and can be out of date the moment another window switches the server.
- *
- * A missing value leaves the previous one alone rather than clearing it: an
- * older server that sends a roster without the workspace beside it has not
- * said the scheduler stopped serving anything.
  */
 function setServingWorkspace(path) {
+  servingWorkspacePath = typeof path === 'string' && path ? path : null;
+}
+
+/**
+ * Record which workspace the roster now on screen was read out of.
+ *
+ * It arrives on the same message as the roster, so the two cannot describe
+ * different workspaces. It is ALSO the serving workspace at the moment the
+ * server built that message, which is why this sets both: a roster is only
+ * ever read from the workspace the server has open. They part company later,
+ * when a switch is announced and no new roster follows, which is exactly the
+ * state the routines list has to draw honestly.
+ *
+ * An absent workspace leaves both alone rather than clearing them: an older
+ * server that sends a roster without one has not said anything changed.
+ */
+function setRosterWorkspace(path) {
   if (typeof path !== 'string' || !path) return;
-  servingWorkspacePath = path;
+  rosterWorkspacePath = path;
+  setServingWorkspace(path);
 }
 
 function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupComplete) {
