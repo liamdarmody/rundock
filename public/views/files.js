@@ -629,8 +629,84 @@ function loadFileContent(path, content) {
       return;
     }
     const surface = FILE_SURFACES[viewers.classify(path)] || openBinaryOrUnsupportedFile;
-    surface(viewers, path, content);
+    // THE RENDER-TARGET SEAM. An installed extension may claim this file's
+    // extension through the renderer registry; a claimed file mounts through
+    // the sandboxed host, and everything else falls through to the plain
+    // surface exactly as before. The plain surface is also every failure's
+    // destination: an unregistered target, a mount that cannot be built, a
+    // view that errors or never starts, all land on `surface` with the
+    // reason named, because the one thing this seam is forbidden to produce
+    // is a broken frame where a working plain rendering used to be.
+    openThroughRendererSeam(viewers, path, content, surface);
   });
+}
+
+// The seam's own function, cut small so a test can drive it without the rest
+// of the file: consult the registry, mount through the host on a claim,
+// degrade to the plain surface with the failure named on anything else.
+function openThroughRendererSeam(viewers, path, content, surface) {
+  // Whatever renders next, the previous mount's listener must not outlive
+  // its file: torn down here, on every open, before anything is decided.
+  if (activeExtensionMount) { activeExtensionMount.teardown(); activeExtensionMount = null; }
+  const registry = window.rundockRendererRegistry;
+  const claim = registry && registry.rendererFor ? registry.rendererFor(path) : null;
+  if (!claim || !claim.registered) {
+    surface(viewers, path, content);
+    return;
+  }
+  Promise.all([
+    import('/extension-host.js'),
+    fetchExtensionUi(claim.extension, claim.renderer),
+  ]).then(([host, payload]) => {
+    if (currentFilePath !== path) return; // stale
+    if (!payload || !payload.ok) {
+      surface(viewers, path, content);
+      noteRendererFailure(payload && payload.reason
+        ? payload.reason : 'the renderer\'s payload could not be fetched');
+      return;
+    }
+    document.getElementById('editor-content').classList.remove('hidden');
+    const pane = document.getElementById('editor-content');
+    pane.textContent = '';
+    activeExtensionMount = host.mountExtension({
+      paneElement: pane,
+      payload,
+      onOpen: (target) => openWikilink(target),
+      onDegrade: (reason) => {
+        if (currentFilePath !== path) return;
+        surface(viewers, path, content);
+        noteRendererFailure(reason);
+      },
+    });
+  }).catch((e) => {
+    if (currentFilePath !== path) return;
+    surface(viewers, path, content);
+    noteRendererFailure(String(e && e.message || e));
+  });
+}
+
+// The registered payload fetcher. Overridable so the seam is testable and so
+// the integration that delivers extension rosters can supply its own
+// transport; until one is registered the seam answers as an unregistered
+// target would, which renders the plain surface.
+function fetchExtensionUi(extensionId, rendererId) {
+  const fetcher = window.rundockExtensionUiFetcher;
+  if (typeof fetcher !== 'function') {
+    return Promise.resolve({ ok: false, reason: 'no extension transport is registered yet' });
+  }
+  return Promise.resolve(fetcher(extensionId, rendererId));
+}
+
+let activeExtensionMount = null;
+
+// A renderer failure is a note beside the plain rendering, never a blank:
+// the person keeps their file, and the message says what stood down.
+function noteRendererFailure(reason) {
+  const status = document.getElementById('editor-status');
+  if (status) {
+    status.textContent = `Extension renderer stood down: ${reason}`;
+    status.style.color = 'var(--attention)';
+  }
 }
 
 // Board view: a writable registry view. Mounts the board into the editor pane
