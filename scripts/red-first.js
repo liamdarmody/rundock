@@ -190,7 +190,11 @@ function restoreTo(repo, ref, files) {
 // this tool spawns has a restore step to skip. The cost of waiting longer is
 // paid by a developer watching the tool refuse to exit.
 const END_GRACE_MS = 500;
-const POLL_MS = 50;
+
+// How often the cheap question below is asked, and how rarely the expensive one
+// is. See psGroupMembers for why the second needs a rein on it.
+const POLL_MS = 25;
+const TABLE_POLL_MS = 150;
 
 // A pause that blocks rather than yields.
 //
@@ -228,15 +232,22 @@ const EXITED_STATE = 'Z';
  *
  * Spawning is allowed here even from a signal or 'exit' listener because it is
  * synchronous, which is also why it is asked only when the cheap question above
- * has already answered "something is there".
+ * has already answered "something is there", and then no more often than
+ * TABLE_POLL_MS.
  *
- * The whole table is listed and filtered here rather than asked for by group,
- * because the flag that selects a process group is not the same one on every
- * platform and picking the wrong one silently selects by something else.
+ * THE WHOLE TABLE IS LISTED AND FILTERED HERE, which is the expensive way to do
+ * it, and it is chosen because the cheap way is not portable: the flag that
+ * selects a process group is `-g` on BSD and means a session or group NAME on
+ * Linux's procps, so the same invocation silently selects by something else
+ * depending on the machine. Selecting by the wrong thing would answer the wrong
+ * question, and this question decides whether a suite is killed. The cost is
+ * held down by the two rules above rather than by a flag that cannot be trusted
+ * across platforms: on an ordinary ending this runs once, and never more than
+ * four times, against a grace of half a second.
  */
 function psGroupMembers(pgid) {
   const out = spawnSync('ps', ['-e', '-o', 'pgid=,pid=,stat='],
-    { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] });
+    { encoding: 'utf8', timeout: 1000, stdio: ['ignore', 'pipe', 'ignore'] });
   if (out.error || typeof out.stdout !== 'string') return null;
   if (out.status !== 0 && !out.stdout.trim()) return null;
   const members = [];
@@ -254,26 +265,29 @@ function psGroupMembers(pgid) {
  *
  * @returns {boolean|null} true running, false gone, null this machine will not say
  *
- * THE DISTINCTION IS THE DEFECT, and it is a platform difference that a macOS
- * measurement cannot show. When this process signals its own direct child and
- * then waits, the child dies at once but stays in the table until this process
- * collects it, which it cannot do while the event loop is blocked in the wait.
- * On Linux that corpse is still a member of its process group, so asking the
- * kernel whether the group exists keeps answering yes for the entire grace,
- * the group is then SIGKILLed for no reason, the ending reports that it
- * survived, and an alarm meant for a genuine leak fires on every interrupt.
- * macOS filters exited members out of the same question, so none of it shows
- * there. Continuous integration runs on Linux.
+ * THE DISTINCTION IS THE DEFECT. When this process signals its own direct child
+ * and then waits, the child dies at once but stays in the table until this
+ * process collects it, which it cannot do while the event loop is blocked in
+ * the wait. That corpse is still a member of its process group, so asking the
+ * kernel whether the group exists keeps answering yes for the entire grace, the
+ * group is then SIGKILLed for no reason, the ending reports that it survived,
+ * and an alarm meant for a genuine leak fires on every interrupt.
+ *
+ * MEASURED ON BOTH PLATFORMS, and the same on both: macOS and Linux each report
+ * a group whose only member is an exited entry as existing. An earlier version
+ * of this file said macOS filtered such members out; it does not, and the
+ * evidence file records the measurement that corrected it.
  *
  * So the group is asked about by its members and their states, and a group
  * whose remaining members have all exited is gone.
  *
  * The reader is a parameter so the decision can be driven on any machine,
- * including one whose sandbox blocks spawning, rather than only on the platform
- * that happens to produce corpses.
+ * including one whose sandbox blocks spawning, rather than only where corpses
+ * happen to appear.
  */
 function groupRunning(pgid, readMembers = psGroupMembers) {
-  // Cheap first, and on macOS it is usually the only question asked.
+  // Cheap first, and it is the only question asked once the group is really
+  // gone, which is the common case at the end of a run.
   if (!exists(-pgid)) return false;
   const members = readMembers(pgid);
   if (members === null) return null;
@@ -303,18 +317,34 @@ function groupRunning(pgid, readMembers = psGroupMembers) {
  * SIGTERM first and SIGKILL after the grace, because a child that ignores
  * SIGTERM is the only case where anything but the escalation keeps a suite from
  * outliving this process, and the criterion it answers to is unconditional.
+ *
+ * The reader is a parameter so that the answer this cannot get, and what it
+ * does when it cannot get one, are drivable by a test on a machine where `ps`
+ * works.
  */
-function endGroup(pgid) {
-  if (groupRunning(pgid) === false) return 'gone';
+function endGroup(pgid, readMembers = psGroupMembers) {
+  // Throttled so the expensive read cannot be made on every turn of the loop.
+  let nextTable = 0;
+  const state = () => {
+    if (!exists(-pgid)) return false;
+    if (Date.now() < nextTable) return true;
+    nextTable = Date.now() + TABLE_POLL_MS;
+    const members = readMembers(pgid);
+    if (members === null) return null;
+    return members.some(m => !String(m.state).startsWith(EXITED_STATE));
+  };
+
+  if (state() === false) return 'gone';
   try { process.kill(-pgid, 'SIGTERM'); } catch (e) { /* gone since the check */ }
   const deadline = Date.now() + END_GRACE_MS;
   while (Date.now() < deadline) {
-    if (groupRunning(pgid) === false) return 'gone';
+    if (state() === false) return 'gone';
     pause(POLL_MS);
   }
   try { process.kill(-pgid, 'SIGKILL'); } catch (e) { /* gone since the check */ }
   pause(POLL_MS);
-  const after = groupRunning(pgid);
+  nextTable = 0;
+  const after = state();
   if (after === false) return 'gone';
   return after === null ? 'unknown' : 'running';
 }
@@ -326,17 +356,59 @@ function endGroup(pgid) {
  * record describes a TREE and belongs beside the tree it describes; this one
  * describes PROCESSES on one machine, and means nothing in another checkout of
  * the same commit. Keeping it out of the working tree also keeps it clear of
- * the cleanliness check this tool makes of the repository it is pointed at: a
- * file written inside would have to be ignored by every repository the tool is
- * ever run against, including the throwaway ones its own tests build, and a
- * repository that had not been told to ignore it would find the tool refusing
- * its own record.
+ * the cleanliness check this tool makes of the repository it is pointed at.
  *
- * Keyed by the resolved repository path, so two checkouts are two records.
+ * Keyed by the repository's CANONICAL path. path.resolve alone does not follow
+ * symbolic links, and on macOS the same checkout reached through /tmp and
+ * through /private/tmp resolves to two different strings, so two runs against
+ * one working tree would hold two records, neither refusing the other, and both
+ * would revert it. realpath is what makes the two spellings one identity.
  */
+function canonicalRepo(repo) {
+  const resolved = path.resolve(repo);
+  try { return fs.realpathSync(resolved); } catch (e) { return resolved; }
+}
+
 function runRecordPath(repo) {
-  const key = crypto.createHash('sha256').update(path.resolve(repo)).digest('hex').slice(0, 16);
+  const key = crypto.createHash('sha256').update(canonicalRepo(repo)).digest('hex').slice(0, 16);
   return path.join(os.tmpdir(), `red-first-run-${key}.json`);
+}
+
+// ONE definition of what a record looks like on disk, used by every writer, so
+// the shape cannot drift between the claim, the updates and the survivor
+// rewrite.
+function serialiseRecord(record) {
+  return JSON.stringify(record, null, 2) + '\n';
+}
+
+/**
+ * Put a complete record at `file`, atomically.
+ *
+ * WRITTEN ASIDE AND THEN MOVED INTO PLACE, because an exclusive create is
+ * atomic but the write that follows it is not: a contender whose own create
+ * fails EEXIST in that gap reads an empty file, judges the record unreadable,
+ * and is one step from deciding it is stale. Both runs then revert the same
+ * tree, which is the direction the refusal exists to prevent.
+ *
+ * `link` publishes a claim: it fails EEXIST if anyone already holds the name,
+ * and the contents are whole before the name exists. `rename` publishes an
+ * update over a name this run already owns.
+ *
+ * @returns {boolean} false only when the exclusive claim was already held
+ */
+function publishRecord(file, record, { exclusive = false } = {}) {
+  const scratch = `${file}.${process.pid}.${Math.random().toString(36).slice(2, 10)}`;
+  fs.writeFileSync(scratch, serialiseRecord(record));
+  try {
+    if (exclusive) fs.linkSync(scratch, file);
+    else fs.renameSync(scratch, file);
+    return true;
+  } catch (e) {
+    if (exclusive && e.code === 'EEXIST') return false;
+    throw e;
+  } finally {
+    if (exclusive) { try { fs.unlinkSync(scratch); } catch (e2) { /* already moved */ } }
+  }
 }
 
 function readRunRecord(file) {
@@ -347,13 +419,27 @@ function readRunRecord(file) {
 }
 
 /**
- * Is the run this record describes still going?
+ * Which part of the run this record describes is still going, if any?
  *
- * Both halves are asked about, because between the two suites there are moments
- * when the tool is alive with nothing under it, and after an ending nothing can
- * catch there are moments when a suite is alive with no tool over it. Either
- * one means starting now would put a second suite on this machine, or a second
- * reverter on the same working tree.
+ * BOTH HALVES ARE ASKED ABOUT, and the group is the one the criterion is
+ * actually worded around. Between the two suites there are moments when the
+ * tool is alive with nothing under it; after an ending nothing can catch there
+ * are moments when a suite is alive with no tool over it, and that second case
+ * is a suite from a PREVIOUS run, which is exactly what a start now must not
+ * add to.
+ *
+ * A group whose members have all exited is not a live run: see groupRunning. A
+ * group this machine will not describe is treated as live, which is the safe
+ * direction, since refusing costs a message and proceeding costs a second
+ * suite.
+ *
+ * WHICH HALF ANSWERED IS RETURNED, not just whether one did, because the
+ * refusal has to describe what is running. Wording it from whether the record
+ * carries a group id instead told a reader that a process group was running in
+ * the gap after that group had ended, next to advice to delete the record if it
+ * had already gone.
+ *
+ * @returns {'pid'|'group'|null}
  *
  * THE BOUND, since this is a judgement about numbers. A pid or a group id whose
  * owner has gone can in principle be reused by something unrelated, and this
@@ -362,56 +448,87 @@ function readRunRecord(file) {
  * file to delete; the consequence of the other error direction is another full
  * suite on a machine that already has one.
  */
-function runIsLive(held) {
-  const pid = Number(held.pid);
-  if (Number.isInteger(pid) && pid > 0 && exists(pid)) return true;
+function liveRunKind(held) {
+  // The GROUP is asked about first, because it is the more specific answer and
+  // the one worth telling a reader. Asking about the pid first reported "no
+  // suite under it yet" for a run that had a suite under it, since a live tool
+  // always answers before its live group gets a chance to.
   const group = Number(held.group);
-  if (!Number.isInteger(group) || group <= 0) return false;
-  return groupRunning(group) !== false;
+  if (Number.isInteger(group) && group > 0 && groupRunning(group) !== false) return 'group';
+  const pid = Number(held.pid);
+  if (Number.isInteger(pid) && pid > 0 && exists(pid)) return 'pid';
+  return null;
 }
+
+// How long an unreadable record is given to become readable before this run
+// gives up on it. A record is written aside and moved into place, so an
+// unreadable one is a damaged file rather than a half-written one; this is the
+// margin for a file system that reports otherwise.
+const RECORD_SETTLE_MS = 200;
 
 /**
  * Take ownership of this repository for the length of this run, or report the
  * run that already holds it.
  *
- * CLAIMED BEFORE ANY OTHER WORK, and with an exclusive create rather than a
- * read followed by a write. The first version read the record at the top of the
- * run and did not write one until after three git commands had finished, so two
- * starts a few milliseconds apart both saw an empty machine, both proceeded,
- * and both reverted the same working tree, checking files out from under each
- * other. That is the case the refusal exists to prevent, and the check that was
- * meant to prevent it had a window in the middle of it.
+ * CLAIMED BEFORE ANY OTHER WORK, and by publishing a whole record under a name
+ * nobody else holds, rather than by reading and then writing. The first version
+ * read the record at the top of the run and did not write one until after three
+ * git commands had finished, so two starts a few milliseconds apart both saw an
+ * empty machine, both proceeded, and both reverted the same working tree,
+ * checking files out from under each other. That is the case the refusal exists
+ * to prevent, and the check meant to prevent it had a window in the middle.
  *
- * On EEXIST the holder is read and judged: a live run wins and this start is
- * refused, a record whose run has gone is stale and is replaced. A stale file
- * that refused every start until somebody deleted it would be its own outage.
+ * On EEXIST the holder is read and judged. A live run wins and this start is
+ * refused. A record whose run has gone is stale: it is renamed aside rather
+ * than deleted, so that only one of several contenders retires it, and the
+ * claim is tried again. A stale file that refused every start until somebody
+ * deleted it by hand would be its own outage, which is the thing this branch
+ * exists to prevent and the reason it is worth having a test.
+ *
+ * A record that cannot be read is NOT treated as stale. It is re-read for a
+ * short window, and if it stays unreadable this start is refused and the file
+ * is named, because deleting a record this run cannot understand is how it
+ * would end up running beside whoever wrote it.
  */
 function claimRun(repo, tests) {
   const file = runRecordPath(repo);
   const record = {
     pid: process.pid, group: null, tests,
-    repo: path.resolve(repo), startedAt: new Date().toISOString(),
+    repo: canonicalRepo(repo), startedAt: new Date().toISOString(),
   };
-  const body = () => JSON.stringify(record, null, 2) + '\n';
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let published;
     try {
-      fs.writeFileSync(file, body(), { flag: 'wx' });
-      return { ok: true, file, record };
+      published = publishRecord(file, record, { exclusive: true });
     } catch (e) {
-      if (e.code !== 'EEXIST') {
-        // Loud, because the refusal is only as good as this write. A run that
-        // cannot record itself still works; the next one just will not be
-        // refused, and whoever retries should know that before they do.
-        console.error('[red-first] could not record this run at '
-          + `${file} (${e.message}); a concurrent start will not be refused`);
-        return { ok: true, file, record, unrecorded: true };
-      }
-      const held = readRunRecord(file);
-      if (held && runIsLive(held)) return { ok: false, file, live: { ...held, file } };
-      try { fs.rmSync(file, { force: true }); } catch (e2) { /* someone else got there */ }
+      // Loud, because the refusal is only as good as this write. A run that
+      // cannot record itself still works; the next one just will not be
+      // refused, and whoever retries should know that before they do.
+      console.error('[red-first] could not record this run at '
+        + `${file} (${e.message}); a concurrent start will not be refused`);
+      return { ok: true, file, record, unrecorded: true };
     }
+    if (published) return { ok: true, file, record };
+
+    const deadline = Date.now() + RECORD_SETTLE_MS;
+    let held = readRunRecord(file);
+    while (held === null && Date.now() < deadline) {
+      if (!fs.existsSync(file)) break; // retired by whoever held it; try again
+      pause(POLL_MS);
+      held = readRunRecord(file);
+    }
+    if (held === null) {
+      if (!fs.existsSync(file)) continue;
+      return { ok: false, file, unclaimable: true };
+    }
+    const liveBy = liveRunKind(held);
+    if (liveBy) return { ok: false, file, live: { ...held, file, liveBy } };
+    // Stale. Renamed aside rather than unlinked, so that two contenders who
+    // both judged it stale do not both clear the way for a third.
+    try { fs.renameSync(file, `${file}.stale.${process.pid}`); } catch (e) { /* someone got there first */ }
+    try { fs.unlinkSync(`${file}.stale.${process.pid}`); } catch (e) { /* already gone */ }
   }
-  return { ok: false, file, live: { ...(readRunRecord(file) || {}), file } };
+  return { ok: false, file, unclaimable: true };
 }
 
 /**
@@ -444,10 +561,21 @@ async function redFirst({ repo, base = 'main', tests, log = () => {}, runner = n
   // is a create rather than a read: see claimRun.
   const claim = claimRun(repo, tests);
   if (!claim.ok) {
+    if (claim.unclaimable) {
+      return result('refused', 'could not take the run record for this '
+        + `repository at ${claim.file}: it could not be read, or another start `
+        + 'held it each time this one tried. It is left where it is rather than '
+        + 'deleted, because a record this run cannot understand may belong to a '
+        + 'run that is still going. Inspect it, and remove it if nothing is '
+        + 'running.');
+    }
     const live = claim.live;
-    const group = Number(live.group);
-    const what = Number.isInteger(group) && group > 0
-      ? `process group ${group} running ${live.tests}`
+    // Worded from what was found LIVE, not from what the record happens to
+    // carry: a record can name a group that has since ended while its tool is
+    // still going, and saying that group is running sends the reader looking
+    // for a process that is not there.
+    const what = live.liveBy === 'group'
+      ? `process group ${live.group} running ${live.tests}`
       : `red first pid ${live.pid} running ${live.tests}, with no suite under it yet`;
     return result('refused', 'a run of this tool is still live in this '
       + `repository: ${what}, started ${live.startedAt} by red first pid ${live.pid}. `
@@ -458,7 +586,9 @@ async function redFirst({ repo, base = 'main', tests, log = () => {}, runner = n
 
   const recordFile = claim.file;
   const claimed = claim.record;
-  let recordWritten = !claim.unrecorded;
+  // ONE flag for "this run holds a record on disk". A run that could not write
+  // one holds nothing and releases nothing.
+  let holdsRecord = !claim.unrecorded;
 
   // The process group this run started and has not yet watched end.
   //
@@ -482,14 +612,22 @@ async function redFirst({ repo, base = 'main', tests, log = () => {}, runner = n
   // registered, including during the git commands below.
   let sourceFiles = [];
 
-  // The record the NEXT start reads, updated as the live group changes so that
-  // what it names is what is actually running.
+  /**
+   * Put the record back on disk naming `group`, or nothing if no suite is under
+   * this run just now.
+   *
+   * WRITTEN AT THE SPAWN, and not again when the group ends. A record may
+   * therefore name a group that has since finished, and that is harmless
+   * because the refusal describes what liveRunKind found alive rather than what
+   * the record carries: a finished group is reported as the live tool with no
+   * suite under it. Writing the record back on every ending would be a change
+   * no reader and no test could observe.
+   */
   const writeRunRecord = (group) => {
-    if (claim.unrecorded) return;
+    if (!holdsRecord) return;
     try {
-      fs.writeFileSync(recordFile,
-        JSON.stringify({ ...claimed, group: group || null }, null, 2) + '\n');
-      recordWritten = true;
+      publishRecord(recordFile, { ...claimed, group: group || null,
+        ...(survived.length ? { survivedEnding: true, group: survived[0] } : {}) });
     } catch (e) {
       console.error('[red-first] could not update this run at '
         + `${recordFile} (${e.message}); a concurrent start will not be refused`);
@@ -502,26 +640,19 @@ async function redFirst({ repo, base = 'main', tests, log = () => {}, runner = n
    * A GROUP THAT OUTLIVED SIGKILL IS THE ONE CASE WHERE THE RECORD MUST STAY.
    * That is the exact situation the refusal exists for, and removing the record
    * there would let the next start add a second suite on top of the one this
-   * run has just failed to end. So the record is rewritten to name the survivor
-   * and left in place; only a run that ended everything it started gives the
-   * claim back.
+   * run has just failed to end. So the record is left in place naming the
+   * survivor; only a run that ended everything it started gives the claim back.
    *
    * Only ever this run's own record. Reading it back before removing it costs
    * one syscall and means a record belonging to somebody else is left alone.
    */
   const releaseRun = () => {
-    if (!recordWritten) return;
+    if (!holdsRecord) return;
     const held = readRunRecord(recordFile);
     if (!held || Number(held.pid) !== process.pid) return;
-    if (survived.length) {
-      try {
-        fs.writeFileSync(recordFile, JSON.stringify(
-          { ...claimed, group: survived[0], survivedEnding: true }, null, 2) + '\n');
-      } catch (e) { /* the next start reads whatever is there */ }
-      return;
-    }
+    if (survived.length) { writeRunRecord(survived[0]); return; }
     try { fs.rmSync(recordFile, { force: true }); } catch (e) { /* nothing left to clear */ }
-    recordWritten = false;
+    holdsRecord = false;
   };
 
   const spawnRun = () => new Promise((resolve, reject) => {
@@ -579,10 +710,11 @@ async function redFirst({ repo, base = 'main', tests, log = () => {}, runner = n
   const endStartedGroup = () => {
     if (startedGroup === null) return;
     const pgid = startedGroup;
-    startedGroup = null;
     const outcome = groupEnder(pgid);
+    startedGroup = null;
     if (outcome !== 'running') return;
     survived.push(pgid);
+    writeRunRecord(pgid);
     // console.error rather than the injected log, which defaults to silence.
     // A group that outlived SIGKILL is the failure this whole file exists to
     // prevent, and it must not be able to happen quietly.
@@ -696,6 +828,18 @@ async function redFirst({ repo, base = 'main', tests, log = () => {}, runner = n
       { passedWithChange: false, source: sourceFiles, tests: testFiles });
     }
 
+    // A SURVIVOR ENDS THIS RUN HERE. Restoring the source and spawning the
+    // reverted suite now would put a second suite on the machine on top of the
+    // one this run has just failed to end, which is the compounding load the
+    // whole change exists to prevent, produced by the tool itself.
+    if (survived.length) {
+      return result('inconclusive', 'the first suite could not be confirmed '
+        + `ended (process group ${survived[0]} is still running), so this run `
+        + 'stops rather than starting a second suite beside it; the run record '
+        + 'is left naming that group',
+      { passedWithChange: true, source: sourceFiles, tests: testFiles });
+    }
+
     log('restoring the source, keeping the tests');
     let failedWithoutChange = null;
     let withoutChange = { ok: null, pass: null, fail: null, names: [] };
@@ -732,10 +876,12 @@ async function redFirst({ repo, base = 'main', tests, log = () => {}, runner = n
     return result('proven', 'the tests fail without the change and pass with it',
       { passedWithChange: true, failedWithoutChange: true, source: sourceFiles, tests: testFiles, ...counts });
   } finally {
-    // Ending comes first here, so a throw from anything after it cannot leave a
-    // suite behind. This runs on every return above and on any error out of
-    // them, which is what makes the ordinary exits as covered as the signals.
-    endStartedGroup();
+    // The ending is NOT repeated here. runAndEnd ends the group in a `finally`
+    // of its own, which runs on every return out of the body and on every throw
+    // through it, so by this point there is never a group left to find; a call
+    // here would be a branch no test could reach, and removing it would redden
+    // nothing. What does belong here is giving the claim back, which every exit
+    // that unwinds must do.
     releaseRun();
     process.off('exit', onExit);
     for (const signal of SIGNALS) process.off(signal, onSignal);
@@ -809,4 +955,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { redFirst, recordOutcome, restoreTo, isTest, namesFrom, runRecordPath, groupRunning, TEST_DIRS, TEST_FILENAME_MARKERS, NAME_LIMIT, LIMITATION };
+module.exports = { redFirst, recordOutcome, restoreTo, isTest, namesFrom, runRecordPath, groupRunning, endGroup, TEST_DIRS, TEST_FILENAME_MARKERS, NAME_LIMIT, LIMITATION };

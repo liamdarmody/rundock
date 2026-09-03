@@ -8,7 +8,7 @@
 // the mechanism they call has vanished rather than because a suite survived.
 // A prohibition is proven the other way round: commit the forbidden act, run
 // the test, watch it go red for the reason it names. That was done for each
-// case below and the run is recorded in .review/red-first-orphans-evidence.md.
+// case below, and the run is recorded with the change's review records.
 //
 // WHAT WAS MEASURED, which is why this file exists at all. The tool spawns its
 // test command detached, and a package runner starts children of its own. On a
@@ -42,7 +42,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawn, spawnSync } = require('node:child_process');
 
-const { redFirst, runRecordPath, groupRunning } = require('../../scripts/red-first.js');
+const { redFirst, runRecordPath, groupRunning, endGroup } = require('../../scripts/red-first.js');
 
 const SCRIPT = path.join(__dirname, '..', '..', 'scripts', 'red-first.js');
 
@@ -196,9 +196,51 @@ function reap(pids) {
   }
 }
 
+/**
+ * The teardown every test here shares.
+ *
+ * Nine tests were repeating this by hand, which made the deliberate differences
+ * between them (an extra process to end, a record left on purpose) hard to pick
+ * out from the boilerplate around them. What stays in a test's own `finally` is
+ * what is particular to that test.
+ *
+ * Only processes this file started are ever signalled, including here.
+ */
+function teardown({ dir, pidFiles = [], files = [], pids = [] }) {
+  for (const f of pidFiles) reap(pidsIn(f));
+  reap(pids);
+  for (const f of [...pidFiles, ...files]) fs.rmSync(f, { force: true });
+  if (dir) {
+    fs.rmSync(runRecordPath(dir), { force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * A pid and a process group that are both certainly gone.
+ *
+ * Used to build a record that describes a run which has ended, which is the
+ * state a crashed or SIGKILLed run leaves behind and the one a later start must
+ * be willing to clear.
+ */
+async function deadGroup() {
+  const kid = spawn('sh', ['-c', 'exit 0'], { detached: true, stdio: 'ignore' });
+  await new Promise(resolve => kid.on('exit', resolve));
+  const cleared = await until(() => {
+    if (running(kid.pid)) return false;
+    try { process.kill(-kid.pid, 0); return false; } catch (e) { return true; }
+  }, 5000);
+  assert.strictEqual(cleared, true, 'the fixture process must be gone before it is used as a dead one');
+  return kid.pid;
+}
+
 function cli(dir, tests) {
   return spawnSync(process.execPath,
     [SCRIPT, '--repo', dir, '--base', 'main', '--tests', tests], { encoding: 'utf8' });
+}
+
+function readRecord(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { return null; }
 }
 
 function readBefore(file) {
@@ -240,11 +282,7 @@ describe('no suite outlives the tool', () => {
       assert.strictEqual(fs.existsSync(runRecordPath(dir)), false,
         `a finished run left its record at ${runRecordPath(dir)}`);
     } finally {
-      reap(pidsIn(file));
-      fs.rmSync(file, { force: true });
-      fs.rmSync(before, { force: true });
-      fs.rmSync(runRecordPath(dir), { force: true });
-      fs.rmSync(dir, { recursive: true, force: true });
+      teardown({ dir, pidFiles: [file], files: [before] });
     }
   });
 
@@ -277,11 +315,7 @@ describe('no suite outlives the tool', () => {
         `a suite that ignores SIGTERM outlived the tool: ${survivors.join(', ')}`);
       noWarning(r.stderr, 'stubborn suite');
     } finally {
-      reap(pidsIn(file));
-      fs.rmSync(file, { force: true });
-      fs.rmSync(before, { force: true });
-      fs.rmSync(runRecordPath(dir), { force: true });
-      fs.rmSync(dir, { recursive: true, force: true });
+      teardown({ dir, pidFiles: [file], files: [before] });
     }
   });
 
@@ -327,18 +361,21 @@ describe('no suite outlives the tool', () => {
       assert.strictEqual(fs.existsSync(runRecordPath(dir)), false,
         'an error exit must still give the claim back');
     } finally {
-      reap(pids.concat(pidsIn(file)));
-      fs.rmSync(file, { force: true });
-      fs.rmSync(runRecordPath(dir), { force: true });
-      fs.rmSync(dir, { recursive: true, force: true });
+      teardown({ dir, pidFiles: [file], pids });
     }
   });
 
   test('AC-2: an error out of the run itself also leaves no suite running', async (t) => {
-    // The other shape of error exit, kept because it reaches the outer
-    // `finally` rather than the exit listener: the runner destroys the
-    // repository's git directory once it has started its background child, so
-    // the restore that follows throws.
+    // The other shape of error exit: the runner destroys the repository's git
+    // directory once it has started its background child, so the restore that
+    // follows throws.
+    //
+    // WHAT THIS REACHES, stated precisely because an earlier version of this
+    // comment claimed more. By the time restoreTo throws, the ending inside
+    // runAndEnd has already run and cleared the group, so what is exercised
+    // here is that ending plus the claim being given back on the way out, not
+    // a second ending in the outer `finally`. There is no such second ending:
+    // it would be a branch nothing could reach.
     const dir = repo();
     const file = scratch('error');
     const before = scratch('error-before');
@@ -364,11 +401,7 @@ describe('no suite outlives the tool', () => {
       assert.strictEqual(fs.existsSync(runRecordPath(dir)), false,
         'an error exit must still give the claim back');
     } finally {
-      reap(pidsIn(file));
-      fs.rmSync(file, { force: true });
-      fs.rmSync(before, { force: true });
-      fs.rmSync(runRecordPath(dir), { force: true });
-      fs.rmSync(dir, { recursive: true, force: true });
+      teardown({ dir, pidFiles: [file], files: [before] });
     }
   });
 
@@ -410,10 +443,7 @@ describe('no suite outlives the tool', () => {
       // the most common way this tool is stopped.
       noWarning(stderr, 'signal during the first run');
     } finally {
-      reap(pids.concat(pidsIn(file)));
-      fs.rmSync(file, { force: true });
-      fs.rmSync(runRecordPath(dir), { force: true });
-      fs.rmSync(dir, { recursive: true, force: true });
+      teardown({ dir, pidFiles: [file], pids });
     }
   });
 
@@ -455,10 +485,7 @@ describe('no suite outlives the tool', () => {
         `an exit taken mid-run left ${survivors.length} process(es) running: ${survivors.join(', ')}`);
       noWarning(r.stderr, 'exit taken mid-run');
     } finally {
-      reap(pids.concat(pidsIn(file)));
-      fs.rmSync(file, { force: true });
-      fs.rmSync(runRecordPath(dir), { force: true });
-      fs.rmSync(dir, { recursive: true, force: true });
+      teardown({ dir, pidFiles: [file], pids });
     }
   });
 });
@@ -505,6 +532,188 @@ describe('telling a process that has exited from one that is still running', () 
     const answer = groupRunning(gone.pid, () => { asked += 1; return null; });
     assert.strictEqual(answer, false);
     assert.strictEqual(asked, 0, 'the process table must not be read when the group has gone');
+  });
+});
+
+describe('a refusal describes what it found, not what the record carries', () => {
+  test('AC-6: a record naming a finished group reports the live run, not that group', async (t) => {
+    // A record names the group of the suite most recently started, and is not
+    // rewritten when that suite ends. So between the two suites the record
+    // carries a group id that has gone while its tool is still going.
+    //
+    // Wording the refusal from the record would announce that process group as
+    // running, and send the reader to look for a process that is not there,
+    // next to advice to delete the record if it had already gone. The refusal
+    // is worded from what was actually found alive instead.
+    const dir = repo();
+    const record = runRecordPath(dir);
+    try {
+      const gone = await deadGroup();
+      // This test process is the live run; the group it names has ended.
+      fs.writeFileSync(record, JSON.stringify({
+        pid: process.pid, group: gone, tests: 'npm test', repo: dir,
+        startedAt: new Date().toISOString(),
+      }, null, 2) + '\n');
+
+      const r = cli(dir, 'echo this must never run');
+      t.diagnostic(`refusal: ${r.stdout.trim()}`);
+      assert.match(r.stdout, /REFUSED/, r.stdout);
+      assert.match(r.stdout, /no suite under it yet/,
+        `the refusal must report the live run, not the finished group\n${r.stdout}`);
+      assert.doesNotMatch(r.stdout, new RegExp(`process group ${gone} running`),
+        `the refusal must not say a finished group is running\n${r.stdout}`);
+      assert.match(r.stdout, new RegExp(`\\b${process.pid}\\b`),
+        `and must name the run it did find\n${r.stdout}`);
+    } finally {
+      teardown({ dir });
+    }
+  });
+
+  test('AC-5: a record that cannot be read is refused and left alone, not cleared', async (t) => {
+    // The safe direction for a record this run cannot understand. Treating it
+    // as stale and deleting it is how the tool would end up running beside
+    // whoever wrote it; refusing costs a message and names the file.
+    const dir = repo();
+    const record = runRecordPath(dir);
+    try {
+      // Both shapes of unreadable: something that is not a record at all, and
+      // an empty file, which is what a reader would see if a record were ever
+      // published in place rather than moved into place complete.
+      for (const contents of ['this is not a run record\n', '']) {
+        fs.writeFileSync(record, contents);
+        const probe = cli(dir, 'echo this must never run');
+        assert.match(probe.stdout, /REFUSED/,
+          `an unreadable record (${JSON.stringify(contents)}) must be refused\n${probe.stdout}`);
+        assert.strictEqual(fs.existsSync(record), true,
+          'and must be left where it is');
+      }
+
+      fs.writeFileSync(record, 'this is not a run record\n');
+      const r = cli(dir, 'echo this must never run');
+      t.diagnostic(`refusal: ${r.stdout.trim()}`);
+      assert.notStrictEqual(r.status, 0, 'an unreadable record must not be waved through');
+      assert.match(r.stdout, /REFUSED/, r.stdout);
+      assert.match(r.stdout, new RegExp(record.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+        `the refusal must name the file so it can be inspected\n${r.stdout}`);
+      assert.strictEqual(fs.existsSync(record), true,
+        'and must leave it where it is rather than deleting what it cannot read');
+    } finally {
+      teardown({ dir });
+    }
+  });
+});
+
+describe('a machine that will not describe its own process table', () => {
+  test('the group is still ended, and nothing is announced that cannot be known', async (t) => {
+    // What the tool does where `ps` cannot be spawned, which is the case under a
+    // command sandbox. The evidence file claims the ending works unchanged there
+    // and that no false alarm is raised; neither was driven by anything until
+    // now, so both were claims rather than measurements.
+    const file = scratch('unknowable');
+    const kid = spawn('sh', ['-c',
+      `sleep ${LONG} >/dev/null 2>&1 & echo $! >> ${JSON.stringify(file)}; echo $$ >> ${JSON.stringify(file)}; sleep 30`],
+      { detached: true, stdio: 'ignore' });
+    kid.unref();
+    try {
+      const started = await until(() => pidsIn(file).length >= 2, 15000);
+      assert.strictEqual(started, true, 'the stand in group must be up');
+      const pids = pidsIn(file);
+      t.diagnostic(`before: ${table(pids)}`);
+
+      // A reader that answers nothing, which is what a blocked spawn produces.
+      const outcome = endGroup(kid.pid, () => null);
+      t.diagnostic(`endGroup said ${outcome}; after: ${table(pids)}`);
+
+      // The signals are still sent, so nothing is left running.
+      assert.deepStrictEqual(pids.filter(running), [],
+        `the group must still be ended when the table cannot be read: ${pids.filter(running).join(', ')}`);
+      // And the answer is the honest one rather than an alarm.
+      assert.strictEqual(outcome, 'unknown',
+        'a machine that will not say must not be reported as a survivor');
+    } finally {
+      teardown({ pidFiles: [file], pids: [kid.pid] });
+    }
+  });
+
+  test('AC-5: a suite it cannot describe is treated as live, so a start is refused', async (t) => {
+    // The other half of the same ignorance. runIsLive is asked about a record
+    // whose owning run has gone and whose group this machine will not describe;
+    // the safe answer is that the run is live, because refusing costs a message
+    // and proceeding costs a second suite.
+    //
+    // Driven by taking `ps` off PATH for the second start, rather than by
+    // injecting anything: the refusal happens before any git command, so a PATH
+    // with nothing on it is enough to reach it.
+    const dir = repo();
+    const record = runRecordPath(dir);
+    const holder = spawn('sh', ['-c', `sleep ${LONG}`], { detached: true, stdio: 'ignore' });
+    holder.unref();
+    try {
+      await until(() => running(holder.pid), 5000);
+      const gone = await deadGroup();
+      fs.writeFileSync(record, JSON.stringify({
+        pid: gone, group: holder.pid, tests: 'npm test', repo: dir,
+        startedAt: new Date().toISOString(),
+      }, null, 2) + '\n');
+
+      const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'no-ps-'));
+      const r = spawnSync(process.execPath,
+        [SCRIPT, '--repo', dir, '--base', 'main', '--tests', 'echo this must never run'],
+        { encoding: 'utf8', env: { ...process.env, PATH: empty } });
+      fs.rmSync(empty, { recursive: true, force: true });
+      t.diagnostic(`with no ps on PATH: ${r.stdout.trim()}`);
+
+      assert.notStrictEqual(r.status, 0, 'a suite that cannot be described must not be assumed gone');
+      assert.match(r.stdout, /REFUSED/, `${r.stdout}\n${r.stderr}`);
+      assert.match(r.stdout, new RegExp(`\\b${holder.pid}\\b`),
+        `the refusal must still name the group\n${r.stdout}`);
+      assert.strictEqual(running(holder.pid), true, 'and must leave it alone');
+    } finally {
+      teardown({ dir, pids: [holder.pid] });
+    }
+  });
+});
+
+describe('one checkout reached by two names', () => {
+  test('AC-5: is one run record, so a second start through a symbolic link is refused', async (t) => {
+    // path.resolve does not follow symbolic links, so the same working tree
+    // reached as /tmp/x and /private/tmp/x, or through a symlinked worktree,
+    // hashed to two different records. Neither refused the other and both would
+    // have reverted the one tree. On this machine os.tmpdir() is itself reached
+    // through such a link, which is how the difference shows without contriving
+    // one.
+    const dir = repo();
+    const link = path.join(os.tmpdir(), `red-first-link-${process.pid}-${Date.now()}`);
+    fs.symlinkSync(dir, link);
+    try {
+      assert.strictEqual(runRecordPath(link), runRecordPath(dir),
+        'two names for one checkout must be one record');
+
+      const file = scratch('symlink');
+      const first = spawn(process.execPath,
+        [SCRIPT, '--repo', dir, '--base', 'main',
+          '--tests', packageRunnerLeaving(file, { tail: 'sleep 20' })],
+        { stdio: ['ignore', 'pipe', 'pipe'] });
+      const exited = new Promise(resolve => first.on('exit', resolve));
+      try {
+        const up = await until(() => pidsIn(file).length >= 2, 15000);
+        assert.strictEqual(up, true, 'the first run must have a live suite');
+
+        const second = cli(link, 'echo this must never run');
+        t.diagnostic(`start through the link said: ${second.stdout.trim()}`);
+        assert.match(second.stdout, /REFUSED/,
+          `a start through the other name must be refused\n${second.stdout}`);
+      } finally {
+        first.kill('SIGTERM');
+        await exited;
+        teardown({ pidFiles: [file] });
+      }
+    } finally {
+      // unlink, not rm: this is a symbolic link to a directory, and removing it
+      // must not follow it to the repository underneath.
+      try { fs.unlinkSync(link); } catch (e) { /* never created */ }
+      teardown({ dir });
+    }
   });
 });
 
@@ -569,10 +778,7 @@ describe('starting on top of a run that is still going', () => {
         'the record must not outlive the run it describes, or every later start is refused');
     } finally {
       if (first) first.kill('SIGKILL');
-      reap(pids.concat(pidsIn(file)));
-      fs.rmSync(file, { force: true });
-      fs.rmSync(runRecordPath(dir), { force: true });
-      fs.rmSync(dir, { recursive: true, force: true });
+      teardown({ dir, pidFiles: [file], pids });
     }
   });
 
@@ -616,9 +822,8 @@ describe('starting on top of a run that is still going', () => {
       assert.strictEqual(fs.existsSync(record), false,
         'the claim must be given back when the run ends');
     } finally {
-      if (release) release();
-      fs.rmSync(runRecordPath(dir), { force: true });
-      fs.rmSync(dir, { recursive: true, force: true });
+      if (release) release(); // particular to this test: let the held runner finish
+      teardown({ dir });
     }
   });
 });
@@ -656,6 +861,16 @@ describe('a suite the tool could not end', () => {
       pids = pidsIn(file);
       assert.ok(pids.length >= 1, `the runner must have started something: ${pids}`);
 
+      // THE RUN STOPS HERE. Restoring the source and spawning the reverted
+      // suite now would put a second suite on the machine on top of the one
+      // just failed, which is the compounding load the whole change exists to
+      // prevent, produced by the tool itself.
+      assert.match(r.stdout, /OUTCOME inconclusive/,
+        `a run that could not end its suite must stop
+${r.stdout}`);
+      assert.strictEqual(pids.length, 2,
+        `exactly one suite must have been started, got ${pids.length} pids: ${pids}`);
+
       // The alarm fires, and names the group, because here the tool genuinely
       // cannot tell that it ended it.
       assert.match(r.stderr, SURVIVOR_WARNING,
@@ -671,11 +886,117 @@ describe('a suite the tool could not end', () => {
         `the kept record must name a group this run started, got ${held.group} of ${pids}`);
       assert.match(r.stderr, new RegExp(`\\b${held.group}\\b`),
         'the warning names the same group the record does');
+
+      // AC-5 AS WORDED IS ABOUT THIS STATE, and until now nothing started
+      // against it. The criterion is a suite from a PREVIOUS run: the tool that
+      // owned it has gone and only its group is left, which is the case the
+      // refusal exists for and the one an interrupted run leaves behind.
+      //
+      // Every other refusal test here starts while the first tool is still
+      // alive, so the refusal is decided on the recorded pid and the group is
+      // never consulted. Asserted first, so that this test cannot pass on the
+      // pid branch by accident.
+      assert.strictEqual(running(held.pid), false,
+        `the run that wrote this record must be gone, so the decision below is `
+        + `made on its group rather than on its pid (pid ${held.pid})`);
+      // Asked of the GROUP, not of the group's leader. The leader is the shell,
+      // which has exited; what is left is the child it started, which is in the
+      // group but is not the pid the group is named after.
+      assert.strictEqual(groupRunning(held.group), true,
+        'and its suite must still be running, or there is nothing to refuse on');
+
+      const second = cli(dir, 'echo this must never run');
+      t.diagnostic(`start against the abandoned suite said: ${second.stdout.trim()}`);
+      assert.notStrictEqual(second.status, 0, 'a start on top of an abandoned suite must not exit 0');
+      assert.match(second.stdout, /REFUSED/, second.stdout);
+      assert.match(second.stdout, new RegExp(`\\b${held.group}\\b`),
+        `the refusal must name the group left behind\n${second.stdout}`);
+      assert.match(second.stdout, /sleep 6/,
+        `the refusal must name the command that group is running\n${second.stdout}`);
+
+      // And refusing must not be a disguised way of clearing it.
+      assert.strictEqual(groupRunning(held.group), true,
+        'the refusal must leave the suite it found alone');
     } finally {
-      reap(pidsIn(file));
-      fs.rmSync(file, { force: true });
-      fs.rmSync(runRecordPath(dir), { force: true });
-      fs.rmSync(dir, { recursive: true, force: true });
+      teardown({ dir, pidFiles: [file] });
+    }
+  });
+});
+
+describe('a record left behind by a run that has ended', () => {
+  test('AC-5: is cleared when its suite has gone, and refused while its suite is alive', async (t) => {
+    // BOTH DIRECTIONS OF THE SAME DECISION, because each is a defect on its own.
+    //
+    // Refusing on a record whose run has ended turns the guard against piling on
+    // load into an outage: a crashed or SIGKILLed run leaves a record, and every
+    // later start in that repository is refused until somebody deletes the file
+    // by hand. Clearing a record whose suite is still running does the opposite,
+    // and puts a second suite on the machine beside the first.
+    //
+    // The record here is written by this test rather than by a run, because what
+    // is under test is the reading of it and that needs control over exactly
+    // which of the two named things is alive. The path where the tool writes the
+    // record itself is covered by the test above.
+    const dir = repo();
+    const file = scratch('stale');
+    const record = runRecordPath(dir);
+    const holder = spawn('sh', ['-c', `sleep ${LONG}`], { detached: true, stdio: 'ignore' });
+    holder.unref();
+    let live = null;
+    try {
+      const gone = await deadGroup();
+      await until(() => running(holder.pid), 5000);
+
+      const write = (group) => fs.writeFileSync(record, JSON.stringify({
+        pid: gone, group, tests: 'npm test', repo: dir,
+        startedAt: new Date().toISOString(),
+      }, null, 2) + '\n');
+
+      // Alive: the owning run has gone but its suite has not.
+      write(holder.pid);
+      const refused = cli(dir, 'echo this must never run');
+      t.diagnostic(`with the suite still alive: ${refused.stdout.trim()}`);
+      assert.notStrictEqual(refused.status, 0, 'a live suite must still be refused');
+      assert.match(refused.stdout, /REFUSED/, refused.stdout);
+      assert.match(refused.stdout, new RegExp(`\\b${holder.pid}\\b`),
+        `the refusal must name the group it found\n${refused.stdout}`);
+      assert.strictEqual(running(holder.pid), true, 'and must leave it running');
+
+      // Gone: both the run and its suite have ended, so the record says nothing.
+      reap([holder.pid]);
+      await until(() => !running(holder.pid), 5000);
+      write(gone);
+      assert.strictEqual(fs.existsSync(record), true, 'the stale record is in place');
+
+      live = spawn(process.execPath,
+        [SCRIPT, '--repo', dir, '--base', 'main',
+          '--tests', packageRunnerLeaving(file, { tail: 'sleep 3' })],
+        { stdio: ['ignore', 'pipe', 'pipe'] });
+      let out = '';
+      live.stdout.on('data', (b) => { out += b.toString(); });
+      const exited = new Promise(resolve => live.on('exit', resolve));
+
+      // The stale record is not merely tolerated, it is taken over.
+      const taken = await until(() => {
+        const held = readRecord(record);
+        return held !== null && Number(held.pid) === live.pid;
+      }, 20000);
+      t.diagnostic(`record during the run: ${JSON.stringify(readRecord(record))}`);
+      assert.strictEqual(taken, true,
+        'the stale record must be replaced by the run that cleared it');
+
+      await exited;
+      live = null;
+      t.diagnostic(`start over a stale record said: ${out.trim().split('\n').pop()}`);
+      assert.doesNotMatch(out, /REFUSED/,
+        `a record whose run and suite have both gone must not refuse a start\n${out}`);
+      assert.match(out, /\[red-first\] (PROVEN|NOT-DISCRIMINATING|INCONCLUSIVE)/,
+        `the start must reach an ordinary conclusion\n${out}`);
+      assert.strictEqual(fs.existsSync(record), false,
+        'and must give the claim back when it ends');
+    } finally {
+      if (live) live.kill('SIGKILL'); // particular to this test: the run may still be up
+      teardown({ dir, pidFiles: [file], pids: [holder.pid] });
     }
   });
 });
@@ -721,11 +1042,7 @@ describe('two starts at once against one repository', () => {
       assert.strictEqual(fs.existsSync(runRecordPath(dir)), false,
         'the claim must be given back once both have finished');
     } finally {
-      reap(pidsIn(fileA).concat(pidsIn(fileB)));
-      fs.rmSync(fileA, { force: true });
-      fs.rmSync(fileB, { force: true });
-      fs.rmSync(runRecordPath(dir), { force: true });
-      fs.rmSync(dir, { recursive: true, force: true });
+      teardown({ dir, pidFiles: [fileA, fileB] });
     }
   });
 });
@@ -789,12 +1106,7 @@ describe('cleanup reaches what this tool started, and stops there', () => {
         `the tool ended or stopped a process it never started (pid ${foreign.pid}); `
         + `its count stood still at ${before}`);
     } finally {
-      reap(pidsIn(file));
-      reap([foreign.pid]);
-      fs.rmSync(file, { force: true });
-      fs.rmSync(beat, { force: true });
-      fs.rmSync(runRecordPath(dir), { force: true });
-      fs.rmSync(dir, { recursive: true, force: true });
+      teardown({ dir, pidFiles: [file], files: [beat], pids: [foreign.pid] });
     }
   });
 });
