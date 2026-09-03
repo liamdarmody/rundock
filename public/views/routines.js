@@ -32,6 +32,16 @@
   }
 }(typeof self !== 'undefined' ? self : this, function () {
 
+// The colour rule, reached off the global at call time. See
+// public/agent-colour.js: escaping stops a value ending its style attribute
+// and does nothing about one that stays inside it and is still CSS. Fails
+// CLOSED to the fallback when the module is absent.
+function agentColour(value, fallback) {
+  const safe = fallback === undefined ? 'var(--accent)' : fallback;
+  return typeof RundockAgentColour !== 'undefined'
+    ? RundockAgentColour.safeColour(value, safe) : safe;
+}
+
 // Which routine the reader has asked to delete, BY IDENTITY: the agent that
 // declares it, its name, and which of that agent's routines of that name it
 // is. Held here rather than on the element because a routine's name is
@@ -75,6 +85,45 @@ let pendingProblem = null;
 // required in node with no global at all.
 function routinesClock() {
   return typeof routinesNow === 'function' ? routinesNow() : new Date();
+}
+
+/**
+ * The workspace the server's scheduler is serving, taken from the global the
+ * shell keeps.
+ *
+ * NOT `currentWorkspacePath`, and the difference is the whole of what this
+ * list gets right. That one is the workspace this WINDOW asked to open, and
+ * another window can move the server out from under it. This one is written
+ * only from values the server produced, which is the same string discovery
+ * stamps on every routine, so the comparison below is between two copies of
+ * one value.
+ *
+ * Read through typeof for the same reason the clock is: this file is required
+ * in node with no global at all, and an undeclared identifier throws where a
+ * typeof does not.
+ */
+function routinesServingWorkspace() {
+  return typeof servingWorkspacePath === 'string' ? servingWorkspacePath : null;
+}
+
+/**
+ * The workspace the routines being listed were read out of.
+ *
+ * ONE VALUE FOR THE WHOLE ROSTER, because a roster is only ever read from one
+ * workspace: discovery stamps every routine it reads with the root it read
+ * them from. Taken off the rows rather than from a global so it describes what
+ * is actually on screen, which is the fault the header carried before: it
+ * named the workspace the window remembered, directly above a list of rows
+ * that had come from somewhere else.
+ */
+function routinesRosterWorkspace() {
+  const roster = typeof agents !== 'undefined' && agents ? agents : [];
+  for (const agent of roster) {
+    for (const routine of (agent && agent.routines) || []) {
+      if (routine && typeof routine.workspace === 'string' && routine.workspace) return routine.workspace;
+    }
+  }
+  return null;
 }
 
 function routinesZone() {
@@ -144,6 +193,11 @@ const ICONS = {
   play: '<polygon points="6 3 20 12 6 21 6 3"/>',
   trash: '<polyline points="3 6 5 6 21 6"/>'
     + '<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  // A pencil, drawn on the same 24 grid at the same stroke weight as the three
+  // above, so the row reads as one set of controls rather than as two borrowed
+  // from different places.
+  pencil: '<path d="M12 20h9"/>'
+    + '<path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/>',
 };
 
 function iconButton(action, label, paths, onclick, danger) {
@@ -229,6 +283,21 @@ function rowHtml(entry, index, withActions) {
     // roster. Passed through untouched: a client that decided this for itself
     // would be a second copy of a grammar that lives beside the tick.
     scheduleReadable: r.scheduleReadable,
+    // THE SCHEDULER'S OWN REFUSAL, published beside the roster by the same
+    // enrichment that stamps scheduleReadable, and passed through untouched
+    // for the same reason: the row's offer promises what the tick would do,
+    // and the tick's own answer is the only copy of that which cannot drift.
+    refusal: r.refusal,
+    // WHAT THE ROUTINE SAYS TO DO, passed as the file answered it. The model
+    // asks whether there is anything there at all, which the tick's own gate
+    // also asks: a routine with nothing to send is refused rather than run,
+    // and this is what lets the row say so.
+    prompt: r.prompt,
+    // The workspace this routine was read out of, and the one the server is
+    // serving. Both are the server's own value, compared by the model rather
+    // than assumed equal here.
+    workspace: r.workspace,
+    servingWorkspace: routinesServingWorkspace(),
     now: routinesClock(),
     zone: routinesZone(),
   });
@@ -258,6 +327,29 @@ function rowHtml(entry, index, withActions) {
       + `<span class="schedule-problem">${esc(row.scheduleProblem.text)}</span>`
       + '</div>';
   }
+  // AND THE OTHER FAULT OF THE SAME KIND: a routine that says when it runs and
+  // never says what to do. Drawn on its own line and in the same tone, because
+  // it is the same class of thing to a reader: a routine that will not run
+  // until somebody edits the file. Kept separate from the schedule fault
+  // rather than folded into one line, because a routine can carry both and
+  // each names a different thing to fix. Drawn on the delete confirmation too,
+  // for the reason the schedule fault is.
+  if (row.promptProblem) {
+    body += '<div class="rr-meta rr-problem-line">'
+      + `<span class="prompt-problem">${esc(row.promptProblem.text)}</span>`
+      + '</div>';
+  }
+  // A ROUTINE NOTHING IS SERVING SAYS WHERE RUNDOCK WENT. Drawn on its own
+  // line and toned unlike the schedule fault above: nothing about the routine
+  // is wrong, so it takes the quiet tone the missed row uses rather than the
+  // danger one. Drawn on the delete confirmation too, for the same reason the
+  // schedule fault is: somebody about to remove a routine is entitled to know
+  // it was not running.
+  if (row.workspaceNote) {
+    body += '<div class="rr-meta rr-note-line">'
+      + `<span class="workspace-note">${esc(row.workspaceNote.text)}</span>`
+      + '</div>';
+  }
   // THE ROW FOR A ROUTINE NOBODY HAS TURNED ON YET. It takes the next-run
   // line's place rather than sitting beside it, because the model returns no
   // next run for this state: a routine that will not run must not advertise
@@ -274,10 +366,24 @@ function rowHtml(entry, index, withActions) {
       + ` onclick="routinesSetEnabled(${index}, true)">${esc(row.offer.label)}</button>`
       + '</div>';
   }
-  // Revision 7's second line. Both facts, together, because they answer the
-  // one question a reader has after a miss or a failure: did it recover, and
-  // when does it try again.
-  if (row.status) {
+  // A run in progress, checked before the three-tone line below and instead
+  // of it: outcomeOf (routines-model.js) deliberately answers `null` while
+  // `lastRunStatus` is 'running', because "on time / caught up / missed /
+  // failed" are all verdicts on a run that has ENDED, and this one has not.
+  // That withholding is right for the model; it is not a reason for the row
+  // to say nothing. Before this, the row went blank for exactly as long as a
+  // run was in progress, including "View last run", which is the one control
+  // that would have let a reader reach it. See run-detail-model.js's
+  // 'running' state ("Still going"), built and unreachable until this line.
+  if (r.state && r.state.status === 'running') {
+    body += '<div class="rr-meta rr-run-line">'
+      + '<span class="run-status live">Still going</span>'
+      + (withActions
+        ? `${sep}<button class="btn-link rr-view-run" type="button" data-routines-action="view-run"`
+          + ` onclick="routinesViewLastRun(${index})">View run</button>`
+        : '')
+      + '</div>';
+  } else if (row.status) {
     body += '<div class="rr-meta rr-run-line">'
       + `<span class="run-status ${row.status.tone}">${esc(row.status.text)}</span>`
       + (nextRun ? `${sep}${nextRun}` : '')
@@ -302,6 +408,18 @@ function rowHtml(entry, index, withActions) {
     actions += r.paused
       ? iconButton('resume', 'Resume', ICONS.play, `routinesSetPaused(${index}, false)`, false)
       : iconButton('pause', 'Pause', ICONS.pause, `routinesSetPaused(${index}, true)`, false);
+    // BETWEEN THE TWO IT ALREADY HAD, and the position is the decision. Pause
+    // keeps the place it has always had, because it is the control most
+    // reached for. Delete stays last, where the destructive one belongs. The
+    // new one goes in the gap rather than at either end.
+    //
+    // OFFERED ON EVERY ROW, INCLUDING ONES WHOSE SCHEDULE THIS EDITOR CANNOT
+    // SHOW. That case is exactly where the control is worth most: a routine
+    // written by hand for a cadence the scheduler never reads is one that fires
+    // nothing, and this is the way to fix it. The editor says so when it opens
+    // rather than the row hiding the way in, because a control that is silently
+    // absent teaches nothing.
+    actions += iconButton('edit', 'Edit schedule', ICONS.pencil, `routinesEditSchedule(${index})`, false);
     actions += iconButton('delete', 'Delete', ICONS.trash, `routinesAskDelete(${index})`, true);
     actions += '</div>';
   }
@@ -310,7 +428,7 @@ function rowHtml(entry, index, withActions) {
     // An agent with no colour of its own falls back to the idle token rather
     // than to a literal, so the one place that value is written stays the one
     // place it is written.
-    + `<div class="avatar sm" style="background:${esc(a.colour || 'var(--idle)')}">${esc(a.icon || '')}</div>`
+    + `<div class="avatar sm" style="background:${agentColour(a.colour, 'var(--idle)')}">${esc(a.icon || '')}</div>`
     + `<div class="rr-body">${body}</div>${actions}</div>`;
 }
 
@@ -362,13 +480,28 @@ function routinesScopeName() {
  * the list passes its scoped sentence, and the empty pane passes nothing,
  * because its state line lives in the box below rather than in the header.
  */
-function headerHtml(subtitle) {
+function headerHtml(subtitle, workspace) {
   const model = routinesModel();
   let h = '<div class="profile-header">'
     + `<div class="profile-avatar skill-avatar">${CLOCK_SVG}</div>`
-    + `<div><div class="profile-name">${esc(model.LEAD.title)}</div>`
-    + (subtitle ? `<div class="routines-subtitle">${esc(subtitle)}</div>` : '')
-    + '</div></div>';
+    + `<div><div class="profile-name">${esc(model.LEAD.title)}</div></div>`
+    + '</div>';
+  // THE SENTENCE IS A SIBLING OF THE HEADER, NOT A CHILD OF IT, the same
+  // split views/skills.js's selectSkill() draws between .profile-header (icon
+  // plus name only) and .profile-desc (a full-width block below it). Nested
+  // inside the header's text column, the subtitle and the workspace line had
+  // no width of their own to wrap against: they took whatever the column
+  // happened to leave once the icon and its gap were spent, which on a
+  // two-line fact (scope plus workspace) read as the icon shrinking rather
+  // than the text running long. A sibling block spans the panel's own width
+  // instead, which is the width these sentences were always meant to wrap
+  // against.
+  if (subtitle || workspace) {
+    h += '<div class="routines-header-desc">'
+      + (subtitle ? `<div class="routines-subtitle">${esc(subtitle)}</div>` : '')
+      + (workspace ? `<div class="routines-workspace" data-routines-workspace>${esc(workspace)}</div>` : '')
+      + '</div>';
+  }
   // On the header rather than in one of the three branches below, so the
   // refusal is on the page whichever state the list is in when it arrives.
   if (pendingProblem) {
@@ -377,9 +510,25 @@ function headerHtml(subtitle) {
   return h;
 }
 
-/** The header a list of routines carries, scoped or not. */
+/**
+ * The header a list of routines carries, scoped or not.
+ *
+ * WHOSE ROUTINES THESE ARE, ON THE HEADER RATHER THAN ON EACH ROW. It is one
+ * fact about the whole list, and a reader with three workspaces otherwise has
+ * to read it off the window.
+ *
+ * ON THE LIST AND NOT ON THE EMPTY PANE, which is the one caller that passes
+ * no subtitle. "These are the routines in Ledger" above "No routines yet"
+ * describes a list that is not there, and the empty pane's whole shape is one
+ * box carrying what is true and what to do about it.
+ */
 function listHeaderHtml() {
-  return headerHtml(routinesModel().header({ agentName: routinesScopeName() }).subtitle);
+  const head = routinesModel().header({
+    agentName: routinesScopeName(),
+    workspace: routinesRosterWorkspace(),
+    servingWorkspace: routinesServingWorkspace(),
+  });
+  return headerHtml(head.subtitle, head.workspace);
 }
 
 // The one thing each variant offers, and where pressing it goes. Held as a
@@ -691,10 +840,35 @@ function routinesSetPaused(index, paused) {
   routinesSetFlag(index, 'set_routine_paused', 'paused', paused);
 }
 
+/**
+ * Open the editor on this routine's schedule.
+ *
+ * IT SENDS NOTHING, which is what separates it from every other control on this
+ * row. The other three ask the server for a change the reader has already
+ * decided; this one opens a screen where they decide. So there is no message
+ * shape here and no refusal to handle: the editor owns both from the moment it
+ * opens.
+ *
+ * IT CARRIES THE SAME TRIPLE THE OTHERS DO. Nothing makes a routine name unique
+ * within a file, so the agent, the name and which namesake it is travel
+ * together, and the editor carries them through to the message it eventually
+ * sends. A door that dropped the occurrence would open on one routine's times
+ * and save over another's.
+ *
+ * The refusal from the last action goes, for the reason it is held at all: it
+ * answers a control pressed on this list, and the reader is leaving it.
+ */
+function routinesEditSchedule(index) {
+  const entry = allRoutines()[index];
+  pendingProblem = null;
+  if (!entry || typeof editRoutineSchedule !== 'function') return;
+  editRoutineSchedule(entry.agent.id, entry.routine.name, entry.occurrence);
+}
+
 return {
   renderRoutines, showRoutinesForAgent,
   routinesAskDelete, routinesCancelDelete, routinesConfirmDelete, routinesSetPaused, routinesSetEnabled,
-  routinesOpenSkill,
+  routinesOpenSkill, routinesEditSchedule,
   routinesActionFailed, routinesActionCleared, routinesViewLastRun,
 };
 }));

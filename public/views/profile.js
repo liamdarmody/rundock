@@ -24,6 +24,26 @@
   }
 }(typeof self !== 'undefined' ? self : this, function () {
 
+// ATTRIBUTE-POSITION ESCAPER and the colour rule, both reached off the global
+// at call time the same way this file reaches every other helper it does not
+// own. `esc` is right for element content and wrong for an attribute value: it
+// leaves both quote characters alone. An agent id is the agent file's own
+// filename and a skill id is its directory name, so both are chosen by
+// whoever can write into the workspace. See public/agent-colour.js for why a
+// colour is judged rather than escaped.
+function escA(value) {
+  if (typeof escAttr === 'function') return escAttr(value);
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function agentColour(value, fallback) {
+  const safe = fallback === undefined ? 'var(--accent)' : fallback;
+  return typeof RundockAgentColour !== 'undefined'
+    ? RundockAgentColour.safeColour(value, safe) : safe;
+}
+
 function showProfile(agentId) {
   const a=agents.find(x=>x.id===agentId);
   // Missing target (a search hit whose agent is absent from the client list,
@@ -37,10 +57,10 @@ function showProfile(agentId) {
   const existing=conversations.filter(c=>c.agentId===agentId||(c.sessionIds||[]).some(s=>s.agentId===agentId));
   let h=`<a class="profile-back" onclick="switchNav('team')">&#8592; Back</a>
     <div class="profile-header">
-      <div class="profile-avatar" style="background:${a.colour}">${a.icon}</div>
+      <div class="profile-avatar" style="background:${agentColour(a.colour)}">${esc(a.icon)}</div>
       <div>
-        <div class="profile-name">${a.displayName}</div>
-        ${a.role?`<div style="font-size:var(--body);color:var(--text-2)">${a.role}</div>`:''}
+        <div class="profile-name">${esc(a.displayName)}</div>
+        ${a.role?`<div style="font-size:var(--body);color:var(--text-2)">${esc(a.role)}</div>`:''}
       </div>
     </div>`;
   if(a.description) h+=`<p class="profile-desc" style="margin-bottom:24px">${esc(a.description)}</p>`;
@@ -52,9 +72,9 @@ function showProfile(agentId) {
     const setupLabel = (guideCopy && guideCopy.guideLine('setup', getGuide()?.displayName)) || '';
     h+=`<div class="profile-cta"><button class="profile-cta-btn" onclick="startConversation(getGuide()?.id || 'default')">${esc(setupLabel)}</button></div>`;
   } else if(a.status === 'available') {
-    h+=`<div class="profile-cta"><button class="profile-cta-btn" onclick="addToTeam('${a.id}')">Add to team</button></div>`;
+    h+=`<div class="profile-cta"><button class="profile-cta-btn" data-agent-id="${escA(a.id)}" onclick="addToTeam(this.dataset.agentId)">Add to team</button></div>`;
   } else {
-    h+=`<div class="profile-cta"><button class="profile-cta-btn" onclick="startConversation('${a.id}')">New conversation</button></div>`;
+    h+=`<div class="profile-cta"><button class="profile-cta-btn" data-agent-id="${escA(a.id)}" onclick="startConversation(this.dataset.agentId)">New conversation</button></div>`;
   }
   // Capabilities card
   if(a.capabilities) {
@@ -73,7 +93,7 @@ function showProfile(agentId) {
   if(agentSkills.length) {
     h+=`<div class="profile-card"><div class="profile-card-section"><div class="profile-section-label">Skills</div>`;
     for(const s of agentSkills) {
-      h+=`<div class="profile-card-item" style="display:flex;flex-direction:column;gap:2px;cursor:pointer" onclick="switchNav('skills');selectSkill('${s.id}')">
+      h+=`<div class="profile-card-item" style="display:flex;flex-direction:column;gap:2px;cursor:pointer" data-skill-id="${escA(s.id)}" onclick="switchNav('skills');selectSkill(this.dataset.skillId)">
         <span style="font-weight:600">${esc(s.name)}</span>
         ${s.description ? `<span style="font-size:var(--caption);color:var(--text-2)">${esc(s.description)}</span>` : ''}
       </div>`;
@@ -109,7 +129,7 @@ function showProfile(agentId) {
         // the editor never offered has no plain words, and the stored string
         // is shown rather than nothing.
         const when = (routinesModel && routinesModel.scheduleWords(r.schedule)) || r.schedule;
-        h+=`<div class="profile-card-item" style="display:flex;flex-direction:column;gap:3px;cursor:pointer" onclick="showRoutinesForAgent('${esc(a.id)}')">
+        h+=`<div class="profile-card-item" style="display:flex;flex-direction:column;gap:3px;cursor:pointer" data-agent-id="${escA(a.id)}" onclick="showRoutinesForAgent(this.dataset.agentId)">
           <span style="font-weight:600">${esc(r.name)}</span>
           <span style="font-size:var(--caption);color:var(--text-2)">${esc(when)}</span>
         </div>`;
@@ -120,9 +140,13 @@ function showProfile(agentId) {
       // is being looked at. Once this agent has one it goes, and the next is
       // added from the routines view's own header control, which inherits the
       // scope it is pressed in.
+      // SECONDARY WEIGHT, matching "Schedule this skill" on the skill page:
+      // both are a shortcut into the same routine editor, not the primary
+      // action of this screen, and reading as loud as "New conversation"
+      // overstated it.
       h+=`<div class="profile-card-text" style="padding-bottom:10px">Give one of ${esc(a.displayName)}'s skills a schedule and it runs without being asked.</div>
-      <button class="settings-btn-primary" type="button" data-profile-action="add-routine"
-        data-agent-id="${esc(a.id)}" onclick="addRoutineForAgent('${esc(a.id)}')">Add routine</button>`;
+      <button class="settings-btn" type="button" data-profile-action="add-routine"
+        data-agent-id="${escA(a.id)}" onclick="addRoutineForAgent(this.dataset.agentId)">Add routine</button>`;
     }
     h+=`</div></div>`;
   }
@@ -136,7 +160,7 @@ function showProfile(agentId) {
     if(hasConnectors) {
       h+=a.capabilities.connectors.split(',').map(cn=>row(esc(cn.trim()), '<span style="color:var(--success);font-size:var(--caption)">Connected</span>')).join('');
     }
-    if(a.model) h+=row('Model', `<span style="color:var(--text-2)">${modelLabels[a.model]||a.model}</span>`);
+    if(a.model) h+=row('Model', `<span style="color:var(--text-2)">${esc(modelLabels[a.model]||a.model)}</span>`);
     // Runtime is stated for every agent, not just Codex ones, so it reads as
     // a fact about the agent rather than a special mark.
     h+=row('Runtime', `<span style="color:var(--text-2)">${a.runtime === 'codex' ? 'Codex' : 'Claude Code'}</span>`);
@@ -154,7 +178,7 @@ function showProfile(agentId) {
     h+=`<div class="profile-existing"><div class="profile-section-label">Existing conversations</div>`;
     for(const c of existing) {
       const n = c.messageCount ?? c.messages.length;
-      h+=`<div class="profile-existing-item" onclick="openConversation('${c.id}')"><span class="profile-existing-title">${esc(c.title)}</span><span class="profile-existing-meta">${n} message${n === 1 ? '' : 's'}</span></div>`;
+      h+=`<div class="profile-existing-item" data-convo-id="${escA(c.id)}" onclick="openConversation(this.dataset.convoId)"><span class="profile-existing-title">${esc(c.title)}</span><span class="profile-existing-meta">${n} message${n === 1 ? '' : 's'}</span></div>`;
     }
     h+=`</div>`;
   }
@@ -162,7 +186,13 @@ function showProfile(agentId) {
   showView('profile');
   // Highlight in sidebar
   document.querySelectorAll('.agent-status-item').forEach(el=>el.classList.remove('active'));
-  document.querySelector(`[data-agent="${agentId}"]`)?.classList.add('active');
+  // Matched by reading the attribute back rather than by building a selector
+  // out of it. The id is a filename an agent chooses, and a quote in it makes
+  // querySelector throw rather than inject, which took the sidebar highlight
+  // out with it.
+  for (const el of document.querySelectorAll('[data-agent]')) {
+    if (el.dataset.agent === agentId) { el.classList.add('active'); break; }
+  }
 }
 
 return { showProfile };

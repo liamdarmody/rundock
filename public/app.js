@@ -56,7 +56,7 @@ const persist = (() => {
 const sunIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`;
 const moonIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
 
-let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false, currentWorkspacePath=null, workspaceAnalysis=null, workspaceIsEmpty=false, workspaceMode='knowledge', setupComplete=true, conversationsLoaded=false, activeSidebarPill='all', convoLists=[];
+let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false, currentWorkspacePath=null, servingWorkspacePath=null, workspaceAnalysis=null, workspaceIsEmpty=false, workspaceMode='knowledge', setupComplete=true, conversationsLoaded=false, activeSidebarPill='all', convoLists=[];
 let runtimeStatus = null; // { defaultRuntime, claude: {installed, authenticated, version}, codex: {...} }
 const agentLastActivity = {}; // { agentId: { time: Date, label: string } }
 // Per-conversation state: { convoId: { isProcessing, currentStreamingMsg, latestText } }
@@ -171,53 +171,11 @@ function updateUnreadBadge() {
   }
 }
 
-// THE ONE ALARMING STATE IN THE PRODUCT, ON THE CHROME.
-//
-// The three-tone ruling makes a real failure the only genuinely alarming state
-// a routine can be in, and it could not be seen without opening the view that
-// governs it: somebody whose overnight run failed had no way to know until
-// they went and looked.
-//
-// THE TOKEN IS --danger AND NOT THE CLASS BESIDE IT. `.nav-badge` already
-// exists for unread conversations and is --attention, and amber is deliberately
-// spent on "needs the user, not an error". A failed routine is an error, so it
-// takes its own class and the danger token rather than borrowing amber, which
-// reads as an alert whatever a legend says it means.
-//
-// WHICH ROUTINES COUNT IS THE MODEL'S ANSWER, not this function's. It asks the
-// same question a row asks, so the rule the rows were settled on cannot say one
-// thing on a row and another on the rail.
-function updateRoutineFailureBadge() {
-  const navBtn = document.querySelector('[data-nav="routines"]');
-  if (!navBtn) return;
-  let badge = navBtn.querySelector('.nav-badge-failed');
-  const facts = [];
-  for (const agent of agents || []) {
-    for (const routine of agent.routines || []) {
-      facts.push({
-        // The same fields a row reads, taken the same way, so the rail and the
-        // row cannot disagree about what happened last.
-        lastStart: routine.lastStart,
-        lastRunStatus: routine.state ? routine.state.status : null,
-        lastSlot: routine.lastSlot,
-        missedSlot: routine.missedSlot,
-        // AND WHETHER IT IS PAUSED, which the row does not need and the rail
-        // does. A paused routine can never succeed again, so a dot raised by
-        // one could never be cleared by the rule that clears dots.
-        paused: !!routine.paused,
-      });
-    }
-  }
-  if (RundockRoutinesModel.anyFailure(facts)) {
-    if (!badge) {
-      badge = document.createElement('span');
-      badge.className = 'nav-badge-failed';
-      navBtn.appendChild(badge);
-    }
-  } else {
-    if (badge) badge.remove();
-  }
-}
+// A failed-routine dot used to render here, on the nav rail, so a failure was
+// visible without opening the view that governs it. Removed 2026-08-27: it
+// read as distracting in practice. `RundockRoutinesModel.anyFailure` (the
+// model function this used to ask) stays in routines-model.js, tested, in
+// case a quieter signal for this replaces it later.
 
 function esc(t){const d=document.createElement('div');d.textContent=t;return d.innerHTML;}
 function escAttr(t){return t.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
@@ -247,7 +205,7 @@ function connect() {
   ws = new WebSocket(`${p}//${location.host}`);
   ws.onopen = () => { setConn('connected'); ws.send(JSON.stringify({type:'get_workspaces'})); };
   ws.onmessage = e => handle(JSON.parse(e.data));
-  ws.onclose = () => { setConn('disconnected'); setTimeout(connect, 2000); };
+  ws.onclose = () => { setConn('disconnected'); packagesConnectionLost(); setTimeout(connect, 2000); };
   ws.onerror = () => {}; // Prevent unhandled error; onclose fires next
 }
 function setConn(s) { const b=document.getElementById('connection-bar'); b.className=`connection-bar ${s}`; b.textContent=s==='connected'?'Connected':s==='disconnected'?'Disconnected. Reconnecting...':'Connecting...'; if(s==='connected')setTimeout(()=>b.style.display='none',2000); else b.style.display='block'; }
@@ -257,6 +215,7 @@ function setConn(s) { const b=document.getElementById('connection-bar'); b.class
 function handle(d) {
   const convoId = d._conversationId;
   switch(d.type) {
+    case 'package_import_plan': case 'package_import_result': case 'package_import_error': packagesReplyArrived(d); break;
     case 'workspaces': handleWorkspaces(d); break;
     case 'workspace_set':
       // Start the clock on the renderer's share of opening a workspace. The
@@ -265,6 +224,14 @@ function handle(d) {
       workspaceOpenStartedAt = Date.now();
       onWorkspaceReady(d.path, d.analysis, d.isEmpty, d.workspaceMode, d.scaffoldError, d.setupComplete);
       break;
+    // WHICH WORKSPACE THE SCHEDULER IS SERVING, which is not the same question
+    // as which workspace this window opened. There is one scheduler on this
+    // server and several windows can be looking at it, so another window
+    // switching the server leaves this one showing a workspace nothing is
+    // running for. This arrives on every switch, including switches this
+    // window did not ask for, and it carries the path only: the reader stays
+    // where they were and the routines list stops promising runs.
+    case 'serving_workspace': setServingWorkspace(d.path); break;
     case 'folder_picked': if (d.path) selectWorkspace(d.path); break;
     case 'workspace_error': {
       const errEl = document.getElementById('workspace-error');
@@ -288,12 +255,17 @@ function handle(d) {
     // AND THE RAIL, for the same reason one step further out: the roster is
     // also what arrives when a run finishes, which is the only thing that
     // raises or clears the failure dot.
-    case 'agents': agents=d.agents; renderAgentList(); renderOrgChart(); renderRoutinesPanel(); renderRoutines(); updateRoutineFailureBadge(); renderConvoList(); break;
+    //
+    // THE WORKSPACE THE ROSTER WAS READ FROM ARRIVES WITH IT, on the same
+    // message, so the routines list can never compare rows against a workspace
+    // value that moved after they did. Assigned before anything draws.
+    case 'agents': agents=d.agents; setServingWorkspace(d.workspace); renderAgentList(); renderOrgChart(); renderRoutinesPanel(); renderRoutines(); renderConvoList(); runDetailRosterUpdated(); break;
     // renderRoutines as well as renderSkills: the routines empty state asks
     // whether the workspace has a skill, so the reply that answers that
     // question is the reply that has to redraw it. Without this the list sits
     // on its waiting line until the next roster broadcast.
     case 'run': runArrived(d); break;
+    case 'routine_run_stop_requested': stopRequestArrived(d); break;
     case 'skills': skills=d.skills; skillsLoaded=true; renderSkills(); renderRoutines(); routineEditorSkillsArrived(d.skills); if(palettePendingSkill){const s=palettePendingSkill;palettePendingSkill=null;selectSkill(s);} break;
     case 'conversations':
       handlePersistedConversations(d.conversations, d.lastActiveConversationId);
@@ -490,6 +462,15 @@ function handle(d) {
     case 'routine_error':
       addSystemMsg(d.message || 'Routine could not be saved');
       routineEditorFailed(d.message);
+      break;
+    // A schedule change lands on the same road a save does, because the reader
+    // is in the same place: the editor, with a save in flight, waiting to be
+    // told. A refusal arrives as routine_error above, which is why that case
+    // needs nothing added for this one.
+    case 'routine_rescheduled':
+      routinesActionCleared();
+      addSystemMsg('Routine "' + (d.name || '') + '" now runs ' + (d.schedule || ''));
+      routineEditorSaved();
       break;
     case 'routine_action_error':
       // The routines list asked, so the routines list is told. Deliberately
@@ -1342,8 +1323,14 @@ function showWorkspacePicker(recent, discovered) {
   const recentEl = document.getElementById('workspace-recent');
   const discoveredEl = document.getElementById('workspace-discovered');
 
+  // `subtitle` is inserted as MARKUP by contract: the Recent list passes
+  // esc(r.path) and the Discovered list passes a built string. Both callers
+  // escape what they pass. `path` is a directory name off the recents file or
+  // a scan of the home directory, and it lands in an attribute, so it takes
+  // escAttr rather than esc: this screen renders BEFORE a workspace has been
+  // chosen, which is before the reader has decided to trust anything.
   const wsCard = (name, subtitle, path) =>
-    `<div class="ws-pick-item ws-card" data-ws-path="${esc(path)}">
+    `<div class="ws-pick-item ws-card" data-ws-path="${escAttr(path)}">
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" style="color:var(--text-2);flex-shrink:0"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
       <div class="ws-card-body">
         <div class="ws-card-name">${esc(name)}</div>
@@ -1449,9 +1436,36 @@ function resetSidebarForWorkspace() {
   setNavState('conversations');
 }
 
+/**
+ * Record which workspace the server's scheduler is serving.
+ *
+ * THE ONLY WRITER OF THIS VALUE, and every caller hands it a string the SERVER
+ * produced from its own `getWorkspace()`: the path on a serving_workspace
+ * notice, the workspace beside a roster, and the path the server confirms a
+ * workspace_set with. That is the same string discovery stamps on every
+ * routine, so the routines list compares two copies of one value rather than
+ * two paths that were spelled independently and might differ by a separator or
+ * a resolved symlink.
+ *
+ * NEVER SET FROM `currentWorkspacePath`, which is what this window asked to
+ * open and can be out of date the moment another window switches the server.
+ *
+ * A missing value leaves the previous one alone rather than clearing it: an
+ * older server that sends a roster without the workspace beside it has not
+ * said the scheduler stopped serving anything.
+ */
+function setServingWorkspace(path) {
+  if (typeof path !== 'string' || !path) return;
+  servingWorkspacePath = path;
+}
+
 function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupComplete) {
   const isSameWorkspace = (currentWorkspacePath === dir);
   currentWorkspacePath = dir;
+  // The server confirmed this path out of its own root, so it is the serving
+  // workspace as well as the one this window now shows. Set here so a window
+  // that opens a workspace and never receives another message still knows.
+  setServingWorkspace(dir);
   workspaceAnalysis = analysis || null;
   workspaceIsEmpty = !!isEmpty;
   workspaceMode = mode || 'knowledge';
@@ -1471,6 +1485,9 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   ws.send(JSON.stringify({ type: 'get_runtime_status' }));
   skillsLoaded = false;
   currentSkillId = null;
+  // A package plan describes one workspace's collision facts and defaults;
+  // a different workspace returns the install flow to idle.
+  if (!isSameWorkspace) packagesWorkspaceChanged();
 
   if (isSameWorkspace && currentView !== 'workspace') {
     // Reconnect to same workspace: keep in-memory conversations and active view intact.

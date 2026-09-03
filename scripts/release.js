@@ -3,24 +3,47 @@
 /**
  * Release script for Rundock (tag-and-let-CI-build model).
  *
- * Bumps the version, promotes the CHANGELOG `## Unreleased` block to a versioned
- * heading, commits, pushes main, and pushes a `v<version>` tag. The GitHub Actions
- * release workflow (.github/workflows/release.yml) then builds, signs, notarises,
- * and publishes a DRAFT GitHub release for that tag. Building no longer happens on
- * your laptop.
+ * A release is three commands, and the gaps between them are the point.
  *
- * After this script: watch the Actions run, then review and publish the draft
- * release. Update the Rundock Site download links once the release is published.
+ *   npm run release:gate                    # the full gauntlet, on the candidate
+ *   npm run release -- prepare <version>    # bump, promote the changelog, open a pull request
+ *   ...review and merge that pull request...
+ *   npm run release -- tag <version>        # tag the merged commit, which starts the build
+ *   ...watch the build, review the draft it publishes...
+ *   npm run release -- publish <version>    # publish the reviewed draft
  *
- * Usage:
- *   npm run release -- <version>     (e.g. npm run release -- 0.8.14)
+ * WHY IT IS NOT ONE COMMAND. It used to be: bump, commit, push main, tag. main
+ * requires status checks with admin enforcement, so that push is rejected every
+ * time and the command could never finish. Teaching it to open a pull request
+ * and wait would keep one command at the cost of burying a real approval point,
+ * so the split is where the human already was.
  *
- * Recovery: if the CI build fails (e.g. an expired Apple agreement), fix the cause
- * and re-run the workflow on the same tag (gh run rerun, or the Actions UI). There
- * is no need to revert main: the bump + tag stay, and CI publishes once it passes.
+ * The gate governs the commit being released and is checked in `prepare`,
+ * before the bump commit exists. It is deliberately NOT re-checked in `tag`:
+ * the tagged commit is always one past the gated one, because the bump sits on
+ * top of it, and it only touches package.json and CHANGELOG.md. What `tag`
+ * checks instead is that the reviewed commit really is on origin/main.
  *
- * No Apple/signing credentials are needed locally any more; those live in GitHub
- * Secrets are provided by the CI environment (see the repository CI settings).
+ * `tag` starts something that cannot be un-started: the GitHub Actions
+ * workflow that builds, signs, notarises, and publishes a DRAFT release.
+ * Building does not happen on your laptop, and no Apple or signing
+ * credentials are needed locally: those live in the CI environment. But CI
+ * never makes anything public. It produces a DRAFT and stops there.
+ *
+ * `publish` is the step that matters most, and CI never runs it. Only a
+ * human decides a specific version is ready for everyone, by running
+ * `publish` themselves with --confirm naming that exact version (see
+ * hasPublishConfirmation). This was not always enforced: on 2026-08-27 an
+ * agent ran `publish` unprompted, straight after fixing unrelated build
+ * bugs, because nothing but a naming convention separated it from `tag`.
+ * See Ratchet-Log "A split command is not a control", 2026-08-27.
+ *
+ * Recovery: if the CI build fails (e.g. an expired Apple agreement), fix the
+ * cause and re-run the workflow on the same tag (gh run rerun, or the Actions
+ * UI). There is no need to revert main: the bump and the tag stay, and the
+ * draft is still there to publish once CI passes.
+ *
+ * Update the Rundock Site download links once the release is published.
  */
 
 const { execFileSync } = require('child_process');
@@ -36,7 +59,7 @@ const REPO = 'liamdarmody/rundock';
 // Helpers
 // ---------------------------------------------------------------------------
 
-function log(step, msg) {
+function logStep(step, msg) {
   console.log(`[release:${step}] ${msg}`);
 }
 
@@ -45,57 +68,52 @@ function fail(step, msg) {
   process.exit(1);
 }
 
-function git(args, opts = {}) {
-  return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', ...opts });
+// A git runner bound to one repository. Every step takes its runner as an
+// option so the release flow can be exercised end to end against a throwaway
+// repository in a temp directory rather than against this checkout.
+function gitIn(root) {
+  return (args, opts = {}) => execFileSync('git', args, { cwd: root, encoding: 'utf8', ...opts });
 }
+
+const git = gitIn(ROOT);
 
 // ---------------------------------------------------------------------------
 // Steps
 // ---------------------------------------------------------------------------
 
-function getVersion() {
-  const version = process.argv[2];
-  if (!version) {
-    fail('version', 'Usage: npm run release -- <version> (e.g. npm run release -- 0.8.14)');
-  }
-  if (!/^\d+\.\d+\.\d+$/.test(version)) {
-    fail('version', `Invalid version "${version}". Expected semver MAJOR.MINOR.PATCH (e.g. 0.8.14).`);
-  }
-  return version;
-}
-
 // Must be on main, fully clean tree, in sync with origin, and the tag must not
 // already exist. Runs BEFORE any file is modified so a failed pre-flight leaves
-// the working tree untouched.
-function preflight(version) {
+// the working tree untouched. Throws so it is unit-testable; the main flow
+// converts to fail().
+function preflight(version, { root = ROOT, git = gitIn(root) } = {}) {
   let branch;
   try {
     branch = git(['symbolic-ref', '--short', 'HEAD']).trim();
   } catch (err) {
-    fail('preflight', `Could not determine current branch: ${err.message}`);
+    throw new Error(`Could not determine current branch: ${err.message}`);
   }
   if (branch !== 'main') {
-    fail('preflight', `Must be on main to release (currently on "${branch}").`);
+    throw new Error(`Must be on main to release (currently on "${branch}").`);
   }
 
   const status = git(['status', '--porcelain']).trim();
   if (status) {
-    fail('preflight', `Working tree is not clean. Commit or stash changes before releasing:\n${status}`);
+    throw new Error(`Working tree is not clean. Commit or stash changes before releasing:\n${status}`);
   }
 
   try {
     git(['fetch', 'origin', 'main'], { stdio: 'pipe' });
   } catch (err) {
-    fail('preflight', `git fetch origin main failed: ${err.message}`);
+    throw new Error(`git fetch origin main failed: ${err.message}`);
   }
   const behind = git(['rev-list', '--count', 'HEAD..origin/main']).trim();
   if (parseInt(behind, 10) > 0) {
-    fail('preflight', `Local main is ${behind} commit(s) behind origin/main. Pull before releasing.`);
+    throw new Error(`Local main is ${behind} commit(s) behind origin/main. Pull before releasing.`);
   }
 
   const tag = `v${version}`;
   if (git(['tag', '-l', tag]).trim()) {
-    fail('preflight', `Tag ${tag} already exists locally. Choose a new version or delete the tag.`);
+    throw new Error(`Tag ${tag} already exists locally. Choose a new version or delete the tag.`);
   }
 }
 
@@ -192,8 +210,24 @@ function publishRelease(version, { api = ghApi, log = (msg) => console.log(`[rel
   return { id: draft.id, tag, url: published.html_url };
 }
 
-function setVersion(version) {
-  const pkgPath = path.join(ROOT, 'package.json');
+// Reads --confirm <version> from argv and checks it names the exact version
+// being published. This is a friction boundary, not a security one: anyone
+// who can run this script can also type the flag. Its purpose is that the
+// command tag prints for its own next step deliberately does not include a
+// working --confirm, so publish can never be run by copying the previous
+// step's own output. See Ratchet-Log "A split command is not a control",
+// 2026-08-27: publish and tag were already separate commands specifically
+// so a human decides when the last one runs, and nothing but that naming
+// convention stopped an agent running it unprompted mid-task. A stale
+// confirmation for a different version does not satisfy this, so an old
+// command cannot be reused for a new release by habit.
+function hasPublishConfirmation(argv, version) {
+  const i = argv.indexOf('--confirm');
+  return i !== -1 && argv[i + 1] === version;
+}
+
+function setVersion(version, { root = ROOT, log = logStep } = {}) {
+  const pkgPath = path.join(root, 'package.json');
   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
   pkg.version = version;
   fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
@@ -234,29 +268,34 @@ function extractChangelogEntry(version, changelogText) {
 // Promote the `## Unreleased` heading to the versioned heading for this release.
 // If `## ${version}:` already exists, no-op. If neither exists, abort: we must
 // not release without notes. The release name is read from a `**Name:**` line.
-function promoteUnreleasedChangelog(version) {
-  const changelogPath = path.join(ROOT, 'CHANGELOG.md');
+// Returns the versioned heading it wrote, or the one already present, so the
+// caller can quote it without re-parsing the file. Throws so it is
+// unit-testable; the main flow converts to fail().
+function promoteUnreleasedChangelog(version, { root = ROOT, log = logStep } = {}) {
+  const changelogPath = path.join(root, 'CHANGELOG.md');
   if (!fs.existsSync(changelogPath)) {
-    fail('changelog', `CHANGELOG.md not found at ${changelogPath}`);
+    throw new Error(`CHANGELOG.md not found at ${changelogPath}`);
   }
   const original = fs.readFileSync(changelogPath, 'utf8');
 
-  const versionHeadingRe = new RegExp(`^## ${version.replace(/\./g, '\\.')}:`, 'm');
-  if (versionHeadingRe.test(original)) {
+  const versionHeadingRe = new RegExp(`^## ${version.replace(/\./g, '\\.')}:.*$`, 'm');
+  const alreadyPromoted = original.match(versionHeadingRe);
+  if (alreadyPromoted) {
     log('changelog', `Versioned heading for ${version} already present, skipping promotion`);
-    return;
+    return alreadyPromoted[0];
   }
 
   const unreleasedRe = /^## Unreleased[ \t]*$/m;
   if (!unreleasedRe.test(original)) {
-    fail(
-      'changelog',
+    throw new Error(
       `No "## Unreleased" block and no "## ${version}:" block in CHANGELOG.md. ` +
       `Add release notes under "## Unreleased" before running release.`
     );
   }
 
-  const entry = extractChangelogEntry('Unreleased');
+  // Parse the block we already have in memory rather than re-reading the file,
+  // which is what makes this work against any root, not only this checkout.
+  const entry = extractChangelogEntry('Unreleased', original);
   const nameMatch = entry && entry.body.match(/^\s*\*\*Name:\*\*\s*(.+?)\s*$/m);
   let name;
   if (nameMatch) {
@@ -274,66 +313,289 @@ function promoteUnreleasedChangelog(version) {
 
   fs.writeFileSync(changelogPath, updated, 'utf8');
   log('changelog', `Promoted "## Unreleased" to "${newHeading}"`);
+  return newHeading;
 }
 
-function commitTagPush(version) {
-  const tag = `v${version}`;
-  try {
-    git(['add', 'package.json', 'CHANGELOG.md'], { stdio: 'inherit' });
-    git(['commit', '-m', `chore: release ${version}`], { stdio: 'inherit' });
-    git(['push', 'origin', 'main'], { stdio: 'inherit' });
-    git(['tag', tag], { stdio: 'inherit' });
-    git(['push', 'origin', tag], { stdio: 'inherit' });
-  } catch (err) {
-    fail('push', `git commit/tag/push failed: ${err.message}`);
+// ---------------------------------------------------------------------------
+// Prepare subcommand
+// ---------------------------------------------------------------------------
+
+// Default transport for `gh` invocations that are not API calls. Injected as an
+// option so the prepare flow can be exercised without reaching GitHub, which is
+// the same arrangement publishRelease uses for its API transport.
+function ghCli(root = ROOT) {
+  return (args) => execFileSync('gh', args, { cwd: root, encoding: 'utf8' });
+}
+
+// Short, factual, and held to the same writing rules as anything committed:
+// this text is published under the project's name.
+function pullRequestBody(version, { gatedSha, heading, branch }) {
+  const entry = heading.replace(/^##\s*/, '');
+  return [
+    `Version bump and changelog promotion for ${version}, and nothing else. The commit sits on top of ${gatedSha.slice(0, 9)}, which is the commit the release gate passed on.`,
+    '',
+    `Promoted changelog heading: ${entry}`,
+    `Full entry: https://github.com/${REPO}/blob/${branch}/CHANGELOG.md`,
+    '',
+    `Branch protection requires the checks on this pull request to pass before it can merge, so there is nothing further to run locally. Once it has merged, \`npm run release -- tag ${version}\` tags the merged commit on main, and that tag is what starts the build, sign, notarise and draft publish workflow.`,
+    '',
+  ].join('\n');
+}
+
+// Everything up to the point a human has to look at something: preflight, gate
+// check, version bump, changelog promotion, a commit on `release/<version>`,
+// the branch pushed, and a pull request opened against main. It does not push
+// to main and it does not tag. Throws so it is unit-testable; the main flow
+// converts to fail().
+function prepareRelease(version, { root = ROOT, git = gitIn(root), gh = ghCli(root), log = logStep } = {}) {
+  preflight(version, { root, git });
+
+  // The gate governs the SHA being released: check it BEFORE the version-bump
+  // commit is created, because that commit only adds package.json and
+  // CHANGELOG.md on top of the gated code.
+  const gatedSha = git(['rev-parse', 'HEAD']).trim();
+  requireGatePass(gatedSha, { root });
+
+  const branch = `release/${version}`;
+  if (git(['branch', '--list', branch]).trim()) {
+    throw new Error(`Branch ${branch} already exists locally. Delete it, or finish the release it belongs to.`);
   }
-  log('push', `Committed, pushed main, and pushed tag ${tag}`);
+  if (git(['ls-remote', '--heads', 'origin', branch]).trim()) {
+    throw new Error(`Branch ${branch} already exists on the remote. An earlier prepare got that far; review its pull request rather than starting again.`);
+  }
+
+  // The push is the boundary between what can be wound back and what cannot.
+  // Before it, the only changes anywhere are the ones made below, because the
+  // preflight proved the tree was clean, so a failure restores exactly what
+  // this function wrote and nothing of anyone else's. After it, the branch is
+  // on the remote and somebody may already be reading it, so the failure says
+  // what exists rather than tidying it away.
+  let pushed = false;
+  try {
+    git(['checkout', '-b', branch], { stdio: 'pipe' });
+    setVersion(version, { root, log });
+    const heading = promoteUnreleasedChangelog(version, { root, log });
+    git(['add', 'package.json', 'CHANGELOG.md'], { stdio: 'pipe' });
+    git(['commit', '-m', `chore: release ${version}`], { stdio: 'pipe' });
+    git(['push', '-u', 'origin', branch], { stdio: 'pipe' });
+    pushed = true;
+    log('prepare', `Pushed ${branch}`);
+
+    const out = gh([
+      'pr', 'create',
+      '--base', 'main',
+      '--head', branch,
+      '--title', `Prepare the ${version} release`,
+      '--body', pullRequestBody(version, { gatedSha, heading, branch }),
+    ]);
+    const pullRequest = String(out || '').trim().split('\n').filter(Boolean).pop() || '';
+    log('prepare', `Opened ${pullRequest || 'the pull request'}`);
+    return { branch, gatedSha, heading, pullRequest };
+  } catch (err) {
+    if (pushed) {
+      throw new Error(
+        `${err.message}\n\nThe branch ${branch} is pushed and carries the release commit, but the pull request was not opened. ` +
+        `Open it against main by hand, or delete the branch and run prepare again. No tag exists either way.`
+      );
+    }
+    const restored = restoreMain(branch, { git });
+    throw new Error(
+      `${err.message}\n\n${restored}`
+    );
+  }
+}
+
+// Put the repository back on main as the preflight found it. Safe only because
+// the preflight refuses a dirty tree, so the sole thing discarded here is the
+// version bump and changelog promotion this run just wrote.
+function restoreMain(branch, { git }) {
+  try {
+    git(['checkout', '--force', 'main'], { stdio: 'pipe' });
+    if (git(['branch', '--list', branch]).trim()) {
+      git(['branch', '-D', branch], { stdio: 'pipe' });
+    }
+    return 'Nothing was pushed. The working tree is back on main as it was, and no tag exists.';
+  } catch (err) {
+    return (
+      `Nothing was pushed, and winding the working tree back failed as well: ${err.message}. ` +
+      `Check "git status" and "git branch" before running prepare again.`
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tag subcommand
+// ---------------------------------------------------------------------------
+
+// Run after the prepare pull request has been reviewed and merged. It cannot
+// assume the merge landed just because it was asked to run, so it reads the
+// state of `origin/main` and refuses unless the release commit is actually
+// there. Tagging is the irreversible half of a release: the tag is what starts
+// the build, sign, notarise and draft publish workflow.
+//
+// THE GATE IS DELIBERATELY NOT RE-RUN HERE. The tagged commit is always one
+// past the gated one, because the bump commit sits on top of it, so a gate
+// check at this point would be gating a commit that only touches package.json
+// and CHANGELOG.md. The gate check happens once, in prepare, against the
+// pre-bump commit, which is where it has always happened.
+//
+// Throws so it is unit-testable; the main flow converts to fail().
+function tagRelease(version, { root = ROOT, git = gitIn(root), log = logStep } = {}) {
+  const tag = `v${version}`;
+
+  // On main, clean tree, not behind origin, and the tag not already local.
+  preflight(version, { root, git });
+
+  // The tag must land on the reviewed commit, so local main has to BE that
+  // commit rather than merely contain it: the preflight rules out being behind,
+  // and this rules out being ahead.
+  const head = git(['rev-parse', 'HEAD']).trim();
+  const merged = git(['rev-parse', 'origin/main']).trim();
+  if (head !== merged) {
+    throw new Error(
+      `Local main is at ${head.slice(0, 9)} but origin/main is at ${merged.slice(0, 9)}. ` +
+      `The tag must land on the reviewed commit, so local main must carry nothing of its own.`
+    );
+  }
+
+  let pkg;
+  try {
+    pkg = JSON.parse(git(['show', `${merged}:package.json`]));
+  } catch (err) {
+    throw new Error(`Could not read package.json at origin/main: ${err.message}`);
+  }
+  if (pkg.version !== version) {
+    throw new Error(
+      `package.json at origin/main is ${pkg.version}, not ${version}. ` +
+      `The prepare pull request for ${version} has not merged yet: run "npm run release -- prepare ${version}" first, then merge it.`
+    );
+  }
+
+  // The version alone is not proof the release commit landed. A tree with the
+  // bump but no promoted heading would publish a release with empty notes,
+  // which is the failure the changelog promotion exists to prevent.
+  const changelog = git(['show', `${merged}:CHANGELOG.md`]);
+  const headingRe = new RegExp(`^## ${version.replace(/\./g, '\\.')}:`, 'm');
+  if (!headingRe.test(changelog)) {
+    throw new Error(
+      `CHANGELOG.md at origin/main has no "## ${version}:" heading, so the changelog promotion is not on main. ` +
+      `Tagging now would publish a release with no notes.`
+    );
+  }
+
+  if (git(['ls-remote', '--tags', 'origin', `refs/tags/${tag}`]).trim()) {
+    throw new Error(`Tag ${tag} already exists on the remote. Choose a new version, or recut deliberately by deleting it first.`);
+  }
+
+  git(['tag', tag], { stdio: 'pipe' });
+  try {
+    git(['push', 'origin', tag], { stdio: 'pipe' });
+  } catch (err) {
+    // Leave nothing tagged anywhere. A local tag left behind would make the
+    // next attempt fail the preflight instead of retrying the push.
+    let cleanup = 'The local tag has been removed, so nothing is tagged anywhere.';
+    try {
+      git(['tag', '-d', tag], { stdio: 'pipe' });
+    } catch (deleteErr) {
+      cleanup = `The local tag could not be removed either (${deleteErr.message}); delete it with "git tag -d ${tag}" before trying again.`;
+    }
+    throw new Error(`Pushing ${tag} failed: ${err.message}\n\n${cleanup}`);
+  }
+
+  log('tag', `Tagged ${tag} on ${merged.slice(0, 9)} and pushed it`);
+  return { tag, sha: merged };
 }
 
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
+const USAGE = [
+  'Usage:',
+  '  npm run release -- prepare <version>                    bump, promote the changelog, and open the release pull request',
+  '  npm run release -- tag <version>                        after that pull request merges, tag the merged commit',
+  '  npm run release -- publish <version> --confirm <version>   publish the draft release CI built for that tag, only after you have tested it yourself',
+].join('\n');
+
 // Guarded so the changelog helpers are requireable (by tests and by
 // scripts/release-notes.js) without starting a release.
 if (require.main === module) {
-  if (process.argv[2] === 'publish') {
-    // npm run release -- publish <version>
+  const [subcommand, arg] = process.argv.slice(2);
+
+  const versionFor = (step) => {
+    if (!arg || !/^\d+\.\d+\.\d+$/.test(arg)) {
+      fail(step, `Usage: npm run release -- ${step} <version> (e.g. npm run release -- ${step} 0.12.0)`);
+    }
+    return arg;
+  };
+
+  if (subcommand === 'prepare') {
+    const version = versionFor('prepare');
+    let result;
+    try {
+      result = prepareRelease(version);
+    } catch (err) {
+      fail('prepare', err.message);
+    }
+    console.log('');
+    logStep('done', `${version} is prepared on ${result.branch}: ${result.pullRequest || 'the pull request is open'}`);
+    logStep('done', 'The required checks run on that pull request. Review it and merge it.');
+    logStep('done', 'Once it has merged: git checkout main && git pull');
+    logStep('done', `Then tag the merged commit with: npm run release -- tag ${version}`);
+    logStep('done', 'Nothing is tagged until that runs, so a mistake here is a branch to delete.');
+  } else if (subcommand === 'tag') {
+    const version = versionFor('tag');
+    try {
+      tagRelease(version);
+    } catch (err) {
+      fail('tag', err.message);
+    }
+    console.log('');
+    logStep('done', `Tagged v${version}. GitHub Actions is now building, signing, notarising, and publishing a DRAFT release.`);
+    logStep('done', `Watch the build:   https://github.com/${REPO}/actions`);
+    logStep('done', `Review the draft:  https://github.com/${REPO}/releases`);
+    logStep('done', 'Do not publish yet. Download and test the draft build on your own machine(s) first.');
+    logStep('done', `Once you have decided v${version} is ready for everyone: npm run release -- publish ${version} --confirm ${version}`);
+    logStep('done', `If CI fails (e.g. expired Apple agreement): fix it and re-run the workflow on tag v${version}: no need to revert main.`);
+  } else if (subcommand === 'publish') {
     // Publishes the reviewed draft, binding the tag before the draft flip.
-    const version = process.argv[3];
-    if (!version || !/^\d+\.\d+\.\d+$/.test(version)) {
-      fail('publish', 'Usage: npm run release -- publish <version> (e.g. npm run release -- publish 0.11.7)');
+    // --confirm is required and must name this exact version: see
+    // hasPublishConfirmation's own comment for why.
+    const version = versionFor('publish');
+    if (!hasPublishConfirmation(process.argv, version)) {
+      fail('publish',
+        `Publishing v${version} makes it downloadable by everyone, not just you testing the draft.\n` +
+        `  This requires --confirm ${version}, typed fresh for this exact version after you have tested the build yourself:\n` +
+        `    npm run release -- publish ${version} --confirm ${version}\n` +
+        `  Never run this because it was the next line printed by an earlier step, and an agent must never supply --confirm on its own.`
+      );
     }
     try {
       const result = publishRelease(version);
       console.log('');
-      log('done', `v${version} is live: ${result.url || `https://github.com/${REPO}/releases`}`);
-      log('done', 'Site download links resolve via /releases/latest; no bump needed.');
+      logStep('done', `v${version} is live: ${result.url || `https://github.com/${REPO}/releases`}`);
+      logStep('done', 'Site download links resolve via /releases/latest; no bump needed.');
     } catch (err) {
       fail('publish', err.message);
     }
+  } else if (/^\d+\.\d+\.\d+$/.test(subcommand || '')) {
+    // The form this script used to take. It pushed the bump straight to main,
+    // which a protected branch refuses, so it cannot be made to work: say what
+    // replaced it rather than start something that dies halfway through.
+    fail('usage', `A release is now two commands, because the bump goes through a pull request like any other change.\n${USAGE}`);
   } else {
-    const version = getVersion();
-    preflight(version);
-    // The gate governs the SHA being tagged: check it BEFORE the version-bump
-    // commit is created (that commit only adds package.json + CHANGELOG.md on
-    // top of the gated code).
-    try {
-      requireGatePass(git(['rev-parse', 'HEAD']).trim());
-    } catch (err) {
-      fail('gate', err.message);
-    }
-    setVersion(version);
-    promoteUnreleasedChangelog(version);
-    commitTagPush(version);
-
-    console.log('');
-    log('done', `Tagged v${version}. GitHub Actions is now building, signing, notarising, and publishing a DRAFT release.`);
-    log('done', `Watch the build:   https://github.com/${REPO}/actions`);
-    log('done', `Review the draft:  https://github.com/${REPO}/releases`);
-    log('done', `Then publish with: npm run release -- publish ${version}  (binds the tag before flipping the draft flag)`);
-    log('done', `If CI fails (e.g. expired Apple agreement): fix it and re-run the workflow on tag v${version}: no need to revert main.`);
+    fail('usage', `${subcommand ? `Unknown subcommand "${subcommand}".` : 'No subcommand given.'}\n${USAGE}`);
   }
 }
 
-module.exports = { extractChangelogEntry, promoteUnreleasedChangelog, requireGatePass, publishRelease, ghApiArgs };
+module.exports = {
+  extractChangelogEntry,
+  promoteUnreleasedChangelog,
+  preflight,
+  requireGatePass,
+  prepareRelease,
+  tagRelease,
+  publishRelease,
+  hasPublishConfirmation,
+  ghApiArgs,
+};

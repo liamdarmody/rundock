@@ -53,7 +53,7 @@ Before opening a PR:
 ### Conventions
 
 - **No build step.** Rundock ships plain JS. No transpilation, no bundling, no minification. Keep it that way.
-- **Changelog entries go under `## Unreleased`.** New entries accumulate at the top of `CHANGELOG.md` under a single `## Unreleased` heading. Start the body with a `**Name:** <release name>` line so the release script can promote it to a titled heading at release time. The release script auto-promotes `## Unreleased` to `## X.Y.Z: <Name> (YYYY-MM-DD)` when you run `npm run release -- X.Y.Z`. Entries follow the structure and voice rules in [Changelog entry standards](#changelog-entry-standards) below.
+- **Changelog entries go under `## Unreleased`.** New entries accumulate at the top of `CHANGELOG.md` under a single `## Unreleased` heading. Start the body with a `**Name:** <release name>` line so the release script can promote it to a titled heading at release time. The release script auto-promotes `## Unreleased` to `## X.Y.Z: <Name> (YYYY-MM-DD)` when you run `npm run release -- prepare X.Y.Z`. Entries follow the structure and voice rules in [Changelog entry standards](#changelog-entry-standards) below.
 - **No new dependencies** without discussion. The two-dependency footprint is deliberate.
 - **Vanilla JS only.** No frameworks, no TypeScript. The codebase is readable without tooling.
 - **Commit messages:** Start with a verb in imperative mood. Keep the first line under 72 characters. Examples: `fix permission card timeout race condition`, `add workspace mode toggle to settings panel`.
@@ -109,6 +109,22 @@ Rundock has a substantial automated suite, and PRs are expected to keep it green
 - **`npm run test:coverage`**: server-side line coverage with a per-area breakdown.
 
 Expectations for a PR: the full suite green on Node 22 and 24 (CI checks both), new behaviour covered by tests (bug fixes include a regression test that fails before the fix), and byte-for-byte guarantees respected if you touch the editor. Then test by hand against a real workspace with agents: verify your change across the team, conversations, skills, and files views as relevant.
+
+**If a test fails and then passes on a re-run, read [docs/TEST-TIMING.md](docs/TEST-TIMING.md) before re-running again.** It carries the inventory of every assertion in the suite that depends on timing or on how two things interleave, says which are known to be load-sensitive and which are correct as written, and gives the rule for adding a wait: poll for a condition that must be reached, sleep only to prove something never happens. A test not listed there is a new instance of that class and should be classified rather than re-run until green.
+
+### Proving a test would have failed
+
+A test written after the fix, while looking at the finished code, tends to assert what the fix obviously does. `scripts/red-first.js` runs that requirement mechanically: it takes your change's source away against the point your branch was cut from, re-runs the tests, and reports whether they actually go red.
+
+```bash
+npm run red-first
+```
+
+**Run it with no base of its own.** That is the correct invocation, and the reason is worth knowing. Work here is done in git worktrees cut from `origin/main`, and a worktree does not move the local `main` ref that another worktree has checked out, so that ref can sit behind the commit your branch was actually cut from. `--base main` then reverts work that had already merged, reports its tests as proof of your change, and exits 0, with output indistinguishable from a genuine pass. Given no base, the tool takes one from `origin/HEAD` instead, which nothing local can move, and prints it as the run starts.
+
+Flags reach the script through npm after a `--`, as in `npm run red-first -- --tests "npm run test:coverage"`. Naming a base yourself is still allowed; one that reaches back past your branch's fork point is refused rather than measured, and the refusal names what it would have reverted.
+
+Exit 0 only when discrimination is proven. Every other outcome names itself rather than reporting a bare failure: `NOT-PROVABLE` (nothing of yours could go red, which is its own finding), `NOT-DISCRIMINATING` (the tests pass with your source reverted), `INCONCLUSIVE` (the suite was already failing) and `REFUSED` (the run could not be trusted, and it says why). The result folds into `.precommit-gate.json` beside the pre-commit checks, so a reviewer reads one record rather than two that can disagree.
 
 ## Licence
 

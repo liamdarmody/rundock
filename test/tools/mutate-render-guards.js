@@ -21,13 +21,16 @@
 //   node test/tools/mutate-render-guards.js            # report
 //   node test/tools/mutate-render-guards.js --markdown # the same, as a table
 //
-// The file is restored afterwards, including when a run throws.
+// The file is restored afterwards, including when a run throws and when one is
+// killed. That part is not this file's: see test/tools/mutation-run.js for what
+// the envelope covers and for the one way out it cannot.
 
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
+const { beginMutationRun } = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 const SRC = path.join(ROOT, 'public', 'markdown-render.js');
@@ -125,7 +128,8 @@ function redTests() {
 }
 
 function run() {
-  const original = fs.readFileSync(SRC, 'utf8');
+  const session = beginMutationRun({ files: [SRC] });
+  const original = session.original(SRC);
   const results = [];
   try {
     for (const [label, guard, without] of MUTATIONS) {
@@ -137,7 +141,7 @@ function run() {
       results.push({ label, applied: true, red: redTests() });
     }
   } finally {
-    fs.writeFileSync(SRC, original);
+    session.finish();
   }
   return results;
 }

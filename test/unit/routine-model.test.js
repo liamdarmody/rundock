@@ -19,6 +19,7 @@ const { _internal: srv } = require('../../server.js');
 const { makeWorkspace, agentFile, cleanup } = require('../helpers/workspace.js');
 const {
   updateRoutineBlock, normalizeRoutine, isRunOnSupported, computePlanHash,
+  hasRunnablePrompt,
 } = require('../../lib/agents/routines.js');
 
 const FIXTURE = [
@@ -186,6 +187,23 @@ describe('routine representation', () => {
     assert.strictEqual(routine({}).enabled, false);
     assert.strictEqual(routine({}).paused, false);
     assert.strictEqual(routine({ enabled: 'maybe' }).enabled, false);
+  });
+
+  // The question the run gate asks before it hands a prompt to a child. It has
+  // to be asked of the value rather than of the key, because a routine can
+  // carry `prompt:` with nothing after it, and it must not TYPE the value:
+  // `prompt` reaches the CLI exactly as the file wrote it, quotes included, and
+  // that is true of every routine working today.
+  test('a routine with nothing to say is told apart from one with an instruction', () => {
+    assert.strictEqual(hasRunnablePrompt(routine({ prompt: 'Run the digest' })), true);
+    assert.strictEqual(hasRunnablePrompt(routine({})), false, 'an absent prompt reads as runnable');
+    assert.strictEqual(hasRunnablePrompt(routine({ prompt: '' })), false, 'a declared, empty prompt reads as runnable');
+    assert.strictEqual(hasRunnablePrompt(routine({ prompt: '   ' })), false, 'whitespace reads as an instruction');
+    // The value itself is untouched by being asked about, so the four letters
+    // the spawn used to send are still the four letters the file did not write.
+    assert.strictEqual(routine({}).prompt, null);
+    assert.strictEqual(routine({ prompt: '"Run it"' }).prompt, '"Run it"',
+      'asking the question stripped the quotes the CLI is meant to receive');
   });
 
   test('planApprovedAt and the plan hash are parsed', () => {

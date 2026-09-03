@@ -1,6 +1,6 @@
 {
   "name": "rundock",
-  "version": "0.11.8",
+  "version": "0.12.0",
   "description": "A visual workspace for your AI agent team. Built for people running their own businesses. Works with your Claude or ChatGPT subscription.",
   "main": "electron/main.js",
   "scripts": {
@@ -18,7 +18,7 @@
     "check:refs": "node scripts/check-internal-refs.js",
     "precommit": "node scripts/precommit-gate.js",
     "red-first": "node scripts/red-first.js",
-    "mutate:guards": "node test/tools/mutate-render-guards.js --markdown && node test/tools/mutate-routine-editor-guards.js --markdown && node test/tools/mutate-routines-guards.js --markdown && node test/tools/mutate-run-detail-guards.js --markdown && node test/tools/mutate-nav-guards.js --markdown && node test/tools/mutate-workspace-rollback-guards.js --markdown",
+    "mutate:guards": "node test/tools/mutate-render-guards.js --markdown && node test/tools/mutate-routine-editor-guards.js --markdown && node test/tools/mutate-routines-guards.js --markdown && node test/tools/mutate-run-detail-guards.js --markdown && node test/tools/mutate-nav-guards.js --markdown && node test/tools/mutate-workspace-rollback-guards.js --markdown && node test/tools/mutate-fence-guards.js --markdown && node test/tools/mutate-atomic-write-guards.js --markdown && node test/tools/mutate-import-apply-guards.js --markdown && node test/tools/mutate-import-plan-guards.js --markdown && node test/tools/mutate-import-protocol-guards.js --markdown && node test/tools/mutate-install-flow-guards.js --markdown && node test/tools/mutate-routines-truth-guards.js --markdown",
     "check:fixture": "node test/tools/regenerate-benign-before.js --check",
     "lint:styles": "node test/tools/style-drift.js",
     "typecheck": "tsc -p tsconfig.server.json && tsc -p tsconfig.client.json",

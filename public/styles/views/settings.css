@@ -39,3 +39,24 @@
 .mode-toggle-btn.active { background: var(--card); color: var(--text-1); border-color: var(--border); box-shadow: 0 1px 3px rgba(0,0,0,0.18); }
 .mode-description { font-size: var(--caption); color: var(--text-2); line-height: 1.5; padding: 8px 0 4px; }
 
+
+/* ---- The Packages install flow (PL4 states on the PL2 section) ---- */
+/* The confirm-card stays PLAIN by decision: amber is reserved for the one
+   state that runs third-party code, and a content-only import is not it. */
+.packages-field-label { font-size: var(--caption); font-weight: 600; color: var(--text-2); margin-bottom: 8px; }
+.packages-field-row { display: flex; gap: 8px; }
+.packages-input { flex: 1; padding: 8px 12px; font-size: var(--body); border-radius: var(--radius-md); border: 1px solid var(--border); background: var(--base); color: var(--text-1); }
+.packages-input:disabled { opacity: 0.6; }
+.packages-field-error { font-size: var(--caption); color: var(--danger); margin-top: 8px; }
+.packages-state, .packages-confirm-card, .packages-success-card { display: flex; flex-direction: column; gap: 10px; padding: 20px; }
+.packages-headline { font-size: var(--body); font-weight: 600; color: var(--text-1); }
+.packages-body, .packages-collision-note, .packages-blocked-line { font-size: var(--caption); color: var(--text-2); line-height: 1.6; }
+.packages-collision-note { color: var(--text-1); }
+.packages-failed .packages-headline { color: var(--danger); }
+.packages-actions { display: flex; gap: 8px; margin-top: 6px; }
+.packages-confirm:disabled { opacity: 0.5; cursor: default; }
+.packages-part { display: flex; justify-content: space-between; gap: 12px; font-size: var(--caption); }
+.packages-part-label { font-weight: 600; color: var(--text-1); }
+.packages-part-dest { color: var(--text-3); font-family: var(--mono, monospace); }
+.packages-spinner { width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--text-2); border-radius: 50%; animation: packages-spin 0.8s linear infinite; }
+@keyframes packages-spin { to { transform: rotate(360deg); } }

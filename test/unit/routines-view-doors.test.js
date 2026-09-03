@@ -426,17 +426,18 @@ describe('the ways this list gets drawn, pressed', () => {
     w.drawn = 0;
     const realRender = w.renderRoutines;
     w.renderRoutines = () => { w.drawn++; realRender(); };
-    // Everything else the roster case calls. updateRoutineFailureBadge is
-    // among them: it puts the failure dot on the rail rather than anything in
-    // this view, so what it does is driven where the rail is drawn, in
-    // "the roster arriving from the server raises and clears the dot" in
-    // test/unit/routines-view.test.js. Named here so this case can run at all,
-    // and named there so it is not merely named.
-    for (const name of ['renderAgentList', 'renderOrgChart', 'renderConvoList',
-      'updateRoutineFailureBadge']) {
+    // Everything else the roster case calls, named here so this case can run
+    // at all.
+    for (const name of ['renderAgentList', 'renderOrgChart', 'renderConvoList', 'runDetailRosterUpdated']) {
       w[name] = () => {};
     }
-    w.d = { type: 'agents', agents: w.agents };
+    // The roster case also records the workspace the roster was read from,
+    // which the routines list compares every row against. Stubbed here so the
+    // case can run at all; what it actually records is driven against the real
+    // shell's own writer in "the writer in the real shell is the global the
+    // rendered page reads" in test/unit/routines-end-to-end.test.js.
+    w.setServingWorkspace = () => {};
+    w.d = { type: 'agents', agents: w.agents, workspace: '/w/open' };
     w.eval(`(function () {${body}\n})()`);
     assert.strictEqual(w.drawn, 1, 'a roster arrived and the routines list was not redrawn');
     assert.strictEqual(w.document.querySelectorAll('.routine-row').length, 1);
@@ -940,15 +941,15 @@ describe('one mount, one renderer', () => {
     const { doc, w, dom } = shell();
     w.eval(TEAM_SRC);
     w.getGuide = () => null;
-    // updateRoutineFailureBadge is stubbed with the rest: it draws the failure
-    // dot on the nav rail rather than in this panel, and what it does is driven
-    // in test/unit/routines-view.test.js.
-    for (const name of ['renderOrgChart', 'renderConvoEmptyAgents', 'renderConvoList', 'renderAgentList',
-      'updateRoutineFailureBadge']) {
+    for (const name of ['renderOrgChart', 'renderConvoEmptyAgents', 'renderConvoList', 'renderAgentList', 'runDetailRosterUpdated']) {
       w[name] = () => {};
     }
+    // The workspace the roster was read from, recorded by the same case. This
+    // panel draws no row that reads it; it is driven where it is read, in
+    // test/unit/routines-end-to-end.test.js.
+    w.setServingWorkspace = () => {};
     const body = appPiece(/case 'agents':([\s\S]*?)\bbreak;/, 'the roster case of the client dispatch');
-    w.d = { type: 'agents', agents: w.agents };
+    w.d = { type: 'agents', agents: w.agents, workspace: '/w/open' };
     w.eval(`(function () {${body}\n})()`);
 
     const panel = doc.getElementById('sidebar-routines');
@@ -967,11 +968,7 @@ describe('one mount, one renderer', () => {
     const { doc, w, dom } = shell({ routines: [] });
     w.eval(TEAM_SRC);
     w.getGuide = () => null;
-    // updateRoutineFailureBadge is stubbed with the rest: it draws the failure
-    // dot on the nav rail rather than in this panel, and what it does is driven
-    // in test/unit/routines-view.test.js.
-    for (const name of ['renderOrgChart', 'renderConvoEmptyAgents', 'renderConvoList', 'renderAgentList',
-      'updateRoutineFailureBadge']) {
+    for (const name of ['renderOrgChart', 'renderConvoEmptyAgents', 'renderConvoList', 'renderAgentList', 'runDetailRosterUpdated']) {
       w[name] = () => {};
     }
     // Revealed first, by the real router, because the panel is correctly
@@ -979,6 +976,8 @@ describe('one mount, one renderer', () => {
     // arriving does not take it away again.
     w.eval(`function setNavState(nav) {${appPiece(/function setNavState\(nav\) \{([\s\S]*?)\n\}/, 'setNavState')}\n}`);
     w.setNavState('routines');
+    // The workspace the roster was read from, recorded by the same case.
+    w.setServingWorkspace = () => {};
     const body = appPiece(/case 'agents':([\s\S]*?)\bbreak;/, 'the roster case of the client dispatch');
     w.d = { type: 'agents', agents: w.agents };
     w.eval(`(function () {${body}\n})()`);

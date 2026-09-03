@@ -34,6 +34,10 @@ The org chart is the product. Show someone yours.
 
 ![Rundock Kanban board with columns and rich cards, Obsidian-compatible](docs/rundock-boards.png)
 
+**Schedule a skill to a cadence, through a form, and it runs without you watching.** Pick an agent, a skill, and how often, and Rundock runs it on its own server: a morning briefing, an end-of-day sync, a weekly digest. See what a run actually did from its own screen, or stop one that's misbehaving.
+
+![Rundock routines list showing four routines across different agents, each in a different one of the four run states: ran on time, caught up after a missed slot, missed, and failed](docs/rundock-routines.png)
+
 ## How Rundock fits
 
 Rundock is two things at once. For you, it is the visual workspace: an org chart, parallel conversations, delegation you can watch happen. Underneath, it is a runtime-agnostic orchestration layer. It catches requests, routes them to the right agent, hands context between them, and keeps the team coordinated. The execution engine is pluggable: Claude Code and Codex today, more later. Your agents are plain markdown you own, so the same team runs on whichever engine you choose, switchable without a rebuild. Rundock owns the coordination, the interface, and the portability. The engine underneath can change. The layer you built stays yours.

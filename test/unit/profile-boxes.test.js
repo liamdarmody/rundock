@@ -242,14 +242,18 @@ describe('Add routine teaches that routines exist, and then stops', () => {
   // AC-B5. The button is feature discovery rather than repeat use: it exists
   // to say the concept is there, in the one place where an agent with no
   // schedule is being looked at.
+  //
+  // SECONDARY WEIGHT, matching "Schedule this skill" on the skill page: both
+  // are a shortcut into the same routine editor, not this screen's primary
+  // action, and the button read as loud as "New conversation" before this.
   test('Add routine is offered while the agent has none', () => {
     const { w, doc, dom } = shell({ routines: [] });
     w.showProfile('piper');
     const button = doc.querySelector('[data-profile-action="add-routine"]');
     assert.ok(button, 'an agent with no routines is not offered a way to make one');
     assert.ok(routinesBox(doc).contains(button), 'the offer is not inside the Routines box');
-    assert.strictEqual(button.className, 'settings-btn-primary',
-      'the offer is not the small in-card primary the mock draws');
+    assert.strictEqual(button.className, 'settings-btn',
+      'the offer should read as secondary weight, matching Schedule this skill');
     dom.window.close();
   });
 
@@ -274,8 +278,15 @@ describe('a routine row carries the destination the routes file presses', () => 
     const { w, doc, dom } = shell();
     w.showProfile('piper');
     const row = routinesBox(doc).querySelector('.profile-card-item');
-    assert.match(row.getAttribute('onclick') || '', /^showRoutinesForAgent\('piper'\)$/,
+    // The agent travels as data rather than as a literal spliced into the
+    // handler, because the id is the agent file's own filename and an agent
+    // chooses that. Both halves are asserted: the handler reads the attribute,
+    // and the attribute carries this agent. Checking only the first would pass
+    // against a row that opens the routines view for nobody.
+    assert.match(row.getAttribute('onclick') || '', /^showRoutinesForAgent\(this\.dataset\.agentId\)$/,
       'a routine row on the profile does not open the routines view for this agent');
+    assert.strictEqual(row.dataset.agentId, 'piper',
+      'the row does not carry the agent whose profile it is on');
     dom.window.close();
   });
 });

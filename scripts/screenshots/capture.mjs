@@ -159,6 +159,20 @@ export const SHOTS = [
       await page.waitForTimeout(500);
     },
   },
+  {
+    // The demo workspace's four routines are seeded (generate-workspace.mjs
+    // ROUTINE_STATE / ROUTINE_SLOTS) to land on the four run-status tones from
+    // the approved 2026-08-22 design brief (Ran on time / Caught up / Missed /
+    // Failed), so this shot shows the reliability story the 0.12.0 release is
+    // actually about, not just an empty scheduling form.
+    name: 'routines', feature: 'Routines: schedule a skill, see what a run did',
+    crop: '#routines-content',
+    async setup(page) {
+      await page.evaluate(() => switchNav('routines'));
+      await page.waitForSelector('#routines-content .routine-row', { timeout: 10000 });
+      await page.waitForTimeout(300);
+    },
+  },
 ];
 
 // Captures every shot in both themes to `stagingDir`. Returns a list of

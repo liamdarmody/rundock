@@ -78,14 +78,38 @@
    *
    * There is no machine identity in a routine and nothing coordinates two
    * copies of a workspace, so a workspace opened on four computers is four
-   * separate local schedulers, each with its own idea of what has already run.
-   * Whether that means four runs or an unreliable guard depends on whether the
-   * sync tool carries the state folder, which is a property of the tool. None
-   * of that is solvable in this release, so the copy says what happens instead
-   * of leaving the user to find out.
+   * separate local schedulers. Each keeps the guard that stops a re-fire in
+   * memory, filled once when it starts, so each has its own idea of what has
+   * already run for as long as it stays up. That is four runs, and no sync
+   * tool changes it. None of it is solvable in this release, so the copy says
+   * what happens instead of leaving the user to find out.
    */
   const RUN_ON_CAVEAT = 'Routines run on the machine they were made on. '
     + 'A workspace open on more than one computer runs its routines on each of them.';
+
+  /**
+   * What happens to this routine when its workspace is not the one open, said
+   * where the routine is being made rather than in documentation met later.
+   *
+   * There is one scheduler and it serves the open workspace. Somebody with
+   * three workspaces is therefore making a routine that runs in one of the
+   * three, and nothing on this screen said so: they finished the editor
+   * believing they had scheduled something that fires whenever Rundock is up.
+   *
+   * IT NAMES THE CATCH-UP IN THE SAME BREATH, because without it the sentence
+   * reads as "you will lose runs" and the answer for most people is that they
+   * will not: coming back to the workspace the same day serves the slot.
+   *
+   * TIGHTENED IN THE DESIGN REVIEW PASS, from two sentences of 41 words to
+   * two clauses of 32, joined as one sentence rather than two: "so" carries
+   * the cause the reader needs (this workspace, not that one) in fewer words
+   * than a full stop and a restart did. Every phrase the tests pin (the rule,
+   * "do not run", "caught up") is still here in the same order; what went is
+   * padding around them ("While you are in", "when you open it again").
+   */
+  const WORKSPACE_CAVEAT = 'Rundock only runs the routines of the workspace that is open, '
+    + "so this one's do not run while you are elsewhere. "
+    + 'A missed slot is caught up the same day you return.';
 
   const RUN_ON_LABEL = 'Run on';
 
@@ -115,11 +139,53 @@
   const STEP_LEADS = {
     pick: 'Step 1 of 2. Pick a skill {agent} already has.',
     pickAny: 'Step 1 of 2. Pick a skill any of your agents already has.',
+    // The lead for a picker that already knows the skill and not the agent:
+    // pressing a skill's own control when several agents have it. Asking the
+    // reader to pick a skill there would ask a question they just answered.
+    pickAgent: 'Step 1 of 2. Pick which agent runs {skill}.',
     schedule: 'Step 2 of 2. Say when to run it, in plain terms.',
     empty: 'Routines schedule skills your agents already have. Build one and it will show up here.',
     loading: 'Looking for skills your agents can run.',
     build: 'Build a skill',
+    // EDITING IS NOT STEP TWO OF TWO, and this line exists because saying so
+    // would be false. There is no step one behind it: the skill and the run
+    // target are settled and are shown rather than asked for, so a reader who
+    // arrived here arrived at the whole of what they came to change. A step
+    // counter would offer a first step that does not exist, and its second
+    // sentence says what is NOT about to move, which is the question somebody
+    // editing a live routine actually has.
+    edit: 'Say when this should run instead. Nothing else about the routine changes.',
   };
+
+  /**
+   * The routine's stored schedule, said back to a reader the editor cannot
+   * show it to.
+   *
+   * WHY A SENTENCE IS OWED AT ALL. Agent files are written by hand, and the
+   * scheduler reads more than this editor offers: any minute of the hour, in
+   * any case. `readSchedule` refuses to pre-fill from a schedule the controls
+   * cannot display, which is right, and leaves the form showing values that are
+   * not the routine's with nothing accounting for the difference. So the note
+   * names the stored schedule, verbatim, and says plainly what saving would do
+   * to it.
+   *
+   * IT NAMES THE SCHEDULE RATHER THAN DESCRIBING IT. The reader wrote that line
+   * themselves, in a file they can open, and quoting it is the only thing that
+   * lets them tell whether replacing it matters.
+   *
+   * NEITHER A FAULT NOR A WARNING IN ITS TONE. A schedule this editor cannot
+   * build is an ordinary thing to find: it may be one that runs perfectly well.
+   * What is true is that the picker cannot show it, which is a fact about the
+   * picker, so that is what the sentence says.
+   */
+  const STORED_SCHEDULE_NOTE = "This routine's schedule, {schedule}, is not one this editor can build. "
+    + 'Saving replaces it with the one above.';
+
+  function storedScheduleNote(input) {
+    const schedule = input && typeof input.schedule === 'string' ? input.schedule.trim() : '';
+    if (!schedule || readSchedule(schedule)) return null;
+    return STORED_SCHEDULE_NOTE.replace('{schedule}', schedule);
+  }
 
   // Where save goes. A routine that has been written belongs on the list of
   // routines, so the editor's job finishes by leaving. Named here rather than
@@ -157,7 +223,70 @@
     return { label: RUN_ON_LABEL, options: runOnOptions(), caveat: RUN_ON_CAVEAT };
   }
 
+  /**
+   * The step that decides WHEN a routine runs, as one thing, including the
+   * sentence that says WHERE it will run.
+   *
+   * SAME RULE AS `runOnField`, one level out. A caveat kept as a loose export
+   * can be rendered on a help page and nowhere else with every test still
+   * green; a caveat carried by the thing it qualifies cannot be rendered
+   * without it. The run-on caveat qualifies a FIELD, so the field carries it.
+   * This one qualifies the whole step, because what it says is true of the
+   * routine being made rather than of any one control on the screen, so the
+   * step carries it.
+   *
+   * The frequencies and times come back on the same object for the same
+   * reason: a view that assembled the step out of three separate exports could
+   * drop this one and still draw a complete-looking step.
+   */
+  function scheduleStepFields() {
+    return {
+      lead: STEP_LEADS.schedule,
+      frequencies: FREQUENCIES,
+      times: times(),
+      runOn: runOnField(),
+      workspaceCaveat: WORKSPACE_CAVEAT,
+    };
+  }
+
   // ===== THE SKILL PICKER =====
+
+  /**
+   * Why an unassigned skill cannot be scheduled, said once and read by both
+   * surfaces that have to say so: the routines view's own empty state, when
+   * every skill the workspace has is unassigned, and a skill's own page,
+   * when that specific skill is. ONE STRING, so the two cannot drift into
+   * two different explanations of the same fact.
+   *
+   * NEITHER 'NOBODY HAS' NOR 'NO AGENT HAS', DELIBERATELY. A skill's own
+   * page, directly above where this string is shown, already describes an
+   * unassigned skill as available to all agents, and a reason phrased as a
+   * denial that any agent had it would contradict the card sitting above it
+   * on the same page. So this states the MECHANISM instead: a routine is
+   * declared on one specific agent's file, which is a fact about routines
+   * rather than a claim about who has the skill, and it holds together with
+   * the skill being available to every agent rather than instead of it.
+   *
+   * NO DEICTIC EITHER, so 'a skill' rather than 'this skill'. The routines
+   * view can carry this state with any number of unassigned skills and
+   * names none of them, so 'this skill' would point at nothing there, and
+   * with more than one it would be false on the skill's own page too: there
+   * is no single 'this skill' once the workspace has several. Stated as a
+   * general fact about a skill, it reads true wherever it is shown and for
+   * however many skills the state applies to.
+   */
+  const UNASSIGNED_REASON = "A routine is written into one specific agent's file, "
+    + 'so a skill has to be assigned to a specific agent before it can be scheduled.';
+
+  /**
+   * A skill's assigned agents, safe against a skill with none and against
+   * `skill` itself being missing. The one place that reads `assignedAgents`,
+   * so `skillChoices` below has a single spot to trust it from rather than
+   * two copies of the same defensive lookup that could drift apart.
+   */
+  function assignedAgentsOf(skill) {
+    return (skill && skill.assignedAgents) || [];
+  }
 
   /**
    * What can be scheduled, and for whom.
@@ -181,7 +310,7 @@
     const options = [];
 
     for (const skill of skills) {
-      const assigned = (skill && skill.assignedAgents) || [];
+      const assigned = assignedAgentsOf(skill);
       for (const agent of assigned) {
         if (agentId && agent.id !== agentId) continue;
         options.push({
@@ -204,13 +333,29 @@
       createSkill: options.length === 0,
       createSkillLabel: STEP_LEADS.build,
       emptyLead: STEP_LEADS.empty,
+      // A FACT ABOUT THE SKILLS SUPPLIED, NOT ABOUT `options`, and so NOT
+      // SCOPED BY `agentId`. `options` answers "what can this call offer",
+      // which for a scoped call is silent about skills belonging to other
+      // agents; a workspace where every skill belongs to somebody else would
+      // read as "unassigned" under a scoped reading, which is false. This
+      // reads `skills` directly instead, true only when at least one was
+      // supplied and none of them has an agent, which is true or false the
+      // same way whichever scope the call was made with.
+      onlyUnassignedSkills: skills.length > 0
+        && skills.every(skill => assignedAgentsOf(skill).length === 0),
     };
   }
 
   function stepLead(input) {
     const agentName = (input && input.agentName) || null;
-    if (!agentName) return STEP_LEADS.pickAny;
-    return STEP_LEADS.pick.replace('{agent}', agentName);
+    if (agentName) return STEP_LEADS.pick.replace('{agent}', agentName);
+    // One skill, several agents that have it: the skill is settled and the
+    // open question is the agent, so the lead asks that question and no other.
+    const skills = (input && input.skills) || [];
+    if (skills.length === 1 && assignedAgentsOf(skills[0]).length > 1) {
+      return STEP_LEADS.pickAgent.replace('{skill}', skills[0].name || skills[0].id);
+    }
+    return STEP_LEADS.pickAny;
   }
 
   // ===== THE SENTENCE BUILDER =====
@@ -261,6 +406,41 @@
   }
 
   /**
+   * The reverse of `buildSchedule`: a schedule already on disk, taken back
+   * apart into the two values the builder holds.
+   *
+   * WHY THIS EXISTS. Editing a routine's schedule opens the sentence builder
+   * with that routine's current words already in it, and the builder's state is
+   * a frequency and a time rather than a sentence. Something has to turn one
+   * into the other, and this is the only place that does.
+   *
+   * BOTH HALVES ARE LOOKED UP, NEVER LIFTED OUT OF THE STRING, which is the
+   * same rule `buildSchedule` follows and it matters more in this direction.
+   * An agent file is written by hand as well as by this editor, so the string
+   * arriving here can say anything. Handing back whatever the pattern captured
+   * would pre-fill a form with values no control on it can show: a `<select>`
+   * asked to select an option it does not have shows its first one instead, so
+   * the reader would be looking at a schedule that is not theirs with nothing
+   * saying so. A schedule this editor could not have built therefore reads back
+   * as nothing, and the caller decides what to do about that.
+   *
+   * THE CASE IS FOLDED BEFORE THE LOOKUP, because the scheduler folds it before
+   * it reads. `Every Monday at 07:00` is a routine that fires, so it is one this
+   * has to be able to reopen; the values handed back are the editor's own, so
+   * what is rebuilt afterwards is the canonical spelling rather than the
+   * author's.
+   */
+  function readSchedule(schedule) {
+    if (!schedule || typeof schedule !== 'string') return null;
+    const parts = /^every ([a-z]+) at (\d{2}:\d{2})$/.exec(schedule.toLowerCase());
+    if (!parts) return null;
+    const freq = frequency(parts[1]);
+    const time = timeOption(parts[2]);
+    if (!freq || !time) return null;
+    return { frequency: freq.value, time: time.value };
+  }
+
+  /**
    * The plain sentence the editor shows back.
    *
    * The run-on clause is read off the chosen option. A fixed string here would
@@ -273,7 +453,7 @@
     const option = runOnOption(input && input.runOn);
     const skillName = (input && input.skillName) || null;
     if (!freq || !time || !option || !skillName) return null;
-    return `Every ${freq.label} at ${time.label}, run: ${skillName}, on ${option.sentence}.`;
+    return `Run ${skillName} every ${freq.label} at ${time.label}, on ${option.sentence}.`;
   }
 
   // ===== TIME ZONES, IN WORDS =====
@@ -348,10 +528,11 @@
   }
 
   return {
-    RUN_ON_SUPPORTED, RUN_ON_CAVEAT, RUN_ON_LABEL, FREQUENCIES, STEP_LEADS, SAVE_DESTINATION,
-    runOnOptions, runOnOption, runOnField,
+    RUN_ON_SUPPORTED, RUN_ON_CAVEAT, WORKSPACE_CAVEAT, RUN_ON_LABEL, FREQUENCIES, STEP_LEADS, SAVE_DESTINATION,
+    UNASSIGNED_REASON, STORED_SCHEDULE_NOTE, storedScheduleNote,
+    runOnOptions, runOnOption, runOnField, scheduleStepFields,
     skillChoices, stepLead,
-    times, buildSchedule, previewSentence,
+    times, buildSchedule, readSchedule, previewSentence,
     timezoneWords, timezoneCaption, readyCaption,
     routineDraft,
   };

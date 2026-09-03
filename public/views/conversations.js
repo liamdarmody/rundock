@@ -37,6 +37,16 @@
   }
 }(typeof self !== 'undefined' ? self : this, function () {
 
+// The colour rule, reached off the global at call time. `escAttr` is already
+// reached that way by this file, which was its ONE caller in the whole client
+// before this change. See public/agent-colour.js for why a colour is judged
+// rather than escaped.
+function agentColour(value, fallback) {
+  const safe = fallback === undefined ? 'var(--accent)' : fallback;
+  return typeof RundockAgentColour !== 'undefined'
+    ? RundockAgentColour.safeColour(value, safe) : safe;
+}
+
 // Persist conversation metadata to server (never message content)
 function persistConversation(convo) {
   if (!ws || !convo) return;
@@ -181,7 +191,7 @@ function startConversation(agentId) {
   if (agent.prompts && agent.prompts.length) {
     // Standard prompt pills for non-Path-C conversations
     let h=`<div id="chat-prompts" class="chat-prompts">`;
-    h+=`<div class="chat-prompts-avatar avatar" style="background:${agent.colour};width:56px;height:56px;font-size:24px">${agent.icon}</div>`;
+    h+=`<div class="chat-prompts-avatar avatar" style="background:${agentColour(agent.colour)};width:56px;height:56px;font-size:24px">${esc(agent.icon)}</div>`;
     h+=`<div class="chat-prompts-title">How can I help?</div>`;
     h+=`<div class="chat-prompts-list">`;
     for(const p of agent.prompts) {
@@ -714,20 +724,24 @@ function renderConvoItem(c, variant) {
   let leftButton;
   if (liveStyle) {
     const pinIconSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="${c.pinned ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 11V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v7"/><path d="M5 17h14"/><path d="M7 11l-2 6h14l-2-6"/></svg>`;
-    leftButton = `<button class="convo-pin" onclick="togglePin('${c.id}', event)" data-tooltip="${c.pinned ? 'Unpin' : 'Pin'}">${pinIconSvg}</button>`;
+    leftButton = `<button class="convo-pin" data-convo-id="${escAttr(c.id)}" onclick="togglePin(this.dataset.convoId, event)" data-tooltip="${c.pinned ? 'Unpin' : 'Pin'}">${pinIconSvg}</button>`;
   } else if (variant === 'previous') {
     const checkSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
-    leftButton = `<button class="convo-archive" onclick="archiveConversation('${c.id}', event)" data-tooltip="Archive">${checkSvg}</button>`;
+    leftButton = `<button class="convo-archive" data-convo-id="${escAttr(c.id)}" onclick="archiveConversation(this.dataset.convoId, event)" data-tooltip="Archive">${checkSvg}</button>`;
   } else {
     const deleteSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
-    leftButton = `<button class="convo-delete" onclick="deleteConversation('${c.id}', event)" data-tooltip="Delete">${deleteSvg}</button>`;
+    leftButton = `<button class="convo-delete" data-convo-id="${escAttr(c.id)}" onclick="deleteConversation(this.dataset.convoId, event)" data-tooltip="Delete">${deleteSvg}</button>`;
   }
 
-  return `<div class="${classes.join(' ')}" ${styleAttr} onclick="openConversation('${c.id}')" oncontextmenu="openConvoListMenu(event, '${c.id}')">
+  // The conversation id travels as data, not spliced into three handlers.
+  // It is read straight out of .rundock/conversations.json, which the server
+  // writes from a client message without validating the id, and which is an
+  // ordinary file in the workspace that any agent can edit.
+  return `<div class="${classes.join(' ')}" ${styleAttr} data-convo-id="${escAttr(c.id)}" onclick="openConversation(this.dataset.convoId)" oncontextmenu="openConvoListMenu(event, this.dataset.convoId)">
     ${leftButton}
     ${titleSection}
     ${preview ? `<span class="convo-preview">${esc(preview)}</span>` : ''}
-    <div class="convo-meta"><div class="avatar xs" style="background:${displayAgent.colour}">${displayAgent.icon}</div><span>${displayAgent.displayName}</span>${timeStr}${indicator}</div>
+    <div class="convo-meta"><div class="avatar xs" style="background:${agentColour(displayAgent.colour)}">${esc(displayAgent.icon)}</div><span>${esc(displayAgent.displayName)}</span>${timeStr}${indicator}</div>
   </div>`;
 }
 

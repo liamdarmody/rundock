@@ -17,7 +17,7 @@ import { Image } from './nodes/image.js';
 import { Callout } from './nodes/callout.js';
 import { SoftHardBreak } from './nodes/soft-hard-break.js';
 import { SoftOrderedList } from './nodes/soft-ordered-list.js';
-import { SourceBulletList, SourceHorizontalRule, SourceTaskList, SourceText } from './nodes/source-markers.js';
+import { SourceBulletList, SourceCodeBlock, SourceHorizontalRule, SourceTaskList, SourceText } from './nodes/source-markers.js';
 import { tableExtensions, tableDirtyKey } from './nodes/table.js';
 import { criticExtensions } from './nodes/critic-marks.js';
 import { mathExtensions } from './nodes/math.js';
@@ -54,6 +54,12 @@ export function createEditorInstance({ element, initialBody, onUpdate, onSelecti
         // only when they could form a link, so literal brackets in prose are
         // not backslash-escaped on save.
         text: false,
+        // Disable StarterKit's CodeBlock; SourceCodeBlock below replaces it
+        // with a serialiser that writes back the fence the file was written
+        // with. The default writes three backticks whatever the source used,
+        // which shortens a four-backtick fence and lets the block's own
+        // example close it on the next read.
+        codeBlock: false,
         link: {
           // Plain click opens. Matches always-editable consumer apps like
           // Notion and Apple Notes; wikilinks already open on plain click via
@@ -71,6 +77,7 @@ export function createEditorInstance({ element, initialBody, onUpdate, onSelecti
       SoftOrderedList,
       SourceText,
       SourceBulletList,
+      SourceCodeBlock,
       SourceHorizontalRule,
       // TaskList/TaskItem give "- [ ]"/"- [x]" real checkbox nodes. Without
       // them a checkbox line parses as a bullet whose literal "[ ]" text the

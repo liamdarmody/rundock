@@ -717,6 +717,10 @@ test('the workspace switch does not release a run that is still going', async ()
         },
         agents: { armAgentsDirWatcher: noop, invalidateAgentCache: noop },
         store: { clearSearchFailure: noop, ensureSearchEngine: noop },
+      broadcast: noop,
+        // The switch tells every connected client where the scheduler went, so
+        // a window that did not ask stops promising runs it will not get.
+        broadcast: noop,
       };
       // WHAT PROVES THE SWITCH'S RESETS RAN, planted before the switch and
       // read after it.
@@ -935,6 +939,8 @@ function openWorkspace(sched, dir, config) {
     },
     agents: { armAgentsDirWatcher: noop, invalidateAgentCache: noop },
     store: { clearSearchFailure: noop, ensureSearchEngine: noop },
+    // The switch announces where the scheduler went to every connected client.
+    broadcast: noop,
   };
   freshWorkspaceHandlers(sched).handleSetWorkspace(ctx, ws, { type: 'set_workspace', path: dir });
   assert.ok(sent.some(m => m.type === 'workspace_set'),
@@ -1404,7 +1410,7 @@ test('the signaller the scheduler imports is real, takes a child handle, and end
 // stronger reading, where the signal never left at all and the child then
 // exited successfully of its own accord, so that the meaning cannot be
 // quietly narrowed later without this turning red.
-test('a run whose stop never left, and which then ends well, still reads as stopped', async () => {
+test('a run whose stop never left, and which then ends well, reads as what it really was', async () => {
   await withTempWorkspaceAsync(async (dir) => {
     await withTempHomeAsync(async () => {
       const child = Object.assign(new EventEmitter(), { pid: 4245 });
@@ -1413,20 +1419,22 @@ test('a run whose stop never left, and which then ends well, still reads as stop
         assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true, 'the run started');
         const [live] = sched.runningRuns();
 
-        assert.strictEqual(sched.cancelRun(live.id), true, 'a stop was asked for');
-        assert.strictEqual(attempts, 1, 'and reached the signaller');
+        // CANCELLED MEANS DELIVERED. The signaller throws, so the ask never
+        // went, and the caller is told so rather than told a comfortable yes.
+        assert.strictEqual(sched.cancelRun(live.id), false, 'the ask did not go, and the caller is told');
+        assert.strictEqual(attempts, 1, 'though it did reach the signaller');
 
         // The child exits ZERO, on its own, untouched: the signal never left,
         // so nothing about this ending was caused by the stop.
         child.emit('close', 0);
         assert.ok(await until(() => sched.routineState[KEY].status !== 'running'), 'the run ended');
 
-        assert.strictEqual(runRecords(dir)[0].status, 'cancelled',
-          'and reads as stopped, because a stop was asked for before it ended');
-        assert.notStrictEqual(runRecords(dir)[0].status, 'succeeded',
-          'rather than as a run nobody had asked to stop, which is the reading this word does not carry');
-        assert.strictEqual(sched.routineState[KEY].status, 'cancelled',
-          'with both stores saying the same thing about it');
+        assert.strictEqual(runRecords(dir)[0].status, 'succeeded',
+          'and reads as the ending it actually had, because no stop was ever delivered');
+        assert.notStrictEqual(runRecords(dir)[0].status, 'cancelled',
+          'never as a stop the user would wrongly believe worked');
+        assert.strictEqual(sched.routineState[KEY].status, 'completed',
+          'in the vocabulary that store uses for the same fact');
       }, () => { attempts += 1; throw new Error('no such process'); });
     });
   });
@@ -1557,7 +1565,7 @@ test('stopping a codex run sends the real client an interrupt naming the thread 
 // intent is remembered and honoured when the turn appears, and the client
 // holds the interrupt until the turn it names has been acknowledged, so it is
 // sent once and it is not refused for arriving early.
-test('a codex run stopped before its turn exists is still stopped, once, when it appears', async () => {
+test('a codex run stopped before its turn exists never starts one', async () => {
   await withTempWorkspaceAsync(async (dir) => {
     await withTempHomeAsync(async () => {
       const CODEX_AGENT = realCodexAgent(dir);
@@ -1574,24 +1582,90 @@ test('a codex run stopped before its turn exists is still stopped, once, when it
           assert.ok(live, 'and the run is reachable all the same');
           assert.strictEqual(sched.cancelRun(live.id), true, 'so it can be stopped now');
 
-          const started = await untilRequest(dir, 'turn/start');
-          const interrupt = await untilRequest(dir, 'turn/interrupt');
-          assert.ok(interrupt, 'the stop was honoured once the turn existed');
-          assert.strictEqual(interrupt.params.threadId, started.params.threadId,
-            'naming the turn that was started after the stop was asked for');
-          // Both positions taken from ONE reading of the log: each reading
-          // parses fresh objects, so comparing one reading's entry against
-          // another's finds nothing and passes for the wrong reason.
-          const wire = stubRequests(dir);
-          const startedAtIndex = wire.findIndex(e => e.method === 'turn/start');
-          const interruptedAtIndex = wire.findIndex(e => e.method === 'turn/interrupt');
-          assert.ok(startedAtIndex >= 0 && interruptedAtIndex > startedAtIndex,
-            'and it was sent after the turn it names was started, rather than into nothing');
-
-          assert.ok(await until(() => sched.routineState[KEY].status !== 'running'), 'and the turn ended');
+          // THE ENTIRE PURPOSE OF STOPPING A ROUTINE IS TO STOP IT DOING
+          // THINGS. A stop that arrived before the turn is honoured by never
+          // starting the turn: no thread, no turn, no interrupt, because
+          // there is nothing to interrupt, asserted on the wire.
+          assert.ok(await until(() => sched.routineState[KEY].status !== 'running'), 'the run ended');
           assert.strictEqual(sched.routineState[KEY].status, 'cancelled', 'recorded as a stop');
-          assert.strictEqual(stubRequests(dir).filter(e => e.method === 'turn/interrupt').length, 1,
-            'and exactly one interrupt was sent, not one per await it waited through');
+          const wire = stubRequests(dir);
+          assert.deepStrictEqual(wire.filter(e => e.method === 'thread/start'), [],
+            'no thread was started either: the stop arrived before the thread, so the '
+            + 'earlier of the two checkpoints is the one that has to hold, and a run '
+            + 'that started a thread it never used would prove only the later one');
+          assert.deepStrictEqual(wire.filter(e => e.method === 'turn/start'), [],
+            'no turn start ever reached the app server');
+          assert.deepStrictEqual(wire.filter(e => e.method === 'turn/interrupt'), [],
+            'and nothing needed interrupting, because nothing was started');
+          // BOTH STORES, AND THE HOLD, because this ending leaves through its
+          // own early return rather than through the path every other ending
+          // takes: the record write and the release are exactly what that
+          // return could silently skip. The record is read off the disk, as
+          // a restarted process would meet it.
+          assert.strictEqual(runRecords(dir)[0].status, 'cancelled', 'in the record too');
+          assert.strictEqual(sched.executeRoutine(CODEX_AGENT, HANGING_ROUTINE, KEY), true,
+            'and the routine was released');
+          await endedAfter(sched, async () => {
+            const [next] = sched.runningRuns();
+            assert.ok(next, 'the second run is reachable, which is what ends it');
+            sched.cancelRun(next.id);
+          });
+        });
+      });
+    });
+  });
+});
+
+// The LATER of the two checkpoints, witnessed on its own. The test above
+// cancels before the thread, so the earlier checkpoint honours the stop and
+// the later one is never consulted; deleting the later one alone would leave
+// that test green. This one lets the run pass the earlier checkpoint, lands
+// the stop while the thread is still starting, and requires that no turn
+// begins: the window between thread and turn is exactly where a run gains
+// write access, so this is the point at which the check most matters.
+test('a stop that lands while the thread is starting still prevents the turn', async () => {
+  await withTempWorkspaceAsync(async (dir) => {
+    await withTempHomeAsync(async () => {
+      const CODEX_AGENT = realCodexAgent(dir);
+      const { thread } = await realCodexRun();
+      let releaseThread;
+      const threadGate = new Promise((res) => { releaseThread = res; });
+      let releaseThread2;
+      const threadGate2 = new Promise((res) => { releaseThread2 = res; });
+      const gates = [threadGate, threadGate2];
+      let threadAsked;
+      const askedThread = new Promise((res) => { threadAsked = res; });
+      let turnsStarted = 0;
+      const server = {
+        // Each start waits on its own gate, so the release test's second run
+        // is not held behind the first run's already-opened gate.
+        startThread: async () => { threadAsked(); await (gates.shift() || null); return thread; },
+        startTurn: () => { turnsStarted += 1; return new EventEmitter(); },
+        interruptTurn: async () => {},
+      };
+      await withFakeCodex(server, async (sched) => {
+        assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true, 'the run started');
+        // PAST THE EARLIER CHECKPOINT, proven rather than assumed: the thread
+        // request has been made, so the first check already answered "go on".
+        await askedThread;
+        const [live] = sched.runningRuns();
+        assert.ok(live, 'the run is reachable while its thread starts');
+        assert.strictEqual(sched.cancelRun(live.id), true, 'and the stop is accepted there');
+        releaseThread();
+        assert.ok(await until(() => sched.routineState[KEY].status !== 'running'), 'the run ended');
+        assert.strictEqual(sched.routineState[KEY].status, 'cancelled', 'recorded as a stop');
+        assert.strictEqual(turnsStarted, 0,
+          'and the turn never started: a thread the stop overtook is abandoned before the work');
+        // BOTH STORES, AND THE HOLD, for this checkpoint's own early return:
+        // a test on the other checkpoint says nothing about this exit.
+        assert.strictEqual(runRecords(dir)[0].status, 'cancelled', 'in the record too');
+        releaseThread2();
+        assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true,
+          'and the routine was released');
+        await endedAfter(sched, async () => {
+          const [next] = sched.runningRuns();
+          assert.ok(next, 'the second run is reachable, which is what ends it');
+          sched.cancelRun(next.id);
         });
       });
     });
@@ -1612,19 +1686,19 @@ test('a stop that could not be sent is retried by the next request, and one that
         assert.strictEqual(sched.executeRoutine(AGENT, ROUTINE, KEY), true, 'the run started');
         const [live] = sched.runningRuns();
 
-        assert.strictEqual(sched.cancelRun(live.id), true, 'the first stop was asked for');
-        assert.strictEqual(attempts.length, 1, 'and reached the signaller');
+        assert.strictEqual(sched.cancelRun(live.id), false, 'the first ask did not go, and says so');
+        assert.strictEqual(attempts.length, 1, 'though it reached the signaller');
         assert.strictEqual(sched.routineState[KEY].status, 'running',
           'the run is still going, because nothing was actually signalled');
 
-        assert.strictEqual(sched.cancelRun(live.id), true, 'the second stop was asked for too');
+        assert.strictEqual(sched.cancelRun(live.id), false, 'the second ask did not go either');
         assert.strictEqual(attempts.length, 2,
           'and reached the signaller again, because the first signal never left');
 
         // Now let one land. After that the guard applies: a signal that did go
         // out is not sent a second time to a process id that may be reused.
         refuse = false;
-        assert.strictEqual(sched.cancelRun(live.id), true, 'the third stop was asked for');
+        assert.strictEqual(sched.cancelRun(live.id), true, 'the third ask went');
         assert.strictEqual(attempts.length, 3, 'and landed');
         assert.strictEqual(sched.cancelRun(live.id), true, 'a fourth request is still answered');
         assert.strictEqual(attempts.length, 3,
@@ -1682,6 +1756,14 @@ test('a stop whose request is refused lets nothing escape, and the run still end
 
         sub.emit('event', run.done);
         assert.ok(await until(() => sched.routineState[KEY].status !== 'running'), 'the turn then ended');
+        // ENDED AS WHAT IT REALLY WAS. Both stops were refused, so no stop
+        // was ever delivered to this run, and the rejection handler must have
+        // cleared the cancelled flag both times: a record reading 'cancelled'
+        // here would tell the user a stop worked that they were just told did
+        // not, which is the precise falsehood the delivered-not-requested
+        // rule exists to remove.
+        assert.strictEqual(sched.routineState[KEY].status, 'completed',
+          'a run whose every stop was refused ends as the ending it really had, never as a stop');
         assert.strictEqual(sched.executeRoutine(CODEX_AGENT, ROUTINE, KEY), true, 'and released the routine');
         await endedAfter(sched, async () => {
           await until(() => sub.listenerCount('event') > 1);
@@ -2368,6 +2450,7 @@ test('a workspace switch replaces the slot records the way it replaces the run s
       },
       agents: { armAgentsDirWatcher: noop, invalidateAgentCache: noop },
       store: { clearSearchFailure: noop, ensureSearchEngine: noop },
+      broadcast: noop,
     };
     const sent = [];
     freshWorkspaceHandlers(sched).handleSetWorkspace(ctx, { send: (raw) => sent.push(JSON.parse(raw)) },
@@ -2828,4 +2911,90 @@ test('a schedule that stopped parsing loses its anchor too, not just a routine t
     assert.strictEqual(sched.routineSlots.routines[LATE_KEY].due, new Date(2026, 7, 19, 23, 0, 0).toISOString(),
       'and the anchor resynced once the schedule parsed again');
   });
+});
+
+// ===========================================================================
+// TWO INSTANCES OPEN ON ONE WORKSPACE
+// ===========================================================================
+//
+// The documented always-on setup keeps Rundock up on a server and up on the
+// laptop, with one workspace synced between them. The documentation says that
+// runs the routine twice. This is that claim, checked against the code that
+// decides it rather than against a description of it, because the description
+// has been wrong before.
+//
+// WHAT DECIDES IT, READ RATHER THAN SUMMARISED. The tick asks
+//
+//     const nextRun = getNextRun(routine.schedule, routineState[key]?.lastRun);
+//
+// and `routineState` is a module-owned object in memory. It is filled by
+// loadRoutineState, which runs when the process starts and whenever the
+// workspace changes, and at no other time: nothing on the tick path reads the
+// file. saveRoutineState writes
+// the whole object out on each run, so one instance's write never merges into
+// another's memory either.
+//
+// SO THE SYNC TOOL IS NOT THE VARIABLE, and this test is built to make that
+// unarguable: the two instances share ONE DIRECTORY. That is the strongest
+// sync anything could have, instantaneous and lossless, and both instances
+// still fire. A tool that copies the file more slowly, or not at all, cannot
+// do better than the same directory does.
+//
+// A SECOND MODULE INSTANCE IS A SECOND PROCESS, for the reason freshScheduler
+// is used elsewhere in this file: its own empty state, filled only by its own
+// load.
+test('two instances on one workspace both fire the routine, sharing one state file', async (t) => {
+  const claude = require(CLAUDE_KEY);
+  const realSpawn = claude.spawnClaude;
+  const realKill = claude.killProcessTree;
+  const prevClaudeDeps = claude.wireClaudeRuntimeDeps({ getActualPort: () => 0 });
+  const children = [];
+  claude.spawnClaude = () => { const child = new EventEmitter(); children.push(child); return child; };
+  claude.killProcessTree = () => {};
+  const temp = enterTempWorkspace();
+  const BRIEFING = 'nightly:briefing';
+  // Twenty past nine, with the routine due at seven. Past due on both ticks,
+  // so nothing here depends on which instance ticks first.
+  const NOW = new Date(2026, 7, 20, 9, 20);
+  const stateFile = path.join(temp.ws, '.rundock', 'routine-state.json');
+  try {
+    writeRoutineAgent(temp.ws, [{ name: 'briefing', schedule: 'every day at 07:00', prompt: 'p', enabled: true }]);
+    const laptop = freshScheduler();
+    const server = freshScheduler();
+    for (const instance of [laptop, server]) {
+      instance.wireSchedulerDeps({ getWssClients: () => [] });
+      // The boot path, which is the only thing that ever fills the object the
+      // suppression reads. Both start knowing nothing, because nothing has run.
+      instance.loadRoutineState();
+    }
+    assert.ok(!fs.existsSync(stateFile), 'sanity: no run has been recorded yet');
+
+    observeOnce(t, laptop, NOW);
+    assert.strictEqual(children.length, 1, 'the first instance fired the routine');
+    const onDisk = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
+    assert.strictEqual(typeof onDisk[BRIEFING].lastRun, 'string',
+      'and wrote the run to the file both instances share');
+
+    // THE WHOLE MECHANISM, IN ONE ASSERTION. The other instance is looking at
+    // the same directory, and the run it would be suppressed by is sitting in
+    // it. Its own copy is still empty, because nothing since its boot has read
+    // that file.
+    assert.strictEqual(server.routineState[BRIEFING], undefined,
+      'the second instance has not seen the first instance\'s run, and never will while it stays up');
+
+    observeOnce(t, server, NOW);
+    assert.strictEqual(children.length, 2,
+      'so it fired the same routine again, with the state file shared and current');
+
+    // Said the other way round, so a reader is not left inferring it from a
+    // spawn count: what the suppression was asked, on the instant it decided.
+    assert.ok(server.getNextRun('every day at 07:00', laptop.routineState[BRIEFING].lastRun) === null,
+      'the run the first instance recorded WOULD have suppressed the second, had it been asked with it');
+  } finally {
+    for (const child of children) child.emit('close', 0);
+    claude.spawnClaude = realSpawn;
+    claude.killProcessTree = realKill;
+    claude.wireClaudeRuntimeDeps(prevClaudeDeps);
+    temp.leave();
+  }
 });

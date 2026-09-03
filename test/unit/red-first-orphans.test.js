@@ -8,7 +8,7 @@
 // the mechanism they call has vanished rather than because a suite survived.
 // A prohibition is proven the other way round: commit the forbidden act, run
 // the test, watch it go red for the reason it names. That was done for each
-// case below, and the run is recorded with the change's review records.
+// case below and the run is recorded in docs/evidence/red-first-orphans-evidence.md.
 //
 // WHAT WAS MEASURED, which is why this file exists at all. The tool spawns its
 // test command detached, and a package runner starts children of its own. On a
@@ -621,7 +621,7 @@ describe('a machine that will not describe its own process table', () => {
       t.diagnostic(`before: ${table(pids)}`);
 
       // A reader that answers nothing, which is what a blocked spawn produces.
-      const outcome = endGroup(kid.pid, () => null);
+      const outcome = endGroup(kid.pid, { readMembers: () => null });
       t.diagnostic(`endGroup said ${outcome}; after: ${table(pids)}`);
 
       // The signals are still sent, so nothing is left running.
@@ -722,6 +722,18 @@ describe('starting on top of a run that is still going', () => {
     // Driven end to end against a real first run rather than a hand-written
     // record, because a hand-written one only proves the reader can read the
     // test's idea of a record.
+    //
+    // The first run is held open with a suite that cannot end on its own, the
+    // same way every other stand-in suite in this file is. It used to be
+    // `sleep 25`, which is not a property of anything under test: it is a
+    // budget for everything this test does before it asserts the run is still
+    // alive, and that includes a synchronous `cli()` call which runs the whole
+    // tool again over git. Spend more than 25 seconds getting there on a
+    // loaded runner and the first run has already concluded, so the refusal
+    // has nothing live to find and the assertions fail for a reason unrelated
+    // to refusal. Observed once on a CI Node 24 runner, green on re-run and on
+    // every local attempt. A duration nothing can outrun removes the budget
+    // rather than enlarging it; the teardown below ends the group either way.
     const dir = repo();
     const file = scratch('refuse');
     let first = null;
@@ -729,7 +741,7 @@ describe('starting on top of a run that is still going', () => {
     try {
       first = spawn(process.execPath,
         [SCRIPT, '--repo', dir, '--base', 'main',
-          '--tests', packageRunnerLeaving(file, { tail: 'sleep 25' })],
+          '--tests', packageRunnerLeaving(file, { tail: `sleep ${LONG}` })],
         { stdio: ['ignore', 'pipe', 'pipe'] });
       let firstStderr = '';
       first.stderr.on('data', (b) => { firstStderr += b.toString(); });
@@ -755,7 +767,7 @@ describe('starting on top of a run that is still going', () => {
       // for anyway, which is the second defect this card exists to avoid.
       assert.match(second.stdout, new RegExp(`\\b${written.group}\\b`),
         `the refusal must name the process group it found\n${second.stdout}`);
-      assert.match(second.stdout, /sleep 25/,
+      assert.match(second.stdout, new RegExp(`sleep ${LONG}`),
         `the refusal must name the command that is running\n${second.stdout}`);
       assert.match(second.stdout, new RegExp(`\\b${written.pid}\\b`),
         `the refusal must name the run that owns it\n${second.stdout}`);

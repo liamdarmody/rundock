@@ -17,7 +17,7 @@ const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
 const { _internal: srv } = require('../../server.js');
 const config = require('../../lib/config.js');
 
-// The full routing surface of the dispatch table, frozen: 36 message types
+// The full routing surface of the dispatch table, frozen: 39 message types
 // plus save_agent's two legacy aliases. The four root shims (chat, delegate,
 // end_delegation, flush_buffer) must NEVER appear here: chat is the
 // kill-window chat shim, delegate/end_delegation are delegation glue, and
@@ -27,12 +27,14 @@ const EXPECTED_TYPES = [
   'get_workspaces', 'client_render_time', 'list_workspaces', 'set_workspace',
   'pick_folder', 'create_workspace', 'set_workspace_mode',
   'get_agents', 'get_runtime_status', 'get_files', 'get_skills', 'get_run',
+  'cancel_routine_run',
+  'plan_package_import', 'apply_package_import',
   'get_conversations', 'set_last_active_conversation', 'save_conversation',
   'get_lists', 'create_list', 'delete_list', 'delete_conversation',
   'read_file', 'add_to_team',
   'save_agent', 'create_agent', 'update_agent', 'delete_agent',
   'save_skill', 'delete_skill', 'save_routine', 'delete_routine', 'set_routine_paused',
-  'set_routine_enabled',
+  'set_routine_enabled', 'set_routine_schedule',
   'search_conversations', 'search_universal', 'get_session_history',
   'save_file', 'create_path', 'reveal_in_finder',
 ];
@@ -106,6 +108,61 @@ describe('handler seams (stub ctx, capture ws)', () => {
       const ws2 = captureWs();
       table.set_workspace_mode({}, ws2, { type: 'set_workspace_mode', mode: 'sideways' });
       assert.strictEqual(ws2.sent[0].type, 'workspace_error', 'invalid modes are refused');
+    } finally {
+      config.setWorkspace(original);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // EVERY WINDOW IS TOLD, NOT ONLY THE ONE THAT ASKED.
+  //
+  // There is one scheduler and it serves one workspace, and several windows
+  // can be looking at one server: a browser on the laptop and one on the
+  // phone, which is the setup the always-on documentation recommends. Only the
+  // socket that asked used to hear about a switch, so every other window went
+  // on drawing a next-run time against routines the scheduler had stopped
+  // serving. Nothing on those screens was true and nothing on them said so.
+  //
+  // ASSERTED AGAINST THE BROADCAST AND NOT AGAINST THE ASKING SOCKET, because
+  // the asking socket was always told. The whole content of this is that the
+  // message goes somewhere else as well.
+  test('set_workspace tells every connected client which workspace is now served', () => {
+    const table = buildDispatch();
+    const original = config.getWorkspace();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-handlers-'));
+    const broadcast = [];
+    const noop = () => {};
+    const ctx = {
+      signals: { phaseTimer: () => ({ mark: noop, summary: () => '' }), reportStartup: noop },
+      runtime: { killAllChildren: noop, cleanOrphanedProcesses: noop },
+      workspace: {
+        setWorkspaceRoot: (d) => config.setWorkspace(d),
+        armAgentsDirWatcher: noop, armFileTreeWatcher: noop, healWorkspaceIfMoved: noop,
+        saveRecentWorkspace: noop, fileTreeForSend: () => [],
+      },
+      agents: { armAgentsDirWatcher: noop, invalidateAgentCache: noop },
+      store: { clearSearchFailure: noop, ensureSearchEngine: noop },
+      broadcast: (raw) => broadcast.push(JSON.parse(raw)),
+    };
+    try {
+      const ws = captureWs();
+      table.set_workspace(ctx, ws, { type: 'set_workspace', path: dir });
+      assert.ok(ws.sent.some(m => m.type === 'workspace_set'),
+        'sanity: the open path ran to the end rather than into the rollback');
+
+      const notices = broadcast.filter(m => m.type === 'serving_workspace');
+      assert.strictEqual(notices.length, 1, 'exactly one notice, to everybody');
+      assert.strictEqual(notices[0].path, config.getWorkspace(),
+        "the notice carries the server's own root, which is the string discovery stamps on routines");
+      assert.strictEqual(notices[0].path, dir);
+
+      // The roster the asking socket receives carries the same value, so a
+      // window comparing rows against it is comparing two copies of one
+      // string rather than two independently spelled paths.
+      const roster = ws.sent.find(m => m.type === 'agents');
+      assert.ok(roster, 'the asking socket still receives its roster');
+      assert.strictEqual(roster.workspace, config.getWorkspace(),
+        'and the workspace it was read from travels with it');
     } finally {
       config.setWorkspace(original);
       fs.rmSync(dir, { recursive: true, force: true });

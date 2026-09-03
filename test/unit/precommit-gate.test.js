@@ -387,11 +387,12 @@ describe('the default branch is read from the remote, not assumed', () => {
 });
 
 describe('the release commit is the one thing allowed on the default branch', () => {
-  // scripts/release.js bumps the version, promotes the changelog and commits
-  // straight to main. That is by design, and on the day this guard merged it
-  // stopped `npm run release` dead: the version was bumped, the changelog
-  // promoted, and the commit refused. A gate that blocks the release tool
-  // shipping beside it is not protecting anything.
+  // release.js used to commit the bump straight to main, and on the day this
+  // guard merged it stopped the release dead: the version was bumped, the
+  // changelog promoted, and the commit refused. A gate that blocks the release
+  // tool shipping beside it is not protecting anything. That commit is now made
+  // on a release branch instead, and the exception below stays for the
+  // hand-edited version or changelog that still reaches main without one.
   const onMain = (staged) => refusal({
     record: null, tree: TREE, branch: MAIN, mainBranch: MAIN, staged,
   });
@@ -433,6 +434,53 @@ describe('the release commit is the one thing allowed on the default branch', ()
   });
 });
 
+describe('the release commit is admitted on the branch it is now made on', () => {
+  // The release commit moved. main is protected and refuses a direct push, so
+  // release.js commits the bump on `release/<version>` and puts it through a
+  // pull request. The exception has to follow it there, or the tool ships
+  // beside a gate that blocks it, which is the state this exception was written
+  // to prevent in the first place.
+  const onReleaseBranch = (staged, branch = 'release/0.12.0') => refusal({
+    record: null, tree: TREE, branch, mainBranch: MAIN, staged,
+  });
+
+  test('the release footprint needs no record on a release branch', () => {
+    assert.strictEqual(onReleaseBranch(['package.json', 'CHANGELOG.md']), null);
+    assert.strictEqual(onReleaseBranch(['package.json']), null);
+    assert.strictEqual(onReleaseBranch(['CHANGELOG.md']), null);
+  });
+
+  test('anything else alongside it still needs a record', () => {
+    // Same rule as on the default branch: the exception is the footprint, not
+    // the branch name. A source file riding along faces the normal checks.
+    assert.strictEqual(onReleaseBranch(['package.json', 'server.js']).code, 'no-record');
+    assert.strictEqual(onReleaseBranch(['server.js']).code, 'no-record');
+  });
+
+  test('an empty staging area is not a release commit here either', () => {
+    assert.strictEqual(onReleaseBranch([]).code, 'no-record');
+  });
+
+  test('only the exact branch release.js creates is admitted', () => {
+    // `release/<semver>` is the name prepare builds and nothing else. A branch
+    // that merely starts with the word would be a name anybody could adopt to
+    // skip the checks.
+    assert.strictEqual(onReleaseBranch(['package.json'], 'release/next').code, 'no-record');
+    assert.strictEqual(onReleaseBranch(['package.json'], 'release/0.12.0-rc1').code, 'no-record');
+    assert.strictEqual(onReleaseBranch(['package.json'], 'releases/0.12.0').code, 'no-record');
+    assert.strictEqual(onReleaseBranch(['package.json'], 'fix/release/0.12.0').code, 'no-record');
+  });
+
+  test('a record still wins where one exists', () => {
+    // The exception is a floor, not a ceiling: an ordinary commit on a release
+    // branch with a matching record proceeds as it always would.
+    assert.strictEqual(refusal({
+      record: { ...ok, branch: 'release/0.12.0' }, tree: TREE,
+      branch: 'release/0.12.0', mainBranch: MAIN, staged: ['server.js'],
+    }), null);
+  });
+});
+
 describe('the release commit, through the real entry point on real git', () => {
   // Everything above hands refusal() a staged array built by hand, which is a
   // double for what stagedPaths() returns. That proves the decision and not the
@@ -464,6 +512,43 @@ describe('the release commit, through the real entry point on real git', () => {
 
       const { code, out } = spawnGate(['--verify'], dir);
       assert.strictEqual(code, 0, `the release commit must be admitted, got: ${out}`);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('the real hook admits the release commit on a release branch, with no record', () => {
+    // The path the release actually takes now: the bump is committed on
+    // release/<version> and reaches main through a pull request. Asserted
+    // through the real entry point because the branch name comes from git here,
+    // not from an argument written by hand.
+    const { dir, run } = repoOnDefaultBranch();
+    try {
+      run('checkout', '-q', '-b', 'release/1.0.1');
+      const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+      pkg.version = '1.0.1';
+      fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg, null, 2));
+      fs.writeFileSync(path.join(dir, 'CHANGELOG.md'), '# Changelog\n\n## 1.0.1 (today)\n');
+      run('add', 'package.json', 'CHANGELOG.md');
+
+      const { code, out } = spawnGate(['--verify'], dir);
+      assert.strictEqual(code, 0, `the release commit must be admitted, got: ${out}`);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('the real hook refuses a source file riding along on a release branch', () => {
+    const { dir, run } = repoOnDefaultBranch();
+    try {
+      run('checkout', '-q', '-b', 'release/1.0.1');
+      fs.writeFileSync(path.join(dir, 'CHANGELOG.md'), '# Changelog\n\n## 1.0.1 (today)\n');
+      fs.writeFileSync(path.join(dir, 'server.js'), '// snuck in\n');
+      run('add', 'CHANGELOG.md', 'server.js');
+
+      const { code, out } = spawnGate(['--verify'], dir);
+      assert.notStrictEqual(code, 0, 'a source file on a release branch faces the normal checks');
+      assert.match(out, /checks have not been run/);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
