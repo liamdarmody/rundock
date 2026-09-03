@@ -37,7 +37,11 @@ const { spawnSync } = require('node:child_process');
 // SIGKILL before that handler has run turns the tidiest exit into the mess this
 // whole area exists to prevent.
 const END_GRACE_MS = 500;
-const POLL_MS = 50;
+
+// How often the cheap question below is asked, and how rarely the expensive one
+// is. See psGroupMembers for why the second needs a rein on it.
+const POLL_MS = 25;
+const TABLE_POLL_MS = 150;
 
 // A pause that blocks rather than yields.
 //
@@ -75,11 +79,18 @@ const EXITED_STATE = 'Z';
  *
  * Spawning is allowed here even from a signal or 'exit' listener because it is
  * synchronous, which is also why it is asked only when the cheap question above
- * has already answered "something is there".
+ * has already answered "something is there", and, inside endGroup's loop, no
+ * more often than TABLE_POLL_MS.
  *
- * The whole table is listed and filtered here rather than asked for by group,
- * because the flag that selects a process group is not the same one on every
- * platform and picking the wrong one silently selects by something else.
+ * THE WHOLE TABLE IS LISTED AND FILTERED HERE, which is the expensive way to do
+ * it, and it is chosen because the cheap way is not portable: the flag that
+ * selects a process group is `-g` on BSD and means a session or group NAME on
+ * Linux's procps, so the same invocation silently selects by something else
+ * depending on the machine. Selecting by the wrong thing would answer the wrong
+ * question, and this question decides whether a suite is killed. The cost is
+ * held down by the two rules above rather than by a flag that cannot be trusted
+ * across platforms: on an ordinary ending this runs once, and never more than
+ * four times, against a grace of half a second.
  */
 function psGroupMembers(pgid) {
   const out = spawnSync('ps', ['-e', '-o', 'pgid=,pid=,stat='],
@@ -101,26 +112,29 @@ function psGroupMembers(pgid) {
  *
  * @returns {boolean|null} true running, false gone, null this machine will not say
  *
- * THE DISTINCTION IS THE DEFECT, and it is a platform difference that a macOS
- * measurement cannot show. When a process signals its own direct child and
- * then waits, the child dies at once but stays in the table until that process
- * collects it, which it cannot do while the event loop is blocked in the wait.
- * On Linux that corpse is still a member of its process group, so asking the
- * kernel whether the group exists keeps answering yes for the entire grace,
- * the group is then SIGKILLed for no reason, the ending reports that it
- * survived, and an alarm meant for a genuine leak fires on every interrupt.
- * macOS filters exited members out of the same question, so none of it shows
- * there. Continuous integration runs on Linux.
+ * THE DISTINCTION IS THE DEFECT. When a process signals its own direct child
+ * and then waits, the child dies at once but stays in the table until that
+ * process collects it, which it cannot do while the event loop is blocked in
+ * the wait. That corpse is still a member of its process group, so asking the
+ * kernel whether the group exists keeps answering yes for the entire grace, the
+ * group is then SIGKILLed for no reason, the ending reports that it survived,
+ * and an alarm meant for a genuine leak fires on every interrupt.
+ *
+ * MEASURED ON BOTH PLATFORMS, and the same on both: macOS and Linux each report
+ * a group whose only member is an exited entry as existing. An earlier version
+ * of this comment said macOS filtered such members out; it does not, and the
+ * reverting check's evidence file records the measurement that corrected it.
  *
  * So the group is asked about by its members and their states, and a group
  * whose remaining members have all exited is gone.
  *
  * The reader is a parameter so the decision can be driven on any machine,
- * including one whose sandbox blocks spawning, rather than only on the platform
- * that happens to produce corpses.
+ * including one whose sandbox blocks spawning, rather than only where corpses
+ * happen to appear.
  */
 function groupRunning(pgid, readMembers = psGroupMembers) {
-  // Cheap first, and on macOS it is usually the only question asked.
+  // Cheap first, and it is the only question asked once the group is really
+  // gone, which is the common case at the end of a run.
   if (!exists(-pgid)) return false;
   const members = readMembers(pgid);
   if (members === null) return null;
@@ -131,9 +145,13 @@ function groupRunning(pgid, readMembers = psGroupMembers) {
  * End one process group, and say what became of it.
  *
  * @param {number} pgid
- * @param {{graceMs?: number}} [opts] how long the group gets to end on its own
- *   before SIGKILL. Raise it where the group holds something that must run on
- *   the way out, such as a mutation harness restoring a source file.
+ * @param {{graceMs?: number, readMembers?: (pgid: number) => ({pid: number,
+ *   state: string}[]|null)}} [opts] `graceMs` is how long the group gets to end
+ *   on its own before SIGKILL; raise it where the group holds something that
+ *   must run on the way out, such as a mutation harness restoring a source
+ *   file. `readMembers` is the process-table reader, a parameter so that the
+ *   answer this cannot get, and what it does when it cannot get one, are
+ *   drivable by a test on a machine where `ps` works.
  * @returns {'gone'|'running'|'unknown'}
  *
  * A NEGATIVE pid signals the whole group, which is the point rather than a
@@ -154,22 +172,41 @@ function groupRunning(pgid, readMembers = psGroupMembers) {
  * SIGTERM is the only case where anything but the escalation keeps a subtree
  * from outliving its caller, and the criterion it answers to is unconditional.
  */
-function endGroup(pgid, { graceMs = END_GRACE_MS } = {}) {
-  if (groupRunning(pgid) === false) return 'gone';
+function endGroup(pgid, { graceMs = END_GRACE_MS, readMembers = psGroupMembers } = {}) {
+  // THE TABLE READ IS REINED, THE DECISION IS NOT. What a group's members
+  // mean is groupRunning's question and exists in this file exactly once;
+  // this wrapper only decides how often the expensive table read is made,
+  // reusing the last answer for TABLE_POLL_MS between reads. The exited
+  // member rule has been got wrong twice already, which is precisely why a
+  // second copy of it four lines from the first is not allowed to exist.
+  let lastReadAt = -Infinity;
+  let lastMembers;
+  const reined = (asked) => {
+    if (Date.now() - lastReadAt < TABLE_POLL_MS) return lastMembers;
+    lastReadAt = Date.now();
+    lastMembers = readMembers(asked);
+    return lastMembers;
+  };
+  const state = () => groupRunning(pgid, reined);
+
+  if (state() === false) return 'gone';
   try { process.kill(-pgid, 'SIGTERM'); } catch (e) { /* gone since the check */ }
   const deadline = Date.now() + graceMs;
   while (Date.now() < deadline) {
-    if (groupRunning(pgid) === false) return 'gone';
+    if (state() === false) return 'gone';
     pause(POLL_MS);
   }
   try { process.kill(-pgid, 'SIGKILL'); } catch (e) { /* gone since the check */ }
   pause(POLL_MS);
-  const after = groupRunning(pgid);
+  // The verdict read is never served from the cache: what is reported after
+  // the escalation has to describe the table as it is now.
+  lastReadAt = -Infinity;
+  const after = state();
   if (after === false) return 'gone';
   return after === null ? 'unknown' : 'running';
 }
 
 module.exports = {
   pause, exists, psGroupMembers, groupRunning, endGroup,
-  END_GRACE_MS, POLL_MS, EXITED_STATE,
+  END_GRACE_MS, POLL_MS, TABLE_POLL_MS, EXITED_STATE,
 };
