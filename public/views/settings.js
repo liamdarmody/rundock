@@ -26,6 +26,9 @@
 // the model's state and forwards the person's actions and the server's
 // replies. The model decides what, if anything, is sent.
 let packagesInstall = (typeof RundockPackagesInstallModel !== 'undefined') ? RundockPackagesInstallModel.initial() : null;
+// The extension half of the install section: same model module, its own
+// state, because a person can abandon one flow without disturbing the other.
+let extensionInstall = (typeof RundockPackagesInstallModel !== 'undefined') ? RundockPackagesInstallModel.extInitial() : null;
 
 // One guard for every packages render path: markup goes into the settings
 // pane only when the pane is showing and Packages is the displayed section;
@@ -72,11 +75,44 @@ function packagesRetry() { packagesApplyTransition(RundockPackagesInstallModel.r
 
 function packagesReplyArrived(msg) { packagesApplyTransition(RundockPackagesInstallModel.reply(packagesInstall, msg)); }
 
+// The extension flow's transitions travel the same one-socket rule as the
+// pack flow's: a send that cannot go out resets to a stated not-connected
+// error rather than pretending something is in flight.
+function extensionApplyTransition(out) {
+  if (out.send) {
+    if (!(ws && ws.readyState === WebSocket.OPEN)) {
+      extensionInstall = {
+        ...RundockPackagesInstallModel.extInitial(),
+        url: (extensionInstall && extensionInstall.url) || '',
+        reference: (extensionInstall && extensionInstall.reference) || '',
+        fieldError: 'Not connected: nothing was sent. Try again once the connection returns.',
+      };
+      packagesRenderIfVisible();
+      return;
+    }
+    ws.send(JSON.stringify(out.send));
+  }
+  extensionInstall = out.state;
+  packagesRenderIfVisible();
+}
+
+function extensionSubmit() {
+  const urlField = document.getElementById('extension-source-url');
+  const refField = document.getElementById('extension-source-ref');
+  extensionApplyTransition(RundockPackagesInstallModel.extSubmit(
+    extensionInstall, urlField ? urlField.value : '', refField ? refField.value : ''));
+}
+function extensionConfirm() { extensionApplyTransition(RundockPackagesInstallModel.extConfirm(extensionInstall)); }
+function extensionDecline() { extensionApplyTransition(RundockPackagesInstallModel.extDecline(extensionInstall)); }
+function extensionBack() { extensionApplyTransition({ state: RundockPackagesInstallModel.extInitial() }); }
+function extensionReplyArrived(msg) { extensionApplyTransition(RundockPackagesInstallModel.extReply(extensionInstall, msg)); }
+
 // Per-workspace state must not outlive the workspace it was built from: a
 // plan's collision facts, planned digests and default readings all describe
 // one workspace, so a change of workspace returns the flow to idle.
 function packagesWorkspaceChanged() {
   packagesInstall = RundockPackagesInstallModel.initial();
+  extensionInstall = RundockPackagesInstallModel.extInitial();
   packagesRenderIfVisible();
 }
 
@@ -87,6 +123,8 @@ function packagesConnectionLost() {
   // Identity means no wait was in progress: repainting here would wipe a
   // half-typed path for nothing.
   if (out.state !== packagesInstall) packagesApplyTransition(out);
+  const extOut = RundockPackagesInstallModel.extConnectionLost(extensionInstall);
+  if (extOut.state !== extensionInstall) extensionApplyTransition(extOut);
 }
 
 function packagesSectionHtml() {
@@ -141,7 +179,57 @@ function packagesSectionHtml() {
         <div class="packages-actions"><button class="settings-btn" onclick="packagesCancel()">Done</button></div>
       </div>`;
   }
-  return `<div class="settings-section-title">Packages</div>${field}${stateHtml}`;
+  return `<div class="settings-section-title">Packages</div>${field}${stateHtml}${extensionSectionHtml()}`;
+}
+
+function extensionSectionHtml() {
+  const m = RundockPackagesInstallModel;
+  const st = extensionInstall;
+  const idle = st.phase === 'ext-idle';
+  const field = `<div class="settings-card">
+      <div class="packages-field-label">Install an extension from GitHub</div>
+      <div class="packages-field-row">
+        <input id="extension-source-url" class="packages-input" type="text" placeholder="Repository URL or owner/repo"
+          value="${escAttr(st.url || '')}" ${idle ? '' : 'disabled'}>
+        <input id="extension-source-ref" class="packages-input packages-input-ref" type="text" placeholder="Tag or commit"
+          value="${escAttr(st.reference || '')}" ${idle ? '' : 'disabled'}>
+        <button class="settings-btn" onclick="extensionSubmit()" ${idle ? '' : 'disabled'}>Read it</button>
+      </div>
+      ${st.fieldError ? `<div class="packages-field-error">${esc(st.fieldError)}</div>` : ''}
+    </div>`;
+  let stateHtml = '';
+  if (st.phase === 'ext-acquiring') {
+    stateHtml = `<div class="settings-card packages-state"><div class="packages-spinner"></div>Fetching the pinned snapshot…</div>`;
+  } else if (st.phase === 'ext-trust') {
+    const copy = m.extTrustCopy(st);
+    stateHtml = `<div class="settings-card packages-confirm-card extension-trust-card">
+        <div class="packages-headline">${esc(copy.headline)}</div>
+        <div class="packages-body">${esc(copy.sourceLine)}</div>
+        <div class="packages-body extension-facts-lead">${esc(copy.factsLead)}</div>
+        <div class="packages-body">${esc(copy.body)}</div>
+        <div class="packages-body extension-match-line">${esc(copy.matchLine)}</div>
+        ${copy.replacesLine ? `<div class="packages-body">${esc(copy.replacesLine)}</div>` : ''}
+        <div class="packages-actions">
+          <button class="settings-btn packages-confirm" onclick="extensionConfirm()">${esc(copy.confirmLabel)}</button>
+          <button class="settings-btn packages-cancel" onclick="extensionDecline()">${esc(copy.declineLabel)}</button>
+        </div>
+      </div>`;
+  } else if (st.phase === 'ext-installing') {
+    stateHtml = `<div class="settings-card packages-state"><div class="packages-spinner"></div>Installing…</div>`;
+  } else if (st.phase === 'ext-failed') {
+    stateHtml = `<div class="settings-card packages-state packages-failed">
+        <div class="packages-headline">That didn't work</div>
+        <div class="packages-body">${esc(st.message)}</div>
+        <div class="packages-actions"><button class="settings-btn" onclick="extensionBack()">Back</button></div>
+      </div>`;
+  } else if (st.phase === 'ext-done') {
+    stateHtml = `<div class="settings-card packages-success-card">
+        <div class="packages-headline">Installed ${esc(st.record.name)} ${esc(st.record.version)}</div>
+        <div class="packages-body">Pinned at ${esc(st.record.source.reference)}. Update checks read this record, so you never enter the URL again.</div>
+        <div class="packages-actions"><button class="settings-btn" onclick="extensionBack()">Done</button></div>
+      </div>`;
+  }
+  return field + stateHtml;
 }
 
 function showSettingsSection(section) {
