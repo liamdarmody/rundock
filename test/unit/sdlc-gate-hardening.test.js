@@ -41,28 +41,37 @@ const ALLOWED_DESTRUCTIVE = [
   },
 ];
 
-function markdownDocs() {
-  const out = ['CONTRIBUTING.md', 'README.md'].filter(f => fs.existsSync(path.join(ROOT, f)));
-  const walk = (dir) => {
-    for (const entry of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
-      const rel = path.join(dir, entry.name);
-      if (entry.isDirectory()) walk(rel);
-      else if (entry.name.endsWith('.md')) out.push(rel);
-    }
-  };
-  walk('docs');
-  return out;
+// The scanned set is DERIVED, never listed: every markdown file git tracks,
+// wherever it lives, so a destructive step added to a root document, a
+// scaffold instruction that ships into user workspaces, or a directory that
+// does not exist yet is scanned the day it appears. No exclusions today; an
+// exclusion added later must be named here with its reason. A file git names
+// that cannot be read is a failure, not a skip: a scan that quietly drops
+// documents is the blindness this suite exists to remove.
+function trackedMarkdown() {
+  const { execFileSync } = require('node:child_process');
+  return execFileSync('git', ['ls-files', '*.md'], { cwd: ROOT, encoding: 'utf8' })
+    .split('\n').filter(Boolean);
 }
 
 describe('documented steps and uncommitted work', () => {
-  test('every destructive command in the docs stands beside its caution, and nowhere else', () => {
-    // The pattern proves it still bites before an empty result is believed.
+  test('every destructive command in the tracked docs stands beside its caution, and nowhere else', () => {
+    // The pattern proves it still bites, in both directions, before an empty
+    // result is believed.
     assert.ok(DESTRUCTIVE.test('Reverted with `git checkout -- scripts/red-first.js`'),
       'the destructive-command pattern no longer matches its own specimen');
+    assert.ok(!DESTRUCTIVE.test('run `git checkout -b my-branch` and `git status` first'),
+      'the destructive-command pattern matches ordinary branch and status commands');
+
+    const docs = trackedMarkdown();
+    // Dozens are tracked today (62 at the time of writing); a walk that finds
+    // far fewer has stopped finding documents, which must never read as an
+    // empty offender list.
+    assert.ok(docs.length >= 30, `only ${docs.length} tracked markdown files found; the document walk has gone blind`);
 
     const offenders = [];
     const allowedHits = new Map(ALLOWED_DESTRUCTIVE.map(a => [a.file, 0]));
-    for (const file of markdownDocs()) {
+    for (const file of docs) {
       const lines = read(file).split('\n');
       lines.forEach((line, i) => {
         if (!DESTRUCTIVE.test(line)) return;
@@ -145,34 +154,95 @@ const ENUMERATIONS = [
   { file: 'test/tools/coverage-areas.js', extraction: 'SF and DA records out of the lcov', failLoudBy: 'count', where: 'a floored area that was not measured raises a violation' },
   { file: 'test/tools/style-drift.js', extraction: 'colour, function and radius literals out of stylesheets', failLoudBy: 'count', where: 'stale allowlist entries error when a listed literal is no longer found' },
   { file: 'test/tools/style-resolve-diff.js', extraction: 'declarations and rule blocks out of stylesheets', failLoudBy: 'count', where: 'its companion test file proves the patterns on specimens' },
-  { file: 'test/unit/sdlc-gate-hardening.test.js', extraction: 'destructive commands in docs, redTests bodies out of the harnesses, scanner rules out of check-internal-refs', failLoudBy: 'count', where: 'specimen self-tests and exact extraction counts throughout this file' },
+  { file: 'test/unit/sdlc-gate-hardening.test.js', extraction: 'destructive commands in tracked markdown, redTests and report bodies out of the harnesses, scanner rules out of check-internal-refs', failLoudBy: 'count', where: 'specimen self-tests, document and per-directory floors, and exact extraction counts throughout this file' },
+  { file: 'test/helpers/scheduler-statuses.js', extraction: 'status literals out of the scheduler writers', failLoudBy: 'count', where: 'its consumers assert the vocabulary in both directions (profile-boxes) and drive every word' },
+  { file: 'test/integration/http-api.test.js', extraction: 'script and stylesheet links out of served index.html', failLoudBy: 'count', where: 'floors on both lists plus a token-sheet canary' },
+  { file: 'test/integration/ws-handler-edges.test.js', extraction: 'frontmatter and order lines out of written agent files', failLoudBy: 'count', where: 'exact match counts; missing frontmatter refuses' },
+  { file: 'test/tools/innerhtml-sites.js', extraction: 'innerHTML assignment sites across the client', failLoudBy: 'count', where: 'pinned per-file totals in innerhtml-inventory.test.js' },
+  { file: 'test/unit/app-retentions.test.js', extraction: 'DOM-writing functions out of app.js', failLoudBy: 'count', where: 'owners.size floor plus the stale-manifest check in both directions' },
+  { file: 'test/unit/client-namespace.test.js', extraction: 'top-level declarations and uses across client sources', failLoudBy: 'count', where: 'declaration-count floor beside the extraction' },
+  { file: 'test/unit/guide-name.test.js', extraction: 'pronoun scan over rendered surfaces', failLoudBy: 'count', where: 'specimen pair beside the pattern, added with this registry row' },
+  { file: 'test/unit/markdown-render.test.js', extraction: 'renderer call sites and script tags out of client sources', failLoudBy: 'count', where: 'call-site and script-count floors beside each scan' },
+  { file: 'test/unit/routine-editor-view.test.js', extraction: 'navigation arms cut out of app.js', failLoudBy: 'count', where: 'the cut refuses when the arm is missing' },
+  { file: 'test/unit/routines-panel.test.js', extraction: 'markup regions cut out of index.html and app.js', failLoudBy: 'count', where: 'every cut refuses when its region is missing' },
+  { file: 'test/unit/run-detail-view.test.js', extraction: 'the run-detail panel cut out of index.html', failLoudBy: 'count', where: 'the cut refuses when the panel is missing' },
+  { file: 'test/unit/scheduler-lifecycle-doors.test.js', extraction: 'lifecycle call sites and their enclosing functions out of the server sources', failLoudBy: 'count', where: 'manifest equality plus a self-arming floor' },
+  { file: 'test/unit/skills-empty.test.js', extraction: 'markup regions cut out of index.html', failLoudBy: 'count', where: 'every cut refuses when its region is missing' },
+  { file: 'test/unit/style-drift.test.js', extraction: 'value literals out of allowlist reasons', failLoudBy: 'count', where: 'specimen beside the pattern, added with this registry row' },
 ];
 
 // What makes a file a source-walking extraction. Deliberately the same
 // heuristic a person would use scanning for the shape: it reads a file and
 // runs a pattern over the text. Over-collection is handled by registering the
 // file with what its extraction actually is, never by narrowing the detector.
+//
+// WHAT THIS CANNOT SEE, stated beside the check the way the residue scan's
+// blind spot is: an extraction that splits on a delimiter instead of matching,
+// one that walks with indexOf, or a pattern assembled at runtime from pieces.
+// A new extraction idiom belongs in the predicate with a specimen below, not
+// in a registry row on trust.
+const EXTRACTION_IDIOMS = /\.matchAll\(|\.match\(\/|\.match\([A-Z_]|\.exec\(|appPiece\(/;
+function looksLikeExtraction(src) {
+  return src.includes('readFileSync(') && EXTRACTION_IDIOMS.test(src);
+}
+
+// The WHOLE test tree, recursively, so an extraction lands in the walk
+// wherever it lands in the tree. node_modules is the one exclusion, with the
+// obvious reason: dependencies are not this repository's instruments.
 function detectorHits() {
   const hits = [];
-  const dirs = ['test/unit', 'test/tools', 'test/e2e'];
-  for (const dir of dirs) {
-    if (!fs.existsSync(path.join(ROOT, dir))) continue;
-    for (const name of fs.readdirSync(path.join(ROOT, dir))) {
-      if (!name.endsWith('.js')) continue;
-      const rel = `${dir}/${name}`;
-      const src = read(rel);
-      if (src.includes('readFileSync(') && (/\.matchAll\(|\.match\(\/|appPiece\(/.test(src))) {
-        hits.push(rel);
+  const walked = new Set();
+  const walk = (dir) => {
+    walked.add(dir);
+    for (const entry of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
+      const rel = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (entry.name !== 'node_modules') walk(rel);
+        continue;
       }
+      if (!entry.name.endsWith('.js')) continue;
+      if (looksLikeExtraction(read(rel))) hits.push(rel);
     }
-  }
-  return hits.sort();
+  };
+  walk('test');
+  return { hits: hits.sort(), walked };
 }
 
 describe('source-walking enumerations', () => {
+  test('the detection predicate fires on every recognised idiom and not on a plain read', () => {
+    // The predicate is what decides the registration gate's whole reach, so
+    // each idiom it claims to recognise is proven on a specimen, and a file
+    // that merely reads bytes is proven invisible. A predicate that silently
+    // stops recognising an idiom fails here, by name, before an empty
+    // unregistered list is believed.
+    const reads = "const src = fs.readFileSync('a.js', 'utf8');\n";
+    const specimens = {
+      'matchAll': reads + 'for (const m of src.matchAll(/x/g)) {}',
+      'match with a literal': reads + 'const m = src.match(/^function (\\w+)/);',
+      'match with a named pattern': reads + 'const m = src.match(CALL_SHAPE);',
+      'exec': reads + 'const m = RE.exec(src);',
+      'appPiece': reads + "const body = appPiece(/case 'x':/, 'the x case');",
+    };
+    for (const [idiom, snippet] of Object.entries(specimens)) {
+      assert.ok(looksLikeExtraction(snippet), `the predicate no longer recognises the ${idiom} idiom`);
+    }
+    assert.ok(!looksLikeExtraction(reads + 'const n = src.length;'),
+      'the predicate fires on a file that reads bytes and extracts nothing');
+  });
+
   test('every extraction in the test tree is registered with a fail-loud property', () => {
-    const hits = detectorHits();
-    assert.ok(hits.length >= 20, `only ${hits.length} extraction files detected; the detector itself has gone blind`);
+    const { hits, walked } = detectorHits();
+    // The walk's reach is asserted directly, so losing a directory from the
+    // recursion is loud rather than absorbed by the total.
+    for (const dir of ['test/unit', 'test/tools', 'test/e2e', 'test/integration', 'test/helpers']) {
+      assert.ok(walked.has(dir), `the detector no longer walks ${dir}`);
+    }
+    const byDir = (d) => hits.filter(h => h.startsWith(d + '/')).length;
+    assert.ok(byDir('test/unit') >= 20, `only ${byDir('test/unit')} unit extraction files detected; the detector has gone blind there`);
+    assert.ok(byDir('test/tools') >= 3, `only ${byDir('test/tools')} tools extraction files detected; the detector has gone blind there`);
+    assert.ok(byDir('test/integration') >= 2, `only ${byDir('test/integration')} integration extraction files detected; the detector has gone blind there`);
+    assert.ok(byDir('test/helpers') >= 1, `only ${byDir('test/helpers')} helper extraction files detected; the detector has gone blind there`);
+
     const registered = new Set(ENUMERATIONS.map(e => e.file));
     const unregistered = hits.filter(h => !registered.has(h));
     assert.deepStrictEqual(unregistered, [],
@@ -183,13 +253,16 @@ describe('source-walking enumerations', () => {
   });
 
   test('every registered enumeration still walks source', () => {
-    const hits = new Set(detectorHits());
+    const hits = new Set(detectorHits().hits);
     const gone = ENUMERATIONS.filter(e => !hits.has(e.file)).map(e => e.file);
     assert.deepStrictEqual(gone, [],
       'a registered file no longer walks source (or no longer exists); remove its row so the registry stays true');
   });
 
-  test('every registered enumeration names a real property in a real place', () => {
+  // Well-formedness only: `where` is descriptive prose pointing a reader at
+  // the guard, and this suite does not verify the prose still names a live
+  // line. The property itself is exercised where it lives, per row.
+  test('every registry row is well formed', () => {
     for (const e of ENUMERATIONS) {
       assert.ok(['count', 'imports', 'mutation'].includes(e.failLoudBy),
         `${e.file}: failLoudBy must be count, imports or mutation`);
@@ -251,6 +324,40 @@ describe('a mutation result that cannot be parsed is a refusal, not a crash', ()
     });
   }
 
+  // The parser refusing is half the rule; the report is where a person reads
+  // the verdict, and one harness proved the two can drift: its parser refused
+  // and its report printed the refusal as a guard nobody was watching. So
+  // every harness's report is cut out and driven with a refusal row, in both
+  // shapes, and must say no verdict was obtained rather than any definite
+  // thing.
+  for (const file of HARNESSES) {
+    test(`${path.basename(file)} reports a refusal as no verdict, in both shapes`, () => {
+      const src = read(file);
+      const m = src.match(/function report\(results, markdown\) \{[\s\S]*?\n\}/);
+      assert.ok(m, `${file}: report could not be cut out; if it moved or was renamed, update this extraction`);
+      const probe = [{ label: 'probe-mutation', applied: true, unparsable: true, red: [], matches: 1 }];
+      for (const markdown of [true, false]) {
+        const said = [];
+        const fakeConsole = { log: (line) => said.push(String(line)), error: (line) => said.push(String(line)) };
+        // The copies may print module-level extras after their table (the
+        // fence harness lists what it deliberately does not mutate); those
+        // identifiers are stubbed empty so the refusal row itself is what is
+        // driven.
+        const factory = new Function('console', 'NOT_MUTATED', `${m[0]}; return report;`);
+        const failures = factory(fakeConsole, [])(probe, markdown);
+        const out = said.join('\n');
+        assert.ok(out.includes('probe-mutation'),
+          `${file}: the ${markdown ? 'markdown' : 'plain'} report does not name the mutation that got no verdict`);
+        assert.match(out, /no verdict/i,
+          `${file}: the ${markdown ? 'markdown' : 'plain'} report must say no verdict was obtained, not a definite result`);
+        assert.doesNotMatch(out, /NOTHING TURNED RED/,
+          `${file}: a refusal must never be printed as a mutation nothing noticed`);
+        assert.ok(failures >= 1,
+          `${file}: a refusal row must count as a failure so the gate stays red`);
+      }
+    });
+  }
+
   test('the harness count matches the mutate:guards chain', () => {
     const chain = JSON.parse(read('package.json')).scripts['mutate:guards'];
     for (const file of HARNESSES) {
@@ -299,14 +406,58 @@ describe('the internal-reference scanner and the acceptance-label shape', () => 
     assert.deepStrictEqual(lookalike, [], 'a label shape embedded in a longer word must not trip the rule');
   });
 
-  test('the amnesty list only shrinks', () => {
+  test('the amnesty list only shrinks, by membership and not by count', () => {
     const { AC_LABEL_AMNESTY } = buildScanner();
-    // The size on the day the ratchet was added. Burning a file down lowers
-    // this number; record the new, smaller size in the same change. Raising
-    // it means a new file shipped the shape, which the rule exists to stop.
-    const SIZE_WHEN_RATCHETED = 38;
-    assert.ok(AC_LABEL_AMNESTY.size <= SIZE_WHEN_RATCHETED,
-      `the amnesty list grew to ${AC_LABEL_AMNESTY.size}; it may only burn down. Reword the new file instead`);
+    // The exact membership on the day the ratchet was added. A size cap would
+    // let one file leave and another arrive with the count holding, so the
+    // check is subset: every current member must be one of these, and burning
+    // a file down means removing it from the scanner's list (this copy needs
+    // no edit; it is the ceiling, not the state). A new member here means a
+    // new file shipped the shape, which the rule exists to stop: reword the
+    // file instead.
+    const RATCHETED = new Set([
+    'docs/TEST-TIMING.md',
+    'docs/evidence/red-first-orphans-evidence.md',
+    'docs/evidence/scheduler-lifecycle-evidence.md',
+    'docs/evidence/setup-race-flakes-evidence.md',
+    'scripts/red-first.js',
+    'test/e2e/file-tree-icons.spec.js',
+    'test/e2e/theme.spec.js',
+    'test/integration/scheduler-gating.test.js',
+    'test/integration/scheduler-output-drain.test.js',
+    'test/integration/scheduler-predating-routines.test.js',
+    'test/integration/scheduler-run-observation.test.js',
+    'test/integration/scheduler-run-records.test.js',
+    'test/integration/scheduler-workspace-lifecycle.test.js',
+    'test/tools/mutate-routines-guards.js',
+    'test/tools/mutate-run-detail-guards.js',
+    'test/unit/boundary.test.js',
+    'test/unit/guide-name.test.js',
+    'test/unit/profile-boxes.test.js',
+    'test/unit/red-first-orphans.test.js',
+    'test/unit/red-first.test.js',
+    'test/unit/routine-actions.test.js',
+    'test/unit/routine-editor-contract.test.js',
+    'test/unit/routine-editor-doors.test.js',
+    'test/unit/routine-editor-model.test.js',
+    'test/unit/routine-editor-view.test.js',
+    'test/unit/routine-model.test.js',
+    'test/unit/routine-timezone.test.js',
+    'test/unit/routines-end-to-end.test.js',
+    'test/unit/routines-model.test.js',
+    'test/unit/routines-next-run.test.js',
+    'test/unit/routines-panel.test.js',
+    'test/unit/routines-view-doors.test.js',
+    'test/unit/routines-view.test.js',
+    'test/unit/scheduler-lib.test.js',
+    'test/unit/scheduler-lifecycle-doors.test.js',
+    'test/unit/session-transcript-capture.test.js',
+    'test/unit/session-transcript.test.js',
+    'test/unit/team-sidebar.test.js',
+    ]);
+    const arrivals = [...AC_LABEL_AMNESTY].filter(f => !RATCHETED.has(f));
+    assert.deepStrictEqual(arrivals, [],
+      'a file joined the amnesty after the ratchet date; the list may only burn down');
   });
 });
 
@@ -314,6 +465,12 @@ describe('the internal-reference scanner and the acceptance-label shape', () => 
 // The optional encoder
 // ---------------------------------------------------------------------------
 
+// The criterion's named proof, measured 2026-09-03 rather than reasoned: a
+// clean `npm ci --omit=optional --ignore-scripts` against this manifest
+// completed (318 packages, no encoder), and this suite's own green run was
+// made in a working tree whose encoder download had been refused by a
+// restricted network at install time, which is the environment the criterion
+// describes running the focused gate.
 describe('a fresh install works without the media encoder', () => {
   test('ffmpeg-static is optional, and its consumer guards the require', () => {
     const pkg = JSON.parse(read('package.json'));
@@ -321,8 +478,23 @@ describe('a fresh install works without the media encoder', () => {
       'ffmpeg-static must not be a hard dependency: it downloads from outside the npm registry at install time, and nothing the tests need uses it');
     assert.strictEqual((pkg.optionalDependencies || {})['ffmpeg-static'], '^5.2.0',
       'the capture pipeline still wants the encoder where the optional install succeeds');
+    // The property, not the formatting: the optional require must sit inside
+    // a try block so its absence degrades instead of throwing, whatever the
+    // statement's spacing or the local names around it.
     assert.match(read('scripts', 'screenshots', 'motion.mjs'),
-      /try \{ candidates\.push\(require\('ffmpeg-static'\)\); \} catch/,
+      /try\s*\{[^{}]*require\('ffmpeg-static'\)[^{}]*\}\s*catch/,
       'motion.mjs must keep guarding the require, so an install without the optional package still runs');
+  });
+
+  test('the packaged application does not carry the encoder', () => {
+    // Measured 2026-09-03: moving the encoder to optionalDependencies made it
+    // a production dependency, and the desktop build packs the production
+    // tree, so without this exclusion the shipped app gains a large encoder
+    // binary no shipped code path uses. The exclusion is what keeps the
+    // packaged output indifferent to the install-time class; this assertion
+    // is what keeps the exclusion.
+    const files = JSON.parse(read('package.json')).build.files;
+    assert.ok(files.includes('!node_modules/ffmpeg-static/**'),
+      'the build file set must exclude the optional encoder, or the shipped app carries it for nothing');
   });
 });

@@ -300,13 +300,16 @@ describe('every way this list gets drawn is enumerated', () => {
     // The scan is a prohibition, so an empty result is its passing state and
     // a pattern gone blind is indistinguishable from a clean tree. The
     // specimen proves the pattern still bites before the tree is trusted.
-    const specimen = [..."switchNav('routines')".matchAll(/(?:switchNav|showView|setNavState)\((['"])([\w-]+)\1\)/g)];
+    // ONE VALUE for the specimen and the scan, so an edit to the pattern the
+    // scan runs is the edit the specimen exercises.
+    const NAV_CALL = /(?:switchNav|showView|setNavState)\((['"])([\w-]+)\1\)/g;
+    const specimen = [..."switchNav('routines')".matchAll(NAV_CALL)];
     assert.strictEqual(specimen.length, 1, 'the navigation pattern no longer matches its own specimen');
     assert.strictEqual(specimen[0][2], 'routines');
     for (const rel of clientFiles()) {
       if (rel === 'public/app.js') continue;
       const src = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
-      for (const m of src.matchAll(/(?:switchNav|showView|setNavState)\((['"])([\w-]+)\1\)/g)) {
+      for (const m of src.matchAll(NAV_CALL)) {
         if (m[2] !== 'routines') continue;
         // Three files may, and each is listed in ROUTES above with the test
         // that presses it: the editor, which leaves for this list after a

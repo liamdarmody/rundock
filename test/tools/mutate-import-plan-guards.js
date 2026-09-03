@@ -142,7 +142,7 @@ function report(results, markdown) {
       failed++;
       const why = 'no verdict: the suite failed but its output could not be parsed, so nothing '
         + 'about this mutation is known; fix the reporter parsing rather than trusting a rerun';
-      lines.push(markdown ? `| ${label} | **${why}** | |` : `${label}\n  ${why.toUpperCase()}`);
+      lines.push(markdown ? `| ${label} | ${matches} | **${why}** | |` : `${label}\n  ${why.toUpperCase()}`);
       continue;
     }
     if (ambiguous) {

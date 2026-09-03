@@ -158,7 +158,14 @@ function run() {
 function report(results, markdown) {
   let failed = 0;
   const lines = [];
-  for (const { label, applied, red, ambiguous, matches } of results) {
+  for (const { label, applied, red, ambiguous, matches, unparsable } of results) {
+    if (unparsable) {
+      failed++;
+      const why = 'no verdict: the suite failed but its output could not be parsed, so nothing '
+        + 'about this mutation is known; fix the reporter parsing rather than trusting a rerun';
+      lines.push(markdown ? `| ${label} | ${matches} | **${why}** | |` : `${label}\n  ${why.toUpperCase()}`);
+      continue;
+    }
     if (ambiguous) {
       failed++;
       const why = `the guard text matches ${ambiguous} places, so it would break whichever came first`;

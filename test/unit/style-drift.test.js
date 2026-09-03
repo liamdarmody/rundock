@@ -115,6 +115,11 @@ describe('an allowlist reason describes only what it still allows', () => {
   const LITERAL = /#[0-9a-fA-F]{3,8}\b|\b\d+px\b|\b\d*\.?\d+m?s\b/g;
 
   test('no reason names a literal that is not in its allow list', () => {
+    // A prohibition over extracted literals passes vacuously when the pattern
+    // goes blind, so it proves it still bites before the empty result counts.
+    LITERAL.lastIndex = 0;
+    assert.deepStrictEqual('a #fff wash over 200ms at 4px'.match(LITERAL), ['#fff', '200ms', '4px'],
+      'the literal pattern no longer matches its own specimen');
     const stale = [];
     for (const [file, entry] of Object.entries(ALLOW)) {
       for (const lit of entry.why.match(LITERAL) || []) {

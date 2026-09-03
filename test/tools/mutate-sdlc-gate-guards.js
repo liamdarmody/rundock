@@ -49,6 +49,9 @@ const FOCUSED = { src: path.join(ROOT, 'test', 'unit', 'sdlc-gate-hardening.test
 const TRUTH_HARNESS = { src: path.join(ROOT, 'test', 'tools', 'mutate-routines-truth-guards.js'), suite: 'test/unit/sdlc-gate-hardening.test.js' };
 // The reference scanner, watched by the tests that drive its rule table.
 const SCANNER = { src: path.join(ROOT, 'scripts', 'check-internal-refs.js'), suite: 'test/unit/sdlc-gate-hardening.test.js' };
+// The one harness that proved parser and report can drift apart, watched by
+// the report-path uniformity tests.
+const ROLLBACK_HARNESS = { src: path.join(ROOT, 'test', 'tools', 'mutate-workspace-rollback-guards.js'), suite: 'test/unit/sdlc-gate-hardening.test.js' };
 
 const MUTATIONS = [
   // ===== A DESTRUCTIVE STEP WITHOUT ITS CAUTION =====
@@ -86,6 +89,14 @@ const MUTATIONS = [
     "    re: /\\bNEVER-MATCHES-ANYTHING-[0-9]+\\b/,\n    amnesty: AC_LABEL_AMNESTY,"],
   // Remove the amnesty consult and every legacy file fails the gate at once,
   // which is the ratchet collapsing into a flag day nobody scheduled.
+  // ===== A REFUSAL MISREPORTED AS A DEFINITE RESULT =====
+  // Remove the report branch and a parser refusal falls through to the
+  // nothing-turned-red case: a definite verdict about a mutation for which
+  // no verdict exists, in the one harness that already drifted this way once.
+  [ROLLBACK_HARNESS, 'a parser refusal reaches the report as no verdict, never as nothing-turned-red',
+    "    if (unparsable) {\n      failed++;\n      const why = 'no verdict: the suite failed but its output could not be parsed, so nothing '\n        + 'about this mutation is known; fix the reporter parsing rather than trusting a rerun';\n      lines.push(markdown ? `| ${label} | ${matches} | **${why}** | |` : `${label}\\n  ${why.toUpperCase()}`);\n      continue;\n    }\n",
+    ''],
+
   [SCANNER, 'the amnesty is consulted before the rule fires',
     '      if (rule.amnesty && rule.amnesty.has(label)) continue;',
     '      if (rule.amnesty && false) continue;'],
@@ -123,7 +134,7 @@ function redTests(suite) {
 }
 
 function run() {
-  const targets = [EVIDENCE, ENVELOPE, FOCUSED, TRUTH_HARNESS, SCANNER];
+  const targets = [EVIDENCE, ENVELOPE, FOCUSED, TRUTH_HARNESS, SCANNER, ROLLBACK_HARNESS];
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
   for (const target of targets) originals.set(target, session.original(target.src));

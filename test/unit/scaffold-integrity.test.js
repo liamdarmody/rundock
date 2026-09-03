@@ -20,7 +20,10 @@ describe('scaffolded platform files', () => {
   test('every referenced rundock-* skill exists in the scaffold', () => {
     // A prohibition scan passes on an empty result, so the pattern proves it
     // can still find a reference before the absence of failures is believed.
-    const specimen = [...'see `rundock-example-skill` for the shape'.matchAll(/`(rundock-[a-z][a-z-]*)`/g)];
+    // ONE VALUE for the specimen and the scan: a specimen matched against its
+    // own copy of the pattern stays green while the scan goes blind.
+    const SKILL_REF = /`(rundock-[a-z][a-z-]*)`/g;
+    const specimen = [...'see `rundock-example-skill` for the shape'.matchAll(SKILL_REF)];
     assert.strictEqual(specimen.length, 1, 'the skill-reference pattern no longer matches its own specimen');
     const files = fs.readdirSync(SCAFFOLD).filter((f) => f.endsWith('.md'));
     const shipped = new Set(files.map((f) => f.replace(/\.md$/, '')));
@@ -29,7 +32,7 @@ describe('scaffolded platform files', () => {
       const text = fs.readFileSync(path.join(SCAFFOLD, f), 'utf-8');
       const lines = text.split('\n');
       lines.forEach((line, i) => {
-        for (const m of line.matchAll(/`(rundock-[a-z][a-z-]*)`/g)) {
+        for (const m of line.matchAll(SKILL_REF)) {
           if (!shipped.has(m[1])) {
             failures.push(`${f}:${i + 1} references \`${m[1]}\`, which is not a scaffolded file`);
           }
