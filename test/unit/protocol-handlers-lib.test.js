@@ -474,6 +474,30 @@ describe('the serving-workspace notice', () => {
     }
   }
 
+  // THE SEAM BETWEEN THE HANDLER AND THE ANNOUNCER, bound rather than
+  // assumed. The handler test above proves the handler adds no notice of its
+  // own, and the tests below prove the root setter announces to every window;
+  // what neither can see is the composition root handing the handler a setter
+  // that does not announce, which would leave every window that did not ask
+  // for a switch silently untold with both suites green. So the function the
+  // handler actually receives, off the server's own composed context, is
+  // driven here and required to announce to both windows.
+  test('the setter the composed context hands the handler is the announcing one', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'serving-seam-'));
+    try {
+      listening(() => {
+        const composed = root.wsHandlerContext.workspace.setWorkspaceRoot;
+        composed(dir);
+        const heard = eachWindowNotices();
+        assert.strictEqual(heard[heard.length - 1] && heard[heard.length - 1].path, dir,
+          'the setter the handler is composed with must be the one that tells every window, '
+          + 'or a rewire of the composition root silently disconnects the notice');
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   // Every assertion on one window's inbox is made of the other's too, so a
   // transport that reached only one socket fails on whichever it missed.
   function eachWindowNotices() {
