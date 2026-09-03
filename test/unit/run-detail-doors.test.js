@@ -355,7 +355,7 @@ describe('the doors, pressed', () => {
     const body = APP_SRC.slice(at + "case 'agents':".length, APP_SRC.indexOf('break;', at));
     // Every other global the roster case reaches for, stubbed so this one
     // line can be pressed without the rest of the case throwing first.
-    for (const name of ['setServingWorkspace', 'renderAgentList', 'renderOrgChart',
+    for (const name of ['setRosterWorkspace', 'renderAgentList', 'renderOrgChart',
       'renderRoutinesPanel', 'renderConvoList']) {
       w[name] = () => {};
     }

@@ -123,10 +123,16 @@ describe('handler seams (stub ctx, capture ws)', () => {
   // on drawing a next-run time against routines the scheduler had stopped
   // serving. Nothing on those screens was true and nothing on them said so.
   //
-  // ASSERTED AGAINST THE BROADCAST AND NOT AGAINST THE ASKING SOCKET, because
-  // the asking socket was always told. The whole content of this is that the
-  // message goes somewhere else as well.
-  test('set_workspace tells every connected client which workspace is now served', () => {
+  // ASSERTED AS AN ABSENCE, DELIBERATELY. The notice originates in exactly
+  // one place, the server's own root setter, and 'changing the root tells
+  // every connected window which workspace it is' below drives that place
+  // against real connected clients. What this one pins is the other half of
+  // the single-source rule: the handler adds no copy of its own. The ctx here
+  // stubs the root setter with one that announces nothing, so any notice on
+  // the broadcast is one the handler itself sent, and the first version of
+  // this change did exactly that: two senders, two transports, and a failure
+  // path where the early copy described a root the server had rolled back.
+  test('set_workspace announces through the root setter alone, never from the handler', () => {
     const table = buildDispatch();
     const original = config.getWorkspace();
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-handlers-'));
@@ -151,10 +157,9 @@ describe('handler seams (stub ctx, capture ws)', () => {
         'sanity: the open path ran to the end rather than into the rollback');
 
       const notices = broadcast.filter(m => m.type === 'serving_workspace');
-      assert.strictEqual(notices.length, 1, 'exactly one notice, to everybody');
-      assert.strictEqual(notices[0].path, config.getWorkspace(),
-        "the notice carries the server's own root, which is the string discovery stamps on routines");
-      assert.strictEqual(notices[0].path, dir);
+      assert.strictEqual(notices.length, 0,
+        'the handler sent a serving-workspace notice of its own: the root setter is the one announcer, '
+        + 'and a second sender is a second thing that can disagree with it on the failure path');
 
       // The roster the asking socket receives carries the same value, so a
       // window comparing rows against it is comparing two copies of one
@@ -420,5 +425,156 @@ describe('cancel seams (stub ctx)', () => {
     assert.ok(grandparent.exited && grandparent.cancelled, 'the grandparent is reaped through the chain');
     assert.ok(!ctx.processes.has('c9'), 'the entry is removed');
     assert.deepStrictEqual(sent.map(m => m.subtype), ['cancelled', 'done'], 'client unblocks in order');
+  });
+});
+
+// ===========================================================================
+// WHICH WORKSPACE THE SCHEDULER IS SERVING, ANNOUNCED FROM ONE PLACE
+// ===========================================================================
+//
+// There is one scheduler and it serves one workspace, and several windows can
+// be looking at one server: a browser on the laptop and one on the phone,
+// which is the setup the always-on documentation recommends. Only the socket
+// that asked for a switch used to learn about it, so every other window went
+// on drawing a next-run time against routines that had stopped being served.
+//
+// THE ANNOUNCE LIVES WHERE THE CHANGE HAPPENS, NOT WHERE IT WAS REQUESTED, and
+// these tests are about the difference. setWorkspaceRoot is the one function
+// that writes the root and points the scheduler at it, and its own comment
+// already names the four ways a workspace changes: open one, create one, roll
+// back to the previous one after a failed open, clear the pointer to one that
+// has gone. Announced from the open handler instead, the notice described a
+// root the server was not always serving, because the open path can throw
+// after the announce and the rollback puts the old root back without saying
+// so. Here the rollback IS a call to this function, so the retraction cannot
+// be forgotten.
+describe('the serving-workspace notice', () => {
+  const { _internal: root } = require('../../server.js');
+  // TWO WINDOWS, NOT ONE, and each with its own inbox. 'Tells every connected
+  // window' is a claim about fan-out, and one listener satisfies it whether
+  // the transport reaches everybody, the first socket, or the most recent
+  // one. Two distinct clients are the smallest number a send-to-one
+  // implementation cannot satisfy.
+  let seenByWindow = [[], []];
+  const listeners = [0, 1].map((i) => ({
+    readyState: 1, send: (raw) => seenByWindow[i].push(JSON.parse(raw)),
+  }));
+  function listening(fn) {
+    const before = [...root.connectedClients];
+    const original = config.getWorkspace();
+    seenByWindow = [[], []];
+    root.connectedClients.clear();
+    for (const l of listeners) root.connectedClients.add(l);
+    try {
+      return fn();
+    } finally {
+      root.connectedClients.clear();
+      for (const c of before) root.connectedClients.add(c);
+      root.setWorkspace(original);
+    }
+  }
+
+  // THE SEAM BETWEEN THE HANDLER AND THE ANNOUNCER, bound rather than
+  // assumed. The handler test above proves the handler adds no notice of its
+  // own, and the tests below prove the root setter announces to every window;
+  // what neither can see is the composition root handing the handler a setter
+  // that does not announce, which would leave every window that did not ask
+  // for a switch silently untold with both suites green. So the function the
+  // handler actually receives, off the server's own composed context, is
+  // driven here and required to announce to both windows.
+  test('the setter the composed context hands the handler is the announcing one', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'serving-seam-'));
+    try {
+      listening(() => {
+        const composed = root.wsHandlerContext.workspace.setWorkspaceRoot;
+        composed(dir);
+        const heard = eachWindowNotices();
+        assert.strictEqual(heard[heard.length - 1] && heard[heard.length - 1].path, dir,
+          'the setter the handler is composed with must be the one that tells every window, '
+          + 'or a rewire of the composition root silently disconnects the notice');
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Every assertion on one window's inbox is made of the other's too, so a
+  // transport that reached only one socket fails on whichever it missed.
+  function eachWindowNotices() {
+    const per = seenByWindow.map(inbox => inbox.filter(m => m.type === 'serving_workspace'));
+    assert.deepStrictEqual(per[0], per[1],
+      'both connected windows hear the same notices in the same order, or the transport is picking favourites');
+    return per[0];
+  }
+
+  const notices = () => eachWindowNotices();
+  const lastNotice = () => notices()[notices().length - 1] || null;
+
+  test('changing the root tells every connected window which workspace it is', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'serving-'));
+    try {
+      listening(() => {
+        const before = notices().length;
+        root.setWorkspace(dir);
+        assert.strictEqual(lastNotice() && lastNotice().path, dir,
+          'a window that did not ask for the switch is told where the scheduler went');
+        assert.strictEqual(notices().length, before + 1,
+          'and exactly once per change: this is the composed wiring, so a second notice here is a second sender');
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The state a window has never been told apart from the state it has been
+  // told is nothing: a workspace whose folder has gone leaves the scheduler
+  // serving none, and a window left describing the old one would go on
+  // promising runs nothing can make.
+  test('clearing the root says so rather than going quiet', () => {
+    listening(() => {
+      root.setWorkspace(null);
+      assert.strictEqual(lastNotice() && lastNotice().path, null,
+        'no workspace is a statement, not a silence');
+    });
+  });
+
+  // THE FAILURE PATH, WHICH IS WHERE THE FIRST VERSION OF THIS INVERTED.
+  //
+  // The open path can throw after the root has already changed, and the
+  // handler's catch puts the previous root back. Announced from the handler
+  // before that work, every window was left believing the new workspace was
+  // being served while the scheduler had returned to the old one, so windows
+  // showing the old workspace's roster drew every firing routine as moved and
+  // dormant, with nothing scheduled to correct it.
+  test('an open that throws leaves the notice describing the workspace actually served', () => {
+    const table = buildDispatch();
+    const previous = fs.mkdtempSync(path.join(os.tmpdir(), 'serving-prev-'));
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), 'serving-next-'));
+    const noop = () => {};
+    // Throws AFTER setWorkspaceRoot has run, which is the window this covers.
+    const ctx = {
+      signals: { phaseTimer: () => { throw new Error('prepare exploded'); } },
+      runtime: { killAllChildren: noop },
+      workspace: {
+        setWorkspaceRoot: (d) => root.setWorkspace(d),
+        armFileTreeWatcher: noop,
+      },
+      agents: { invalidateAgentCache: noop },
+      store: { clearSearchFailure: noop },
+    };
+    try {
+      listening(() => {
+        root.setWorkspace(previous);
+        const ws = captureWs();
+        table.set_workspace(ctx, ws, { type: 'set_workspace', path: target });
+        assert.strictEqual(ws.sent[0].type, 'workspace_error', 'sanity: the open path threw');
+        assert.strictEqual(config.getWorkspace(), previous, 'sanity: the root was rolled back');
+        assert.strictEqual(lastNotice() && lastNotice().path, previous,
+          'the last thing every window was told is the workspace the scheduler is actually serving');
+      });
+    } finally {
+      fs.rmSync(previous, { recursive: true, force: true });
+      fs.rmSync(target, { recursive: true, force: true });
+    }
   });
 });

@@ -88,42 +88,40 @@ function routinesClock() {
 }
 
 /**
- * The workspace the server's scheduler is serving, taken from the global the
- * shell keeps.
+ * The workspace the server's scheduler is serving: a path, `null` for none, or
+ * `undefined` when this window has not been told.
  *
  * NOT `currentWorkspacePath`, and the difference is the whole of what this
  * list gets right. That one is the workspace this WINDOW asked to open, and
  * another window can move the server out from under it. This one is written
- * only from values the server produced, which is the same string discovery
- * stamps on every routine, so the comparison below is between two copies of
- * one value.
+ * only from values the server produced, which is the same string that travels
+ * beside a roster, so the comparison below is between two copies of one value.
+ *
+ * THE THREE STATES ARE PASSED THROUGH RATHER THAN FLATTENED. Never having been
+ * told is not the same as having been told nothing is served, and a read that
+ * turned both into `null` would make a workspace that has gone look exactly
+ * like a window that has heard nothing.
  *
  * Read through typeof for the same reason the clock is: this file is required
  * in node with no global at all, and an undeclared identifier throws where a
  * typeof does not.
  */
 function routinesServingWorkspace() {
-  return typeof servingWorkspacePath === 'string' ? servingWorkspacePath : null;
+  if (typeof servingWorkspacePath === 'undefined') return undefined;
+  return typeof servingWorkspacePath === 'string' && servingWorkspacePath ? servingWorkspacePath : null;
 }
 
 /**
  * The workspace the routines being listed were read out of.
  *
  * ONE VALUE FOR THE WHOLE ROSTER, because a roster is only ever read from one
- * workspace: discovery stamps every routine it reads with the root it read
- * them from. Taken off the rows rather than from a global so it describes what
- * is actually on screen, which is the fault the header carried before: it
- * named the workspace the window remembered, directly above a list of rows
- * that had come from somewhere else.
+ * workspace, and it arrives on the same message as the rows. Read off the
+ * global the shell records it in rather than walked out of the rows
+ * themselves: one fact travelling by one channel, so the header and the rows
+ * cannot end up describing different workspaces.
  */
 function routinesRosterWorkspace() {
-  const roster = typeof agents !== 'undefined' && agents ? agents : [];
-  for (const agent of roster) {
-    for (const routine of (agent && agent.routines) || []) {
-      if (routine && typeof routine.workspace === 'string' && routine.workspace) return routine.workspace;
-    }
-  }
-  return null;
+  return typeof rosterWorkspacePath === 'string' && rosterWorkspacePath ? rosterWorkspacePath : null;
 }
 
 function routinesZone() {
