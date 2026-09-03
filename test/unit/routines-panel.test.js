@@ -508,8 +508,12 @@ describe('which surfaces ask whether a routine is being served', () => {
   const src = (...parts) => fs.readFileSync(path.join(ROOT_DIR, ...parts), 'utf-8');
 
   test('the routines list asks, because it promises a next run', () => {
-    assert.match(src('public', 'views', 'routines.js'), /routinesServingWorkspace\(\)/,
-      'the surface that promises a run must know whether anything will make it');
+    // THE CONSUMING CALL SITE, not the bare identifier: the function's own
+    // declaration line satisfies a name match with nothing calling it, which
+    // is an assertion satisfied by the absence of the thing it checks.
+    assert.match(src('public', 'views', 'routines.js'),
+      /servingWorkspace: routinesServingWorkspace\(\),/,
+      'the surface that promises a run must feed the model whether anything will make it');
   });
 
   test('the scope panel does not ask, because a count is not a promise', () => {

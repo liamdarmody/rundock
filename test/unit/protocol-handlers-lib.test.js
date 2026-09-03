@@ -450,15 +450,21 @@ describe('cancel seams (stub ctx)', () => {
 // be forgotten.
 describe('the serving-workspace notice', () => {
   const { _internal: root } = require('../../server.js');
-  let seen = [];
-  const listener = { readyState: 1, send: (raw) => seen.push(JSON.parse(raw)) };
-
+  // TWO WINDOWS, NOT ONE, and each with its own inbox. 'Tells every connected
+  // window' is a claim about fan-out, and one listener satisfies it whether
+  // the transport reaches everybody, the first socket, or the most recent
+  // one. Two distinct clients are the smallest number a send-to-one
+  // implementation cannot satisfy.
+  let seenByWindow = [[], []];
+  const listeners = [0, 1].map((i) => ({
+    readyState: 1, send: (raw) => seenByWindow[i].push(JSON.parse(raw)),
+  }));
   function listening(fn) {
     const before = [...root.connectedClients];
     const original = config.getWorkspace();
-    seen = [];
+    seenByWindow = [[], []];
     root.connectedClients.clear();
-    root.connectedClients.add(listener);
+    for (const l of listeners) root.connectedClients.add(l);
     try {
       return fn();
     } finally {
@@ -468,7 +474,16 @@ describe('the serving-workspace notice', () => {
     }
   }
 
-  const notices = () => seen.filter(m => m.type === 'serving_workspace');
+  // Every assertion on one window's inbox is made of the other's too, so a
+  // transport that reached only one socket fails on whichever it missed.
+  function eachWindowNotices() {
+    const per = seenByWindow.map(inbox => inbox.filter(m => m.type === 'serving_workspace'));
+    assert.deepStrictEqual(per[0], per[1],
+      'both connected windows hear the same notices in the same order, or the transport is picking favourites');
+    return per[0];
+  }
+
+  const notices = () => eachWindowNotices();
   const lastNotice = () => notices()[notices().length - 1] || null;
 
   test('changing the root tells every connected window which workspace it is', () => {
