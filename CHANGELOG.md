@@ -6,6 +6,8 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ## Unreleased
 
+- **The approval storm is fixed: the boundary now knows the runtime's own paths, one directory under two names, and when to stand down:** the macOS write block names the runtime's measured bookkeeping (its home-directory state, its configuration file, the temp directory under both spellings) instead of trusting runtime defaults that did not hold in the field, so a default workspace raises no card and no refusal for plumbing you never see. Boundary checks canonicalise paths first, so a file inside your workspace no longer cards because it was reached through a symlink, a `/private` alias, or a different casing, which hit workspaces synced through Dropbox-style symlinks hardest. A crossing into the runtime's home directory now says what a grant there exposes and offers a narrower one covering only this workspace's transcripts. And a per-workspace setting can turn the operating-system block off entirely, with copy that names what that withdraws and the one class the block could never help, tools that launch their own processes.
+
 **Name:** TBD
 
 You can now stop a routine that's already running, instead of quitting Rundock to interrupt it.

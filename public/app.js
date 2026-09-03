@@ -244,6 +244,7 @@ function handle(d) {
       if (errEl) { errEl.textContent = d.message; errEl.style.display = 'block'; }
       break;
     }
+    case 'sandbox_mode': renderSandboxCard(d); break;
     case 'workspace_mode_changed':
       workspaceMode = d.mode;
       // Re-render settings if currently viewing workspace settings

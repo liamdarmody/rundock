@@ -215,6 +215,7 @@ const TABLE = {
     ['b', 'attr-escaper', 'the workspace card'],
     ['a', 'staticMarkup', 'the appearance card'],
     ['a', 'appValues', 'the about card: the app version from package.json'],
+    ['a', 'staticMarkup', 'the command sandbox card: booleans choosing between literal copy, nothing interpolated'],
     ['a', 'appValues', 'the runtimes card: constant labels and a regex-clamped version'],
   ],
   'views/skills.js': [

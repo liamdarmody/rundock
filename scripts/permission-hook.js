@@ -17,6 +17,84 @@
 const http = require('http');
 const os = require('os');
 const path = require('path');
+const fs = require('fs');
+
+// One directory, several names. macOS keeps /tmp and /var as symlinks into
+// /private, Dropbox and iCloud vaults are commonly reached through a symlink
+// in ~/Documents, and the default filesystem is case-insensitive while
+// preserving case, so the same inside file arrives here spelled many ways.
+// Compared unresolved, every alternate spelling of an inside path reads as
+// outside and cards, which is the false-positive half of the approval storm
+// two field workspaces reported (one of them Dropbox-symlinked). So both
+// sides of every comparison are canonicalised first.
+//
+// A target that does not exist yet cannot be resolved directly; it is judged
+// by its nearest existing ancestor, canonicalised, with the unborn tail
+// reattached. The same rule the reverting check uses for its run records,
+// for the same reason: resolve alone does not follow links, and one place
+// reached through two names must be one identity.
+//
+// Only real host paths are canonicalised. A Windows-shaped token judged on a
+// non-Windows host (the test flavour) has no filesystem to ask, and on
+// Windows itself the path module is already win32 and the flavour test is an
+// identity.
+function canonicalize(p, pmod = path) {
+  const resolved = pmod.resolve(p);
+  if (pmod === path.win32 && process.platform !== 'win32') return resolved;
+  const tail = [];
+  let cur = resolved;
+  for (;;) {
+    try {
+      const real = fs.realpathSync.native ? fs.realpathSync.native(cur) : fs.realpathSync(cur);
+      tail.reverse();
+      return tail.length ? pmod.join(real, ...tail) : real;
+    } catch (e) {
+      const parent = pmod.dirname(cur);
+      if (parent === cur) return resolved;
+      tail.push(pmod.basename(cur));
+      cur = parent;
+    }
+  }
+}
+
+// Paths whose standing grant means more than a folder. Version one carries
+// the runtime's own home directory alone, structured as a table so the next
+// entry is a row rather than a mechanism: a grant there exposes the account
+// credential file and every project's transcripts on the machine, which the
+// card must say, and the common legitimate need (this workspace's own
+// transcripts) deserves a narrower grant than the whole folder.
+function sensitivePaths(home = os.homedir()) {
+  return [{ id: 'claude-home', root: path.join(home, '.claude') }];
+}
+
+// The transcripts folder for ONE workspace, derived rather than hardcoded:
+// the runtime names each project folder by flattening the workspace path,
+// and the scheme belongs to the installed runtime, not to this file. The
+// transform (every character outside letters, digits and hyphen becomes a
+// hyphen) was verified against the installed layout on 2026-09-03; when the
+// projects directory already holds an entry for this workspace the derived
+// name is trusted only if that entry exists, so a scheme drift makes the
+// narrow offer vanish rather than grant the wrong folder.
+function transcriptsDirFor(workspaceRoot, home = os.homedir()) {
+  const flattened = path.resolve(workspaceRoot).replace(/[^A-Za-z0-9-]/g, '-');
+  const projects = path.join(home, '.claude', 'projects');
+  const derived = path.join(projects, flattened);
+  try {
+    const entries = fs.readdirSync(projects);
+    return entries.includes(flattened) ? derived : null;
+  } catch (e) { return null; }
+}
+
+// What a crossing into a sensitive path carries beyond its path: the table
+// row's id, and the narrow grant when one can be derived. Attached in one
+// place so the file-tool and shell paths cannot drift apart.
+function sensitiveEnrichment(crossingPath, workspaceRoot, home = os.homedir()) {
+  if (typeof crossingPath !== 'string' || !crossingPath) return null;
+  const hit = sensitivePaths(home).find(sp => isUnder(canonicalize(crossingPath), canonicalize(sp.root)));
+  if (!hit) return null;
+  const narrow = transcriptsDirFor(workspaceRoot, home);
+  return { sensitive: hit.id, ...(narrow ? { narrowGrantDir: narrow } : {}) };
+}
 
 // MCP read/write classification. Read-style MCP tools auto-approve; writes,
 // destructive actions, and anything unrecognised get a permission card.
@@ -90,7 +168,7 @@ function isUnder(resolved, root, pmod = path) {
   return r === b || r.startsWith(b + pmod.sep);
 }
 function buildRoots(workspaceRoot, extraDirs = [], pmod = path) {
-  return [pmod.resolve(workspaceRoot), ...extraDirs.map(d => pmod.resolve(d))];
+  return [canonicalize(workspaceRoot, pmod), ...extraDirs.map(d => canonicalize(d, pmod))];
 }
 function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = []) {
   const field = FILE_TOOL_PATH_FIELD[toolName];
@@ -102,7 +180,7 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = []) 
     // A path-less Write/Edit is malformed; let the generic card handle it.
     return (toolName === 'Glob' || toolName === 'Grep') ? { where: 'inside' } : null;
   }
-  const resolvedPath = path.resolve(workspaceRoot, target);
+  const resolvedPath = canonicalize(path.resolve(workspaceRoot, target));
   const inside = buildRoots(workspaceRoot, extraDirs).some(r => isUnder(resolvedPath, r));
   // The folder a standing grant would cover: the directory itself for the
   // directory-scanning tools, the parent directory for file targets.
@@ -266,7 +344,7 @@ function shellCrossings(command, workspaceRoot, extraDirs) {
     if (isExemptToken(t)) continue;
     if (!homed && !t.startsWith('/') && !WIN_DRIVE.test(t) && !WIN_UNC.test(t) && !TRAVERSAL.test(t)) continue;
     const pmod = flavourFor(t, workspaceRoot);
-    const resolved = pmod.resolve(pmod.resolve(workspaceRoot), t);
+    const resolved = canonicalize(pmod.resolve(pmod.resolve(workspaceRoot), t), pmod);
     if (buildRoots(workspaceRoot, extraDirs, pmod).some(r => isUnder(resolved, r, pmod))) continue;
     const key = pmod === path.win32 ? resolved.toLowerCase() : resolved;
     if (seen.has(key)) continue;
@@ -291,7 +369,7 @@ function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [])
   return { where: 'outside', resolvedPath: crossings[0].path, grantDir: null, grantable: false, crossings };
 }
 
-module.exports = { isProtectedClaudeEdit, isMcpReadTool, classifyFileAccess, classifyShellAccess };
+module.exports = { isProtectedClaudeEdit, isMcpReadTool, classifyFileAccess, classifyShellAccess, canonicalize, sensitivePaths, sensitiveEnrichment, transcriptsDirFor };
 
 if (require.main === module) main();
 function main() {
@@ -415,7 +493,8 @@ process.stdin.on('end', () => {
           // has none, because no path established it. Always sent, so the
           // server never has to reconstruct it: this is the only producer of
           // boundary requests in the product.
-          crossings: access.crossings || [{ path: access.resolvedPath, grantDir: access.grantDir }],
+          crossings: (access.crossings || [{ path: access.resolvedPath, grantDir: access.grantDir }])
+            .map(c => ({ ...c, ...(sensitiveEnrichment(c.path, wsRoot) || {}) })),
         }
       : {})
   });

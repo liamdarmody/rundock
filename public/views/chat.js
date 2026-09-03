@@ -642,11 +642,24 @@ function renderPermissionCard(d, convoId) {
         ? 'Outside-workspace access needs your approval. "Always allow this folder" remembers it for this workspace only.'
         : 'Outside-workspace access needs your approval. This one is not remembered: approving it approves this request only.';
     }
+    // A crossing into a path the sensitive table names swaps in copy that
+    // states the stakes, and offers the narrow grant when the hook could
+    // derive one. The whole-folder grant stays available and is demoted by
+    // position, never removed: operator authority is the product's rule.
+    const sensitiveCrossing = crossings.find(c => c && c.sensitive) || null;
+    if (sensitiveCrossing) {
+      const copy = RundockPermissions.sensitiveBoundaryCopy(sensitiveCrossing.sensitive);
+      if (copy) context = copy.context;
+    }
   }
 
   // Store callback data for safe event handling (no inline onclick injection).
   // toolInput is echoed back in control_response (required by Claude Code).
-  pendingPermissions.set(requestId, { convoId, key, toolInput: input, grantDir: grantable ? req.grant_dir : null });
+  const sensNarrow = boundary ? (crossings.find(c => c && c.narrowGrantDir) || {}).narrowGrantDir || null : null;
+  const sensCopy = boundary && crossings.some(c => c && c.sensitive)
+    ? RundockPermissions.sensitiveBoundaryCopy((crossings.find(c => c && c.sensitive) || {}).sensitive)
+    : null;
+  pendingPermissions.set(requestId, { convoId, key, toolInput: input, grantDir: grantable ? req.grant_dir : null, narrowGrantDir: sensNarrow });
 
   const icons = {
     low: '<svg class="permission-icon" width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5"/><path d="M6 8l1.5 1.5L10.5 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -683,6 +696,9 @@ function renderPermissionCard(d, convoId) {
           : `<code class="permission-detail">${esc(detail)}</code>`}
       <div class="permission-actions">
         <button class="btn-perm btn-allow" data-perm-id="${escAttr(requestId)}" data-perm-action="allow">Allow</button>
+        ${sensNarrow && sensCopy
+          ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="allow-transcripts">${esc(sensCopy.narrowLabel)}</button>`
+          : ''}
         ${grantable
           ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="allow-folder">Always allow this folder</button>`
           : (!boundary && RundockPermissions.offersAlwaysAllow(risk) ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="always">Always allow</button>` : '')}
@@ -696,7 +712,7 @@ function renderPermissionCard(d, convoId) {
     btn.addEventListener('click', () => {
       const action = btn.dataset.permAction;
       const id = btn.dataset.permId;
-      respondPermission(id, action !== 'deny', action === 'always', action === 'allow-folder');
+      respondPermission(id, action !== 'deny', action === 'always', action === 'allow-folder', action === 'allow-transcripts');
     });
   });
 
@@ -722,7 +738,7 @@ function renderPendingPermissionCards(convoId) {
   }
 }
 
-function respondPermission(requestId, allow, always, allowFolder) {
+function respondPermission(requestId, allow, always, allowFolder, allowTranscripts) {
   const pending = pendingPermissions.get(requestId);
   if (!pending || !ws) return;
   pendingPermissions.delete(requestId);
@@ -735,6 +751,10 @@ function respondPermission(requestId, allow, always, allowFolder) {
     requestId: requestId,
     conversationId: pending.convoId,
     ...(allowFolder && pending.grantDir ? { grantDir: pending.grantDir } : {}),
+    // The narrow grant travels the same road as the folder grant: it IS a
+    // folder grant, for the one subfolder the sensitive copy names, so the
+    // server needs no second mechanism.
+    ...(allowTranscripts && pending.narrowGrantDir ? { grantDir: pending.narrowGrantDir } : {}),
     allow: allow,
     toolInput: pending.toolInput || {}
   }));

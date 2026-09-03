@@ -215,6 +215,25 @@
   // High-risk requests never offer a standing "Always allow".
   function offersAlwaysAllow(risk) { return risk !== 'high'; }
 
+  // The copy for a boundary crossing into a path the sensitive table names.
+  // Pure and table-driven so the card and the tests read one source, and so
+  // the next sensitive path is a row here rather than a rewrite there. The
+  // stakes are named concretely, because "sensitive folder" tells a person
+  // nothing they can weigh: this is a consent surface, and consent asked
+  // without disclosing stakes is the defect this copy exists to remove.
+  const SENSITIVE_COPY = {
+    'claude-home': {
+      context: 'This is the runtime\'s own home folder. A standing grant for all of it exposes '
+        + '.credentials.json, which is your Claude account token, and projects/, which holds every '
+        + 'project\'s transcripts on this machine. Granting the whole folder is rarely what you mean; '
+        + 'the narrow option covers the usual need, this workspace\'s own transcripts.',
+      narrowLabel: 'Allow this workspace\'s transcripts only',
+    },
+  };
+  function sensitiveBoundaryCopy(sensitiveId) {
+    return SENSITIVE_COPY[sensitiveId] || null;
+  }
+
   // ── Pending permission requests for background conversations ────────────
   // A control_request for a conversation that is not on screen must never
   // be dropped (the server auto-denies an unanswered request at the
@@ -274,6 +293,6 @@
     return m.size;
   }
 
-  return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow,
+  return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow, sensitiveBoundaryCopy,
     routePermissionRequest, queuePendingPermission, pendingPermissionsFor, removePendingPermission, clearPendingPermissions };
 }));

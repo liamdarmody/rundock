@@ -18,6 +18,7 @@ const os = require('node:os');
 const { spawn } = require('node:child_process');
 
 const h = require('../helpers/harness.js');
+const { canonicalize } = require('../../scripts/permission-hook.js');
 
 const HOOK = path.join(__dirname, '..', '..', 'scripts', 'permission-hook.js');
 
@@ -74,7 +75,7 @@ describe('workspace file-access boundary', () => {
     const { msg } = await client.waitFor(m => m.type === 'control_request'
       && m.request && m.request.boundary === true, { since, label: 'boundary card' });
     assert.strictEqual(msg.request.tool_name, 'Write');
-    assert.strictEqual(msg.request.resolved_path, target, 'the card names the real target');
+    assert.strictEqual(msg.request.resolved_path, canonicalize(target), 'the card names the real target, canonically');
     client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: 'boundary-test', allow: false });
     const out = await pending;
     assert.strictEqual(decisionOf(out), 'deny', 'the write never happens');
@@ -93,7 +94,7 @@ describe('workspace file-access boundary', () => {
     assert.strictEqual(decisionOf(out1), 'allow');
 
     const grants = JSON.parse(fs.readFileSync(path.join(h.workspaceDir, '.rundock', 'permissions.json'), 'utf-8'));
-    assert.ok(grants.allowedDirs.includes(grantDir), 'grant encoded into the workspace');
+    assert.ok(grants.allowedDirs.includes(canonicalize(grantDir)), 'grant encoded into the workspace, canonically');
 
     since = client.messages.length;
     const out2 = await runHook('Write', { file_path: path.join(grantDir, 'export-two.md'), content: 'two' });
@@ -145,7 +146,7 @@ describe('workspace file-access boundary', () => {
     const { msg } = await client.waitFor(m => m.type === 'control_request'
       && m.request && m.request.boundary === true, { since, label: 'shell boundary card' });
     assert.strictEqual(msg.request.tool_name, 'Bash');
-    assert.strictEqual(msg.request.resolved_path, target, 'the card names where the command reaches');
+    assert.strictEqual(msg.request.resolved_path, canonicalize(target), 'the card names where the command reaches, canonically');
     client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: 'boundary-test', allow: false });
     assert.strictEqual(decisionOf(await pending), 'deny', 'the command never runs');
   });
@@ -165,7 +166,7 @@ describe('workspace file-access boundary', () => {
     const { msg } = await client.waitFor(m => m.type === 'control_request'
       && m.request && m.request.boundary === true, { since, label: 'two-crossing card' });
     const reported = (msg.request.crossings || []).map(c => c.path);
-    assert.deepStrictEqual(reported, [first, second], 'both targets reach the card, in order');
+    assert.deepStrictEqual(reported, [canonicalize(first), canonicalize(second)], 'both targets reach the card, in order');
     assert.strictEqual(msg.request.grant_dir, null,
       'and no folder is offered to remember, because a folder does not answer a command');
     client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: 'boundary-test', allow: false });

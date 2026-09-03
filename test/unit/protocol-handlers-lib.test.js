@@ -17,7 +17,7 @@ const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
 const { _internal: srv } = require('../../server.js');
 const config = require('../../lib/config.js');
 
-// The full routing surface of the dispatch table, frozen: 39 message types
+// The full routing surface of the dispatch table, frozen: 41 message types
 // plus save_agent's two legacy aliases. The four root shims (chat, delegate,
 // end_delegation, flush_buffer) must NEVER appear here: chat is the
 // kill-window chat shim, delegate/end_delegation are delegation glue, and
@@ -26,6 +26,9 @@ const EXPECTED_TYPES = [
   'permission_response', 'cancel',
   'get_workspaces', 'client_render_time', 'list_workspaces', 'set_workspace',
   'pick_folder', 'create_workspace', 'set_workspace_mode',
+  // The command sandbox's per-workspace switch: read and write, driven end
+  // to end by test/unit/workspace-boundary.test.js.
+  'get_sandbox_mode', 'set_sandbox_mode',
   'get_agents', 'get_runtime_status', 'get_files', 'get_skills', 'get_run',
   'cancel_routine_run',
   'plan_package_import', 'apply_package_import',
@@ -448,6 +451,104 @@ describe('cancel seams (stub ctx)', () => {
 // after the announce and the rollback puts the old root back without saying
 // so. Here the rollback IS a call to this function, so the retraction cannot
 // be forgotten.
+describe('the command sandbox switch, through the real dispatch', () => {
+  const workspace = require('../../lib/protocol/handlers/workspace.js');
+
+  function withWorkspace(dir, fn) {
+    const original = config.getWorkspace();
+    config.setWorkspace(dir);
+    try { return fn(); } finally { config.setWorkspace(original); }
+  }
+  function tempWs() {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-sandbox-'));
+    fs.mkdirSync(path.join(d, '.claude'), { recursive: true });
+    return d;
+  }
+
+  test('the dispatch entries answer, whichever arm this host takes', () => {
+    // Driven through the real table so the wiring is what is proven; the
+    // reply differs by host platform, and each host covers its own arm here
+    // while the direct calls below cover the other, which is what keeps the
+    // file fully covered on macOS and the Linux runners alike.
+    const table = buildDispatch();
+    const dir = tempWs();
+    withWorkspace(dir, () => {
+      const get = captureWs();
+      table.get_sandbox_mode({}, get, {});
+      assert.strictEqual(get.sent[0].type, 'sandbox_mode');
+      assert.strictEqual(get.sent[0].available, process.platform === 'darwin');
+
+      const set = captureWs();
+      table.set_sandbox_mode({}, set, { enabled: false });
+      assert.strictEqual(set.sent[0].type,
+        process.platform === 'darwin' ? 'sandbox_mode' : 'workspace_error');
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('on macOS the switch withdraws and restores, and the reply says which', () => {
+    const dir = tempWs();
+    withWorkspace(dir, () => {
+      // Opting in first writes the block, so the withdrawal below has a file
+      // to be observed in; a fresh workspace opted out writes nothing at all.
+      const on = captureWs();
+      workspace.handleSetSandboxMode({}, on, { enabled: true }, 'darwin');
+      assert.deepStrictEqual(on.sent[0], { type: 'sandbox_mode', available: true, optedOut: false });
+      let settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf8'));
+      assert.ok(settings.sandbox, 'opted in: the block is written');
+
+      const off = captureWs();
+      workspace.handleSetSandboxMode({}, off, { enabled: false }, 'darwin');
+      assert.deepStrictEqual(off.sent[0], { type: 'sandbox_mode', available: true, optedOut: true });
+      settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf8'));
+      assert.strictEqual('sandbox' in settings, false, 'our block is withdrawn');
+
+      const get = captureWs();
+      workspace.handleGetSandboxMode({}, get, {}, 'darwin');
+      assert.deepStrictEqual(get.sent[0], { type: 'sandbox_mode', available: true, optedOut: true });
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('a platform with no sandbox is refused for set and unavailable for get', () => {
+    const dir = tempWs();
+    withWorkspace(dir, () => {
+      const set = captureWs();
+      workspace.handleSetSandboxMode({}, set, { enabled: false }, 'linux');
+      assert.strictEqual(set.sent[0].type, 'workspace_error');
+      const get = captureWs();
+      workspace.handleGetSandboxMode({}, get, {}, 'linux');
+      assert.deepStrictEqual(get.sent[0], { type: 'sandbox_mode', available: false, optedOut: false });
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('no workspace open is a refusal for set and unavailable for get', () => {
+    withWorkspace(null, () => {
+      const set = captureWs();
+      workspace.handleSetSandboxMode({}, set, { enabled: false }, 'darwin');
+      assert.strictEqual(set.sent[0].type, 'workspace_error');
+      const get = captureWs();
+      workspace.handleGetSandboxMode({}, get, {}, 'darwin');
+      assert.strictEqual(get.sent[0].available, false);
+    });
+  });
+
+  test('a write the workspace refuses becomes a named error, never silence', () => {
+    // .rundock exists as a FILE, so the state write inside cannot happen and
+    // the switch's failure surfaces as a workspace_error carrying the cause.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-sandbox-bad-'));
+    fs.writeFileSync(path.join(dir, '.rundock'), 'not a directory');
+    withWorkspace(dir, () => {
+      const set = captureWs();
+      workspace.handleSetSandboxMode({}, set, { enabled: false }, 'darwin');
+      assert.strictEqual(set.sent[0].type, 'workspace_error');
+      assert.match(set.sent[0].message, /Could not update the sandbox setting/);
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe('the serving-workspace notice', () => {
   const { _internal: root } = require('../../server.js');
   // TWO WINDOWS, NOT ONE, and each with its own inbox. 'Tells every connected
