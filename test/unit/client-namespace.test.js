@@ -245,6 +245,7 @@ const MANIFEST = {
     "packagesConnectionLost",
     "packagesReplyArrived",
     "packagesRetry",
+    "packagesSetDecision",
     "packagesSubmit",
     "packagesWorkspaceChanged",
     "renderRuntimesCard",

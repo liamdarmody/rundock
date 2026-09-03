@@ -67,6 +67,7 @@ function packagesSubmit() {
 }
 
 function packagesCancel() { packagesApplyTransition(RundockPackagesInstallModel.cancel(packagesInstall)); }
+function packagesSetDecision(id, decision) { packagesApplyTransition(RundockPackagesInstallModel.setDecision(packagesInstall, id, decision)); }
 function packagesConfirm() { packagesApplyTransition(RundockPackagesInstallModel.confirm(packagesInstall)); }
 function packagesRetry() { packagesApplyTransition(RundockPackagesInstallModel.retry(packagesInstall)); }
 
@@ -89,6 +90,72 @@ function packagesConnectionLost() {
   if (out.state !== packagesInstall) packagesApplyTransition(out);
 }
 
+// The PL5 review card: every offered item as a row, collisions carrying
+// their own overwrite-or-skip choice with skip preselected, blocked rows
+// carrying the one action that clears them, and a confirm whose label says
+// exactly what pressing it does. All words come from the model.
+function packagesReviewRowHtml(row) {
+  const kindTag = `<span class="packages-kind-tag">${esc(row.kind)}</span>`;
+  if (row.rowClass === 'willAdd') {
+    return `<div class="packages-item-row" data-row="${escAttr(row.rowClass)}" data-item="${escAttr(row.id)}">
+        <div class="packages-item-top"><span class="packages-item-name">${esc(row.name)}</span>${kindTag}
+          <span class="packages-ready-mark" data-tone="${escAttr(row.tone)}">Will add</span></div>
+      </div>`;
+  }
+  if (row.rowClass === 'skippedNew') {
+    return `<div class="packages-item-row" data-row="${escAttr(row.rowClass)}" data-item="${escAttr(row.id)}">
+        <div class="packages-item-top"><span class="packages-item-name">${esc(row.name)}</span>${kindTag}
+          <span class="packages-skip-mark">Will skip</span>
+          <button class="settings-btn packages-row-btn" onclick="packagesSetDecision('${escAttr(row.id)}', 'add')">Add it back</button></div>
+      </div>`;
+  }
+  const compare = row.compare ? `<div class="packages-compare">
+      <div class="packages-compare-side"><div class="packages-compare-label">What you have</div><p>${esc(row.compare.have)}</p></div>
+      <div class="packages-compare-side"><div class="packages-compare-label">What arrives</div><p>${esc(row.compare.arrives)}</p></div>
+    </div>` : '';
+  if (row.rowClass === 'blocked') {
+    const toggle = !row.colliding ? '' : `<div class="packages-decision-toggle">
+        <button class="packages-dt-btn packages-dt-blocked" disabled>Overwrite: blocked</button>
+        <button class="packages-dt-btn${row.decision === 'skip' ? ' packages-dt-selected' : ''}"
+          onclick="packagesSetDecision('${escAttr(row.id)}', 'skip')">Skip: keep yours</button>
+      </div>`;
+    return `<div class="packages-item-row" data-row="blocked" data-item="${escAttr(row.id)}">
+        <div class="packages-item-top"><span class="packages-item-name">${esc(row.name)}</span>${kindTag}</div>
+        ${compare}${toggle}
+        <div class="packages-blocked-block" data-tone="${escAttr(row.tone)}">
+          <div class="packages-blocked-note">${esc(row.blockedNote)}</div>
+          <button class="settings-btn packages-blocked-resolve"
+            onclick="packagesSetDecision('${escAttr(row.id)}', '${escAttr(row.blockedAction.decision)}')">${esc(row.blockedAction.label)}</button>
+        </div>
+      </div>`;
+  }
+  return `<div class="packages-item-row" data-row="collision" data-item="${escAttr(row.id)}">
+      <div class="packages-item-top"><span class="packages-item-name">${esc(row.name)}</span>${kindTag}</div>
+      ${compare}
+      <div class="packages-decision-toggle">
+        <button class="packages-dt-btn${row.decision === 'overwrite' ? ' packages-dt-selected packages-dt-overwrite' : ''}"
+          onclick="packagesSetDecision('${escAttr(row.id)}', 'overwrite')">Overwrite: replace what you have</button>
+        <button class="packages-dt-btn${row.decision === 'skip' ? ' packages-dt-selected' : ''}"
+          onclick="packagesSetDecision('${escAttr(row.id)}', 'skip')">Skip: keep yours</button>
+      </div>
+    </div>`;
+}
+
+function packagesReviewCardHtml(copy, st) {
+  return `<div class="settings-card packages-review-card">
+      <div class="packages-headline">${esc(copy.title)}</div>
+      <div class="packages-review-sub">${esc(st.sourcePath)}</div>
+      <div class="packages-item-list">${copy.rows.map(packagesReviewRowHtml).join('')}</div>
+      <div class="packages-review-confirm">
+        <div class="packages-review-note${copy.confirmWarn ? ' packages-review-warn' : ''}">${esc(copy.confirmNote)}</div>
+        <div class="packages-actions">
+          <button class="settings-btn packages-confirm" onclick="packagesConfirm()">${esc(copy.confirmLabel)}</button>
+          <button class="settings-btn packages-cancel" onclick="packagesCancel()">${esc(copy.cancelLabel)}</button>
+        </div>
+      </div>
+    </div>`;
+}
+
 function packagesSectionHtml() {
   const m = RundockPackagesInstallModel;
   const st = packagesInstall;
@@ -104,15 +171,26 @@ function packagesSectionHtml() {
   let stateHtml = '';
   if (st.phase === 'classifying') {
     stateHtml = `<div class="settings-card packages-state"><div class="packages-spinner"></div>Reading the package…</div>`;
-  } else if (st.phase === 'offer') {
+  } else if (st.phase === 'offer' && st.collisions.length === 0) {
     const copy = m.offerCopy(st);
     stateHtml = `<div class="settings-card packages-confirm-card">
         <div class="packages-headline">${esc(copy.headline)}</div>
         <div class="packages-body">${esc(copy.body)}</div>
-        ${copy.collisionNote ? `<div class="packages-collision-note">${esc(copy.collisionNote)}</div>` : ''}
         <div class="packages-actions">
-          <button class="settings-btn packages-confirm" onclick="packagesConfirm()" ${copy.confirmDisabled ? 'disabled' : ''}>${esc(copy.confirmLabel)}</button>
+          <button class="settings-btn packages-confirm" onclick="packagesConfirm()">${esc(copy.confirmLabel)}</button>
           <button class="settings-btn packages-cancel" onclick="packagesCancel()">${esc(copy.cancelLabel)}</button>
+        </div>
+      </div>`;
+  } else if (st.phase === 'offer') {
+    stateHtml = packagesReviewCardHtml(m.reviewCopy(st), st);
+  } else if (st.phase === 'stale') {
+    const copy = m.staleCopy();
+    stateHtml = `<div class="settings-card packages-stale-card" data-tone="${escAttr(copy.tone)}">
+        <div class="packages-stale-headline">${esc(copy.headline)}</div>
+        <div class="packages-stale-body">${esc(copy.body)}</div>
+        <div class="packages-actions">
+          <button class="settings-btn packages-replan" onclick="packagesRetry()">${esc(copy.actionLabel)}</button>
+          <button class="settings-btn packages-cancel" onclick="packagesCancel()">Back</button>
         </div>
       </div>`;
   } else if (st.phase === 'applying') {
@@ -282,6 +360,6 @@ function changeWorkspace() {
 }
 
 return { showSettingsSection, renderSettingsSection, setWorkspaceMode, runtimeRowHtml, runtimesCardHtml, renderRuntimesCard, changeWorkspace,
-  packagesSubmit, packagesCancel, packagesConfirm, packagesRetry,
+  packagesSubmit, packagesCancel, packagesConfirm, packagesRetry, packagesSetDecision,
   packagesReplyArrived, packagesWorkspaceChanged, packagesConnectionLost };
 }));

@@ -183,7 +183,9 @@ test('a refusal from the real server renders the failure card, not a spinner', a
   await expect(failed.locator('.packages-body')).toContainText('not a canonical skill name');
 });
 
-test('a collision disables confirm and says each item needs its own decision', async ({ page }) => {
+// The review surface: collisions are visible and individually decided, skip
+// preselected, and the confirm label says exactly what pressing it does.
+test('a collision opens the review with skip preselected, in both themes, and skip keeps yours', async ({ page }) => {
   await boot(page);
   await seedPackage(page, '.claude/skills/collide-writer', [['SKILL.md', 'existing']]);
   const source = await seedPackage(page, 'pkg-collide', [
@@ -192,12 +194,89 @@ test('a collision disables confirm and says each item needs its own decision', a
   await openPackages(page);
   await page.fill('#packages-source-path', source);
   await page.getByRole('button', { name: 'Read it' }).click();
-  const card = page.locator('.packages-confirm-card');
-  await expect(card.locator('.packages-collision-note')).toContainText('collide-writer');
-  await expect(card.locator('.packages-collision-note')).toContainText('keep-or-replace decision');
-  await expect(card.getByRole('button', { name: 'Add to my team' })).toBeDisabled();
-  // And the workspace copy survives untouched.
-  await page.getByRole('button', { name: 'Cancel' }).click();
+  const card = page.locator('.packages-review-card');
+  await expect(card.locator('.packages-headline')).toHaveText('Review this package');
+  const row = card.locator('[data-item="skill:collide-writer"]');
+  await expect(row).toHaveAttribute('data-row', 'collision');
+  await expect(row.locator('.packages-dt-selected')).toHaveText(/Skip: keep yours/);
+  await expect(card.locator('.packages-confirm')).toHaveText('Skip 1, nothing added');
+  // The same card in the other theme: the review renders whole either way.
+  await page.evaluate(() => toggleTheme());
+  await expect(card.locator('.packages-headline')).toHaveText('Review this package');
+  await expect(row.locator('.packages-dt-selected')).toHaveText(/Skip: keep yours/);
+  await page.evaluate(() => toggleTheme());
+  // Confirming an untouched review keeps what the person already has.
+  await card.locator('.packages-confirm').click();
+  await expect(page.locator('.packages-success-card .packages-headline')).toHaveText('Nothing was added');
   const kept = await page.request.get('/api/file?path=' + encodeURIComponent('.claude/skills/collide-writer/SKILL.md'));
   expect(await kept.text()).toContain('existing');
+});
+
+test('overwrite is a deliberate switch, and the confirm label follows it', async ({ page }) => {
+  await boot(page);
+  await seedPackage(page, '.claude/skills/switch-writer', [['SKILL.md', 'existing']]);
+  const source = await seedPackage(page, 'pkg-switch-decide', [
+    ['.claude/skills/switch-writer/SKILL.md', 'incoming'],
+  ]);
+  await openPackages(page);
+  await page.fill('#packages-source-path', source);
+  await page.getByRole('button', { name: 'Read it' }).click();
+  const row = page.locator('[data-item="skill:switch-writer"]');
+  await row.getByRole('button', { name: /Overwrite: replace what you have/ }).click();
+  await expect(row.locator('.packages-dt-selected')).toHaveText(/Overwrite/);
+  const confirm = page.locator('.packages-review-card .packages-confirm');
+  await expect(confirm).toHaveText('Overwrite 1');
+  await confirm.click();
+  await expect(page.locator('.packages-success-card .packages-headline')).toHaveText('Added to your team');
+  const replaced = await page.request.get('/api/file?path=' + encodeURIComponent('.claude/skills/switch-writer/SKILL.md'));
+  expect(await replaced.text()).toContain('incoming');
+});
+
+test('a blocked row offers skipping and nothing else, and skipping clears it', async ({ page }) => {
+  await boot(page);
+  // The workspace's default agent is no part of the import; overwriting the
+  // colliding agent would make a second default.
+  await seedPackage(page, '.claude/agents', [['blocked-coach.md', '---\nname: blocked-coach\norder: 0\n---\n\nC.\n']]);
+  await seedPackage(page, '.claude/agents', [['blocked-helper.md', '---\nname: blocked-helper\n---\n\nOld.\n']]);
+  const source = await seedPackage(page, 'pkg-blocked', [
+    ['.claude/agents/blocked-helper.md', '---\nname: blocked-helper\norder: 0\n---\n\nNew default.\n'],
+  ]);
+  await openPackages(page);
+  await page.fill('#packages-source-path', source);
+  await page.getByRole('button', { name: 'Read it' }).click();
+  const row = page.locator('[data-item="agent:blocked-helper"]');
+  await expect(row).toHaveAttribute('data-row', 'collision');
+  await row.getByRole('button', { name: /Overwrite: replace what you have/ }).click();
+  await expect(row).toHaveAttribute('data-row', 'blocked');
+  await expect(row.locator('.packages-blocked-note')).toContainText('second default agent');
+  await expect(row.locator('.packages-dt-blocked')).toBeDisabled();
+  await expect(page.locator('.packages-review-card .packages-confirm')).toContainText('blocked');
+  // The one way out is skipping, and it clears the conflict in place.
+  await row.getByRole('button', { name: 'Skip this item' }).click();
+  await expect(row).toHaveAttribute('data-row', 'collision');
+  await expect(page.locator('.packages-review-card .packages-confirm')).toHaveText('Skip 1, nothing added');
+});
+
+test('a workspace that moves mid-review voids every decision, with danger weight and a re-plan', async ({ page }) => {
+  await boot(page);
+  const workspace = await page.evaluate(() => currentWorkspacePath);
+  await seedPackage(page, '.claude/skills/stale-writer', [['SKILL.md', 'existing']]);
+  const source = await seedPackage(page, 'pkg-stale', [
+    ['.claude/skills/stale-writer/SKILL.md', 'incoming'],
+  ]);
+  await openPackages(page);
+  await page.fill('#packages-source-path', source);
+  await page.getByRole('button', { name: 'Read it' }).click();
+  await expect(page.locator('.packages-review-card')).toBeVisible();
+  // The workspace changes under the review; the next projection says stale.
+  fs.writeFileSync(path.join(workspace, '.claude/skills/stale-writer/SKILL.md'), 'moved under you');
+  const row = page.locator('[data-item="skill:stale-writer"]');
+  await row.getByRole('button', { name: /Overwrite: replace what you have/ }).click();
+  const stale = page.locator('.packages-stale-card');
+  await expect(stale).toHaveAttribute('data-tone', 'danger');
+  await expect(stale.locator('.packages-stale-headline')).toHaveText('Your workspace changed');
+  await expect(stale.locator('.packages-stale-body')).toContainText('discarded and nothing was written');
+  await stale.getByRole('button', { name: 'Re-plan' }).click();
+  // The re-plan reads the moved workspace and the review reopens against it.
+  await expect(page.locator('.packages-review-card')).toBeVisible();
 });

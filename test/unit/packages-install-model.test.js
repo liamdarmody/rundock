@@ -88,7 +88,6 @@ describe('the offer', () => {
     assert.match(copy.body, /Nothing runs until you add them\./);
     assert.strictEqual(copy.confirmLabel, 'Add to my team');
     assert.strictEqual(copy.confirmDisabled, false);
-    assert.strictEqual(copy.collisionNote, null);
   });
 
   test('a real empty-package refusal classifies by its code, other real refusals as failure', () => {
@@ -111,19 +110,21 @@ describe('the offer', () => {
   });
 });
 
-describe('collisions fail closed', () => {
-  test('any colliding item disables confirm and names itself, and confirm can never send', () => {
-    const state = offered(realPlanMsg({ withCollision: true }).planMsg);
-    const copy = model.offerCopy(state);
-    assert.strictEqual(copy.confirmDisabled, true);
-    assert.match(copy.collisionNote, /writer/);
-    assert.match(copy.collisionNote, /keep-or-replace decision/);
-    assert.match(copy.collisionNote, /does not offer yet/);
-    // Exhaustion: no sequence of the model's public actions can produce an
-    // apply message from a colliding plan.
-    assert.strictEqual(model.confirm(state).send, undefined);
-    assert.strictEqual(model.confirm(model.confirm(state).state).send, undefined);
-    assert.strictEqual(model.applyReply(state, { type: 'package_import_result', status: 'ready', writes: [] }).state, state);
+describe('collisions enter review, decided skip', () => {
+  test('a colliding plan starts every collision as skip and asks the server to project it', () => {
+    const { planMsg } = realPlanMsg({ withCollision: true });
+    const submitted = model.submit(model.initial(), '/tmp/somewhere');
+    const out = model.reply(submitted.state, planMsg);
+    assert.strictEqual(out.state.phase, 'offer');
+    // Nothing is silently overwritten: skip is the default the review opens
+    // with, and overwrite always requires a deliberate switch.
+    assert.strictEqual(out.state.decisions['skill:writer'], 'skip');
+    assert.strictEqual(out.send.type, 'evaluate_package_decisions');
+    assert.strictEqual(out.send.approval.items.filter((i) => i.id === 'skill:writer')[0].decision, 'skip');
+    // Confirming an untouched review keeps what the person already has.
+    const confirmed = model.confirm(out.state);
+    assert.strictEqual(confirmed.send.type, 'apply_package_import');
+    assert.strictEqual(confirmed.send.approval.items.filter((i) => i.id === 'skill:writer')[0].decision, 'skip');
   });
 });
 

@@ -44,8 +44,12 @@
 
   // The one reply entry: the model's own phase decides which handler runs,
   // so no routing ever depends on a wire field the model has not verified.
+  // A result arriving in the offer phase is the review's own projection (the
+  // server evaluated the current decisions without writing), which is why no
+  // new wire type exists for it: it is an import result, computed not applied.
   function reply(state, msg) {
     if (state.phase === 'classifying') return planReply(state, msg);
+    if (state.phase === 'offer') return evaluationReply(state, msg);
     if (state.phase === 'applying') return applyReply(state, msg);
     return { state };
   }
@@ -61,14 +65,77 @@
       return { state: { phase: 'failed', sourcePath: state.sourcePath, message: msg.message || 'The package could not be read.' } };
     }
     const items = msg.plan.items;
+    // NOTHING IS SILENTLY OVERWRITTEN: every colliding item starts decided
+    // skip, so a person who reviews the list and moves on keeps what they
+    // already have, and overwrite always requires a deliberate switch.
+    const decisions = {};
+    for (const item of items) decisions[item.id] = item.collision ? 'skip' : 'add';
+    const offer = {
+      phase: 'offer',
+      sourcePath: state.sourcePath,
+      plan: msg.plan,
+      agents: items.filter((i) => i.kind === 'agent').length,
+      skills: items.filter((i) => i.kind === 'skill').length,
+      collisions: items.filter((i) => i.collision).map((i) => ({ id: i.id, kind: i.kind, slug: i.slug })),
+      decisions,
+      projection: null,
+    };
+    if (offer.collisions.length === 0) return { state: offer };
+    // A review with decisions to make is projected by the one evaluator on
+    // the server, never by a second copy of its rules here: the same message
+    // family that applies an import evaluates it, without writing.
+    return { state: offer, send: evaluateMessage(offer) };
+  }
+
+  function decisionsFor(state) {
+    const decisions = {};
+    for (const item of state.plan.items) decisions[item.id] = state.decisions[item.id];
+    return decisions;
+  }
+
+  function evaluateMessage(state) {
+    return {
+      type: 'evaluate_package_decisions',
+      sourcePath: state.sourcePath,
+      approval: sharedDecide()(state.plan, decisionsFor(state)),
+    };
+  }
+
+  // One decision, changed. Only combinations the evaluator itself accepts
+  // can be chosen: a colliding item is overwritten or skipped, a new item is
+  // added or skipped (skipping a new item is how a blocked row clears its
+  // conflict). Anything else is refused unchanged, and every change asks the
+  // server to project the result so blocking is never computed locally.
+  function setDecision(state, id, decision) {
+    if (state.phase !== 'offer') return { state };
+    const item = state.plan.items.filter((i) => i.id === id)[0];
+    if (!item) return { state };
+    const allowed = item.collision ? ['overwrite', 'skip'] : ['add', 'skip'];
+    if (allowed.indexOf(decision) === -1) return { state };
+    if (state.decisions[id] === decision) return { state };
+    const next = { ...state, decisions: { ...state.decisions, [id]: decision }, projection: null };
+    return { state: next, send: evaluateMessage(next) };
+  }
+
+  // What the projection said about the current decisions. Stale voids the
+  // whole review, per the state model: the workspace or source moved, so
+  // every choice above no longer describes what is actually there.
+  function evaluationReply(state, msg) {
+    if (state.phase !== 'offer') return { state };
+    if (msg.type === 'package_import_error') {
+      return { state: { phase: 'failed', sourcePath: state.sourcePath, message: msg.message || 'The review could not be checked.', canReplan: true } };
+    }
+    if (msg.type !== 'package_import_result') return { state };
+    if (msg.status === 'stale') {
+      return { state: { phase: 'stale', sourcePath: state.sourcePath } };
+    }
     return {
       state: {
-        phase: 'offer',
-        sourcePath: state.sourcePath,
-        plan: msg.plan,
-        agents: items.filter((i) => i.kind === 'agent').length,
-        skills: items.filter((i) => i.kind === 'skill').length,
-        collisions: items.filter((i) => i.collision).map((i) => ({ id: i.id, kind: i.kind, slug: i.slug })),
+        ...state,
+        projection: {
+          status: msg.status,
+          blocked: (msg.blocked || []).map((b) => ({ id: b.id, reason: b.reason })),
+        },
       },
     };
   }
@@ -83,11 +150,7 @@
         + 'Nothing runs until you add them.',
       confirmLabel: 'Add to my team',
       cancelLabel: 'Cancel',
-      confirmDisabled: state.collisions.length > 0,
-      collisionNote: state.collisions.length === 0 ? null
-        : `${count(state.collisions.length, 'item')} here (${state.collisions.map((c) => c.slug).join(', ')}) `
-          + 'already exist in your workspace. Each needs its own keep-or-replace decision, which this flow '
-          + 'does not offer yet, so nothing can be added from this package here.',
+      confirmDisabled: false,
     };
   }
 
@@ -99,24 +162,136 @@
 
   // The approval is built by THE decision contract itself: the shared
   // decide from packages-decide.js, loaded by script tag in the browser and
-  // required here under Node, with every item decided add.
+  // required here under Node, carrying exactly the decisions on the review.
   function sharedDecide() {
     if (typeof module === 'object' && module.exports) return require('./packages-decide.js').decide;
     return RundockPackagesDecide.decide;
   }
 
-  function allAddApproval(plan) {
-    const decisions = {};
-    for (const item of plan.items) decisions[item.id] = 'add';
-    return sharedDecide()(plan, decisions);
-  }
-
   function confirm(state) {
     if (state.phase !== 'offer') return { state };
-    if (state.collisions.length > 0) return { state };
     return {
       state: { phase: 'applying', sourcePath: state.sourcePath },
-      send: { type: 'apply_package_import', sourcePath: state.sourcePath, approval: allAddApproval(state.plan) },
+      send: { type: 'apply_package_import', sourcePath: state.sourcePath, approval: sharedDecide()(state.plan, decisionsFor(state)) },
+    };
+  }
+
+  // THE TONE EACH REVIEW CLASS CARRIES, in one place so a walk can prove the
+  // ruling: nothing on this surface executes anything, so nothing here takes
+  // the danger tone except the one state where the person's review work has
+  // been voided under them. Blocked is attention, per the state model's own
+  // convention that a notice where nothing broke does not reach for danger.
+  var REVIEW_TONES = {
+    willAdd: 'success',
+    collision: 'neutral',
+    skippedNew: 'neutral',
+    blocked: 'attention',
+    stale: 'danger',
+  };
+
+  // WHERE EACH EVALUATOR BUCKET REACHES THIS SURFACE. The keys are the
+  // evaluator's own result shape; a bucket added there without a home here
+  // fails the walk that compares the two, so an outcome can never be
+  // computed that this surface silently has no words for.
+  var RESULT_RENDERINGS = {
+    status: 'routes the review: stale voids it, ready and decisions-blocked keep it open',
+    writes: 'the will-add and overwrite rows, counted into the confirm label',
+    unchanged: 'a collision whose bytes already match what arrives, said on its row',
+    skipped: 'the skip rows, counted into the confirm label',
+    blocked: 'the blocked treatment on the rows the projection names',
+    stale: 'the review-void state over the whole card',
+  };
+
+  function reviewRowClass(state, item) {
+    const blocked = !!(state.projection
+      && state.projection.blocked.some((b) => b.id === item.id));
+    if (blocked) return 'blocked';
+    if (item.collision) return 'collision';
+    return state.decisions[item.id] === 'skip' ? 'skippedNew' : 'willAdd';
+  }
+
+  function reviewCounts(state) {
+    const counts = { adds: 0, overwrites: 0, skips: 0, blocked: 0 };
+    for (const item of state.plan.items) {
+      const rowClass = reviewRowClass(state, item);
+      if (rowClass === 'blocked') counts.blocked += 1;
+      else if (state.decisions[item.id] === 'skip') counts.skips += 1;
+      else if (item.collision) counts.overwrites += 1;
+      else counts.adds += 1;
+    }
+    return counts;
+  }
+
+  // The confirm button's own label carries the breakdown, the same honesty
+  // rule as the success receipts: never a generic Confirm with the detail
+  // left to body copy underneath.
+  function confirmLabel(counts) {
+    if (counts.adds === 0 && counts.overwrites === 0 && counts.blocked === 0 && counts.skips > 0) {
+      return `Skip ${counts.skips}, nothing added`;
+    }
+    const parts = [];
+    if (counts.adds) parts.push(`add ${counts.adds}`);
+    if (counts.overwrites) parts.push(`overwrite ${counts.overwrites}`);
+    if (counts.skips) parts.push(`skip ${counts.skips}`);
+    if (counts.blocked) parts.push(`${counts.blocked} blocked`);
+    const joined = parts.join(', ');
+    return joined.charAt(0).toUpperCase() + joined.slice(1);
+  }
+
+  function reviewCopy(state) {
+    const counts = reviewCounts(state);
+    const rows = state.plan.items.map((item) => {
+      const rowClass = reviewRowClass(state, item);
+      const identical = item.collision && item.plannedDigest === item.approvedDigest;
+      return {
+        id: item.id,
+        name: item.slug,
+        kind: item.kind,
+        rowClass,
+        tone: REVIEW_TONES[rowClass],
+        decision: state.decisions[item.id],
+        colliding: item.collision,
+        compare: !item.collision ? null : {
+          have: identical
+            ? 'Already in your workspace, identical to what arrives.'
+            : 'Already in your workspace, with different content.',
+          arrives: identical
+            ? "The package's version, byte for byte what you have."
+            : "The package's version. Overwrite replaces yours with it.",
+        },
+        // NEVER OVERWRITE AS THE WAY OUT: the blocked row's one action is
+        // skipping, and the copy says what skipping keeps.
+        blockedNote: rowClass !== 'blocked' ? null
+          : 'Blocked: this would give your team a second default agent. Rundock allows exactly one. '
+            + 'Skipping this item keeps your workspace exactly as it is and clears the conflict.',
+        blockedAction: rowClass !== 'blocked' ? null
+          : { label: 'Skip this item', decision: 'skip' },
+      };
+    });
+    return {
+      title: 'Review this package',
+      rows,
+      counts,
+      confirmLabel: confirmLabel(counts),
+      confirmNote: counts.blocked > 0
+        ? `${counts.blocked} item${counts.blocked === 1 ? '' : 's'} will not be written until the default conflict clears.`
+        : counts.adds === 0 && counts.overwrites === 0
+          ? 'Confirming writes nothing, and says so rather than doing something silent.'
+          : 'Nothing else in your workspace changes.',
+      confirmWarn: counts.blocked > 0,
+      cancelLabel: 'Cancel',
+    };
+  }
+
+  // The review-void state: the person did real work deciding, that work is
+  // gone, and the copy lands with enough weight to be read, not skimmed.
+  function staleCopy() {
+    return {
+      tone: REVIEW_TONES.stale,
+      headline: 'Your workspace changed',
+      body: 'Something this review depended on changed while you were deciding. '
+        + 'Every choice above has been discarded and nothing was written.',
+      actionLabel: 'Re-plan',
     };
   }
 
@@ -183,5 +358,10 @@
     return submit(initial(), state.sourcePath);
   }
 
-  return { initial, submit, reply, planReply, offerCopy, cancel, confirm, applyReply, doneCopy, retry, connectionLost, allAddApproval };
+  // A dropped connection in the stale phase changes nothing: the review is
+  // already void and the only action re-plans, which checks the connection
+  // itself on the way out.
+
+  return { initial, submit, reply, planReply, offerCopy, cancel, confirm, applyReply, doneCopy, retry, connectionLost,
+    setDecision, reviewCopy, staleCopy, confirmLabel, reasonWords, REVIEW_TONES, RESULT_RENDERINGS };
 }));

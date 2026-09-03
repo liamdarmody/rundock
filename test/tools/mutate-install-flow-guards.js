@@ -30,18 +30,21 @@ const MODEL = {
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
-  [MODEL, 'a colliding plan can never produce an apply message',
-    '    if (state.collisions.length > 0) return { state };\n',
-    ''],
+  // THE FAIL-CLOSED GUARD IS GONE BECAUSE ITS RULE IS. A colliding plan now
+  // enters the review surface with every collision decided skip, and that
+  // rule has its own guards in mutate-collision-decisions-guards.js (the
+  // skip default, the decided approval on the wire, and the rest). A guard
+  // kept here would pin the overturned shape and report its own target as
+  // unmutated forever.
+  [MODEL, 'a fresh collision is decided skip, never anything writable',
+    "    for (const item of items) decisions[item.id] = item.collision ? 'skip' : 'add';\n",
+    "    for (const item of items) decisions[item.id] = item.collision ? 'overwrite' : 'add';\n"],
   [MODEL, 'cancel sends nothing at all',
     '  function cancel() {\n    return { state: initial() };\n  }',
     "  function cancel() {\n    return { state: initial(), send: { type: 'apply_package_import' } };\n  }"],
   [MODEL, 'the approval comes through the shared decide module, not a local copy',
-    '    return sharedDecide()(plan, decisions);',
-    '    return { schema: plan.schema, source: plan.source, manifest: plan.manifest, items: plan.items.map((item) => ({ ...item, decision: decisions[item.id] })) };'],
-  [MODEL, 'every item is decided add before the shared decide runs',
-    "    for (const item of plan.items) decisions[item.id] = 'add';\n",
-    ''],
+    "      send: { type: 'apply_package_import', sourcePath: state.sourcePath, approval: sharedDecide()(state.plan, decisionsFor(state)) },",
+    "      send: { type: 'apply_package_import', sourcePath: state.sourcePath, approval: { schema: state.plan.schema, source: state.plan.source, manifest: state.plan.manifest, items: state.plan.items.map((item) => ({ ...item, decision: decisionsFor(state)[item.id] })) } },"],
   [MODEL, 'the nothing-usable state is classified by its code, never by prose',
     "      if (msg.code === 'empty-package') {",
     '      if (false) {'],

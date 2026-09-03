@@ -194,11 +194,15 @@ describe('the protocol boundary', () => {
     const reply = dispatchJson('apply_package_import', { sourcePath: sourceRoot, approval });
     assert.strictEqual(reply.status, 'ready');
     const receipt = JSON.parse(fs.readFileSync(path.join(workspace, reply.receipt), 'utf8'));
+    // Each entry also records the decision that governed it, so a later
+    // import can say what was decided last time rather than guessing.
+    const decisionOf = Object.fromEntries(approval.items.map((i) => [i.id, i.decision]));
+    const entry = (outcome) => (o) => ({ id: o.id, kind: o.kind, destination: o.destination, decision: decisionOf[o.id], outcome });
     const expected = [
-      ...reply.writes.map((o) => ({ id: o.id, kind: o.kind, destination: o.destination, outcome: 'written' })),
-      ...reply.unchanged.map((o) => ({ id: o.id, kind: o.kind, destination: o.destination, outcome: 'unchanged' })),
-      ...reply.skipped.map((o) => ({ id: o.id, kind: o.kind, destination: o.destination, outcome: 'skipped' })),
-      ...reply.blocked.map((o) => ({ id: o.id, kind: o.kind, destination: o.destination, outcome: 'blocked' })),
+      ...reply.writes.map(entry('written')),
+      ...reply.unchanged.map(entry('unchanged')),
+      ...reply.skipped.map(entry('skipped')),
+      ...reply.blocked.map(entry('blocked')),
     ].sort((a, b) => (a.id < b.id ? -1 : 1));
     assert.deepStrictEqual(receipt.items, expected);
     assert.deepStrictEqual(receipt.items.map((i) => [i.id, i.outcome]),

@@ -59,4 +59,40 @@
 .packages-part-label { font-weight: 600; color: var(--text-1); }
 .packages-part-dest { color: var(--text-3); font-family: var(--mono, monospace); }
 .packages-spinner { width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--text-2); border-radius: 50%; animation: packages-spin 0.8s linear infinite; }
+
+/* The PL5 review card. Same confirm-card family as the offer: no amber
+   chrome anywhere on the card itself, because nothing on this surface
+   executes anything. Attention is spent only on the blocked notice, and
+   danger only on the review-void state, which the tone walk in the model's
+   suite holds to exactly one class. */
+.packages-review-card { display: flex; flex-direction: column; gap: 10px; padding: 20px; }
+.packages-review-sub { font-size: var(--caption); color: var(--text-3); font-family: var(--mono, monospace); word-break: break-all; }
+.packages-item-list { border-top: 1px solid var(--border); }
+.packages-item-row { padding: 11px 0; border-bottom: 1px solid var(--border); }
+.packages-item-top { display: flex; align-items: center; gap: 8px; }
+.packages-item-name { font-size: var(--body); font-weight: 600; color: var(--text-1); }
+.packages-kind-tag { font-size: 9px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-3); background: var(--elevated); padding: 2px 6px; border-radius: var(--radius-xs); }
+.packages-ready-mark { margin-left: auto; font-size: var(--caption); font-weight: 600; color: var(--success); }
+.packages-skip-mark { margin-left: auto; font-size: var(--caption); font-weight: 600; color: var(--text-2); }
+.packages-row-btn { padding: 3px 10px; }
+.packages-compare { display: flex; gap: 8px; margin: 9px 0 10px; }
+.packages-compare-side { flex: 1; background: var(--elevated); border-radius: var(--radius-md); padding: 8px 10px; min-width: 0; }
+.packages-compare-label { font-size: 9px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-3); margin-bottom: 4px; }
+.packages-compare-side p { margin: 0; font-size: var(--caption); color: var(--text-1); line-height: 1.5; }
+.packages-decision-toggle { display: flex; gap: 6px; }
+.packages-dt-btn { flex: 1; padding: 6px 10px; font-size: var(--caption); font-weight: 600; border-radius: var(--radius-md); border: 1px solid var(--border); background: var(--elevated); color: var(--text-2); cursor: pointer; }
+.packages-dt-selected { border-color: var(--text-2); color: var(--text-1); font-weight: 700; }
+.packages-dt-selected.packages-dt-overwrite { border-color: var(--accent); color: var(--accent); background: var(--accent-glow, transparent); }
+.packages-dt-blocked { opacity: 0.4; cursor: not-allowed; text-decoration: line-through; }
+.packages-blocked-block { border-radius: var(--radius-md); padding: 10px 12px; margin-top: 9px; background: color-mix(in srgb, var(--attention) 9%, transparent); }
+.packages-blocked-note { font-size: var(--caption); color: var(--attention); line-height: 1.55; }
+.packages-blocked-resolve { margin-top: 8px; }
+.packages-review-confirm { display: flex; flex-direction: column; gap: 9px; padding-top: 12px; border-top: 1px solid var(--border); }
+.packages-review-note { font-size: var(--caption); color: var(--text-3); line-height: 1.5; }
+.packages-review-warn { color: var(--attention); }
+
+/* The review-void state: the one danger-toned class on this surface. */
+.packages-stale-card { display: flex; flex-direction: column; gap: 10px; padding: 20px; border: 1px solid var(--danger); }
+.packages-stale-headline { font-size: var(--body); font-weight: 700; color: var(--text-1); }
+.packages-stale-body { font-size: var(--caption); color: var(--danger); line-height: 1.55; }
 @keyframes packages-spin { to { transform: rotate(360deg); } }
