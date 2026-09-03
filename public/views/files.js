@@ -329,6 +329,7 @@ function closeOpenFile() {
   editorDirty = false;
   fileHistory = [];
   closeFindBar();
+  removeFileConnections();
   document.querySelectorAll('.file-item.active').forEach((el) => el.classList.remove('active'));
 }
 
@@ -604,6 +605,10 @@ function loadFileContent(path, content) {
   hideExternalEditConflict();
   currentFilePath = path;
   rawFileContent = content;
+  // The previous file's connections must not outlive it under ANY next
+  // surface, including the read-only viewers and boards that never draw a
+  // section of their own.
+  removeFileConnections();
   editorDirty = false; // freshly loaded: no unsaved edits
   // Reset the Preview/Code mode on every open. Only the legacy text surface
   // used to reset it, so a stale 'edit' left over from a previous text file
@@ -703,6 +708,12 @@ function openMarkdownFile(viewers, path, content) {
   fileFrontmatter = '';
   fileBody = content;
   initTiptapEditor(path, content);
+  // The connections list rides this surface because this is the surface a
+  // linked document is read on: markdown is the one file kind that carries
+  // wikilinks. Mounted on the pane, beside the editor element rather than
+  // inside it, because the editor owns its own element's children and clears
+  // them on init.
+  renderFileConnections(document.getElementById('tiptap-editor-pane'));
 }
 
 // Text keeps the legacy preview/edit chrome; artifacts share it so the Code
@@ -765,8 +776,11 @@ function renderEditorContent() {
     }
     previewEl.className = 'editor-content formatted';
     previewEl.innerHTML = formatMdFull(fileBody);
-    renderFileConnections(previewEl);
+    renderFileConnections(previewEl.parentElement);
   } else {
+    // Leaving preview for the code view: the section describes the rendered
+    // document, and the code view is not it.
+    removeFileConnections();
     destroyActiveFileViewer();
     previewEl.classList.add('hidden');
     textareaEl.classList.remove('hidden');
@@ -780,13 +794,24 @@ function renderEditorContent() {
 // canvas, drawn under the rendered file from the same resolver every click
 // goes through. Built with createElement throughout: nothing here may
 // interpolate file names into markup.
-function renderFileConnections(previewEl) {
-  const host = previewEl.parentElement;
-  if (!host) return;
-  let section = document.getElementById('file-connections');
+//
+// ONE REMOVER, CALLED ON EVERY WAY OUT. The section describes one file, so
+// its lifetime is the file's: every open of any surface starts by removing
+// it (loadFileContent), closing the file removes it, and leaving preview for
+// the code view removes it. The first version removed it only at the top of
+// its own renderer, so a text file's connections stayed mounted under the
+// next markdown file, naming links that belonged to a document no longer on
+// screen.
+function removeFileConnections() {
+  const section = document.getElementById('file-connections');
   if (section) section.remove();
+}
+
+function renderFileConnections(host) {
+  if (!host) return;
+  removeFileConnections();
   if (!currentFilePath) return;
-  section = document.createElement('div');
+  const section = document.createElement('div');
   section.id = 'file-connections';
   section.className = 'file-connections';
   host.appendChild(section);
@@ -1092,7 +1117,8 @@ return {
   openBinaryOrUnsupportedFile, renderEditorContent, setEditorMode,
   getFileContentForSave, openWikilink, openWorkspaceFilePath,
   highlightFileInSidebar, findFileInTree, wikilinkSearchName, fileConnections,
-  renderFileConnections, drawFileConnections, invalidateWorkspaceLinks, updateEditorBackButton,
+  renderFileConnections, drawFileConnections, removeFileConnections,
+  invalidateWorkspaceLinks, updateEditorBackButton,
   openSkillFile, editorGoBack,
 };
 }));

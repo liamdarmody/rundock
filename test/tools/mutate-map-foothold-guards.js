@@ -79,8 +79,36 @@ const MUTATIONS = [
   // Report an absent index as an indexed empty workspace and a consumer
   // cannot tell a runtime without sqlite from a workspace with no links.
   [ROUTER, 'no index is a statement, not an empty graph',
-    "        res.end(JSON.stringify({ indexed: false, links: [] }));",
-    "        res.end(JSON.stringify({ indexed: true, links: [] }));"],
+    "        res.end(JSON.stringify({ indexed: false, nodes: [], links: [] }));",
+    "        res.end(JSON.stringify({ indexed: true, nodes: [], links: [] }));"],
+  // Resolve on every request and the memo is decoration: the counting test
+  // is what notices the criterion's own words stopped being true.
+  [ROUTER, 'an unchanged tree is answered from the memo, never re-resolved',
+    "        if (!graphMemo.resolved.has(target)) {",
+    "        if (true) {"],
+  // Swallow a real failure into a success and a corrupt index renders as an
+  // empty workspace with nothing telling anybody.
+  [ROUTER, 'a failing index answers 500 with its cause, never a quiet 200',
+    "      res.writeHead(500, { 'Content-Type': 'application/json' });",
+    "      res.writeHead(200, { 'Content-Type': 'application/json' });"],
+
+  // ===== THE LIST RIDES THE SURFACE A LINKED DOCUMENT IS READ ON =====
+  // Unwire the markdown mount and the feature is unreachable for the one
+  // file kind that carries wikilinks, while every function-level test would
+  // have stayed green: the real-open-path test is what notices.
+  [FILES, 'the markdown surface mounts the connections list',
+    "  renderFileConnections(document.getElementById('tiptap-editor-pane'));",
+    ""],
+  // Let the section outlive its file and the reader sees one document over
+  // another document's connections.
+  [FILES, 'every open starts with the previous file\'s section gone',
+    "  removeFileConnections();\n  editorDirty = false; // freshly loaded: no unsaved edits",
+    "  editorDirty = false; // freshly loaded: no unsaved edits"],
+  // Point the rows at the raw link text and a click opens a different file
+  // from the same link clicked in the document.
+  [FILES, 'a row opens the resolved file, not the text the link was written as',
+    "  group('Links to', outgoing, (r) => r.resolved);",
+    "  group('Links to', outgoing, (r) => r.target);"],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];

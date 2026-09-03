@@ -125,6 +125,7 @@ const MANIFEST = {
     "openWorkspaceFilePath",
     "paletteFileIcon",
     "promptCreate",
+    "removeFileConnections",
     "renderEditorContent",
     "renderFileConnections",
     "renderFileTree",

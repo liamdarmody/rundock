@@ -324,12 +324,9 @@ CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
   INSERT INTO messages_fts(messages_fts, rowid, text) VALUES ('delete', old.id, old.text);
 END;
 
--- Links: what a file SAYS it points at, never what that resolves to. Which
--- file [[Roadmap]] means depends on every other file in the workspace, so a
--- resolved path stored here would go stale whenever an unrelated file is
--- added or a folder renamed; resolution happens at read time against the
--- current tree, and this table holds the part that genuinely belongs to the
--- source file.
+-- Links: the source file, the target as written, and the kind. Resolution is
+-- served by the graph endpoint against the current tree, memoised per tree
+-- generation.
 --
 -- Embeds are stored with kind 'embed' rather than dropped, so excluding them
 -- from any consumer stays a read-time filter rather than something baked into

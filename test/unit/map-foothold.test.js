@@ -198,44 +198,77 @@ describe('the endpoint resolves at read time against the cached tree', () => {
     return { code: res.code, body: JSON.parse(chunks.join('')) };
   }
 
-  test('links come back carrying what they resolve to right now, read from the cached tree', () => {
-    let cachedReads = 0;
-    const tree = [
-      folder('alpha', [folder('alpha/Decoy', [file('alpha/Decoy/Notes.md')])]),
-      folder('beta', [folder('beta/Target', [file('beta/Target/Notes.md')])]),
-    ];
+  const TREE = [
+    folder('alpha', [folder('alpha/Decoy', [file('alpha/Decoy/Notes.md')])]),
+    folder('beta', [folder('beta/Target', [file('beta/Target/Notes.md')])]),
+  ];
+  const ENGINE = {
+    allLinks: () => [
+      { src: 'src.md', target: 'beta/Target/Notes', kind: 'wikilink' },
+      { src: 'src.md', target: 'Nowhere', kind: 'wikilink' },
+    ],
+  };
+
+  test('nodes come from the cached tree and links carry what they resolve to', () => {
     const { code, body } = drive({
-      getFileTreeCached: () => { cachedReads += 1; return tree; },
-      getSearchEngine: () => ({
-        allLinks: () => [
-          { src: 'src.md', target: 'beta/Target/Notes', kind: 'wikilink' },
-          { src: 'src.md', target: 'Nowhere', kind: 'wikilink' },
-        ],
-      }),
+      getFileTreeCached: () => TREE,
+      getSearchEngine: () => ENGINE,
     });
     assert.strictEqual(code, 200);
     assert.strictEqual(body.indexed, true);
+    assert.deepStrictEqual(body.nodes.map(n => n.path),
+      ['alpha/Decoy/Notes.md', 'beta/Target/Notes.md'],
+      'every file the tree holds is a node, whether or not anything links it');
     assert.strictEqual(body.links[0].resolved, 'beta/Target/Notes.md',
       'the endpoint and a click in a document go through one resolver, so they cannot disagree');
     assert.strictEqual(body.links[1].resolved, null, 'an unresolved link is a fact, not an omission');
-    assert.ok(cachedReads >= 1, 'resolution reads the tree the server already holds');
   });
 
-  test('no index is a statement, not an error and not an empty graph', () => {
+  test('an unchanged tree is never re-resolved: the second request answers from the memo', () => {
+    // A fresh tree object, so this test owns its memo generation whatever
+    // ran before it: the memo is keyed by tree identity, and the shared
+    // fixture may already be resolved by an earlier test.
+    const tree = [...TREE];
+    const before1 = httpRouter.graphResolutionStats().count;
+    drive({ getFileTreeCached: () => tree, getSearchEngine: () => ENGINE });
+    const afterFirst = httpRouter.graphResolutionStats().count;
+    assert.ok(afterFirst > before1, 'sanity: the first request against this tree resolved something');
+    drive({ getFileTreeCached: () => tree, getSearchEngine: () => ENGINE });
+    assert.strictEqual(httpRouter.graphResolutionStats().count, afterFirst,
+      'a second request against the same tree resolves nothing: the answers are the memo\'s');
+    // A NEW tree object is a new generation: every answer may have moved.
+    drive({ getFileTreeCached: () => [...tree], getSearchEngine: () => ENGINE });
+    assert.ok(httpRouter.graphResolutionStats().count > afterFirst,
+      'and a changed tree empties the memo rather than serving yesterday\'s answers');
+  });
+
+  test('no index is an absent capability, stated, with the full shape intact', () => {
     const { code, body } = drive({
       getFileTreeCached: () => [],
       getSearchEngine: () => null,
     });
     assert.strictEqual(code, 200);
     assert.strictEqual(body.indexed, false,
-      'a runtime without the index says so, rather than rendering as an unlinked workspace');
+      'a runtime without the index says the capability is missing, rather than rendering as an unlinked workspace');
+    assert.deepStrictEqual(body.nodes, [], 'the shape does not change with the capability');
+    assert.deepStrictEqual(body.links, []);
+  });
+
+  test('a failing index is a 500 with the error named, never a quiet 200', () => {
+    const { code, body } = drive({
+      getFileTreeCached: () => TREE,
+      getSearchEngine: () => ({ allLinks: () => { throw new Error('index file is corrupt'); } }),
+    });
+    assert.strictEqual(code, 500, 'a real failure is a failure, not an empty success');
+    assert.match(body.error, /index file is corrupt/, 'and it names its cause');
   });
 });
 
-describe('the connections list names the files a click would open', () => {
+describe('the connections list rides the real open path', () => {
   const TREE = [
     folder('a', [file('a/Here.md'), file('a/Other.md')]),
     file('Top.md'),
+    file('plain.txt'),
   ];
   const LINKS = [
     { src: 'a/Here.md', target: 'Other', kind: 'wikilink' },
@@ -245,6 +278,7 @@ describe('the connections list names the files a click would open', () => {
     { src: 'a/Here.md', target: 'Top', kind: 'embed' },
     { src: 'Top.md', target: 'a/Here.md', kind: 'markdown' },
     { src: 'a/Here.md', target: 'Other', kind: 'wikilink' },
+    { src: 'plain.txt', target: 'Top', kind: 'wikilink' },
   ];
 
   test('outgoing and incoming are resolved through the one resolver, deduplicated, embeds excluded', () => {
@@ -254,55 +288,154 @@ describe('the connections list names the files a click would open', () => {
     assert.deepStrictEqual(incoming, [{ src: 'Top.md' }]);
   });
 
-  test('a document click and a connections click open the same file', () => {
-    // The document route: openWikilink builds the search name and resolves.
-    // The connections route: the list carries the resolved path and opens it
-    // directly. Both are driven here and must send the same read_file path.
-    const dom = new JSDOM('<!doctype html><body></body>');
+  // THE SHELL THE REAL PATH RUNS IN. The editor skeleton from index.html, the
+  // module loaders pre-seeded so the registry and the editor resolve to test
+  // doubles, and every app-owned global the open path reaches for. What runs
+  // is the real loadFileContent dispatch, the real surface functions, and the
+  // real connections renderer: nothing below hands the section a detached
+  // element or calls the drawing function itself.
+  function shell() {
+    const dom = new JSDOM(`<!doctype html><body>
+      <div id="editor-header" class="hidden"></div>
+      <span id="editor-filename"></span><span id="editor-status"></span>
+      <button id="toggle-preview"></button><button id="toggle-edit"></button>
+      <div id="editor-empty"></div>
+      <div id="editor-pane">
+        <div id="editor-content" class="hidden"></div>
+        <textarea id="editor-textarea" class="hidden"></textarea>
+        <div id="tiptap-editor-pane" class="hidden">
+          <div id="tiptap-properties"></div>
+          <div id="tiptap-editor"></div>
+          <div id="tiptap-toolbar"></div>
+        </div>
+      </div>
+    </body>`);
+    const w = dom.window;
     const sent = [];
-    global.document = dom.window.document;
-    global.ws = { send: (raw) => sent.push(JSON.parse(raw)) };
-    global.cachedFileTree = TREE;
-    global.currentFilePath = null;
-    global.editorReturnView = 'editor';
-    global.fileHistory = [];
-    global.switchNav = () => {};
-    global.showView = () => {};
-    global.highlightFileInSidebar = () => {};
-    try {
-      filesView.openWikilink('Other');
-      const viaDocument = sent.find(m => m.type === 'read_file');
-      sent.length = 0;
-      const { outgoing } = fileConnections('a/Here.md', LINKS, TREE);
-      filesView.openWorkspaceFilePath(outgoing[0].resolved);
-      const viaConnections = sent.find(m => m.type === 'read_file');
-      assert.ok(viaDocument && viaConnections, 'both routes asked the server for a file');
-      assert.strictEqual(viaConnections.path, viaDocument.path,
-        'the list and the link name one file, because both answers came from one resolver');
-    } finally {
-      delete global.document; delete global.ws; delete global.cachedFileTree;
-      delete global.currentFilePath; delete global.editorReturnView;
-      delete global.fileHistory; delete global.switchNav;
-      delete global.showView; delete global.highlightFileInSidebar;
+    const stubs = {
+      window: w, document: w.document,
+      ws: { send: (raw) => sent.push(JSON.parse(raw)) },
+      cachedFileTree: TREE,
+      currentFilePath: null, editorReturnView: 'editor', fileHistory: [],
+      rawFileContent: '', fileFrontmatter: '', fileBody: '', editorMode: 'preview',
+      editorDirty: false, saveTimer: null, boardSaveTimer: null, boardPendingSave: null,
+      diskBaselines: new Map(),
+      workspaceAnalysis: null, agents: [],
+      switchNav: () => {}, showView: () => {}, highlightFileInSidebar: () => {},
+      closeFindBar: () => {}, findState: { open: false }, syncTiptapFindStateFromPlugin: () => {},
+      paletteOpenFile: () => {},
+      activeTiptapEditor: null, _tiptapSaveTimer: null,
+      // The registry double: classification by extension, which is all the
+      // dispatch reads. Pre-seeded so loadViewersModule never imports.
+      _viewersModuleResolved: null, _viewersModule: null,
+      _tiptapEditorModule: null, _tiptapEditorModuleResolved: null,
+      activeFileViewer: null,
+      formatMdFull: (t) => String(t),
+      fetch: () => Promise.resolve({ ok: true, json: () => Promise.resolve({ indexed: true, links: LINKS }) }),
+    };
+    const viewers = {
+      classify: (p) => (p.endsWith('.md') ? 'markdown' : p.endsWith('.txt') ? 'text' : 'image'),
+      mountViewer: () => ({ destroy: () => {} }),
+    };
+    stubs._viewersModuleResolved = viewers;
+    stubs._viewersModule = Promise.resolve(viewers);
+    const tiptap = {
+      createEditor: ({ element }) => {
+        element.textContent = 'rendered document';
+        return { editor: { destroyed: false, on: () => {} } };
+      },
+      destroyEditor: () => {},
+    };
+    stubs._tiptapEditorModule = Promise.resolve(tiptap);
+    stubs._tiptapEditorModuleResolved = tiptap;
+    for (const [k, v] of Object.entries(stubs)) global[k] = v;
+    const cleanup = () => {
+      for (const k of Object.keys(stubs)) delete global[k];
       dom.window.close();
-    }
+    };
+    const settle = () => new Promise((r) => setTimeout(r, 0)).then(() => new Promise((r) => setTimeout(r, 0)));
+    return { w, doc: w.document, sent, cleanup, settle };
+  }
+
+  test('opening a markdown file through the real dispatch mounts the connections under its surface', async () => {
+    const { doc, cleanup, settle } = shell();
+    try {
+      filesView.loadFileContent('a/Here.md', 'To [[Other]].');
+      await settle();
+      const section = doc.getElementById('file-connections');
+      assert.ok(section, 'the section exists after a real markdown open, not after a hand call');
+      assert.strictEqual(section.parentElement.id, 'tiptap-editor-pane',
+        'and it is mounted under the surface a linked document is actually read on');
+      const rows = [...section.querySelectorAll('.file-connections-row')].map(r => r.textContent);
+      assert.deepStrictEqual(rows, ['a/Other.md', 'Top.md'],
+        'outgoing resolved, incoming source, nothing else');
+    } finally { cleanup(); }
   });
 
-  test('the rendered list says why it is empty, in both empty states', () => {
-    const dom = new JSDOM('<!doctype html><body><div id="s"></div></body>');
-    const section = dom.window.document.getElementById('s');
-    global.document = dom.window.document;
-    global.cachedFileTree = TREE;
+  test('a clicked row and the same link clicked in the document open one file', async () => {
+    const { doc, sent, cleanup, settle } = shell();
     try {
-      filesView.drawFileConnections(section, 'a/Here.md', { indexed: false, links: [] });
-      assert.match(section.textContent, /need the search index/,
+      filesView.loadFileContent('a/Here.md', 'To [[Other]].');
+      await settle();
+      const row = doc.querySelector('#file-connections .file-connections-row');
+      assert.ok(row, 'sanity: the rendered list produced a row');
+      row.dispatchEvent(new (doc.defaultView.Event)('click'));
+      const viaConnections = sent.filter(m => m.type === 'read_file').pop();
+      sent.length = 0;
+      filesView.openWikilink('Other');
+      const viaDocument = sent.filter(m => m.type === 'read_file').pop();
+      assert.ok(viaConnections && viaDocument, 'both routes asked the server for a file');
+      assert.strictEqual(viaConnections.path, viaDocument.path,
+        'the row the code produced and the link in the document name one file, off one resolver');
+    } finally { cleanup(); }
+  });
+
+  test('the section lives exactly as long as the file it describes', async () => {
+    const { doc, cleanup, settle } = shell();
+    try {
+      filesView.loadFileContent('plain.txt', 'points at [[Top]]');
+      await settle();
+      assert.ok(doc.getElementById('file-connections'), 'sanity: the text surface drew its section');
+      // The reported defect: a markdown file opened next kept the text
+      // file's section mounted underneath it, naming another document's
+      // links.
+      filesView.loadFileContent('a/Here.md', 'To [[Other]].');
+      await settle();
+      const section = doc.getElementById('file-connections');
+      assert.ok(section, 'the markdown file has its own section');
+      const rows = [...section.querySelectorAll('.file-connections-row')].map(r => r.textContent);
+      assert.ok(!rows.includes('Top.md') || rows.includes('a/Other.md'),
+        'and its rows are the new file\'s, not the text file\'s leftovers');
+      assert.deepStrictEqual(rows, ['a/Other.md', 'Top.md'], 'exactly the markdown file\'s connections');
+      // A surface that owns the pane exclusively carries no section at all.
+      filesView.loadFileContent('shot.png', '');
+      await settle();
+      assert.strictEqual(doc.getElementById('file-connections'), null,
+        'a read-only viewer shows no other file\'s connections');
+      // And closing the file removes it rather than leaving it for the next open.
+      filesView.loadFileContent('a/Here.md', 'To [[Other]].');
+      await settle();
+      filesView.closeOpenFile();
+      assert.strictEqual(doc.getElementById('file-connections'), null,
+        'a closed file leaves nothing behind');
+    } finally { cleanup(); }
+  });
+
+  test('the rendered list says why it is empty, in both empty states', async () => {
+    const { doc, cleanup, settle } = shell();
+    try {
+      global.fetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve({ indexed: false, nodes: [], links: [] }) });
+      filesView.invalidateWorkspaceLinks();
+      filesView.loadFileContent('a/Here.md', 'To [[Other]].');
+      await settle(); await settle();
+      assert.match(doc.getElementById('file-connections').textContent, /need the search index/,
         'no index is named, not rendered as a workspace with no links');
-      filesView.drawFileConnections(section, 'a/Here.md', null);
-      assert.match(section.textContent, /could not be read/,
+      global.fetch = () => Promise.reject(new Error('down'));
+      filesView.invalidateWorkspaceLinks();
+      filesView.loadFileContent('Top.md', 'x');
+      await settle(); await settle();
+      assert.match(doc.getElementById('file-connections').textContent, /could not be read/,
         'an unreachable link list is named too');
-    } finally {
-      delete global.document; delete global.cachedFileTree;
-      dom.window.close();
-    }
+    } finally { cleanup(); }
   });
 });
