@@ -43,6 +43,9 @@
     "typescript": "^7.0.2",
     "v8-to-istanbul": "^9.3.0"
   },
+  "optionalDependencies": {
+    "ffmpeg-static": "^5.2.0"
+  },
   "build": {
     "appId": "ai.rundock.app",
     "productName": "Rundock",
@@ -63,9 +66,27 @@
       "!scripts/screenshots/**",
       "!scripts/update-harness/**",
       "node_modules/**/*",
+      "!node_modules/@derhuerst/http-basic/**",
+      "!node_modules/@types/node/**",
+      "!node_modules/agent-base/**",
+      "!node_modules/buffer-from/**",
+      "!node_modules/caseless/**",
+      "!node_modules/concat-stream/**",
+      "!node_modules/env-paths/**",
+      "!node_modules/ffmpeg-static/**",
+      "!node_modules/http-response-object/**",
+      "!node_modules/https-proxy-agent/**",
+      "!node_modules/inherits/**",
+      "!node_modules/parse-cache-control/**",
+      "!node_modules/progress/**",
+      "!node_modules/readable-stream/**",
+      "!node_modules/safe-buffer/**",
+      "!node_modules/string_decoder/**",
+      "!node_modules/typedarray/**",
+      "!node_modules/undici-types/**",
+      "!node_modules/util-deprecate/**",
       "electron/**/*",
-      "package.json",
-      "!node_modules/ffmpeg-static/**"
+      "package.json"
     ],
     "asarUnpack": [
       "scripts/**/*"
@@ -144,8 +165,5 @@
     "node": ">=22.0.0"
   },
   "license": "SEE LICENSE IN LICENSE",
-  "private": true,
-  "optionalDependencies": {
-    "ffmpeg-static": "^5.2.0"
-  }
+  "private": true
 }

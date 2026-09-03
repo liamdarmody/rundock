@@ -125,50 +125,50 @@ describe('documented steps and uncommitted work', () => {
 // unexecuted experiment, and this registry is where the experiment's name is
 // recorded.
 const ENUMERATIONS = [
-  { file: 'test/unit/client-styles.test.js', extraction: 'stylesheet links out of index.html', failLoudBy: 'count', where: 'sheets.length floor beside the extraction' },
-  { file: 'test/unit/config.test.js', extraction: 'workspace-root assignments out of server.js', failLoudBy: 'count', where: 'exact deepStrictEqual against the two permitted assignments' },
-  { file: 'test/unit/design-doc.test.js', extraction: 'declared tokens and documented tokens', failLoudBy: 'count', where: 'set difference asserted empty in both directions' },
-  { file: 'test/unit/doc-claims.test.js', extraction: 'changelog headings, hook directory list, doc-named files and statuses', failLoudBy: 'count', where: 'each match asserted found, list sizes floored, status sets equal' },
-  { file: 'test/unit/doc-links.test.js', extraction: 'relative markdown links across the docs', failLoudBy: 'count', where: 'checked-links floor beside the scan' },
-  { file: 'test/unit/navigation-doors.test.js', extraction: 'inline handlers and call sites out of index.html and the client', failLoudBy: 'count', where: 'manifest equality over the collected sites' },
-  { file: 'test/unit/package-import-apply.test.js', extraction: 'frontmatter field counts out of written agent files', failLoudBy: 'count', where: 'exact strictEqual on each match count' },
-  { file: 'test/unit/packaging.test.js', extraction: 'local requires and asset tags out of server.js, electron/main.js and index.html', failLoudBy: 'count', where: 'canary membership plus a non-empty floor per list' },
-  { file: 'test/unit/profile-boxes.test.js', extraction: 'app.js arms cut out for pressing', failLoudBy: 'count', where: 'appPiece refuses when a piece is missing' },
-  { file: 'test/unit/regression.test.js', extraction: 'pinned call-shape occurrences in client source', failLoudBy: 'count', where: 'every match wrapped in an exact or floored count assertion' },
-  { file: 'test/unit/routine-editor-doors.test.js', extraction: 'editor entry calls and rendered handler names', failLoudBy: 'count', where: 'found-vs-DOORS equality and a handlers.size floor' },
-  { file: 'test/unit/routine-schedule-edit.test.js', extraction: 'routines-section counts out of written files', failLoudBy: 'count', where: 'exact strictEqual on each match count' },
-  { file: 'test/unit/routine-timezone.test.js', extraction: 'frontmatter block out of a written file', failLoudBy: 'count', where: 'indexing the match throws when the pattern misses' },
-  { file: 'test/unit/routine-write.test.js', extraction: 'routines-section counts and frontmatter out of written files', failLoudBy: 'count', where: 'exact counts asserted; missing frontmatter throws' },
-  { file: 'test/unit/routines-end-to-end.test.js', extraction: 'app.js pieces cut out for pressing', failLoudBy: 'count', where: 'appPiece refuses when a piece is missing' },
-  { file: 'test/unit/routines-truth.test.js', extraction: 'status literals out of the scheduler writers and refusal returns', failLoudBy: 'count', where: 'set equality against the declared vocabulary; every return accounted for' },
-  { file: 'test/unit/routines-view-doors.test.js', extraction: 'navigation calls across the client and the palette', failLoudBy: 'count', where: 'specimen self-test beside the prohibition scan; palette set equality' },
-  { file: 'test/unit/routines-view.test.js', extraction: 'app.js arms cut out for pressing', failLoudBy: 'count', where: 'appPiece refuses when a piece is missing' },
-  { file: 'test/unit/run-detail-doors.test.js', extraction: 'run-detail entry calls across the client', failLoudBy: 'count', where: 'found-vs-manifest equality' },
-  { file: 'test/unit/run-detail-model.test.js', extraction: 'unknown-reason words out of the transcript reader and scheduler', failLoudBy: 'count', where: 'floor asserted against the scan, per its own comment' },
-  { file: 'test/unit/scaffold-integrity.test.js', extraction: 'skill references out of scaffold markdown', failLoudBy: 'count', where: 'specimen self-test beside the prohibition scan' },
-  { file: 'test/unit/session-transcript-capture.test.js', extraction: 'the content-block union out of types.d.ts', failLoudBy: 'count', where: 'size floor and set equality against the known block types' },
-  { file: 'test/unit/style-resolve-diff.test.js', extraction: 'var() fallbacks out of stylesheets', failLoudBy: 'count', where: 'a dedicated that-check-can-actually-fail specimen pair' },
-  { file: 'test/unit/team-sidebar.test.js', extraction: 'the roster dispatch case cut out of app.js', failLoudBy: 'count', where: 'appPiece refuses when the case is missing' },
-  { file: 'test/unit/token-references.test.js', extraction: 'declared and referenced custom properties across public/', failLoudBy: 'count', where: 'used.size floor and a named-token canary' },
-  { file: 'test/unit/workspace-modes.test.js', extraction: 'gitignore entry count', failLoudBy: 'count', where: 'exact strictEqual on the match count' },
-  { file: 'test/tools/coverage-areas.js', extraction: 'SF and DA records out of the lcov', failLoudBy: 'count', where: 'a floored area that was not measured raises a violation' },
-  { file: 'test/tools/style-drift.js', extraction: 'colour, function and radius literals out of stylesheets', failLoudBy: 'count', where: 'stale allowlist entries error when a listed literal is no longer found' },
-  { file: 'test/tools/style-resolve-diff.js', extraction: 'declarations and rule blocks out of stylesheets', failLoudBy: 'count', where: 'its companion test file proves the patterns on specimens' },
-  { file: 'test/unit/sdlc-gate-hardening.test.js', extraction: 'destructive commands in tracked markdown, redTests and report bodies out of the harnesses, scanner rules out of check-internal-refs', failLoudBy: 'count', where: 'specimen self-tests, document and per-directory floors, and exact extraction counts throughout this file' },
-  { file: 'test/helpers/scheduler-statuses.js', extraction: 'status literals out of the scheduler writers', failLoudBy: 'count', where: 'its consumers assert the vocabulary in both directions (profile-boxes) and drive every word' },
-  { file: 'test/integration/http-api.test.js', extraction: 'script and stylesheet links out of served index.html', failLoudBy: 'count', where: 'floors on both lists plus a token-sheet canary' },
-  { file: 'test/integration/ws-handler-edges.test.js', extraction: 'frontmatter and order lines out of written agent files', failLoudBy: 'count', where: 'exact match counts; missing frontmatter refuses' },
-  { file: 'test/tools/innerhtml-sites.js', extraction: 'innerHTML assignment sites across the client', failLoudBy: 'count', where: 'pinned per-file totals in innerhtml-inventory.test.js' },
-  { file: 'test/unit/app-retentions.test.js', extraction: 'DOM-writing functions out of app.js', failLoudBy: 'count', where: 'owners.size floor plus the stale-manifest check in both directions' },
-  { file: 'test/unit/client-namespace.test.js', extraction: 'top-level declarations and uses across client sources', failLoudBy: 'count', where: 'declaration-count floor beside the extraction' },
-  { file: 'test/unit/guide-name.test.js', extraction: 'pronoun scan over rendered surfaces', failLoudBy: 'count', where: 'specimen pair beside the pattern, added with this registry row' },
-  { file: 'test/unit/markdown-render.test.js', extraction: 'renderer call sites and script tags out of client sources', failLoudBy: 'count', where: 'call-site and script-count floors beside each scan' },
-  { file: 'test/unit/routine-editor-view.test.js', extraction: 'navigation arms cut out of app.js', failLoudBy: 'count', where: 'the cut refuses when the arm is missing' },
-  { file: 'test/unit/routines-panel.test.js', extraction: 'markup regions cut out of index.html and app.js', failLoudBy: 'count', where: 'every cut refuses when its region is missing' },
-  { file: 'test/unit/run-detail-view.test.js', extraction: 'the run-detail panel cut out of index.html', failLoudBy: 'count', where: 'the cut refuses when the panel is missing' },
-  { file: 'test/unit/scheduler-lifecycle-doors.test.js', extraction: 'lifecycle call sites and their enclosing functions out of the server sources', failLoudBy: 'count', where: 'manifest equality plus a self-arming floor' },
-  { file: 'test/unit/skills-empty.test.js', extraction: 'markup regions cut out of index.html', failLoudBy: 'count', where: 'every cut refuses when its region is missing' },
-  { file: 'test/unit/style-drift.test.js', extraction: 'value literals out of allowlist reasons', failLoudBy: 'count', where: 'specimen beside the pattern, added with this registry row' },
+  { file: 'test/unit/client-styles.test.js', extraction: 'stylesheet links out of index.html', failLoudBy: 'count', where: 'sheets.length floor beside the extraction', anchor: 'sheets.length' },
+  { file: 'test/unit/config.test.js', extraction: 'workspace-root assignments out of server.js', failLoudBy: 'count', where: 'exact deepStrictEqual against the two permitted assignments', anchor: 'deepStrictEqual' },
+  { file: 'test/unit/design-doc.test.js', extraction: 'declared tokens and documented tokens', failLoudBy: 'count', where: 'set difference asserted empty in both directions', anchor: 'two empty sets' },
+  { file: 'test/unit/doc-claims.test.js', extraction: 'changelog headings, hook directory list, doc-named files and statuses', failLoudBy: 'count', where: 'each match asserted found, list sizes floored, status sets equal', anchor: 'dirs.length >= 3' },
+  { file: 'test/unit/doc-links.test.js', extraction: 'relative markdown links across the docs', failLoudBy: 'count', where: 'checked-links floor beside the scan', anchor: 'checked >=' },
+  { file: 'test/unit/navigation-doors.test.js', extraction: 'inline handlers and call sites out of index.html and the client', failLoudBy: 'count', where: 'manifest equality over the collected sites', anchor: 'deepStrictEqual' },
+  { file: 'test/unit/package-import-apply.test.js', extraction: 'frontmatter field counts out of written agent files', failLoudBy: 'count', where: 'exact strictEqual on each match count', anchor: 'strictEqual' },
+  { file: 'test/unit/packaging.test.js', extraction: 'local requires and asset tags out of server.js, electron/main.js and index.html', failLoudBy: 'count', where: 'require-coverage refusals per file plus an entry-requires floor', anchor: 'entryRequires.length >= 1' },
+  { file: 'test/unit/profile-boxes.test.js', extraction: 'app.js arms cut out for pressing', failLoudBy: 'count', where: 'appPiece refuses when a piece is missing', anchor: 'appPiece(' },
+  { file: 'test/unit/regression.test.js', extraction: 'pinned call-shape occurrences in client source', failLoudBy: 'count', where: 'every match wrapped in an exact or floored count assertion', anchor: 'length' },
+  { file: 'test/unit/routine-editor-doors.test.js', extraction: 'editor entry calls and rendered handler names', failLoudBy: 'count', where: 'found-vs-DOORS equality and a handlers.size floor', anchor: 'handlers.size' },
+  { file: 'test/unit/routine-schedule-edit.test.js', extraction: 'routines-section counts out of written files', failLoudBy: 'count', where: 'exact strictEqual on each match count', anchor: 'strictEqual' },
+  { file: 'test/unit/routine-timezone.test.js', extraction: 'frontmatter block out of a written file', failLoudBy: 'count', where: 'indexing the match throws when the pattern misses', anchor: 'frontmatter' },
+  { file: 'test/unit/routine-write.test.js', extraction: 'routines-section counts and frontmatter out of written files', failLoudBy: 'count', where: 'exact counts asserted; missing frontmatter throws', anchor: 'strictEqual' },
+  { file: 'test/unit/routines-end-to-end.test.js', extraction: 'app.js pieces cut out for pressing', failLoudBy: 'count', where: 'appPiece refuses when a piece is missing', anchor: 'appPiece(' },
+  { file: 'test/unit/routines-truth.test.js', extraction: 'status literals out of the scheduler writers and refusal returns', failLoudBy: 'count', where: 'set equality against the declared vocabulary; every return accounted for', anchor: 'statusesTheSchedulerRecords' },
+  { file: 'test/unit/routines-view-doors.test.js', extraction: 'navigation calls across the client and the palette', failLoudBy: 'count', where: 'specimen self-test beside the prohibition scan; palette set equality', anchor: 'NAV_CALL' },
+  { file: 'test/unit/routines-view.test.js', extraction: 'app.js arms cut out for pressing', failLoudBy: 'count', where: 'appPiece refuses when a piece is missing', anchor: 'appPiece(' },
+  { file: 'test/unit/run-detail-doors.test.js', extraction: 'run-detail entry calls across the client', failLoudBy: 'count', where: 'found-vs-manifest equality', anchor: 'deepStrictEqual' },
+  { file: 'test/unit/run-detail-model.test.js', extraction: 'unknown-reason words out of the transcript reader and scheduler', failLoudBy: 'count', where: 'floor asserted against the scan, per its own comment', anchor: 'floor' },
+  { file: 'test/unit/scaffold-integrity.test.js', extraction: 'skill references out of scaffold markdown', failLoudBy: 'count', where: 'specimen self-test beside the prohibition scan', anchor: 'SKILL_REF' },
+  { file: 'test/unit/session-transcript-capture.test.js', extraction: 'the content-block union out of types.d.ts', failLoudBy: 'count', where: 'size floor and set equality against the known block types', anchor: 'size' },
+  { file: 'test/unit/style-resolve-diff.test.js', extraction: 'var() fallbacks out of stylesheets', failLoudBy: 'count', where: 'a dedicated that-check-can-actually-fail specimen pair', anchor: '<<UNRESOLVED>>' },
+  { file: 'test/unit/team-sidebar.test.js', extraction: 'the roster dispatch case cut out of app.js', failLoudBy: 'count', where: 'appPiece refuses when the case is missing', anchor: 'appPiece(' },
+  { file: 'test/unit/token-references.test.js', extraction: 'declared and referenced custom properties across public/', failLoudBy: 'count', where: 'used.size floor and a named-token canary', anchor: 'used.size' },
+  { file: 'test/unit/workspace-modes.test.js', extraction: 'gitignore entry count', failLoudBy: 'count', where: 'exact strictEqual on the match count', anchor: 'strictEqual' },
+  { file: 'test/tools/coverage-areas.js', extraction: 'SF and DA records out of the lcov', failLoudBy: 'count', where: 'a floored area that was not measured raises a violation', anchor: 'violation' },
+  { file: 'test/tools/style-drift.js', extraction: 'colour, function and radius literals out of stylesheets', failLoudBy: 'count', where: 'stale allowlist entries error when a listed literal is no longer found', anchor: 'stale' },
+  { file: 'test/tools/style-resolve-diff.js', extraction: 'declarations and rule blocks out of stylesheets', failLoudBy: 'count', where: 'its companion test file proves the patterns on specimens', anchor: 'tokensAt' },
+  { file: 'test/unit/sdlc-gate-hardening.test.js', extraction: 'destructive commands in tracked markdown, redTests and report bodies out of the harnesses, scanner rules out of check-internal-refs', failLoudBy: 'count', where: 'specimen self-tests, document and per-directory floors, and exact extraction counts throughout this file', anchor: 'looksLikeExtraction' },
+  { file: 'test/helpers/scheduler-statuses.js', extraction: 'status literals out of the scheduler writers', failLoudBy: 'count', where: 'its consumers assert the vocabulary in both directions (profile-boxes) and drive every word', anchor: 'statusesTheSchedulerRecords' },
+  { file: 'test/integration/http-api.test.js', extraction: 'script and stylesheet links out of served index.html', failLoudBy: 'count', where: 'floors on both lists plus a token-sheet canary', anchor: 'tokens.css' },
+  { file: 'test/integration/ws-handler-edges.test.js', extraction: 'frontmatter and order lines out of written agent files', failLoudBy: 'count', where: 'exact match counts; missing frontmatter refuses', anchor: 'exactly one order line' },
+  { file: 'test/tools/innerhtml-sites.js', extraction: 'innerHTML assignment sites across the client', failLoudBy: 'count', where: 'pinned per-file totals in innerhtml-inventory.test.js', anchor: 'sites' },
+  { file: 'test/unit/app-retentions.test.js', extraction: 'DOM-writing functions out of app.js', failLoudBy: 'count', where: 'owners.size floor plus the stale-manifest check in both directions', anchor: 'owners.size' },
+  { file: 'test/unit/client-namespace.test.js', extraction: 'top-level declarations and uses across client sources', failLoudBy: 'count', where: 'declaration-count floor beside the extraction', anchor: 'appTop.size' },
+  { file: 'test/unit/guide-name.test.js', extraction: 'pronoun scan over rendered surfaces', failLoudBy: 'count', where: 'specimen pair beside the pattern, added with this registry row', anchor: 'no longer matches its own specimen' },
+  { file: 'test/unit/markdown-render.test.js', extraction: 'renderer call sites and script tags out of client sources', failLoudBy: 'count', where: 'call-site and script-count floors beside each scan', anchor: 'call sites' },
+  { file: 'test/unit/routine-editor-view.test.js', extraction: 'navigation arms cut out of app.js', failLoudBy: 'count', where: 'the cut refuses when the arm is missing', anchor: 'has no arm' },
+  { file: 'test/unit/routines-panel.test.js', extraction: 'markup regions cut out of index.html and app.js', failLoudBy: 'count', where: 'every cut refuses when its region is missing', anchor: 'no longer carries' },
+  { file: 'test/unit/run-detail-view.test.js', extraction: 'the run-detail panel cut out of index.html', failLoudBy: 'count', where: 'the cut refuses when the panel is missing', anchor: 'no longer carries' },
+  { file: 'test/unit/scheduler-lifecycle-doors.test.js', extraction: 'lifecycle call sites and their enclosing functions out of the server sources', failLoudBy: 'count', where: 'manifest equality plus a self-arming floor', anchor: 'selfArming.length' },
+  { file: 'test/unit/skills-empty.test.js', extraction: 'markup regions cut out of index.html', failLoudBy: 'count', where: 'every cut refuses when its region is missing', anchor: 'no longer carries' },
+  { file: 'test/unit/style-drift.test.js', extraction: 'value literals out of allowlist reasons', failLoudBy: 'count', where: 'specimen beside the pattern, added with this registry row', anchor: 'no longer matches its own specimen' },
 ];
 
 // What makes a file a source-walking extraction. Deliberately the same
@@ -259,15 +259,20 @@ describe('source-walking enumerations', () => {
       'a registered file no longer walks source (or no longer exists); remove its row so the registry stays true');
   });
 
-  // Well-formedness only: `where` is descriptive prose pointing a reader at
-  // the guard, and this suite does not verify the prose still names a live
-  // line. The property itself is exercised where it lives, per row.
-  test('every registry row is well formed', () => {
+  // `where` is descriptive prose pointing a reader at the guard; `anchor` is
+  // the machine-checkable half: a literal that lives inside the named guard,
+  // so a deleted floor, specimen or set-equality fails here by row instead of
+  // leaving the inventory silently untrue. The prose is not verified; the
+  // anchor is.
+  test('every registry row is well formed and its anchor still stands in the file', () => {
     for (const e of ENUMERATIONS) {
       assert.ok(['count', 'imports', 'mutation'].includes(e.failLoudBy),
         `${e.file}: failLoudBy must be count, imports or mutation`);
-      assert.ok(e.extraction && e.where,
-        `${e.file}: the registry row must say what is extracted and where its guard lives`);
+      assert.ok(e.extraction && e.where && e.anchor,
+        `${e.file}: the registry row must say what is extracted, where its guard lives, and an anchor inside that guard`);
+      assert.ok(read(e.file).includes(e.anchor),
+        `${e.file}: the anchor "${e.anchor}" is gone, so the guard this row claims may be gone with it; `
+        + 'restore the guard or re-anchor the row against whatever now holds the property');
     }
   });
 });
@@ -280,6 +285,24 @@ const HARNESSES = fs.readdirSync(path.join(ROOT, 'test', 'tools'))
   .filter(f => /^mutate-.*-guards\.js$/.test(f))
   .map(f => `test/tools/${f}`)
   .sort();
+
+// The harness scripts the gate actually runs, parsed out of the chain that
+// runs them. This is the second source the discovered set is judged against.
+const CHAIN_HARNESSES = (JSON.parse(read('package.json')).scripts['mutate:guards'].match(/test\/tools\/[\w-]+\.js/g) || []).sort();
+
+// EVERY claim below is generated per harness, so a short or empty list would
+// register fewer tests and pass having proven nothing, which is the exact
+// defect this file forbids in every other enumeration. Asserted AT LOAD,
+// before any generated test exists to be relied on: a suite that would
+// generate zero per-harness tests dies here instead of passing. The floor is
+// today's count; a new harness raises it in the same change that adds the
+// harness.
+assert.ok(HARNESSES.length >= 14,
+  `only ${HARNESSES.length} mutation harnesses discovered; the pattern or the directory walk has gone blind`);
+assert.deepStrictEqual(HARNESSES, CHAIN_HARNESSES,
+  'the harnesses on disk and the harnesses the mutate:guards chain runs must be the same set, in both '
+  + 'directions: one on disk but unwired never runs, and one wired but undiscovered here escapes every '
+  + 'uniformity proof below');
 
 // The redTests copy in each harness, cut out and built with its dependencies
 // stubbed, so the parser can be fed output it cannot read without running a
@@ -326,16 +349,30 @@ describe('a mutation result that cannot be parsed is a refusal, not a crash', ()
 
   // The parser refusing is half the rule; the report is where a person reads
   // the verdict, and one harness proved the two can drift: its parser refused
-  // and its report printed the refusal as a guard nobody was watching. So
-  // every harness's report is cut out and driven with a refusal row, in both
-  // shapes, and must say no verdict was obtained rather than any definite
-  // thing.
+  // and its report printed the refusal as a guard nobody was watching. So the
+  // whole seam is driven per harness: the row fed to report() is NOT a
+  // fixture written here, it is constructed by the harness's own run() code,
+  // cut out at the push site and evaluated with the parser's refusal in hand.
+  // A harness that renames or drops the refusal flag between parser and
+  // report therefore fails here by name, which a hand-written probe could
+  // never show.
+  function rowRunConstructs(file) {
+    const src = read(file);
+    const m = src.match(/results\.push\(red && red\.unparsable[\s\S]*?\);/);
+    assert.ok(m, `${file}: the run() push site for a parser refusal could not be cut out; update this extraction with the new shape`);
+    const factory = new Function('red', 'label', 'matches', 'target',
+      `const rows = []; const results = { push: (r) => rows.push(r) }; ${m[0]}; return rows[0];`);
+    return factory({ unparsable: true }, 'probe-mutation', 1, { suite: 'stub-suite' });
+  }
+
   for (const file of HARNESSES) {
     test(`${path.basename(file)} reports a refusal as no verdict, in both shapes`, () => {
       const src = read(file);
       const m = src.match(/function report\(results, markdown\) \{[\s\S]*?\n\}/);
       assert.ok(m, `${file}: report could not be cut out; if it moved or was renamed, update this extraction`);
-      const probe = [{ label: 'probe-mutation', applied: true, unparsable: true, red: [], matches: 1 }];
+      const row = rowRunConstructs(file);
+      assert.strictEqual(row && row.label, 'probe-mutation',
+        `${file}: run() dropped the label between the parser and the report`);
       for (const markdown of [true, false]) {
         const said = [];
         const fakeConsole = { log: (line) => said.push(String(line)), error: (line) => said.push(String(line)) };
@@ -344,7 +381,7 @@ describe('a mutation result that cannot be parsed is a refusal, not a crash', ()
         // identifiers are stubbed empty so the refusal row itself is what is
         // driven.
         const factory = new Function('console', 'NOT_MUTATED', `${m[0]}; return report;`);
-        const failures = factory(fakeConsole, [])(probe, markdown);
+        const failures = factory(fakeConsole, [])([row], markdown);
         const out = said.join('\n');
         assert.ok(out.includes('probe-mutation'),
           `${file}: the ${markdown ? 'markdown' : 'plain'} report does not name the mutation that got no verdict`);
@@ -358,12 +395,12 @@ describe('a mutation result that cannot be parsed is a refusal, not a crash', ()
     });
   }
 
-  test('the harness count matches the mutate:guards chain', () => {
-    const chain = JSON.parse(read('package.json')).scripts['mutate:guards'];
-    for (const file of HARNESSES) {
-      assert.ok(chain.includes(path.basename(file)),
-        `${file} exists but is not wired into the mutate:guards chain`);
-    }
+  test('the discovered harnesses and the mutate:guards chain are one set, both ways', () => {
+    // Restated as a test for the reader; the load-time assertion above is
+    // what guarantees the per-harness tests cannot silently number zero.
+    assert.deepStrictEqual(HARNESSES, CHAIN_HARNESSES,
+      'a harness on disk but unwired never runs; one wired but undiscovered escapes the uniformity proofs');
+    assert.ok(HARNESSES.length >= 14, 'the harness floor moved without this file learning why');
   });
 });
 
@@ -397,9 +434,15 @@ describe('the internal-reference scanner and the acceptance-label shape', () => 
       .filter(f => f.label.includes('acceptance-criteria'));
     assert.strictEqual(fresh.length, 1, 'the label shape in a file off the amnesty must be a finding');
 
+    // The ratchet's success state is an empty amnesty; on that day there is
+    // no amnestied file to probe and this branch trivially passes, while the
+    // fresh-hit and lookalike cases above and below keep the rule itself
+    // proven.
     const amnestied = [...AC_LABEL_AMNESTY][0];
-    const excused = scanLines(amnestied, line).filter(f => f.label.includes('acceptance-criteria'));
-    assert.deepStrictEqual(excused, [], `a hit in ${amnestied} is amnestied until that file burns its labels down`);
+    if (amnestied) {
+      const excused = scanLines(amnestied, line).filter(f => f.label.includes('acceptance-criteria'));
+      assert.deepStrictEqual(excused, [], `a hit in ${amnestied} is amnestied until that file burns its labels down`);
+    }
 
     const lookalike = scanLines('test/unit/some-new-file.test.js', '// the MAC-1 frame offset')
       .filter(f => f.label.includes('acceptance-criteria'));
@@ -486,15 +529,63 @@ describe('a fresh install works without the media encoder', () => {
       'motion.mjs must keep guarding the require, so an install without the optional package still runs');
   });
 
-  test('the packaged application does not carry the encoder', () => {
-    // Measured 2026-09-03: moving the encoder to optionalDependencies made it
-    // a production dependency, and the desktop build packs the production
-    // tree, so without this exclusion the shipped app gains a large encoder
-    // binary no shipped code path uses. The exclusion is what keeps the
-    // packaged output indifferent to the install-time class; this assertion
-    // is what keeps the exclusion.
-    const files = JSON.parse(read('package.json')).build.files;
-    assert.ok(files.includes('!node_modules/ffmpeg-static/**'),
-      'the build file set must exclude the optional encoder, or the shipped app carries it for nothing');
+  test('the packaged application carries nothing the encoder alone dragged into the production tree', () => {
+    // Measured 2026-09-03: moving the encoder to optionalDependencies
+    // promoted its WHOLE transitive closure into the production tree, not
+    // just the package, and the desktop build packs the production tree. So
+    // the closure is computed here, from the lockfile, and every member the
+    // encoder alone reaches must be unselected by the build's own file
+    // rules, while a member a real runtime dependency also needs is shown
+    // and left packed. A future lockfile refresh that adds or renames a
+    // transitive member fails this test instead of shipping it.
+    const pkg = JSON.parse(read('package.json'));
+    const lock = JSON.parse(read('package-lock.json'));
+    const depsOf = (name) => {
+      const entry = lock.packages['node_modules/' + name];
+      return entry ? Object.keys({ ...(entry.dependencies || {}), ...(entry.optionalDependencies || {}) }) : [];
+    };
+    const closure = (roots) => {
+      const seen = new Set();
+      const queue = [...roots];
+      while (queue.length) {
+        const name = queue.shift();
+        if (seen.has(name)) continue;
+        seen.add(name);
+        queue.push(...depsOf(name));
+      }
+      return seen;
+    };
+    const runtime = closure(Object.keys(pkg.dependencies || {}));
+    const encoder = closure(['ffmpeg-static']);
+    const encoderOnly = [...encoder].filter(n => !runtime.has(n)).sort();
+    const shared = [...encoder].filter(n => runtime.has(n)).sort();
+    assert.ok(encoderOnly.includes('ffmpeg-static'), 'sanity: the encoder reaches itself');
+    assert.ok(encoderOnly.length >= 10,
+      `only ${encoderOnly.length} encoder-only packages computed; the closure walk has gone blind`);
+
+    // THE EFFECT, NOT THE SPELLING: each name is resolved through the build's
+    // own file rules the way the packer reads them (a path is packed when a
+    // positive pattern selects it and no negation deselects it), so a pattern
+    // that is present but ineffective, or an equivalent spelling, is judged
+    // by what it selects rather than by its text.
+    const globToRe = (glob) => new RegExp('^' + glob
+      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+      .replace(/\*\*/g, '\u0000')
+      .replace(/\*/g, '[^/]*')
+      .replace(/\u0000/g, '.*') + '$');
+    const positives = pkg.build.files.filter(f => !f.startsWith('!')).map(globToRe);
+    const negatives = pkg.build.files.filter(f => f.startsWith('!')).map(f => globToRe(f.slice(1)));
+    const packed = (rel) => positives.some(re => re.test(rel)) && !negatives.some(re => re.test(rel));
+
+    const shipped = encoderOnly.filter(name => packed(`node_modules/${name}/index.js`));
+    assert.deepStrictEqual(shipped, [],
+      'these packages are in the production tree only because of the optional encoder, and the build '
+      + 'rules still select them: exclude each, or show which runtime dependency really needs it');
+    // The two sides of the line: what a real dependency needs stays packed,
+    // named here so the decision is visible rather than implied.
+    for (const name of shared) {
+      assert.ok(packed(`node_modules/${name}/index.js`),
+        `${name} is needed by a real runtime dependency and must stay packed; an exclusion has caught it`);
+    }
   });
 });
